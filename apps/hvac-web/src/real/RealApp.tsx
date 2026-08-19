@@ -348,6 +348,7 @@ export default function RealApp({ config }: RealAppProps) {
           onNavigate={navigate}
           confirmSiteNavigation={confirmSiteNavigation}
           cancelSiteNavigation={cancelSiteNavigation}
+          registerUnsavedDraft={registerUnsavedDraft}
         />
       ) : null}
     </main>

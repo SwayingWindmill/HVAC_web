@@ -37,14 +37,16 @@ export const principalContextSchema = z.object({
 export const capabilitySchema = z.enum([
   'site.list', 'site.read',
   'asset.list', 'asset.read', 'device.list', 'device.read',
+  'site.write', 'space.write', 'asset.write', 'device.write', 'sensor.write', 'point.write', 'binding.write',
+  'template.manage', 'registry.import', 'registry.retire',
   'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
   'alarm.list', 'alarm.read', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle',
   'session.revoke', 'audit.read', 'iam.admin', 'api-credential.manage',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(9),
+  capabilitySetVersion: z.literal(10),
   policyRevision: z.string().min(1).max(128),
-  capabilities: z.array(capabilitySchema).max(21).refine((values) => new Set(values).size === values.length, {
+  capabilities: z.array(capabilitySchema).max(31).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',
   }),
 }).strict();
@@ -168,6 +170,8 @@ export const telemetryPointSchema = z.object({
   sampleIntervalMs: z.number().int().min(100).max(86_400_000),
   publishIntervalMs: z.number().int().min(100).max(86_400_000),
   staleAfterMs: z.number().int().min(100).max(604_800_000),
+  counterDecreaseMode: z.enum(['RESET_TO_ZERO', 'ROLLOVER', 'INVALID']).nullable(),
+  counterRolloverModulus: z.number().positive().nullable(),
   sourceMetadata: z.record(z.unknown()),
   status: registryStatusSchema,
   revision: revisionSchema,
@@ -210,6 +214,186 @@ export const siteAssetModelSchema = z.object({
   counts: assetModelCountsSchema,
 }).strict();
 
+export const mutationMetaSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+  reason: z.string().trim().min(1).max(1000),
+}).strict();
+export const siteMutationSchema = z.object({
+  code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  displayName: z.string().trim().min(1).max(256),
+  timezone: z.string().trim().min(1).max(128),
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const spaceMutationSchema = z.object({
+  parentSpaceId: uuidV7Schema.optional(),
+  code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  displayName: z.string().trim().min(1).max(256),
+  spaceType: spaceSchema.shape.spaceType,
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const assetMutationSchema = z.object({
+  code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  displayName: z.string().trim().min(1).max(256),
+  assetType: z.string().trim().min(1).max(64),
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const deviceMutationSchema = z.object({
+  code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  displayName: z.string().trim().min(1).max(256),
+  deviceType: z.string().trim().min(1).max(64),
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const sensorMutationSchema = z.object({
+  code: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  displayName: z.string().trim().min(1).max(256),
+  sensorType: z.string().trim().min(1).max(64),
+  manufacturer: z.string().max(128).optional(),
+  model: z.string().max(128).optional(),
+  serialNumber: z.string().max(256).optional(),
+  calibrationDueAt: z.string().datetime({ offset: true }).optional(),
+  metadata: z.record(z.unknown()),
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const pointMutationSchema = z.object({
+  reportingDeviceId: uuidV7Schema,
+  sensorId: uuidV7Schema.optional(),
+  pointCode: z.string().min(1).max(128).regex(/^[a-z][a-z0-9_]{0,127}$/),
+  sourceKey: z.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/),
+  displayName: z.string().trim().min(1).max(256),
+  pointType: telemetryPointSchema.shape.pointType,
+  valueType: telemetryPointSchema.shape.valueType,
+  unit: z.string().max(64).optional(),
+  writable: z.boolean(),
+  sampleIntervalMs: z.number().int().min(100).max(86_400_000),
+  publishIntervalMs: z.number().int().min(100).max(86_400_000),
+  staleAfterMs: z.number().int().min(100).max(604_800_000),
+  counterDecreaseMode: z.enum(['RESET_TO_ZERO', 'ROLLOVER', 'INVALID']).optional(),
+  counterRolloverModulus: z.number().positive().optional(),
+  sourceMetadata: z.record(z.unknown()),
+  status: registryStatusSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const rebindRequestSchema = z.object({
+  kind: z.enum(['DEVICE_ASSET', 'ASSET_SPACE', 'DEVICE_SPACE', 'SENSOR_DEVICE', 'SENSOR_SPACE', 'POINT_SUBJECT']),
+  sourceId: uuidV7Schema,
+  targetId: uuidV7Schema,
+  targetType: z.enum(['SITE', 'SPACE', 'ASSET']).optional(),
+  role: z.string().trim().min(1).max(64),
+  effectiveAt: z.string().datetime({ offset: true }),
+  meta: mutationMetaSchema,
+}).strict();
+export const bindingMutationResultSchema = z.object({
+  bindingId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  kind: z.string().min(1),
+  sourceId: uuidV7Schema,
+  targetId: uuidV7Schema,
+  role: z.string().min(1),
+  revision: revisionSchema,
+  validFrom: z.string().datetime({ offset: true }),
+  replayed: z.boolean(),
+}).strict();
+export const templateKindSchema = z.enum(['ASSET', 'DEVICE', 'POINT']);
+export const releaseTemplateRequestSchema = z.object({
+  templateKey: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9._-]{0,127}$/),
+  templateKind: templateKindSchema,
+  payload: z.record(z.unknown()),
+  releaseReferences: z.record(z.string().min(1).max(256)).refine((value) => Object.keys(value).length > 0, 'at least one release reference is required'),
+  meta: mutationMetaSchema,
+}).strict();
+export const templateRevisionSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  templateId: uuidV7Schema,
+  templateKey: z.string().min(1),
+  templateKind: templateKindSchema,
+  revisionNumber: revisionSchema,
+  status: z.literal('RELEASED'),
+  payload: z.record(z.unknown()),
+  releaseReferences: z.record(z.string()),
+  releasedAt: z.string().datetime({ offset: true }),
+}).strict();
+export const assignTemplateRequestSchema = z.object({
+  siteId: uuidV7Schema,
+  targetType: templateKindSchema,
+  targetId: uuidV7Schema,
+  templateRevisionId: uuidV7Schema,
+  effectiveAt: z.string().datetime({ offset: true }),
+  meta: mutationMetaSchema,
+}).strict();
+export const templateAssignmentSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  targetType: templateKindSchema,
+  targetId: uuidV7Schema,
+  templateRevisionId: uuidV7Schema,
+  validFrom: z.string().datetime({ offset: true }),
+  validTo: z.string().datetime({ offset: true }).optional(),
+  revision: revisionSchema,
+}).strict();
+export const importRowSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  resourceType: z.enum(['SPACE', 'ASSET', 'DEVICE', 'SENSOR', 'POINT']),
+  externalId: z.string().min(1).max(256),
+  targetId: uuidV7Schema.optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+  payload: z.record(z.unknown()),
+}).strict();
+export const importRowResultSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  resourceType: z.string().min(1),
+  externalId: z.string().min(1),
+  targetId: uuidV7Schema.optional(),
+  expectedRevision: z.number().int().nonnegative(),
+  status: z.enum(['READY', 'ERROR', 'COMMITTED']),
+  errorCode: z.string().optional(),
+  message: z.string().optional(),
+}).strict();
+export const importPlanRequestSchema = z.object({
+  namespace: z.string().trim().min(1).max(128),
+  rows: z.array(importRowSchema).min(1).max(1000),
+}).strict();
+export const importPlanSchema = z.object({
+  schemaVersion: z.literal(1),
+  planId: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  namespace: z.string().min(1),
+  rows: z.array(importRowSchema),
+  results: z.array(importRowResultSchema),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export const importCommitRequestSchema = z.object({
+  plan: importPlanSchema,
+  meta: mutationMetaSchema,
+}).strict();
+export const importCommitResultSchema = z.object({
+  planDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  results: z.array(importRowResultSchema),
+  replayed: z.boolean(),
+}).strict();
+export const retireRequestSchema = z.object({
+  resourceType: z.enum(['SITE', 'SPACE', 'ASSET', 'DEVICE', 'SENSOR', 'POINT']),
+  resourceId: uuidV7Schema,
+  meta: mutationMetaSchema,
+}).strict();
+export const retirementResultSchema = z.object({
+  sagaId: uuidV7Schema,
+  resourceType: z.string().min(1),
+  resourceId: uuidV7Schema,
+  status: z.enum(['BLOCKED', 'COMPLETED']),
+  dependencyCount: z.number().int().nonnegative(),
+  revision: revisionSchema,
+  replayed: z.boolean(),
+}).strict();
+
 export const externalBindingSchema = z.object({
   id: uuidV7Schema,
   tenantId: uuidV7Schema,
@@ -235,6 +419,8 @@ export const siteCollectionSchema = collectionSchema(siteSchema);
 export const assetCollectionSchema = collectionSchema(assetSchema);
 export const deviceCollectionSchema = collectionSchema(deviceSchema);
 export const deviceBindingCollectionSchema = collectionSchema(deviceBindingSchema);
+export const spaceCollectionSchema = collectionSchema(spaceSchema);
+export const telemetryPointCollectionSchema = collectionSchema(telemetryPointSchema);
 
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
@@ -270,6 +456,30 @@ export type SiteCollection = z.infer<typeof siteCollectionSchema>;
 export type AssetCollection = z.infer<typeof assetCollectionSchema>;
 export type DeviceCollection = z.infer<typeof deviceCollectionSchema>;
 export type DeviceBindingCollection = z.infer<typeof deviceBindingCollectionSchema>;
+export type SpaceCollection = z.infer<typeof spaceCollectionSchema>;
+export type TelemetryPointCollection = z.infer<typeof telemetryPointCollectionSchema>;
+export type MutationMeta = z.infer<typeof mutationMetaSchema>;
+export type SiteMutation = z.infer<typeof siteMutationSchema>;
+export type SpaceMutation = z.infer<typeof spaceMutationSchema>;
+export type AssetMutation = z.infer<typeof assetMutationSchema>;
+export type DeviceMutation = z.infer<typeof deviceMutationSchema>;
+export type SensorMutation = z.infer<typeof sensorMutationSchema>;
+export type PointMutation = z.infer<typeof pointMutationSchema>;
+export type RebindRequest = z.infer<typeof rebindRequestSchema>;
+export type BindingMutationResult = z.infer<typeof bindingMutationResultSchema>;
+export type TemplateKind = z.infer<typeof templateKindSchema>;
+export type ReleaseTemplateRequest = z.infer<typeof releaseTemplateRequestSchema>;
+export type TemplateRevision = z.infer<typeof templateRevisionSchema>;
+export type AssignTemplateRequest = z.infer<typeof assignTemplateRequestSchema>;
+export type TemplateAssignment = z.infer<typeof templateAssignmentSchema>;
+export type ImportRow = z.infer<typeof importRowSchema>;
+export type ImportRowResult = z.infer<typeof importRowResultSchema>;
+export type ImportPlanRequest = z.infer<typeof importPlanRequestSchema>;
+export type ImportPlan = z.infer<typeof importPlanSchema>;
+export type ImportCommitRequest = z.infer<typeof importCommitRequestSchema>;
+export type ImportCommitResult = z.infer<typeof importCommitResultSchema>;
+export type RetireRequest = z.infer<typeof retireRequestSchema>;
+export type RetirementResult = z.infer<typeof retirementResultSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -298,6 +508,24 @@ export function createPlatformGatewayClient(baseUrl = '') {
     if (params.limit !== undefined) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     return `${path}${query.size ? `?${query.toString()}` : ''}`;
+  };
+
+  const mutation = <I, O>(
+    path: string,
+    method: 'POST' | 'PATCH',
+    body: I,
+    inputSchema: z.ZodType<I>,
+    outputSchema: z.ZodType<O>,
+    init?: RequestInit,
+  ) => {
+    const headers = new Headers(init?.headers);
+    headers.set('Content-Type', 'application/json');
+    return request(path, outputSchema, {
+      ...init,
+      method,
+      headers,
+      body: JSON.stringify(inputSchema.parse(body)),
+    });
   };
 
   return {
@@ -353,6 +581,69 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },
+    ),
+    listSiteSpaceChildren: (siteId: string, parentSpaceId: string | null, params: RegistryListParams = {}, init?: RequestInit) => {
+      const path = '__SITE_SPACE_CHILDREN_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (parentSpaceId) query.set('parentSpaceId', parentSpaceId);
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      if (params.cursor) query.set('cursor', params.cursor);
+      return request(`${path}${query.size ? `?${query.toString()}` : ''}`, spaceCollectionSchema, { ...init, method: 'GET' });
+    },
+    listDevicePoints: (deviceId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__DEVICE_POINTS_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), params), telemetryPointCollectionSchema, { ...init, method: 'GET' },
+    ),
+    createSite: (body: SiteMutation, init?: RequestInit) => mutation('__SITES_PATH__', 'POST', body, siteMutationSchema, siteSchema, init),
+    updateSite: (siteId: string, body: SiteMutation, init?: RequestInit) => mutation(
+      '__SITE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'PATCH', body, siteMutationSchema, siteSchema, init,
+    ),
+    createSiteSpace: (siteId: string, body: SpaceMutation, init?: RequestInit) => mutation(
+      '__SITE_SPACES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, spaceMutationSchema, spaceSchema, init,
+    ),
+    updateSiteSpace: (siteId: string, spaceId: string, body: SpaceMutation, init?: RequestInit) => mutation(
+      '__SITE_SPACE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{spaceId}', encodeURIComponent(spaceId)), 'PATCH', body, spaceMutationSchema, spaceSchema, init,
+    ),
+    createSiteAsset: (siteId: string, body: AssetMutation, init?: RequestInit) => mutation(
+      '__SITE_ASSET_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, assetMutationSchema, assetSchema, init,
+    ),
+    updateSiteAsset: (siteId: string, assetId: string, body: AssetMutation, init?: RequestInit) => mutation(
+      '__SITE_ASSET_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{assetId}', encodeURIComponent(assetId)), 'PATCH', body, assetMutationSchema, assetSchema, init,
+    ),
+    createSiteDevice: (siteId: string, body: DeviceMutation, init?: RequestInit) => mutation(
+      '__SITE_DEVICES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, deviceMutationSchema, deviceSchema, init,
+    ),
+    updateSiteDevice: (siteId: string, deviceId: string, body: DeviceMutation, init?: RequestInit) => mutation(
+      '__SITE_DEVICE_DETAIL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{deviceId}', encodeURIComponent(deviceId)), 'PATCH', body, deviceMutationSchema, deviceSchema, init,
+    ),
+    createSiteSensor: (siteId: string, body: SensorMutation, init?: RequestInit) => mutation(
+      '__SITE_SENSORS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, sensorMutationSchema, sensorSchema, init,
+    ),
+    updateSiteSensor: (siteId: string, sensorId: string, body: SensorMutation, init?: RequestInit) => mutation(
+      '__SITE_SENSOR_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{sensorId}', encodeURIComponent(sensorId)), 'PATCH', body, sensorMutationSchema, sensorSchema, init,
+    ),
+    createSitePoint: (siteId: string, body: PointMutation, init?: RequestInit) => mutation(
+      '__SITE_POINTS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, pointMutationSchema, telemetryPointSchema, init,
+    ),
+    updateSitePoint: (siteId: string, pointId: string, body: PointMutation, init?: RequestInit) => mutation(
+      '__SITE_POINT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{pointId}', encodeURIComponent(pointId)), 'PATCH', body, pointMutationSchema, telemetryPointSchema, init,
+    ),
+    rebindRegistryResource: (siteId: string, body: RebindRequest, init?: RequestInit) => mutation(
+      '__SITE_REBIND_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, rebindRequestSchema, bindingMutationResultSchema, init,
+    ),
+    releaseRegistryTemplateRevision: (body: ReleaseTemplateRequest, init?: RequestInit) => mutation(
+      '__TEMPLATE_REVISIONS_PATH__', 'POST', body, releaseTemplateRequestSchema, templateRevisionSchema, init,
+    ),
+    assignRegistryTemplateRevision: (body: AssignTemplateRequest, init?: RequestInit) => mutation(
+      '__TEMPLATE_ASSIGNMENTS_PATH__', 'POST', body, assignTemplateRequestSchema, templateAssignmentSchema, init,
+    ),
+    planRegistryImport: (siteId: string, body: ImportPlanRequest, init?: RequestInit) => mutation(
+      '__SITE_IMPORT_DRY_RUN_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importPlanRequestSchema, importPlanSchema, init,
+    ),
+    commitRegistryImport: (siteId: string, body: ImportCommitRequest, init?: RequestInit) => mutation(
+      '__SITE_IMPORT_COMMIT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, importCommitRequestSchema, importCommitResultSchema, init,
+    ),
+    beginRegistryRetirement: (siteId: string, body: RetireRequest, init?: RequestInit) => mutation(
+      '__SITE_RETIRE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, retireRequestSchema, retirementResultSchema, init,
     ),
   };
 }

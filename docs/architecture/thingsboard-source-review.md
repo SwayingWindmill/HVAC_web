@@ -153,3 +153,38 @@ All files were reviewed against the pinned ThingsBoard CE `v4.3.1.1` release at 
 ### S07 consequence
 
 The public History contract is version 2 and returns a flat typed Observation page plus `projectionWatermark` and `nextCursor`; no `series`, `maxPointsPerKey`, pseudo `revision`, `datasetRevision`, `dataWatermark`, `partial`, or `truncatedKeys` compatibility fields remain. Aggregate History is a separate governed route with explicit granularity, Site time zone and quality policy. Numeric charts consume NUMBER Observations only, while STRING/BOOLEAN/JSON facts remain available through the same raw History API.
+
+## S18 — Registry administration UI and import/export
+
+Date: 2026-08-19
+
+Local issue: #264
+
+### Upstream files reviewed
+
+The implementation used a sparse local checkout of the pinned ThingsBoard CE `v4.3.1.1` release at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` and read the administration UI immediately before implementation:
+
+- `ui-ngx/src/app/modules/home/pages/device/device.component.ts`
+- `ui-ngx/src/app/modules/home/pages/device/devices-table-config.resolver.ts`
+- `ui-ngx/src/app/modules/home/pages/device-profile/device-profiles-table-config.resolver.ts`
+- adjacent Asset/Profile/entity administration components from the same pinned tree as needed for the table/action/import-export patterns.
+
+### Observed upstream semantics
+
+- ThingsBoard centralizes entity-list columns, fetch/save/delete functions and action enablement in reusable table configuration rather than letting every page invent its own entity lifecycle behavior.
+- Device administration separates form edit state from the loaded server entity and explicitly marks profile changes dirty; administration actions are enabled according to scope/authority.
+- Device Profile administration exposes create/import/export as explicit operator actions and refreshes the authoritative list after completion.
+- ThingsBoard also exposes Customer/Public assignment, mutable Profiles and direct delete semantics. Those conflict with the HVAC typed Registry owner, immutable TemplateRevision and dependency-aware retirement model.
+
+### Implementation decision
+
+- `ADOPT`: a dedicated Registry administration workspace, server-backed entity tables, permission-gated operator actions, explicit import/export entry points, and protected dirty form state.
+- `ADAPT`: use the generated HVAC owner contract with stable cursor/lazy Space loading and Device Point pagination; every update carries `expectedRevision`, and a stale Revision is shown as an explicit conflict that requires reloading authoritative data.
+- `REPLACE`: mutable Profile editing with browser draft -> immutable `TemplateRevision` release -> new assignment interval. Rollback is another assignment to an already released Revision, never mutation of release history.
+- `REPLACE`: direct relation/customer assignment with typed `rebind` kinds owned by Registry; direct delete with the dependency-aware retirement saga.
+- `ADAPT`: import becomes owner-side dry-run -> immutable reviewed plan -> commit; controlled export is derived only from the authoritative SiteAssetModel and intentionally omits free-form Sensor/Point metadata and credential-bearing configuration.
+- `REJECT`: Customer/Public sharing as Registry topology authority, arbitrary relation editing, browser-side topology reconstruction, hard-delete UI, mock/demo Registry fallback, and compatibility calls to superseded API shapes.
+
+### S18 consequence
+
+Real System Management now exposes a Registry workspace for Site/Space/Asset/Device/Point lifecycle operations, lazy Space hierarchy, Device Point lists, typed rebind, immutable Template release/assignment/rollback, dry-run/commit import, and controlled export. Write affordances follow the current Capability set, while the backend owner remains authoritative for IAM/Tenant/Site scope, revision conflict, binding rules, import validity and retirement dependencies. Dirty Registry drafts register with the existing Protected Scope so Site switching cannot silently discard operator edits.

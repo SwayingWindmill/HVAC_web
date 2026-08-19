@@ -6,14 +6,27 @@ import {
   createPlatformGatewayClient,
   type Asset,
   type AssetCollection,
+  type AssetMutation,
+  type AssignTemplateRequest,
   type Device,
   type DeviceBinding,
   type DeviceBindingCollection,
   type DeviceCollection,
+  type DeviceMutation,
+  type ImportCommitRequest,
+  type ImportPlanRequest,
+  type PointMutation,
+  type RebindRequest,
   type RegistryListParams,
+  type ReleaseTemplateRequest,
+  type RetireRequest,
   type Site,
   type SiteAssetModel,
   type SiteCollection,
+  type SiteMutation,
+  type Space,
+  type SpaceMutation,
+  type TelemetryPoint,
   uuidV7Schema,
 } from './generated/platformGateway.gen';
 
@@ -28,6 +41,10 @@ export type RegistryErrorKind =
   | 'unavailable'
   | 'timeout'
   | 'mapping'
+  | 'revision-conflict'
+  | 'binding-conflict'
+  | 'import-conflict'
+  | 'mutation-conflict'
   | 'unknown';
 
 export interface RegistryErrorPresentation {
@@ -78,6 +95,15 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
       case 'MAPPING_INVALID':
       case 'MAPPING_QUARANTINED':
         return { kind: 'mapping', title: 'Registry 映射尚未就绪', description: detail, retryable, traceId };
+      case 'REGISTRY_REVISION_CONFLICT':
+        return { kind: 'revision-conflict', title: '资源已被其他操作更新', description: '当前编辑基于旧 Revision。请重新加载权威数据后再决定是否重做本次修改。', retryable: false, traceId };
+      case 'REGISTRY_BINDING_CONFLICT':
+        return { kind: 'binding-conflict', title: '绑定变更冲突', description: detail, retryable: false, traceId };
+      case 'REGISTRY_IMPORT_PLAN_INVALID':
+        return { kind: 'import-conflict', title: '导入计划已失效', description: '必须重新执行 dry-run；旧计划不会被强制提交。', retryable: false, traceId };
+      case 'REGISTRY_IDEMPOTENCY_CONFLICT':
+      case 'TEMPLATE_REVISION_IMMUTABLE':
+        return { kind: 'mutation-conflict', title: 'Registry 写入冲突', description: detail, retryable: false, traceId };
       default:
         return { kind: 'unknown', title: 'Registry 请求失败', description: detail, retryable, traceId };
     }
@@ -221,3 +247,66 @@ export type RegistryDeviceBindingCollection = DeviceBindingCollection;
 export type RegistryAsset = Asset;
 export type RegistryDevice = Device;
 export type RegistryDeviceBinding = DeviceBinding;
+
+export async function getRegistrySpaceChildren(siteId: string, parentSpaceId: string | null, signal: AbortSignal): Promise<Space[]> {
+  return collectCollection<Space>(
+    (params, requestSignal) => client.listSiteSpaceChildren(registryId(siteId), parentSpaceId, params, { signal: requestSignal }),
+    signal,
+  );
+}
+
+export async function getRegistryDevicePoints(deviceId: string, signal: AbortSignal): Promise<TelemetryPoint[]> {
+  return collectCollection<TelemetryPoint>(
+    (params, requestSignal) => client.listDevicePoints(registryId(deviceId), params, { signal: requestSignal }),
+    signal,
+  );
+}
+
+export function useRegistrySpaceChildren(siteId: string | null, parentSpaceId: string | null, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: ['registry', 'sites', siteId, 'spaces', parentSpaceId ?? 'root'],
+    queryFn: async ({ pageParam, signal }) => {
+      const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      return (await client.listSiteSpaceChildren(registryId(siteId!), parentSpaceId, params, { signal })).data;
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && Boolean(siteId)),
+    retry: retryRegistryQuery,
+  });
+}
+
+export function useRegistryDevicePoints(deviceId: string | null, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: ['registry', 'devices', deviceId, 'points'],
+    queryFn: async ({ pageParam, signal }) => {
+      const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      return (await client.listDevicePoints(registryId(deviceId!), params, { signal })).data;
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && Boolean(deviceId)),
+    retry: retryRegistryQuery,
+  });
+}
+
+export const registryAdminApi = {
+  createSite: async (body: SiteMutation) => (await client.createSite(body)).data,
+  updateSite: async (siteId: string, body: SiteMutation) => (await client.updateSite(registryId(siteId), body)).data,
+  createSpace: async (siteId: string, body: SpaceMutation) => (await client.createSiteSpace(registryId(siteId), body)).data,
+  updateSpace: async (siteId: string, spaceId: string, body: SpaceMutation) => (await client.updateSiteSpace(registryId(siteId), registryId(spaceId), body)).data,
+  createAsset: async (siteId: string, body: AssetMutation) => (await client.createSiteAsset(registryId(siteId), body)).data,
+  updateAsset: async (siteId: string, assetId: string, body: AssetMutation) => (await client.updateSiteAsset(registryId(siteId), registryId(assetId), body)).data,
+  createDevice: async (siteId: string, body: DeviceMutation) => (await client.createSiteDevice(registryId(siteId), body)).data,
+  updateDevice: async (siteId: string, deviceId: string, body: DeviceMutation) => (await client.updateSiteDevice(registryId(siteId), registryId(deviceId), body)).data,
+  createPoint: async (siteId: string, body: PointMutation) => (await client.createSitePoint(registryId(siteId), body)).data,
+  updatePoint: async (siteId: string, pointId: string, body: PointMutation) => (await client.updateSitePoint(registryId(siteId), registryId(pointId), body)).data,
+  rebind: async (siteId: string, body: RebindRequest) => (await client.rebindRegistryResource(registryId(siteId), body)).data,
+  releaseTemplate: async (body: ReleaseTemplateRequest) => (await client.releaseRegistryTemplateRevision(body)).data,
+  assignTemplate: async (body: AssignTemplateRequest) => (await client.assignRegistryTemplateRevision(body)).data,
+  planImport: async (siteId: string, body: ImportPlanRequest) => (await client.planRegistryImport(registryId(siteId), body)).data,
+  commitImport: async (siteId: string, body: ImportCommitRequest) => (await client.commitRegistryImport(registryId(siteId), body)).data,
+  retire: async (siteId: string, body: RetireRequest) => (await client.beginRegistryRetirement(registryId(siteId), body)).data,
+};
