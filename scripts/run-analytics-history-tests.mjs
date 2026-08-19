@@ -202,25 +202,27 @@ try {
   const metricVersionId = '01990000-1510-7000-8000-000000000001';
   const metricBindingId = '01990000-1530-7000-8000-000000000001';
   const metricCalculationRunId = '01990000-1540-7000-8000-000000000001';
-  clickHouse(`INSERT INTO analytics.metric_series (
+  clickHouse(`INSERT INTO analytics.metric_result_facts (
     result_id, tenant_id, site_id, subject_type, subject_id,
     metric_id, metric_version_id, metric_code, metric_version,
     metric_binding_id, binding_version, period_start, period_end, calculated_at,
     granularity, value_type, value_json, value_number, value_string, value_boolean,
-    quality, completeness, calculation_run_id, revision, provenance
+    unit, quality, completeness, calculation_run_id, revision, provenance
   ) VALUES
     (toUUID('01990000-1550-7000-8000-000000000001'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), 'SITE', toUUID('01990000-5000-7000-8000-000000000001'),
      toUUID('${metricId}'), toUUID('${metricVersionId}'), 'daily_energy', 1,
      toUUID('${metricBindingId}'), 1, toDateTime64('2026-08-10 16:00:00', 3, 'UTC'), toDateTime64('2026-08-11 16:00:00', 3, 'UTC'), toDateTime64('2026-08-11 16:02:00', 3, 'UTC'),
-     'DAY', 'NUMBER', '1000', 1000, NULL, NULL, 'PARTIAL', 0.99, toUUID('${metricCalculationRunId}'), 1, '{"reason":"scheduled","source":"counter_deltas"}'),
+     'DAY', 'NUMBER', '1000', 1000, NULL, NULL, 'kWh', 'PARTIAL', 0.99, toUUID('${metricCalculationRunId}'), 1, '{"reason":"scheduled","source":"counter_deltas"}'),
     (toUUID('01990000-1550-7000-8000-000000000002'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), 'SITE', toUUID('01990000-5000-7000-8000-000000000001'),
      toUUID('${metricId}'), toUUID('${metricVersionId}'), 'daily_energy', 1,
      toUUID('${metricBindingId}'), 1, toDateTime64('2026-08-10 16:00:00', 3, 'UTC'), toDateTime64('2026-08-11 16:00:00', 3, 'UTC'), toDateTime64('2026-08-12 02:00:00', 3, 'UTC'),
-     'DAY', 'NUMBER', '1012', 1012, NULL, NULL, 'GOOD', 1.0, toUUID('01990000-1540-7000-8000-000000000002'), 2, '{"reason":"late_data_recalculation","previousRevision":1}')`);
-  report.assertions.metricSeriesEngine = clickHouse(`SELECT engine FROM system.tables WHERE database = 'analytics' AND name = 'metric_series'`);
-  if (report.assertions.metricSeriesEngine !== 'ReplacingMergeTree') throw new Error(`unexpected metric_series engine ${report.assertions.metricSeriesEngine}`);
-  report.assertions.metricSeriesLatestRevision = clickHouse(`SELECT toString(revision) || '|' || toString(value_number) || '|' || quality || '|' || toString(completeness) || '|' || toString(metric_version) || '|' || toString(binding_version) FROM analytics.metric_series FINAL WHERE metric_code = 'daily_energy' AND subject_id = toUUID('01990000-5000-7000-8000-000000000001') AND period_start = toDateTime64('2026-08-10 16:00:00', 3, 'UTC') FORMAT TSVRaw`);
-  if (report.assertions.metricSeriesLatestRevision !== '2|1012|GOOD|1|1|1') throw new Error(`Metric historical recalculation did not expose revision 2 as current result: ${report.assertions.metricSeriesLatestRevision}`);
+     'DAY', 'NUMBER', '1012', 1012, NULL, NULL, 'kWh', 'GOOD', 1.0, toUUID('01990000-1540-7000-8000-000000000002'), 2, '{"reason":"late_data_recalculation","previousRevision":1}')`);
+  report.assertions.metricResultFactsEngine = clickHouse(`SELECT engine FROM system.tables WHERE database = 'analytics' AND name = 'metric_result_facts'`);
+  if (report.assertions.metricResultFactsEngine !== 'MergeTree') throw new Error(`unexpected metric_result_facts engine ${report.assertions.metricResultFactsEngine}`);
+  report.assertions.metricResultFactHistory = clickHouse(`SELECT toString(count()) || '|' || arrayStringConcat(arrayMap(value -> toString(value), arraySort(groupArray(revision))), ',') FROM analytics.metric_result_facts WHERE metric_code = 'daily_energy' AND subject_id = toUUID('01990000-5000-7000-8000-000000000001') AND period_start = toDateTime64('2026-08-10 16:00:00', 3, 'UTC') FORMAT TSVRaw`);
+  if (report.assertions.metricResultFactHistory !== '2|1,2') throw new Error(`Metric historical recalculation did not preserve both revisions: ${report.assertions.metricResultFactHistory}`);
+  report.assertions.metricResultRevisionTwoPayload = clickHouse(`SELECT toString(revision) || '|' || toString(value_number) || '|' || quality || '|' || toString(completeness) || '|' || toString(metric_version) || '|' || toString(binding_version) FROM analytics.metric_result_facts WHERE metric_code = 'daily_energy' AND subject_id = toUUID('01990000-5000-7000-8000-000000000001') AND period_start = toDateTime64('2026-08-10 16:00:00', 3, 'UTC') ORDER BY revision DESC LIMIT 1 FORMAT TSVRaw`);
+  if (report.assertions.metricResultRevisionTwoPayload !== '2|1012|GOOD|1|1|1') throw new Error(`Metric revision 2 payload is incorrect: ${report.assertions.metricResultRevisionTwoPayload}`);
 
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
@@ -235,13 +237,14 @@ try {
   report.assertions.readerCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);
-  report.assertions.metricReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_reader', '--query', 'SELECT count() FROM analytics.metric_series FINAL']);
-  report.assertions.cubeCanSelectMetric = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.metric_series FINAL']);
+  report.assertions.metricReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
+  report.assertions.cubeCanSelectMetric = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
   report.assertions.forecastReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'forecast_service_reader', '--query', 'SELECT count() FROM analytics.forecast_series']);
   report.assertions.cubeCanSelectForecast = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.forecast_series']);
   report.assertions.readerCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'analytics_projector_reader');
-  report.assertions.metricReaderCannotInsert = clickHouseMustFail("INSERT INTO analytics.metric_series (result_id) VALUES (generateUUIDv4())", 'metric_engine_reader');
-  report.assertions.metricWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.metric_series', 'metric_engine_writer');
+  report.assertions.metricReaderCannotInsert = clickHouseMustFail("INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())", 'metric_engine_reader');
+  report.assertions.metricWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.metric_result_facts', 'metric_engine_writer');
+  report.assertions.metricWriterCanDelete = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_writer', '--query', "ALTER TABLE analytics.metric_result_facts DELETE WHERE result_id = toUUID('00000000-0000-0000-0000-000000000000') SETTINGS mutations_sync=1"]);
   report.assertions.forecastReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.forecast_series (forecast_id) VALUES (generateUUIDv4())', 'forecast_service_reader');
   report.assertions.forecastWriterCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.forecast_series', 'forecast_service_writer');
   report.assertions.historyQueryCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'telemetry_query_history_reader');

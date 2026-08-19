@@ -33,17 +33,18 @@ type request struct {
 }
 
 type metricJobPayload struct {
-	BindingID               string    `json:"bindingId"`
-	PeriodStart             time.Time `json:"periodStart"`
-	PeriodEnd               time.Time `json:"periodEnd"`
+	BindingID                string    `json:"bindingId"`
+	PeriodStart              time.Time `json:"periodStart"`
+	PeriodEnd                time.Time `json:"periodEnd"`
 	FinalizationDelaySeconds int64     `json:"finalizationDelaySeconds"`
 }
 
 type runtime struct {
-	store  *metric.PostgresStore
-	series *metric.ClickHouseStore
-	engine *metric.Engine
-	latest *metric.RedisLatestStore
+	store     *metric.PostgresStore
+	series    *metric.ClickHouseStore
+	engine    *metric.Engine
+	lifecycle *metric.LifecycleExecutor
+	latest    *metric.RedisLatestStore
 }
 
 func main() {
@@ -141,7 +142,13 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	return &runtime{store: store, series: series, engine: engine, latest: latest}, nil
+	lifecycle, err := metric.NewLifecycleExecutor(store, series)
+	if err != nil {
+		_ = latest.Close()
+		store.Close()
+		return nil, err
+	}
+	return &runtime{store: store, series: series, engine: engine, lifecycle: lifecycle, latest: latest}, nil
 }
 
 func (runtime *runtime) Ping(ctx context.Context) error {
@@ -325,6 +332,48 @@ func executeMetricJob(ctx context.Context, runtime *runtime, job metric.Schedule
 }
 
 func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.SchedulerJob, defaultFinalizationDelay time.Duration) (map[string]any, string, bool, error) {
+	if job.JobType == "DATA_RETENTION_SCAN" || job.JobType == "DATA_ARCHIVE" {
+		var payload metric.LifecyclePayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, "INVALID_PAYLOAD", false, err
+		}
+		outcome, err := runtime.lifecycle.Execute(ctx, job, payload, time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, metric.ErrArchiveEvidenceRequired) {
+				return nil, "ARCHIVE_EVIDENCE_REQUIRED", true, err
+			}
+			return nil, "LIFECYCLE_EXECUTION_FAILED", true, err
+		}
+		return map[string]any{
+			"status": outcome.Status, "resourceKey": outcome.ResourceKey,
+			"deletionRequestId": outcome.DeletionRequestID, "tombstoneId": outcome.TombstoneID,
+		}, "", false, nil
+	}
+
+	publication, found, err := runtime.store.LoadJobPublication(ctx, job.TenantID, job.SiteID, job.JobID)
+	if err != nil {
+		return nil, "DEPENDENCY_UNAVAILABLE", true, err
+	}
+	if found && publication.Status == "PERSISTING" {
+		if _, err = runtime.engine.ReconcileScope(ctx, job.TenantID, job.SiteID, time.Now().UTC(), 100); err != nil {
+			return nil, "PUBLICATION_RECONCILE_FAILED", true, err
+		}
+		publication, found, err = runtime.store.LoadJobPublication(ctx, job.TenantID, job.SiteID, job.JobID)
+		if err != nil {
+			return nil, "DEPENDENCY_UNAVAILABLE", true, err
+		}
+	}
+	if found {
+		switch publication.Status {
+		case "PERSISTED":
+			return map[string]any{"runId": publication.RunID, "resultId": publication.ResultID, "revision": publication.Revision, "deduplicated": true}, "", false, nil
+		case "PERSISTING":
+			return nil, "PUBLICATION_RECONCILE_PENDING", true, errors.New("Metric Result publication remains PERSISTING")
+		case "FAILED":
+			return nil, "PUBLICATION_FAILED", false, errors.New("Metric Result publication is terminal FAILED")
+		}
+	}
+
 	var payload metricJobPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return nil, "INVALID_PAYLOAD", false, err
@@ -380,18 +429,18 @@ func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.Sch
 	}
 
 	result, err := runtime.engine.Execute(ctx, metric.RunRequest{
-		TenantID: job.TenantID, SiteID: job.SiteID, BindingID: payload.BindingID,
+		TenantID: job.TenantID, SiteID: job.SiteID, BindingID: payload.BindingID, SchedulerJobID: job.JobID,
 		PeriodStart: period.Start, PeriodEnd: period.End, Reason: reason,
 	})
 	if err != nil {
 		return nil, "METRIC_EXECUTION_FAILED", true, err
 	}
 	return map[string]any{
-		"bindingId": payload.BindingID,
-		"runId": result.RunID,
-		"resultId": result.ResultID,
+		"bindingId":   payload.BindingID,
+		"runId":       result.RunID,
+		"resultId":    result.ResultID,
 		"periodStart": period.Start,
-		"periodEnd": period.End,
+		"periodEnd":   period.End,
 	}, "", false, nil
 }
 

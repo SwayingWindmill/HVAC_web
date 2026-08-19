@@ -46,7 +46,7 @@ CREATE USER IF NOT EXISTS forecast_service_writer IDENTIFIED WITH no_password;
 GRANT SELECT ON telemetry_history.observations TO forecast_service_reader;
 GRANT SELECT ON telemetry_history.counter_deltas TO forecast_service_reader;
 GRANT SELECT ON analytics.energy_interval_facts TO forecast_service_reader;
-GRANT SELECT ON analytics.metric_series TO forecast_service_reader;
+GRANT SELECT ON analytics.metric_result_facts TO forecast_service_reader;
 GRANT SELECT ON analytics.forecast_series TO forecast_service_reader;
 GRANT INSERT ON analytics.forecast_series TO forecast_service_writer;
 GRANT SELECT ON analytics.forecast_series TO cube_analytics_reader;

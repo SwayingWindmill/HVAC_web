@@ -47,5 +47,5 @@ GRANT SELECT ON analytics.energy_interval_facts TO analytics_projector_reader;
 GRANT INSERT ON analytics.energy_interval_facts TO analytics_projector_writer;
 GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader;
 -- Settlement reads released Metric results, not energy_interval_facts. Its grant is
--- declared with analytics.metric_series after that dataset is created.
+-- declared with analytics.metric_result_facts after that dataset is created.
 GRANT SELECT ON telemetry_history.observations TO telemetry_query_history_reader;

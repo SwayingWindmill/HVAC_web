@@ -59,32 +59,36 @@ type Input struct {
 }
 
 type Result struct {
-	RunID        string
-	ResultID     string
-	Binding      Binding
-	PeriodStart  time.Time
-	PeriodEnd    time.Time
-	CalculatedAt time.Time
-	Value        float64
-	Quality      string
-	Completeness float64
-	Inputs       []Input
+	RunID          string
+	ResultID       string
+	Revision       uint64
+	SchedulerJobID string
+	Binding        Binding
+	PeriodStart    time.Time
+	PeriodEnd      time.Time
+	CalculatedAt   time.Time
+	Value          float64
+	Quality        string
+	Completeness   float64
+	Inputs         []Input
 }
 
 type RunRequest struct {
-	TenantID    string
-	SiteID      string
-	BindingID   string
-	PeriodStart time.Time
-	PeriodEnd   time.Time
-	Reason      string
+	TenantID       string
+	SiteID         string
+	BindingID      string
+	SchedulerJobID string
+	PeriodStart    time.Time
+	PeriodEnd      time.Time
+	Reason         string
 }
 
 type Registry interface {
 	LoadBinding(context.Context, string, string, string, time.Time) (Binding, error)
-	CreateRun(context.Context, Result, string, []byte) error
+	LoadCurrentMetricInput(context.Context, Binding, Dependency, time.Time, time.Time) (Input, error)
+	CreateRun(context.Context, Result, string, []byte) (Result, error)
 	MarkRunRunning(context.Context, string, string, string, time.Time) error
-	BeginPublication(context.Context, Result, time.Time) error
+	BeginPublication(context.Context, Result, time.Time) (Result, error)
 	CompletePublication(context.Context, Result, time.Time) error
 	FailRun(context.Context, Result, string, time.Time) error
 	ListStalePublications(context.Context, time.Time, int) ([]Result, error)
@@ -92,7 +96,7 @@ type Registry interface {
 
 type SeriesStore interface {
 	ReadPoint(context.Context, Binding, string, time.Time, time.Time) (Input, error)
-	ReadMetric(context.Context, Binding, Dependency, time.Time, time.Time) (Input, error)
+	ReadMetricResult(context.Context, Result) (Result, error)
 	InsertMetric(context.Context, Result) error
 	HasMetricResult(context.Context, string) (bool, error)
 }
@@ -136,7 +140,7 @@ func (e *Engine) Execute(ctx context.Context, request RunRequest) (Result, error
 			}
 			input, err = e.series.ReadPoint(ctx, binding, pointID, request.PeriodStart, request.PeriodEnd)
 		case "METRIC":
-			input, err = e.series.ReadMetric(ctx, binding, dep, request.PeriodStart, request.PeriodEnd)
+			input, err = e.registry.LoadCurrentMetricInput(ctx, binding, dep, request.PeriodStart, request.PeriodEnd)
 		case "EXTERNAL":
 			value, ok := numberMap(binding.SourceDefinition, "externals", dep.Code)
 			if !ok {
@@ -170,27 +174,44 @@ func (e *Engine) Execute(ctx context.Context, request RunRequest) (Result, error
 		return Result{}, errors.New("metric strict quality policy rejected inputs")
 	}
 	now := e.now().UTC()
-	runID, err := uuidv7(now)
-	if err != nil {
-		return Result{}, err
+	schedulerJobID := strings.TrimSpace(request.SchedulerJobID)
+	runID := schedulerJobID
+	if runID == "" {
+		runID, err = uuidv7(now)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	resultID, err := uuidv7(now)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{RunID: runID, ResultID: resultID, Binding: binding, PeriodStart: request.PeriodStart.UTC(), PeriodEnd: request.PeriodEnd.UTC(), CalculatedAt: now, Value: value, Quality: quality, Completeness: completeness, Inputs: inputs}
+	result := Result{RunID: runID, ResultID: resultID, SchedulerJobID: schedulerJobID, Binding: binding, PeriodStart: request.PeriodStart.UTC(), PeriodEnd: request.PeriodEnd.UTC(), CalculatedAt: now, Value: value, Quality: quality, Completeness: completeness, Inputs: inputs}
 	refs, _ := json.Marshal(inputs)
-	if err = e.registry.CreateRun(ctx, result, request.Reason, refs); err != nil {
+	result, err = e.registry.CreateRun(ctx, result, request.Reason, refs)
+	if err != nil {
 		return Result{}, err
 	}
-	if err = e.registry.MarkRunRunning(ctx, binding.TenantID, binding.SiteID, runID, now); err != nil {
+	value, err = calculate(binding, result.Inputs)
+	if err != nil {
 		return Result{}, err
 	}
-	if err = e.registry.BeginPublication(ctx, result, e.now().UTC()); err != nil {
+	quality, completeness = summarize(result.Inputs, binding.QualityPolicy)
+	if binding.QualityPolicy == "STRICT" && quality != "GOOD" {
+		return Result{}, errors.New("metric strict quality policy rejected persisted run inputs")
+	}
+	result.Value, result.Quality, result.Completeness = value, quality, completeness
+	if err = e.registry.MarkRunRunning(ctx, binding.TenantID, binding.SiteID, result.RunID, now); err != nil {
+		return Result{}, err
+	}
+	result, err = e.registry.BeginPublication(ctx, result, e.now().UTC())
+	if err != nil {
 		return Result{}, err
 	}
 	if err = e.series.InsertMetric(ctx, result); err != nil {
-		_ = e.registry.FailRun(ctx, result, "CLICKHOUSE_INSERT_FAILED", e.now().UTC())
+		// The ClickHouse outcome may be unknown (for example a lost HTTP response).
+		// Keep the publication PERSISTING so reconciliation can prove or replay the
+		// exact same Result ID/revision instead of manufacturing a second Result.
 		return Result{}, err
 	}
 	if err = e.registry.CompletePublication(ctx, result, e.now().UTC()); err != nil {
@@ -243,7 +264,14 @@ func (e *Engine) reconcileResults(ctx context.Context, stale []Result) (int, err
 			return repaired, checkErr
 		}
 		if !exists {
-			continue
+			if checkErr = e.series.InsertMetric(ctx, result); checkErr != nil {
+				return repaired, checkErr
+			}
+		} else {
+			result, checkErr = e.series.ReadMetricResult(ctx, result)
+			if checkErr != nil {
+				return repaired, checkErr
+			}
 		}
 		if err := e.registry.CompletePublication(ctx, result, e.now().UTC()); err != nil {
 			return repaired, err

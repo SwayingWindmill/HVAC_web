@@ -43,21 +43,26 @@ func NewRedisLatestStore(address, password string, database int, ttl time.Durati
 }
 
 var putMetricLatestScript = redis.NewScript(`
-local current = redis.call('HGET', KEYS[1], 'periodEndMs')
-if current and tonumber(current) > tonumber(ARGV[1]) then
+local currentPeriodEnd = redis.call('HGET', KEYS[1], 'periodEndMs')
+local currentRevision = redis.call('HGET', KEYS[1], 'revision')
+if currentPeriodEnd and tonumber(currentPeriodEnd) > tonumber(ARGV[1]) then
+  return 0
+end
+if currentPeriodEnd and tonumber(currentPeriodEnd) == tonumber(ARGV[1]) and currentRevision and tonumber(currentRevision) >= tonumber(ARGV[2]) then
   return 0
 end
 redis.call('HSET', KEYS[1],
   'periodEndMs', ARGV[1],
-  'calculatedAtMs', ARGV[2],
-  'resultId', ARGV[3],
-  'metricVersionId', ARGV[4],
-  'bindingId', ARGV[5],
-  'value', ARGV[6],
-  'unit', ARGV[7],
-  'quality', ARGV[8],
-  'completeness', ARGV[9])
-redis.call('PEXPIRE', KEYS[1], ARGV[10])
+  'revision', ARGV[2],
+  'calculatedAtMs', ARGV[3],
+  'resultId', ARGV[4],
+  'metricVersionId', ARGV[5],
+  'bindingId', ARGV[6],
+  'value', ARGV[7],
+  'unit', ARGV[8],
+  'quality', ARGV[9],
+  'completeness', ARGV[10])
+redis.call('PEXPIRE', KEYS[1], ARGV[11])
 return 1
 `)
 
@@ -67,7 +72,7 @@ func (store *RedisLatestStore) PutMetric(ctx context.Context, result Result) err
 	}
 	key := fmt.Sprintf("metric:latest:%s:%s:%s:%s:%s", result.Binding.TenantID, result.Binding.SiteID, result.Binding.MetricID, result.Binding.SubjectType, result.Binding.SubjectID)
 	_, err := putMetricLatestScript.Run(ctx, store.client, []string{key},
-		result.PeriodEnd.UTC().UnixMilli(), result.CalculatedAt.UTC().UnixMilli(), result.ResultID,
+		result.PeriodEnd.UTC().UnixMilli(), result.Revision, result.CalculatedAt.UTC().UnixMilli(), result.ResultID,
 		result.Binding.MetricVersionID, result.Binding.BindingID, strconv.FormatFloat(result.Value, 'g', -1, 64),
 		result.Binding.Unit, result.Quality, strconv.FormatFloat(result.Completeness, 'g', -1, 64), store.ttl.Milliseconds(),
 	).Result()

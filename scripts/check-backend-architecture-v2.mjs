@@ -141,7 +141,7 @@ for (const name of ['ProblemBuilder', 'ObjectiveBuilder', 'ConstraintBuilder', '
 invariant(optimizationService.includes('Reconcile('), 'Optimization Evaluation reconciliation boundary is incomplete');
 
 const settlementService = await readFile(resolve(root, 'services/settlement-service/internal/settlement/clickhouse.go'), 'utf8');
-invariant(settlementService.includes('analytics.metric_series'), 'Settlement must consume Metric Result from analytics.metric_series');
+invariant(settlementService.includes('analytics.metric_result_facts'), 'Settlement must consume append-only Metric Result facts from analytics.metric_result_facts');
 invariant(!settlementService.includes('energy_interval_facts'), 'Settlement must not recalculate standard metrics from energy_interval_facts');
 
 const supportDomains = await readFile(resolve(root, 'infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql'), 'utf8');

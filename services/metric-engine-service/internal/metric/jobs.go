@@ -27,6 +27,13 @@ type SchedulerJob struct {
 	WorkerID       string
 }
 
+type JobPublication struct {
+	RunID    string
+	ResultID string
+	Revision uint64
+	Status   string
+}
+
 func (s *PostgresStore) ClaimMetricJobs(ctx context.Context, workerID string, batch int, leaseDuration time.Duration, now time.Time) ([]SchedulerJob, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("metric postgres store is unavailable")
@@ -50,7 +57,7 @@ WHERE job_type='METRIC_BACKFILL' AND state IN ('CLAIMED','RUNNING')
 FROM core_registry.job_instances
 WHERE state='READY' AND cancel_requested=false
   AND tenant_id IS NOT NULL AND site_id IS NOT NULL
-  AND job_type IN ('METRIC_WINDOW_CALC','METRIC_RECALC','METRIC_BACKFILL')
+  AND job_type IN ('METRIC_WINDOW_CALC','METRIC_RECALC','METRIC_BACKFILL','DATA_RETENTION_SCAN','DATA_ARCHIVE')
 ORDER BY priority DESC, scheduled_for ASC
 FOR UPDATE SKIP LOCKED
 LIMIT $1`, batch)
@@ -243,12 +250,39 @@ func retryDelayWithJitter(attempt int) time.Duration {
 	return time.Duration(float64(base) * jitter)
 }
 
+func (s *PostgresStore) LoadJobPublication(ctx context.Context, tenantID, siteID, jobID string) (JobPublication, bool, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return JobPublication{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, tenantID, siteID); err != nil {
+		return JobPublication{}, false, err
+	}
+	var publication JobPublication
+	err = tx.QueryRow(ctx, `SELECT run_id::text,result_id::text,result_revision,status
+FROM core_registry.metric_result_revisions
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND scheduler_job_id=$3::uuid`, tenantID, siteID, jobID).Scan(
+		&publication.RunID, &publication.ResultID, &publication.Revision, &publication.Status,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return JobPublication{}, false, nil
+	}
+	if err != nil {
+		return JobPublication{}, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return JobPublication{}, false, err
+	}
+	return publication, true, nil
+}
+
 func ValidateMetricSchedulerJob(job SchedulerJob) error {
 	if job.JobID == "" || job.WorkerID == "" || job.TenantID == "" || job.SiteID == "" || job.AttemptNo <= 0 || job.TimeoutSeconds <= 0 {
 		return errors.New("metric scheduler job identity is incomplete")
 	}
-	if job.JobType != "METRIC_WINDOW_CALC" && job.JobType != "METRIC_RECALC" && job.JobType != "METRIC_BACKFILL" {
-		return fmt.Errorf("unsupported metric scheduler job type %s", job.JobType)
+	if job.JobType != "METRIC_WINDOW_CALC" && job.JobType != "METRIC_RECALC" && job.JobType != "METRIC_BACKFILL" && job.JobType != "DATA_RETENTION_SCAN" && job.JobType != "DATA_ARCHIVE" {
+		return fmt.Errorf("unsupported metric/lifecycle scheduler job type %s", job.JobType)
 	}
 	return nil
 }
