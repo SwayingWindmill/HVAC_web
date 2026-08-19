@@ -75,3 +75,45 @@ All files were read from the pinned `v4.3.1.1` tag at commit `c2a52e46c44e308dde
 ### S06 consequence
 
 Public Current single/batch reads return the PostgreSQL snapshot directly. Redis projection startup/materialization failure cannot make Current incorrect or prevent the authoritative service from starting. Accepted historical observations are retained while database timestamp guards prevent older samples from rolling Current backward. Duplicate/replay paths do not advance Business Revision. MQTT retry and parking are both bounded; parked failures vacate the active worker so unrelated devices can progress, terminal outcomes are observable as `dead`/`quarantined`, and configured Gateway partitions remain isolated.
+## S15 — shared Outbound Delivery ledger
+
+Date: 2026-08-19
+
+Local issue: #256
+
+### Upstream files reviewed
+
+The implementation-time review re-used the pinned source evidence already captured by the D09 integrations adjudication and re-read the REST/Notification delivery paths at `v4.3.1.1` / `c2a52e46c44e308ddee430e7266b8e10eddde9c4`:
+
+- `rule-engine/rule-engine-components/src/main/java/org/thingsboard/rule/engine/rest/TbRestApiCallNode.java`
+- `rule-engine/rule-engine-components/src/main/java/org/thingsboard/rule/engine/rest/TbHttpClient.java`
+- `rule-engine/rule-engine-components/src/main/java/org/thingsboard/rule/engine/rest/TbRestApiCallNodeConfiguration.java`
+- `rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/rest/TbHttpClientTest.java`
+- `rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/rest/TbRestApiCallNodeTest.java`
+- `SsrfSafeAddressResolverGroup.java` and its tests/configuration surface recorded by `thingsboard-ai-analytics-integrations-adjudication.md`
+- `common/data/src/main/java/org/thingsboard/server/common/data/notification/NotificationRequest.java`
+- `dao/src/main/java/org/thingsboard/server/dao/model/sql/NotificationRequestEntity.java`
+- `dao/src/main/java/org/thingsboard/server/dao/notification/DefaultNotificationRequestService.java`
+- `application/src/main/java/org/thingsboard/server/service/notification/DefaultNotificationCenter.java`
+- `application/src/main/java/org/thingsboard/server/service/notification/DefaultNotificationSchedulerService.java`
+- `application/src/main/java/org/thingsboard/server/service/notification/rule/DefaultNotificationRuleProcessor.java`
+
+### Observed upstream semantics
+
+- REST external effects are asynchronous and expose bounded concurrency, timeout and response handling seams.
+- The pinned REST implementation contains a DNS-rebinding-safe resolver and redirect rejection pattern; those are useful transport-boundary protections.
+- Upstream REST protection is configuration-sensitive rather than a mandatory default-deny contract, and some defaults can be effectively unbounded. HVAC therefore cannot inherit the defaults unchanged.
+- Rule-node Success/Failure is an execution result, not a durable business delivery ledger. There is no authoritative `Intent -> Attempt -> Receipt -> DeadLetter/ReplayApproval` chain that can explain a crash between provider effect and local completion.
+- Notification Request persistence gives durable notification-request state and scheduling/deduplication concepts, but it is not sufficient evidence for a per-provider delivery effect or a safe replay of an outcome-unknown send.
+- Static connector/provider credentials belong to configuration in the reference paths; that conflicts with the HVAC `CredentialRef` boundary.
+
+### Implementation decision
+
+- `ADOPT`: asynchronous external-I/O boundary, explicit timeout/concurrency limits, resolved-address SSRF protection, redirect rejection, provider request/receipt identifiers, and stable idempotency keys where providers support them.
+- `ADAPT`: make egress protection default-deny, require an explicit destination allowlist, pin the actual dial to the addresses that passed validation, impose hard upper bounds on body/time/concurrency/attempts, and persist only bounded response evidence.
+- `REPLACE`: direct Rule Node/provider effects with a shared durable owner that commits `DeliveryIntent` and a leased `DeliveryAttempt` before the external call.
+- `REJECT`: blind retry after an outcome-unknown send, treating provider acceptance as confirmed delivery, plaintext credential material in business records, redirect following, runtime fallback to a legacy direct-send path, and editing historical attempts during replay.
+
+### S15 consequence
+
+The S15 owner persists immutable attempt/receipt/dead-letter/replay evidence under Tenant FORCE RLS. Automatic retry is allowed only for a result proven `NOT_SENT`; a crash/lease expiry or transport result that may have reached the provider becomes `OUTCOME_UNKNOWN` and requires explicit replay approval. Replay creates a new attempt number. The first adapter is REST/Webhook only; Notification product semantics remain S16 scope.
