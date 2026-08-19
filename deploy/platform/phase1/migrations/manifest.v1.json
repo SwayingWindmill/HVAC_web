@@ -90,7 +90,8 @@
         "services/alarm-service/migrations/002_s4_alarm_lifecycle.sql",
         "services/alarm-service/migrations/003_s4_tenant_scope.sql",
         "services/alarm-service/migrations/004_s4_event_provenance.sql",
-        "services/alarm-service/migrations/005_s13_alarm_orthogonal.sql"
+        "services/alarm-service/migrations/005_s13_alarm_orthogonal.sql",
+        "services/alarm-service/migrations/006_s14_alarm_evaluator.sql"
       ]
     },
     {

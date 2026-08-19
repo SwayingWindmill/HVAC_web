@@ -165,79 +165,19 @@ func (store *PostgresStore) Publish(ctx context.Context, tenantID, siteID string
 	if store == nil || store.pool == nil {
 		return alarmmodel.Alarm{}, ErrUnavailable
 	}
-	fingerprint, err := alarmmodel.Fingerprint(tenantID, siteID, publication.SourceType, publication.SourceReference, publication.AlarmType, publication.DeviceID, publication.PointID)
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	occurredAt, err := time.Parse(time.RFC3339Nano, publication.OccurredAt)
-	if err != nil {
-		return alarmmodel.Alarm{}, alarmmodel.ErrInvalidOperation
-	}
 	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
 	if err != nil {
 		return alarmmodel.Alarm{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
-	current, err := getActiveByFingerprint(ctx, tx, tenantID, siteID, fingerprint, true)
-	if err == nil {
-		updated, err := alarmmodel.RecordOccurrence(current, publication.occurrenceInput())
-		if err != nil {
-			return alarmmodel.Alarm{}, err
-		}
-		if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
-			return alarmmodel.Alarm{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm occurrence: %w", err)
-		}
-		return updated, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return alarmmodel.Alarm{}, err
-	}
-
-	alarmID, err := store.newID(occurredAt)
+	alarm, err := store.publishInTransaction(ctx, tx, tenantID, siteID, publication)
 	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	incidentCorrelationID, err := store.newID(occurredAt.Add(time.Nanosecond))
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	incident, err := alarmmodel.NewIncident(publication.incidentInput(alarmID, incidentCorrelationID, tenantID, siteID))
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	inserted, err := insertIncident(ctx, tx, incident)
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	if inserted {
-		if err := insertTimelineEntry(ctx, tx, incident, incident.Timeline[0]); err != nil {
-			return alarmmodel.Alarm{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm incident: %w", err)
-		}
-		return incident, nil
-	}
-
-	current, err = getActiveByFingerprint(ctx, tx, tenantID, siteID, fingerprint, true)
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	updated, err := alarmmodel.RecordOccurrence(current, publication.occurrenceInput())
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return alarmmodel.Alarm{}, fmt.Errorf("commit concurrent Alarm occurrence: %w", err)
+		return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm publication: %w", err)
 	}
-	return updated, nil
+	return alarm, nil
 }
 
 func (store *PostgresStore) ClearActive(ctx context.Context, tenantID, siteID string, recovery Recovery) (alarmmodel.Alarm, error) {
@@ -249,27 +189,14 @@ func (store *PostgresStore) ClearActive(ctx context.Context, tenantID, siteID st
 		return alarmmodel.Alarm{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	current, err := getActiveByFingerprint(ctx, tx, tenantID, siteID, recovery.Fingerprint, true)
+	alarm, err := store.clearInTransaction(ctx, tx, tenantID, siteID, recovery)
 	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	if current.IncidentCorrelationID != recovery.IncidentCorrelationID {
-		return alarmmodel.Alarm{}, ErrNotFound
-	}
-	cleared, err := alarmmodel.ClearIncident(current, alarmmodel.ClearInput{
-		OccurredAt: recovery.OccurredAt, Reason: recovery.Reason, Evidence: recovery.Evidence, RuleRevision: recovery.RuleRevision,
-		ActorType: recovery.ActorType, ActorID: recovery.ActorID, CorrelationID: recovery.CorrelationID,
-	})
-	if err != nil {
-		return alarmmodel.Alarm{}, err
-	}
-	if err := persistUpdatedAlarm(ctx, tx, current, cleared); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm recovery: %w", err)
 	}
-	return cleared, nil
+	return alarm, nil
 }
 
 func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {

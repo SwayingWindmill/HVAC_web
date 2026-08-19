@@ -62,6 +62,7 @@ COPY services/alarm-service/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo
 COPY services/alarm-service/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/services/alarm-service/migrations/003_s4_tenant_scope.sql
 COPY services/alarm-service/migrations/004_s4_event_provenance.sql /opt/hvac/repo/services/alarm-service/migrations/004_s4_event_provenance.sql
 COPY services/alarm-service/migrations/005_s13_alarm_orthogonal.sql /opt/hvac/repo/services/alarm-service/migrations/005_s13_alarm_orthogonal.sql
+COPY services/alarm-service/migrations/006_s14_alarm_evaluator.sql /opt/hvac/repo/services/alarm-service/migrations/006_s14_alarm_evaluator.sql
 COPY services/work-order-service/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/services/work-order-service/migrations/001_s5_work_order_runtime.sql
 COPY services/work-order-service/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/services/work-order-service/migrations/002_s5_work_order_create_assignment.sql
 COPY services/work-order-service/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/services/work-order-service/migrations/003_s5_work_order_lifecycle.sql
