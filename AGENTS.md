@@ -18,15 +18,40 @@
 - Reuse-first implementation: before introducing new infrastructure, libraries,
   or tooling, search GitHub and the existing dependency set for maintained
   solutions that satisfy the requirement; document the choice and pin the selected version or commit.
-- Execute all project commands from WSL. This includes dependency installation,
-  npm/node scripts, builds, tests, lint/typecheck, Go commands, Docker/Compose,
-  and local-stack helpers. When the agent itself is running on Windows, invoke
-  commands through WSL (for this workspace, `E:\Code\HVAC_web` maps to
-  `/mnt/e/Code/HVAC_web`) instead of running project commands directly in
-  PowerShell or cmd.exe.
-- WSL commands must use the Linux toolchain installed inside WSL. Do not fall
-  back to Windows Node/npm/Go/Docker executables exposed through `/mnt/*` PATH
-  entries. For Node work, verify `node` and `npm` resolve inside the WSL Linux
-  filesystem (for example under `~/.nvm`) before installing or building; if a
-  shared `node_modules` was produced by Windows tooling, recreate it from WSL
-  before continuing.
+- Source-first reference implementation rule: when a target architecture decision
+  is derived from an external reference implementation, pin an official upstream
+  release/tag and commit, then read the relevant official source code, upstream
+  tests, and official documentation before implementing or refactoring that
+  concern. This rule also applies retroactively to local modules that were already
+  written before the source review: existing code has no incumbency preference and
+  remains UNVERIFIED until compared against the pinned reference implementation.
+  Do not implement or retain an adopted mechanism from prose or architecture
+  diagrams alone. Record the reviewed upstream files and the resulting
+  ADOPT/ADAPT/REJECT decisions in the project architecture source-review record.
+  If local behavior materially conflicts with the reference implementation and
+  there is no documented, evidence-backed reason that the local behavior is safer,
+  simpler, more maintainable, or required by HVAC/domain constraints, the pinned
+  reference implementation behavior wins and the local code must be refactored to
+  match it. Preserve project-specific differences only when that justification is
+  explicit and reviewed. Do not copy upstream source verbatim unless license and
+  provenance have been explicitly reviewed. For the current Edge Control Plane
+  reference, this rule applies to OpenEMS.
+- No meaningless tests. Add or retain a test only when it protects a concrete
+  current product contract, safety invariant, data invariant, authorization
+  boundary, externally observable behavior, or a previously observed realistic
+  regression. Do not add tests merely for coverage, trivial getters/setters,
+  implementation details, duplicate permutations, exhaustive fixture combinations,
+  obsolete compatibility behavior, or assertions that cannot catch a meaningful
+  product failure. When a contract changes, update or delete stale tests instead of
+  adding compatibility code to satisfy them. Prefer the smallest direct behavioral
+  test set that proves the required behavior.
+- No speculative defensive programming. Add a validation, guard, fallback, retry,
+  default, coercion, recovery branch, or exception handler only for a concrete
+  reachable failure mode at a real trust boundary, external I/O boundary,
+  persistence-corruption boundary, concurrency boundary, or safety-critical
+  invariant. Do not defend against impossible states already excluded by trusted
+  types, schemas, database constraints, or an upstream owner contract. Do not add
+  redundant validation at every layer, silent fallbacks, catch-and-ignore logic,
+  permissive defaults, or "just in case" branches. Prefer a clear failure over
+  masking an invalid state. Every defensive branch must have an identifiable
+  failure mode that justifies its existence; otherwise remove it.

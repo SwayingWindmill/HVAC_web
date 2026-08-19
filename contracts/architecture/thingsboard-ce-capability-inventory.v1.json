@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "status": "CURRENT_AUDIT_INPUT",
+  "purpose": "Define the complete source-backed ThingsBoard CE capability set that must be adjudicated against HVAC Web.",
+  "adjudicationStatus": "NOT_STARTED",
+  "baseline": {
+    "repository": "https://github.com/thingsboard/thingsboard",
+    "tag": "v4.3.1.1",
+    "commit": "c2a52e46c44e308ddee430e7266b8e10eddde9c4",
+    "license": "Apache-2.0",
+    "localReadOnlyCheckout": "C:\\Users\\HaoZhang\\AppData\\Local\\Temp\\thingsboard-v4.3.1.1-src"
+  },
+  "evidencePriority": [
+    "production_source",
+    "upstream_tests",
+    "active_database_ddl",
+    "runtime_and_deployment_configuration",
+    "public_api_and_ui_entrypoints",
+    "official_documentation"
+  ],
+  "coverageRules": [
+    "Include every capability signaled by a controller, public domain type, active DDL, UI page domain, transport module, Rule Node registration, application service package, deployment module, upstream test, or official documentation.",
+    "Assign every source signal to exactly one primary audit domain and use cross-references for secondary domains.",
+    "Do not complete a domain review until production source, tests, persistence, public API or UI, and failure or boundary behavior have all been checked; record absent evidence explicitly.",
+    "Do not classify a documentation-only capability as CE source-backed.",
+    "Include dynamic capabilities through registries, component descriptors, annotations, module assembly, and runtime configuration.",
+    "Treat every existing HVAC Web counterpart as UNVERIFIED until its adjudication is complete."
+  ],
+  "allowedFutureDecisions": [
+    "ADOPT",
+    "ADAPT",
+    "REPLACE",
+    "KEEP",
+    "REJECT",
+    "DEFER"
+  ],
+  "sourceSurfaces": {
+    "controllers": {
+      "namedControllerClasses": 60,
+      "baseOrAbstractClasses": 2,
+      "concreteControllers": 58,
+      "directlyAnnotatedControllers": 57,
+      "note": "AutoCommitController is the additional concrete controller without a direct controller annotation."
+    },
+    "uiPageDomains": 32,
+    "ruleNodes": {
+      "annotatedConcreteClasses": 77,
+      "packageCategories": 29
+    },
+    "database": {
+      "activeCreateTableDeclarations": 66,
+      "uniqueActiveTableNames": 64,
+      "commentedOutCreateTableDeclarationsExcluded": 1,
+      "duplicateDeclarations": [
+        "key_dictionary",
+        "ts_kv_latest"
+      ]
+    },
+    "applicationServicePackages": 43,
+    "coreTransportModules": [
+      "http",
+      "mqtt",
+      "coap",
+      "lwm2m",
+      "snmp"
+    ],
+    "tests": {
+      "controllerTestClasses": 53,
+      "ruleEngineComponentTestClasses": 88,
+      "daoTestClasses": 116,
+      "applicationTransportIntegrationTestClasses": 165,
+      "uiSpecFiles": 1
+    }
+  },
+  "surfaceCoverage": {
+    "allConcreteControllersAssigned": true,
+    "allUiPageDomainsAssigned": true,
+    "allUniqueActiveTablesAssigned": true,
+    "allRuleNodeCategoriesAssigned": true,
+    "allApplicationServicePackagesAssigned": true,
+    "allCoreTransportModulesAssigned": true,
+    "assignmentDetails": "docs/architecture/thingsboard-ce-capability-inventory.md"
+  },
+  "auditDomains": [
+    {
+      "id": "D01",
+      "name": "security-tenancy-identity-audit",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/238",
+      "capabilities": [
+        "system-admin-tenant-customer-user-lifecycle",
+        "tenant-profile-quotas-and-feature-limits",
+        "authority-permission-and-tenant-isolation",
+        "login-jwt-activation-password-reset-and-session",
+        "two-factor-authentication",
+        "oauth2-sso-domain-and-registration-templates",
+        "api-key-lifecycle-and-authorization",
+        "audit-log-and-security-traceability",
+        "api-usage-rate-entity-and-resource-limits",
+        "mail-sms-auth-ui-and-qr-settings",
+        "customer-assignment-sharing-and-public-access"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 17,
+        "uiPageDomainCount": 11,
+        "uniqueTableCount": 17,
+        "applicationServicePackageCount": 6
+      }
+    },
+    {
+      "id": "D02",
+      "name": "entities-relations-devices-assets-profiles",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/237",
+      "capabilities": [
+        "asset-and-asset-profile-lifecycle",
+        "device-and-device-profile-lifecycle",
+        "device-credentials-and-registration-metadata",
+        "entity-relation-graph",
+        "entity-query-search-and-pagination",
+        "entity-view-key-and-time-window-projection",
+        "entity-assignment-sharing-and-public-exposure",
+        "resource-image-and-component-descriptor",
+        "entity-import-export-version-control-and-auto-commit",
+        "profile-owned-transport-rule-queue-ota-and-alarm-configuration"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 10,
+        "uiPageDomainCount": 6,
+        "uniqueTableCount": 9,
+        "applicationServicePackageCount": 8
+      }
+    },
+    {
+      "id": "D03",
+      "name": "connectivity-gateway-rpc-ota",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/234",
+      "capabilities": [
+        "http-device-transport",
+        "mqtt-v3-v5-and-sparkplug-b-transport",
+        "coap-device-transport",
+        "lwm2m-device-management-transport",
+        "snmp-device-transport",
+        "transport-credentials-and-authentication",
+        "device-session-activity-disconnect-and-reconnect",
+        "telemetry-and-attribute-uplink-boundary",
+        "device-provisioning-claim-and-connectivity-check",
+        "mqtt-gateway-api-and-gateway-device-service",
+        "server-side-and-client-side-rpc-v1-v2",
+        "persistent-rpc-expiration-and-retry",
+        "ota-package-assignment-download-and-status",
+        "external-thingsboard-iot-gateway-boundary"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 5,
+        "uiPageDomainCount": 2,
+        "uniqueTableCount": 2,
+        "applicationServicePackageCount": 4,
+        "coreTransportModuleCount": 5
+      }
+    },
+    {
+      "id": "D04",
+      "name": "telemetry-attributes-timeseries-storage-calculated-fields",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/245",
+      "capabilities": [
+        "client-shared-and-server-attributes",
+        "latest-and-timeseries-ingestion-query-and-delete",
+        "key-dictionary-value-types-and-timestamps",
+        "websocket-realtime-subscriptions-and-recovery",
+        "entity-data-query-aggregation-filter-and-pagination",
+        "calculated-field-types-and-bindings",
+        "calculated-field-chaining-loop-prevention-and-debug",
+        "job-and-historical-reprocessing-hooks",
+        "sql-timescaledb-cassandra-and-edqs-storage-paths",
+        "ttl-housekeeping-and-retention",
+        "duplicate-out-of-order-and-rule-engine-delivery-semantics"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 3,
+        "uiPageDomainCount": 1,
+        "uniqueTableCount": 7,
+        "applicationServicePackageCount": 5
+      }
+    },
+    {
+      "id": "D05",
+      "name": "rule-engine-queue-scheduling-debug",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/243",
+      "capabilities": [
+        "rule-chain-and-node-lifecycle-import-export",
+        "root-chain-profile-binding-and-component-descriptors",
+        "message-envelope-types-and-metadata",
+        "actor-routing-relations-fanout-and-nested-chains",
+        "node-state-processing-stack-callbacks-and-failure-propagation",
+        "queue-partition-processing-order-retry-timeout-and-concurrency",
+        "tenant-execution-limits-and-isolation",
+        "debug-events-time-bounded-debugging-and-stats",
+        "delay-deduplication-checkpoint-ack-and-transaction",
+        "filter-switch-metadata-transform-math-geo-data-and-action-nodes",
+        "javascript-and-tbel-script-sandbox",
+        "alarm-notification-rpc-edge-and-external-nodes"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 5,
+        "uiPageDomainCount": 1,
+        "uniqueTableCount": 7,
+        "applicationServicePackageCount": 7,
+        "annotatedRuleNodeCount": 77,
+        "ruleNodeCategoryCount": 29
+      }
+    },
+    {
+      "id": "D06",
+      "name": "alarm-notification-disposition",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/239",
+      "capabilities": [
+        "alarm-type-severity-status-ack-clear-and-assignment",
+        "alarm-comment-entity-propagation-query-filter-and-count",
+        "create-update-clear-node-idempotency-and-reopen",
+        "profile-alarm-condition-duration-repeat-schedule-and-state",
+        "notification-target-template-rule-request-and-inbox",
+        "email-sms-slack-teams-mobile-and-firebase-channels",
+        "alarm-api-usage-device-edge-entity-limit-resource-rule-and-task-triggers",
+        "notification-scheduling-deduplication-retry-escalation-and-failure",
+        "edge-alarm-and-notification-synchronization"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 6,
+        "uiPageDomainCount": 2,
+        "uniqueTableCount": 9,
+        "applicationServicePackageCount": 1
+      }
+    },
+    {
+      "id": "D07",
+      "name": "dashboard-widget-mobile-presentation",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/246",
+      "capabilities": [
+        "dashboard-lifecycle-import-export-customer-public-and-home",
+        "dashboard-state-layout-alias-time-window-and-action",
+        "telemetry-alarm-rpc-static-map-and-scada-widgets",
+        "widget-type-bundle-custom-js-html-and-resources",
+        "image-resource-and-scada-symbol-management",
+        "mobile-app-bundle-oauth-qr-and-navigation",
+        "ui-settings-home-links-and-realtime-data-binding",
+        "presentation-artifact-version-control"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 5,
+        "uiPageDomainCount": 5,
+        "uniqueTableCount": 6,
+        "applicationServicePackageCount": 1
+      }
+    },
+    {
+      "id": "D08",
+      "name": "edge-sync-offline-remote-configuration",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/241",
+      "capabilities": [
+        "edge-entity-credentials-provisioning-connectivity-and-upgrade",
+        "device-asset-profile-rule-dashboard-view-and-ota-assignment",
+        "edge-event-queue-cursor-and-change-delivery",
+        "grpc-session-full-incremental-and-resumable-sync",
+        "cloud-edge-data-configuration-alarm-and-rpc-flow",
+        "offline-local-operation-recovery-priority-and-backpressure",
+        "edge-local-rule-engine-notification-and-ui-boundary",
+        "conflict-delete-duplicate-ordering-and-ce-edge-compatibility"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 2,
+        "uiPageDomainCount": 1,
+        "uniqueTableCount": 2,
+        "applicationServicePackageCount": 2,
+        "crossReferenceDomain": "D03"
+      }
+    },
+    {
+      "id": "D09",
+      "name": "ai-analytics-integrations-automation-extensions",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/236",
+      "capabilities": [
+        "ai-model-lifecycle-provider-credentials-and-request",
+        "ai-rule-node-and-message-output-boundary",
+        "source-backed-ai-ui-and-calculated-field-hooks",
+        "trendz-external-integration-hook",
+        "mqtt-kafka-rabbitmq-and-rest-external-actions",
+        "aws-sqs-sns-lambda-gcp-pubsub-and-azure-iot-hub-nodes",
+        "email-sms-slack-and-teams-external-integrations",
+        "geo-math-and-aggregation-nodes",
+        "iot-gateway-platform-integrations-mcp-and-post-baseline-boundaries"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 2,
+        "uiPageDomainCount": 1,
+        "uniqueTableCount": 1,
+        "applicationServicePackageCount": 1
+      }
+    },
+    {
+      "id": "D10",
+      "name": "operations-platform-deployment-ha-observability-upgrade",
+      "issue": "https://github.com/SwayingWindmill/HVAC_web/issues/235",
+      "capabilities": [
+        "monolith-and-microservice-deployment-topologies",
+        "tb-node-web-ui-transports-js-vc-executors-and-edqs",
+        "actor-partition-cluster-discovery-and-inter-node-messaging",
+        "queue-implementations-partitioning-stats-backpressure-and-recovery",
+        "cache-redis-and-cache-consistency",
+        "dao-database-migration-update-timescaledb-and-cassandra-variants",
+        "script-executor-isolation-jobs-housekeeper-and-ttl",
+        "stats-lifecycle-error-health-system-info-and-usage",
+        "rate-resource-entity-and-api-limits",
+        "entity-version-control-import-export-and-auto-commit",
+        "upgrade-version-compatibility-packaging-docker-haproxy-and-rest-client",
+        "tls-configuration-secret-and-operational-security"
+      ],
+      "primarySourceSignals": {
+        "controllerCount": 3,
+        "uiPageDomainCount": 2,
+        "uniqueTableCount": 4,
+        "applicationServicePackageCount": 8
+      }
+    }
+  ],
+  "sourceBoundary": [
+    {
+      "capability": "ThingsBoard IoT Gateway connectors such as Modbus, BACnet, and OPC UA",
+      "classification": "EXTERNAL_OPEN_SOURCE_COMPANION",
+      "reason": "Implemented in a separate open-source project; the core CE repository contains only integration boundaries such as gateway-device support and the MQTT Gateway API."
+    },
+    {
+      "capability": "Platform Integrations",
+      "classification": "PE_OR_EXTERNAL_SOURCE_UNAVAILABLE",
+      "reason": "Documented capability without complete implementation in the fixed CE core source baseline."
+    },
+    {
+      "capability": "Advanced RBAC and Entity Groups",
+      "classification": "PE_OR_EXTERNAL_SOURCE_UNAVAILABLE",
+      "reason": "Proprietary behavior must not be inferred from documentation."
+    },
+    {
+      "capability": "White Labeling and Reporting",
+      "classification": "PE_OR_EXTERNAL_SOURCE_UNAVAILABLE",
+      "reason": "No complete source-backed implementation is available in the fixed CE baseline."
+    },
+    {
+      "capability": "Trendz",
+      "classification": "EXTERNAL_COMMERCIAL_PRODUCT",
+      "reason": "The CE repository contains an integration controller, not the Trendz implementation."
+    },
+    {
+      "capability": "Calculated Field historical reprocessing",
+      "classification": "ENTITLEMENT_REQUIRES_DOMAIN_REVIEW",
+      "reason": "Calculated Field and Job infrastructure exists in CE, but exact version and entitlement behavior must be confirmed in D04."
+    },
+    {
+      "capability": "MCP Server and newer predictive-maintenance documentation",
+      "classification": "POST_BASELINE_OR_EXTERNAL",
+      "reason": "No corresponding core implementation was found in the fixed v4.3.1.1 source checkout."
+    }
+  ],
+  "downstreamGates": [
+    "All ten domain adjudications must complete before the local reverse audit is final.",
+    "The local reverse audit must complete before target domain model conflict resolution.",
+    "The target domain model must complete before the phased replacement and implementation roadmap."
+  ]
+}

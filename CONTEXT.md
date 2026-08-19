@@ -254,7 +254,7 @@ A structured Benchmark Evidence requirement that is not present in the current s
 
 ## Requested Operational Scope
 
-The exact Organization, Site, Equipment, Device and time boundary that a caller attempted to access but that is not part of the caller's authorized operational Scope. Requested Operational Scope may appear only in authorization decisions and their Evidence; it never authorizes Registry, Telemetry, Analytics or Command reads and must not disclose whether the requested resource exists.
+The exact Tenant, Site, Asset, Device and time boundary that a caller attempted to access but that is not part of the caller's authorized operational Scope. Requested Operational Scope may appear only in authorization decisions and their Evidence; it never authorizes Registry, Telemetry, Analytics or Command reads and must not disclose whether the requested resource exists.
 
 ## Benchmark Deterministic Blocker Sample
 
@@ -271,3 +271,39 @@ The repository-owned deterministic evaluator registered for one Operations Agent
 ## Operations Agent Benchmark Report
 
 The versioned machine-readable result produced by the repository Benchmark Runner. It records discovery status, scenario and contract versions, ordered structure and blocker phases, scored criteria that remain unevaluated or blocked, and stable failure codes by scenario and dimension. A passing score can never replace or offset a failed blocker phase.
+
+## Domain Owner
+
+The single bounded context that is authoritative for creating and changing one class of business fact. Physical co-location with another module never transfers Domain Ownership; other contexts interact through governed commands, queries, owner-authored events or rebuildable projections.
+
+## Template Revision
+
+An immutable released description of stable Asset or Device classification, required capabilities, expected Point shape and references to other domain releases. A Template Revision does not contain live credentials, runtime state, Alarm state, Rule execution state or secrets.
+
+## Release Reference
+
+A stable reference from one released or assigned artifact to the exact immutable revision owned by another domain. A Release Reference coordinates compatibility without transferring ownership or copying the referenced domain configuration into a mutable cross-domain profile.
+
+## Product Release Manifest
+
+An immutable coordination record that locks the exact released revisions intended to operate together for one product rollout. It coordinates validation, deployment, rollback evidence and compatibility, but it does not become the owner of the referenced domain facts.
+
+## Metric
+
+A versioned derived fact computed from authoritative inputs under an explicit definition, unit, quality policy and provenance. A Metric is not a synthetic Device Point and never overwrites raw Telemetry Observations.
+
+## Command Intent
+
+A governed request for a physical or logical control change after authorization and before execution. A Command Intent remains distinct from approval, transport delivery, Edge arbitration, device acknowledgment, readback and verified physical outcome.
+
+## Alarm Incident
+
+One durable occurrence of an Alarm condition for a stable fingerprint. Its condition state, acknowledgment, suppression, assignment, Work Order links and Notification disposition are separate facts; recurrence after recovery creates a new Incident rather than reopening the historical occurrence.
+
+## Alarm Condition State
+
+Whether the physical or logical condition represented by an Alarm Incident is currently `ACTIVE` or `CLEARED`. Acknowledgment, suppression, Notification delivery and Work Order completion do not change Alarm Condition State.
+
+## Delivery Intent
+
+A durable request to submit one governed payload to an external destination under an immutable business identity and destination policy. Delivery attempts, provider receipts, retries, dead-letter handling and replay are evidence about delivery; they never become the originating domain's business fact.
