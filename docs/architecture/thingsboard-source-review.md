@@ -117,3 +117,39 @@ The implementation-time review re-used the pinned source evidence already captur
 ### S15 consequence
 
 The S15 owner persists immutable attempt/receipt/dead-letter/replay evidence under Tenant FORCE RLS. Automatic retry is allowed only for a result proven `NOT_SENT`; a crash/lease expiry or transport result that may have reached the provider becomes `OUTCOME_UNKNOWN` and requires explicit replay approval. Replay creates a new attempt number. The first adapter is REST/Webhook only; Notification product semantics remain S16 scope.
+
+## S07 — Typed history/query and aggregation contract
+
+Date: 2026-08-19
+
+Local issue: #258
+
+### Upstream files reviewed
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/kv/BaseReadTsKvQuery.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/kv/AggregationParams.java`
+- `dao/src/main/java/org/thingsboard/server/dao/sqlts/AggregationTimeseriesDao.java`
+- `dao/src/main/java/org/thingsboard/server/dao/sqlts/AbstractSqlTimeseriesDao.java`
+- `dao/src/main/java/org/thingsboard/server/dao/timeseries/BaseTimeseriesService.java`
+
+All files were reviewed against the pinned ThingsBoard CE `v4.3.1.1` release at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4`, not `master`.
+
+### Observed upstream semantics
+
+- A time-series read query carries an explicit aggregation policy, result `limit`, and `order`; result bounding is part of the query contract rather than an after-the-fact UI convention.
+- Aggregation parameters distinguish fixed millisecond intervals from calendar intervals and carry a `ZoneId` for calendar interpretation.
+- The DAO boundary accepts an explicit `ReadTsKvQuery` per key and returns bounded query results; aggregation remains a query concern rather than a mutation of Latest state.
+- The upstream model supports typed KV values. Numeric aggregation therefore cannot be treated as the only historical representation.
+- Upstream calendar/time-zone support is useful, but its generic per-key time-series identity is weaker than HVAC's required Observation/Point/Source identity and does not replace HVAC Counter reset/rollover semantics.
+
+### Implementation decision
+
+- `ADOPT`: explicit query limits/order, typed raw history, bounded aggregate result counts, and calendar aggregation driven by an explicit IANA time zone.
+- `ADAPT`: raw HVAC history pages are ordered by `(telemetryKey, sampledAt, observationId)` and use an opaque cursor bound to the exact query scope plus a fixed projection snapshot. This preserves distinct same-timestamp Observations and makes repeated pagination stable while new rows are projected.
+- `ADAPT`: HVAC returns Observation identity, acceptance status, Point/Sensor identity, Point revision, quality, and source position. `ACCEPTED` and valid `OUT_OF_ORDER` facts remain queryable even when they did not advance Current.
+- `ADAPT`: aggregation is Point-type-aware: TELEMETRY uses gauge statistics, COUNTER uses reset/rollover/revision/unit/quality-aware deltas, and STATE returns typed last-state/change semantics. Site calendar buckets are evaluated in the requested IANA time zone, including DST boundaries.
+- `REJECT`: numeric-only history, source offset masquerading as revision, static `datasetRevision`, `max(sampled_at)` as a projector watermark, fixed-millisecond day/month business boundaries, and compatibility fields for the superseded v1 History response.
+
+### S07 consequence
+
+The public History contract is version 2 and returns a flat typed Observation page plus `projectionWatermark` and `nextCursor`; no `series`, `maxPointsPerKey`, pseudo `revision`, `datasetRevision`, `dataWatermark`, `partial`, or `truncatedKeys` compatibility fields remain. Aggregate History is a separate governed route with explicit granularity, Site time zone and quality policy. Numeric charts consume NUMBER Observations only, while STRING/BOOLEAN/JSON facts remain available through the same raw History API.

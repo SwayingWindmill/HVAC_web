@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "predecessorContractVersion": "1.0.0-planned",
-  "currentContractVersion": "1.0.0",
+  "predecessorContractVersion": "1.0.0",
+  "currentContractVersion": "2.0.0",
   "activationStatus": "expand-baseline",
   "operations": [
     {
@@ -37,6 +37,13 @@
       "path": "/api/v1/telemetry/device-series:query",
       "requestSchema": "DeviceHistoryRequest",
       "responseSchema": "DeviceHistoryResponse"
+    },
+    {
+      "operationId": "queryDeviceHistoryAggregate",
+      "method": "POST",
+      "path": "/api/v1/telemetry/device-series:aggregate",
+      "requestSchema": "DeviceHistoryAggregateRequest",
+      "responseSchema": "DeviceHistoryAggregateResponse"
     }
   ],
   "requiredSchemaProperties": {
@@ -84,14 +91,31 @@
       "keys",
       "from",
       "to",
-      "maxPointsPerKey"
+      "pageSize"
     ],
     "DeviceHistoryResponse": [
       "schemaVersion",
       "tenantId",
       "siteId",
       "deviceId",
-      "series",
+      "observations",
+      "metadata"
+    ],
+    "DeviceHistoryAggregateRequest": [
+      "deviceId",
+      "keys",
+      "from",
+      "to",
+      "granularity",
+      "timezone",
+      "qualityPolicy"
+    ],
+    "DeviceHistoryAggregateResponse": [
+      "schemaVersion",
+      "tenantId",
+      "siteId",
+      "deviceId",
+      "buckets",
       "metadata"
     ]
   },

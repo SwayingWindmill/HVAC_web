@@ -61,11 +61,11 @@ type telemetryController struct {
 }
 
 type telemetryCaller struct {
-	principal            identitycontext.UserPrincipal
-	tenantID string
-	contextID            string
-	expiresAt            time.Time
-	workloadSPIFFE       string
+	principal      identitycontext.UserPrincipal
+	tenantID       string
+	contextID      string
+	expiresAt      time.Time
+	workloadSPIFFE string
 }
 
 type telemetryCallerContextKeyType struct{}
@@ -73,19 +73,20 @@ type telemetryCallerContextKeyType struct{}
 var telemetryCallerContextKey telemetryCallerContextKeyType
 
 type publicTelemetryRoute struct {
-	template   string
-	action     telemetryauth.Action
-	batch      bool
-	bootstrap  bool
-	checkpoint bool
-	history    bool
+	template         string
+	action           telemetryauth.Action
+	batch            bool
+	bootstrap        bool
+	checkpoint       bool
+	history          bool
+	historyAggregate bool
 }
 
 type telemetryAuthorization struct {
-	grant                string
-	principalID          string
-	policyRevision       string
-	targets              []telemetryauth.AuthorizedTarget
+	grant          string
+	principalID    string
+	policyRevision string
+	targets        []telemetryauth.AuthorizedTarget
 }
 
 type telemetryFailure struct {
@@ -336,11 +337,11 @@ func (h *handler) telemetryWorkloadCaller(request *http.Request) (telemetryCalle
 	}
 	now := h.identity.now().UTC()
 	return telemetryCaller{
-		principal:            identitycontext.UserPrincipal{Subject: spiffeID, Issuer: subjectIssuer, DisplayName: spiffeID},
-		tenantID: tenantID,
-		contextID:            "workload:" + requestIDFromContext(request.Context()),
-		expiresAt:            now.Add(h.identity.config.DelegationTTL),
-		workloadSPIFFE:       spiffeID,
+		principal:      identitycontext.UserPrincipal{Subject: spiffeID, Issuer: subjectIssuer, DisplayName: spiffeID},
+		tenantID:       tenantID,
+		contextID:      "workload:" + requestIDFromContext(request.Context()),
+		expiresAt:      now.Add(h.identity.config.DelegationTTL),
+		workloadSPIFFE: spiffeID,
 	}, nil
 }
 
@@ -954,7 +955,7 @@ func validTelemetryTransportPosition(position s2telemetryapi.TransportPosition) 
 func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicTelemetryRoute, deviceID string) {
 	decision := routeDecisionFromContext(request.Context())
 	expectedOwner := ownershipregistry.OwnerTelemetryRuntime
-	if route.history {
+	if route.history || route.historyAggregate {
 		expectedOwner = ownershipregistry.OwnerAnalyticsQuery
 	}
 	if decision.RegistryRevision != 0 && decision.SelectedOwner != expectedOwner {
@@ -1016,7 +1017,7 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 		h.CheckpointTelemetryRecoveryCursors(writer, request, input)
 		return
 	}
-	if route.history {
+	if route.history || route.historyAggregate {
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
 			return
@@ -1026,6 +1027,15 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 			return
 		}
 		request = request.WithContext(context.WithValue(request.Context(), telemetryCallerContextKey, caller))
+		if route.historyAggregate {
+			input, failure := parseTelemetryHistoryAggregateRequest(writer, request)
+			if failure != nil {
+				h.writeTelemetryFailure(writer, request, *failure)
+				return
+			}
+			h.QueryDeviceHistoryAggregate(writer, request, input)
+			return
+		}
 		input, failure := parseTelemetryHistoryRequest(writer, request)
 		if failure != nil {
 			h.writeTelemetryFailure(writer, request, *failure)
@@ -1058,6 +1068,9 @@ func matchPublicTelemetryRoute(path string) (publicTelemetryRoute, string, bool)
 	}
 	if path == s2telemetryapi.QueryDeviceHistoryPath {
 		return publicTelemetryRoute{template: s2telemetryapi.QueryDeviceHistoryPath, action: telemetryauth.ActionHistoryRead, history: true}, "", true
+	}
+	if path == s2telemetryapi.QueryDeviceHistoryAggregatePath {
+		return publicTelemetryRoute{template: s2telemetryapi.QueryDeviceHistoryAggregatePath, action: telemetryauth.ActionHistoryRead, historyAggregate: true}, "", true
 	}
 	deviceID, matches := matchSinglePathParameter(path, s2telemetryapi.GetDeviceObservationSnapshotPathTemplate, "{deviceId}")
 	if !matches {
@@ -1298,6 +1311,31 @@ func parseTelemetryHistoryRequest(writer http.ResponseWriter, request *http.Requ
 	}
 	if ensureTelemetryJSONEOF(decoder) != nil {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "Device History request invalid", "The Device History request contains additional JSON data.", false}
+		return input, &failure
+	}
+	return input, nil
+}
+
+func parseTelemetryHistoryAggregateRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.DeviceHistoryAggregateRequest, *telemetryFailure) {
+	var input s2telemetryapi.DeviceHistoryAggregateRequest
+	if request.URL.RawQuery != "" {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_REQUEST_INVALID", "Device History aggregate request invalid", "The Device History aggregate route does not accept query parameters.", false}
+		return input, &failure
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumTelemetryRequestSize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failure := telemetryLimitExceeded("The Device History aggregate request body exceeds the maximum size.")
+			return input, &failure
+		}
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_REQUEST_INVALID", "Device History aggregate request invalid", "The Device History aggregate request is malformed.", false}
+		return input, &failure
+	}
+	if ensureTelemetryJSONEOF(decoder) != nil {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_REQUEST_INVALID", "Device History aggregate request invalid", "The Device History aggregate request contains additional JSON data.", false}
 		return input, &failure
 	}
 	return input, nil

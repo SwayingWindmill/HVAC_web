@@ -66,7 +66,7 @@ func main() {
 	historyClient, err := history.NewClient(history.Config{
 		BaseURL: requiredEnv("QUERY_HISTORY_CLICKHOUSE_ENDPOINT"), Database: envOr("QUERY_HISTORY_CLICKHOUSE_DATABASE", "telemetry_history"),
 		Table: envOr("QUERY_HISTORY_CLICKHOUSE_TABLE", "observations"), Username: envOr("QUERY_HISTORY_CLICKHOUSE_USERNAME", "telemetry_query_history_reader"),
-		Password: os.Getenv("QUERY_HISTORY_CLICKHOUSE_PASSWORD"), DatasetRevision: requiredEnv("QUERY_HISTORY_DATASET_REVISION"), HTTPClient: historyHTTPClient,
+		Password: os.Getenv("QUERY_HISTORY_CLICKHOUSE_PASSWORD"), HTTPClient: historyHTTPClient,
 	})
 	if err != nil {
 		logger.Error("query_history_clickhouse_client_invalid", "error_code", "QUERY_HISTORY_CLICKHOUSE_CLIENT_INVALID")

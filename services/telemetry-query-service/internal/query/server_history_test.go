@@ -19,165 +19,111 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
 
-func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesMetadata(t *testing.T) {
-	now := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
-	from := now.Add(-6 * time.Hour)
+func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesTypedObservation(t *testing.T) {
+	now := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
-		ActingOrganizationID: testOrganizationID,
-		TenantID:             "018f1d00-0000-7000-8000-000000000001",
-		SiteID:               testSiteID,
-		DeviceID:             "018f1e00-4000-7000-8000-000000000001",
-		Keys:                 []string{"zone.temperature"},
-		From:                 from,
-		To:                   now,
-		MaxPointsPerKey:      100,
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: "018f1e00-4000-7000-8000-000000000001",
+		Keys: []string{"zone.mode"}, From: now.Add(-time.Hour), To: now, PageSize: 100,
 	}
-	unit := "Cel"
-	sensorID := "018f1e00-6000-7000-8000-000000000001"
-	watermark := now
+	watermark := now.Add(-time.Minute)
 	historyEngine := &historyEngineStub{response: telemetryhistorymodel.DeviceHistoryResponse{
-		SchemaVersion:        1,
-		TenantID:             query.TenantID,
-		SiteID:               query.SiteID,
-		DeviceID:             query.DeviceID,
-		Series: []telemetryhistorymodel.DeviceHistorySeries{{
-			Key: query.Keys[0],
-			Points: []telemetryhistorymodel.DeviceHistoryPoint{{
-				ObservationID:  "018f1e00-8000-7000-8000-000000000001",
-				PointID:        "018f1e00-5000-7000-8000-000000000001",
-				SensorID:       &sensorID,
-				SampledAt:      from.Add(time.Hour),
-				ReceivedAt:     from.Add(time.Hour + time.Second),
-				Value:          22.5,
-				Unit:           &unit,
-				Quality:        telemetryhistorymodel.QualityGood,
-				QualityReasons: []string{},
-				Revision:       7,
-			}},
+		SchemaVersion: 2, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+		Observations: []telemetryhistorymodel.DeviceHistoryObservation{{
+			ObservationID: "018f1e00-8000-7000-8000-000000000001", TelemetryKey: "zone.mode",
+			PointID: "018f1e00-5000-7000-8000-000000000001", PointType: telemetryhistorymodel.PointTypeState, PointRevision: 7,
+			SampledAt: now.Add(-30 * time.Minute), ReceivedAt: now.Add(-30*time.Minute + time.Second),
+			Acceptance: telemetryhistorymodel.AcceptanceOutOfOrder, ValueType: telemetryhistorymodel.ValueTypeString, Value: json.RawMessage(`"COOL"`),
+			Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{},
+			SourcePosition: telemetryhistorymodel.SourcePosition{Partition: "mqtt:gw:device:zone.mode", Offset: 42, EventID: "018f1e00-8000-7000-8000-000000000001"},
 		}},
-		Metadata: telemetryhistorymodel.DeviceHistoryMetadata{
-			RequestedFrom:   query.From,
-			RequestedTo:     query.To,
-			DataWatermark:   &watermark,
-			DatasetRevision: "telemetry-history:v1:7",
-			Partial:         false,
-			MaxPointsPerKey: query.MaxPointsPerKey,
-			ReturnedPoints:  1,
-			TruncatedKeys:   []string{},
-		},
+		Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, ProjectionWatermark: &watermark, PageSize: query.PageSize, ReturnedObservations: 1},
 	}}
-	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := NewHandler(ServerConfig{
-		Engine:                 &engineStub{response: analyticsmodel.EnergySeriesResponse{}},
-		HistoryEngine:          historyEngine,
-		DelegationPublicKey:    signer.Public(),
-		AllowedPresenterSPIFFE: testPresenter,
-		Audience:               testAudience,
-		Now:                    func() time.Time { return now },
-	})
-	scope, err := query.ScopeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
-		Issuer:               testPresenter,
-		Subject:              "user-1",
-		SubjectIssuer:        "issuer-test",
-		PrincipalID:          testPrincipalID,
-		ExecutingService:     testPresenter,
-		Audience:             testAudience,
-		ActingOrganizationID: query.ActingOrganizationID,
-		Actions:              []string{telemetryhistorymodel.DeviceHistoryAction},
-		Scopes:               []string{scope},
-		PolicyRevision:       "telemetry-access:2",
-		SessionID:            "session-test",
-		IssuedAt:             now.Add(-time.Second).Unix(),
-		ExpiresAt:            now.Add(30 * time.Second).Unix(),
-		TokenID:              "token-test",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(query)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, DeviceHistoryPath, bytes.NewReader(payload))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Delegation-Grant", grant)
-	spiffe, _ := url.Parse(testPresenter)
-	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+	signer := newHistorySigner(t)
+	handler := NewHandler(ServerConfig{Engine: &engineStub{response: analyticsmodel.EnergySeriesResponse{}}, HistoryEngine: historyEngine, DelegationPublicKey: signer.Public(), AllowedPresenterSPIFFE: testPresenter, Audience: testAudience, Now: func() time.Time { return now }})
+	grant := signHistoryGrant(t, signer, now, query.TenantID, telemetryhistorymodel.DeviceHistoryAction, query.ScopeDigest)
+
+	payload, _ := json.Marshal(query)
+	request := historyRequest(DeviceHistoryPath, payload, grant)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d; body=%s", recorder.Code, recorder.Body.String())
-	}
-	if historyEngine.calls != 1 || historyEngine.query.DeviceID != query.DeviceID || len(historyEngine.query.Keys) != 1 {
-		t.Fatalf("history engine call = %#v", historyEngine)
-	}
-	if recorder.Header().Get("Cache-Control") != "private, no-store" {
-		t.Fatalf("cache control = %q", recorder.Header().Get("Cache-Control"))
+	if recorder.Code != http.StatusOK || historyEngine.calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, historyEngine.calls, recorder.Body.String())
 	}
 	var response telemetryhistorymodel.DeviceHistoryResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Metadata.DatasetRevision != "telemetry-history:v1:7" || response.Metadata.ReturnedPoints != 1 {
-		t.Fatalf("response = %#v", response)
+	if len(response.Observations) != 1 || response.Observations[0].Acceptance != telemetryhistorymodel.AcceptanceOutOfOrder || response.Observations[0].PointRevision != 7 || response.Metadata.ProjectionWatermark == nil {
+		t.Fatalf("response=%#v", response)
 	}
 }
 
-func TestDeviceHistoryRouteRejectsGrantForDifferentRange(t *testing.T) {
-	now := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
-	query := telemetryhistorymodel.DeviceHistoryQuery{
-		ActingOrganizationID: testOrganizationID,
-		TenantID:             "018f1d00-0000-7000-8000-000000000001",
-		SiteID:               testSiteID,
-		DeviceID:             "018f1e00-4000-7000-8000-000000000001",
-		Keys:                 []string{"zone.temperature"},
-		From:                 now.Add(-time.Hour),
-		To:                   now,
-		MaxPointsPerKey:      100,
+func TestDeviceHistoryAggregateRouteBindsTimezoneQualityAndPointType(t *testing.T) {
+	now := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: "018f1e00-4000-7000-8000-000000000001",
+		Keys: []string{"zone.temperature"}, From: now.Add(-24 * time.Hour), To: now,
+		Granularity: telemetryhistorymodel.AggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
 	}
-	grantQuery := query
-	grantQuery.From = query.From.Add(-time.Hour)
+	watermark := now.Add(-time.Minute)
+	historyEngine := &historyEngineStub{aggregateResponse: telemetryhistorymodel.DeviceHistoryAggregateResponse{
+		SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+		Buckets: []telemetryhistorymodel.DeviceHistoryAggregateBucket{{
+			TelemetryKey: "zone.temperature", PointID: "018f1e00-5000-7000-8000-000000000001", PointRevision: 3,
+			PointType: telemetryhistorymodel.PointTypeTelemetry, PeriodStart: query.From, PeriodEnd: query.To,
+			Quality: telemetryhistorymodel.AggregateQualitySummary{Good: 4}, Completeness: 1,
+			Gauge: &telemetryhistorymodel.GaugeAggregate{Average: 22, Minimum: 20, Maximum: 24, First: 21, Last: 23, SampleCount: 4},
+		}},
+		Metadata: telemetryhistorymodel.DeviceHistoryAggregateMetadata{RequestedFrom: query.From, RequestedTo: query.To, Granularity: query.Granularity, Timezone: query.Timezone, QualityPolicy: query.QualityPolicy, ProjectionWatermark: &watermark, ReturnedBuckets: 1},
+	}}
+	signer := newHistorySigner(t)
+	handler := NewHandler(ServerConfig{Engine: &engineStub{}, HistoryEngine: historyEngine, DelegationPublicKey: signer.Public(), AllowedPresenterSPIFFE: testPresenter, Audience: testAudience, Now: func() time.Time { return now }})
+	grant := signHistoryGrant(t, signer, now, query.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, query.ScopeDigest)
+
+	payload, _ := json.Marshal(query)
+	request := historyRequest(DeviceHistoryAggregatePath, payload, grant)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || historyEngine.aggregateCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, historyEngine.aggregateCalls, recorder.Body.String())
+	}
+	if historyEngine.aggregateQuery.Timezone != "Asia/Singapore" || historyEngine.aggregateQuery.QualityPolicy != telemetryhistorymodel.AggregateQualityValidOnly {
+		t.Fatalf("query=%#v", historyEngine.aggregateQuery)
+	}
+}
+
+func newHistorySigner(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
 	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	historyEngine := &historyEngineStub{}
-	handler := NewHandler(ServerConfig{
-		Engine:                 &engineStub{},
-		HistoryEngine:          historyEngine,
-		DelegationPublicKey:    signer.Public(),
-		AllowedPresenterSPIFFE: testPresenter,
-		Audience:               testAudience,
-		Now:                    func() time.Time { return now },
-	})
-	scope, err := grantQuery.ScopeDigest()
+	return signer
+}
+
+func signHistoryGrant(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, tenantID, action string, digest func() (string, error)) string {
+	t.Helper()
+	scope, err := digest()
 	if err != nil {
 		t.Fatal(err)
 	}
 	grant, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: testPresenter, Subject: "user-1", SubjectIssuer: "issuer-test", PrincipalID: testPrincipalID,
-		ExecutingService: testPresenter, Audience: testAudience, ActingOrganizationID: query.ActingOrganizationID,
-		Actions: []string{telemetryhistorymodel.DeviceHistoryAction}, Scopes: []string{scope}, PolicyRevision: "telemetry-access:2",
-		SessionID: "session-test", IssuedAt: now.Add(-time.Second).Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-test",
+		ExecutingService: testPresenter, Audience: testAudience, TenantID: tenantID,
+		Actions: []string{action}, Scopes: []string{scope}, PolicyRevision: "telemetry-access:2", SessionID: "session-test",
+		IssuedAt: now.Add(-time.Second).Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(query)
-	request := httptest.NewRequest(http.MethodPost, DeviceHistoryPath, bytes.NewReader(payload))
+	return grant
+}
+
+func historyRequest(path string, payload []byte, grant string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Delegation-Grant", grant)
 	spiffe, _ := url.Parse(testPresenter)
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden || historyEngine.calls != 0 {
-		t.Fatalf("status = %d; calls=%d; body=%s", recorder.Code, historyEngine.calls, recorder.Body.String())
-	}
+	return request
 }

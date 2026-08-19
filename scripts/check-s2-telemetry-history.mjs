@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
-const [bootstrap, baseline, migration, ingestStore, relay, repository, sink, projector, clickHouseDDL, compose, integration] = await Promise.all([
+const [
+  bootstrap, baseline, migration, ingestStore, relay, repository, sink, projector, clickHouseDDL, compose, integration,
+  historyModel, aggregateModel, historyClient, aggregateClient, publicContract, internalContract,
+] = await Promise.all([
   read('infra/s2-telemetry/postgres/init/000-bootstrap-identities.sql'),
   read('infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql'),
   read('infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql'),
@@ -16,6 +19,12 @@ const [bootstrap, baseline, migration, ingestStore, relay, repository, sink, pro
   read('infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql'),
   read('infra/s2-telemetry/compose.yaml'),
   read('scripts/run-s2-telemetry-history-tests.mjs'),
+  read('libs/telemetryhistorymodel/model.go'),
+  read('libs/telemetryhistorymodel/aggregation.go'),
+  read('services/telemetry-query-service/internal/history/client.go'),
+  read('services/telemetry-query-service/internal/history/aggregate.go'),
+  read('contracts/http/s2-telemetry-public.openapi.json'),
+  read('contracts/http/telemetry-query-internal.openapi.yaml'),
 ]);
 
 for (const marker of ['s2_telemetry_history', 's2_telemetry_history_service', 'NOINHERIT', 'NOBYPASSRLS']) {
@@ -67,6 +76,29 @@ assert(integration.includes('pullDockerImageWithRetry'), 'history integration mu
 assert(integration.includes("'--pull=never'"), 'history integration compose startup must not repull images');
 for (const marker of ['TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce', 'PUBLISHED|2|true', "'1|1|24.75'", "'1|24.75'"]) {
   assert(integration.includes(marker), `missing ClickHouse integration evidence marker ${marker}`);
+}
+
+for (const marker of ['AcceptanceOutOfOrder', 'ValueTypeNumber', 'ValueTypeString', 'ValueTypeBoolean', 'ValueTypeJSON', 'PointRevision', 'SourcePosition', 'NextCursor', 'ProjectionWatermark']) {
+  assert(historyModel.includes(marker), `missing typed History model marker ${marker}`);
+}
+for (const marker of ['PointTypeTelemetry', 'PointTypeCounter', 'PointTypeState', 'AggregateGranularityDay', 'AggregateQualityValidOnly', 'AggregateQualityUsable', 'CounterAggregate', 'StateAggregate']) {
+  assert(aggregateModel.includes(marker), `missing typed aggregate model marker ${marker}`);
+}
+for (const marker of ["acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')", "value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')", 'ORDER BY telemetry_key, sampled_at, toString(observation_id)', 'max(projected_at)', 'LastObservationID']) {
+  assert(historyClient.includes(marker), `missing stable typed History query marker ${marker}`);
+}
+for (const marker of ['RESET_TO_ZERO', 'ROLLOVER', 'REVISION_BOUNDARY', 'UNIT_BOUNDARY', 'previous_quality', 'toStartOfDay', 'toStartOfMonth']) {
+  assert(aggregateClient.includes(marker), `missing Point-type/calendar aggregate marker ${marker}`);
+}
+for (const marker of ['"/api/v1/telemetry/device-series:aggregate"', '"DeviceHistoryObservation"', '"projectionWatermark"', '"pointRevision"', '"sourcePosition"', '"OUT_OF_ORDER"']) {
+  assert(publicContract.includes(marker), `missing public History v2 contract marker ${marker}`);
+}
+for (const marker of ['/internal/v1/telemetry/device-history:aggregate', 'DeviceHistoryAggregateQuery', 'DeviceHistoryObservation', 'projectionWatermark', 'pointRevision', 'sourcePosition']) {
+  assert(internalContract.includes(marker), `missing internal History v2 contract marker ${marker}`);
+}
+const historyOnlyContracts = `${publicContract.slice(publicContract.indexOf('"DeviceHistoryRequest"'))}\n${internalContract.slice(internalContract.indexOf('DeviceHistoryQuery:'))}`;
+for (const forbidden of ['maxPointsPerKey', 'datasetRevision', 'dataWatermark', 'returnedPoints', 'truncatedKeys']) {
+  assert(!historyOnlyContracts.includes(forbidden), `legacy pseudo History field remains active: ${forbidden}`);
 }
 
 console.log('S2 ClickHouse telemetry history architecture check passed.');
