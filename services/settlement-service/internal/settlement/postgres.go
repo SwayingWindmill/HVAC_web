@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -173,6 +174,34 @@ func (s *PostgresStore) TransitionPeriod(ctx context.Context, period Period, sta
 
 func encode(value any) []byte { raw, _ := json.Marshal(value); return raw }
 
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC()
+}
+
+func upsertCurrentProjection(ctx context.Context, tx pgx.Tx, snapshot Snapshot, cost map[string]any) error {
+	calc := snapshot.Calculation
+	_, err := tx.Exec(ctx, `INSERT INTO core_registry.settlement_current_projection(
+ tenant_id,site_id,settlement_period_id,snapshot_id,dataset_revision,settlement_revision_no,
+ quality,completeness,source_watermark,source_metric_revisions,missing_metric_binding_refs,cost,updated_at)
+ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13)
+ ON CONFLICT (tenant_id,site_id,settlement_period_id) DO UPDATE SET
+ snapshot_id=EXCLUDED.snapshot_id,dataset_revision=EXCLUDED.dataset_revision,
+ settlement_revision_no=EXCLUDED.settlement_revision_no,quality=EXCLUDED.quality,
+ completeness=EXCLUDED.completeness,source_watermark=EXCLUDED.source_watermark,
+ source_metric_revisions=EXCLUDED.source_metric_revisions,
+ missing_metric_binding_refs=EXCLUDED.missing_metric_binding_refs,cost=EXCLUDED.cost,updated_at=EXCLUDED.updated_at
+ WHERE core_registry.settlement_current_projection.dataset_revision < EXCLUDED.dataset_revision`,
+		snapshot.Period.TenantID, snapshot.Period.SiteID, snapshot.Period.ID, snapshot.ID, snapshot.DatasetRevision, snapshot.RevisionNo,
+		calc.Quality, calc.Completeness, nullableTime(calc.SourceWatermark), encode(calc.SourceMetricRevisions), encode(calc.MissingMetricBindingRefs), encode(cost), snapshot.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert settlement current projection: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresStore) InsertSnapshot(ctx context.Context, snapshot Snapshot) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -196,28 +225,36 @@ func (s *PostgresStore) InsertSnapshot(ctx context.Context, snapshot Snapshot) e
 	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(
 id,tenant_id,site_id,settlement_period_id,boundary_id,revision_no,previous_snapshot_id,settlement_revision_id,
-meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18)`,
+meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at,
+source_metric_revisions,source_watermark,missing_metric_binding_refs,dataset_revision)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22)`,
 		snapshot.ID, period.TenantID, period.SiteID, period.ID, period.BoundaryID, snapshot.RevisionNo, previous, revision,
-		encode(calc.MeterRefs), encode(calc.MetricVersionRefs), encode(tariffs), encode(calc.SourceRefs), encode(calc.EnergyBreakdown), encode(demand), encode(cost), calc.Quality, calc.Completeness, snapshot.CreatedAt)
+		encode(calc.MeterRefs), encode(calc.MetricVersionRefs), encode(tariffs), encode(calc.SourceRefs), encode(calc.EnergyBreakdown), encode(demand), encode(cost), calc.Quality, calc.Completeness, snapshot.CreatedAt,
+		encode(calc.SourceMetricRevisions), nullableTime(calc.SourceWatermark), encode(calc.MissingMetricBindingRefs), snapshot.DatasetRevision)
 	if err != nil {
 		return fmt.Errorf("insert settlement snapshot: %w", err)
+	}
+	if err = upsertCurrentProjection(ctx, tx, snapshot, cost); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
 
-const snapshotSelect = `SELECT s.id::text,s.revision_no,coalesce(s.previous_snapshot_id::text,''),coalesce(s.settlement_revision_id::text,''),s.created_at,
+const snapshotSelect = `SELECT s.id::text,s.revision_no,s.dataset_revision,coalesce(s.previous_snapshot_id::text,''),coalesce(s.settlement_revision_id::text,''),s.created_at,
 s.meter_binding_refs,s.metric_version_refs,s.tariff_version_refs,s.source_reading_refs,s.energy_breakdown,s.demand,s.cost,s.quality,s.completeness,
+s.source_metric_revisions,s.source_watermark,s.missing_metric_binding_refs,
 p.tenant_id::text,p.site_id::text,p.id::text,p.boundary_id::text,p.period_start,p.period_end,p.timezone,p.status`
 
 type scanner interface{ Scan(...any) error }
 
 func scanSnapshot(row scanner) (Snapshot, error) {
 	var snapshot Snapshot
-	var meters, metricVersions, tariffs, sources, energy, demand, cost []byte
+	var meters, metricVersions, tariffs, sources, energy, demand, cost, sourceRevisions, missingBindings []byte
 	var completeness float64
-	err := row.Scan(&snapshot.ID, &snapshot.RevisionNo, &snapshot.PreviousSnapshotID, &snapshot.SettlementRevisionID, &snapshot.CreatedAt,
+	var sourceWatermark *time.Time
+	err := row.Scan(&snapshot.ID, &snapshot.RevisionNo, &snapshot.DatasetRevision, &snapshot.PreviousSnapshotID, &snapshot.SettlementRevisionID, &snapshot.CreatedAt,
 		&meters, &metricVersions, &tariffs, &sources, &energy, &demand, &cost, &snapshot.Calculation.Quality, &completeness,
+		&sourceRevisions, &sourceWatermark, &missingBindings,
 		&snapshot.Period.TenantID, &snapshot.Period.SiteID, &snapshot.Period.ID, &snapshot.Period.BoundaryID,
 		&snapshot.Period.Start, &snapshot.Period.End, &snapshot.Period.Timezone, &snapshot.Period.Status)
 	if err != nil {
@@ -227,13 +264,20 @@ func scanSnapshot(row scanner) (Snapshot, error) {
 	_ = json.Unmarshal(meters, &snapshot.Calculation.MeterRefs)
 	_ = json.Unmarshal(metricVersions, &snapshot.Calculation.MetricVersionRefs)
 	_ = json.Unmarshal(sources, &snapshot.Calculation.SourceRefs)
+	_ = json.Unmarshal(sourceRevisions, &snapshot.Calculation.SourceMetricRevisions)
+	_ = json.Unmarshal(missingBindings, &snapshot.Calculation.MissingMetricBindingRefs)
+	if sourceWatermark != nil {
+		snapshot.Calculation.SourceWatermark = sourceWatermark.UTC()
+	}
 	_ = json.Unmarshal(energy, &snapshot.Calculation.EnergyBreakdown)
 	var tariffRefs []map[string]any
 	_ = json.Unmarshal(tariffs, &tariffRefs)
 	if len(tariffRefs) > 0 {
 		snapshot.Calculation.TariffVersionID, _ = tariffRefs[0]["tariffVersionId"].(string)
 	}
-	var demandValue struct{ KW map[string]float64 `json:"kwByPeriod"` }
+	var demandValue struct {
+		KW map[string]float64 `json:"kwByPeriod"`
+	}
 	_ = json.Unmarshal(demand, &demandValue)
 	snapshot.Calculation.DemandKW = demandValue.KW
 	var costValue struct {
@@ -270,22 +314,47 @@ func (s *PostgresStore) LatestSnapshot(ctx context.Context, tenantID, siteID, pe
 	return snapshot, nil
 }
 
-func (s *PostgresStore) CreateCandidate(ctx context.Context, candidate Candidate, at time.Time) error {
+func (s *PostgresStore) CreateCandidate(ctx context.Context, candidate Candidate, at time.Time) (string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
 	if err = setScope(ctx, tx, candidate.TenantID, candidate.SiteID); err != nil {
-		return err
+		return "", err
+	}
+	lockKey := strings.Join([]string{candidate.PeriodID, candidate.BaseSnapshotID, candidate.CalculationDigest}, "|")
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return "", err
+	}
+	var existingID string
+	err = tx.QueryRow(ctx, `SELECT id::text FROM core_registry.settlement_change_candidates
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND settlement_period_id=$3::uuid
+  AND base_snapshot_id=$4::uuid AND calculation_digest=$5 AND status IN ('OPEN','APPROVED')
+LIMIT 1`, candidate.TenantID, candidate.SiteID, candidate.PeriodID, candidate.BaseSnapshotID, candidate.CalculationDigest).Scan(&existingID)
+	if err == nil {
+		if err = tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return existingID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
 	}
 	impact := map[string]any{"recalculatedTotalCost": candidate.Calculation.TotalCost, "currency": candidate.Calculation.Currency}
 	evidence := map[string]any{"baseSnapshotId": candidate.BaseSnapshotID, "recalculated": candidate.Calculation}
-	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_change_candidates(id,tenant_id,site_id,settlement_period_id,reason_code,impact_summary,evidence,status,detected_at,revision,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::jsonb,$7::jsonb,'OPEN',$8,1,$8,$8)`, candidate.ID, candidate.TenantID, candidate.SiteID, candidate.PeriodID, candidate.Reason, encode(impact), encode(evidence), at)
+	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_change_candidates(
+ id,tenant_id,site_id,settlement_period_id,reason_code,impact_summary,evidence,status,detected_at,revision,created_at,updated_at,
+ base_snapshot_id,calculation_digest)
+ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::jsonb,$7::jsonb,'OPEN',$8,1,$8,$8,$9::uuid,$10)`,
+		candidate.ID, candidate.TenantID, candidate.SiteID, candidate.PeriodID, candidate.Reason, encode(impact), encode(evidence), at, candidate.BaseSnapshotID, candidate.CalculationDigest)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return candidate.ID, nil
 }
 
 func (s *PostgresStore) ApproveCandidate(ctx context.Context, tenantID, siteID, candidateID string, at time.Time) error {
@@ -318,18 +387,17 @@ func (s *PostgresStore) LoadApprovedCandidate(ctx context.Context, tenantID, sit
 	}
 	var candidate Candidate
 	var evidence []byte
-	err = tx.QueryRow(ctx, `SELECT id::text,tenant_id::text,site_id::text,settlement_period_id::text,reason_code,evidence FROM core_registry.settlement_change_candidates WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='APPROVED'`, tenantID, siteID, candidateID).Scan(&candidate.ID, &candidate.TenantID, &candidate.SiteID, &candidate.PeriodID, &candidate.Reason, &evidence)
+	err = tx.QueryRow(ctx, `SELECT id::text,tenant_id::text,site_id::text,settlement_period_id::text,reason_code,base_snapshot_id::text,calculation_digest,evidence FROM core_registry.settlement_change_candidates WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='APPROVED'`, tenantID, siteID, candidateID).Scan(&candidate.ID, &candidate.TenantID, &candidate.SiteID, &candidate.PeriodID, &candidate.Reason, &candidate.BaseSnapshotID, &candidate.CalculationDigest, &evidence)
 	if err != nil {
 		return Candidate{}, Snapshot{}, err
 	}
 	var envelope struct {
-		BaseSnapshotID string      `json:"baseSnapshotId"`
-		Recalculated   Calculation `json:"recalculated"`
+		Recalculated Calculation `json:"recalculated"`
 	}
 	if err = json.Unmarshal(evidence, &envelope); err != nil {
 		return Candidate{}, Snapshot{}, err
 	}
-	candidate.BaseSnapshotID, candidate.Calculation = envelope.BaseSnapshotID, envelope.Recalculated
+	candidate.Calculation = envelope.Recalculated
 	query := snapshotSelect + ` FROM core_registry.settlement_snapshots s JOIN core_registry.settlement_periods p ON p.tenant_id=s.tenant_id AND p.site_id=s.site_id AND p.id=s.settlement_period_id WHERE s.tenant_id=$1::uuid AND s.site_id=$2::uuid AND s.id=$3::uuid`
 	base, err := scanSnapshot(tx.QueryRow(ctx, query, tenantID, siteID, candidate.BaseSnapshotID))
 	if err != nil {
@@ -363,11 +431,16 @@ func (s *PostgresStore) ApplyRevision(ctx context.Context, candidate Candidate, 
 	demand := map[string]any{"kwByPeriod": calc.DemandKW}
 	cost := map[string]any{"currency": calc.Currency, "energyByPeriod": calc.EnergyCost, "demandByPeriod": calc.DemandCost, "total": calc.TotalCost}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.settlement_snapshots(
-id,tenant_id,site_id,settlement_period_id,boundary_id,revision_no,previous_snapshot_id,settlement_revision_id,meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18)`,
+id,tenant_id,site_id,settlement_period_id,boundary_id,revision_no,previous_snapshot_id,settlement_revision_id,meter_binding_refs,metric_version_refs,tariff_version_refs,source_reading_refs,energy_breakdown,demand,cost,quality,completeness,created_at,
+source_metric_revisions,source_watermark,missing_metric_binding_refs,dataset_revision)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8::uuid,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22)`,
 		next.ID, candidate.TenantID, candidate.SiteID, candidate.PeriodID, base.Period.BoundaryID, next.RevisionNo, next.PreviousSnapshotID, next.SettlementRevisionID,
-		encode(calc.MeterRefs), encode(calc.MetricVersionRefs), encode(tariffs), encode(calc.SourceRefs), encode(calc.EnergyBreakdown), encode(demand), encode(cost), calc.Quality, calc.Completeness, at)
+		encode(calc.MeterRefs), encode(calc.MetricVersionRefs), encode(tariffs), encode(calc.SourceRefs), encode(calc.EnergyBreakdown), encode(demand), encode(cost), calc.Quality, calc.Completeness, at,
+		encode(calc.SourceMetricRevisions), nullableTime(calc.SourceWatermark), encode(calc.MissingMetricBindingRefs), next.DatasetRevision)
 	if err != nil {
+		return err
+	}
+	if err = upsertCurrentProjection(ctx, tx, next, cost); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE core_registry.settlement_change_candidates SET status='APPLIED',resolved_at=$4,updated_at=$4,revision=revision+1 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='APPROVED'`, candidate.TenantID, candidate.SiteID, candidate.ID, at)

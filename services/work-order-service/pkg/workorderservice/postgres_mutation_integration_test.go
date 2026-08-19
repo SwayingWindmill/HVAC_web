@@ -53,7 +53,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	create := CreateMutation{
 		WorkOrderID: postgresMutationWorkOrderID,
 		Title:       "Inspect economizer linkage", Description: "Confirm the authoritative source and assignment boundary.", Priority: workordermodel.PriorityHigh,
-		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceManual, ResourceID: "manual:p4-postgres-create", Relationship: workordermodel.RelationshipOrigin}},
+		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: "01930000-4000-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin}},
 		ActorType:        "PRINCIPAL", ActorID: "principal:p4-creator", PolicyRevision: "work-order-p4-policy-1", CorrelationID: "p4-create-correlation",
 		IdempotencyKey: "p4-create-key-0001", OccurredAt: "2026-08-01T12:00:00Z",
 	}
@@ -145,6 +145,9 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	current, err := store.Get(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID)
 	if err != nil || current.Version != 4 || len(current.Timeline) != 4 || current.Status != workordermodel.StatusCompleted || len(current.CompletionEvidence) != 1 || current.AssigneeID == nil || *current.AssigneeID != assignee {
 		t.Fatalf("authoritative mutation projection=%#v err=%v", current, err)
+	}
+	if len(current.SourceReferences) != 1 || current.SourceReferences[0] != create.SourceReferences[0] {
+		t.Fatalf("Work Order completion changed Alarm link: %#v", current.SourceReferences)
 	}
 	var idempotencyCount, auditCount int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM work_order_runtime.work_order_idempotency WHERE response_payload->>'workOrderId' = $1`, postgresMutationWorkOrderID).Scan(&idempotencyCount); err != nil {

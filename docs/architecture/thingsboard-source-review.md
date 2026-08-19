@@ -309,3 +309,36 @@ Alarm evaluation is now an Alarm-owned durable state machine. Released policy co
 - A clean PostgreSQL 16 runtime initialized through Alarm migrations `001`–`006` plus canonical seed passed the complete Alarm Service integration suite, including duration restart, distinct-repeat counting, no-data scheduling, stale/invalid/missing false-clear blocking, DST schedule behavior, timer supersession, lease expiry/reclaim, S13 clear/recurrence and Tenant RLS.
 - The runtime owner seam released policy revision 1, appended revision 2, switched the assignment, then rolled back by appending assignment revision 3 to revision 1; each switch reset incompatible duration state instead of inheriting a prior candidate.
 - Direct database checks proved all four S14 tables use FORCE RLS; runtime may INSERT immutable releases/assignments but may not UPDATE/DELETE them, and the immutable trigger rejects mutation even under the migrator role.
+## S19 — Work Order / Settlement / Cost projections
+
+Date: 2026-08-19
+
+Local issue: #274
+
+### Upstream files reviewed
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/relation/EntityRelation.java`
+- `common/dao-api/src/main/java/org/thingsboard/server/dao/relation/RelationService.java`
+- `dao/src/main/java/org/thingsboard/server/dao/relation/BaseRelationService.java`
+- `common/dao-api/src/main/java/org/thingsboard/server/dao/alarm/AlarmService.java`
+- `dao/src/main/java/org/thingsboard/server/dao/alarm/BaseAlarmService.java`
+- Alarm DAO/service tests that explicitly invoke `clearAlarm(...)` through the Alarm owner service.
+
+All files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S19 implementation.
+
+### Observed upstream semantics
+
+- Entity relationships are explicit tenant-scoped relation records with a from/to identity and typed relationship; relation persistence does not silently mutate the lifecycle of either related entity.
+- Alarm clear/recovery is an explicit Alarm-service operation. Upstream tests clear an Alarm by invoking the Alarm owner service rather than by completing an unrelated linked entity.
+- ThingsBoard CE has no equivalent of the HVAC Work Order aggregate with the local assignment/task/evidence/versioned lifecycle contract, and it has no equivalent of the HVAC Settlement/Cost accounting model.
+
+### Implementation decision
+
+- `ADOPT`: explicit typed relationship semantics and the rule that Alarm recovery remains owned by the Alarm domain.
+- `ADAPT`: the existing Work Order `SourceReference` is the formal Alarm link. S19 makes authoritative source IDs UUIDv7 at the database boundary, removes the stale `EQUIPMENT` source-domain value, adds reverse Alarm-link lookup, and keeps source links append-only. Work Order completion/reopen changes only the Work Order aggregate and preserves the Alarm link unchanged.
+- `ADAPT`: Settlement remains a local accounting domain. Existing immutable `settlement_snapshots` stay the history authority; S19 adds an explicit PostgreSQL Current projection carrying dataset revision, source Metric revisions, source watermark, missing bindings, quality/completeness and cost. Change Candidate identity is deduplicated by base Snapshot plus calculation digest.
+- `REJECT`: Work Order completion clearing/recovering Alarm state, generic free-form relationship mutation, accidental latest-row selection as Settlement Current authority, and silently treating a missing released Metric binding as complete data.
+
+### S19 consequence
+
+Work Order remains independently operable while Alarm links are formal, immutable relationship evidence. Settlement/cost recomputation becomes traceable to exact Metric revisions and a source watermark; missing or partial inputs remain visible in quality/completeness; immutable Snapshot history can rebuild the Current projection. Phase1 now includes the canonical `009a` topology/metering, `009c` Metric, and `009b` Settlement foundation in the dependency order proven by a fresh PostgreSQL install.

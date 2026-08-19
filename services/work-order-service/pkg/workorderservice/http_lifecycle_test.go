@@ -16,7 +16,7 @@ func TestWorkOrderHTTPLifecycleRunsReviewedGraphWithExactContext(t *testing.T) {
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, OrganizationID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -86,7 +86,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, _ := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, OrganizationID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -150,7 +150,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, OrganizationID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-precondition-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -206,7 +206,7 @@ func TestWorkOrderHTTPLifecycleRejectsStoreAuditEvidenceDrift(t *testing.T) {
 	signer := newSigner(t)
 	assignee := "principal:operator"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, OrganizationID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:operator", PolicyRevision: "policy-1", CorrelationID: "create-audit-drift", OccurredAt: now.Format(time.RFC3339Nano),

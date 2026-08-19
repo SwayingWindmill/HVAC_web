@@ -198,7 +198,7 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 
 func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, organizationID, siteID, workOrderID string, extraScopes ...string) string {
 	t.Helper()
-	scopes := []string{"organization:" + organizationID, "site:" + siteID}
+	scopes := []string{"tenant:" + organizationID, "site:" + siteID}
 	if workOrderID != "" {
 		scopes = append(scopes, "work-order:"+workOrderID)
 	}
@@ -206,7 +206,7 @@ func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions 
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test", PrincipalID: "principal:operator",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
-		ActingOrganizationID: organizationID, TenantID: httpTestTenantID, Actions: actions, Scopes: scopes,
+		TenantID: organizationID, Actions: actions, Scopes: scopes,
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
 		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "id-1",
 	})
@@ -228,7 +228,7 @@ func newSigner(t *testing.T) *ecdsa.PrivateKey {
 func validHTTPWorkOrder() workordermodel.WorkOrder {
 	assigneeID := "principal:operator"
 	return workordermodel.WorkOrder{
-		SchemaVersion: workordermodel.SchemaVersion, WorkOrderID: httpTestWorkOrderID, OrganizationID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		SchemaVersion: workordermodel.SchemaVersion, WorkOrderID: httpTestWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan vibration", Description: "Verify the vibration and record the maintenance outcome.",
 		Priority: workordermodel.PriorityHigh, Status: workordermodel.StatusOpen, AssigneeID: &assigneeID,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},

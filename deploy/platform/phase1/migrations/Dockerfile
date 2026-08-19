@@ -33,6 +33,8 @@ COPY infra/s1-registry/postgres/init/007b-control-point-invariants.sql /opt/hvac
 COPY infra/s1-registry/postgres/init/007c-counter-semantics.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007c-counter-semantics.sql
 COPY infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql /opt/hvac/repo/infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql
 COPY infra/s1-registry/postgres/init/009-energy-data-foundation.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-energy-data-foundation.sql
+COPY infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql
+COPY infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql
 COPY infra/s1-registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009c-metric-model-v2.sql
 COPY infra/s1-registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009d-data-governance-v2.sql
 COPY infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
@@ -42,6 +44,7 @@ COPY infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo
 COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 COPY infra/s1-registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
+COPY infra/s1-registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
@@ -67,6 +70,7 @@ COPY services/work-order-service/migrations/001_s5_work_order_runtime.sql /opt/h
 COPY services/work-order-service/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/services/work-order-service/migrations/002_s5_work_order_create_assignment.sql
 COPY services/work-order-service/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/services/work-order-service/migrations/003_s5_work_order_lifecycle.sql
 COPY services/work-order-service/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/services/work-order-service/migrations/004_s5_tenant_scope.sql
+COPY services/work-order-service/migrations/005_s19_alarm_links.sql /opt/hvac/repo/services/work-order-service/migrations/005_s19_alarm_links.sql
 
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh

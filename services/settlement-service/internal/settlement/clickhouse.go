@@ -41,7 +41,7 @@ func (s *ClickHouseStore) ReadMetricFacts(ctx context.Context, period Period, bi
 		bindingByID[binding.MetricBindingID] = binding
 		ids = append(ids, "toUUID("+sqlQuote(binding.MetricBindingID)+")")
 	}
-	sql := fmt.Sprintf(`SELECT result_id,metric_binding_id,metric_version_id,metric_code,period_start,period_end,value_number,quality,completeness
+	sql := fmt.Sprintf(`SELECT result_id,metric_binding_id,metric_version_id,metric_code,period_start,period_end,value_number,quality,completeness,revision,calculated_at
 FROM analytics.metric_result_facts
 WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s)
   AND metric_binding_id IN (%s)
@@ -83,7 +83,7 @@ FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), string
 	facts := make([]Fact, 0, len(lines))
 	for _, line := range lines {
 		parts := strings.Split(line, "\t")
-		if len(parts) != 9 {
+		if len(parts) != 11 {
 			return nil, errors.New("settlement Metric result row is malformed")
 		}
 		binding, ok := bindingByID[parts[1]]
@@ -106,10 +106,18 @@ FORMAT TabSeparated`, sqlQuote(period.TenantID), sqlQuote(period.SiteID), string
 		if err != nil {
 			return nil, err
 		}
+		revision, err := strconv.ParseUint(parts[9], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		calculatedAt, err := parseClickHouseTime(parts[10])
+		if err != nil {
+			return nil, err
+		}
 		facts = append(facts, Fact{
 			ID: parts[0], MetricBindingID: parts[1], MetricVersionID: parts[2], MetricCode: parts[3],
 			Role: binding.Role, TariffPeriodCode: binding.TariffPeriodCode,
-			Start: start, End: end, Value: value, Quality: parts[7], Completeness: completeness,
+			Start: start, End: end, CalculatedAt: calculatedAt, Value: value, Revision: revision, Quality: parts[7], Completeness: completeness,
 		})
 	}
 	return facts, nil

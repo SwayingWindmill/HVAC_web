@@ -49,7 +49,9 @@
         "infra/s1-registry/postgres/init/007c-counter-semantics.sql",
         "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql",
         "infra/s1-registry/postgres/init/009-energy-data-foundation.sql",
+        "infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql",
         "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
+        "infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql",
         "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
         "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
@@ -58,6 +60,7 @@
         "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
         "infra/s1-registry/postgres/init/010-s05-registry-writer.sql",
         "infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql",
+        "infra/s1-registry/postgres/init/012-s19-settlement-projections.sql",
         "infra/connectivity/postgres/init/001-s09-connectivity.sql"
       ]
     },
@@ -100,7 +103,8 @@
         "services/work-order-service/migrations/001_s5_work_order_runtime.sql",
         "services/work-order-service/migrations/002_s5_work_order_create_assignment.sql",
         "services/work-order-service/migrations/003_s5_work_order_lifecycle.sql",
-        "services/work-order-service/migrations/004_s5_tenant_scope.sql"
+        "services/work-order-service/migrations/004_s5_tenant_scope.sql",
+        "services/work-order-service/migrations/005_s19_alarm_links.sql"
       ]
     }
   ],
@@ -130,6 +134,7 @@
     "s1_core_service",
     "metric_engine_runtime",
     "scheduler_runtime",
+    "settlement_runtime",
     "connectivity_runtime",
     "s2_iam_grant_runtime",
     "s2_telemetry_migrator_service",
