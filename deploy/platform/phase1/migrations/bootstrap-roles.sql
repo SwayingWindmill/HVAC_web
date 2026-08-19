@@ -27,7 +27,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_runtime') THEN CREATE ROLE scheduler_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'connectivity_migrator') THEN CREATE ROLE connectivity_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'connectivity_runtime') THEN CREATE ROLE connectivity_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'settlement_runtime') THEN CREATE ROLE settlement_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'settlement_runtime') THEN CREATE ROLE settlement_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'forecast_runtime') THEN CREATE ROLE forecast_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'optimization_runtime') THEN CREATE ROLE optimization_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's2_iam_grant_runtime') THEN CREATE ROLE s2_iam_grant_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -78,6 +78,7 @@ REVOKE ALL ON SCHEMA gateway, audit_ledger FROM PUBLIC;
 GRANT CONNECT ON DATABASE hvac_s0 TO s0_migrator, gateway_runtime, gateway_relay_runtime, audit_consumer_runtime, audit_query_runtime;
 
 \connect hvac_s1
+ALTER ROLE settlement_runtime LOGIN;
 REVOKE CONNECT ON DATABASE hvac_s1 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS iam AUTHORIZATION s1_iam_migrator;
 CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
@@ -88,7 +89,7 @@ ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 ALTER SCHEMA outbound_delivery OWNER TO outbound_delivery_migrator;
 ALTER SCHEMA connectivity OWNER TO connectivity_migrator;
 REVOKE ALL ON SCHEMA iam, core_registry, outbound_delivery, connectivity FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, metric_engine_runtime, scheduler_runtime, s2_iam_grant_runtime, connectivity_runtime;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, s2_iam_grant_runtime, connectivity_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_admin, s1_iam_reconciler;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
 GRANT USAGE ON SCHEMA outbound_delivery TO outbound_delivery_runtime;

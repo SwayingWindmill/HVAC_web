@@ -11,7 +11,7 @@ import (
 func TestMemoryStoreLifecycleIsAtomicReplaySafeAndVersioned(t *testing.T) {
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: testWorkOrderID, OrganizationID: testOrganizationID, SiteID: testSiteID,
+		WorkOrderID: testWorkOrderID, TenantID: testOrganizationID, SiteID: testSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: "01910000-4000-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle",
@@ -61,7 +61,7 @@ func TestMemoryStoreLifecycleIsAtomicReplaySafeAndVersioned(t *testing.T) {
 func TestMemoryStoreLifecycleCompletesAndReopensWithAppendOnlyEvidence(t *testing.T) {
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: testWorkOrderID, OrganizationID: testOrganizationID, SiteID: testSiteID,
+		WorkOrderID: testWorkOrderID, TenantID: testOrganizationID, SiteID: testSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: "01910000-4000-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle",
@@ -81,9 +81,15 @@ func TestMemoryStoreLifecycleCompletesAndReopensWithAppendOnlyEvidence(t *testin
 	if err != nil || completed.WorkOrder.Status != workordermodel.StatusCompleted || len(completed.WorkOrder.CompletionEvidence) != 1 {
 		t.Fatalf("complete result=%#v err=%v", completed, err)
 	}
+	if len(completed.WorkOrder.SourceReferences) != 1 || completed.WorkOrder.SourceReferences[0] != initial.SourceReferences[0] {
+		t.Fatalf("completion changed Alarm link: %#v", completed.WorkOrder.SourceReferences)
+	}
 	reopened, err := store.Transition(context.Background(), testOrganizationID, testSiteID, testWorkOrderID, lifecycleStoreMutation(workordermodel.OperationReopen, 3, "recheck", "reopen-0000001", "2026-08-02T03:00:00Z"))
 	if err != nil || reopened.WorkOrder.Status != workordermodel.StatusOpen || len(reopened.WorkOrder.CompletionEvidence) != 1 {
 		t.Fatalf("reopen result=%#v err=%v", reopened, err)
+	}
+	if len(reopened.WorkOrder.SourceReferences) != 1 || reopened.WorkOrder.SourceReferences[0] != initial.SourceReferences[0] {
+		t.Fatalf("reopen changed Alarm link: %#v", reopened.WorkOrder.SourceReferences)
 	}
 }
 

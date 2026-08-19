@@ -37,7 +37,7 @@
 - Virtual Meter 第一阶段仅允许 Meter Binding / Virtual Meter 来源，并在写入时拒绝依赖环。
 - Settlement Boundary 绑定固定 Topology Version，并以单 Node 或 Edge Set 定义正式业务结算边界；Edge Set 在发布前必须非空。
 - Tariff 使用 Site timezone 快照和有效期版本；released 版本不可时间重叠，Tariff Period 按 `SUPER_PEAK / PEAK / FLAT / VALLEY` 与本地时间片建模。
-- Settlement Period 使用 `OPEN / CALCULATING / REVIEW / LOCKED / REVISED / CANCELLED` 状态机；LOCKED 必须已有初始 Snapshot，Snapshot 永不可 UPDATE/DELETE，锁后变化通过 Change Candidate 与追加式 Settlement Revision 产生新 Snapshot。
+- Settlement Period 使用 `OPEN / CALCULATING / REVIEW / LOCKED / REVISED / CANCELLED` 状态机；LOCKED 必须已有初始 Snapshot，Snapshot 永不可 UPDATE/DELETE，锁后变化通过 Change Candidate 与追加式 Settlement Revision 产生新 Snapshot。S19 将 `009a/009c/009b` canonical foundation 正式纳入 Phase1，并增加 `settlement_current_projection`：Current 显式携带 dataset revision、source Metric revisions、source watermark、missing Metric binding、quality/completeness 与 cost，可由不可变 Snapshot 历史重建。
 - Metric 使用稳定 Identity + 有效期 Metric Version；Dependency 仅允许 `POINT / METRIC / EXTERNAL` 并强制 DAG，released Version 与 Dependency 冻结；Metric Binding 固定 Subject、Version、binding version 与 granularity，Calculation Run 固定输入引用和运行状态。
 - Metric Result 历史事实落 ClickHouse `analytics.metric_result_facts`，每次计算/重算保留独立 `result_id` 与单调 `revision`；PostgreSQL `metric_result_heads` 是逻辑窗口 Current authority，只在对应 ClickHouse Fact 已确认持久化后推进，Redis Latest 仅为可重建投影。
 - Data Lifecycle Policy 在 PostgreSQL 按 Dataset/Data Class/有效期版本化，ClickHouse 不再以硬编码 TTL 充当治理权威；第一版 Lifecycle Worker 已复用 durable Scheduler 的 claim/lease/retry 执行 Metric Result retention，ACTIVE Legal Hold 会在源删除前阻断，archive-required 数据没有匹配的 VERIFIED Archive Manifest 时 fail-closed。
@@ -58,7 +58,6 @@
 
 - Organization 尚未从全仓库清除。
 - Metric calculation execution service 尚未完成。
-- Settlement calculation/reconciliation execution 尚未完成。
 - Forecast advanced training/artifact/deployment orchestration 尚未完成。
 - Optimization cost/demand/carbon solver、审批与 Control execution handoff 尚未完成。
 - Object Storage provider 的实际归档写入与归档产物生成仍未完成；S08 Lifecycle Worker 已接管 Metric Result 的 hold/archive-evidence/delete/tombstone 编排，但不会在没有 VERIFIED Archive Evidence 时伪造归档完成。

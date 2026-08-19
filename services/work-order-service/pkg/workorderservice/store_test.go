@@ -72,7 +72,7 @@ func validWorkOrder(id, organizationID, siteID, updatedAt string) workordermodel
 	status := workordermodel.StatusOpen
 	return workordermodel.WorkOrder{
 		SchemaVersion: workordermodel.SchemaVersion,
-		WorkOrderID:   id, OrganizationID: organizationID, SiteID: siteID,
+		WorkOrderID:   id, TenantID: organizationID, SiteID: siteID,
 		Title: "Inspect air handler", Description: "Authoritative maintenance work order.",
 		Priority: workordermodel.PriorityHigh, Status: status,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: "01910000-4000-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin}},

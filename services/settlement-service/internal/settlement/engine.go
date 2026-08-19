@@ -15,8 +15,8 @@ import (
 
 type Period struct {
 	TenantID, SiteID, ID, BoundaryID, Timezone, Status string
-	Start, End                                          time.Time
-	MeterBindingRefs                                    []string
+	Start, End                                         time.Time
+	MeterBindingRefs                                   []string
 }
 
 type MetricBinding struct {
@@ -24,9 +24,9 @@ type MetricBinding struct {
 }
 
 type TariffPeriod struct {
-	ID, Code, DayType             string
-	StartMinute, EndMinute        int
-	EnergyRate, DemandRate        float64
+	ID, Code, DayType      string
+	StartMinute, EndMinute int
+	EnergyRate, DemandRate float64
 }
 
 type Tariff struct {
@@ -37,39 +37,44 @@ type Tariff struct {
 
 type Fact struct {
 	ID, MetricBindingID, MetricVersionID, MetricCode, Role, TariffPeriodCode string
-	Start, End                                                               time.Time
+	Start, End, CalculatedAt                                                 time.Time
 	Value                                                                    float64
+	Revision                                                                 uint64
 	Quality                                                                  string
 	Completeness                                                             float64
 }
 
 type Calculation struct {
-	EnergyBreakdown   map[string]float64
-	DemandKW          map[string]float64
-	EnergyCost        map[string]float64
-	DemandCost        map[string]float64
-	TotalCost         float64
-	Currency, Quality string
-	Completeness      float64
-	SourceRefs        []string
-	MeterRefs         []string
-	MetricBindingRefs []string
-	MetricVersionRefs []string
-	TariffVersionID   string
+	EnergyBreakdown          map[string]float64
+	DemandKW                 map[string]float64
+	EnergyCost               map[string]float64
+	DemandCost               map[string]float64
+	TotalCost                float64
+	Currency, Quality        string
+	Completeness             float64
+	SourceRefs               []string
+	MeterRefs                []string
+	MetricBindingRefs        []string
+	MetricVersionRefs        []string
+	MissingMetricBindingRefs []string
+	SourceMetricRevisions    map[string]uint64
+	SourceWatermark          time.Time
+	TariffVersionID          string
 }
 
 type Snapshot struct {
-	ID                                         string
-	RevisionNo                                 int
+	ID                                       string
+	RevisionNo                               int
+	DatasetRevision                          uint64
 	PreviousSnapshotID, SettlementRevisionID string
-	Period                                     Period
-	Calculation                                Calculation
-	CreatedAt                                  time.Time
+	Period                                   Period
+	Calculation                              Calculation
+	CreatedAt                                time.Time
 }
 
 type Candidate struct {
-	ID, TenantID, SiteID, PeriodID, BaseSnapshotID, Reason string
-	Calculation                                            Calculation
+	ID, TenantID, SiteID, PeriodID, BaseSnapshotID, Reason, CalculationDigest string
+	Calculation                                                               Calculation
 }
 
 type Repository interface {
@@ -77,7 +82,7 @@ type Repository interface {
 	TransitionPeriod(context.Context, Period, string, time.Time) error
 	InsertSnapshot(context.Context, Snapshot) error
 	LatestSnapshot(context.Context, string, string, string) (Snapshot, error)
-	CreateCandidate(context.Context, Candidate, time.Time) error
+	CreateCandidate(context.Context, Candidate, time.Time) (string, error)
 	ApproveCandidate(context.Context, string, string, string, time.Time) error
 	LoadApprovedCandidate(context.Context, string, string, string) (Candidate, Snapshot, error)
 	ApplyRevision(context.Context, Candidate, Snapshot, Snapshot, time.Time) error
@@ -109,6 +114,7 @@ func (e *Engine) CalculatePeriod(ctx context.Context, tenantID, siteID, periodID
 		return Snapshot{}, fmt.Errorf("settlement period cannot calculate from %s", period.Status)
 	}
 	now := e.now().UTC()
+	originalStatus := period.Status
 	if period.Status != "CALCULATING" {
 		if err = e.repo.TransitionPeriod(ctx, period, "CALCULATING", now); err != nil {
 			return Snapshot{}, err
@@ -123,11 +129,30 @@ func (e *Engine) CalculatePeriod(ctx context.Context, tenantID, siteID, periodID
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if originalStatus == "REVIEW" {
+		current, currentErr := e.repo.LatestSnapshot(ctx, tenantID, siteID, periodID)
+		if currentErr == nil && digest(current.Calculation) == digest(calc) {
+			if err = e.repo.TransitionPeriod(ctx, period, "REVIEW", e.now().UTC()); err != nil {
+				return Snapshot{}, err
+			}
+			return current, nil
+		}
+		if currentErr == nil {
+			if err = e.repo.TransitionPeriod(ctx, period, "REVIEW", e.now().UTC()); err != nil {
+				return Snapshot{}, err
+			}
+			return Snapshot{}, errors.New("settlement review inputs changed; reconcile the current snapshot")
+		}
+		if err = e.repo.TransitionPeriod(ctx, period, "REVIEW", e.now().UTC()); err != nil {
+			return Snapshot{}, err
+		}
+		return Snapshot{}, fmt.Errorf("load current settlement snapshot: %w", currentErr)
+	}
 	id, err := uuidv7(now)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot := Snapshot{ID: id, RevisionNo: 0, Period: period, Calculation: calc, CreatedAt: now}
+	snapshot := Snapshot{ID: id, RevisionNo: 0, DatasetRevision: 1, Period: period, Calculation: calc, CreatedAt: now}
 	if err = e.repo.InsertSnapshot(ctx, snapshot); err != nil {
 		return Snapshot{}, err
 	}
@@ -165,11 +190,12 @@ func (e *Engine) ReconcilePeriod(ctx context.Context, tenantID, siteID, periodID
 	if err != nil {
 		return "", err
 	}
-	candidate := Candidate{ID: id, TenantID: tenantID, SiteID: siteID, PeriodID: periodID, BaseSnapshotID: base.ID, Reason: reason, Calculation: calc}
-	if err = e.repo.CreateCandidate(ctx, candidate, e.now().UTC()); err != nil {
+	candidate := Candidate{ID: id, TenantID: tenantID, SiteID: siteID, PeriodID: periodID, BaseSnapshotID: base.ID, Reason: reason, CalculationDigest: digest(calc), Calculation: calc}
+	candidateID, err := e.repo.CreateCandidate(ctx, candidate, e.now().UTC())
+	if err != nil {
 		return "", err
 	}
-	return id, nil
+	return candidateID, nil
 }
 
 func (e *Engine) ApproveCandidate(ctx context.Context, tenantID, siteID, candidateID string) error {
@@ -193,7 +219,7 @@ func (e *Engine) ApplyApprovedRevision(ctx context.Context, tenantID, siteID, ca
 	if err != nil {
 		return Snapshot{}, err
 	}
-	next := Snapshot{ID: snapshotID, RevisionNo: base.RevisionNo + 1, PreviousSnapshotID: base.ID, SettlementRevisionID: revisionID, Period: base.Period, Calculation: candidate.Calculation, CreatedAt: now}
+	next := Snapshot{ID: snapshotID, RevisionNo: base.RevisionNo + 1, DatasetRevision: base.DatasetRevision + 1, PreviousSnapshotID: base.ID, SettlementRevisionID: revisionID, Period: base.Period, Calculation: candidate.Calculation, CreatedAt: now}
 	if err = e.repo.ApplyRevision(ctx, candidate, base, next, now); err != nil {
 		return Snapshot{}, err
 	}
@@ -205,9 +231,6 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	if len(bindings) == 0 {
 		return Calculation{}, errors.New("settlement boundary has no released Metric bindings")
 	}
-	if len(facts) == 0 {
-		return Calculation{}, errors.New("settlement period has no released Metric results")
-	}
 	location, err := time.LoadLocation(period.Timezone)
 	if err != nil {
 		return Calculation{}, err
@@ -215,12 +238,20 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	calc := Calculation{
 		EnergyBreakdown: map[string]float64{}, DemandKW: map[string]float64{}, EnergyCost: map[string]float64{}, DemandCost: map[string]float64{},
 		Currency: tariff.Currency, Quality: "GOOD", Completeness: 1, TariffVersionID: tariff.VersionID,
-		MeterRefs: append([]string(nil), period.MeterBindingRefs...),
+		MeterRefs: append([]string(nil), period.MeterBindingRefs...), SourceMetricRevisions: map[string]uint64{},
+	}
+	bindingByID := make(map[string]MetricBinding, len(bindings))
+	for _, binding := range bindings {
+		bindingByID[binding.MetricBindingID] = binding
 	}
 	bindingRefs := map[string]struct{}{}
 	versionRefs := map[string]struct{}{}
 	completenessTotal := 0.0
 	for _, fact := range facts {
+		binding, ok := bindingByID[fact.MetricBindingID]
+		if !ok || fact.MetricVersionID != binding.MetricVersionID {
+			return Calculation{}, errors.New("settlement Metric result does not match the released binding revision")
+		}
 		periodCode := strings.TrimSpace(fact.TariffPeriodCode)
 		var tariffSlice TariffPeriod
 		if periodCode == "" {
@@ -245,9 +276,20 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 		bindingRefs[fact.MetricBindingID] = struct{}{}
 		versionRefs[fact.MetricVersionID] = struct{}{}
 		calc.SourceRefs = append(calc.SourceRefs, fact.ID)
+		if fact.Revision > calc.SourceMetricRevisions[fact.MetricBindingID] {
+			calc.SourceMetricRevisions[fact.MetricBindingID] = fact.Revision
+		}
+		if fact.CalculatedAt.After(calc.SourceWatermark) {
+			calc.SourceWatermark = fact.CalculatedAt.UTC()
+		}
 		completenessTotal += fact.Completeness
 		if fact.Quality != "GOOD" {
 			calc.Quality = "PARTIAL"
+		}
+	}
+	for _, binding := range bindings {
+		if _, found := bindingRefs[binding.MetricBindingID]; !found {
+			calc.MissingMetricBindingRefs = append(calc.MissingMetricBindingRefs, binding.MetricBindingID)
 		}
 	}
 	for _, tariffSlice := range tariff.Periods {
@@ -261,8 +303,13 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	for _, value := range calc.DemandCost {
 		calc.TotalCost += value
 	}
-	calc.Completeness = completenessTotal / float64(len(facts))
-	if calc.Completeness < 1 && calc.Quality == "GOOD" {
+	denominator := len(facts) + len(calc.MissingMetricBindingRefs)
+	if denominator > 0 {
+		calc.Completeness = completenessTotal / float64(denominator)
+	} else {
+		calc.Completeness = 0
+	}
+	if calc.Completeness < 1 || len(calc.MissingMetricBindingRefs) > 0 {
 		calc.Quality = "PARTIAL"
 	}
 	for id := range bindingRefs {
@@ -273,6 +320,7 @@ func calculate(period Period, bindings []MetricBinding, tariff Tariff, facts []F
 	}
 	sort.Strings(calc.MetricBindingRefs)
 	sort.Strings(calc.MetricVersionRefs)
+	sort.Strings(calc.MissingMetricBindingRefs)
 	sort.Strings(calc.SourceRefs)
 	return calc, nil
 }
