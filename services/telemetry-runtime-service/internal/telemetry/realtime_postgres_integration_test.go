@@ -56,7 +56,7 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 	}
 	access := AccessContext{
 		PrincipalID: realtimeTestPrincipal, Subject: "subject-a", SubjectIssuer: "https://issuer.example.test",
-		SessionID: "session-a", ActingOrganizationID: orgA, PolicyRevision: "telemetry-access:3",
+		SessionID: "session-a", TenantID: orgA, PolicyRevision: "telemetry-access:3",
 	}
 	bootstrap, err := service.Bootstrap(ctx, access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
 		{ClientSubscriptionId: "postgres-zone", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},

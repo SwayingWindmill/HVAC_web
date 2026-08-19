@@ -102,7 +102,7 @@ func TestRealtimeCheckpointRecoveryAndRevocation(t *testing.T) {
 	}
 
 	crossTenant := access
-	crossTenant.ActingOrganizationID = "018f2e00-1000-7000-8000-000000000004"
+	crossTenant.TenantID = "018f2e00-1000-7000-8000-000000000004"
 	if _, err := service.Bootstrap(context.Background(), crossTenant, request); !errors.Is(err, ErrRecoveryCursorRejected) {
 		t.Fatalf("cross-tenant cursor reuse was not rejected: %v", err)
 	}
@@ -238,7 +238,7 @@ func newRealtimeTestService(t *testing.T, repository RealtimeRepository, transpo
 }
 
 func realtimeTestAccess() AccessContext {
-	return AccessContext{PrincipalID: realtimeTestPrincipal, Subject: "subject-1", SubjectIssuer: "https://issuer.example", SessionID: "session-1", ActingOrganizationID: realtimeTestOrg, PolicyRevision: "policy-7"}
+	return AccessContext{PrincipalID: realtimeTestPrincipal, Subject: "subject-1", SubjectIssuer: "https://issuer.example", SessionID: "session-1", TenantID: realtimeTestOrg, PolicyRevision: "policy-7"}
 }
 
 func realtimeTestSnapshot(now time.Time, revision int64) telemetryapi.DeviceObservationSnapshot {
