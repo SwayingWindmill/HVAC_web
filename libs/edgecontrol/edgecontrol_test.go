@@ -220,6 +220,43 @@ func (controller controllerFunc) Run(ctx context.Context, image ProcessImage, pl
 	return controller.run(ctx, image, plan)
 }
 
+func TestAllControllersObserveTheSameImmutableCycleImage(t *testing.T) {
+	runtime := NewRuntime()
+	descriptor := testDescriptor("chwp01", "Frequency", "point-cycle-snapshot", DataTypeDouble, AccessReadOnly)
+	if err := runtime.Register(descriptor); err != nil {
+		t.Fatal(err)
+	}
+	firstSample := Sample{Value: DoubleValue(40), Quality: QualityGood, ObservedAt: time.Unix(320, 0).UTC(), Sequence: 1}
+	if err := runtime.PublishNext(descriptor.Address(), firstSample); err != nil {
+		t.Fatal(err)
+	}
+	observed := make([]float64, 0, 2)
+	controllers := []ControllerBinding{
+		{Controller: controllerFunc{id: "first", run: func(_ context.Context, image ProcessImage, _ *ControlPlan) error {
+			snapshot, _ := image.Get(descriptor.Address())
+			observed = append(observed, snapshot.Sample.Value.Double)
+			return runtime.PublishNext(descriptor.Address(), Sample{Value: DoubleValue(42), Quality: QualityGood, ObservedAt: time.Unix(321, 0).UTC(), Sequence: 2})
+		}}},
+		{Controller: controllerFunc{id: "second", run: func(_ context.Context, image ProcessImage, _ *ControlPlan) error {
+			snapshot, _ := image.Get(descriptor.Address())
+			observed = append(observed, snapshot.Sample.Value.Double)
+			return nil
+		}}},
+	}
+	scheduler, err := NewScheduler(controllers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := NewCycle(runtime, scheduler, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := cycle.RunOnce(context.Background(), time.Unix(320, 0).UTC())
+	if result.Halted || !reflect.DeepEqual(observed, []float64{40, 40}) {
+		t.Fatalf("controllers did not share one immutable Process Image: halted=%v observed=%v", result.Halted, observed)
+	}
+}
+
 func TestSchedulerPreservesConfiguredOrderAndDeduplicates(t *testing.T) {
 	runtime := NewRuntime()
 	order := make([]string, 0)
@@ -377,5 +414,54 @@ func TestCriticalControllerFailureHaltsCycleFailClosed(t *testing.T) {
 	result := cycle.RunOnce(context.Background(), time.Unix(400, 0).UTC())
 	if !result.Halted || called || len(result.Decisions) != 0 {
 		t.Fatalf("critical controller failure did not halt fail-closed: halted=%v called=%v decisions=%#v", result.Halted, called, result.Decisions)
+	}
+}
+
+func TestCycleRejectsRegressingClockBeforeProcessImage(t *testing.T) {
+	runtime := NewRuntime()
+	scheduler, err := NewScheduler(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := NewCycle(runtime, scheduler, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAt := time.Unix(500, 0).UTC()
+	first := cycle.RunOnce(context.Background(), firstAt)
+	if first.ClockError != nil || first.Halted {
+		t.Fatalf("first cycle failed: %#v", first)
+	}
+	regressed := cycle.RunOnce(context.Background(), firstAt.Add(-time.Second))
+	if !regressed.Halted || !errors.Is(regressed.ClockError, ErrCycleClockRegression) {
+		t.Fatalf("regressing Edge clock was not rejected: %#v", regressed)
+	}
+	if regressed.Image.Cycle() != 0 {
+		t.Fatalf("regressing clock advanced the Process Image: cycle=%d", regressed.Image.Cycle())
+	}
+}
+
+func TestRejectedDeviceWriteMarksCycleHalted(t *testing.T) {
+	runtime := NewRuntime()
+	descriptor := testDescriptor("chwp01", "FrequencySetpoint", "point-rejected-write", DataTypeDouble, AccessWriteOnly)
+	if err := runtime.Register(descriptor); err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := NewScheduler([]ControllerBinding{{Controller: controllerFunc{id: "controller", run: func(_ context.Context, _ ProcessImage, plan *ControlPlan) error {
+		_, _, err := plan.Request(descriptor.Address(), "controller", DoubleValue(42))
+		return err
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := NewCycle(runtime, scheduler, outputWriterFunc(func(context.Context, ProcessImage, []Decision) error {
+		return errors.New("device rejected write")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := cycle.RunOnce(context.Background(), time.Unix(600, 0).UTC())
+	if !result.Halted || result.OutputError == nil {
+		t.Fatalf("rejected device write did not fail closed: %#v", result)
 	}
 }

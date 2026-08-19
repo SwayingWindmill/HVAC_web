@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var ErrCycleClockRegression = errors.New("cycle clock regressed")
+
 type Controller interface {
 	ID() string
 	Run(context.Context, ProcessImage, *ControlPlan) error
@@ -149,6 +151,7 @@ type CycleResult struct {
 	Decisions         []Decision
 	PhaseResults      []CyclePhaseResult
 	Halted            bool
+	ClockError        error
 	OutputError       error
 	Duration          time.Duration
 }
@@ -157,6 +160,9 @@ type Cycle struct {
 	runtime   *Runtime
 	scheduler *Scheduler
 	writer    OutputWriter
+
+	runMu  sync.Mutex
+	lastAt time.Time
 
 	hooksMu sync.RWMutex
 	hooks   map[CyclePhase][]CycleHookBinding
@@ -232,10 +238,17 @@ func (cycle *Cycle) appendPhase(ctx context.Context, result *CycleResult, phase 
 // Driver polling remains asynchronous to Controller execution and publishes next values before this
 // method is called; a Protocol Bridge can synchronize its read/write work through Cycle hooks.
 func (cycle *Cycle) RunOnce(ctx context.Context, at time.Time) (result CycleResult) {
+	cycle.runMu.Lock()
+	defer cycle.runMu.Unlock()
 	started := time.Now()
 	defer func() { result.Duration = time.Since(started) }()
 	if at.IsZero() {
 		at = time.Now().UTC()
+	}
+	if !cycle.lastAt.IsZero() && at.Before(cycle.lastAt) {
+		result.Halted = true
+		result.ClockError = fmt.Errorf("%w: previous=%s current=%s", ErrCycleClockRegression, cycle.lastAt.Format(time.RFC3339Nano), at.Format(time.RFC3339Nano))
+		return result
 	}
 
 	if cycle.appendPhase(ctx, &result, CyclePhaseBeforeProcessImage, CyclePhaseContext{At: at}) {
@@ -243,6 +256,7 @@ func (cycle *Cycle) RunOnce(ctx context.Context, at time.Time) (result CycleResu
 	}
 
 	image := cycle.runtime.SwitchProcessImage(at)
+	cycle.lastAt = at
 	result.Image = image
 	if cycle.appendPhase(ctx, &result, CyclePhaseAfterProcessImage, CyclePhaseContext{At: at, Image: image}) {
 		return result
@@ -278,6 +292,9 @@ func (cycle *Cycle) RunOnce(ctx context.Context, at time.Time) (result CycleResu
 	executeHooks, executeHalted := cycle.runPhase(ctx, CyclePhaseExecuteWrite, CyclePhaseContext{At: at, Image: image})
 	if !executeHalted && cycle.writer != nil && len(accepted) > 0 {
 		result.OutputError = cycle.writer.Apply(ctx, image, accepted)
+		if result.OutputError != nil {
+			result.Halted = true
+		}
 	}
 	executeHooks.Duration = time.Since(executeStarted)
 	result.PhaseResults = append(result.PhaseResults, executeHooks)

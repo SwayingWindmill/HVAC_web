@@ -46,7 +46,7 @@ type pendingEdgeCommand struct {
 }
 
 type EdgeControlCycleResult struct {
-	PollResults       []edgecontrol.DirectDevicePollResult
+	PollResults       []edgecontrol.DevicePollResult
 	Cycle             edgecontrol.CycleResult
 	TelemetrySnapshot Snapshot
 	TimedataRecords   int
@@ -61,9 +61,9 @@ type EdgeControlRuntime struct {
 	runtime      *edgecontrol.Runtime
 	capabilities *edgecontrol.CapabilityRegistry
 	components   *edgecontrol.ComponentRegistry
-	host         *edgecontrol.DirectDeviceHost
+	host         *edgecontrol.DeviceHost
 	intentStore  *edgecontrol.IntentStore
-	writer       *edgecontrol.DirectDeviceOutputWriter
+	writer       *edgecontrol.DeviceOutputWriter
 	cycle        *edgecontrol.Cycle
 	timedata     edgecontrol.TimedataRecorder
 
@@ -89,7 +89,7 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	if err != nil {
 		return nil, err
 	}
-	host, err := edgecontrol.NewDirectDeviceHost(runtime, components)
+	host, err := edgecontrol.NewDeviceHost(runtime, components)
 	if err != nil {
 		return nil, err
 	}
@@ -109,15 +109,18 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	if err != nil {
 		return nil, err
 	}
-	writer, err := edgecontrol.NewDirectDeviceOutputWriter(host)
+	writer, err := edgecontrol.NewDeviceOutputWriter(host)
 	if err != nil {
 		return nil, err
 	}
 
 	commandByKey := map[string]edgeCommandBinding{}
 	leaseByAddress := map[string]bool{}
+	staleAfterByAddress := make(map[string]time.Duration, len(config.Points))
 	limits := make([]edgeNumericLimit, 0)
 	for _, point := range config.Points {
+		staleAfter, _ := time.ParseDuration(point.StaleAfter) // config.Validate already owns interval validation.
+		staleAfterByAddress[point.DeviceID+"/"+point.PointCode] = staleAfter
 		if point.PointType != "COMMAND" {
 			continue
 		}
@@ -146,7 +149,9 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 		return nil, err
 	}
 	limitController := &edgeLimitController{id: "capability-limits", limits: limits}
-	safetyController := &edgePlantSafetyController{id: "plant-safety-interlock", bindings: bindingsByDevice, plant: config.Plant}
+	safetyController := &edgePlantSafetyController{
+		id: "plant-safety-interlock", bindings: bindingsByDevice, staleAfterByAddress: staleAfterByAddress, plant: config.Plant,
+	}
 	scheduler, err := edgecontrol.NewScheduler([]edgecontrol.ControllerBinding{
 		{Priority: 0, Controller: safetyController},
 		{Priority: 10, Controller: limitController},
@@ -442,9 +447,10 @@ func (controller *edgeLimitController) Run(_ context.Context, _ edgecontrol.Proc
 }
 
 type edgePlantSafetyController struct {
-	id       string
-	bindings map[string]map[edgecontrol.SemanticChannel]string
-	plant    PlantConfig
+	id                  string
+	bindings            map[string]map[edgecontrol.SemanticChannel]string
+	staleAfterByAddress map[string]time.Duration
+	plant               PlantConfig
 }
 
 func (controller *edgePlantSafetyController) ID() string { return controller.id }
@@ -455,9 +461,9 @@ func (controller *edgePlantSafetyController) Run(_ context.Context, image edgeco
 			continue
 		}
 		faultAddress := bindings[edgecontrol.SemanticFaultCode]
-		fault, available := edgeTextValue(image, faultAddress)
-		if !available {
-			_, _ = plan.Deny(startAddress, controller.id, "SAFETY_STATE_UNAVAILABLE")
+		fault, state := edgeTextValue(image, faultAddress, controller.staleAfterByAddress[faultAddress])
+		if state != "" {
+			_, _ = plan.Deny(startAddress, controller.id, state)
 			continue
 		}
 		if strings.TrimSpace(fault) != "" {
@@ -469,8 +475,12 @@ func (controller *edgePlantSafetyController) Run(_ context.Context, image edgeco
 		}
 		for _, dependency := range []string{controller.plant.ChilledWaterPump.ID, controller.plant.CoolingWaterPump.ID, controller.plant.CoolingTower.ID} {
 			runAddress := controller.bindings[dependency][edgecontrol.SemanticRunState]
-			runState, ok := edgeTextValue(image, runAddress)
-			if !ok || runState != "RUNNING" {
+			runState, state := edgeTextValue(image, runAddress, controller.staleAfterByAddress[runAddress])
+			if state == "SAFETY_STATE_STALE" {
+				_, _ = plan.Deny(startAddress, controller.id, state)
+				break
+			}
+			if state != "" || runState != "RUNNING" {
 				_, _ = plan.Deny(startAddress, controller.id, "INTERLOCK_OPEN")
 				break
 			}
@@ -479,13 +489,16 @@ func (controller *edgePlantSafetyController) Run(_ context.Context, image edgeco
 	return nil
 }
 
-func edgeTextValue(image edgecontrol.ProcessImage, address string) (string, bool) {
+func edgeTextValue(image edgecontrol.ProcessImage, address string, staleAfter time.Duration) (string, string) {
 	if address == "" {
-		return "", false
+		return "", "SAFETY_STATE_UNAVAILABLE"
 	}
 	snapshot, ok := image.Get(address)
 	if !ok || !snapshot.HasValue || snapshot.Sample.Quality == edgecontrol.QualityUnavailable || snapshot.Sample.Value.Type != edgecontrol.DataTypeString {
-		return "", false
+		return "", "SAFETY_STATE_UNAVAILABLE"
 	}
-	return snapshot.Sample.Value.String, true
+	if staleAfter > 0 && image.At().Sub(snapshot.Sample.ObservedAt) > staleAfter {
+		return "", "SAFETY_STATE_STALE"
+	}
+	return snapshot.Sample.Value.String, ""
 }
