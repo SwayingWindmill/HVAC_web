@@ -28,8 +28,6 @@ const (
 	AlarmUnassignAction      = "alarm:unassign"
 	AlarmSuppressAction      = "alarm:suppress"
 	AlarmUnsuppressAction    = "alarm:unsuppress"
-	AlarmCloseAction         = "alarm:close"
-	AlarmReopenAction        = "alarm:reopen"
 	DefaultGatewaySPIFFEID   = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience          = "alarm-service"
 	maximumMutationBody      = 8 * 1024
@@ -351,10 +349,6 @@ func mutationAction(operation alarmmodel.Operation) (string, bool) {
 		return AlarmSuppressAction, true
 	case alarmmodel.OperationUnsuppress:
 		return AlarmUnsuppressAction, true
-	case alarmmodel.OperationClose:
-		return AlarmCloseAction, true
-	case alarmmodel.OperationReopen:
-		return AlarmReopenAction, true
 	default:
 		return "", false
 	}
@@ -364,12 +358,26 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 	query := request.URL.Query()
 	for key := range query {
 		switch key {
-		case "status", "severity", "cursor", "limit":
+		case "condition", "severity", "acknowledged", "suppressed", "cursor", "limit":
 		default:
 			return Filter{}, false
 		}
 	}
-	filter := Filter{Status: alarmmodel.Status(query.Get("status")), Severity: alarmmodel.Severity(query.Get("severity")), Cursor: query.Get("cursor"), Limit: 50}
+	filter := Filter{Condition: alarmmodel.Condition(query.Get("condition")), Severity: alarmmodel.Severity(query.Get("severity")), Cursor: query.Get("cursor"), Limit: 50}
+	if raw := query.Get("acknowledged"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Filter{}, false
+		}
+		filter.Acknowledged = &value
+	}
+	if raw := query.Get("suppressed"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Filter{}, false
+		}
+		filter.Suppressed = &value
+	}
 	if raw := query.Get("limit"); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 1 || value > handler.maxListLimit {
@@ -380,10 +388,10 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 	if len(filter.Cursor) > 4096 {
 		return Filter{}, false
 	}
-	if filter.Status != "" && !contains([]alarmmodel.Status{alarmmodel.StatusOpen, alarmmodel.StatusAcknowledged, alarmmodel.StatusSuppressed, alarmmodel.StatusClosed}, filter.Status) {
+	if filter.Condition != "" && !contains([]alarmmodel.Condition{alarmmodel.ConditionActive, alarmmodel.ConditionCleared}, filter.Condition) {
 		return Filter{}, false
 	}
-	if filter.Severity != "" && !contains([]alarmmodel.Severity{alarmmodel.SeverityInfo, alarmmodel.SeverityWarning, alarmmodel.SeverityMajor, alarmmodel.SeverityCritical}, filter.Severity) {
+	if filter.Severity != "" && !contains([]alarmmodel.Severity{alarmmodel.SeverityInfo, alarmmodel.SeverityWarning, alarmmodel.SeverityMinor, alarmmodel.SeverityMajor, alarmmodel.SeverityCritical}, filter.Severity) {
 		return Filter{}, false
 	}
 	return filter, true
@@ -466,10 +474,6 @@ func matchAlarmPath(path string) (alarmRoute, bool) {
 		route.operation = alarmmodel.OperationSuppress
 	case "unsuppress":
 		route.operation = alarmmodel.OperationUnsuppress
-	case "close":
-		route.operation = alarmmodel.OperationClose
-	case "reopen":
-		route.operation = alarmmodel.OperationReopen
 	default:
 		return alarmRoute{}, false
 	}

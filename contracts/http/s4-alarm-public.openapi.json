@@ -2,10 +2,10 @@
   "openapi": "3.1.0",
   "info": {
     "title": "S4 Alarm Public API — SE-DOMAIN-ALARM-001 subordinate contract",
-    "version": "2.1.2",
-    "description": "Alarm Domain subordinate public contract. SE-DOMAIN-ALARM-001 V1.0 freezes public Site scope, cursor pagination, BOLA-safe resource resolution, ACK request shape, permission and idempotency semantics. Existing S4 Alarm remains the canonical Alarm resource."
+    "version": "2.2.0",
+    "description": "Alarm Domain subordinate public contract. S13 exposes the orthogonal Alarm Incident aggregate: physical condition, acknowledgement, suppression, current/peak severity, assignment, links and immutable timeline. ACK never clears the physical condition; arbitrary Close/Reopen operations are not part of the public contract."
   },
-  "x-authority": "SE-DOMAIN-ALARM-001 V1.0 CURRENT CANDIDATE",
+  "x-authority": "SE-DOMAIN-ALARM-001 S13 ORTHOGONAL AGGREGATE",
   "paths": {
     "/api/v1/alarms": {
       "get": {
@@ -19,11 +19,13 @@
           { "$ref": "#/components/parameters/Limit" },
           { "$ref": "#/components/parameters/Cursor" },
           { "$ref": "#/components/parameters/AlarmSeverity" },
-          { "$ref": "#/components/parameters/AlarmStatus" }
+          { "$ref": "#/components/parameters/AlarmCondition" },
+          { "$ref": "#/components/parameters/Acknowledged" },
+          { "$ref": "#/components/parameters/Suppressed" }
         ],
         "responses": {
           "200": {
-            "description": "Site-scoped Alarm feed ordered by first trigger time DESC and alarmId DESC.",
+            "description": "Site-scoped Alarm Incident feed ordered by first occurrence time DESC and alarmId DESC.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CursorAlarmListResponse" } } }
           },
           "400": { "$ref": "#/components/responses/Error" },
@@ -40,11 +42,11 @@
         "x-public-ingress": "platform-gateway",
         "x-architecture-status": "ACTIVE",
         "x-shape-status": "READY",
-        "description": "Resolves alarmId to the authoritative Alarm record before Site authorization. Missing, cross-Tenant and out-of-Site-scope resources all return 404 ALARM_NOT_FOUND to prevent BOLA disclosure.",
+        "description": "Resolves alarmId to the authoritative Alarm Incident before Site authorization. Missing, cross-Tenant and out-of-Site-scope resources all return 404 ALARM_NOT_FOUND to prevent BOLA disclosure.",
         "parameters": [{ "$ref": "#/components/parameters/AlarmId" }],
         "responses": {
           "200": {
-            "description": "Canonical Alarm resource in the success envelope.",
+            "description": "Canonical Alarm Incident resource in the success envelope.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
           },
           "400": { "$ref": "#/components/responses/Error" },
@@ -61,7 +63,7 @@
         "x-public-ingress": "platform-gateway",
         "x-architecture-status": "ACTIVE",
         "x-shape-status": "READY",
-        "description": "Acknowledges that the Alarm is known. ACK does not resolve, close or otherwise change the Alarm lifecycle state. The operation is naturally idempotent; Idempotency-Key is optional.",
+        "description": "Acknowledges that the Alarm is known. ACK is orthogonal to the physical condition and never clears the Incident. The operation is naturally idempotent; Idempotency-Key is optional.",
         "parameters": [
           { "$ref": "#/components/parameters/AlarmId" },
           { "$ref": "#/components/parameters/OptionalIdempotencyKey" }
@@ -72,7 +74,7 @@
         },
         "responses": {
           "200": {
-            "description": "Current canonical Alarm resource. Repeated ACK returns the current Alarm without replacing the first acknowledgement fact.",
+            "description": "Current canonical Alarm Incident. Repeated ACK returns the current resource without replacing the first acknowledgement fact.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
           },
           "400": { "$ref": "#/components/responses/Error" },
@@ -108,20 +110,32 @@
         "name": "cursor",
         "in": "query",
         "required": false,
-        "description": "Opaque cursor bound to the original Site and Alarm filters.",
+        "description": "Opaque cursor bound to the original Site and orthogonal Alarm filters.",
         "schema": { "type": "string", "maxLength": 4096 }
       },
       "AlarmSeverity": {
         "name": "severity",
         "in": "query",
         "required": false,
-        "schema": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] }
+        "schema": { "$ref": "#/components/schemas/AlarmSeverity" }
       },
-      "AlarmStatus": {
-        "name": "status",
+      "AlarmCondition": {
+        "name": "condition",
         "in": "query",
         "required": false,
-        "schema": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] }
+        "schema": { "$ref": "#/components/schemas/AlarmCondition" }
+      },
+      "Acknowledged": {
+        "name": "acknowledged",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "boolean" }
+      },
+      "Suppressed": {
+        "name": "suppressed",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "boolean" }
       },
       "OptionalIdempotencyKey": {
         "name": "Idempotency-Key",
@@ -142,6 +156,70 @@
         "format": "uuid",
         "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
       },
+      "AlarmSeverity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+      "AlarmCondition": { "type": "string", "enum": ["ACTIVE", "CLEARED"] },
+      "AlarmSourceType": { "type": "string", "enum": ["DEVICE_RULE", "SITE_RULE", "EXTERNAL"] },
+      "AlarmOperation": { "type": "string", "enum": ["PUBLISH", "ACKNOWLEDGE", "ASSIGN", "UNASSIGN", "SUPPRESS", "UNSUPPRESS", "CLEAR"] },
+      "EvidenceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reference", "capturedAt"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "reference": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "capturedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Acknowledgement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["acknowledgedAt", "acknowledgedBy"],
+        "properties": {
+          "acknowledgedAt": { "type": "string", "format": "date-time" },
+          "acknowledgedBy": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "comment": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "Suppression": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["startsAt", "expiresAt", "reason", "actorId", "policyRevision"],
+        "properties": {
+          "startsAt": { "type": "string", "format": "date-time" },
+          "expiresAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "actorId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "AlarmLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "targetId"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["DEVICE", "EVENT", "POINT", "WORK_ORDER"] },
+          "targetId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "TimelineEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "condition", "reason", "actorType", "actorId", "currentSeverity", "policyRevision", "correlationId", "occurredAt", "version"],
+        "properties": {
+          "operation": { "$ref": "#/components/schemas/AlarmOperation" },
+          "condition": { "$ref": "#/components/schemas/AlarmCondition" },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "actorType": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "actorId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppression": { "$ref": "#/components/schemas/Suppression" },
+          "currentSeverity": { "$ref": "#/components/schemas/AlarmSeverity" },
+          "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "correlationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "version": { "type": "integer", "minimum": 1 }
+        }
+      },
       "Meta": {
         "type": "object",
         "additionalProperties": true,
@@ -150,14 +228,45 @@
       },
       "Alarm": {
         "type": "object",
-        "additionalProperties": true,
-        "required": ["alarmId", "tenantId", "siteId", "severity", "status"],
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion", "alarmId", "tenantId", "siteId", "alarmType", "fingerprint", "incidentCorrelationId",
+          "sourceType", "sourceReference", "ruleRevision", "title", "summary", "condition", "currentSeverity",
+          "peakSeverity", "occurrenceCount", "firstOccurredAt", "lastOccurredAt", "evidence", "links", "timeline",
+          "version", "createdAt", "updatedAt"
+        ],
         "properties": {
+          "schemaVersion": { "type": "integer", "const": 2 },
           "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "severity": { "type": "string" },
-          "status": { "type": "string" }
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "eventId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "alarmType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "incidentCorrelationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceType": { "$ref": "#/components/schemas/AlarmSourceType" },
+          "sourceReference": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "ruleRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "condition": { "$ref": "#/components/schemas/AlarmCondition" },
+          "currentSeverity": { "$ref": "#/components/schemas/AlarmSeverity" },
+          "peakSeverity": { "$ref": "#/components/schemas/AlarmSeverity" },
+          "acknowledgement": { "$ref": "#/components/schemas/Acknowledgement" },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppression": { "$ref": "#/components/schemas/Suppression" },
+          "occurrenceCount": { "type": "integer", "minimum": 1 },
+          "firstOccurredAt": { "type": "string", "format": "date-time" },
+          "lastOccurredAt": { "type": "string", "format": "date-time" },
+          "clearedAt": { "type": "string", "format": "date-time" },
+          "evidence": { "type": "array", "items": { "$ref": "#/components/schemas/EvidenceReference" } },
+          "links": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmLink" } },
+          "timeline": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/TimelineEntry" } },
+          "version": { "type": "integer", "minimum": 1 },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
         }
       },
       "AlarmEnvelope": {
@@ -172,9 +281,7 @@
       "AckAlarmRequest": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "comment": { "type": "string", "maxLength": 1000 }
-        }
+        "properties": { "comment": { "type": "string", "maxLength": 1000 } }
       },
       "CursorMeta": {
         "allOf": [

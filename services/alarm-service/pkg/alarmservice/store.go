@@ -22,10 +22,12 @@ var (
 )
 
 type Filter struct {
-	Status   alarmmodel.Status
-	Severity alarmmodel.Severity
-	Cursor   string
-	Limit    int
+	Condition    alarmmodel.Condition
+	Severity     alarmmodel.Severity
+	Acknowledged *bool
+	Suppressed   *bool
+	Cursor       string
+	Limit        int
 }
 
 type Mutation struct {
@@ -40,6 +42,36 @@ type Mutation struct {
 	CorrelationID   string
 	IdempotencyKey  string
 	OccurredAt      string
+}
+
+type Publication struct {
+	DeviceID        *string
+	EventID         *string
+	PointID         *string
+	AlarmType       string
+	SourceType      alarmmodel.SourceType
+	SourceReference string
+	RuleRevision    string
+	Title           string
+	Summary         string
+	Severity        alarmmodel.Severity
+	OccurredAt      string
+	Evidence        []alarmmodel.EvidenceReference
+	ActorType       string
+	ActorID         string
+	CorrelationID   string
+}
+
+type Recovery struct {
+	Fingerprint           string
+	IncidentCorrelationID string
+	OccurredAt            string
+	Reason                string
+	Evidence              []alarmmodel.EvidenceReference
+	RuleRevision          string
+	ActorType             string
+	ActorID               string
+	CorrelationID         string
 }
 
 type MutationResult struct {
@@ -57,6 +89,8 @@ type Store interface {
 	Get(context.Context, string, string, string) (alarmmodel.Alarm, error)
 	ResolveScope(context.Context, string, string) (AlarmScope, error)
 	Apply(context.Context, string, string, string, Mutation) (MutationResult, error)
+	Publish(context.Context, string, string, Publication) (alarmmodel.Alarm, error)
+	ClearActive(context.Context, string, string, Recovery) (alarmmodel.Alarm, error)
 }
 
 type idempotencyRecord struct {
@@ -64,16 +98,24 @@ type idempotencyRecord struct {
 	alarm  alarmmodel.Alarm
 }
 
+type idGenerator func(time.Time) (string, error)
+
 type MemoryStore struct {
 	mu          sync.RWMutex
 	alarms      map[string]alarmmodel.Alarm
+	active      map[string]string
 	idempotency map[string]idempotencyRecord
+	newID       idGenerator
 }
 
 func NewMemoryStore(items []alarmmodel.Alarm) (*MemoryStore, error) {
+	return newMemoryStore(items, newUUIDv7)
+}
+
+func newMemoryStore(items []alarmmodel.Alarm, generator idGenerator) (*MemoryStore, error) {
 	store := &MemoryStore{
-		alarms:      make(map[string]alarmmodel.Alarm, len(items)),
-		idempotency: make(map[string]idempotencyRecord),
+		alarms: make(map[string]alarmmodel.Alarm, len(items)), active: make(map[string]string),
+		idempotency: make(map[string]idempotencyRecord), newID: generator,
 	}
 	for _, alarm := range items {
 		if err := alarm.Validate(); err != nil {
@@ -81,6 +123,13 @@ func NewMemoryStore(items []alarmmodel.Alarm) (*MemoryStore, error) {
 		}
 		if _, duplicate := store.alarms[alarm.AlarmID]; duplicate {
 			return nil, errors.New("duplicate alarm identity")
+		}
+		if alarm.Condition == alarmmodel.ConditionActive {
+			key := activeKey(alarm.TenantID, alarm.SiteID, alarm.Fingerprint)
+			if _, duplicate := store.active[key]; duplicate {
+				return nil, errors.New("duplicate active alarm fingerprint")
+			}
+			store.active[key] = alarm.AlarmID
 		}
 		store.alarms[alarm.AlarmID] = cloneStoredAlarm(alarm)
 	}
@@ -105,18 +154,12 @@ func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filte
 	}
 	items := make([]alarmmodel.Alarm, 0, len(store.alarms))
 	for _, alarm := range store.alarms {
-		if alarm.TenantID != tenantID || alarm.SiteID != siteID {
-			continue
-		}
-		if filter.Status != "" && alarm.Status != filter.Status {
-			continue
-		}
-		if filter.Severity != "" && alarm.Severity != filter.Severity {
+		if alarm.TenantID != tenantID || alarm.SiteID != siteID || !matchesFilter(alarm, filter) {
 			continue
 		}
 		if filter.Cursor != "" {
-			triggeredAt, err := time.Parse(time.RFC3339Nano, alarm.FirstOccurredAt)
-			if err != nil || triggeredAt.After(cursorTime) || (triggeredAt.Equal(cursorTime) && alarm.AlarmID >= cursorAlarmID) {
+			triggeredAt, _ := time.Parse(time.RFC3339Nano, alarm.FirstOccurredAt)
+			if triggeredAt.After(cursorTime) || (triggeredAt.Equal(cursorTime) && alarm.AlarmID >= cursorAlarmID) {
 				continue
 			}
 		}
@@ -156,6 +199,78 @@ func (store *MemoryStore) ResolveScope(_ context.Context, tenantID, alarmID stri
 	return AlarmScope{TenantID: alarm.TenantID, SiteID: alarm.SiteID}, nil
 }
 
+func (store *MemoryStore) Publish(_ context.Context, tenantID, siteID string, publication Publication) (alarmmodel.Alarm, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	fingerprint, err := alarmmodel.Fingerprint(tenantID, siteID, publication.SourceType, publication.SourceReference, publication.AlarmType, publication.DeviceID, publication.PointID)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	key := activeKey(tenantID, siteID, fingerprint)
+	if alarmID, exists := store.active[key]; exists {
+		current := store.alarms[alarmID]
+		updated, err := alarmmodel.RecordOccurrence(current, alarmmodel.OccurrenceInput{
+			Severity: publication.Severity, OccurredAt: publication.OccurredAt, Evidence: publication.Evidence,
+			RuleRevision: publication.RuleRevision, ActorType: publication.ActorType, ActorID: publication.ActorID,
+			CorrelationID: publication.CorrelationID,
+		})
+		if err != nil {
+			return alarmmodel.Alarm{}, err
+		}
+		store.alarms[alarmID] = cloneStoredAlarm(updated)
+		return cloneStoredAlarm(updated), nil
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, publication.OccurredAt)
+	if err != nil {
+		return alarmmodel.Alarm{}, alarmmodel.ErrInvalidOperation
+	}
+	alarmID, err := store.newID(occurredAt)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	incidentCorrelationID, err := store.newID(occurredAt.Add(time.Nanosecond))
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	incident, err := alarmmodel.NewIncident(alarmmodel.IncidentInput{
+		AlarmID: alarmID, TenantID: tenantID, SiteID: siteID, DeviceID: publication.DeviceID, EventID: publication.EventID,
+		PointID: publication.PointID, AlarmType: publication.AlarmType, IncidentCorrelationID: incidentCorrelationID,
+		SourceType: publication.SourceType, SourceReference: publication.SourceReference, RuleRevision: publication.RuleRevision,
+		Title: publication.Title, Summary: publication.Summary, Severity: publication.Severity, OccurredAt: publication.OccurredAt,
+		Evidence: publication.Evidence, ActorType: publication.ActorType, ActorID: publication.ActorID,
+	})
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	store.alarms[incident.AlarmID] = cloneStoredAlarm(incident)
+	store.active[key] = incident.AlarmID
+	return cloneStoredAlarm(incident), nil
+}
+
+func (store *MemoryStore) ClearActive(_ context.Context, tenantID, siteID string, recovery Recovery) (alarmmodel.Alarm, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := activeKey(tenantID, siteID, recovery.Fingerprint)
+	alarmID, exists := store.active[key]
+	if !exists {
+		return alarmmodel.Alarm{}, ErrNotFound
+	}
+	current := store.alarms[alarmID]
+	if current.IncidentCorrelationID != recovery.IncidentCorrelationID {
+		return alarmmodel.Alarm{}, ErrNotFound
+	}
+	cleared, err := alarmmodel.ClearIncident(current, alarmmodel.ClearInput{
+		OccurredAt: recovery.OccurredAt, Reason: recovery.Reason, Evidence: recovery.Evidence, RuleRevision: recovery.RuleRevision,
+		ActorType: recovery.ActorType, ActorID: recovery.ActorID, CorrelationID: recovery.CorrelationID,
+	})
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	store.alarms[alarmID] = cloneStoredAlarm(cleared)
+	delete(store.active, key)
+	return cloneStoredAlarm(cleared), nil
+}
+
 func (store *MemoryStore) Apply(_ context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -191,18 +306,29 @@ func (store *MemoryStore) Apply(_ context.Context, tenantID, siteID, alarmID str
 	return MutationResult{Alarm: cloneStoredAlarm(updated), Replayed: updated.Version == current.Version}, nil
 }
 
+func matchesFilter(alarm alarmmodel.Alarm, filter Filter) bool {
+	if filter.Condition != "" && alarm.Condition != filter.Condition || filter.Severity != "" && alarm.CurrentSeverity != filter.Severity {
+		return false
+	}
+	if filter.Acknowledged != nil && (alarm.Acknowledgement != nil) != *filter.Acknowledged {
+		return false
+	}
+	if filter.Suppressed != nil && (alarm.Suppression != nil) != *filter.Suppressed {
+		return false
+	}
+	return true
+}
+
+func activeKey(tenantID, siteID, fingerprint string) string {
+	return tenantID + "|" + siteID + "|" + fingerprint
+}
+
 func (mutation Mutation) operationInput() alarmmodel.OperationInput {
 	return alarmmodel.OperationInput{
-		Operation:       mutation.Operation,
-		ExpectedVersion: mutation.ExpectedVersion,
-		Reason:          mutation.Reason,
-		AssigneeID:      mutation.AssigneeID,
-		SuppressedUntil: mutation.SuppressedUntil,
-		ActorType:       mutation.ActorType,
-		ActorID:         mutation.ActorID,
-		PolicyRevision:  mutation.PolicyRevision,
-		CorrelationID:   mutation.CorrelationID,
-		OccurredAt:      mutation.OccurredAt,
+		Operation: mutation.Operation, ExpectedVersion: mutation.ExpectedVersion, Reason: mutation.Reason,
+		AssigneeID: mutation.AssigneeID, SuppressedUntil: mutation.SuppressedUntil, ActorType: mutation.ActorType,
+		ActorID: mutation.ActorID, PolicyRevision: mutation.PolicyRevision, CorrelationID: mutation.CorrelationID,
+		OccurredAt: mutation.OccurredAt,
 	}
 }
 
@@ -218,11 +344,9 @@ func mutationDigest(mutation Mutation) (string, error) {
 		PolicyRevision  string               `json:"policyRevision"`
 		CorrelationID   string               `json:"correlationId"`
 	}{
-		Operation: mutation.Operation, ExpectedVersion: mutation.ExpectedVersion,
-		Reason: strings.TrimSpace(mutation.Reason), AssigneeID: mutation.AssigneeID,
-		SuppressedUntil: mutation.SuppressedUntil, ActorType: strings.TrimSpace(mutation.ActorType),
-		ActorID: strings.TrimSpace(mutation.ActorID), PolicyRevision: strings.TrimSpace(mutation.PolicyRevision),
-		CorrelationID: strings.TrimSpace(mutation.CorrelationID),
+		Operation: mutation.Operation, ExpectedVersion: mutation.ExpectedVersion, Reason: strings.TrimSpace(mutation.Reason),
+		AssigneeID: mutation.AssigneeID, SuppressedUntil: mutation.SuppressedUntil, ActorType: strings.TrimSpace(mutation.ActorType),
+		ActorID: strings.TrimSpace(mutation.ActorID), PolicyRevision: strings.TrimSpace(mutation.PolicyRevision), CorrelationID: strings.TrimSpace(mutation.CorrelationID),
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -240,16 +364,27 @@ type alarmCursor struct {
 }
 
 func alarmFilterFingerprint(tenantID, siteID string, filter Filter) string {
-	payload := tenantID + "\x00" + siteID + "\x00" + string(filter.Status) + "\x00" + string(filter.Severity)
+	acknowledged, suppressed := "", ""
+	if filter.Acknowledged != nil {
+		acknowledged = boolString(*filter.Acknowledged)
+	}
+	if filter.Suppressed != nil {
+		suppressed = boolString(*filter.Suppressed)
+	}
+	payload := strings.Join([]string{tenantID, siteID, string(filter.Condition), string(filter.Severity), acknowledged, suppressed}, "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(digest[:])
 }
 
-func encodeAlarmCursor(tenantID, siteID string, filter Filter, alarm alarmmodel.Alarm) (string, error) {
-	cursor := alarmCursor{
-		Version: 1, TriggeredAt: alarm.FirstOccurredAt, AlarmID: alarm.AlarmID,
-		Fingerprint: alarmFilterFingerprint(tenantID, siteID, filter),
+func boolString(value bool) string {
+	if value {
+		return "true"
 	}
+	return "false"
+}
+
+func encodeAlarmCursor(tenantID, siteID string, filter Filter, alarm alarmmodel.Alarm) (string, error) {
+	cursor := alarmCursor{Version: 2, TriggeredAt: alarm.FirstOccurredAt, AlarmID: alarm.AlarmID, Fingerprint: alarmFilterFingerprint(tenantID, siteID, filter)}
 	encoded, err := json.Marshal(cursor)
 	if err != nil {
 		return "", err
@@ -265,8 +400,7 @@ func decodeAlarmCursor(tenantID, siteID string, filter Filter) (time.Time, strin
 	var cursor alarmCursor
 	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&cursor) != nil || cursor.Version != 1 || !alarmmodel.IsUUIDv7(cursor.AlarmID) ||
-		cursor.Fingerprint != alarmFilterFingerprint(tenantID, siteID, filter) {
+	if decoder.Decode(&cursor) != nil || cursor.Version != 2 || !alarmmodel.IsUUIDv7(cursor.AlarmID) || cursor.Fingerprint != alarmFilterFingerprint(tenantID, siteID, filter) {
 		return time.Time{}, "", ErrInvalidCursor
 	}
 	triggeredAt, err := time.Parse(time.RFC3339Nano, cursor.TriggeredAt)
@@ -277,16 +411,8 @@ func decodeAlarmCursor(tenantID, siteID string, filter Filter) (time.Time, strin
 }
 
 func cloneStoredAlarm(alarm alarmmodel.Alarm) alarmmodel.Alarm {
-	result := alarm
-	result.Evidence = append([]alarmmodel.EvidenceReference(nil), alarm.Evidence...)
-	result.Transitions = append([]alarmmodel.Transition(nil), alarm.Transitions...)
-	if alarm.AssigneeID != nil {
-		value := *alarm.AssigneeID
-		result.AssigneeID = &value
-	}
-	if alarm.SuppressedUntil != nil {
-		value := *alarm.SuppressedUntil
-		result.SuppressedUntil = &value
-	}
+	encoded, _ := json.Marshal(alarm)
+	var result alarmmodel.Alarm
+	_ = json.Unmarshal(encoded, &result)
 	return result
 }

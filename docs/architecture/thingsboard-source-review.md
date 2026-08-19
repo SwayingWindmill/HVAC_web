@@ -188,3 +188,45 @@ The implementation used a sparse local checkout of the pinned ThingsBoard CE `v4
 ### S18 consequence
 
 Real System Management now exposes a Registry workspace for Site/Space/Asset/Device/Point lifecycle operations, lazy Space hierarchy, Device Point lists, typed rebind, immutable Template release/assignment/rollback, dry-run/commit import, and controlled export. Write affordances follow the current Capability set, while the backend owner remains authoritative for IAM/Tenant/Site scope, revision conflict, binding rules, import validity and retirement dependencies. Dirty Registry drafts register with the existing Protected Scope so Site switching cannot silently discard operator edits.
+
+## S13 — Alarm orthogonal aggregate migration
+
+Date: 2026-08-19
+
+Local issue: #265
+
+### Upstream files reviewed
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/Alarm.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/AlarmStatus.java`
+- `dao/src/main/java/org/thingsboard/server/dao/alarm/BaseAlarmService.java`
+- `dao/src/main/resources/sql/schema-functions.sql`
+- `dao/src/test/java/org/thingsboard/server/dao/service/AlarmServiceTest.java`
+- `application/src/test/java/org/thingsboard/server/cf/AlarmRulesTest.java`
+- `application/src/test/java/org/thingsboard/server/edge/AlarmEdgeTest.java`
+
+All files were read directly from the pinned ThingsBoard CE `v4.3.1.1` checkout at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S13 implementation.
+
+### Observed upstream semantics
+
+- ThingsBoard stores `acknowledged` and `cleared` as independent Alarm facts and derives the four display statuses (`ACTIVE_UNACK`, `ACTIVE_ACK`, `CLEARED_UNACK`, `CLEARED_ACK`) from those facts. ACK therefore does not clear the physical condition, and clear does not imply acknowledgement.
+- ACK and clear paths lock the existing Alarm row and are naturally idempotent when the corresponding fact is already present.
+- Active-Alarm create/update first queries the business condition and then inserts when absent. The pinned implementation does not provide a database uniqueness boundary that makes two simultaneous first creates converge on one active Alarm.
+- Upstream keeps Alarm severity on the Alarm aggregate and tests stateful Alarm rule behavior, but its generic entity model does not provide the HVAC fingerprint, current/peak severity pair, Site-scoped incident correlation, or Work Order linking semantics required by D06.
+
+### Implementation decision
+
+- `ADOPT`: acknowledgement and clear as orthogonal facts; naturally idempotent ACK/clear behavior; transactional locking when mutating an existing Alarm Incident; durable Alarm history/evidence rather than deriving state only in the UI.
+- `ADAPT`: replace the derived four-value status as the canonical model with explicit `condition=ACTIVE|CLEARED`, independent acknowledgement/suppression/assignment, `currentSeverity` plus monotonic `peakSeverity`, stable SHA-256 HVAC fingerprint, immutable timeline, and explicit Incident correlation/link evidence.
+- `ADAPT`: close the upstream simultaneous-first-create gap with a PostgreSQL partial unique index on `(tenant_id, site_id, fingerprint) WHERE condition='ACTIVE'` plus conflict convergence. Recovery is bound to both the fingerprint and the specific Incident correlation, so a delayed clear from an older Incident cannot clear a later recurrence. Recovery removes the active uniqueness claimant; a later recurrence creates a new Alarm ID and Incident correlation while retaining the same fingerprint.
+- `REJECT`: arbitrary operator Close/Reopen, Work Order completion as a clear signal, runtime dual Alarm models, first-create correctness based only on application `SELECT` followed by `INSERT`, and compatibility status fields that can diverge from physical condition facts.
+
+### S13 consequence
+
+The runtime Alarm aggregate is schema version 2 and no longer contains `OPEN/ACKNOWLEDGED/SUPPRESSED/CLOSED`, `CLOSE`, `REOPEN`, or JSON transition-state compatibility fields. PostgreSQL owns one-active-per-fingerprint uniqueness, Tenant FORCE RLS remains mandatory, system timeline rows are append-only, and operator ACK/suppression cannot mutate the physical condition. The one-shot migration creates pre-S13 aggregate/idempotency backups, an Incident identity map and migration report, rejects legacy `REOPEN` or duplicate-active fingerprint history that must first be reconciled, then removes the retired runtime columns rather than operating old and new models together. S14 remains responsible for evaluator policy and clear-predicate execution; S13 only provides the governed `Publish` / `ClearActive` owner seams.
+
+### S13 verification evidence
+
+- PostgreSQL 16 upgrade test with a populated pre-S13 Alarm (ACK + suppression + three legacy transitions + idempotency row) migrated to the orthogonal aggregate with `1 -> 1` identity preservation and three immutable timeline rows; the offline rollback restored the original `MAJOR|SUPPRESSED|v3` aggregate, all three legacy transitions and the idempotency row, then removed the S13-only tables/columns.
+- A clean PostgreSQL 16 runtime initialized through migrations `001`–`005` plus the canonical seed passed the Alarm Service PostgreSQL integration suite, including simultaneous first create convergence, recurrence, stale old-Incident recovery rejection and Tenant RLS.
+- The append-only database trigger was exercised directly: an `UPDATE` against `alarm_timeline` failed with `alarm timeline is append-only`.

@@ -58,8 +58,8 @@ function psql(sql, { expectFailure = false } = {}) {
 async function waitForPostgres() {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_idempotency') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text");
-      if (state === 'true|true|1') return;
+      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text");
+      if (state === 'true|true|true|1') return;
     } catch {}
     await pause(250);
   }
@@ -105,7 +105,8 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'alarm_runtime' AND c.relkind = 'r'
-  `), '3|3|3', 'table/RLS baseline');
+      AND c.relname IN ('alarm_current', 'alarm_idempotency', 'events', 'alarm_timeline')
+  `), '4|4|4', 'runtime authority table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -151,13 +152,10 @@ try {
   report.assertions.tenantRls = true;
   report.assertions.eventAlarmProvenance = true;
 
-  const insertDenied = psql(`
-    SET SESSION AUTHORIZATION s4_alarm_service;
-    SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
-    INSERT INTO alarm_runtime.alarm_current SELECT * FROM alarm_runtime.alarm_current;
-  `, { expectFailure: true }).toLowerCase();
-  if (!insertDenied.includes('permission denied')) throw new Error(`runtime can insert Alarm authority rows: ${insertDenied}`);
+  expectEqual(psql(`SELECT has_table_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_current', 'DELETE')::text`), 'false', 'runtime Alarm DELETE privilege');
+  expectEqual(psql(`SELECT has_column_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_current', 'title', 'UPDATE')::text`), 'false', 'runtime immutable title UPDATE privilege');
+  expectEqual(psql(`SELECT has_column_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_current', 'condition', 'UPDATE')::text`), 'true', 'runtime condition UPDATE privilege');
+  expectEqual(psql(`SELECT has_column_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_current', 'fingerprint', 'INSERT')::text`), 'true', 'runtime governed incident INSERT privilege');
   const titleUpdateDenied = psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
@@ -174,15 +172,27 @@ try {
   if (!deleteDenied.includes('permission denied')) throw new Error(`runtime can delete Alarm authority rows: ${deleteDenied}`);
   report.assertions.leastPrivilegeColumns = true;
 
+  expectEqual(psql(`SELECT source_incident_count::text || '|' || target_incident_count::text || '|' || identity_preserved::text FROM alarm_runtime.s13_alarm_migration_report WHERE migration_id = 'S13-2026-08-19'`), '0|0|true', 'S13 one-shot migration report');
+  expectEqual(psql(`SELECT (to_regclass('alarm_runtime.alarm_current_pre_s13_backup') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_idempotency_pre_s13_backup') IS NOT NULL)::text`), 'true|true', 'S13 pre-migration backups');
+  expectEqual(psql(`SELECT count(*)::text FROM pg_indexes WHERE schemaname = 'alarm_runtime' AND indexname = 'alarm_current_one_active_fingerprint_uidx' AND indexdef LIKE '%WHERE (condition = ''ACTIVE''::text)%'`), '1', 'S13 active fingerprint partial unique index');
+  const timelineMutationDenied = psql(`
+    SET ROLE s4_alarm_migrator;
+    UPDATE alarm_runtime.alarm_timeline SET reason = 'tampered';
+  `, { expectFailure: true }).toLowerCase();
+  if (!timelineMutationDenied.includes('append-only')) throw new Error(`Alarm timeline immutability trigger did not reject mutation: ${timelineMutationDenied}`);
+  report.assertions.s13MigrationEvidence = true;
+  report.assertions.immutableTimeline = true;
+
   const testEnvironment = {
     ...process.env,
     S4_ALARM_TEST_DATABASE_URL: `postgres://s4_alarm_service:s4-alarm-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s4?sslmode=disable`,
   };
   run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './services/alarm-service/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
-  expectEqual(psql("SELECT status || '|' || version::text || '|' || jsonb_array_length(transitions)::text || '|' || coalesce(assignee_id, '') || '|' || coalesce(suppressed_until::text, '') FROM alarm_runtime.alarm_current"), 'ACKNOWLEDGED|5|5|principal:postgres-operator-2|', 'durable lifecycle projection');
+  expectEqual(psql("SELECT condition || '|' || version::text || '|' || (acknowledged_at IS NOT NULL)::text || '|' || coalesce(assignee_id, '') || '|' || coalesce(suppression::text, '') || '|' || current_severity || '|' || peak_severity FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'ACTIVE|5|true|principal:postgres-operator-2||MAJOR|MAJOR', 'durable orthogonal projection');
+  expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_timeline WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), '5', 'durable immutable timeline');
   expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_idempotency"), '4', 'durable idempotency record');
-  expectEqual(psql("SELECT alarm_type || '|' || event_id::text || '|' || point_id::text FROM alarm_runtime.alarm_current"), 'SUPPLY_TEMPERATURE_DRIFT|01910000-3000-7000-8000-000000000001|01910000-4000-7000-8000-000000000001', 'Event provenance survives Alarm lifecycle mutations');
+  expectEqual(psql("SELECT alarm_type || '|' || event_id::text || '|' || point_id::text FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'SUPPLY_TEMPERATURE_DRIFT|01910000-3000-7000-8000-000000000001|01910000-4000-7000-8000-000000000001', 'Event provenance survives Alarm lifecycle mutations');
   report.assertions.durableProjectionAndIdempotency = true;
 
   report.status = 'passed';

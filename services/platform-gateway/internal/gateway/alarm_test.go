@@ -43,11 +43,13 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 
 func TestValidatePublicAlarmQueryRequiresSiteAndCursorBounds(t *testing.T) {
 	valid := url.Values{
-		"siteId":   {gatewayAlarmSiteID},
-		"severity": {"MAJOR"},
-		"status":   {"OPEN"},
-		"limit":    {"200"},
-		"cursor":   {"opaque-cursor"},
+		"siteId":       {gatewayAlarmSiteID},
+		"severity":     {"MINOR"},
+		"condition":    {"ACTIVE"},
+		"acknowledged": {"true"},
+		"suppressed":   {"false"},
+		"limit":        {"200"},
+		"cursor":       {"opaque-cursor"},
 	}
 	siteID, limit, ok := validatePublicAlarmQuery(valid)
 	if !ok || siteID != gatewayAlarmSiteID || limit != 200 {
@@ -55,11 +57,13 @@ func TestValidatePublicAlarmQueryRequiresSiteAndCursorBounds(t *testing.T) {
 	}
 
 	for name, query := range map[string]url.Values{
-		"missing site": {"limit": {"50"}},
-		"limit zero":   {"siteId": {gatewayAlarmSiteID}, "limit": {"0"}},
-		"limit high":   {"siteId": {gatewayAlarmSiteID}, "limit": {"201"}},
-		"unknown":      {"siteId": {gatewayAlarmSiteID}, "deviceId": {"caller-supplied"}},
-		"long cursor":  {"siteId": {gatewayAlarmSiteID}, "cursor": {strings.Repeat("x", 4097)}},
+		"missing site":      {"limit": {"50"}},
+		"limit zero":        {"siteId": {gatewayAlarmSiteID}, "limit": {"0"}},
+		"limit high":        {"siteId": {gatewayAlarmSiteID}, "limit": {"201"}},
+		"unknown":           {"siteId": {gatewayAlarmSiteID}, "deviceId": {"caller-supplied"}},
+		"invalid condition": {"siteId": {gatewayAlarmSiteID}, "condition": {"ACKNOWLEDGED"}},
+		"invalid boolean":   {"siteId": {gatewayAlarmSiteID}, "acknowledged": {"yes"}},
+		"long cursor":       {"siteId": {gatewayAlarmSiteID}, "cursor": {strings.Repeat("x", 4097)}},
 	} {
 		if _, _, ok := validatePublicAlarmQuery(query); ok {
 			t.Fatalf("invalid Alarm query accepted: %s", name)

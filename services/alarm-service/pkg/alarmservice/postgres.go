@@ -14,7 +14,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-type PostgresStore struct{ pool *pgxpool.Pool }
+type PostgresStore struct {
+	pool  *pgxpool.Pool
+	newID idGenerator
+}
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -39,7 +42,7 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 		pool.Close()
 		return nil, fmt.Errorf("ping Alarm database: %w", err)
 	}
-	return &PostgresStore{pool: pool}, nil
+	return &PostgresStore{pool: pool, newID: newUUIDv7}, nil
 }
 
 func (store *PostgresStore) Close() {
@@ -71,26 +74,22 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 		cursorTriggeredAt = &triggeredAt
 		cursorAlarmID = alarmID
 	}
-	rows, err := tx.Query(ctx, `
-		SELECT alarm_id, tenant_id, site_id, device_id, source_type, source_reference,
-		       title, summary, severity, status, assignee_id, suppressed_until, occurrence_count,
-		       first_occurred_at, last_occurred_at, evidence, transitions, version, created_at, updated_at
-		FROM alarm_runtime.alarm_current
-		WHERE tenant_id = $1
-		  AND site_id = $2
-		  AND ($3 = '' OR status = $3)
-		  AND ($4 = '' OR severity = $4)
-		  AND ($5::timestamptz IS NULL OR first_occurred_at < $5 OR (first_occurred_at = $5 AND alarm_id < $6::uuid))
+	rows, err := tx.Query(ctx, alarmSelect+`
+		WHERE tenant_id = $1 AND site_id = $2
+		  AND ($3 = '' OR condition = $3)
+		  AND ($4 = '' OR current_severity = $4)
+		  AND ($5::boolean IS NULL OR (acknowledged_at IS NOT NULL) = $5)
+		  AND ($6::boolean IS NULL OR (suppression IS NOT NULL) = $6)
+		  AND ($7::timestamptz IS NULL OR first_occurred_at < $7 OR (first_occurred_at = $7 AND alarm_id < $8::uuid))
 		ORDER BY first_occurred_at DESC, alarm_id DESC
-		LIMIT $7
-	`, tenantID, siteID, string(filter.Status), string(filter.Severity), cursorTriggeredAt, cursorAlarmID, limit+1)
+		LIMIT $9`, tenantID, siteID, string(filter.Condition), string(filter.Severity), filter.Acknowledged, filter.Suppressed, cursorTriggeredAt, cursorAlarmID, limit+1)
 	if err != nil {
 		return alarmmodel.ListResponse{}, fmt.Errorf("list Alarms: %w", err)
 	}
 	defer rows.Close()
 	items := make([]alarmmodel.Alarm, 0, limit+1)
 	for rows.Next() {
-		alarm, err := scanAlarm(rows)
+		alarm, err := scanAlarmBase(rows)
 		if err != nil {
 			return alarmmodel.ListResponse{}, err
 		}
@@ -98,6 +97,11 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 	}
 	if err := rows.Err(); err != nil {
 		return alarmmodel.ListResponse{}, fmt.Errorf("iterate Alarms: %w", err)
+	}
+	for index := range items {
+		if err := loadTimeline(ctx, tx, &items[index]); err != nil {
+			return alarmmodel.ListResponse{}, err
+		}
 	}
 	response := alarmmodel.ListResponse{SchemaVersion: alarmmodel.SchemaVersion, Items: items}
 	if len(response.Items) > limit {
@@ -144,11 +148,7 @@ func (store *PostgresStore) ResolveScope(ctx context.Context, tenantID, alarmID 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var scope AlarmScope
-	err = tx.QueryRow(ctx, `
-		SELECT tenant_id::text, site_id::text
-		FROM alarm_runtime.alarm_current
-		WHERE tenant_id = $1 AND alarm_id = $2
-	`, tenantID, alarmID).Scan(&scope.TenantID, &scope.SiteID)
+	err = tx.QueryRow(ctx, `SELECT tenant_id::text, site_id::text FROM alarm_runtime.alarm_current WHERE tenant_id = $1 AND alarm_id = $2`, tenantID, alarmID).Scan(&scope.TenantID, &scope.SiteID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AlarmScope{}, ErrNotFound
 	}
@@ -159,6 +159,117 @@ func (store *PostgresStore) ResolveScope(ctx context.Context, tenantID, alarmID 
 		return AlarmScope{}, fmt.Errorf("commit Alarm scope read: %w", err)
 	}
 	return scope, nil
+}
+
+func (store *PostgresStore) Publish(ctx context.Context, tenantID, siteID string, publication Publication) (alarmmodel.Alarm, error) {
+	if store == nil || store.pool == nil {
+		return alarmmodel.Alarm{}, ErrUnavailable
+	}
+	fingerprint, err := alarmmodel.Fingerprint(tenantID, siteID, publication.SourceType, publication.SourceReference, publication.AlarmType, publication.DeviceID, publication.PointID)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, publication.OccurredAt)
+	if err != nil {
+		return alarmmodel.Alarm{}, alarmmodel.ErrInvalidOperation
+	}
+	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	current, err := getActiveByFingerprint(ctx, tx, tenantID, siteID, fingerprint, true)
+	if err == nil {
+		updated, err := alarmmodel.RecordOccurrence(current, publication.occurrenceInput())
+		if err != nil {
+			return alarmmodel.Alarm{}, err
+		}
+		if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
+			return alarmmodel.Alarm{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm occurrence: %w", err)
+		}
+		return updated, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return alarmmodel.Alarm{}, err
+	}
+
+	alarmID, err := store.newID(occurredAt)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	incidentCorrelationID, err := store.newID(occurredAt.Add(time.Nanosecond))
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	incident, err := alarmmodel.NewIncident(publication.incidentInput(alarmID, incidentCorrelationID, tenantID, siteID))
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	inserted, err := insertIncident(ctx, tx, incident)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if inserted {
+		if err := insertTimelineEntry(ctx, tx, incident, incident.Timeline[0]); err != nil {
+			return alarmmodel.Alarm{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm incident: %w", err)
+		}
+		return incident, nil
+	}
+
+	current, err = getActiveByFingerprint(ctx, tx, tenantID, siteID, fingerprint, true)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	updated, err := alarmmodel.RecordOccurrence(current, publication.occurrenceInput())
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return alarmmodel.Alarm{}, fmt.Errorf("commit concurrent Alarm occurrence: %w", err)
+	}
+	return updated, nil
+}
+
+func (store *PostgresStore) ClearActive(ctx context.Context, tenantID, siteID string, recovery Recovery) (alarmmodel.Alarm, error) {
+	if store == nil || store.pool == nil {
+		return alarmmodel.Alarm{}, ErrUnavailable
+	}
+	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	current, err := getActiveByFingerprint(ctx, tx, tenantID, siteID, recovery.Fingerprint, true)
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if current.IncidentCorrelationID != recovery.IncidentCorrelationID {
+		return alarmmodel.Alarm{}, ErrNotFound
+	}
+	cleared, err := alarmmodel.ClearIncident(current, alarmmodel.ClearInput{
+		OccurredAt: recovery.OccurredAt, Reason: recovery.Reason, Evidence: recovery.Evidence, RuleRevision: recovery.RuleRevision,
+		ActorType: recovery.ActorType, ActorID: recovery.ActorID, CorrelationID: recovery.CorrelationID,
+	})
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := persistUpdatedAlarm(ctx, tx, current, cleared); err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return alarmmodel.Alarm{}, fmt.Errorf("commit Alarm recovery: %w", err)
+	}
+	return cleared, nil
 }
 
 func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
@@ -178,7 +289,6 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 		return MutationResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
 	current, err := getAlarmRow(ctx, tx, tenantID, siteID, alarmID, true)
 	if err != nil {
 		return MutationResult{}, err
@@ -186,11 +296,7 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 	var responseJSON []byte
 	if key != "" {
 		var storedDigest string
-		err = tx.QueryRow(ctx, `
-			SELECT request_digest, response
-			FROM alarm_runtime.alarm_idempotency
-			WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3 AND idempotency_key = $4
-		`, tenantID, siteID, alarmID, key).Scan(&storedDigest, &responseJSON)
+		err = tx.QueryRow(ctx, `SELECT request_digest, response FROM alarm_runtime.alarm_idempotency WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3 AND idempotency_key = $4`, tenantID, siteID, alarmID, key).Scan(&storedDigest, &responseJSON)
 		if err == nil {
 			if storedDigest != digest {
 				return MutationResult{}, ErrIdempotencyConflict
@@ -208,42 +314,19 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 			return MutationResult{}, fmt.Errorf("read Alarm idempotency record: %w", err)
 		}
 	}
-
 	updated, err := alarmmodel.ApplyOperation(current, mutation.operationInput())
 	if err != nil {
 		return MutationResult{}, err
 	}
-	evidenceJSON, err := json.Marshal(updated.Evidence)
-	if err != nil {
-		return MutationResult{}, fmt.Errorf("encode Alarm evidence: %w", err)
-	}
-	transitionsJSON, err := json.Marshal(updated.Transitions)
-	if err != nil {
-		return MutationResult{}, fmt.Errorf("encode Alarm transitions: %w", err)
-	}
-	command, err := tx.Exec(ctx, `
-		UPDATE alarm_runtime.alarm_current
-		SET status = $5, assignee_id = $6, suppressed_until = $7, evidence = $8,
-		    transitions = $9, version = $10, updated_at = $11
-		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3 AND version = $4
-	`, tenantID, siteID, alarmID, current.Version, string(updated.Status), updated.AssigneeID, updated.SuppressedUntil,
-		evidenceJSON, transitionsJSON, updated.Version, updated.UpdatedAt)
-	if err != nil {
-		return MutationResult{}, fmt.Errorf("update Alarm projection: %w", err)
-	}
-	if command.RowsAffected() != 1 {
-		return MutationResult{}, alarmmodel.ErrVersionConflict
+	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
+		return MutationResult{}, err
 	}
 	responseJSON, err = json.Marshal(updated)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("encode Alarm mutation response: %w", err)
 	}
 	if key != "" {
-		_, err = tx.Exec(ctx, `
-			INSERT INTO alarm_runtime.alarm_idempotency (
-				tenant_id, site_id, alarm_id, idempotency_key, request_digest, response, created_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, tenantID, siteID, alarmID, key, digest, responseJSON, mutation.OccurredAt)
+		_, err = tx.Exec(ctx, `INSERT INTO alarm_runtime.alarm_idempotency (tenant_id, site_id, alarm_id, idempotency_key, request_digest, response, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`, tenantID, siteID, alarmID, key, digest, responseJSON, mutation.OccurredAt)
 		if err != nil {
 			return MutationResult{}, fmt.Errorf("write Alarm idempotency record: %w", err)
 		}
@@ -252,6 +335,14 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 		return MutationResult{}, fmt.Errorf("commit Alarm mutation: %w", err)
 	}
 	return MutationResult{Alarm: updated, Replayed: updated.Version == current.Version}, nil
+}
+
+func (publication Publication) occurrenceInput() alarmmodel.OccurrenceInput {
+	return alarmmodel.OccurrenceInput{Severity: publication.Severity, OccurredAt: publication.OccurredAt, Evidence: publication.Evidence, RuleRevision: publication.RuleRevision, ActorType: publication.ActorType, ActorID: publication.ActorID, CorrelationID: publication.CorrelationID}
+}
+
+func (publication Publication) incidentInput(alarmID, incidentCorrelationID, tenantID, siteID string) alarmmodel.IncidentInput {
+	return alarmmodel.IncidentInput{AlarmID: alarmID, TenantID: tenantID, SiteID: siteID, DeviceID: publication.DeviceID, EventID: publication.EventID, PointID: publication.PointID, AlarmType: publication.AlarmType, IncidentCorrelationID: incidentCorrelationID, SourceType: publication.SourceType, SourceReference: publication.SourceReference, RuleRevision: publication.RuleRevision, Title: publication.Title, Summary: publication.Summary, Severity: publication.Severity, OccurredAt: publication.OccurredAt, Evidence: publication.Evidence, ActorType: publication.ActorType, ActorID: publication.ActorID}
 }
 
 func (store *PostgresStore) beginTenantTransaction(ctx context.Context, tenantID string, readOnly bool) (pgx.Tx, error) {
@@ -274,38 +365,69 @@ func (store *PostgresStore) beginTenantTransaction(ctx context.Context, tenantID
 	return tx, nil
 }
 
+const alarmSelect = `
+	SELECT alarm_id, tenant_id, site_id, device_id, event_id, point_id, alarm_type, fingerprint,
+	       incident_correlation_id, source_type, source_reference, rule_revision, title, summary,
+	       condition, current_severity, peak_severity, acknowledged_at, acknowledged_by, acknowledgement_comment,
+	       assignee_id, suppression, occurrence_count, first_occurred_at, last_occurred_at, cleared_at,
+	       evidence, links, version, created_at, updated_at
+	FROM alarm_runtime.alarm_current`
+
 func getAlarmRow(ctx context.Context, tx pgx.Tx, tenantID, siteID, alarmID string, lock bool) (alarmmodel.Alarm, error) {
-	query := `
-		SELECT alarm_id, tenant_id, site_id, device_id, source_type, source_reference,
-		       title, summary, severity, status, assignee_id, suppressed_until, occurrence_count,
-		       first_occurred_at, last_occurred_at, evidence, transitions, version, created_at, updated_at
-		FROM alarm_runtime.alarm_current
-		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3`
+	query := alarmSelect + ` WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3`
 	if lock {
 		query += ` FOR UPDATE`
 	}
-	alarm, err := scanAlarm(tx.QueryRow(ctx, query, tenantID, siteID, alarmID))
+	alarm, err := scanAlarmBase(tx.QueryRow(ctx, query, tenantID, siteID, alarmID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return alarmmodel.Alarm{}, ErrNotFound
 	}
 	if err != nil {
 		return alarmmodel.Alarm{}, err
 	}
+	if err := loadTimeline(ctx, tx, &alarm); err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := alarm.Validate(); err != nil {
+		return alarmmodel.Alarm{}, fmt.Errorf("validate stored Alarm: %w", err)
+	}
 	return alarm, nil
+}
+
+func getActiveByFingerprint(ctx context.Context, tx pgx.Tx, tenantID, siteID, fingerprint string, lock bool) (alarmmodel.Alarm, error) {
+	query := alarmSelect + ` WHERE tenant_id = $1 AND site_id = $2 AND fingerprint = $3 AND condition = 'ACTIVE'`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	alarm, err := scanAlarmBase(tx.QueryRow(ctx, query, tenantID, siteID, fingerprint))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return alarmmodel.Alarm{}, ErrNotFound
+	}
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	if err := loadTimeline(ctx, tx, &alarm); err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	return alarm, alarm.Validate()
 }
 
 type alarmScanner interface{ Scan(...any) error }
 
-func scanAlarm(scanner alarmScanner) (alarmmodel.Alarm, error) {
+func scanAlarmBase(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	var alarm alarmmodel.Alarm
-	var evidenceJSON, transitionsJSON []byte
+	var evidenceJSON, linksJSON []byte
 	var firstOccurredAt, lastOccurredAt, createdAt, updatedAt time.Time
-	var suppressedUntil *time.Time
+	var acknowledgedAt, clearedAt *time.Time
+	var suppressionJSON []byte
+	var acknowledgedBy, acknowledgementComment *string
 	if err := scanner.Scan(
-		&alarm.AlarmID, &alarm.TenantID, &alarm.SiteID, &alarm.DeviceID,
-		&alarm.SourceType, &alarm.SourceReference, &alarm.Title, &alarm.Summary,
-		&alarm.Severity, &alarm.Status, &alarm.AssigneeID, &suppressedUntil, &alarm.OccurrenceCount,
-		&firstOccurredAt, &lastOccurredAt, &evidenceJSON, &transitionsJSON, &alarm.Version, &createdAt, &updatedAt,
+		&alarm.AlarmID, &alarm.TenantID, &alarm.SiteID, &alarm.DeviceID, &alarm.EventID, &alarm.PointID,
+		&alarm.AlarmType, &alarm.Fingerprint, &alarm.IncidentCorrelationID, &alarm.SourceType, &alarm.SourceReference,
+		&alarm.RuleRevision, &alarm.Title, &alarm.Summary, &alarm.Condition, &alarm.CurrentSeverity, &alarm.PeakSeverity,
+		&acknowledgedAt, &acknowledgedBy, &acknowledgementComment, &alarm.AssigneeID, &suppressionJSON,
+		&alarm.OccurrenceCount, &firstOccurredAt, &lastOccurredAt, &clearedAt, &evidenceJSON, &linksJSON,
+		&alarm.Version, &createdAt, &updatedAt,
 	); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
@@ -314,25 +436,129 @@ func scanAlarm(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	alarm.LastOccurredAt = lastOccurredAt.UTC().Format(time.RFC3339Nano)
 	alarm.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	alarm.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	if suppressedUntil != nil {
-		value := suppressedUntil.UTC().Format(time.RFC3339Nano)
-		alarm.SuppressedUntil = &value
+	if acknowledgedAt != nil {
+		alarm.Acknowledgement = &alarmmodel.Acknowledgement{AcknowledgedAt: acknowledgedAt.UTC().Format(time.RFC3339Nano), AcknowledgedBy: dereference(acknowledgedBy), Comment: dereference(acknowledgementComment)}
+	}
+	if clearedAt != nil {
+		value := clearedAt.UTC().Format(time.RFC3339Nano)
+		alarm.ClearedAt = &value
+	}
+	if len(suppressionJSON) > 0 && string(suppressionJSON) != "null" {
+		if err := json.Unmarshal(suppressionJSON, &alarm.Suppression); err != nil {
+			return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm suppression: %w", err)
+		}
 	}
 	if err := json.Unmarshal(evidenceJSON, &alarm.Evidence); err != nil {
 		return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm evidence: %w", err)
 	}
-	if err := json.Unmarshal(transitionsJSON, &alarm.Transitions); err != nil {
-		return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm transitions: %w", err)
-	}
-	if err := alarm.Validate(); err != nil {
-		return alarmmodel.Alarm{}, fmt.Errorf("validate stored Alarm: %w", err)
+	if err := json.Unmarshal(linksJSON, &alarm.Links); err != nil {
+		return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm links: %w", err)
 	}
 	return alarm, nil
 }
 
-func nullableCursor(value string) any {
-	if value == "" {
+func loadTimeline(ctx context.Context, tx pgx.Tx, alarm *alarmmodel.Alarm) error {
+	rows, err := tx.Query(ctx, `
+		SELECT operation, condition, reason, actor_type, actor_id, assignee_id, suppression, current_severity,
+		       policy_revision, correlation_id, occurred_at, version
+		FROM alarm_runtime.alarm_timeline
+		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3
+		ORDER BY version`, alarm.TenantID, alarm.SiteID, alarm.AlarmID)
+	if err != nil {
+		return fmt.Errorf("read Alarm timeline: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry alarmmodel.TimelineEntry
+		var suppressionJSON []byte
+		var occurredAt time.Time
+		if err := rows.Scan(&entry.Operation, &entry.Condition, &entry.Reason, &entry.ActorType, &entry.ActorID, &entry.AssigneeID, &suppressionJSON, &entry.CurrentSeverity, &entry.PolicyRevision, &entry.CorrelationID, &occurredAt, &entry.Version); err != nil {
+			return fmt.Errorf("scan Alarm timeline: %w", err)
+		}
+		entry.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
+		if len(suppressionJSON) > 0 && string(suppressionJSON) != "null" {
+			if err := json.Unmarshal(suppressionJSON, &entry.Suppression); err != nil {
+				return fmt.Errorf("decode Alarm timeline suppression: %w", err)
+			}
+		}
+		alarm.Timeline = append(alarm.Timeline, entry)
+	}
+	return rows.Err()
+}
+
+func insertIncident(ctx context.Context, tx pgx.Tx, alarm alarmmodel.Alarm) (bool, error) {
+	evidenceJSON, _ := json.Marshal(alarm.Evidence)
+	linksJSON, _ := json.Marshal(alarm.Links)
+	command, err := tx.Exec(ctx, `
+		INSERT INTO alarm_runtime.alarm_current (
+			alarm_id, tenant_id, site_id, device_id, event_id, point_id, alarm_type, fingerprint, incident_correlation_id,
+			source_type, source_reference, rule_revision, title, summary, condition, current_severity, peak_severity,
+			occurrence_count, first_occurred_at, last_occurred_at, evidence, links, version, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+		ON CONFLICT (tenant_id, site_id, fingerprint) WHERE condition = 'ACTIVE' DO NOTHING`,
+		alarm.AlarmID, alarm.TenantID, alarm.SiteID, alarm.DeviceID, alarm.EventID, alarm.PointID, alarm.AlarmType, alarm.Fingerprint,
+		alarm.IncidentCorrelationID, alarm.SourceType, alarm.SourceReference, alarm.RuleRevision, alarm.Title, alarm.Summary,
+		alarm.Condition, alarm.CurrentSeverity, alarm.PeakSeverity, alarm.OccurrenceCount, alarm.FirstOccurredAt, alarm.LastOccurredAt,
+		evidenceJSON, linksJSON, alarm.Version, alarm.CreatedAt, alarm.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("insert Alarm incident: %w", err)
+	}
+	return command.RowsAffected() == 1, nil
+}
+
+func persistUpdatedAlarm(ctx context.Context, tx pgx.Tx, current, updated alarmmodel.Alarm) error {
+	if updated.Version == current.Version {
 		return nil
 	}
-	return value
+	evidenceJSON, _ := json.Marshal(updated.Evidence)
+	linksJSON, _ := json.Marshal(updated.Links)
+	var suppressionJSON any
+	if updated.Suppression != nil {
+		suppressionJSON, _ = json.Marshal(updated.Suppression)
+	}
+	var acknowledgedAt, acknowledgedBy, acknowledgementComment any
+	if updated.Acknowledgement != nil {
+		acknowledgedAt, acknowledgedBy, acknowledgementComment = updated.Acknowledgement.AcknowledgedAt, updated.Acknowledgement.AcknowledgedBy, updated.Acknowledgement.Comment
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE alarm_runtime.alarm_current
+		SET rule_revision=$5, condition=$6, current_severity=$7, peak_severity=$8,
+		    acknowledged_at=$9, acknowledged_by=$10, acknowledgement_comment=$11, assignee_id=$12, suppression=$13,
+		    occurrence_count=$14, last_occurred_at=$15, cleared_at=$16, evidence=$17, links=$18, version=$19, updated_at=$20
+		WHERE tenant_id=$1 AND site_id=$2 AND alarm_id=$3 AND version=$4`,
+		updated.TenantID, updated.SiteID, updated.AlarmID, current.Version, updated.RuleRevision, updated.Condition,
+		updated.CurrentSeverity, updated.PeakSeverity, acknowledgedAt, acknowledgedBy, acknowledgementComment, updated.AssigneeID,
+		suppressionJSON, updated.OccurrenceCount, updated.LastOccurredAt, updated.ClearedAt, evidenceJSON, linksJSON, updated.Version, updated.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("update Alarm incident: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return alarmmodel.ErrVersionConflict
+	}
+	return insertTimelineEntry(ctx, tx, updated, updated.Timeline[len(updated.Timeline)-1])
+}
+
+func insertTimelineEntry(ctx context.Context, tx pgx.Tx, alarm alarmmodel.Alarm, entry alarmmodel.TimelineEntry) error {
+	var suppressionJSON any
+	if entry.Suppression != nil {
+		suppressionJSON, _ = json.Marshal(entry.Suppression)
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO alarm_runtime.alarm_timeline (
+			tenant_id, site_id, alarm_id, version, operation, condition, reason, actor_type, actor_id, assignee_id,
+			suppression, current_severity, policy_revision, correlation_id, occurred_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		alarm.TenantID, alarm.SiteID, alarm.AlarmID, entry.Version, entry.Operation, entry.Condition, entry.Reason, entry.ActorType,
+		entry.ActorID, entry.AssigneeID, suppressionJSON, entry.CurrentSeverity, entry.PolicyRevision, entry.CorrelationID, entry.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("append Alarm timeline: %w", err)
+	}
+	return nil
+}
+
+func dereference(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

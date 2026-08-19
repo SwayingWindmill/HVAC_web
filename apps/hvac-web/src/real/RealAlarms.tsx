@@ -12,14 +12,14 @@ import {
   alarmErrorMessage,
   getScopedAlarm,
   listScopedAlarms,
+  type AlarmCondition,
   type AlarmSeverity,
-  type AlarmStatus,
   type ScopedAlarmRequestOptions,
 } from '@/api/alarms';
 import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
 import { FocusHeading } from './FocusHeading';
 import { siteRoute } from './site-routing';
-import { alarmOperationLabel, alarmStatusLabel, projectRealAlarm } from './real-alarms-projection';
+import { alarmOperationLabel, projectRealAlarm } from './real-alarms-projection';
 import './real-alarms.css';
 
 interface RealAlarmsProps {
@@ -116,7 +116,7 @@ function AlarmWorkbench({
   const queryClient = useQueryClient();
   const tenantId = principal.context.tenantId;
   const queryPrefix = useMemo(() => ['real-alarms', tenantId, site.id] as const, [tenantId, site.id]);
-  const [status, setStatus] = useState<AlarmStatus | ''>('');
+  const [condition, setCondition] = useState<AlarmCondition | ''>('');
   const [severity, setSeverity] = useState<AlarmSeverity | ''>('');
   const [selectedAlarmId, setSelectedAlarmId] = useState(() => alarmFromLocation(location.search));
   const canReadDetail = principal.authorization.capabilities.includes('alarm.read');
@@ -142,10 +142,10 @@ function AlarmWorkbench({
   }, [location.search]);
 
   const listQuery = useInfiniteQuery({
-    queryKey: [...queryPrefix, 'list', status || 'ALL', severity || 'ALL'],
+    queryKey: [...queryPrefix, 'list', condition || 'ALL', severity || 'ALL'],
     initialPageParam: null as string | null,
     queryFn: ({ signal, pageParam }) => listScopedAlarms({
-      status: status || undefined,
+      condition: condition || undefined,
       severity: severity || undefined,
       cursor: pageParam ?? undefined,
       limit: 50,
@@ -191,9 +191,9 @@ function AlarmWorkbench({
   const detailProjection = detail ? projectRealAlarm(detail) : null;
   const metrics = [
     { key: 'total', label: '当前结果', value: alarms.length, detail: 'Alarm Service 权威集合', tone: 'accent' as const },
-    { key: 'open', label: '未处理', value: alarms.filter((alarm) => alarm.status === 'OPEN').length, detail: 'OPEN lifecycle', tone: 'warning' as const },
-    { key: 'critical', label: '严重告警', value: alarms.filter((alarm) => alarm.severity === 'CRITICAL').length, detail: 'CRITICAL severity', tone: 'critical' as const },
-    { key: 'closed', label: '已关闭', value: alarms.filter((alarm) => alarm.status === 'CLOSED').length, detail: 'CLOSED lifecycle', tone: 'positive' as const },
+    { key: 'active', label: '活动告警', value: alarms.filter((alarm) => alarm.condition === 'ACTIVE').length, detail: 'ACTIVE condition', tone: 'warning' as const },
+    { key: 'critical', label: '严重告警', value: alarms.filter((alarm) => alarm.currentSeverity === 'CRITICAL').length, detail: 'CRITICAL current severity', tone: 'critical' as const },
+    { key: 'cleared', label: '已恢复', value: alarms.filter((alarm) => alarm.condition === 'CLEARED').length, detail: 'CLEARED condition', tone: 'positive' as const },
   ];
 
   return (
@@ -226,13 +226,11 @@ function AlarmWorkbench({
       <Card title="筛选条件" variant="borderless" className="alarms-filter-card">
         <section className="real-alarms__filters" aria-label="Alarm filters">
         <label>
-          生命周期
-          <select data-testid="real-alarm-status-filter" value={status} onChange={(event) => setStatus(event.currentTarget.value as AlarmStatus | '')}>
+          物理条件
+          <select data-testid="real-alarm-condition-filter" value={condition} onChange={(event) => setCondition(event.currentTarget.value as AlarmCondition | '')}>
             <option value="">全部</option>
-            <option value="OPEN">未处理</option>
-            <option value="ACKNOWLEDGED">已确认</option>
-            <option value="SUPPRESSED">已抑制</option>
-            <option value="CLOSED">已关闭</option>
+            <option value="ACTIVE">活动</option>
+            <option value="CLEARED">已恢复</option>
           </select>
         </label>
         <label>
@@ -241,6 +239,7 @@ function AlarmWorkbench({
             <option value="">全部</option>
             <option value="CRITICAL">严重</option>
             <option value="MAJOR">重要</option>
+            <option value="MINOR">次要</option>
             <option value="WARNING">警告</option>
             <option value="INFO">提示</option>
           </select>
@@ -270,7 +269,7 @@ function AlarmWorkbench({
             {alarms.map((alarm) => {
               const projection = projectRealAlarm(alarm);
               return (
-                <li key={alarm.alarmId} data-alarm-status={alarm.status} data-alarm-severity={alarm.severity}>
+                <li key={alarm.alarmId} data-alarm-condition={alarm.condition} data-alarm-severity={alarm.currentSeverity}>
                   <button type="button" disabled={!canReadDetail} onClick={() => publishAlarmId(alarm.alarmId)} aria-current={selectedAlarmId === alarm.alarmId ? 'true' : undefined}>
                     <span className="real-alarms__list-heading"><strong>{alarm.title}</strong><em>{projection.severityLabel}</em></span>
                     <span>{projection.statusLabel} · {projection.occurrenceLabel}</span>
@@ -295,7 +294,7 @@ function AlarmWorkbench({
             {canReadDetail && selectedAlarmId && detailQuery.isPending ? <div className="real-shell-progress" role="status">正在读取 Alarm 详情…</div> : null}
             {detailQuery.isError ? <div className="real-shell-problem" role="alert">{alarmErrorMessage(detailQuery.error)}</div> : null}
             {detail && detailProjection ? (
-              <article className="real-alarms__detail" data-testid="real-alarm-detail" data-alarm-status={detail.status} data-alarm-version={detail.version}>
+              <article className="real-alarms__detail" data-testid="real-alarm-detail" data-alarm-condition={detail.condition} data-alarm-version={detail.version}>
                 <div className="real-alarms__detail-heading">
                   <div><h2>{detail.title}</h2><p>{detail.summary}</p></div>
                   <Space wrap>
@@ -309,9 +308,16 @@ function AlarmWorkbench({
                   <div><dt>Alarm ID</dt><dd><code>{detail.alarmId}</code></dd></div>
                   <div><dt>Site ID</dt><dd><code>{detail.siteId}</code></dd></div>
                   <div><dt>Device ID</dt><dd>{detail.deviceId ? <code>{detail.deviceId}</code> : '不适用'}</dd></div>
+                  <div><dt>Alarm Type</dt><dd><code>{detail.alarmType}</code></dd></div>
+                  <div><dt>Fingerprint</dt><dd><code>{detail.fingerprint}</code></dd></div>
+                  <div><dt>Incident Correlation</dt><dd><code>{detail.incidentCorrelationId}</code></dd></div>
                   <div><dt>Source</dt><dd>{detailProjection.sourceLabel} · <code>{detail.sourceReference}</code></dd></div>
+                  <div><dt>Rule Revision</dt><dd><code>{detail.ruleRevision}</code></dd></div>
+                  <div><dt>当前 / 峰值严重度</dt><dd>{detail.currentSeverity} / {detail.peakSeverity}</dd></div>
+                  <div><dt>确认事实</dt><dd>{detail.acknowledgement ? `${detail.acknowledgement.acknowledgedBy} · ${formatInstant(detail.acknowledgement.acknowledgedAt, site.timezone)}` : '未确认'}</dd></div>
                   <div><dt>指派对象</dt><dd>{detail.assigneeId ?? '未指派'}</dd></div>
-                  <div><dt>抑制截止</dt><dd>{detail.suppressedUntil ? formatInstant(detail.suppressedUntil, site.timezone) : '不适用'}</dd></div>
+                  <div><dt>抑制截止</dt><dd>{detail.suppression ? formatInstant(detail.suppression.expiresAt, site.timezone) : '不适用'}</dd></div>
+                  <div><dt>恢复时间</dt><dd>{detail.clearedAt ? formatInstant(detail.clearedAt, site.timezone) : '尚未恢复'}</dd></div>
                   <div><dt>发生次数</dt><dd>{detail.occurrenceCount}</dd></div>
                   <div><dt>首次发生</dt><dd>{formatInstant(detail.firstOccurredAt, site.timezone)}</dd></div>
                   <div><dt>最近发生</dt><dd>{formatInstant(detail.lastOccurredAt, site.timezone)}</dd></div>
@@ -332,7 +338,7 @@ function AlarmWorkbench({
                 ) : (
                   <section className="real-alarms__lifecycle" data-testid="real-alarm-read-only" aria-labelledby="real-alarm-read-only-title">
                     <h3 id="real-alarm-read-only-title">只读 Alarm canary</h3>
-                    <p>当前生产阶段仅允许经 Gateway 与 IAM 授权的列表和详情读取。确认、指派、抑制、关闭和重新打开仍保持 0% 公共流量。</p>
+                    <p>当前生产阶段仅允许经 Gateway 与 IAM 授权的列表和详情读取。确认、指派与抑制仍保持 0% 公共流量；恢复由 Alarm evaluator 的 clear predicate 写入，不提供人工关闭/重开。</p>
                   </section>
                 )}
 
@@ -344,13 +350,14 @@ function AlarmWorkbench({
                 </section>
                 <section className="real-alarms__timeline" aria-labelledby="real-alarm-timeline-title">
                   <h3 id="real-alarm-timeline-title">生命周期时间线</h3>
-                  <ol>{detail.transitions.map((transition) => (
-                    <li key={transition.version}>
-                      <strong>{alarmStatusLabel(transition.toStatus)}{transition.operation ? ` · ${alarmOperationLabel(transition.operation)}` : ''}</strong>
-                      <span>{transition.reason}</span>
-                      {transition.assigneeId ? <span>指派：{transition.assigneeId}</span> : null}
-                      {transition.suppressedUntil ? <span>抑制截止：{formatInstant(transition.suppressedUntil, site.timezone)}</span> : null}
-                      <small>{transition.actorType}{transition.actorId ? ` · ${transition.actorId}` : ''} · v{transition.version} · {formatInstant(transition.occurredAt, site.timezone)}</small>
+                  <ol>{detail.timeline.map((entry) => (
+                    <li key={entry.version}>
+                      <strong>{entry.condition === 'CLEARED' ? '已恢复' : '活动'} · {alarmOperationLabel(entry.operation)}</strong>
+                      <span>{entry.reason}</span>
+                      {entry.assigneeId ? <span>指派：{entry.assigneeId}</span> : null}
+                      {entry.suppression ? <span>抑制截止：{formatInstant(entry.suppression.expiresAt, site.timezone)}</span> : null}
+                      <span>当前严重度：{entry.currentSeverity}</span>
+                      <small>{entry.actorType}{entry.actorId ? ` · ${entry.actorId}` : ''} · {entry.policyRevision ? `${entry.policyRevision} · ` : ''}{entry.correlationId} · v{entry.version} · {formatInstant(entry.occurredAt, site.timezone)}</small>
                     </li>
                   ))}</ol>
                 </section>
