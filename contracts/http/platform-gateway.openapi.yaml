@@ -1313,8 +1313,10 @@
           { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
           { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
           { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 4096 } },
-          { "name": "severity", "in": "query", "required": false, "schema": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] } },
-          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] } }
+          { "name": "severity", "in": "query", "required": false, "schema": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] } },
+          { "name": "condition", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACTIVE", "CLEARED"] } },
+          { "name": "acknowledged", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "suppressed", "in": "query", "required": false, "schema": { "type": "boolean" } }
         ],
         "responses": {
           "200": { "description": "Site-scoped Alarm feed.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/CursorAlarmListResponse" } } } },

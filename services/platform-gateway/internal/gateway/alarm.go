@@ -105,7 +105,7 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 		return publicAlarmRoute{}, false
 	}
 	alarmID, err := url.PathUnescape(segments[0])
-	if err != nil || alarmID == "" {
+	if err != nil || !alarmmodel.IsUUIDv7(alarmID) {
 		return publicAlarmRoute{}, false
 	}
 	if len(segments) == 1 {
@@ -219,7 +219,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 	for key := range query {
 		switch key {
-		case "siteId", "status", "severity", "cursor", "limit":
+		case "siteId", "condition", "severity", "acknowledged", "suppressed", "cursor", "limit":
 		default:
 			return "", 0, false
 		}
@@ -242,16 +242,23 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 	if cursor := query.Get("cursor"); len(cursor) > 4096 {
 		return "", 0, false
 	}
-	if status := alarmmodel.Status(query.Get("status")); status != "" {
-		switch status {
-		case alarmmodel.StatusOpen, alarmmodel.StatusAcknowledged, alarmmodel.StatusSuppressed, alarmmodel.StatusClosed:
+	if condition := alarmmodel.Condition(query.Get("condition")); condition != "" {
+		switch condition {
+		case alarmmodel.ConditionActive, alarmmodel.ConditionCleared:
 		default:
 			return "", 0, false
 		}
 	}
+	for _, key := range []string{"acknowledged", "suppressed"} {
+		if raw := query.Get(key); raw != "" {
+			if _, err := strconv.ParseBool(raw); err != nil {
+				return "", 0, false
+			}
+		}
+	}
 	if severity := alarmmodel.Severity(query.Get("severity")); severity != "" {
 		switch severity {
-		case alarmmodel.SeverityInfo, alarmmodel.SeverityWarning, alarmmodel.SeverityMajor, alarmmodel.SeverityCritical:
+		case alarmmodel.SeverityInfo, alarmmodel.SeverityWarning, alarmmodel.SeverityMinor, alarmmodel.SeverityMajor, alarmmodel.SeverityCritical:
 		default:
 			return "", 0, false
 		}

@@ -6,8 +6,6 @@ import {
   acknowledgeScopedAlarm,
   alarmErrorMessage,
   assignScopedAlarm,
-  closeScopedAlarm,
-  reopenScopedAlarm,
   suppressScopedAlarm,
   unassignScopedAlarm,
   unsuppressScopedAlarm,
@@ -20,7 +18,7 @@ import type { RealAlarmProjection } from './real-alarms-projection';
 
 const DEFAULT_SUPPRESSION_HOURS = 4;
 
-type LifecycleOperation = Exclude<AlarmOperation, 'PUBLISH'>;
+type LifecycleOperation = Exclude<AlarmOperation, 'PUBLISH' | 'CLEAR'>;
 
 interface LifecycleVariables {
   operation: LifecycleOperation;
@@ -147,10 +145,6 @@ export default function LocalAlarmLifecycle({
           return suppressScopedAlarm(variables.alarmId, { ...baseInput, suppressedUntil: variables.suppressedUntil ?? '' }, options);
         case 'UNSUPPRESS':
           return unsuppressScopedAlarm(variables.alarmId, baseInput, options);
-        case 'CLOSE':
-          return closeScopedAlarm(variables.alarmId, baseInput, options);
-        case 'REOPEN':
-          return reopenScopedAlarm(variables.alarmId, baseInput, options);
       }
     },
     onSuccess: (updated) => {
@@ -227,7 +221,7 @@ export default function LocalAlarmLifecycle({
             <p>确认动作只改变 Alarm 生命周期，不代表故障已修复；当前状态、来源和触发摘要会一并保留在权威时间线。</p>
             <dl className="real-alarms__ack-summary">
               <div><dt>告警</dt><dd>{alarm.title}</dd></div>
-              <div><dt>当前状态</dt><dd>{alarm.status}</dd></div>
+              <div><dt>当前状态</dt><dd>{projection.statusLabel}</dd></div>
               <div><dt>来源</dt><dd>{alarm.sourceType} · {alarm.sourceReference}</dd></div>
               <div><dt>触发摘要</dt><dd>{alarm.summary}</dd></div>
             </dl>
@@ -252,7 +246,7 @@ export default function LocalAlarmLifecycle({
           </section>
         </div>
       ) : null}
-      {alarm.status !== 'CLOSED' ? (
+      {alarm.condition === 'ACTIVE' ? (
         <label>
           指派对象
           <input
@@ -269,7 +263,7 @@ export default function LocalAlarmLifecycle({
           />
         </label>
       ) : null}
-      {alarm.status === 'OPEN' || alarm.status === 'ACKNOWLEDGED' ? (
+      {projection.canSuppress ? (
         <label>
           抑制时长
           <select
@@ -295,8 +289,6 @@ export default function LocalAlarmLifecycle({
         {projection.canUnassign ? <button data-testid="real-alarm-unassign" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('UNASSIGN')}>取消指派</button> : null}
         {projection.canSuppress ? <button data-testid="real-alarm-suppress" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('SUPPRESS')}>抑制</button> : null}
         {projection.canUnsuppress ? <button data-testid="real-alarm-unsuppress" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('UNSUPPRESS')}>解除抑制</button> : null}
-        {projection.canClose ? <button data-testid="real-alarm-close" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('CLOSE')}>关闭</button> : null}
-        {projection.canReopen ? <button data-testid="real-alarm-reopen" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('REOPEN')}>重新打开</button> : null}
       </div>
       {lifecycleMutation.isPending ? <div className="real-shell-progress" role="status">正在提交 Alarm 生命周期操作…</div> : null}
       {lifecycleMutation.isError ? (

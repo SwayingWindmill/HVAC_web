@@ -5,42 +5,48 @@ import {
   alarmListResponseSchema,
   alarmOperationSchema,
   alarmSchema,
+  alarmConditionSchema,
   alarmSeveritySchema,
-  alarmStatusSchema,
   alarmUUIDv7Schema,
   validateAlarmListScope,
   validateAlarmScope,
   type Alarm,
   type AlarmListResponse,
+  type AlarmCondition,
   type AlarmOperation,
   type AlarmSeverity,
-  type AlarmStatus,
 } from './alarm-contract';
 import { API_MODE } from './config';
 import { alarmPaths } from './generated/platformGateway.gen';
 
 export {
   AlarmApiError,
+  alarmAcknowledgementSchema,
+  alarmConditionSchema,
   alarmEvidenceReferenceSchema,
+  alarmLinkSchema,
   alarmListResponseSchema,
   alarmOperationSchema,
   alarmSchema,
   alarmSeveritySchema,
   alarmSourceTypeSchema,
-  alarmStatusSchema,
-  alarmTransitionSchema,
+  alarmSuppressionSchema,
+  alarmTimelineEntrySchema,
   validateAlarmListScope,
   validateAlarmScope,
 } from './alarm-contract';
 export type {
   Alarm,
+  AlarmAcknowledgement,
+  AlarmCondition,
   AlarmEvidenceReference,
+  AlarmLink,
   AlarmListResponse,
   AlarmOperation,
   AlarmSeverity,
   AlarmSourceType,
-  AlarmStatus,
-  AlarmTransition,
+  AlarmSuppression,
+  AlarmTimelineEntry,
 } from './alarm-contract';
 
 export const ALARM_PUBLIC_ROUTES_ENABLED = API_MODE === 'real';
@@ -50,8 +56,10 @@ export const ALARM_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
 export const ALARM_ROUTES_AVAILABLE = ALARM_PUBLIC_ROUTES_ENABLED || ALARM_LOCAL_ROUTES_ENABLED;
 
 export interface AlarmListFilter {
-  status?: AlarmStatus;
+  condition?: AlarmCondition;
   severity?: AlarmSeverity;
+  acknowledged?: boolean;
+  suppressed?: boolean;
   cursor?: string;
   limit?: number;
 }
@@ -191,8 +199,10 @@ export async function listScopedAlarms(
   const { tenantId, siteId } = validatedScope(options);
   const parameters = new URLSearchParams();
   parameters.set('siteId', siteId);
-  if (filter.status) parameters.set('status', alarmStatusSchema.parse(filter.status));
+  if (filter.condition) parameters.set('condition', alarmConditionSchema.parse(filter.condition));
   if (filter.severity) parameters.set('severity', alarmSeveritySchema.parse(filter.severity));
+  if (filter.acknowledged !== undefined) parameters.set('acknowledged', String(filter.acknowledged));
+  if (filter.suppressed !== undefined) parameters.set('suppressed', String(filter.suppressed));
   if (filter.cursor) parameters.set('cursor', alarmCursorSchema.parse(filter.cursor));
   const limit = filter.limit ?? 50;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
@@ -206,7 +216,7 @@ export async function listScopedAlarms(
     options,
   );
   const response = alarmListResponseSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     items: payload.data,
     nextCursor: payload.meta.nextCursor,
     hasMore: payload.meta.hasMore,
@@ -234,7 +244,7 @@ export async function getScopedAlarm(
 
 async function mutateScopedAlarm(
   alarmId: string,
-  operation: Exclude<AlarmOperation, 'PUBLISH' | 'ACKNOWLEDGE'>,
+  operation: Exclude<AlarmOperation, 'PUBLISH' | 'ACKNOWLEDGE' | 'CLEAR'>,
   input: AlarmLifecycleInput | AlarmAssignInput | AlarmSuppressInput,
   options: ScopedAlarmRequestOptions,
 ): Promise<Alarm> {
@@ -243,7 +253,7 @@ async function mutateScopedAlarm(
   }
   const { tenantId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDV7(alarmId);
-  const validatedOperation = alarmOperationSchema.exclude(['PUBLISH', 'ACKNOWLEDGE']).parse(operation);
+  const validatedOperation = alarmOperationSchema.exclude(['PUBLISH', 'ACKNOWLEDGE', 'CLEAR']).parse(operation);
   if (!options.csrfToken) {
     throw new AlarmApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
   }
@@ -306,14 +316,6 @@ export function suppressScopedAlarm(alarmId: string, input: AlarmSuppressInput, 
 
 export function unsuppressScopedAlarm(alarmId: string, input: AlarmLifecycleInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
   return mutateScopedAlarm(alarmId, 'UNSUPPRESS', lifecycleInputSchema.parse(input), options);
-}
-
-export function closeScopedAlarm(alarmId: string, input: AlarmLifecycleInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
-  return mutateScopedAlarm(alarmId, 'CLOSE', lifecycleInputSchema.parse(input), options);
-}
-
-export function reopenScopedAlarm(alarmId: string, input: AlarmLifecycleInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
-  return mutateScopedAlarm(alarmId, 'REOPEN', lifecycleInputSchema.parse(input), options);
 }
 
 export function alarmErrorMessage(error: unknown): string {

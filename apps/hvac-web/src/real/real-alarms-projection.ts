@@ -3,10 +3,9 @@ import type {
   AlarmOperation,
   AlarmSeverity,
   AlarmSourceType,
-  AlarmStatus,
 } from '../api/alarm-contract.ts';
 
-export type AlarmBusinessState = 'ACTIVE' | 'ACKNOWLEDGED' | 'SUPPRESSED' | 'CLOSED';
+export type AlarmBusinessState = 'ACTIVE' | 'ACKNOWLEDGED' | 'SUPPRESSED' | 'CLEARED';
 
 export interface RealAlarmProjection {
   readonly businessState: AlarmBusinessState;
@@ -20,20 +19,19 @@ export interface RealAlarmProjection {
   readonly canUnassign: boolean;
   readonly canSuppress: boolean;
   readonly canUnsuppress: boolean;
-  readonly canClose: boolean;
-  readonly canReopen: boolean;
 }
 
-const statusLabels: Record<AlarmStatus, string> = {
-  OPEN: '未处理',
+const stateLabels: Record<AlarmBusinessState, string> = {
+  ACTIVE: '活动',
   ACKNOWLEDGED: '已确认',
   SUPPRESSED: '已抑制',
-  CLOSED: '已关闭',
+  CLEARED: '已恢复',
 };
 
 const severityLabels: Record<AlarmSeverity, string> = {
   INFO: '提示',
   WARNING: '警告',
+  MINOR: '次要',
   MAJOR: '重要',
   CRITICAL: '严重',
 };
@@ -51,35 +49,35 @@ const operationLabels: Record<AlarmOperation, string> = {
   UNASSIGN: '取消指派',
   SUPPRESS: '抑制',
   UNSUPPRESS: '解除抑制',
-  CLOSE: '关闭',
-  REOPEN: '重新打开',
+  CLEAR: '恢复',
 };
 
 export function projectRealAlarm(alarm: Alarm): RealAlarmProjection {
-  const acknowledged = alarm.transitions.some((transition) => transition.operation === 'ACKNOWLEDGE');
-  const businessState: AlarmBusinessState = alarm.status === 'OPEN'
-    ? (acknowledged ? 'ACKNOWLEDGED' : 'ACTIVE')
-    : alarm.status;
-  const active = alarm.status !== 'CLOSED';
+  const active = alarm.condition === 'ACTIVE';
+  const businessState: AlarmBusinessState = !active
+    ? 'CLEARED'
+    : alarm.suppression
+      ? 'SUPPRESSED'
+      : alarm.acknowledgement
+        ? 'ACKNOWLEDGED'
+        : 'ACTIVE';
   return Object.freeze({
     businessState,
-    statusLabel: alarm.status === 'OPEN' && acknowledged ? '已确认' : statusLabels[alarm.status],
-    severityLabel: severityLabels[alarm.severity],
+    statusLabel: stateLabels[businessState],
+    severityLabel: severityLabels[alarm.currentSeverity],
     sourceLabel: sourceLabels[alarm.sourceType],
     occurrenceLabel: alarm.occurrenceCount === 1 ? '首次发生' : `累计 ${alarm.occurrenceCount} 次`,
     canMutate: true as const,
-    canAcknowledge: !acknowledged,
+    canAcknowledge: !alarm.acknowledgement,
     canAssign: active,
     canUnassign: active && Boolean(alarm.assigneeId),
-    canSuppress: alarm.status === 'OPEN' || alarm.status === 'ACKNOWLEDGED',
-    canUnsuppress: alarm.status === 'SUPPRESSED',
-    canClose: active,
-    canReopen: alarm.status === 'CLOSED',
+    canSuppress: active && !alarm.suppression,
+    canUnsuppress: active && Boolean(alarm.suppression),
   });
 }
 
-export function alarmStatusLabel(status: AlarmStatus): string {
-  return statusLabels[status];
+export function alarmBusinessStateLabel(state: AlarmBusinessState): string {
+  return stateLabels[state];
 }
 
 export function alarmOperationLabel(operation: AlarmOperation): string {

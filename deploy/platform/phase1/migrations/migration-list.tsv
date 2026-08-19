@@ -47,6 +47,7 @@ hvac_s4|services/alarm-service/migrations/001_s4_alarm_runtime.sql
 hvac_s4|services/alarm-service/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|services/alarm-service/migrations/003_s4_tenant_scope.sql
 hvac_s4|services/alarm-service/migrations/004_s4_event_provenance.sql
+hvac_s4|services/alarm-service/migrations/005_s13_alarm_orthogonal.sql
 hvac_s5|services/work-order-service/migrations/001_s5_work_order_runtime.sql
 hvac_s5|services/work-order-service/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|services/work-order-service/migrations/003_s5_work_order_lifecycle.sql
