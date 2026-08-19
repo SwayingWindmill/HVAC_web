@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 21,
+  "registryRevision": 22,
   "resources": [
     {
       "kind": "schema",
@@ -48,6 +48,12 @@
       "kind": "schema",
       "name": "work_order_runtime",
       "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "outbound_delivery",
+      "writer": "outbound-delivery-service",
       "revision": 1
     },
     {
@@ -522,6 +528,11 @@
       ]
     },
     {
+      "service": "outbound-delivery-service",
+      "schema": "outbound_delivery",
+      "mode": "write"
+    },
+    {
       "service": "telemetry-history-projector",
       "schema": "telemetry_history",
       "mode": "write"
@@ -733,6 +744,13 @@
         "work_order_mutation_audit",
         "work_order_completion_evidence"
       ]
+    },
+    {
+      "schema": "outbound_delivery",
+      "migrationRole": "outbound_delivery_migrator",
+      "runtimeRole": "outbound_delivery_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "write"
     }
   ]
 }

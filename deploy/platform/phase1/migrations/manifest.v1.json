@@ -53,7 +53,8 @@
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
         "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
         "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
-        "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql"
+        "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql",
+        "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql"
       ]
     },
     {
@@ -134,6 +135,7 @@
     "s3_command_service",
     "s4_alarm_service",
     "s5_work_order_service",
-    "s5_work_order_mutation_service"
+    "s5_work_order_mutation_service",
+    "outbound_delivery_runtime"
   ]
 }
