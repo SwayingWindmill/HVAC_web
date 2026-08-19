@@ -67,7 +67,7 @@ type MQTTPublisher struct {
 	connected      *atomic.Bool
 }
 
-func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, plant *Plant, metrics *observability.Registry) (*MQTTPublisher, error) {
+func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, edgeRuntime *EdgeControlRuntime, metrics *observability.Registry) (*MQTTPublisher, error) {
 	if err := plantConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("plant config: %w", err)
 	}
@@ -94,7 +94,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err != nil {
 		return nil, err
 	}
-	commandHandler, err := newEdgeCommandHandler(plant, config, plantConfig.GatewayID)
+	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.GatewayID)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			}()
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID: strings.TrimSpace(config.ClientID),
+			ClientID:          strings.TrimSpace(config.ClientID),
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
 		},
 	})

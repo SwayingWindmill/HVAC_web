@@ -45,8 +45,8 @@ assert(ownership.nativeEdgeContract?.provider === 'EG8200_MQTT', 'Native Edge co
 assert(ownership.nativeEdgeContract?.connectorMayDeclareVerified === false, 'MQTT connector may not declare VERIFIED');
 
 for (const route of (routes.routes ?? []).filter((route) => route.owner === 'command-service')) {
-  assert(route.rollout?.mode === 'disabled', `${route.method} ${route.path} is not disabled`);
-  assert(route.shadowSideEffectPolicy === 'SYNTHETIC_ONLY', `${route.method} ${route.path} is not Synthetic-only`);
+  assert(route.rollout?.mode === 'all', `${route.method} ${route.path} canonical ownership is not active`);
+  assert(route.compatibilityMode === 'native', `${route.method} ${route.path} is not native`);
 }
 
 for (const token of [
@@ -117,7 +117,7 @@ for (const token of [
   assert(mqttConnector.includes(token), `Cloud MQTT command connector is missing ${token}`);
 }
 for (const token of [
-  'commandId', 'STALE_FENCE', 'EXPIRED', 'COMMAND_MAPPING_INVALID', 'ApplyCommand', 'command/reply',
+  'commandId', 'STALE_FENCE', 'EXPIRED', 'COMMAND_MAPPING_INVALID', 'SubmitCommand', 'command/reply',
 ]) {
   assert(mqttEdge.includes(token), `Edge MQTT command handler is missing ${token}`);
 }

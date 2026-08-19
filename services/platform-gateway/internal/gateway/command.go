@@ -25,12 +25,12 @@ import (
 )
 
 const (
-	publicCommandsPath          = "/api/v1/commands"
-	internalCommandsPath        = "/internal/v1/commands"
-	commandDecisionPath         = "/internal/v1/command/decision"
+	publicCommandsPath           = "/api/v1/commands"
+	internalCommandsPath         = "/internal/v1/commands"
+	commandDecisionPath          = "/internal/v1/command/decision"
 	defaultCommandTemperatureKey = "zone.temperature"
-	maximumCommandRequestBody   = int64(16 << 10)
-	defaultCommandResponseLimit = int64(256 << 10)
+	maximumCommandRequestBody    = int64(16 << 10)
+	defaultCommandResponseLimit  = int64(256 << 10)
 )
 
 type CommandConfig struct {
@@ -54,27 +54,27 @@ type commandController struct {
 }
 
 type createCommandRequest struct {
-	AssetID    string                         `json:"assetId"`
+	AssetID        string                         `json:"assetId"`
 	CommandPointID string                         `json:"commandPointId"`
 	Parameters     commandmodel.CommandParameters `json:"parameters"`
 }
 
 type preparedCommand struct {
-	tenantID       string
-	siteID         string
-	deviceID       string
-	pointID        string
-	principalID    string
-	idempotencyKey string
+	tenantID             string
+	siteID               string
+	deviceID             string
+	pointID              string
+	principalID          string
+	idempotencyKey       string
 	capability           commandmodel.Capability
 	parameters           commandmodel.CommandParameters
 	verificationPointKey string
 	currentState         commandCurrentState
-	grant          string
+	grant                string
 }
 
 type assetCommandTarget struct {
-	asset     platformapi.Asset
+	asset         platformapi.Asset
 	device        platformapi.Device
 	point         platformapi.TelemetryPoint
 	feedbackPoint platformapi.TelemetryPoint
@@ -93,12 +93,12 @@ type commandCurrentState struct {
 }
 
 type internalCommandCreate struct {
-	TenantID       string                         `json:"tenantId"`
-	SiteID         string                         `json:"siteId"`
-	DeviceID       string                         `json:"deviceId"`
-	PointID        string                         `json:"pointId"`
-	PrincipalID    string                         `json:"principalId"`
-	IdempotencyKey string                         `json:"idempotencyKey"`
+	TenantID             string                         `json:"tenantId"`
+	SiteID               string                         `json:"siteId"`
+	DeviceID             string                         `json:"deviceId"`
+	PointID              string                         `json:"pointId"`
+	PrincipalID          string                         `json:"principalId"`
+	IdempotencyKey       string                         `json:"idempotencyKey"`
 	Capability           commandmodel.Capability        `json:"capability"`
 	Parameters           commandmodel.CommandParameters `json:"parameters"`
 	VerificationPointKey string                         `json:"verificationPointKey"`
@@ -106,11 +106,11 @@ type internalCommandCreate struct {
 }
 
 type internalCommandApproval struct {
-	TenantID       string `json:"tenantId"`
-	SiteID         string `json:"siteId"`
-	DeviceID       string `json:"deviceId"`
-	PrincipalID    string `json:"principalId"`
-	ApproverRole   string `json:"approverRole"`
+	TenantID     string `json:"tenantId"`
+	SiteID       string `json:"siteId"`
+	DeviceID     string `json:"deviceId"`
+	PrincipalID  string `json:"principalId"`
+	ApproverRole string `json:"approverRole"`
 }
 
 type commandTransitionView struct {
@@ -123,26 +123,26 @@ type commandTransitionView struct {
 }
 
 type commandView struct {
-	SchemaVersion         int                         `json:"schemaVersion"`
-	CommandID             string                      `json:"commandId"`
-	TenantID              string                      `json:"tenantId"`
-	SiteID                string                      `json:"siteId"`
-	DeviceID              string                      `json:"deviceId"`
-	PointID               string                      `json:"pointId"`
-	Capability            commandmodel.Capability     `json:"capability"`
-	CapabilityRevision    string                      `json:"capabilityRevision"`
-	Status                commandmodel.IntentStatus   `json:"status"`
-	Risk                  commandmodel.RiskLevel      `json:"risk"`
-	ApprovalPolicy        commandmodel.ApprovalPolicy `json:"approvalPolicy"`
-	ApprovalCount         int                          `json:"approvalCount"`
-	RequiredApprovalCount int                          `json:"requiredApprovalCount"`
+	SchemaVersion         int                            `json:"schemaVersion"`
+	CommandID             string                         `json:"commandId"`
+	TenantID              string                         `json:"tenantId"`
+	SiteID                string                         `json:"siteId"`
+	DeviceID              string                         `json:"deviceId"`
+	PointID               string                         `json:"pointId"`
+	Capability            commandmodel.Capability        `json:"capability"`
+	CapabilityRevision    string                         `json:"capabilityRevision"`
+	Status                commandmodel.IntentStatus      `json:"status"`
+	Risk                  commandmodel.RiskLevel         `json:"risk"`
+	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
+	ApprovalCount         int                            `json:"approvalCount"`
+	RequiredApprovalCount int                            `json:"requiredApprovalCount"`
 	Parameters            commandmodel.CommandParameters `json:"parameters"`
-	DeviceCommandSequence uint64                       `json:"deviceCommandSequence"`
-	Version               uint64                      `json:"version"`
-	SnapshotRevision      uint64                      `json:"snapshotRevision"`
-	Transitions           []commandTransitionView     `json:"transitions"`
-	CreatedAt             time.Time                   `json:"createdAt"`
-	UpdatedAt             time.Time                   `json:"updatedAt"`
+	DeviceCommandSequence uint64                         `json:"deviceCommandSequence"`
+	Version               uint64                         `json:"version"`
+	SnapshotRevision      uint64                         `json:"snapshotRevision"`
+	Transitions           []commandTransitionView        `json:"transitions"`
+	CreatedAt             time.Time                      `json:"createdAt"`
+	UpdatedAt             time.Time                      `json:"updatedAt"`
 }
 
 func commandCapabilityProfile(capability commandmodel.Capability) (commandmodel.CapabilityProfile, bool) {
@@ -290,7 +290,7 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	prepared := preparedCommand{
 		tenantID: target.device.TenantID, siteID: target.device.SiteID, deviceID: target.device.ID, pointID: target.point.ID,
 		principalID: principalID, idempotencyKey: idempotencyKey, capability: target.capability,
-		parameters: cloneCommandParameters(input.Parameters), verificationPointKey: target.feedbackPoint.SourceKey,
+		parameters: cloneCommandParameters(input.Parameters), verificationPointKey: target.feedbackPoint.PointCode,
 		currentState: currentState, grant: grant,
 	}
 	view, status, location, failure := h.executeCommandCreate(request.Context(), prepared)
@@ -951,7 +951,7 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.command.backendAudience,
 		TenantID: session.TenantID, Actions: []string{"command:read"},
-		Scopes:   []string{"tenant:" + session.TenantID, "command:" + commandID},
+		Scopes:         []string{"tenant:" + session.TenantID, "command:" + commandID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

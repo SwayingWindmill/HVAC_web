@@ -206,7 +206,7 @@ export async function approveScopedCommand(
   if (!options.csrfToken) {
     throw new CommandApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
   }
-  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}:approve`, {
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': options.csrfToken },
     body: JSON.stringify({}),
@@ -312,7 +312,7 @@ export async function approveCommand(commandId: string): Promise<Command> {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
   const csrf = await csrfCapability();
-  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}:approve`, {
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
     body: JSON.stringify({}),

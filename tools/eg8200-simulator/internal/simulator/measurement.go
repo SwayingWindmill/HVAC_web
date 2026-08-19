@@ -43,10 +43,16 @@ func NewMeasurementSchedulerWithSequences(config Config, initialSequences map[st
 	}
 	points := make([]scheduledPoint, 0, len(config.Points))
 	for _, point := range config.Points {
+		if point.PointType == "COMMAND" {
+			continue
+		}
 		points = append(points, scheduledPoint{
 			config:   point,
 			sequence: initialSequences[pointReference(point.DeviceID, point.TelemetryKey)],
 		})
+	}
+	if len(points) == 0 {
+		return nil, errors.New("measurement scheduler requires at least one non-COMMAND point")
 	}
 	return &MeasurementScheduler{points: points}, nil
 }

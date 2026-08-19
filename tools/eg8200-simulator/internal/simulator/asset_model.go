@@ -16,17 +16,17 @@ type SpaceConfig struct {
 }
 
 type AssetConfig struct {
-	ID     string `json:"id"`
+	ID      string `json:"id"`
 	SpaceID string `json:"spaceId"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
 }
 
 type DeviceEndpointConfig struct {
-	ID           string   `json:"id"`
-	SpaceID       string   `json:"spaceId,omitempty"`
-	Name         string   `json:"name"`
-	Type         string   `json:"type"`
+	ID       string   `json:"id"`
+	SpaceID  string   `json:"spaceId,omitempty"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
 	AssetIDs []string `json:"assetIds,omitempty"`
 }
 
@@ -35,7 +35,7 @@ type DeviceEndpointConfig struct {
 type SensorConfig struct {
 	ID               string `json:"id"`
 	DeviceID         string `json:"deviceId"`
-	MountedSpaceID    string `json:"mountedSpaceId"`
+	MountedSpaceID   string `json:"mountedSpaceId"`
 	Name             string `json:"name"`
 	Type             string `json:"type"`
 	SerialNumber     string `json:"serialNumber"`
@@ -43,23 +43,25 @@ type SensorConfig struct {
 }
 
 type PointConfig struct {
-	DeviceID        string `json:"deviceId"`
-	SensorID        string `json:"sensorId,omitempty"`
-	SubjectType     string `json:"subjectType"`
-	SubjectID       string `json:"subjectId,omitempty"`
-	SourceKey       string `json:"sourceKey"`
-	TelemetryKey    string `json:"telemetryKey"`
-	PointCode       string `json:"pointCode"`
-	Name            string `json:"name"`
-	PointType       string `json:"pointType"`
-	ValueType       string `json:"valueType"`
-	Unit            string `json:"unit,omitempty"`
-	Writable        bool   `json:"writable"`
-	SampleInterval  string `json:"sampleInterval"`
-	PublishInterval string `json:"publishInterval"`
-	StaleAfter      string `json:"staleAfter"`
-	SourceProtocol  string `json:"sourceProtocol,omitempty"`
-	SourceAddress   string `json:"sourceAddress,omitempty"`
+	PointID         string         `json:"pointId"`
+	DeviceID        string         `json:"deviceId"`
+	SensorID        string         `json:"sensorId,omitempty"`
+	SubjectType     string         `json:"subjectType"`
+	SubjectID       string         `json:"subjectId,omitempty"`
+	SourceKey       string         `json:"sourceKey"`
+	TelemetryKey    string         `json:"telemetryKey"`
+	PointCode       string         `json:"pointCode"`
+	Name            string         `json:"name"`
+	PointType       string         `json:"pointType"`
+	ValueType       string         `json:"valueType"`
+	Unit            string         `json:"unit,omitempty"`
+	Writable        bool           `json:"writable"`
+	SampleInterval  string         `json:"sampleInterval"`
+	PublishInterval string         `json:"publishInterval"`
+	StaleAfter      string         `json:"staleAfter"`
+	SourceProtocol  string         `json:"sourceProtocol,omitempty"`
+	SourceAddress   string         `json:"sourceAddress,omitempty"`
+	SourceMetadata  map[string]any `json:"sourceMetadata,omitempty"`
 }
 
 var pointCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)
@@ -166,8 +168,16 @@ func validateAssetModel(config Config) error {
 	}
 
 	pointKeys := make(map[string]PointConfig, len(config.Points))
+	pointIDs := make(map[string]struct{}, len(config.Points))
 	devicePointCount := make(map[string]int, len(devices))
 	for index, point := range config.Points {
+		if !uuidV7Pattern.MatchString(strings.TrimSpace(point.PointID)) {
+			return fmt.Errorf("point %d pointId must be UUIDv7", index)
+		}
+		if _, duplicate := pointIDs[point.PointID]; duplicate {
+			return fmt.Errorf("duplicate canonical pointId %s", point.PointID)
+		}
+		pointIDs[point.PointID] = struct{}{}
 		if _, ok := devices[point.DeviceID]; !ok {
 			return fmt.Errorf("point %d references unknown device %s", index, point.DeviceID)
 		}
@@ -188,6 +198,11 @@ func validateAssetModel(config Config) error {
 		}
 		if point.PointType == "COMMAND" && !point.Writable {
 			return fmt.Errorf("point %s COMMAND must be writable", point.TelemetryKey)
+		}
+		if point.PointType == "COMMAND" {
+			if err := validateCommandPointMetadata(point); err != nil {
+				return fmt.Errorf("point %s: %w", point.TelemetryKey, err)
+			}
 		}
 		if point.PointType != "COMMAND" && point.PointType != "SETTING" && point.Writable {
 			return fmt.Errorf("point %s only COMMAND or SETTING may be writable", point.TelemetryKey)
@@ -268,6 +283,35 @@ func allowedPointType(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validateCommandPointMetadata(point PointConfig) error {
+	kind, _ := point.SourceMetadata["controlKind"].(string)
+	capability, _ := point.SourceMetadata["capability"].(string)
+	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
+	if strings.TrimSpace(capability) == "" || strings.TrimSpace(feedbackPointKey) == "" {
+		return errors.New("COMMAND metadata requires capability and feedbackPointKey")
+	}
+	switch kind {
+	case "ACTION":
+		if point.ValueType != "BOOLEAN" {
+			return errors.New("ACTION COMMAND must use BOOLEAN valueType")
+		}
+	case "NUMBER":
+		if point.ValueType != "NUMBER" {
+			return errors.New("NUMBER COMMAND must use NUMBER valueType")
+		}
+		parameterKey, _ := point.SourceMetadata["parameterKey"].(string)
+		minimum, minimumOK := point.SourceMetadata["minimum"].(float64)
+		maximum, maximumOK := point.SourceMetadata["maximum"].(float64)
+		step, stepOK := point.SourceMetadata["step"].(float64)
+		if strings.TrimSpace(parameterKey) == "" || !minimumOK || !maximumOK || !stepOK || minimum > maximum || step <= 0 {
+			return errors.New("NUMBER COMMAND metadata requires parameterKey and valid minimum/maximum/step")
+		}
+	default:
+		return fmt.Errorf("unsupported COMMAND controlKind %q", kind)
+	}
+	return nil
 }
 
 func allowedValueType(value string) bool {

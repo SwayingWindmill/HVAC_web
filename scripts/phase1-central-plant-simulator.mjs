@@ -9,6 +9,8 @@ import {
   sqlLiteral,
 } from './central-plant-local-contract.mjs';
 import {
+  assignCentralPlantPointIds,
+  buildCentralPlantControlPoints,
   buildCentralPlantSimulatorPoints,
   centralPlantAreas,
   centralPlantDeviceEndpoints,
@@ -76,11 +78,18 @@ function bindingRoleForDeviceType(deviceType) {
 
 function buildIdentities(points) {
   let sequence = 1;
+  let commandSequence = 1;
   const nextID = () => localUUID(sequence++);
   const spaceIdByKey = new Map(centralPlantAreas.map((space) => [space.id, nextID()]));
   const assetIdByKey = new Map(centralPlantEquipment.map((asset) => [asset.id, nextID()]));
   const sensorIdByKey = new Map(centralPlantSensors.map((sensor) => [sensor.id, nextID()]));
-  const pointIdByRef = new Map(points.map((point) => [`${point.deviceId}/${point.telemetryKey}`, nextID()]));
+  const pointIdByRef = new Map(points.map((point) => {
+    const expected = point.pointType === 'COMMAND' ? localUUID(0x500000000000 + commandSequence++) : nextID();
+    if (point.pointId && point.pointId !== expected) {
+      throw new Error(`point ${point.deviceId}/${point.telemetryKey} canonical pointId ${point.pointId} does not match deterministic Registry identity ${expected}`);
+    }
+    return [`${point.deviceId}/${point.telemetryKey}`, point.pointId ?? expected];
+  }));
   return { nextID, spaceIdByKey, assetIdByKey, sensorIdByKey, pointIdByRef };
 }
 
@@ -165,21 +174,22 @@ function buildS1Seed(points) {
       ${point.sensorId ? sqlLiteral(ids.sensorIdByKey.get(point.sensorId)) : 'NULL'},
       ${sqlLiteral(point.pointCode)}, ${sqlLiteral(point.telemetryKey)}, ${sqlLiteral(point.name)},
       ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'},
-      false, ${durationMilliseconds(point.sampleInterval)}, ${durationMilliseconds(point.publishInterval)}, ${durationMilliseconds(point.staleAfter)},
+      ${point.writable ? 'true' : 'false'}, ${durationMilliseconds(point.sampleInterval)}, ${durationMilliseconds(point.publishInterval)}, ${durationMilliseconds(point.staleAfter)},
       ${sqlJson(metadata)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL
     )`;
   }).join(',\n');
 
   const pointSubjects = points.map((point) => {
     const pointID = ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`);
+    const bindingRole = point.pointType === 'COMMAND' ? 'CONTROLS' : 'DESCRIBES';
     if (point.subjectType === 'SITE') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SITE', NULL, NULL, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SITE', NULL, NULL, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
     }
     if (point.subjectType === 'EQUIPMENT') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'ASSET', NULL, ${sqlLiteral(ids.assetIdByKey.get(point.subjectId))}, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'ASSET', NULL, ${sqlLiteral(ids.assetIdByKey.get(point.subjectId))}, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
     }
     if (point.subjectType === 'AREA') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SPACE', ${sqlLiteral(ids.spaceIdByKey.get(point.subjectId))}, NULL, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SPACE', ${sqlLiteral(ids.spaceIdByKey.get(point.subjectId))}, NULL, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
     }
     throw new Error(`unsupported point subject ${point.subjectType}`);
   }).join(',\n');
@@ -402,14 +412,18 @@ function startSimulatorService() {
 }
 
 const pointContract = JSON.parse(readFileSync(pointContractPath, 'utf8'));
-const points = buildCentralPlantSimulatorPoints(pointContract);
+const rawObservedPoints = buildCentralPlantSimulatorPoints(pointContract);
+const rawControlPoints = buildCentralPlantControlPoints(rawObservedPoints);
+const registryPoints = assignCentralPlantPointIds([...rawObservedPoints, ...rawControlPoints]);
+const observedPoints = registryPoints.filter((point) => point.pointType !== 'COMMAND');
+const controlPoints = registryPoints.filter((point) => point.pointType === 'COMMAND');
 
 ensureSimulatorCertificate();
 writeSimulatorConfig();
-psql('hvac_s1', buildS1Seed(points));
-psql('hvac_s2', buildS2Seed(points));
+psql('hvac_s1', buildS1Seed(registryPoints));
+psql('hvac_s2', buildS2Seed(observedPoints));
 runLocalAdminGrant();
-psql('hvac_s1', buildTelemetryKeyGrants(points, localAdminPrincipalId()));
+psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
 startSimulatorService();
 
-console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, points=${points.length}`);
+console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}`);

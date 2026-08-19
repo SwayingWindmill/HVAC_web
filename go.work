@@ -9,6 +9,7 @@ use (
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/domainoutbox
+	./libs/edgecontrol
 	./libs/identitycontext
 	./libs/observability
 	./libs/operationsauditevent

@@ -16,9 +16,11 @@
 
 这里的 `OPENEMS` 指采用机制，不等于复制 Java/OSGi 源码。实现语言与运行时仍需要独立证据。
 
-## 2. 官方参考依据
+## 2. 官方参考依据与实现基线
 
-本次只把 OpenEMS 官方文档和官方 GitHub 仓库作为外部事实依据：
+本次只把 OpenEMS 官方文档和官方 GitHub 仓库作为外部事实依据。实现参考固定到官方 release `2026.7.0` / commit `2e2792d`；后续 `develop` 的变化必须经过新的源码审查才可以改变目标行为。
+
+所有 `OPENEMS` 项，以及依赖 OpenEMS Edge 行为的关键 `MERGE` 项，实施时必须遵守 `AGENTS.md` 的 source-first 规则：先阅读对应官方源码、官方测试和官方文档，把源码级行为与 `ADOPT / ADAPT / REJECT` 记录到 `docs/architecture/openems-source-review.md`，再实现或重构。仅凭本文的架构文字不能作为实现依据。
 
 - Edge Architecture：<https://openems.github.io/openems.io/openems/latest/edge/architecture.html>
 - Edge Configuration：<https://openems.github.io/openems.io/openems/latest/edge/configuration.html>

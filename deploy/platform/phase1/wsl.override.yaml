@@ -6,10 +6,12 @@ services:
       OIDC_CLIENT_ID: hvac-web-development
       OIDC_REDIRECT_URI: https://localhost:8443/api/v1/auth/callback
       IDENTITY_POLICY_REVISION: registry-read:1
+      COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
       - ./runtime/secrets:/run/hvac/secrets:ro
       - ./runtime/tls:/run/hvac/public-tls:ro
+      - ./config/command-runtime-cohorts.local.json:/run/hvac/phase1-config/command-runtime-cohorts.local.json:ro
       - ../../../contracts/ownership/route-ownership.v1.json:/run/hvac/config/route-ownership.v1.json:ro
 
   identity-service:
@@ -31,13 +33,18 @@ services:
       IDENTITY_ISSUER: https://localhost:8443/identity
 
   telemetry-worker:
+    environment:
+      TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
 
   iot-service:
+    environment:
+      COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
       - ./runtime/config:/run/hvac/config:ro
+      - ./config/command-edge-bindings.local.json:/run/hvac/phase1-config/command-edge-bindings.local.json:ro
     depends_on:
       energy-api:
         condition: service_healthy

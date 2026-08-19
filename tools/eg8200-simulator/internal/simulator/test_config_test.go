@@ -1,40 +1,49 @@
 package simulator
 
+import "fmt"
+
 func testConfig() Config {
 	plant := testPlantConfig()
-	areas := []AreaConfig{
+	spaces := []SpaceConfig{
 		{ID: "building", Name: "Commercial Building", Type: "BUILDING"},
 		{ID: "plant-room", ParentID: "building", Name: "Central Plant Room", Type: "PLANT_ROOM"},
 		{ID: "rooftop", ParentID: "building", Name: "Rooftop", Type: "ROOFTOP"},
 		{ID: "outdoor", ParentID: "building", Name: "Outdoor", Type: "OUTDOOR"},
 	}
-	equipment := []EquipmentAssetConfig{
-		{ID: "equipment-chiller-01", AreaID: "plant-room", Name: "Chiller 01", Type: "CHILLER"},
-		{ID: "equipment-chwp-01", AreaID: "plant-room", Name: "Chilled Water Pump 01", Type: "CHILLED_WATER_PUMP"},
-		{ID: "equipment-cwp-01", AreaID: "plant-room", Name: "Condenser Water Pump 01", Type: "COOLING_WATER_PUMP"},
-		{ID: "equipment-ct-01", AreaID: "rooftop", Name: "Cooling Tower 01", Type: "COOLING_TOWER"},
-		{ID: "equipment-meter-01", AreaID: "plant-room", Name: "HVAC Power Meter", Type: "HVAC_POWER_METER"},
-		{ID: "equipment-btu-01", AreaID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER"},
-		{ID: "equipment-weather-01", AreaID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION"},
+	assets := []AssetConfig{
+		{ID: "equipment-chiller-01", SpaceID: "plant-room", Name: "Chiller 01", Type: "CHILLER"},
+		{ID: "equipment-chwp-01", SpaceID: "plant-room", Name: "Chilled Water Pump 01", Type: "CHILLED_WATER_PUMP"},
+		{ID: "equipment-cwp-01", SpaceID: "plant-room", Name: "Condenser Water Pump 01", Type: "COOLING_WATER_PUMP"},
+		{ID: "equipment-ct-01", SpaceID: "rooftop", Name: "Cooling Tower 01", Type: "COOLING_TOWER"},
+		{ID: "equipment-meter-01", SpaceID: "plant-room", Name: "HVAC Power Meter", Type: "HVAC_POWER_METER"},
+		{ID: "equipment-btu-01", SpaceID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER"},
+		{ID: "equipment-weather-01", SpaceID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION"},
 	}
 	devices := []DeviceEndpointConfig{
-		{ID: plant.Chiller.ID, AreaID: "plant-room", Name: "Chiller Controller 01", Type: "CHILLER_CONTROLLER", EquipmentIDs: []string{"equipment-chiller-01"}},
-		{ID: plant.ChilledWaterPump.ID, AreaID: "plant-room", Name: "CHWP Drive 01", Type: "PUMP_CONTROLLER", EquipmentIDs: []string{"equipment-chwp-01"}},
-		{ID: plant.CoolingWaterPump.ID, AreaID: "plant-room", Name: "CWP Drive 01", Type: "PUMP_CONTROLLER", EquipmentIDs: []string{"equipment-cwp-01"}},
-		{ID: plant.CoolingTower.ID, AreaID: "rooftop", Name: "Cooling Tower Controller 01", Type: "COOLING_TOWER_CONTROLLER", EquipmentIDs: []string{"equipment-ct-01"}},
-		{ID: plant.PowerMeterID, AreaID: "plant-room", Name: "HVAC Power Meter", Type: "POWER_METER", EquipmentIDs: []string{"equipment-meter-01"}},
-		{ID: plant.BTUMeterID, AreaID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER", EquipmentIDs: []string{"equipment-btu-01"}},
-		{ID: plant.WeatherStationID, AreaID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION", EquipmentIDs: []string{"equipment-weather-01"}},
+		{ID: plant.Chiller.ID, SpaceID: "plant-room", Name: "Chiller Controller 01", Type: "CHILLER_CONTROLLER", AssetIDs: []string{"equipment-chiller-01"}},
+		{ID: plant.ChilledWaterPump.ID, SpaceID: "plant-room", Name: "CHWP Drive 01", Type: "PUMP_CONTROLLER", AssetIDs: []string{"equipment-chwp-01"}},
+		{ID: plant.CoolingWaterPump.ID, SpaceID: "plant-room", Name: "CWP Drive 01", Type: "PUMP_CONTROLLER", AssetIDs: []string{"equipment-cwp-01"}},
+		{ID: plant.CoolingTower.ID, SpaceID: "rooftop", Name: "Cooling Tower Controller 01", Type: "COOLING_TOWER_CONTROLLER", AssetIDs: []string{"equipment-ct-01"}},
+		{ID: plant.PowerMeterID, SpaceID: "plant-room", Name: "HVAC Power Meter", Type: "POWER_METER", AssetIDs: []string{"equipment-meter-01"}},
+		{ID: plant.BTUMeterID, SpaceID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER", AssetIDs: []string{"equipment-btu-01"}},
+		{ID: plant.WeatherStationID, SpaceID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION", AssetIDs: []string{"equipment-weather-01"}},
 	}
 	sensors := []SensorConfig{
-		{ID: "sensor-chws", DeviceID: plant.Chiller.ID, MountedAreaID: "plant-room", Name: "Leaving Chilled Water Temperature Probe", Type: "TEMPERATURE", SerialNumber: "TEST-PT1000-001", CalibrationDueAt: "2027-08-01T00:00:00Z"},
+		{ID: "sensor-chws", DeviceID: plant.Chiller.ID, MountedSpaceID: "plant-room", Name: "Leaving Chilled Water Temperature Probe", Type: "TEMPERATURE", SerialNumber: "TEST-PT1000-001", CalibrationDueAt: "2027-08-01T00:00:00Z"},
 	}
-	point := func(deviceID, sensorID, equipmentID, sourceKey, telemetryKey, pointCode, name, unit, sample, publish string) PointConfig {
+	pointSequence := 1
+	pointID := func() string {
+		value := fmt.Sprintf("01910000-0000-7000-8000-%012x", pointSequence)
+		pointSequence++
+		return value
+	}
+	point := func(deviceID, sensorID, assetID, sourceKey, telemetryKey, pointCode, name, unit, sample, publish string) PointConfig {
 		return PointConfig{
+			PointID:         pointID(),
 			DeviceID:        deviceID,
 			SensorID:        sensorID,
-			SubjectType:     "EQUIPMENT",
-			SubjectID:       equipmentID,
+			SubjectType:     "ASSET",
+			SubjectID:       assetID,
 			SourceKey:       sourceKey,
 			TelemetryKey:    telemetryKey,
 			PointCode:       pointCode,
@@ -61,13 +70,18 @@ func testConfig() Config {
 		{DeviceID: plant.WeatherStationID, SubjectType: "SITE", SourceKey: "ambientWetBulbTemperatureC", TelemetryKey: "weather.ambient_wet_bulb_temperature", PointCode: "ambient_wet_bulb_temperature", Name: "Outdoor Wet Bulb Temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.WeatherStationID + ":ambientWetBulbTemperatureC"},
 		{DeviceID: plant.WeatherStationID, SubjectType: "SITE", SourceKey: "relativeHumidityPct", TelemetryKey: "weather.relative_humidity", PointCode: "relative_humidity", Name: "Outdoor Relative Humidity", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "%RH", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.WeatherStationID + ":relativeHumidityPct"},
 	}
+	for index := range points {
+		if points[index].PointID == "" {
+			points[index].PointID = pointID()
+		}
+	}
 	return Config{
 		SchemaVersion:   ConfigSchemaVersion,
 		GatewayID:       "EG8200-VIRTUAL-001",
 		PublishInterval: "5s",
 		Plant:           plant,
-		Areas:           areas,
-		Equipment:       equipment,
+		Spaces:          spaces,
+		Assets:          assets,
 		Devices:         devices,
 		Sensors:         sensors,
 		Points:          points,

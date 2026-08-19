@@ -5,7 +5,11 @@
   "authority": {
     "project": "User adjudication over SE-ARCH-004 V2.1.2 and SE-ARCH-DEPLOY-001 V1.0 CURRENT",
     "referenceImplementation": "OpenEMS/openems",
-    "principle": "No architecture wins by incumbency. For each concern, adopt the design that is simpler, safer, more predictable and more maintainable for commercial HVAC. OPENEMS means adopt the OpenEMS architectural semantics, not necessarily its Java/OSGi source code."
+    "referenceRelease": "2026.7.0",
+    "referenceCommit": "2e2792d",
+    "implementationRule": "official-source-first",
+    "sourceReviewRecord": "docs/architecture/openems-source-review.md",
+    "principle": "No architecture wins by incumbency. For each concern, adopt the design that is simpler, safer, more predictable and more maintainable for commercial HVAC. OPENEMS means adopt the stronger OpenEMS mechanism after reviewing pinned official source, tests and docs; it does not require copying Java/OSGi source code."
   },
   "sources": [
     "https://openems.github.io/openems.io/openems/latest/edge/architecture.html",
@@ -48,6 +52,26 @@
       "Store and Forward / Replay"
     ]
   },
+  "sourceValidation": {
+    "policy": "Existing local implementation has no incumbency preference. A module is VERIFIED only after pinned OpenEMS source, relevant upstream tests and local behavior have been compared. Material conflicts default to OpenEMS behavior unless an evidence-backed HVAC justification is recorded.",
+    "modules": {
+      "Channel Runtime": "REVIEWING",
+      "Process Image": "REVIEWING",
+      "Cycle": "REVIEWING",
+      "Controller Runtime": "REVIEWING",
+      "Scheduler": "REVIEWING",
+      "Control Arbiter": "REVIEWING",
+      "Capability Profile Registry": "REVIEWING",
+      "Edge Component Registry": "REVIEWING",
+      "Edge Manifest": "REVIEWING",
+      "Device Driver": "UNVERIFIED",
+      "Protocol Bridge": "UNVERIFIED",
+      "Remote Intent Lease": "REVIEWING",
+      "Edge Timedata": "REVIEWING",
+      "Simulator Driver": "REVIEWING",
+      "MQTT Command Edge Adapter": "UNVERIFIED"
+    }
+  },
   "decisions": [
     {"id":"EDGE-001","concern":"On-site autonomous control ownership","verdict":"OPENEMS","target":"Edge owns fast local closed-loop control; Cloud owns policy, governance and long-horizon intent.","implementation":"MISSING","phase":"P1"},
     {"id":"EDGE-002","concern":"Cloud failure isolation","verdict":"MERGE","target":"Keep current Cloud/Edge isolation and extend it so local controllers, schedules and safety continue without Cloud.","implementation":"PARTIAL","phase":"P1"},
@@ -68,7 +92,7 @@
     {"id":"MODEL-001","concern":"Canonical long-lived data-point identity","verdict":"HVAC","target":"Point remains the canonical platform data-point identity.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"MODEL-002","concern":"Edge runtime Channel abstraction","verdict":"OPENEMS","target":"Introduce Channel as the live Edge runtime value object with type, unit, access, quality and priority metadata.","implementation":"MISSING","phase":"P1"},
     {"id":"MODEL-003","concern":"Point-to-Channel mapping","verdict":"MERGE","target":"Every governed Edge Channel maps to a canonical Point; Channel addresses never replace Point identity.","implementation":"MISSING","phase":"P1"},
-    {"id":"MODEL-004","concern":"Equipment/Device/Sensor/Point identity and history","verdict":"HVAC","target":"Retain independent Equipment, Device Endpoint, optional physical Sensor, Point and versioned bindings.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"MODEL-004","concern":"Asset/Device/Sensor/Point identity and history","verdict":"HVAC","target":"Retain independent Asset, Device Endpoint, optional physical Sensor, Point and versioned bindings.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"MODEL-005","concern":"Device-independent capability abstraction","verdict":"OPENEMS","target":"Introduce Capability Profile as HVAC equivalent of Nature; controllers depend on capabilities, not vendor drivers.","implementation":"MISSING","phase":"P1"},
     {"id":"MODEL-006","concern":"Required/optional channels per capability","verdict":"OPENEMS","target":"Capability Profiles declare required and optional Channels/Points plus command limits.","implementation":"MISSING","phase":"P1"},
     {"id":"MODEL-007","concern":"Edge component registry","verdict":"OPENEMS","target":"Introduce local component registry for drivers, bridges, controllers, channels and services.","implementation":"MISSING","phase":"P1"},
@@ -101,10 +125,10 @@
     {"id":"CTRL-004","concern":"Forecast/optimization placement","verdict":"MERGE","target":"Heavy forecasting/global optimization may run in Cloud; Edge executes versioned schedules and preserves local fallback/safety when disconnected.","implementation":"PARTIAL","phase":"P3"},
 
     {"id":"CLOUD-001","concern":"Tenant/IAM/RLS authorization model","verdict":"HVAC","target":"Retain Tenant/Site/Role/Policy IAM and database RLS as Cloud authorization authority.","implementation":"IMPLEMENTED","phase":"P1"},
-    {"id":"CLOUD-002","concern":"Asset/Registry lifecycle model","verdict":"HVAC","target":"Retain Area/Equipment/Device/Sensor/Point identity, binding history, calibration/provenance and product-facing Equipment model.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"CLOUD-002","concern":"Asset/Registry lifecycle model","verdict":"HVAC","target":"Retain Space/Asset/Device/Sensor/Point identity, binding history, calibration/provenance and product-facing Asset model.","implementation":"IMPLEMENTED","phase":"P1"},
     {"id":"CLOUD-003","concern":"Alarm/Work Order/Audit business domains","verdict":"HVAC","target":"Retain Cloud alarm lifecycle, work management and durable audit; Edge emits evidence/events but does not replace these domains.","implementation":"IMPLEMENTED","phase":"P1"},
 
-    {"id":"UI-001","concern":"Self-describing device/control UI","verdict":"MERGE","target":"Generate Asset controls from Registry + Capability Profile + Edge Manifest while retaining HVAC Equipment-centered UX.","implementation":"PARTIAL","phase":"P2"},
+    {"id":"UI-001","concern":"Self-describing device/control UI","verdict":"MERGE","target":"Generate Asset controls from Registry + Capability Profile + Edge Manifest while retaining HVAC Asset-centered UX.","implementation":"PARTIAL","phase":"P2"},
 
     {"id":"TECH-001","concern":"Direct transplant of OpenEMS Java/OSGi Backend/UI runtime","verdict":"REJECT","target":"Adopt proven architectural mechanisms without making Java/OSGi/OpenEMS Backend/UI a target dependency. A bounded runtime PoC may still be used for evidence, but implementation technology must earn its place independently.","implementation":"N/A","phase":"P0"}
   ],

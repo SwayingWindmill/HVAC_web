@@ -27,6 +27,7 @@ type ReportedStateClientConfig struct {
 	TenantID   string
 	SiteID     string
 	DeviceID   string
+	DeviceIDs  []string
 }
 
 type ReportedStateClient struct {
@@ -34,7 +35,7 @@ type ReportedStateClient struct {
 	httpClient *http.Client
 	tenantID   string
 	siteID     string
-	deviceID   string
+	deviceIDs  map[string]struct{}
 }
 
 type reportedStateResponse struct {
@@ -60,7 +61,19 @@ func NewReportedStateClient(config ReportedStateClientConfig) (*ReportedStateCli
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("S2 reported-state base URL must be an HTTPS service origin")
 	}
-	if strings.TrimSpace(config.TenantID) == "" || strings.TrimSpace(config.SiteID) == "" || strings.TrimSpace(config.DeviceID) == "" {
+	tenantID := strings.TrimSpace(config.TenantID)
+	siteID := strings.TrimSpace(config.SiteID)
+	deviceIDs := make(map[string]struct{}, len(config.DeviceIDs)+1)
+	if deviceID := strings.TrimSpace(config.DeviceID); deviceID != "" {
+		deviceIDs[deviceID] = struct{}{}
+	}
+	for _, rawDeviceID := range config.DeviceIDs {
+		deviceID := strings.TrimSpace(rawDeviceID)
+		if deviceID != "" {
+			deviceIDs[deviceID] = struct{}{}
+		}
+	}
+	if tenantID == "" || siteID == "" || len(deviceIDs) == 0 {
 		return nil, errors.New("S2 reported-state cohort configuration is incomplete")
 	}
 	client := config.HTTPClient
@@ -69,18 +82,21 @@ func NewReportedStateClient(config ReportedStateClientConfig) (*ReportedStateCli
 	}
 	return &ReportedStateClient{
 		baseURL: baseURL, httpClient: client,
-		tenantID: strings.TrimSpace(config.TenantID), siteID: strings.TrimSpace(config.SiteID),
-		deviceID: strings.TrimSpace(config.DeviceID),
+		tenantID: tenantID, siteID: siteID, deviceIDs: deviceIDs,
 	}, nil
 }
 
 func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelope commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
-	if client == nil || envelope.TenantID != client.tenantID || envelope.SiteID != client.siteID || envelope.DeviceID != client.deviceID ||
+	approvedDevice := false
+	if client != nil {
+		_, approvedDevice = client.deviceIDs[envelope.DeviceID]
+	}
+	if client == nil || envelope.TenantID != client.tenantID || envelope.SiteID != client.siteID || !approvedDevice ||
 		strings.TrimSpace(envelope.CommandID) == "" || strings.TrimSpace(envelope.AttemptID) == "" || envelope.ExecutionFence == 0 ||
 		strings.TrimSpace(envelope.VerificationPointKey) == "" {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("verification envelope is outside the approved cohort")
 	}
-	endpoint := client.baseURL + internalCommandReportedStatePath + "?key=" + url.QueryEscape(envelope.VerificationPointKey)
+	endpoint := client.baseURL + internalCommandReportedStatePath + "?deviceId=" + url.QueryEscape(envelope.DeviceID) + "&key=" + url.QueryEscape(envelope.VerificationPointKey)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", commandmodel.ReportedStateEvidence{}, fmt.Errorf("construct S2 reported-state request: %w", err)
@@ -104,7 +120,7 @@ func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelo
 	if err := decoder.Decode(&result); err != nil || ensureReportedStateEOF(decoder) != nil {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is invalid")
 	}
-	if result.SchemaVersion != 1 || result.TenantID != client.tenantID || result.SiteID != client.siteID || result.DeviceID != client.deviceID ||
+	if result.SchemaVersion != 1 || result.TenantID != client.tenantID || result.SiteID != client.siteID || result.DeviceID != envelope.DeviceID ||
 		result.ReportedStateKey != envelope.VerificationPointKey || !validS2EvidenceID(result.EvidenceID) || result.ObservedAt.IsZero() {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is outside the approved cohort")
 	}

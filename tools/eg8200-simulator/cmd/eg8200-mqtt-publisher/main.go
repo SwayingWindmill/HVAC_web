@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/tools/eg8200-simulator/internal/simulator"
 )
@@ -57,7 +58,27 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	plant := simulator.NewPlant(plantConfig.Plant, time.Now().UTC())
-	publisher, err := simulator.NewMQTTPublisher(ctx, plantConfig, mqttConfig, plant, telemetry.Metrics)
+	edgeRuntime, err := simulator.NewEdgeControlRuntime(plantConfig, plant)
+	if err != nil {
+		logger.Error("eg8200_edge_runtime_init_failed", "component", "edge_control_runtime")
+		os.Exit(1)
+	}
+	timedata, err := edgecontrol.OpenFileTimedata(filepath.Join(mqttConfig.QueueDirectory, "timedata"), edgecontrol.PriorityLow)
+	if err != nil {
+		logger.Error("eg8200_edge_timedata_init_failed", "component", "edge_timedata")
+		os.Exit(1)
+	}
+	if err := edgeRuntime.AttachTimedata(timedata); err != nil {
+		logger.Error("eg8200_edge_timedata_attach_failed", "component", "edge_timedata")
+		os.Exit(1)
+	}
+	manifest, err := edgeRuntime.Manifest("central-plant:v1", time.Now().UTC())
+	if err != nil {
+		logger.Error("eg8200_edge_manifest_failed", "component", "edge_control_runtime")
+		os.Exit(1)
+	}
+	logger.Info("eg8200_edge_runtime_configured", "component_count", len(manifest.Components), "channel_count", len(manifest.Channels), "capability_profile_count", len(manifest.CapabilityProfiles))
+	publisher, err := simulator.NewMQTTPublisher(ctx, plantConfig, mqttConfig, edgeRuntime, telemetry.Metrics)
 	if err != nil {
 		logger.Error("eg8200_mqtt_publisher_invalid", "error", err.Error())
 		os.Exit(1)
@@ -122,7 +143,29 @@ func main() {
 		logger.Info("eg8200_mqtt_publish_queued", "point_count", len(measurements), "observed_at", snapshot.ObservedAt.UTC().Format(time.RFC3339Nano))
 	}
 
-	publish(plant.Tick(interval))
+	runEdgeCycleAndPublish := func() {
+		snapshot := plant.Tick(interval)
+		edgeCycle := edgeRuntime.RunCycle(ctx, snapshot.ObservedAt)
+		for _, poll := range edgeCycle.PollResults {
+			if poll.Error != nil {
+				logger.Warn("eg8200_edge_simulator_adapter_poll_failed", "adapter_id", poll.AdapterID)
+			}
+		}
+		for _, controller := range edgeCycle.Cycle.ControllerResults {
+			if controller.Error != nil {
+				logger.Warn("eg8200_edge_controller_failed", "controller_id", controller.ControllerID, "critical", controller.Critical)
+			}
+		}
+		if edgeCycle.Cycle.OutputError != nil {
+			logger.Warn("eg8200_edge_output_failed", "cycle", edgeCycle.Cycle.Image.Cycle())
+		}
+		if edgeCycle.TimedataError != nil {
+			logger.Error("eg8200_edge_timedata_record_failed", "cycle", edgeCycle.Cycle.Image.Cycle())
+		}
+		publish(edgeCycle.TelemetrySnapshot)
+	}
+
+	runEdgeCycleAndPublish()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -136,7 +179,7 @@ func main() {
 			logger.Info("eg8200_mqtt_publisher_stopped")
 			return
 		case <-ticker.C:
-			publish(plant.Tick(interval))
+			runEdgeCycleAndPublish()
 		}
 	}
 }

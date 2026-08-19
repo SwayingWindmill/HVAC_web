@@ -12,7 +12,7 @@ import (
 
 const MQTTGatewayConfigSchemaVersion = 1
 
-var mqttUUIDV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 type MQTTGatewayConfig struct {
 	SchemaVersion              int               `json:"schemaVersion"`
@@ -50,7 +50,7 @@ func (config MQTTGatewayConfig) Validate() error {
 	if config.SchemaVersion != MQTTGatewayConfigSchemaVersion {
 		return fmt.Errorf("unsupported MQTT gateway config schemaVersion %d", config.SchemaVersion)
 	}
-	if !mqttUUIDV7Pattern.MatchString(strings.TrimSpace(config.TenantID)) || !mqttUUIDV7Pattern.MatchString(strings.TrimSpace(config.SiteID)) {
+	if !uuidV7Pattern.MatchString(strings.TrimSpace(config.TenantID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(config.SiteID)) {
 		return errors.New("MQTT gateway tenantId and siteId must be UUIDv7")
 	}
 	broker, err := url.Parse(strings.TrimSpace(config.BrokerURL))
@@ -77,7 +77,7 @@ func (config MQTTGatewayConfig) Validate() error {
 	}
 	seenExternal := make(map[string]struct{}, len(config.DeviceExternalIDByDeviceID))
 	for deviceID, externalID := range config.DeviceExternalIDByDeviceID {
-		if strings.TrimSpace(deviceID) == "" || !mqttUUIDV7Pattern.MatchString(strings.TrimSpace(externalID)) {
+		if strings.TrimSpace(deviceID) == "" || !uuidV7Pattern.MatchString(strings.TrimSpace(externalID)) {
 			return errors.New("MQTT gateway device identity mapping is invalid")
 		}
 		if _, duplicate := seenExternal[externalID]; duplicate {

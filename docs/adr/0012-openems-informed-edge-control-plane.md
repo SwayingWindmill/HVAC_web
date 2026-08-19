@@ -1,8 +1,10 @@
 # ADR 0012 — OpenEMS-informed HVAC Edge Control Plane
 
-Status: accepted
+Status: accepted, terminology superseded in part by ADR 0013
 
 Date: 2026-08-17
+
+ADR 0013 supersedes Organization/Area/Equipment/Sensor wording with Tenant/Space/Asset/optional PhysicalSensor. The IPO Cycle, Process Image, Controller/Scheduler/Arbiter, Capability Profile, Driver/Bridge, Edge Timedata and source-first implementation decisions remain accepted.
 
 ## Context
 
@@ -155,6 +157,23 @@ The following remain target Cloud authorities after explicit comparison:
 ### 14. Do not make OpenEMS Java/OSGi/Backend/UI a target dependency
 
 The architectural mechanisms are adopted because they are stronger. The OpenEMS runtime technology is not adopted by default. A bounded A/B PoC may compare direct OpenEMS Edge with an equivalent HVAC Edge implementation, but implementation language/runtime must be justified independently.
+
+### 15. Source-first implementation is mandatory
+
+The OpenEMS reference baseline for this ADR is pinned to official release `2026.7.0`, commit `2e2792d`. `develop` may be consulted for later changes, but it does not silently change this architecture baseline.
+
+For every `OPENEMS` decision and every `MERGE` decision whose Edge behavior materially depends on OpenEMS, implementation or refactoring must follow this order:
+
+1. read the relevant official OpenEMS source at the pinned baseline;
+2. read the relevant upstream tests and official documentation;
+3. record observed runtime semantics and lifecycle behavior in `docs/architecture/openems-source-review.md`;
+4. classify each relevant mechanism as `ADOPT`, `ADAPT`, or `REJECT` for HVAC Web;
+5. only then implement or refactor the local code;
+6. add local behavior tests that exercise the adopted/adapted semantics.
+
+This requirement is retroactive. Edge modules that were implemented before their source review are `UNVERIFIED`, regardless of whether local tests pass. Existing HVAC Web code receives no incumbency preference. When a material conflict is found, the pinned OpenEMS behavior is the default outcome; retaining a conflicting local behavior requires an explicit, evidence-backed justification showing that the difference is required by HVAC domain constraints or is measurably safer, simpler, or more maintainable. Without such justification, the local module must be refactored to the reference behavior.
+
+Architecture prose or diagrams alone are not sufficient evidence for implementation. Source review is behavioral, not a license to copy upstream source verbatim. Project-specific mechanisms that are demonstrably stronger—such as durable Cloud Command governance or fail-closed HVAC safety behavior—remain only when that difference is explicitly documented and reviewed.
 
 ## Consequences
 

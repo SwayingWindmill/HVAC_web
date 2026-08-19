@@ -27,7 +27,7 @@ func TestPostgresConcurrentDispatchClaimHasOneWinner(t *testing.T) {
 		worker := worker
 		go func() {
 			defer wait.Done()
-			envelope, claimErr := store.ClaimDispatch(ctx, commandOrgA, worker, 10*time.Second)
+			envelope, claimErr := store.ClaimDispatch(ctx, commandTenantA, worker, 10*time.Second)
 			if claimErr != nil {
 				errorsFound <- claimErr
 				return
@@ -68,7 +68,7 @@ func TestPostgresPreSendRetryAdvancesFenceAndRejectsOldAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	first, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestPostgresPreSendRetryAdvancesFenceAndRejectsOldAttempt(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-b", 10*time.Second)
+	second, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,12 +103,12 @@ func TestPostgresExpiredPreparedLeaseFreezesOutcomeUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 2*time.Second)
+	first, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	*now = now.Add(3 * time.Second)
-	if _, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
 		t.Fatalf("expired prepared attempt was blindly reassigned: %v", err)
 	}
 	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
@@ -133,15 +133,15 @@ func TestPostgresDeviceControlLaneIsSerial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	first, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil || first.CommandID != firstCommand.Intent.ID {
 		t.Fatalf("first lane claim=%#v err=%v", first, err)
 	}
-	if _, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
 		t.Fatalf("second device command bypassed active lane: %v", err)
 	}
 	acknowledgeAndVerifyPostgres(t, store, admin, now, first, "lane-first", 1)
-	second, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-b", 10*time.Second)
+	second, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second)
 	if err != nil || second.CommandID != secondCommand.Intent.ID {
 		t.Fatalf("second lane claim=%#v err=%v", second, err)
 	}
@@ -155,7 +155,7 @@ func TestPostgresReportedStateMismatchFreezesOutcomeUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatch, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestPostgresReportedStateMismatchFreezesOutcomeUnknown(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	verification, err := store.ClaimVerification(ctx, commandOrgA, "verifier-a", 15*time.Second)
+	verification, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestPostgresReportedStateMismatchFreezesOutcomeUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
-	if _, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
 		t.Fatalf("mismatched reported state was retryable: %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatch, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	verification, err := store.ClaimVerification(ctx, commandOrgA, "verifier-a", 15*time.Second)
+	verification, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestPostgresExpiredReportedStateVerificationFreezesOutcomeUnknown(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatch, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestPostgresExpiredReportedStateVerificationFreezesOutcomeUnknown(t *testin
 		t.Fatal(err)
 	}
 	*now = now.Add(verificationWindow + time.Second)
-	if _, err := store.ClaimVerification(ctx, commandOrgA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+	if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
 		t.Fatalf("expired verification was leased: %v", err)
 	}
 	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
@@ -248,7 +248,7 @@ func TestPostgresConnectorCannotSelfVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatch, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ SELECT i.status,
        d.frozen_control_groups ? 'SETPOINT'
 FROM command_runtime.command_intents i
 JOIN command_runtime.device_control_state d
-  ON d.organization_id = i.organization_id AND d.device_id = i.device_id
+  ON d.tenant_id = i.tenant_id AND d.device_id = i.device_id
 WHERE i.command_id = $1::uuid
 `, commandID).Scan(&actualIntentStatus, &latestAttemptStatus, &attemptCount, &frozenState); err != nil {
 		t.Fatal(err)

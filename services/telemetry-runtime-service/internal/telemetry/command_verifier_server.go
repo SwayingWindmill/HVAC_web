@@ -20,36 +20,36 @@ type commandReportedScalar struct {
 }
 
 type commandReportedStateResponse struct {
-	SchemaVersion          int       `json:"schemaVersion"`
-	EvidenceID             string    `json:"evidenceId"`
-	TenantID               string    `json:"tenantId"`
-	SiteID                 string    `json:"siteId"`
-	DeviceID               string    `json:"deviceId"`
-	EvaluationAvailability string    `json:"evaluationAvailability"`
-	Presence               string    `json:"presence"`
-	Readiness              string    `json:"readiness"`
-	Freshness              string    `json:"freshness"`
-	Quality                string    `json:"quality"`
-	BusinessRevision       uint64    `json:"businessRevision"`
+	SchemaVersion          int                   `json:"schemaVersion"`
+	EvidenceID             string                `json:"evidenceId"`
+	TenantID               string                `json:"tenantId"`
+	SiteID                 string                `json:"siteId"`
+	DeviceID               string                `json:"deviceId"`
+	EvaluationAvailability string                `json:"evaluationAvailability"`
+	Presence               string                `json:"presence"`
+	Readiness              string                `json:"readiness"`
+	Freshness              string                `json:"freshness"`
+	Quality                string                `json:"quality"`
+	BusinessRevision       uint64                `json:"businessRevision"`
 	ReportedValue          commandReportedScalar `json:"reportedValue"`
-	ObservedAt             time.Time `json:"observedAt"`
-	ReportedStateKey       string    `json:"reportedStateKey"`
+	ObservedAt             time.Time             `json:"observedAt"`
+	ReportedStateKey       string                `json:"reportedStateKey"`
 }
 
 type commandReportedStateEvidencePayload struct {
-	SchemaVersion          int       `json:"schemaVersion"`
-	TenantID               string    `json:"tenantId"`
-	SiteID                 string    `json:"siteId"`
-	DeviceID               string    `json:"deviceId"`
-	EvaluationAvailability string    `json:"evaluationAvailability"`
-	Presence               string    `json:"presence"`
-	Readiness              string    `json:"readiness"`
-	Freshness              string    `json:"freshness"`
-	Quality                string    `json:"quality"`
-	BusinessRevision       uint64    `json:"businessRevision"`
+	SchemaVersion          int                   `json:"schemaVersion"`
+	TenantID               string                `json:"tenantId"`
+	SiteID                 string                `json:"siteId"`
+	DeviceID               string                `json:"deviceId"`
+	EvaluationAvailability string                `json:"evaluationAvailability"`
+	Presence               string                `json:"presence"`
+	Readiness              string                `json:"readiness"`
+	Freshness              string                `json:"freshness"`
+	Quality                string                `json:"quality"`
+	BusinessRevision       uint64                `json:"businessRevision"`
 	ReportedValue          commandReportedScalar `json:"reportedValue"`
-	ObservedAt             time.Time `json:"observedAt"`
-	ReportedStateKey       string    `json:"reportedStateKey"`
+	ObservedAt             time.Time             `json:"observedAt"`
+	ReportedStateKey       string                `json:"reportedStateKey"`
 }
 
 func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request *http.Request) {
@@ -68,20 +68,35 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for authoritative command state.", false)
 		return
 	}
-	if h.store == nil || !uuidV7Pattern.MatchString(h.commandVerifierTenantID) || !uuidV7Pattern.MatchString(h.commandVerifierSiteID) ||
-		!uuidV7Pattern.MatchString(h.commandVerifierDeviceID) {
+	if h.store == nil || !uuidV7Pattern.MatchString(h.commandVerifierTenantID) || !uuidV7Pattern.MatchString(h.commandVerifierSiteID) || len(h.commandVerifierDeviceIDs) == 0 {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_COMMAND_REPORTED_STATE_UNAVAILABLE", "Command reported state is not configured.", true)
 		return
 	}
 	query := request.URL.Query()
 	keys, present := query["key"]
-	if !present || len(query) != 1 || len(keys) != 1 || strings.TrimSpace(keys[0]) == "" || len(keys[0]) > 256 {
+	if !present || len(keys) != 1 || strings.TrimSpace(keys[0]) == "" || len(keys[0]) > 256 || len(query) > 2 {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_KEY_INVALID", "A single reported-state key is required.", false)
+		return
+	}
+	deviceID := h.commandVerifierDeviceID
+	if deviceIDs, hasDeviceID := query["deviceId"]; hasDeviceID {
+		if len(deviceIDs) != 1 {
+			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single approved Device is required.", false)
+			return
+		}
+		deviceID = strings.TrimSpace(deviceIDs[0])
+	}
+	if !uuidV7Pattern.MatchString(deviceID) {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single approved Device is required.", false)
+		return
+	}
+	if _, allowed := h.commandVerifierDeviceIDs[deviceID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The configured telemetry resource was not found.", false)
 		return
 	}
 	reportedStateKey := strings.TrimSpace(keys[0])
 	commit, err := h.store.EvaluateAndRead(request.Context(), telemetryauth.Target{
-		DeviceID: h.commandVerifierDeviceID, Keys: []string{reportedStateKey},
+		DeviceID: deviceID, Keys: []string{reportedStateKey},
 	}, h.now().UTC())
 	if errors.Is(err, ErrDeviceNotFound) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The configured telemetry resource was not found.", false)
@@ -91,7 +106,7 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_COMMAND_REPORTED_STATE_UNAVAILABLE", "Command reported state is temporarily unavailable.", true)
 		return
 	}
-	response, err := h.commandReportedStateResponse(commit.Snapshot, reportedStateKey)
+	response, err := h.commandReportedStateResponse(commit.Snapshot, reportedStateKey, deviceID)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_COMMAND_REPORTED_STATE_INVALID", "Command reported state is not authoritative.", true)
 		return
@@ -99,9 +114,9 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObservationSnapshot, reportedStateKey string) (commandReportedStateResponse, error) {
+func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObservationSnapshot, reportedStateKey, deviceID string) (commandReportedStateResponse, error) {
 	if string(snapshot.TenantId) != h.commandVerifierTenantID || string(snapshot.SiteId) != h.commandVerifierSiteID ||
-		string(snapshot.DeviceId) != h.commandVerifierDeviceID || snapshot.BusinessRevision < 0 {
+		string(snapshot.DeviceId) != deviceID || snapshot.BusinessRevision < 0 {
 		return commandReportedStateResponse{}, errors.New("command reported-state scope mismatch")
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, string(snapshot.EvaluatedAt))
@@ -157,7 +172,7 @@ func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObser
 		return commandReportedStateResponse{}, errors.New("command reported-state key is missing or duplicated")
 	}
 	payload := commandReportedStateEvidencePayload{
-		SchemaVersion: 1, TenantID: h.commandVerifierTenantID, SiteID: h.commandVerifierSiteID, DeviceID: h.commandVerifierDeviceID,
+		SchemaVersion: 1, TenantID: h.commandVerifierTenantID, SiteID: h.commandVerifierSiteID, DeviceID: deviceID,
 		EvaluationAvailability: string(snapshot.EvaluationAvailability), Presence: presence, Readiness: string(snapshot.TelemetryReadiness),
 		Freshness: freshness, Quality: quality, BusinessRevision: uint64(snapshot.BusinessRevision), ReportedValue: reportedValue,
 		ObservedAt: observedAt.UTC(), ReportedStateKey: reportedStateKey,

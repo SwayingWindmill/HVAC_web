@@ -25,6 +25,7 @@ function command(overrides = {}) {
     tenantId,
     siteId,
     deviceId,
+    pointId: '018f3e00-3500-7000-8000-000000000001',
     capability: 'SET_TEMPERATURE_SETPOINT',
     capabilityRevision: 'capability:set-temperature-setpoint:v1',
     status,
