@@ -15,6 +15,18 @@ GRANT USAGE ON SCHEMA iam TO s1_iam_admin;
 
 SET LOCAL ROLE s1_iam_migrator;
 
+DROP POLICY IF EXISTS tenants_migrator_all ON iam.tenants;
+CREATE POLICY tenants_migrator_all ON iam.tenants
+  FOR ALL TO s1_iam_migrator USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS role_bindings_migrator_all ON iam.role_bindings;
+CREATE POLICY role_bindings_migrator_all ON iam.role_bindings
+  FOR ALL TO s1_iam_migrator USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS explicit_denies_migrator_all ON iam.explicit_denies;
+CREATE POLICY explicit_denies_migrator_all ON iam.explicit_denies
+  FOR ALL TO s1_iam_migrator USING (true) WITH CHECK (true);
+
 CREATE TABLE iam.capability_catalog_revisions (
   revision bigint PRIMARY KEY CHECK (revision > 0),
   catalog_key text NOT NULL UNIQUE,
