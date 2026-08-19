@@ -25,7 +25,7 @@ const (
 	APICredentialCreatePath    = "/internal/v1/admin/api-credentials/create"
 	APICredentialRotatePath    = "/internal/v1/admin/api-credentials/rotate"
 	APICredentialRevokePath    = "/internal/v1/admin/api-credentials/revoke"
-	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
+	RegistryDecisionPath       = "/internal/v1/registry/decision"
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	CommandDecisionPath        = "/internal/v1/command/decision"
 	AnalyticsDecisionPath      = "/internal/v1/analytics/decision"
@@ -375,8 +375,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleTenantContexts(request.Context(), writer, claims)
 	case AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
 		status = h.handleAdminRoute(writer, request, claims)
-	case RegistryReadDecisionPath:
-		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
+	case RegistryDecisionPath:
+		status = h.handleRegistryDecision(writer, request, claims, spiffeID)
 	case TelemetryDecisionPath:
 		status = h.handleTelemetryDecision(writer, request, claims, spiffeID)
 	case CommandDecisionPath:
@@ -528,7 +528,7 @@ func effectivePrincipalRoles(facts AuthorizationFacts, tenantID string, now time
 	return roles
 }
 
-func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
+func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
 	var decisionRequest registryauth.DecisionRequest
 	decoder := json.NewDecoder(request.Body)
@@ -661,7 +661,7 @@ func expectedInboundAction(path string) (string, bool) {
 		return "iam:admin", true
 	case APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
 		return "api-credential:manage", true
-	case RegistryReadDecisionPath:
+	case RegistryDecisionPath:
 		return registryAuthorizeAction, true
 	case TelemetryDecisionPath:
 		return telemetryAuthorizeAction, true
@@ -695,7 +695,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 9
+const CapabilitySetVersion = 10
 
 type Capability string
 
@@ -32,6 +32,16 @@ const (
 	CapabilityAuditRead             Capability = "audit.read"
 	CapabilityIAMAdmin              Capability = "iam.admin"
 	CapabilityAPICredentialManage   Capability = "api-credential.manage"
+	CapabilitySiteWrite             Capability = "site.write"
+	CapabilitySpaceWrite            Capability = "space.write"
+	CapabilityAssetWrite            Capability = "asset.write"
+	CapabilityDeviceWrite           Capability = "device.write"
+	CapabilitySensorWrite           Capability = "sensor.write"
+	CapabilityPointWrite            Capability = "point.write"
+	CapabilityBindingWrite          Capability = "binding.write"
+	CapabilityTemplateManage        Capability = "template.manage"
+	CapabilityRegistryImport        Capability = "registry.import"
+	CapabilityRegistryRetire        Capability = "registry.retire"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -56,6 +66,16 @@ var supportedCapabilities = [...]Capability{
 	CapabilityAuditRead,
 	CapabilityIAMAdmin,
 	CapabilityAPICredentialManage,
+	CapabilitySiteWrite,
+	CapabilitySpaceWrite,
+	CapabilityAssetWrite,
+	CapabilityDeviceWrite,
+	CapabilitySensorWrite,
+	CapabilityPointWrite,
+	CapabilityBindingWrite,
+	CapabilityTemplateManage,
+	CapabilityRegistryImport,
+	CapabilityRegistryRetire,
 }
 
 func SupportedCapabilities() []Capability {
@@ -84,7 +104,17 @@ func (capability Capability) Valid() bool {
 		CapabilitySessionRevoke,
 		CapabilityAuditRead,
 		CapabilityIAMAdmin,
-		CapabilityAPICredentialManage:
+		CapabilityAPICredentialManage,
+		CapabilitySiteWrite,
+		CapabilitySpaceWrite,
+		CapabilityAssetWrite,
+		CapabilityDeviceWrite,
+		CapabilitySensorWrite,
+		CapabilityPointWrite,
+		CapabilityBindingWrite,
+		CapabilityTemplateManage,
+		CapabilityRegistryImport,
+		CapabilityRegistryRetire:
 		return true
 	default:
 		return false

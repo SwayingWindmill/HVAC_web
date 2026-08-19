@@ -125,7 +125,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			t.Fatalf("invalid parent delegation: %v", err)
 		}
 		switch request.URL.Path {
-		case "/internal/v1/registry-read/decision":
+		case "/internal/v1/registry/decision":
 			if len(parent.Actions) != 1 || parent.Actions[0] != "registry:authorize" {
 				t.Fatalf("unexpected Registry parent claims: %+v", parent)
 			}

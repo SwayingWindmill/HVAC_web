@@ -451,7 +451,7 @@ func (h *handler) resolveCommandDevice(request *http.Request, session bffSession
 		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
 		return platformapi.Device{}, &failure
 	}
-	route, _, matches := matchPublicRegistryRoute("/api/v1/devices/" + url.PathEscape(deviceID))
+	route, _, matches := matchPublicRegistryRoute(http.MethodGet, "/api/v1/devices/"+url.PathEscape(deviceID))
 	if !matches {
 		failure := commandNotFound()
 		return platformapi.Device{}, &failure
@@ -486,7 +486,7 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 		return assetCommandTarget{}, &failure
 	}
 	assetPath := strings.Replace(platformapi.GetAssetPathTemplate, "{assetId}", url.PathEscape(assetID), 1)
-	assetRoute, _, matches := matchPublicRegistryRoute(assetPath)
+	assetRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, assetPath)
 	if !matches {
 		failure := commandNotFound()
 		return assetCommandTarget{}, &failure
@@ -519,7 +519,7 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 		return assetCommandTarget{}, &failure
 	}
 	assetModelPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(asset.SiteID), 1)
-	assetModelRoute, _, matches := matchPublicRegistryRoute(assetModelPath)
+	assetModelRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, assetModelPath)
 	if !matches {
 		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
 		return assetCommandTarget{}, &failure

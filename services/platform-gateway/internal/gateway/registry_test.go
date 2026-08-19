@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -33,7 +34,7 @@ func TestRegistryCanonicalRoutes(t *testing.T) {
 		{"/api/v1/devices/" + registryTestDeviceID, registryauth.ActionDeviceRead, false},
 	}
 	for _, test := range tests {
-		route, _, ok := matchPublicRegistryRoute(test.path)
+		route, _, ok := matchPublicRegistryRoute(http.MethodGet, test.path)
 		if !ok || route.action != test.action || route.list != test.list {
 			t.Fatalf("route %s did not resolve to action=%q list=%t", test.path, test.action, test.list)
 		}
@@ -44,22 +45,25 @@ func TestRegistryCanonicalRoutes(t *testing.T) {
 		"/api/v1/sites/" + registryTestSiteID + "/equipment",
 		"/api/v1/equipment/" + registryTestAssetID,
 	} {
-		if _, _, ok := matchPublicRegistryRoute(forbidden); ok {
+		if _, _, ok := matchPublicRegistryRoute(http.MethodGet, forbidden); ok {
 			t.Fatalf("legacy Registry route still matched: %s", forbidden)
 		}
 	}
 }
 
 func TestRegistryExactSiteScopeIsFailClosed(t *testing.T) {
-	allowed, err := validateExactSiteRegistryScope(registryauth.Decision{AllowedSiteIDs: []string{registryTestSiteID}})
+	allowed, err := validateExactSiteRegistryScope(registryauth.Decision{AllowedSiteIDs: []string{registryTestSiteID}}, registryauth.ActionSiteRead)
 	if err != nil || len(allowed) != 1 {
 		t.Fatalf("exact Site scope rejected: allowed=%#v err=%v", allowed, err)
 	}
 	if _, ok := allowed[registryTestSiteID]; !ok {
 		t.Fatalf("exact Site scope missing %s", registryTestSiteID)
 	}
-	if _, err := validateExactSiteRegistryScope(registryauth.Decision{}); err == nil {
+	if _, err := validateExactSiteRegistryScope(registryauth.Decision{}, registryauth.ActionSiteRead); err == nil {
 		t.Fatal("empty Registry Site scope was accepted")
+	}
+	if allowed, err := validateExactSiteRegistryScope(registryauth.Decision{}, registryauth.ActionSiteWrite); err != nil || len(allowed) != 0 {
+		t.Fatalf("Tenant-scoped Registry action rejected empty Site scope: allowed=%#v err=%v", allowed, err)
 	}
 }
 

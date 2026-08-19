@@ -205,7 +205,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		request = resolved
-		if registryRoute, id, matches := matchPublicRegistryRoute(request.URL.Path); matches {
+		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
 		}
@@ -402,7 +402,7 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 		return request, false
 	}
 	if session.ID == "" && workloadCaller.contextID == "" {
-		if _, _, registryRoute := matchPublicRegistryRoute(request.URL.Path); registryRoute {
+		if _, _, registryRoute := matchPublicRegistryRoute(request.Method, request.URL.Path); registryRoute {
 			resolved, failure := h.identitySession(request)
 			if failure != nil {
 				writeIdentityFailure(writer, request, *failure)
@@ -670,8 +670,10 @@ func safeLogPath(path string) string {
 		if contractOnlyRoute, matches := matchV212ContractOnlyRoute(path); matches {
 			return contractOnlyRoute.template
 		}
-		if registryRoute, _, matches := matchPublicRegistryRoute(path); matches {
-			return registryRoute.template
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
+			if registryRoute, _, matches := matchPublicRegistryRoute(method, path); matches {
+				return registryRoute.template
+			}
 		}
 		if operationsRoute, matches := matchPublicOperationsRoute(path); matches {
 			return operationsRoute.template

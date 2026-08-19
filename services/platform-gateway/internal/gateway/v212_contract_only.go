@@ -12,10 +12,7 @@ type v212ContractOnlyRoute struct {
 }
 
 var v212ContractOnlyRoutes = []v212ContractOnlyRoute{
-	{method: http.MethodPost, template: "/api/v1/sites"},
-	{method: http.MethodGet, template: "/api/v1/sites/{siteId}/spaces/tree", placeholder: "{siteId}"},
 	{method: http.MethodGet, template: "/api/v1/devices"},
-	{method: http.MethodGet, template: "/api/v1/devices/{deviceId}/points", placeholder: "{deviceId}"},
 	{method: http.MethodPost, template: "/api/v1/telemetry/latest"},
 	{method: http.MethodGet, template: "/api/v1/telemetry/history"},
 	{method: http.MethodGet, template: "/api/v1/sites/{siteId}/forecast/load", placeholder: "{siteId}"},

@@ -20,6 +20,7 @@ hvac_s1|infra/s1-registry/postgres/init/007-s4-alarm-authorization.sql
 hvac_s1|infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql
 hvac_s1|infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql
 hvac_s1|infra/s1-registry/postgres/init/007b-control-point-invariants.sql
+hvac_s1|infra/s1-registry/postgres/init/007c-counter-semantics.sql
 hvac_s1|infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql
 hvac_s1|infra/s1-registry/postgres/init/009-energy-data-foundation.sql
 hvac_s1|infra/s1-registry/postgres/init/009c-metric-model-v2.sql
@@ -29,6 +30,7 @@ hvac_s1|infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 hvac_s1|infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 hvac_s1|services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
+hvac_s1|infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 hvac_s2|infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql

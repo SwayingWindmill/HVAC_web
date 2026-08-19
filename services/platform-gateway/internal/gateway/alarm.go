@@ -363,7 +363,7 @@ func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSes
 		return &value
 	}
 	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
-	registryRoute, _, matches := matchPublicRegistryRoute(publicPath)
+	registryRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, publicPath)
 	if !matches {
 		value := alarmUnavailable("Authoritative Site route is unavailable.")
 		return &value
@@ -371,7 +371,7 @@ func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSes
 	outer := routeDecisionFromContext(request.Context())
 	decision := ownershipregistry.Decision{
 		RouteKey: http.MethodGet + " " + registryRoute.template, PathTemplate: registryRoute.template,
-		SelectedOwner: ownershipregistry.OwnerCore,
+		SelectedOwner:    ownershipregistry.OwnerCore,
 		RegistryRevision: outer.RegistryRevision, RouteRevision: 1, CompatibilityMode: "native",
 	}
 	if h.routeManager != nil {
@@ -428,8 +428,8 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 	input := alarmauth.DecisionRequest{
 		TenantID: session.TenantID,
 		SiteID:   route.siteID,
-		AlarmID:              route.alarmID,
-		Action:               route.action,
+		AlarmID:  route.alarmID,
+		Action:   route.action,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {

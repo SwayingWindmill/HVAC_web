@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	CurrentPrincipalPath     = iam.CurrentPrincipalPath
-	RegistryReadDecisionPath = iam.RegistryReadDecisionPath
+	CurrentPrincipalPath = iam.CurrentPrincipalPath
+	RegistryDecisionPath = iam.RegistryDecisionPath
 )
 
 type Config = iam.Config

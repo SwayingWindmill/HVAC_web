@@ -32,7 +32,7 @@ const (
 	testTenantA             = "018f1d00-0000-7000-8000-000000000001"
 	testSiteA1              = "018f1e00-1000-7000-8000-000000000001"
 	testSiteA2              = "018f1e00-1000-7000-8000-000000000002"
-	testAssetA1         = "018f1e00-3000-7000-8000-000000000001"
+	testAssetA1             = "018f1e00-3000-7000-8000-000000000001"
 	testDeviceA1            = "018f1e00-4000-7000-8000-000000000001"
 	testBindingA1           = "018f1e00-5000-7000-8000-000000000001"
 )
@@ -55,6 +55,8 @@ type fakeRegistryStore struct {
 	devices       PageResult[Device]
 	device        Device
 	bindings      PageResult[DeviceBinding]
+	spaceChildren PageResult[Space]
+	devicePoints  PageResult[TelemetryPoint]
 	assetModel    SiteAssetModel
 	err           error
 	lastClaims    registryauth.GrantClaims
@@ -89,6 +91,14 @@ func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth
 func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[DeviceBinding], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
 	return store.bindings, store.err
+}
+func (store *fakeRegistryStore) ListSpaceChildren(_ context.Context, claims registryauth.GrantClaims, siteID, parentSpaceID string, page PageRequest) (PageResult[Space], error) {
+	store.lastClaims, store.lastID, store.lastPage = claims, siteID+"|"+parentSpaceID, page
+	return store.spaceChildren, store.err
+}
+func (store *fakeRegistryStore) ListDevicePoints(_ context.Context, claims registryauth.GrantClaims, deviceID string, page PageRequest) (PageResult[TelemetryPoint], error) {
+	store.lastClaims, store.lastID, store.lastPage = claims, deviceID, page
+	return store.devicePoints, store.err
 }
 func (store *fakeRegistryStore) GetSiteAssetModel(_ context.Context, claims registryauth.GrantClaims, id string) (SiteAssetModel, error) {
 	store.lastClaims, store.lastID = claims, id
@@ -147,13 +157,13 @@ func TestServerAcceptsIAMGrantBoundToOperationsAgentPresenter(t *testing.T) {
 func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{
-		sites:         PageResult[Site]{Items: []Site{}},
-		site:          Site{ID: testSiteA1},
-		assets:        PageResult[Asset]{Items: []Asset{}},
-		assetItem:     Asset{ID: testAssetA1},
-		devices:       PageResult[Device]{Items: []Device{}},
-		device:        Device{ID: testDeviceA1},
-		bindings:      PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
+		sites:     PageResult[Site]{Items: []Site{}},
+		site:      Site{ID: testSiteA1},
+		assets:    PageResult[Asset]{Items: []Asset{}},
+		assetItem: Asset{ID: testAssetA1},
+		devices:   PageResult[Device]{Items: []Device{}},
+		device:    Device{ID: testDeviceA1},
+		bindings:  PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
 	}
 	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	tests := []struct {
@@ -344,21 +354,21 @@ func (harness coreHarness) serveAndGrantAsPresenter(
 
 func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 	return registryauth.GrantClaims{
-		Issuer:                 testGrantIssuer,
-		Presenter:              testPresenter,
-		Audience:               testAudience,
-		PrincipalID:            testPrincipal,
-		SubjectIssuer:          "https://identity.example.test/oidc",
-		Subject:                "delegated",
+		Issuer:         testGrantIssuer,
+		Presenter:      testPresenter,
+		Audience:       testAudience,
+		PrincipalID:    testPrincipal,
+		SubjectIssuer:  "https://identity.example.test/oidc",
+		Subject:        "delegated",
 		TenantID:       testTenantA,
 		AllowedSiteIDs: []string{testSiteA1},
 		DeniedSiteIDs:  []string{},
-		Actions:                []registryauth.Action{action},
-		PolicyRevision:         testPolicy,
-		DecisionReason:         registryauth.ReasonAllowSiteBinding,
-		SessionID:              "session-1",
-		ParentTokenID:          "parent-1",
-		TokenID:                "grant-1",
-		Transitive:             false,
+		Actions:        []registryauth.Action{action},
+		PolicyRevision: testPolicy,
+		DecisionReason: registryauth.ReasonAllowSiteBinding,
+		SessionID:      "session-1",
+		ParentTokenID:  "parent-1",
+		TokenID:        "grant-1",
+		Transitive:     false,
 	}
 }

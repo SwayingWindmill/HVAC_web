@@ -195,6 +195,27 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 			roleSiteActions[binding.SiteID] = append(roleSiteActions[binding.SiteID], binding.Actions...)
 		}
 	}
+	if request.Action.TenantScoped() {
+		if !actionsAllow(tenantRoleActions, request.Action) {
+			decision.ReasonCode = registryauth.ReasonDenyActionNotGranted
+			return decision, nil
+		}
+		for _, binding := range facts.RoleBindings {
+			if binding.Status == FactStatusActive && factEffective(binding.ValidFrom, binding.ValidTo, now) && binding.TenantID == request.TenantID && binding.SiteID == "" && binding.Effect == BindingEffectDeny && actionsDeny(binding.Actions, request.Action) {
+				decision.ReasonCode = registryauth.ReasonDenyExplicit
+				return decision, nil
+			}
+		}
+		for _, deny := range facts.ExplicitDenies {
+			if deny.Status == FactStatusActive && factEffective(deny.ValidFrom, deny.ValidTo, now) && deny.TenantID == request.TenantID && deny.SiteID == "" && actionsDeny(deny.Actions, request.Action) {
+				decision.ReasonCode = registryauth.ReasonDenyExplicit
+				return decision, nil
+			}
+		}
+		decision.Allowed = true
+		decision.ReasonCode = registryauth.ReasonAllowTenantRole
+		return decision, nil
+	}
 	if actionsAllow(tenantRoleActions, request.Action) {
 		for siteID := range tenantSites {
 			allowedSites[siteID] = struct{}{}

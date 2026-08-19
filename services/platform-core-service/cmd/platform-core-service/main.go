@@ -81,6 +81,7 @@ func main() {
 		Addr: envOr("CORE_SERVICE_ADDR", "127.0.0.1:18445"),
 		Handler: core.NewHandler(core.ServerConfig{
 			Store:                  store,
+			Writer:                 store,
 			CursorCodec:            cursorCodec,
 			GrantPublicKey:         iamGrantPublicKey,
 			GrantIssuer:            envOr("CORE_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
