@@ -31,8 +31,10 @@ const (
 	GetAssetPathTemplate              = "__ASSET_PATH__"
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
 	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
-	GetSiteAssetModelPathTemplate         = "__SITE_ASSET_MODEL_PATH__"
-	GetDevicePathTemplate                 = "__DEVICE_PATH__"
+	GetSiteAssetModelPathTemplate          = "__SITE_ASSET_MODEL_PATH__"
+	GetSiteDashboardSummaryPathTemplate    = "__SITE_DASHBOARD_SUMMARY_PATH__"
+	StreamSiteDashboardSummaryPathTemplate = "__SITE_DASHBOARD_SUMMARY_EVENTS_PATH__"
+	GetDevicePathTemplate                  = "__DEVICE_PATH__"
 	ListAlarmsPath                        = "__ALARMS_PATH__"
 	GetAlarmPathTemplate                  = "__ALARM_PATH__"
 	AckAlarmPathTemplate                  = "__ALARM_ACK_PATH__"
@@ -361,6 +363,89 @@ type SiteAssetModel struct {
 	Counts          AssetModelCounts    `json:"counts"`
 }
 
+type PresentationState string
+
+const (
+	PresentationStateReady         PresentationState = "READY"
+	PresentationStateAttention     PresentationState = "ATTENTION"
+	PresentationStateNoData        PresentationState = "NO_DATA"
+	PresentationStatePartial       PresentationState = "PARTIAL"
+	PresentationStateStale         PresentationState = "STALE"
+	PresentationStateSuspect       PresentationState = "SUSPECT"
+	PresentationStateUnavailable   PresentationState = "UNAVAILABLE"
+	PresentationStateNotAuthorized PresentationState = "NOT_AUTHORIZED"
+	PresentationStateNotIntegrated PresentationState = "NOT_INTEGRATED"
+)
+
+type DashboardMetric struct {
+	State              PresentationState `json:"state"`
+	Value              *float64          `json:"value"`
+	Unit               *string           `json:"unit"`
+	Source             string            `json:"source"`
+	DataWatermark      *string           `json:"dataWatermark"`
+	AggregateWatermark *string           `json:"aggregateWatermark"`
+	Reason             *string           `json:"reason"`
+}
+
+type DevicePopulationSummary struct {
+	State               PresentationState `json:"state"`
+	Registered          int               `json:"registered"`
+	Applicable          int               `json:"applicable"`
+	Observable          int               `json:"observable"`
+	Online              int               `json:"online"`
+	Offline             int               `json:"offline"`
+	Stale               int               `json:"stale"`
+	Unknown             int               `json:"unknown"`
+	Unavailable         int               `json:"unavailable"`
+	DenominatorPolicy   string            `json:"denominatorPolicy"`
+	Denominator         *int              `json:"denominator"`
+	AvailabilityPercent *float64          `json:"availabilityPercent"`
+	EvaluatedAt          *string           `json:"evaluatedAt"`
+}
+
+type OpenAlarmSummary struct {
+	State           PresentationState `json:"state"`
+	ActiveCount     *int              `json:"activeCount"`
+	HighestSeverity *string           `json:"highestSeverity"`
+	Watermark       *string           `json:"watermark"`
+	Reason          *string           `json:"reason"`
+}
+
+type SiteDashboardSlowMetrics struct {
+	SiteLocalDayEnergy DashboardMetric `json:"siteLocalDayEnergy"`
+	Cost               DashboardMetric `json:"cost"`
+	BaselineSavings    DashboardMetric `json:"baselineSavings"`
+	COP                DashboardMetric `json:"cop"`
+}
+
+type SiteDashboardFastMetrics struct {
+	CurrentPower DashboardMetric  `json:"currentPower"`
+	OpenAlarms   OpenAlarmSummary `json:"openAlarms"`
+}
+
+type SiteDashboardSummary struct {
+	SchemaVersion      int                      `json:"schemaVersion"`
+	TenantID           string                   `json:"tenantId"`
+	SiteID             string                   `json:"siteId"`
+	SiteTimezone       string                   `json:"siteTimezone"`
+	AsOf               string                   `json:"asOf"`
+	GeneratedAt        string                   `json:"generatedAt"`
+	DataWatermark      *string                  `json:"dataWatermark"`
+	AggregateWatermark *string                  `json:"aggregateWatermark"`
+	Completeness       PresentationState        `json:"completeness"`
+	Quality            PresentationState        `json:"quality"`
+	Reasons            []string                 `json:"reasons"`
+	DevicePopulation   DevicePopulationSummary  `json:"devicePopulation"`
+	SlowMetrics        SiteDashboardSlowMetrics `json:"slowMetrics"`
+	FastMetrics        SiteDashboardFastMetrics `json:"fastMetrics"`
+}
+
+type SiteDashboardSummaryDelta struct {
+	SchemaVersion   int                  `json:"schemaVersion"`
+	BaseGeneratedAt string               `json:"baseGeneratedAt"`
+	Summary         SiteDashboardSummary `json:"summary"`
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -412,6 +497,11 @@ type RegistryServerInterface interface {
 	ListSiteDeviceBindings(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetSiteAssetModel(http.ResponseWriter, *http.Request, string)
 	GetDevice(http.ResponseWriter, *http.Request, string)
+}
+
+type PresentationServerInterface interface {
+	GetSiteDashboardSummary(http.ResponseWriter, *http.Request, string)
+	StreamSiteDashboardSummary(http.ResponseWriter, *http.Request, string)
 }
 
 type HTTPClient interface{ Do(*http.Request) (*http.Response, error) }
@@ -529,6 +619,11 @@ func (c *Client) ListSiteDeviceBindings(ctx context.Context, siteID string, para
 func (c *Client) GetSiteAssetModel(ctx context.Context, siteID string) (*Response[SiteAssetModel], error) {
 	path := strings.Replace(GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	return doJSON[SiteAssetModel](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) GetSiteDashboardSummary(ctx context.Context, siteID string) (*Response[SiteDashboardSummary], error) {
+	path := strings.Replace(GetSiteDashboardSummaryPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	return doJSON[SiteDashboardSummary](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
 func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {

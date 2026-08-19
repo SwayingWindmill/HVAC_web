@@ -43,7 +43,8 @@ import {
   OperationsMetrics,
   OperationsPanelHeading,
 } from '@/components/OperationsUI';
-import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
+import type { CurrentPrincipalResponse, DashboardMetric, Site } from '@/api/generated/platformGateway.gen';
+import { useSiteDashboardSummary } from '@/api/site-dashboard';
 import { boundaryMeta } from '@/features/real-read-model-boundary';
 import { FORECAST_READ_MODEL_BOUNDARY } from '@/features/forecast/capability';
 import { OPTIMIZATION_READ_MODEL_BOUNDARY } from '@/features/optimization/capability';
@@ -501,7 +502,14 @@ function BigScreenPanel({ title, eyebrow, children, accent = false }: {
   );
 }
 
-export function RealBigScreenPage({ site }: RealProductPageProps) {
+function formatBigScreenMetric(metric: DashboardMetric | undefined, fallbackUnit = ''): [string, string] {
+  if (!metric || metric.value === null) return ['—', metric?.reason ?? '未提供权威值'];
+  const value = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(metric.value);
+  const unit = metric.unit ?? fallbackUnit;
+  return [`${value}${unit ? ` ${unit}` : ''}`, metric.state];
+}
+
+export function RealBigScreenPage({ site, principal }: RealProductPageProps) {
   const [scene, setScene] = useState<BigScreenScene>('overview');
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
@@ -509,10 +517,24 @@ export function RealBigScreenPage({ site }: RealProductPageProps) {
     return () => window.clearInterval(timer);
   }, []);
   const clockText = useMemo(() => clock.toLocaleTimeString('zh-CN', { hour12: false }), [clock]);
+  const summaryQuery = useSiteDashboardSummary(
+    principal.context.tenantId,
+    site.id,
+    `${principal.session.id}:${principal.authorization.policyRevision}`,
+  );
+  const summary = summaryQuery.data;
+  const [powerValue, powerState] = formatBigScreenMetric(summary?.fastMetrics.currentPower, 'kW');
+  const [copValue, copState] = formatBigScreenMetric(summary?.slowMetrics.cop);
+  const [energyValue, energyState] = formatBigScreenMetric(summary?.slowMetrics.siteLocalDayEnergy, 'kWh');
+  const [savingsValue, savingsState] = formatBigScreenMetric(summary?.slowMetrics.baselineSavings, '%');
+  const availabilityValue = summary?.devicePopulation.availabilityPercent == null
+    ? '—'
+    : `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(summary.devicePopulation.availabilityPercent)}%`;
+  const alarmValue = summary?.fastMetrics.openAlarms.activeCount == null ? '—' : String(summary.fastMetrics.openAlarms.activeCount);
 
   return (
     <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}>
-      <ProductBoundary site={site} testId="real-site-route-bigscreen" state="READY">
+      <ProductBoundary site={site} testId="real-site-route-bigscreen" state={summaryQuery.isPending ? 'LOADING' : summary?.quality ?? 'UNAVAILABLE'}>
         <main className="bigscreen-shell real-bigscreen-shell">
           <span className="real-shell-sr-only" data-testid="real-shell-site">{site.displayName}</span>
           <div className="bigscreen-stage">
@@ -535,20 +557,20 @@ export function RealBigScreenPage({ site }: RealProductPageProps) {
                 ))}
               </nav>
               <div className="bigscreen-header-meta">
-                <span className="bigscreen-live-status"><i className="bigscreen-live-dot" />真实数据边界</span>
-                <span className="bigscreen-meta-item is-optional">{site.timezone}</span>
+                <span className="bigscreen-live-status">权威 Summary · {summary?.quality ?? (summaryQuery.isPending ? 'LOADING' : 'UNAVAILABLE')}</span>
+                <span className="bigscreen-meta-item is-optional">{summary?.asOf ? `As of ${summary.asOf}` : site.timezone}</span>
                 <strong className="bigscreen-clock">{clockText}</strong>
               </div>
             </header>
 
             <section className="bigscreen-kpi-band" aria-label="运行关键指标">
               {[
-                ['实时功率', '—', '功率聚合待接入'],
-                ['综合 COP', '—', 'COP 聚合待接入'],
-                ['今日能耗', '—', 'Energy Analytics'],
-                ['今日节能率', '—', '基线待接入'],
-                ['设备在线', '—', 'Registry / Presence'],
-                ['待处理工单', '—', 'Alarm lifecycle'],
+                ['实时功率', powerValue, powerState],
+                ['综合 COP', copValue, copState],
+                ['今日能耗', energyValue, energyState],
+                ['今日节能', savingsValue, savingsState],
+                ['设备可用率', availabilityValue, summary?.devicePopulation.state ?? 'UNAVAILABLE'],
+                ['活动告警', alarmValue, summary?.fastMetrics.openAlarms.state ?? 'UNAVAILABLE'],
               ].map(([label, value, sub]) => (
                 <div className="bigscreen-kpi-card" key={label}>
                   <span className="bigscreen-kpi-icon"><ThunderboltOutlined /></span>
@@ -563,8 +585,15 @@ export function RealBigScreenPage({ site }: RealProductPageProps) {
 
             <section className="bigscreen-body" data-scene={scene}>
               <div className="bigscreen-column bigscreen-column-left">
-                <BigScreenPanel eyebrow="ENERGY" title="能耗成本趋势">
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="大屏能源趋势投影待接入" />
+                <BigScreenPanel eyebrow="ENERGY" title="站点本地日能耗">
+                  {summary ? (
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="本地日能耗">{energyValue}</Descriptions.Item>
+                      <Descriptions.Item label="状态">{energyState}</Descriptions.Item>
+                      <Descriptions.Item label="数据水位">{summary.slowMetrics.siteLocalDayEnergy.dataWatermark ?? '未提供'}</Descriptions.Item>
+                      <Descriptions.Item label="聚合水位">{summary.slowMetrics.siteLocalDayEnergy.aggregateWatermark ?? '未提供'}</Descriptions.Item>
+                    </Descriptions>
+                  ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="SiteDashboardSummary 尚未加载" />}
                 </BigScreenPanel>
                 <BigScreenPanel eyebrow="PERFORMANCE" title="系统效率与基线">
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="COP 与节能基线待接入" />
@@ -584,10 +613,16 @@ export function RealBigScreenPage({ site }: RealProductPageProps) {
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="3D 系统拓扑和大屏专用聚合尚未接入；不会加载 Demo 场景数据" />
                   </div>
                   <div className="bigscreen-device-rail">
-                    {['冷水机组', '冷冻水泵', '冷却水泵', '冷却塔', '末端系统'].map((label) => (
+                    {[
+                      ['已登记', summary?.devicePopulation.registered ?? '—', 'Registry'],
+                      ['在线', summary?.devicePopulation.online ?? '—', 'Telemetry'],
+                      ['离线', summary?.devicePopulation.offline ?? '—', 'Telemetry'],
+                      ['陈旧', summary?.devicePopulation.stale ?? '—', 'Telemetry'],
+                      ['未知/不可用', summary ? summary.devicePopulation.unknown + summary.devicePopulation.unavailable : '—', '不进入可用率分母'],
+                    ].map(([label, value, detail]) => (
                       <div className="bigscreen-device-item" key={label}>
                         <span className="bigscreen-device-head"><strong>{label}</strong><i /></span>
-                        <span className="bigscreen-device-data"><strong>—</strong><span>等待真实聚合</span></span>
+                        <span className="bigscreen-device-data"><strong>{value}</strong><span>{detail}</span></span>
                       </div>
                     ))}
                   </div>
@@ -596,13 +631,20 @@ export function RealBigScreenPage({ site }: RealProductPageProps) {
 
               <div className="bigscreen-column bigscreen-column-right">
                 <BigScreenPanel eyebrow="ASSET HEALTH" title="设备健康">
-                  <div className="bigscreen-health-summary"><div className="bigscreen-health-score"><strong>—</strong><span>权威状态待汇总</span></div></div>
+                  <div className="bigscreen-health-summary"><div className="bigscreen-health-score"><strong>{availabilityValue}</strong><span>{summary?.devicePopulation.state ?? 'UNAVAILABLE'} · 分母 {summary?.devicePopulation.denominator ?? '未发布'}</span></div></div>
                 </BigScreenPanel>
                 <BigScreenPanel eyebrow="FDD" title="故障诊断">
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="FDD Read Model 待接入" />
                 </BigScreenPanel>
-                <BigScreenPanel eyebrow="ALARM" title="报警与工单">
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Alarm 大屏投影待接入" />
+                <BigScreenPanel eyebrow="ALARM" title="活动告警">
+                  {summary ? (
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="活动告警">{alarmValue}</Descriptions.Item>
+                      <Descriptions.Item label="最高级别">{summary.fastMetrics.openAlarms.highestSeverity ?? '无'}</Descriptions.Item>
+                      <Descriptions.Item label="状态">{summary.fastMetrics.openAlarms.state}</Descriptions.Item>
+                      <Descriptions.Item label="水位">{summary.fastMetrics.openAlarms.watermark ?? '未提供'}</Descriptions.Item>
+                    </Descriptions>
+                  ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Alarm 摘要尚未加载" />}
                 </BigScreenPanel>
                 <BigScreenPanel eyebrow="OPTIMIZATION" title="优化机会">
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Optimization Read Model 待接入" />

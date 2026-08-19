@@ -87,6 +87,7 @@ type handler struct {
 
 var _ platformapi.ServerInterface = (*handler)(nil)
 var _ platformapi.RegistryServerInterface = (*handler)(nil)
+var _ platformapi.PresentationServerInterface = (*handler)(nil)
 
 // NewHandler creates the public HTTP seam owned by platform-gateway.
 func NewHandler(config Config) http.Handler {
@@ -205,6 +206,14 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		request = resolved
+		if siteID, matches := matchPublicDashboardStreamRoute(request.URL.Path); matches {
+			dispatchDashboardStreamRoute(h, writer, request, siteID)
+			return
+		}
+		if siteID, matches := matchPublicDashboardRoute(request.URL.Path); matches {
+			dispatchDashboardRoute(h, writer, request, siteID)
+			return
+		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
