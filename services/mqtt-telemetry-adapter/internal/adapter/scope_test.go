@@ -10,7 +10,7 @@ func TestProcessorRejectsGatewayOutsideConfiguredTenantSite(t *testing.T) {
 	client := &fakeRuntimeClient{}
 	processor, err := NewProcessor(
 		"018f3e00-0000-7000-8000-000000000101",
-		[]GatewayScopeConfig{{GatewayID: "EG8200-COMMERCIAL-001", TenantID: testTenantID, SiteID: testSiteID}},
+		newTestBindingAuthorizer([]GatewayScopeConfig{{GatewayID: "EG8200-COMMERCIAL-001", TenantID: testTenantID, SiteID: testSiteID}}),
 		client,
 	)
 	if err != nil {
@@ -20,7 +20,7 @@ func TestProcessorRejectsGatewayOutsideConfiguredTenantSite(t *testing.T) {
 	topic := "energy/v1/" + testTenantID + "/" + wrongSite + "/EG8200-COMMERCIAL-001/telemetry"
 	payload := `{"schemaVersion":1,"messageId":"` + testMessageID + `","tenantId":"` + testTenantID + `","siteId":"` + wrongSite + `","gatewayId":"EG8200-COMMERCIAL-001","publishedAt":"2026-08-10T09:00:00Z","replay":false,"devices":[{"externalDeviceId":"METER-01","points":[{"telemetryKey":"active_power","value":126.4,"valueType":"NUMBER","unit":"kW","quality":"GOOD","sampledAt":"2026-08-10T08:59:59Z","sequence":42}]}]}`
 	_, err = processor.Process(context.Background(), topic, []byte(payload))
-	if err == nil || !strings.Contains(err.Error(), "not authorized") {
+	if err == nil || !strings.Contains(err.Error(), "no active IntegrationInstance binding") {
 		t.Fatalf("scope error=%v", err)
 	}
 	if len(client.observations) != 0 {

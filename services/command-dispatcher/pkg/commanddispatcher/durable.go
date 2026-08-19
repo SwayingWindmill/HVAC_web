@@ -15,6 +15,10 @@ type DurableCommandStore interface {
 	ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
 }
 
+type DispatchResolutionFinalizer interface {
+	FinalizeDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
+}
+
 type DurableDispatcher struct {
 	store     DurableCommandStore
 	safety    DispatchSafetyVerifier
@@ -64,5 +68,11 @@ func (d *DurableDispatcher) RunOnce(ctx context.Context, tenantID string) error 
 	if err != nil {
 		return err
 	}
-	return d.store.ResolveDispatch(ctx, envelope, result)
+	if err := d.store.ResolveDispatch(ctx, envelope, result); err != nil {
+		return err
+	}
+	if finalizer, ok := d.connector.(DispatchResolutionFinalizer); ok {
+		return finalizer.FinalizeDispatch(ctx, envelope, result)
+	}
+	return nil
 }

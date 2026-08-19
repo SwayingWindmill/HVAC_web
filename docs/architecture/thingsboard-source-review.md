@@ -230,3 +230,37 @@ The runtime Alarm aggregate is schema version 2 and no longer contains `OPEN/ACK
 - PostgreSQL 16 upgrade test with a populated pre-S13 Alarm (ACK + suppression + three legacy transitions + idempotency row) migrated to the orthogonal aggregate with `1 -> 1` identity preservation and three immutable timeline rows; the offline rollback restored the original `MAJOR|SUPPRESSED|v3` aggregate, all three legacy transitions and the idempotency row, then removed the S13-only tables/columns.
 - A clean PostgreSQL 16 runtime initialized through migrations `001`–`005` plus the canonical seed passed the Alarm Service PostgreSQL integration suite, including simultaneous first create convergence, recurrence, stale old-Incident recovery rejection and Tenant RLS.
 - The append-only database trigger was exercised directly: an `UPDATE` against `alarm_timeline` failed with `alarm timeline is append-only`.
+
+## S09 — Transport retry, Session, Binding and Credential lifecycle
+
+Date: 2026-08-19
+
+Local issue: #263
+
+### Upstream files reviewed
+
+- `common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/service/DefaultTransportService.java`
+- `common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java`
+- `dao/src/main/java/org/thingsboard/server/dao/device/DeviceCredentialsServiceImpl.java`
+
+All files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4`.
+
+### Observed upstream semantics
+
+- Transport authentication and Session registration are explicit service concerns. Session identifiers are registered/deregistered independently from telemetry persistence, and credential changes can trigger transport-side session invalidation.
+- Gateway Sessions maintain child-device connection state and can rebuild that state after reconnect. This is useful for restart recovery, but the pinned Gateway path also supports `GetOrCreateDeviceFromGateway`, where an unknown child may become a new Device identity as a side effect of transport traffic.
+- Device Credentials are first-class records with explicit create/update/delete notification paths. Upstream can store credential material directly according to credential type; that storage shape is broader than the HVAC Secret boundary.
+- Transport acknowledgements and session existence do not prove the HVAC business command effect. The upstream transport/session machinery therefore cannot replace Command Attempt fencing, durable connector evidence, or authoritative readback verification.
+
+### Implementation decision
+
+- `ADOPT`: explicit Transport/Session ownership, restart-rebuildable Session state, Credential lifecycle notifications/invalidation, and a single transport boundary serving telemetry and command capabilities.
+- `ADAPT`: Connectivity owns `TransportProfile`, `IntegrationInstance`, `CredentialRef`, `DeviceBinding`, `GatewayChildBinding`, one-time `Enrollment`, logical Gateway `Session`, connector ownership leases, and durable command-reply correlation. These are Tenant-RLS owner records rather than static process configuration.
+- `ADAPT`: the current single `iot-service` process keeps telemetry ingress and command delivery as separate fault domains. Telemetry failure does not terminate the command loop; command initialization or ownership loss does not terminate telemetry. Each module exposes independent readiness.
+- `ADAPT`: MQTT command publishing uses a durable `PREPARED -> MAY_COMMIT -> REPLIED -> RESOLVED` correlation. `MAY_COMMIT` is persisted before calling the MQTT client. After that point a crash or ambiguous publish result is never automatically republished; a persisted late reply is reused after restart.
+- `ADAPT`: `CredentialRef` persists only a SecretRef, certificate fingerprint, or one-way token hash plus revision/validity/lifecycle state. Revocation and expiry invalidate logical Sessions, and both uplink and command routing require an active Session backed by an active CredentialRef. Broker TLS client-certificate enforcement remains the network authentication boundary; the application Session is the immediate authorization gate after a credential is revoked.
+- `REJECT`: `GetOrCreateDeviceFromGateway`, unknown-child auto-registration, plaintext/recoverable credential values, static Device-to-external-ID routing maps, in-memory fence/result authority, and a second standalone command transport path.
+
+### S09 consequence
+
+MQTT traffic can only resolve a pre-registered Registry Device through an active Connectivity Binding; unknown Gateway children are quarantined and no transport code can insert Registry identity. Enrollment can only consume an unexpired one-time challenge for a Device that already has an active Binding. Connector ownership carries a durable generation/lease, command replies survive process restart, and the only state from which a physical publish may occur is `PREPARED`. Local central-plant bootstrap now seeds the same Connectivity owner model using the simulator certificate fingerprint while keeping private-key material outside the database. Additional protocols remain deferred; S09 establishes the MQTT-first lifecycle and recovery boundary only.

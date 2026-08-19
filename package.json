@@ -28,6 +28,7 @@
     "deployment:phase1:simulator": "node scripts/phase1-central-plant-simulator.mjs",
     "deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs",
     "deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs",
+    "s09:connectivity:check": "node scripts/check-s09-connectivity.mjs",
     "delivery:validate": "node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/local.env.example && node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/staging.env.example",
     "delivery:check": "node scripts/check-s0-delivery-assets.mjs && node scripts/test-render-s0-staging.mjs",
     "pr:gates:classify": "node scripts/classify-pr-gates.mjs",

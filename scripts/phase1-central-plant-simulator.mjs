@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { X509Certificate } from 'node:crypto';
 import path from 'node:path';
 
 import {
@@ -281,6 +282,88 @@ SET tenant_id=EXCLUDED.tenant_id,
 COMMIT;`;
 }
 
+function buildConnectivitySeed() {
+  const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
+  const transportProfileId = localUUID(0x810000000001);
+  const credentialRefId = localUUID(0x810000000002);
+  const sessionId = localUUID(0x810000000003);
+  const certificate = new X509Certificate(readFileSync(path.join(simulatorPkiDir, 'tls.crt')));
+  const certificateFingerprint = certificate.fingerprint256.replaceAll(':', '').toLowerCase();
+  const certificateValidFrom = new Date(certificate.validFrom).toISOString();
+  const certificateValidUntil = new Date(certificate.validTo).toISOString();
+  const deviceBindings = centralPlantDevices.map((device, index) => `(
+    ${sqlLiteral(localUUID(0x820000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
+    ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(device.platformDeviceId)},
+    'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+  )`).join(',\n');
+  const childBindings = centralPlantDevices.map((device, index) => `(
+    ${sqlLiteral(localUUID(0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
+    ${sqlLiteral(integrationInstanceId)}, 'EG8200-COMMERCIAL-001', ${sqlLiteral(device.platformDeviceId)},
+    ${sqlLiteral(device.platformDeviceId)}, 'ACTIVE', clock_timestamp(), NULL, 1,
+    clock_timestamp(), clock_timestamp()
+  )`).join(',\n');
+
+  return `BEGIN;
+INSERT INTO connectivity.transport_profiles (
+  id, tenant_id, protocol, broker_origin, topic_namespace, status, revision, created_at, updated_at
+) VALUES (
+  ${sqlLiteral(transportProfileId)}, ${sqlLiteral(tenantId)}, 'MQTT', 'tls://mqtt-broker:8883', 'energy/v1',
+  'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+)
+ON CONFLICT (id) DO UPDATE SET broker_origin=EXCLUDED.broker_origin, topic_namespace='energy/v1', status='ACTIVE', revision=connectivity.transport_profiles.revision+1, updated_at=clock_timestamp();
+
+INSERT INTO connectivity.integration_instances (
+  id, tenant_id, site_id, transport_profile_id, gateway_external_id, status, revision, created_at, updated_at
+) VALUES (
+  ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(transportProfileId)},
+  'EG8200-COMMERCIAL-001', 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+)
+ON CONFLICT (id) DO UPDATE SET transport_profile_id=EXCLUDED.transport_profile_id, gateway_external_id=EXCLUDED.gateway_external_id, status='ACTIVE', revision=connectivity.integration_instances.revision+1, updated_at=clock_timestamp();
+
+INSERT INTO connectivity.device_bindings (
+  id, tenant_id, site_id, integration_instance_id, device_id, external_device_id,
+  status, valid_from, valid_to, revision, created_at, updated_at
+) VALUES
+${deviceBindings}
+ON CONFLICT (id) DO UPDATE SET external_device_id=EXCLUDED.external_device_id, status='ACTIVE', valid_to=NULL, revision=connectivity.device_bindings.revision+1, updated_at=clock_timestamp();
+
+INSERT INTO connectivity.gateway_child_bindings (
+  id, tenant_id, site_id, integration_instance_id, gateway_external_id, child_device_id,
+  child_external_id, status, valid_from, valid_to, revision, created_at, updated_at
+) VALUES
+${childBindings}
+ON CONFLICT (id) DO UPDATE SET child_external_id=EXCLUDED.child_external_id, status='ACTIVE', valid_to=NULL, revision=connectivity.gateway_child_bindings.revision+1, updated_at=clock_timestamp();
+
+INSERT INTO connectivity.credential_refs (
+  id, tenant_id, integration_instance_id, credential_kind, secret_ref,
+  certificate_fingerprint_sha256, token_hash_sha256, status, valid_from, valid_until,
+  rotated_from_id, revoked_at, revision, created_at, updated_at
+) VALUES (
+  ${sqlLiteral(credentialRefId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(integrationInstanceId)}, 'MTLS_CERTIFICATE',
+  'file:///run/hvac/pki/eg8200-simulator/tls.crt', ${sqlLiteral(certificateFingerprint)}, NULL, 'ACTIVE',
+  ${sqlLiteral(certificateValidFrom)}, ${sqlLiteral(certificateValidUntil)}, NULL, NULL, 1,
+  clock_timestamp(), clock_timestamp()
+)
+ON CONFLICT (id) DO UPDATE SET certificate_fingerprint_sha256=EXCLUDED.certificate_fingerprint_sha256, status='ACTIVE', valid_from=EXCLUDED.valid_from, valid_until=EXCLUDED.valid_until, revoked_at=NULL, revision=connectivity.credential_refs.revision+1, updated_at=clock_timestamp();
+
+UPDATE connectivity.sessions
+SET status='CLOSED', closed_at=clock_timestamp(), close_reason='LOCAL_BOOTSTRAP_REPLACED', revision=revision+1, updated_at=clock_timestamp()
+WHERE tenant_id=${sqlLiteral(tenantId)}::uuid AND integration_instance_id=${sqlLiteral(integrationInstanceId)}::uuid AND status='ACTIVE';
+
+INSERT INTO connectivity.sessions (
+  id, tenant_id, site_id, integration_instance_id, credential_ref_id, credential_revision,
+  gateway_external_id, status, opened_at, expires_at, closed_at, close_reason, revision, updated_at
+) VALUES (
+  ${sqlLiteral(sessionId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
+  ${sqlLiteral(credentialRefId)}, (SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(credentialRefId)}::uuid),
+  'EG8200-COMMERCIAL-001', 'ACTIVE', clock_timestamp(),
+  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '24 hours'),
+  NULL, NULL, 1, clock_timestamp()
+)
+ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, credential_revision=EXCLUDED.credential_revision, status='ACTIVE', opened_at=EXCLUDED.opened_at, expires_at=EXCLUDED.expires_at, closed_at=NULL, close_reason=NULL, revision=connectivity.sessions.revision+1, updated_at=clock_timestamp();
+COMMIT;`;
+}
+
 function buildS2Seed(points) {
   const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
   const ids = buildIdentities(points);
@@ -406,6 +489,10 @@ function runLocalAdminGrant() {
 function startSimulatorService() {
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
+    'up', '-d', '--build', 'iot-service',
+  ]);
+  run(process.execPath, [
+    path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
     '--profile', 'local-simulator',
     'up', '-d', '--build', 'eg8200-simulator',
   ]);
@@ -421,6 +508,7 @@ const controlPoints = registryPoints.filter((point) => point.pointType === 'COMM
 ensureSimulatorCertificate();
 writeSimulatorConfig();
 psql('hvac_s1', buildS1Seed(registryPoints));
+psql('hvac_s1', buildConnectivitySeed());
 psql('hvac_s2', buildS2Seed(observedPoints));
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
