@@ -20,7 +20,6 @@ var ErrDeviceNotFound = errors.New("telemetry device not found")
 
 type SnapshotCommit struct {
 	Snapshot         telemetryapi.DeviceObservationSnapshot
-	FullSnapshot     telemetryapi.DeviceObservationSnapshot
 	StateChanged     bool
 	PreviousRevision int64
 }
@@ -147,7 +146,7 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 		}
 	}
 	return SnapshotCommit{
-		Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), FullSnapshot: evaluation.Snapshot,
+		Snapshot:     ProjectSnapshot(evaluation.Snapshot, requestedKeys),
 		StateChanged: stateChanged, PreviousRevision: previousRevision,
 	}, nil
 }

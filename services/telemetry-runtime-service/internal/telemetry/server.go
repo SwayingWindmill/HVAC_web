@@ -1,7 +1,6 @@
 package telemetry
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -44,7 +43,6 @@ type ServerConfig struct {
 	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
 	SourceAuthenticator            SourceAuthenticator
 	Realtime                       *RealtimeService
-	LatestCache                    LatestCache
 	AllowedCentrifugoSPIFFE        string
 	CentrifugoProxySecret          string
 	AllowedIAMSPIFFE               string
@@ -68,7 +66,6 @@ type handler struct {
 	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
 	sourceAuthenticator            SourceAuthenticator
 	realtime                       *RealtimeService
-	latestCache                    LatestCache
 	allowedCentrifugoSPIFFE        string
 	centrifugoProxySecret          string
 	allowedIAMSPIFFE               string
@@ -104,7 +101,6 @@ func NewHandler(config ServerConfig) http.Handler {
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
 		sourceAuthenticator:            config.SourceAuthenticator,
 		realtime:                       config.Realtime,
-		latestCache:                    config.LatestCache,
 		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
 		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
 		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
@@ -224,13 +220,8 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return
 	}
-	snapshot, err := h.readLatestSnapshot(request.Context(), commit, target.Keys)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
-		return
-	}
-	h.metrics.observeSnapshot(snapshot)
-	writeJSON(writer, http.StatusOK, snapshot)
+	h.metrics.observeSnapshot(commit.Snapshot)
+	writeJSON(writer, http.StatusOK, commit.Snapshot)
 }
 
 func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request) {
@@ -291,37 +282,12 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 			return
 		}
-		snapshot, err := h.readLatestSnapshot(request.Context(), commit, targets[index].Keys)
-		if err != nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
-			return
-		}
-		h.metrics.observeSnapshot(snapshot)
+		h.metrics.observeSnapshot(commit.Snapshot)
 		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
-			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
+			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: commit.Snapshot,
 		}})
 	}
 	writeJSON(writer, http.StatusOK, response)
-}
-
-func (h *handler) readLatestSnapshot(ctx context.Context, commit SnapshotCommit, requestedKeys []string) (telemetryapi.DeviceObservationSnapshot, error) {
-	if h.latestCache == nil {
-		return commit.Snapshot, nil
-	}
-	if err := validateLatestCacheSnapshot(commit.FullSnapshot); err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	if _, err := h.latestCache.PutIfNewer(ctx, commit.FullSnapshot); err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	cached, err := h.latestCache.Get(ctx, string(commit.FullSnapshot.TenantId), string(commit.FullSnapshot.SiteId), string(commit.FullSnapshot.DeviceId))
-	if err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	if cached.BusinessRevision < commit.FullSnapshot.BusinessRevision {
-		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
-	}
-	return ProjectSnapshot(cached, requestedKeys), nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {
