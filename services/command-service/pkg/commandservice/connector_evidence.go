@@ -2,6 +2,7 @@ package commandservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -80,6 +81,10 @@ func (store *PostgresStore) CompleteConnectorEvidence(ctx context.Context, evide
 	}
 	evidence.PreparedAt = evidence.PreparedAt.UTC().Truncate(time.Microsecond)
 	evidence.CompletedAt = evidence.CompletedAt.UTC().Truncate(time.Microsecond)
+	edgeExecutionJSON, err := marshalEdgeExecution(evidence.EdgeExecution)
+	if err != nil {
+		return ErrInvalidRequest
+	}
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return fmt.Errorf("begin connector evidence completion: %w", err)
@@ -95,7 +100,8 @@ SET provider_status_code = $15,
     request_written = $17,
     connector_phase = $18,
     failure_code = NULLIF($19, ''),
-    completed_at = $20
+    completed_at = $20,
+    edge_execution_evidence = $21::jsonb
 WHERE attempt_id = $1::uuid
   AND execution_fence = $2
   AND command_id = $3::uuid
@@ -116,7 +122,7 @@ WHERE attempt_id = $1::uuid
 		evidence.MappingRevision, evidence.BindingRevision, evidence.ProviderEndpoint,
 		evidence.ProviderMethod, evidence.RequestSHA256, evidence.PreparedAt,
 		nullableProviderStatus(evidence.ProviderStatusCode), evidence.ResponseSHA256, evidence.RequestWritten,
-		evidence.ConnectorPhase, evidence.FailureCode, evidence.CompletedAt)
+		evidence.ConnectorPhase, evidence.FailureCode, evidence.CompletedAt, nullableEdgeExecution(edgeExecutionJSON))
 	if err != nil {
 		return fmt.Errorf("complete connector evidence: %w", err)
 	}
@@ -149,13 +155,18 @@ func validCompletedConnectorEvidence(evidence commandmodel.CompletedConnectorEvi
 	if !validPreparedConnectorEvidence(evidence.PreparedConnectorEvidence) || evidence.CompletedAt.IsZero() || evidence.CompletedAt.Before(evidence.PreparedAt) {
 		return false
 	}
+	if evidence.EdgeExecution != nil && !evidence.EdgeExecution.Valid() {
+		return false
+	}
 	switch evidence.ConnectorPhase {
 	case commandmodel.ConnectorPreSendRejected:
-		return !evidence.RequestWritten && evidence.ProviderStatusCode == 0 && strings.TrimSpace(evidence.ResponseSHA256) == ""
+		return !evidence.RequestWritten && evidence.ProviderStatusCode == 0 && strings.TrimSpace(evidence.ResponseSHA256) == "" && evidence.EdgeExecution == nil
+	case commandmodel.ConnectorExecutionRejected:
+		return evidence.RequestWritten && evidence.ProviderStatusCode == 200 && strings.TrimSpace(evidence.ResponseSHA256) != "" && strings.TrimSpace(evidence.FailureCode) != ""
 	case commandmodel.ConnectorRequestCommitted:
 		return evidence.RequestWritten
 	case commandmodel.ConnectorAcknowledged:
-		return evidence.RequestWritten && evidence.ProviderStatusCode == 200 && strings.TrimSpace(evidence.ResponseSHA256) != "" && strings.TrimSpace(evidence.FailureCode) == ""
+		return evidence.RequestWritten && evidence.ProviderStatusCode == 200 && strings.TrimSpace(evidence.ResponseSHA256) != "" && strings.TrimSpace(evidence.FailureCode) == "" && evidence.EdgeExecution != nil && evidence.EdgeExecution.ValidExecuted()
 	default:
 		return false
 	}
@@ -193,11 +204,12 @@ func loadCompletedConnectorEvidence(ctx context.Context, tx pgx.Tx, organization
 	var response, phase, failure *string
 	var written *bool
 	var completedAt *time.Time
+	var edgeExecutionJSON []byte
 	err = tx.QueryRow(ctx, `
-SELECT provider_status_code, response_sha256, request_written, connector_phase, failure_code, completed_at
+SELECT provider_status_code, response_sha256, request_written, connector_phase, failure_code, completed_at, edge_execution_evidence
 FROM command_runtime.connector_evidence
 WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3
-`, organizationID, attemptID, fence).Scan(&status, &response, &written, &phase, &failure, &completedAt)
+`, organizationID, attemptID, fence).Scan(&status, &response, &written, &phase, &failure, &completedAt, &edgeExecutionJSON)
 	if err != nil {
 		return commandmodel.CompletedConnectorEvidence{}, fmt.Errorf("load completed connector evidence: %w", err)
 	}
@@ -213,6 +225,13 @@ WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3
 	}
 	if failure != nil {
 		completed.FailureCode = *failure
+	}
+	if len(edgeExecutionJSON) > 0 {
+		var edge commandmodel.EdgeExecutionEvidence
+		if err := json.Unmarshal(edgeExecutionJSON, &edge); err != nil || !edge.Valid() {
+			return commandmodel.CompletedConnectorEvidence{}, ErrInvalidRequest
+		}
+		completed.EdgeExecution = &edge
 	}
 	return completed, nil
 }
@@ -230,7 +249,30 @@ func sameCompletedConnectorEvidence(left, right commandmodel.CompletedConnectorE
 	return samePreparedConnectorEvidence(left.PreparedConnectorEvidence, right.PreparedConnectorEvidence) &&
 		left.ProviderStatusCode == right.ProviderStatusCode && left.ResponseSHA256 == right.ResponseSHA256 &&
 		left.RequestWritten == right.RequestWritten && left.ConnectorPhase == right.ConnectorPhase &&
-		left.FailureCode == right.FailureCode && left.CompletedAt.Equal(right.CompletedAt)
+		left.FailureCode == right.FailureCode && left.CompletedAt.Equal(right.CompletedAt) && sameEdgeExecutionEvidence(left.EdgeExecution, right.EdgeExecution)
+}
+
+func marshalEdgeExecution(evidence *commandmodel.EdgeExecutionEvidence) ([]byte, error) {
+	if evidence == nil {
+		return nil, nil
+	}
+	if !evidence.Valid() {
+		return nil, ErrInvalidRequest
+	}
+	return json.Marshal(evidence)
+}
+
+func nullableEdgeExecution(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
+}
+
+func sameEdgeExecutionEvidence(left, right *commandmodel.EdgeExecutionEvidence) bool {
+	leftJSON, leftErr := marshalEdgeExecution(left)
+	rightJSON, rightErr := marshalEdgeExecution(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func nullableProviderStatus(status int) any {

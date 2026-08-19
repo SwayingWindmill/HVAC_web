@@ -235,9 +235,12 @@ func (store *PostgresStore) ResolveDispatch(ctx context.Context, envelope comman
 		return ErrInvalidRequest
 	}
 	switch result.Phase {
-	case commandmodel.ConnectorPreSendRejected, commandmodel.ConnectorRequestCommitted:
+	case commandmodel.ConnectorPreSendRejected, commandmodel.ConnectorExecutionRejected, commandmodel.ConnectorRequestCommitted:
+		if result.EdgeExecution != nil && !result.EdgeExecution.Valid() {
+			return ErrInvalidRequest
+		}
 	case commandmodel.ConnectorAcknowledged:
-		if !result.Acknowledged || result.Verified || strings.TrimSpace(result.EvidenceID) == "" {
+		if !result.Acknowledged || result.Verified || strings.TrimSpace(result.EvidenceID) == "" || result.EdgeExecution == nil || !result.EdgeExecution.ValidExecuted() {
 			return ErrInvalidRequest
 		}
 	default:
@@ -313,6 +316,12 @@ FOR UPDATE
 	if result.Phase != commandmodel.ConnectorPreSendRejected && strings.TrimSpace(result.EvidenceID) == "" {
 		return ErrInvalidRequest
 	}
+	if result.EdgeExecution != nil && !result.EdgeExecution.Valid() {
+		return ErrInvalidRequest
+	}
+	if result.Phase == commandmodel.ConnectorAcknowledged && (result.EdgeExecution == nil || !result.EdgeExecution.ValidExecuted()) {
+		return ErrInvalidRequest
+	}
 
 	attemptFinal := commandmodel.AttemptOutcomeUnknown
 	intentFinal := commandmodel.IntentOutcomeUnknown
@@ -333,6 +342,14 @@ FOR UPDATE
 			intentFinal = commandmodel.IntentQueued
 			reason = "PROVABLY_NOT_SENT_REQUEUE"
 			retry = true
+		}
+	case commandmodel.ConnectorExecutionRejected:
+		attemptFinal = commandmodel.AttemptFailed
+		intentFinal = commandmodel.IntentFailed
+		freeze = false
+		reason = strings.TrimSpace(result.FailureCode)
+		if reason == "" {
+			reason = "EDGE_EXECUTION_REJECTED"
 		}
 	case commandmodel.ConnectorRequestCommitted:
 		attemptFinal = commandmodel.AttemptOutcomeUnknown

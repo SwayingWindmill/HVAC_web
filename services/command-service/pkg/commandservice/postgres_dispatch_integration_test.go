@@ -266,7 +266,7 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 	ctx := t.Context()
 	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true,
-		EvidenceID: evidencePrefix + "-provider-ack",
+		EvidenceID: evidencePrefix + "-provider-ack", EdgeExecution: postgresEdgeExecution(t, dispatch),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -287,11 +287,24 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 
 func postgresVerificationNumber(t *testing.T, envelope commandmodel.VerificationEnvelope) float64 {
 	t.Helper()
+	value, ok := commandmodel.ExpectedVerificationValue(envelope.Capability, envelope.Parameters, envelope.EdgeExecution)
+	if !ok || value.Number == nil {
+		t.Fatalf("verification envelope has no numeric governed target: %#v", envelope)
+	}
+	return *value.Number
+}
+
+func postgresEdgeExecution(t *testing.T, envelope commandmodel.DispatchEnvelope) *commandmodel.EdgeExecutionEvidence {
+	t.Helper()
 	value, ok := commandmodel.ParameterValue(envelope.Capability, envelope.Parameters)
 	if !ok {
-		t.Fatalf("verification envelope has no numeric parameter: %#v", envelope)
+		t.Fatalf("dispatch envelope has no numeric parameter: %#v", envelope)
 	}
-	return value
+	requested := commandmodel.NumberScalar(value)
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
 }
 
 func postgresReportedState(envelope commandmodel.VerificationEnvelope, setpointC float64) commandmodel.ReportedStateEvidence {

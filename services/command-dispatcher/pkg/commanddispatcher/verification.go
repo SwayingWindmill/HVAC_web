@@ -54,7 +54,7 @@ func (verifier *AuthoritativeReportedStateVerifier) Verify(ctx context.Context, 
 			reported.Freshness == "FRESH" && reported.Quality == "GOOD" && reported.BusinessRevision > envelope.BaselineBusinessRevision &&
 			reported.ObservedAt.After(envelope.AcknowledgedAt)
 		if authoritative {
-			expected, expectedOK := commandmodel.ExpectedReportedValue(envelope.Capability, envelope.Parameters)
+			expected, expectedOK := commandmodel.ExpectedVerificationValue(envelope.Capability, envelope.Parameters, envelope.EdgeExecution)
 			profile, supported := commandmodel.CapabilityProfileFor(envelope.Capability)
 			if !expectedOK || !supported {
 				return commandmodel.VerificationResult{}, errors.New("command capability cannot be verified")

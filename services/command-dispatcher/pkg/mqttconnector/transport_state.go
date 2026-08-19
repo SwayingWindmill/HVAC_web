@@ -42,6 +42,7 @@ type CommandCorrelation struct {
 	ReplyStatus           string
 	ReplyEventTime        time.Time
 	ReplyReasonCode       string
+	EdgeExecution         *commandmodel.EdgeExecutionEvidence
 	RepliedAt             time.Time
 }
 
@@ -50,7 +51,7 @@ type TransportState interface {
 	AssertConnectorOwnership(ctx context.Context, integrationInstanceID, ownerID string, generation uint64) error
 	PrepareCommandCorrelation(ctx context.Context, correlation CommandCorrelation) (CommandCorrelation, error)
 	ArmCommandCorrelation(ctx context.Context, attemptID string, executionFence, ownerGeneration uint64, armedAt time.Time) error
-	RecordCommandReply(ctx context.Context, integrationInstanceID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, repliedAt time.Time) (CommandCorrelation, error)
+	RecordCommandReply(ctx context.Context, integrationInstanceID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, edgeExecution *commandmodel.EdgeExecutionEvidence, repliedAt time.Time) (CommandCorrelation, error)
 	RecoverCommandReplies(ctx context.Context, integrationInstanceID string, limit int) ([]CommandCorrelation, error)
 	MarkCommandCorrelationResolved(ctx context.Context, attemptID string, executionFence uint64, resolvedAt time.Time) error
 }

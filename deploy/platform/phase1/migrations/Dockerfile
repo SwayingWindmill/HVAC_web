@@ -46,6 +46,7 @@ COPY infra/s1-registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/
 COPY infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/s1-registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
+COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -58,8 +59,10 @@ COPY infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql /opt/hvac/repo/in
 COPY infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql
 
 COPY services/command-service/migrations/001_s3_command_runtime.sql /opt/hvac/repo/services/command-service/migrations/001_s3_command_runtime.sql
+COPY services/command-service/migrations/002_s3_target_runtime.sql /opt/hvac/repo/services/command-service/migrations/002_s3_target_runtime.sql
 COPY services/command-service/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/services/command-service/migrations/003_s3_tenant_scope.sql
 COPY services/command-service/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/services/command-service/migrations/004_s3_command_point_identity.sql
+COPY services/command-service/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/services/command-service/migrations/005_s11_edge_execution_evidence.sql
 COPY services/alarm-service/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/services/alarm-service/migrations/001_s4_alarm_runtime.sql
 COPY services/alarm-service/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/services/alarm-service/migrations/002_s4_alarm_lifecycle.sql
 COPY services/alarm-service/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/services/alarm-service/migrations/003_s4_tenant_scope.sql

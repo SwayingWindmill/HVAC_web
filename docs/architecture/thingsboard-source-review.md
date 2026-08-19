@@ -342,3 +342,34 @@ All files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308dde
 ### S19 consequence
 
 Work Order remains independently operable while Alarm links are formal, immutable relationship evidence. Settlement/cost recomputation becomes traceable to exact Metric revisions and a source watermark; missing or partial inputs remain visible in quality/completeness; immutable Snapshot history can rebuild the Current projection. Phase1 now includes the canonical `009a` topology/metering, `009c` Metric, and `009b` Settlement foundation in the dependency order proven by a fresh PostgreSQL install.
+
+## S11 — Governed Cloud Command -> Edge -> readback chain
+
+Date: 2026-08-19
+
+Local issue: #270
+
+### Upstream files reviewed
+
+- `application/src/main/java/org/thingsboard/server/controller/RpcV2Controller.java`
+- `application/src/main/java/org/thingsboard/server/actors/device/DeviceActorMessageProcessor.java`
+
+Both files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S11 implementation.
+
+### Observed upstream semantics
+
+- A successful one-way RPC HTTP response means the request was sent to the device transport; it does not prove the physical effect.
+- Persistent RPC has explicit `QUEUED`, `SENT`, `DELIVERED`, `SUCCESSFUL`, `TIMEOUT`, `EXPIRED`, and `FAILED` lifecycle states. A device response can make the RPC `SUCCESSFUL`, but that remains RPC completion rather than independent plant-state proof.
+- Expiry, retry and restored device sessions are transport concerns. They are valuable for delivery recovery, but they do not replace HVAC execution fencing or authoritative readback.
+
+### Implementation decision
+
+- `ADOPT`: explicit transport delivery states, expiry handling and restart-recoverable RPC/session state.
+- `ADAPT`: Edge persists a `MAY_EXECUTE` commit point before scheduling a physical action and records structured requested/effective/applied/constraint/winner/cycle evidence. A restart from `MAY_EXECUTE` returns `EDGE_OUTCOME_UNKNOWN` and never blindly repeats the physical action.
+- `ADAPT`: an Edge `EXECUTED` reply with valid structured execution evidence may advance the Cloud Attempt only to `ACKNOWLEDGED`; numeric verification targets the governed Edge applied/effective value while action capabilities retain their semantic readback target such as `RUNNING` or `STOPPED`.
+- `ADAPT`: explicit Edge rejection/expiry is a proven non-execution failure, while write failure or timeout remains `OUTCOME_UNKNOWN` because absence of physical effect cannot be proven.
+- `REJECT`: HTTP 200, MQTT/device ACK, RPC `DELIVERED`, RPC `SUCCESSFUL`, or an Edge-declared `VERIFIED` status as Cloud business success. `SUCCEEDED` remains exclusive to fresh authoritative S2 State/Telemetry readback after acknowledgement.
+
+### S11 consequence
+
+Cloud Intent, approval, authorization, idempotency, lease and execution-fence facts remain immutable Cloud authority. Edge Scheduler/Arbiter/Interlock may constrain or reject the requested command without rewriting those facts. Connector and Connectivity persistence carry Edge execution evidence across restart, and the verifier reloads that durable evidence before independent S2 readback. A transport acknowledgement without governed Edge execution evidence cannot advance the Command, and ambiguous execution paths remain frozen as `OUTCOME_UNKNOWN` rather than being retried blindly.
