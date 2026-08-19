@@ -44,8 +44,13 @@ type Runtime struct {
 }
 
 func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metrics *observability.Registry) (*Runtime, error) {
-	if err := config.Validate(); err != nil || processor == nil {
+	if err := config.Validate(); err != nil || processor == nil || len(config.RuntimeGatewayIDs) == 0 {
 		return nil, errors.New("MQTT telemetry runtime dependencies are invalid")
+	}
+	for _, gatewayID := range config.RuntimeGatewayIDs {
+		if !validGatewayID(strings.TrimSpace(gatewayID)) {
+			return nil, errors.New("MQTT telemetry runtime Gateway identity is invalid")
+		}
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -180,9 +185,9 @@ var (
 )
 
 func (runtime *Runtime) newProcessingQueues() map[string]chan queuedPublish {
-	queues := make(map[string]chan queuedPublish, len(runtime.config.GatewayScopes))
-	for _, scope := range runtime.config.GatewayScopes {
-		queues[strings.TrimSpace(scope.GatewayID)] = make(chan queuedPublish, runtime.config.ProcessingQueueCapacity)
+	queues := make(map[string]chan queuedPublish, len(runtime.config.RuntimeGatewayIDs))
+	for _, gatewayID := range runtime.config.RuntimeGatewayIDs {
+		queues[strings.TrimSpace(gatewayID)] = make(chan queuedPublish, runtime.config.ProcessingQueueCapacity)
 	}
 	runtime.parkingSlots = make(chan struct{}, runtime.config.ProcessingQueueCapacity*len(queues))
 	return queues

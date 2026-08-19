@@ -316,6 +316,8 @@ services:
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
+      CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:?CONNECTIVITY_DATABASE_URL is required}
+      CONNECTIVITY_TENANT_ID: ${CONNECTIVITY_TENANT_ID:?CONNECTIVITY_TENANT_ID is required}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -326,7 +328,7 @@ services:
       timeout: 4s
       retries: 12
       start_period: 10s
-    networks: [application, mqtt]
+    networks: [application, mqtt, data]
     cpus: ${IOT_SERVICE_CPUS:-1.50}
     mem_limit: ${IOT_SERVICE_MEMORY_LIMIT:-512m}
     mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}

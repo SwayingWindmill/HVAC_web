@@ -175,7 +175,7 @@ func newProcessingTestRuntime(t *testing.T, client RuntimeClient, capacity int) 
 		{GatewayID: runtimeGatewayA, TenantID: testTenantID, SiteID: testSiteID},
 		{GatewayID: runtimeGatewayB, TenantID: testTenantID, SiteID: testSiteID},
 	}
-	processor, err := NewProcessor("018f3e00-0000-7000-8000-000000000101", scopes, client)
+	processor, err := NewProcessor("018f3e00-0000-7000-8000-000000000101", newTestBindingAuthorizer(scopes), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func newProcessingTestRuntime(t *testing.T, client RuntimeClient, capacity int) 
 			KeepAliveSeconds: 30, SessionExpirySeconds: 3600, ConnectTimeoutSeconds: 5,
 		},
 		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
-		GatewayScopes:    scopes, ProcessingQueueCapacity: capacity,
+		RuntimeGatewayIDs: []string{runtimeGatewayA, runtimeGatewayB}, ProcessingQueueCapacity: capacity,
 	}
 	runtime, err := NewRuntime(config, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
 	if err != nil {

@@ -56,7 +56,8 @@
         "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
         "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql",
         "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
-        "infra/s1-registry/postgres/init/010-s05-registry-writer.sql"
+        "infra/s1-registry/postgres/init/010-s05-registry-writer.sql",
+        "infra/connectivity/postgres/init/001-s09-connectivity.sql"
       ]
     },
     {
@@ -127,6 +128,7 @@
     "s1_core_service",
     "metric_engine_runtime",
     "scheduler_runtime",
+    "connectivity_runtime",
     "s2_iam_grant_runtime",
     "s2_telemetry_migrator_service",
     "s2_telemetry_service",

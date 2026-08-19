@@ -16,49 +16,53 @@ import (
 	"github.com/quanlaihe/hvac-web/services/command-dispatcher/pkg/commanddispatcher"
 	"github.com/quanlaihe/hvac-web/services/command-dispatcher/pkg/mqttconnector"
 	"github.com/quanlaihe/hvac-web/services/command-service/pkg/commandservice"
+	"github.com/quanlaihe/hvac-web/services/mqtt-telemetry-adapter/internal/connectivity"
 )
+
+const commandOwnershipLease = 30 * time.Second
 
 type inProcessCommandRuntime struct {
 	tenantID         string
+	integrationID    string
+	ownershipOwnerID string
+	connectivity     *connectivity.Store
 	dispatcher       *commanddispatcher.DurableDispatcher
 	dispatcherWorker string
 	verifier         *commanddispatcher.DurableVerificationWorker
 	verifierWorker   string
 	reportedStateKey string
 	connector        *mqttconnector.Connector
+	setReady         func(bool)
 }
 
 type commandRuntimeBinding struct {
-	DeviceID         string `json:"deviceId"`
-	ExternalDeviceID string `json:"externalDeviceId"`
-	SafetyStateKey   string `json:"safetyStateKey"`
+	DeviceID       string `json:"deviceId"`
+	SafetyStateKey string `json:"safetyStateKey"`
 }
 
 type commandRuntimeBindings struct {
 	SchemaVersion int                     `json:"schemaVersion"`
-	TenantID      string                  `json:"tenantId"`
-	SiteID        string                  `json:"siteId"`
-	GatewayID     string                  `json:"gatewayId"`
 	Devices       []commandRuntimeBinding `json:"devices"`
 }
 
-func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime, error) {
+func loadInProcessCommandRuntime(ctx context.Context, store *connectivity.Store, integration connectivity.IntegrationDescriptor) (*inProcessCommandRuntime, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
 		return nil, nil
+	}
+	if store == nil || strings.TrimSpace(integration.ID) == "" {
+		return nil, errors.New("Command Runtime requires Connectivity owner state")
 	}
 	bindings, err := loadCommandRuntimeBindings()
 	if err != nil {
 		return nil, err
 	}
-	tenantID := bindings.TenantID
-	siteID := bindings.SiteID
-	gatewayID := bindings.GatewayID
 	deviceIDs := make([]string, 0, len(bindings.Devices))
-	externalByDevice := make(map[string]string, len(bindings.Devices))
 	safetyKeyByDevice := make(map[string]string, len(bindings.Devices))
 	for _, binding := range bindings.Devices {
+		if _, routeErr := store.ResolveCommandRoute(ctx, integration.ID, integration.TenantID, integration.SiteID, integration.GatewayExternalID, binding.DeviceID); routeErr != nil {
+			return nil, fmt.Errorf("Command Runtime Device %s has no active GatewayChildBinding", binding.DeviceID)
+		}
 		deviceIDs = append(deviceIDs, binding.DeviceID)
-		externalByDevice[binding.DeviceID] = binding.ExternalDeviceID
 		safetyKeyByDevice[binding.DeviceID] = binding.SafetyStateKey
 	}
 
@@ -66,7 +70,7 @@ func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime,
 	if err != nil {
 		return nil, err
 	}
-	dispatcherRuntimeClient, err := commandRuntimeClient(dispatcherIdentity, tenantID, siteID, deviceIDs)
+	dispatcherRuntimeClient, err := commandRuntimeClient(dispatcherIdentity, integration.TenantID, integration.SiteID, deviceIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +80,7 @@ func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime,
 	}
 	safetyReader, err := commanddispatcher.NewReportedStateClient(commanddispatcher.ReportedStateClientConfig{
 		BaseURL: mustCommandEnv("S2_DISPATCH_SAFETY_URL"), HTTPClient: dispatcherS2Client,
-		TenantID: tenantID, SiteID: siteID, DeviceIDs: deviceIDs,
+		TenantID: integration.TenantID, SiteID: integration.SiteID, DeviceIDs: deviceIDs,
 	})
 	if err != nil {
 		return nil, err
@@ -86,19 +90,28 @@ func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime,
 		return nil, err
 	}
 
+	ownershipOwnerID := envOr("MQTT_COMMAND_OWNER_ID", hostnameOr("iot-service-command-owner"))
+	ownership, err := store.ClaimConnectorOwnership(ctx, integration.ID, ownershipOwnerID, commandOwnershipLease)
+	if err != nil {
+		return nil, fmt.Errorf("claim MQTT command connector ownership: %w", err)
+	}
 	connector, err := mqttconnector.New(ctx, mqttconnector.Config{
-		BrokerURL:                  mustCommandEnv("MQTT_COMMAND_BROKER_URL"),
-		ClientID:                   envOr("MQTT_COMMAND_CLIENT_ID", hostnameOr("iot-service-command-dispatcher")),
-		CAFile:                     mustCommandEnv("MQTT_COMMAND_CA"),
-		CertFile:                   mustCommandEnv("MQTT_COMMAND_CERT"),
-		KeyFile:                    mustCommandEnv("MQTT_COMMAND_KEY"),
-		ServerName:                 mustCommandEnv("MQTT_COMMAND_SERVER_NAME"),
-		TenantID:                   tenantID,
-		SiteID:                     siteID,
-		GatewayID:                  gatewayID,
-		DeviceExternalIDByDeviceID: externalByDevice,
-		EvidenceStore:              dispatcherRuntimeClient,
-		ReplyTimeout:               15 * time.Second,
+		BrokerURL:             integration.BrokerOrigin,
+		ClientID:              envOr("MQTT_COMMAND_CLIENT_ID", hostnameOr("iot-service-command-dispatcher")),
+		CAFile:                mustCommandEnv("MQTT_COMMAND_CA"),
+		CertFile:              mustCommandEnv("MQTT_COMMAND_CERT"),
+		KeyFile:               mustCommandEnv("MQTT_COMMAND_KEY"),
+		ServerName:            mustCommandEnv("MQTT_COMMAND_SERVER_NAME"),
+		IntegrationInstanceID: integration.ID,
+		TenantID:              integration.TenantID,
+		SiteID:                integration.SiteID,
+		GatewayID:             integration.GatewayExternalID,
+		OwnerID:               ownershipOwnerID,
+		OwnerGeneration:       ownership.Generation,
+		TransportState:        store,
+		EvidenceStore:         dispatcherRuntimeClient,
+		LateResultSink:        dispatcherRuntimeClient,
+		ReplyTimeout:          15 * time.Second,
 	})
 	if err != nil {
 		return nil, err
@@ -109,7 +122,7 @@ func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime,
 		_ = connector.Disconnect(context.Background())
 		return nil, err
 	}
-	verifierRuntimeClient, err := commandRuntimeClient(verifierIdentity, tenantID, siteID, deviceIDs)
+	verifierRuntimeClient, err := commandRuntimeClient(verifierIdentity, integration.TenantID, integration.SiteID, deviceIDs)
 	if err != nil {
 		_ = connector.Disconnect(context.Background())
 		return nil, err
@@ -121,32 +134,45 @@ func loadInProcessCommandRuntime(ctx context.Context) (*inProcessCommandRuntime,
 	}
 	verificationReader, err := commanddispatcher.NewReportedStateClient(commanddispatcher.ReportedStateClientConfig{
 		BaseURL: mustCommandEnv("S2_REPORTED_STATE_URL"), HTTPClient: verifierS2Client,
-		TenantID: tenantID, SiteID: siteID, DeviceIDs: deviceIDs,
+		TenantID: integration.TenantID, SiteID: integration.SiteID, DeviceIDs: deviceIDs,
 	})
 	if err != nil {
 		_ = connector.Disconnect(context.Background())
 		return nil, err
 	}
-	reportedStateKey := "per-command-authoritative-feedback"
 
 	dispatcherWorkerID := envOr("COMMAND_DISPATCHER_WORKER_ID", hostnameOr("iot-service-command-dispatcher"))
 	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("iot-service-command-verifier"))
 	return &inProcessCommandRuntime{
-		tenantID:         tenantID,
+		tenantID:         integration.TenantID,
+		integrationID:    integration.ID,
+		ownershipOwnerID: ownershipOwnerID,
+		connectivity:     store,
 		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, safetyVerifier, connector, dispatcherWorkerID, 30*time.Second),
 		dispatcherWorker: dispatcherWorkerID,
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 15*time.Second),
 		verifierWorker:   verifierWorkerID,
-		reportedStateKey: reportedStateKey,
+		reportedStateKey: "per-command-authoritative-feedback",
 		connector:        connector,
 	}, nil
+}
+
+func (runtime *inProcessCommandRuntime) SetReadySink(setReady func(bool)) {
+	if runtime == nil {
+		return
+	}
+	runtime.setReady = setReady
+	if runtime.setReady != nil {
+		runtime.setReady(true)
+	}
 }
 
 func (runtime *inProcessCommandRuntime) Run(ctx context.Context, logger *slog.Logger) {
 	if runtime == nil {
 		return
 	}
-	logger.Info("iot_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker, "tenant_id", runtime.tenantID, "reported_state_key", runtime.reportedStateKey)
+	logger.Info("iot_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker, "tenant_id", runtime.tenantID, "integration_instance_id", runtime.integrationID, "reported_state_key", runtime.reportedStateKey)
+	go runtime.runOwnershipRenewal(ctx, logger)
 	go runtime.runDispatcher(ctx, logger)
 	go runtime.runVerifier(ctx, logger)
 	<-ctx.Done()
@@ -157,6 +183,26 @@ func (runtime *inProcessCommandRuntime) Close(ctx context.Context) error {
 		return nil
 	}
 	return runtime.connector.Disconnect(ctx)
+}
+
+func (runtime *inProcessCommandRuntime) runOwnershipRenewal(ctx context.Context, logger *slog.Logger) {
+	ticker := time.NewTicker(commandOwnershipLease / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := runtime.connectivity.ClaimConnectorOwnership(ctx, runtime.integrationID, runtime.ownershipOwnerID, commandOwnershipLease); err != nil {
+				if runtime.setReady != nil {
+					runtime.setReady(false)
+				}
+				logger.Error("iot_command_connector_ownership_renewal_failed", "error_code", "COMMAND_CONNECTOR_OWNERSHIP_LOST")
+			} else if runtime.setReady != nil {
+				runtime.setReady(true)
+			}
+		}
+	}
 }
 
 func (runtime *inProcessCommandRuntime) runDispatcher(ctx context.Context, logger *slog.Logger) {
@@ -244,34 +290,7 @@ func commandIdentity(certEnv, keyEnv string) (workloadtls.CertificateFiles, erro
 func loadCommandRuntimeBindings() (commandRuntimeBindings, error) {
 	path := strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_BINDINGS_FILE"))
 	if path == "" {
-		tenantID, err := requiredCommandEnv("COMMAND_RUNTIME_TENANT_ID")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		siteID, err := requiredCommandEnv("COMMAND_RUNTIME_SITE_ID")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		deviceID, err := requiredCommandEnv("COMMAND_RUNTIME_DEVICE_ID")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		gatewayID, err := requiredCommandEnv("MQTT_COMMAND_GATEWAY_ID")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		externalDeviceID, err := requiredCommandEnv("MQTT_COMMAND_EXTERNAL_DEVICE_ID")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		safetyStateKey, err := requiredCommandEnv("COMMAND_DISPATCH_SAFETY_STATE_KEY")
-		if err != nil {
-			return commandRuntimeBindings{}, err
-		}
-		return commandRuntimeBindings{
-			SchemaVersion: 1, TenantID: tenantID, SiteID: siteID, GatewayID: gatewayID,
-			Devices: []commandRuntimeBinding{{DeviceID: deviceID, ExternalDeviceID: externalDeviceID, SafetyStateKey: safetyStateKey}},
-		}, nil
+		return commandRuntimeBindings{}, errors.New("COMMAND_RUNTIME_BINDINGS_FILE is required for in-process Command Runtime")
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -288,16 +307,15 @@ func loadCommandRuntimeBindings() (commandRuntimeBindings, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return commandRuntimeBindings{}, errors.New("command runtime bindings contain trailing JSON")
 	}
-	if bindings.SchemaVersion != 1 || strings.TrimSpace(bindings.TenantID) == "" || strings.TrimSpace(bindings.SiteID) == "" || strings.TrimSpace(bindings.GatewayID) == "" || len(bindings.Devices) == 0 || len(bindings.Devices) > 64 {
+	if bindings.SchemaVersion != 2 || len(bindings.Devices) == 0 || len(bindings.Devices) > 64 {
 		return commandRuntimeBindings{}, errors.New("command runtime bindings are incomplete")
 	}
 	seen := make(map[string]struct{}, len(bindings.Devices))
 	for index := range bindings.Devices {
 		binding := &bindings.Devices[index]
 		binding.DeviceID = strings.TrimSpace(binding.DeviceID)
-		binding.ExternalDeviceID = strings.TrimSpace(binding.ExternalDeviceID)
 		binding.SafetyStateKey = strings.TrimSpace(binding.SafetyStateKey)
-		if binding.DeviceID == "" || binding.ExternalDeviceID == "" || binding.SafetyStateKey == "" {
+		if binding.DeviceID == "" || binding.SafetyStateKey == "" {
 			return commandRuntimeBindings{}, errors.New("command runtime binding is incomplete")
 		}
 		if _, duplicate := seen[binding.DeviceID]; duplicate {
@@ -305,9 +323,6 @@ func loadCommandRuntimeBindings() (commandRuntimeBindings, error) {
 		}
 		seen[binding.DeviceID] = struct{}{}
 	}
-	bindings.TenantID = strings.TrimSpace(bindings.TenantID)
-	bindings.SiteID = strings.TrimSpace(bindings.SiteID)
-	bindings.GatewayID = strings.TrimSpace(bindings.GatewayID)
 	return bindings, nil
 }
 

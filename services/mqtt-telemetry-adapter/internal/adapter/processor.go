@@ -9,41 +9,35 @@ import (
 )
 
 type ProcessingResult struct {
-	MessageID    string
-	MessageType  string
-	Replay       bool
-	PointCount   int
+	MessageID     string
+	MessageType   string
+	Replay        bool
+	PointCount    int
 	EvidenceCount int
-	Accepted     int
-	Duplicate    int
-	OutOfOrder   int
-	Quarantined  int
-	Rejected     int
+	Accepted      int
+	Duplicate     int
+	OutOfOrder    int
+	Quarantined   int
+	Rejected      int
+}
+
+type BindingAuthorizer interface {
+	AuthorizeGateway(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayExternalID string) error
+	AuthorizeGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) error
 }
 
 type Processor struct {
 	integrationInstanceID string
-	gatewayScopes         map[string]TopicScope
+	bindings              BindingAuthorizer
 	runtime               RuntimeClient
 }
 
-func NewProcessor(integrationInstanceID string, gatewayScopes []GatewayScopeConfig, runtime RuntimeClient) (*Processor, error) {
+func NewProcessor(integrationInstanceID string, bindings BindingAuthorizer, runtime RuntimeClient) (*Processor, error) {
 	integrationInstanceID = strings.TrimSpace(integrationInstanceID)
-	if !uuidV7Pattern.MatchString(integrationInstanceID) || len(gatewayScopes) == 0 || runtime == nil {
+	if !uuidV7Pattern.MatchString(integrationInstanceID) || bindings == nil || runtime == nil {
 		return nil, errors.New("MQTT telemetry processor dependencies are invalid")
 	}
-	allowed := make(map[string]TopicScope, len(gatewayScopes))
-	for _, scope := range gatewayScopes {
-		gatewayID := strings.TrimSpace(scope.GatewayID)
-		if !validGatewayID(gatewayID) || !uuidV7Pattern.MatchString(strings.TrimSpace(scope.TenantID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(scope.SiteID)) {
-			return nil, errors.New("MQTT telemetry Gateway scope is invalid")
-		}
-		if _, duplicate := allowed[gatewayID]; duplicate {
-			return nil, fmt.Errorf("MQTT telemetry Gateway scope %s is duplicated", gatewayID)
-		}
-		allowed[gatewayID] = TopicScope{GatewayID: gatewayID, TenantID: strings.TrimSpace(scope.TenantID), SiteID: strings.TrimSpace(scope.SiteID)}
-	}
-	return &Processor{integrationInstanceID: integrationInstanceID, gatewayScopes: allowed, runtime: runtime}, nil
+	return &Processor{integrationInstanceID: integrationInstanceID, bindings: bindings, runtime: runtime}, nil
 }
 
 func (processor *Processor) Process(ctx context.Context, topic string, payload []byte) (ProcessingResult, error) {
@@ -51,9 +45,8 @@ func (processor *Processor) Process(ctx context.Context, topic string, payload [
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
-	allowed, ok := processor.gatewayScopes[messageTopic.GatewayID]
-	if !ok || allowed.TenantID != messageTopic.TenantID || allowed.SiteID != messageTopic.SiteID {
-		return ProcessingResult{}, permanentMessage(errors.New("MQTT Gateway scope is not authorized"))
+	if err := processor.bindings.AuthorizeGateway(ctx, processor.integrationInstanceID, messageTopic.TenantID, messageTopic.SiteID, messageTopic.GatewayID); err != nil {
+		return ProcessingResult{}, permanentMessage(errors.New("MQTT Gateway has no active IntegrationInstance binding"))
 	}
 	switch messageTopic.MessageType {
 	case MessageTypeTelemetry:
@@ -69,6 +62,13 @@ func (processor *Processor) Process(ctx context.Context, topic string, payload [
 	}
 }
 
+func (processor *Processor) authorizeChild(ctx context.Context, scope TopicScope, externalDeviceID string) error {
+	if err := processor.bindings.AuthorizeGatewayChild(ctx, processor.integrationInstanceID, scope.GatewayID, strings.TrimSpace(externalDeviceID)); err != nil {
+		return permanentMessage(errors.New("MQTT child Device is not pre-registered in an active GatewayChildBinding"))
+	}
+	return nil
+}
+
 func (processor *Processor) processTelemetry(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
 	envelope, err := DecodeTelemetryEnvelope(payload, scope)
 	if err != nil {
@@ -76,6 +76,9 @@ func (processor *Processor) processTelemetry(ctx context.Context, scope TopicSco
 	}
 	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeTelemetry, Replay: envelope.Replay}
 	for _, device := range envelope.Payload.Devices {
+		if err := processor.authorizeChild(ctx, scope, device.DeviceID); err != nil {
+			return ProcessingResult{}, err
+		}
 		for _, point := range device.Points {
 			partition := sourcePartition(envelope.GatewayID, device.DeviceID, point.Code)
 			eventID, eventErr := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
@@ -88,7 +91,7 @@ func (processor *Processor) processTelemetry(ctx context.Context, scope TopicSco
 			}
 			observation := Observation{
 				IntegrationInstanceID: processor.integrationInstanceID,
-				SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(device.DeviceID), TelemetryKey: strings.TrimSpace(point.Code),
+				SourcePath:            "PUSH", ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(device.DeviceID), TelemetryKey: strings.TrimSpace(point.Code),
 				Value: point.Value, ValueType: valueType, Unit: point.Unit, WireQuality: point.Quality, SampledAt: unixMillisRFC3339(device.DeviceTimestamp),
 				SourcePosition: SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
 			}
@@ -121,6 +124,11 @@ func (processor *Processor) processState(ctx context.Context, scope TopicScope, 
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
+	for _, device := range envelope.Payload.Devices {
+		if err := processor.authorizeChild(ctx, scope, device.DeviceID); err != nil {
+			return ProcessingResult{}, err
+		}
+	}
 	rawPayload, _ := json.Marshal(envelope.Payload)
 	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
 		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
@@ -130,8 +138,6 @@ func (processor *Processor) processState(ctx context.Context, scope TopicScope, 
 	}
 	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeState, EvidenceCount: 1}
 	for _, device := range envelope.Payload.Devices {
-		// Wire reportedOnline is evidence only. A positive report contributes
-		// SOURCE_ACTIVITY; a negative report never directly forces Cloud OFFLINE.
 		if device.Online == nil || !*device.Online {
 			continue
 		}
@@ -148,6 +154,11 @@ func (processor *Processor) processHeartbeat(ctx context.Context, scope TopicSco
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
+	for _, deviceID := range envelope.Payload.ConnectedDevices {
+		if err := processor.authorizeChild(ctx, scope, deviceID); err != nil {
+			return ProcessingResult{}, err
+		}
+	}
 	rawPayload, _ := json.Marshal(envelope.Payload)
 	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
 		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
@@ -162,8 +173,6 @@ func (processor *Processor) processHeartbeat(ctx context.Context, scope TopicSco
 		}
 		result.EvidenceCount++
 	}
-	// OfflineDevices is deliberately not mapped to EXPLICIT_DISCONNECT. The
-	// authoritative Presence Engine applies heartbeat freshness/timeout policy.
 	return result, nil
 }
 
@@ -171,6 +180,11 @@ func (processor *Processor) processEvent(ctx context.Context, scope TopicScope, 
 	envelope, err := DecodeEventEnvelope(payload, scope)
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
+	}
+	if strings.EqualFold(strings.TrimSpace(envelope.Payload.SourceType), "DEVICE") {
+		if err := processor.authorizeChild(ctx, scope, envelope.Payload.SourceID); err != nil {
+			return ProcessingResult{}, err
+		}
 	}
 	if err = processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
 		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,

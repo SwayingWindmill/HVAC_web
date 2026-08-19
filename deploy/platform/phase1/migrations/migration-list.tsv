@@ -31,6 +31,7 @@ hvac_s1|infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 hvac_s1|infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 hvac_s1|services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 hvac_s1|infra/s1-registry/postgres/init/010-s05-registry-writer.sql
+hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
 hvac_s2|infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql

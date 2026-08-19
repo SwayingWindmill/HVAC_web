@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const ConfigSchemaVersion = 1
+const ConfigSchemaVersion = 2
 
 var uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
@@ -20,8 +20,8 @@ type Config struct {
 	IntegrationInstanceID   string                 `json:"integrationInstanceId"`
 	MQTT                    MQTTConfig             `json:"mqtt"`
 	TelemetryRuntime        TelemetryRuntimeConfig `json:"telemetryRuntime"`
-	GatewayScopes           []GatewayScopeConfig   `json:"gatewayScopes"`
 	ProcessingQueueCapacity int                    `json:"processingQueueCapacity"`
+	RuntimeGatewayIDs       []string               `json:"-"`
 }
 
 type GatewayScopeConfig struct {
@@ -31,16 +31,16 @@ type GatewayScopeConfig struct {
 }
 
 type MQTTConfig struct {
-	BrokerURL             string `json:"brokerUrl"`
-	ClientID              string `json:"clientId"`
+	BrokerURL             string   `json:"-"`
+	ClientID              string   `json:"clientId"`
 	TopicFilters          []string `json:"topicFilters"`
-	CAFile                string `json:"caFile"`
-	CertFile              string `json:"certFile"`
-	KeyFile               string `json:"keyFile"`
-	ServerName            string `json:"serverName"`
-	KeepAliveSeconds      uint16 `json:"keepAliveSeconds"`
-	SessionExpirySeconds  uint32 `json:"sessionExpirySeconds"`
-	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds"`
+	CAFile                string   `json:"caFile"`
+	CertFile              string   `json:"certFile"`
+	KeyFile               string   `json:"keyFile"`
+	ServerName            string   `json:"serverName"`
+	KeepAliveSeconds      uint16   `json:"keepAliveSeconds"`
+	SessionExpirySeconds  uint32   `json:"sessionExpirySeconds"`
+	ConnectTimeoutSeconds int      `json:"connectTimeoutSeconds"`
 }
 
 type TelemetryRuntimeConfig struct {
@@ -75,17 +75,13 @@ func (config Config) Validate() error {
 	if !uuidV7Pattern.MatchString(strings.TrimSpace(config.IntegrationInstanceID)) {
 		return errors.New("integrationInstanceId must be UUIDv7")
 	}
-	brokerURL, err := url.Parse(strings.TrimSpace(config.MQTT.BrokerURL))
-	if err != nil || brokerURL.Scheme != "tls" || brokerURL.Host == "" || brokerURL.User != nil || brokerURL.RawQuery != "" || brokerURL.Fragment != "" || (brokerURL.Path != "" && brokerURL.Path != "/") {
-		return errors.New("mqtt.brokerUrl must be a tls:// origin")
-	}
 	if strings.TrimSpace(config.MQTT.ClientID) == "" || len(config.MQTT.ClientID) > 128 {
 		return errors.New("mqtt.clientId is invalid")
 	}
 	requiredTopicFilters := map[string]struct{}{
 		"energy/v1/+/+/+/telemetry": {},
-		"energy/v1/+/+/+/state": {},
-		"energy/v1/+/+/+/event": {},
+		"energy/v1/+/+/+/state":     {},
+		"energy/v1/+/+/+/event":     {},
 		"energy/v1/+/+/+/heartbeat": {},
 	}
 	if len(config.MQTT.TopicFilters) != len(requiredTopicFilters) {
@@ -124,20 +120,6 @@ func (config Config) Validate() error {
 	}
 	if config.MQTT.ConnectTimeoutSeconds < 1 || config.MQTT.ConnectTimeoutSeconds > 60 {
 		return errors.New("mqtt.connectTimeoutSeconds must be between 1 and 60")
-	}
-	if len(config.GatewayScopes) == 0 {
-		return errors.New("gatewayScopes must contain at least one Gateway scope")
-	}
-	seenGateways := make(map[string]struct{}, len(config.GatewayScopes))
-	for _, scope := range config.GatewayScopes {
-		gatewayID := strings.TrimSpace(scope.GatewayID)
-		if !validGatewayID(gatewayID) || !uuidV7Pattern.MatchString(strings.TrimSpace(scope.TenantID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(scope.SiteID)) {
-			return errors.New("gatewayScopes contains an invalid Gateway/Tenant/Site binding")
-		}
-		if _, duplicate := seenGateways[gatewayID]; duplicate {
-			return fmt.Errorf("gatewayScopes contains duplicate gatewayId %s", gatewayID)
-		}
-		seenGateways[gatewayID] = struct{}{}
 	}
 	if config.ProcessingQueueCapacity < 1 || config.ProcessingQueueCapacity > 65536 {
 		return errors.New("processingQueueCapacity must be between 1 and 65536")
