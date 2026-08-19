@@ -58,8 +58,8 @@ function psql(sql, { expectFailure = false } = {}) {
 async function waitForPostgres() {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text");
-      if (state === 'true|true|true|1') return;
+      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_evaluation_state') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text");
+      if (state === 'true|true|true|true|1') return;
     } catch {}
     await pause(250);
   }
@@ -105,8 +105,8 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'alarm_runtime' AND c.relkind = 'r'
-      AND c.relname IN ('alarm_current', 'alarm_idempotency', 'events', 'alarm_timeline')
-  `), '4|4|4', 'runtime authority table/RLS baseline');
+      AND c.relname IN ('alarm_current', 'alarm_idempotency', 'events', 'alarm_timeline', 'alarm_policy_revision', 'alarm_policy_assignment', 'alarm_evaluation_state', 'alarm_evaluation_event')
+  `), '8|8|8', 'runtime authority table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -182,6 +182,16 @@ try {
   if (!timelineMutationDenied.includes('append-only')) throw new Error(`Alarm timeline immutability trigger did not reject mutation: ${timelineMutationDenied}`);
   report.assertions.s13MigrationEvidence = true;
   report.assertions.immutableTimeline = true;
+
+  const policyMutationDenied = psql(`
+    SET ROLE s4_alarm_migrator;
+    UPDATE alarm_runtime.alarm_policy_revision SET released_by = 'tampered';
+  `, { expectFailure: true }).toLowerCase();
+  if (!policyMutationDenied.includes('immutable')) throw new Error(`Alarm policy release immutability trigger did not reject mutation: ${policyMutationDenied}`);
+  expectEqual(psql(`SELECT has_table_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_evaluation_state', 'DELETE')::text`), 'false', 'runtime evaluator state DELETE privilege');
+  expectEqual(psql(`SELECT has_table_privilege('s4_alarm_runtime', 'alarm_runtime.alarm_evaluation_event', 'UPDATE')::text`), 'false', 'runtime evaluator evidence UPDATE privilege');
+  report.assertions.s14ImmutableReleaseAndEvidence = true;
+  report.assertions.s14LeastPrivilege = true;
 
   const testEnvironment = {
     ...process.env,

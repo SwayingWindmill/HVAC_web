@@ -264,3 +264,48 @@ All files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308dde
 ### S09 consequence
 
 MQTT traffic can only resolve a pre-registered Registry Device through an active Connectivity Binding; unknown Gateway children are quarantined and no transport code can insert Registry identity. Enrollment can only consume an unexpired one-time challenge for a Device that already has an active Binding. Connector ownership carries a durable generation/lease, command replies survive process restart, and the only state from which a physical publish may occur is `PREPARED`. Local central-plant bootstrap now seeds the same Connectivity owner model using the simulator certificate fingerprint while keeping private-key material outside the database. Additional protocols remain deferred; S09 establishes the MQTT-first lifecycle and recovery boundary only.
+
+## S14 — Stateful Alarm evaluator
+
+Date: 2026-08-19
+
+Local issue: #272
+
+### Upstream files reviewed
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/rule/AlarmRule.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/rule/condition/AlarmCondition.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/rule/condition/DurationAlarmCondition.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/alarm/rule/condition/RepeatingAlarmCondition.java`
+- the numeric/no-data/complex condition and schedule classes adjacent to that condition package
+- `application/src/main/java/org/thingsboard/server/service/cf/ctx/state/alarm/AlarmRuleState.java`
+- `application/src/test/java/org/thingsboard/server/cf/AlarmRulesTest.java`
+- `rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/profile/AlarmRuleStateTest.java`
+
+The files were read directly from the official ThingsBoard repository at pinned CE `v4.3.1.1` commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S14 implementation.
+
+### Observed upstream semantics
+
+- Alarm rule conditions distinguish simple, duration and repeating behavior. Duration retains the first matching time and schedules the remaining delay; repeating rules count matching new events and reset their accumulated state when the condition becomes false.
+- Stateful Alarm rule evaluation explicitly records event count/first-event time/last-check time and supports scheduled reevaluation. Rule-expression/count changes discard state that is no longer valid for the new rule.
+- Alarm schedules are interpreted through Java time-zone-aware `ZoneId`/`ZonedDateTime` local windows, including windows that cross midnight. Upstream tests exercise changing schedules, duration/repeat state and no-data evaluation.
+- The pinned runtime schedules reevaluation with process-local scheduled futures. That is useful execution machinery, but it is not durable restart authority and does not provide the database lease/fence semantics required by the HVAC roadmap.
+
+### Implementation decision
+
+- `ADOPT`: simple/duration/repeating trigger semantics, reset of incompatible accumulated state, explicit scheduled reevaluation, and IANA time-zone/site-local schedule evaluation.
+- `ADAPT`: evaluate typed compare/range/hysteresis/no-data/stale/AND/OR predicates against owner snapshots and return the three-state `MATCHED | NOT_MATCHED | INDETERMINATE` result required by the HVAC Alarm architecture. Canonical Telemetry quality (`GOOD/PARTIAL/ESTIMATED/MANUAL/STALE/INVALID`) gates ordinary predicates; missing, stale, invalid or otherwise untrusted input cannot falsely clear an Active Incident.
+- `ADAPT`: policy changes are immutable `AlarmPolicyRevision` plus append-only assignment revisions. Duration/repeat candidates reset on a policy revision switch while an already active S13 Incident remains correlated until the new explicit clear predicate proves recovery.
+- `REPLACE`: process-local scheduled futures with durable PostgreSQL `nextEvaluationAt`, persisted snapshot/state, `FOR UPDATE SKIP LOCKED` claim, expiring lease and monotonically increasing fence. A new owner snapshot or committed state version invalidates an older timer claim.
+- `ADAPT`: S14 effects execute through the existing S13 `Publish` / Incident-bound `Clear` implementation in the same Alarm owner transaction as evaluation-state/evidence persistence, eliminating a crash window between effect and state commit.
+- `REJECT`: arbitrary scripts/dynamic untyped predicates, browser evaluation authority, Work Order completion as recovery, untrusted-quality false clear, process-local timer state as restart authority, Close/Reopen compatibility, and a second Alarm effect implementation.
+
+### S14 consequence
+
+Alarm evaluation is now an Alarm-owned durable state machine. Released policy content is SHA-256 bound to its canonical payload, policy/assignment revisions are append-only and contiguous, and rollback is a new assignment revision to a previously released policy. The owner release seam prevents one policy family from changing the fingerprint identity or one assignment stream from changing subject/policy family. Timer work is Tenant-RLS scoped and lease/fence protected, and each committed evaluation appends evidence containing the exact policy/assignment/input revision and snapshot. S13 remains the sole Alarm Incident authority; evaluator state and Incident Publish/Clear are committed together, so restart/retry cannot turn a timer replay into a duplicate business effect.
+
+### S14 verification evidence
+
+- A clean PostgreSQL 16 runtime initialized through Alarm migrations `001`–`006` plus canonical seed passed the complete Alarm Service integration suite, including duration restart, distinct-repeat counting, no-data scheduling, stale/invalid/missing false-clear blocking, DST schedule behavior, timer supersession, lease expiry/reclaim, S13 clear/recurrence and Tenant RLS.
+- The runtime owner seam released policy revision 1, appended revision 2, switched the assignment, then rolled back by appending assignment revision 3 to revision 1; each switch reset incompatible duration state instead of inheriting a prior candidate.
+- Direct database checks proved all four S14 tables use FORCE RLS; runtime may INSERT immutable releases/assignments but may not UPDATE/DELETE them, and the immutable trigger rejects mutation even under the migrator role.

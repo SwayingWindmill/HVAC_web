@@ -73,4 +73,81 @@ INSERT INTO alarm_runtime.alarm_timeline (
   '2026-07-31T09:00:00Z'
 );
 
+INSERT INTO alarm_runtime.alarm_policy_revision (
+  tenant_id, site_id, policy_id, policy_revision_id, revision, schema_version, digest, policy, released_at, released_by
+) VALUES
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-5000-7000-8000-000000000001',
+  '01910000-5000-7000-8000-000000000002',
+  1,
+  1,
+  '5915c63b4f29523c69a0038c24d66adf97a23e46b27ed3c54690df3927ea29d4',
+  '{"schemaVersion":1,"policyId":"01910000-5000-7000-8000-000000000001","policyRevisionId":"01910000-5000-7000-8000-000000000002","revision":1,"digest":"5915c63b4f29523c69a0038c24d66adf97a23e46b27ed3c54690df3927ea29d4","alarmType":"S14_DURATION_SUPPLY_TEMPERATURE","sourceType":"SITE_RULE","sourceReference":"alarm-policy:postgres-s14-duration","title":"S14 duration supply temperature","summary":"S14 durable evaluator integration fixture.","severity":"MAJOR","qualityPolicy":"VALID_ONLY","freshnessSeconds":900,"triggerMode":"DURATION","durationSeconds":5,"raise":{"kind":"COMPARE","input":"supplyTemp","operator":"GT","value":{"type":"NUMBER","number":30}},"clear":{"kind":"COMPARE","input":"supplyTemp","operator":"LTE","value":{"type":"NUMBER","number":28}}}'::jsonb,
+  '2026-08-19T11:00:00Z',
+  'test:migrator'
+),
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-5000-7000-8000-000000000011',
+  '01910000-5000-7000-8000-000000000012',
+  1,
+  1,
+  'd5c8217ac38c4ec8b1fbf2486ca73c865da889e8679254f2267f06e976b9632f',
+  '{"schemaVersion":1,"policyId":"01910000-5000-7000-8000-000000000011","policyRevisionId":"01910000-5000-7000-8000-000000000012","revision":1,"digest":"d5c8217ac38c4ec8b1fbf2486ca73c865da889e8679254f2267f06e976b9632f","alarmType":"S14_SUPERSEDE_SUPPLY_TEMPERATURE","sourceType":"SITE_RULE","sourceReference":"alarm-policy:postgres-s14-supersede","title":"S14 supersede supply temperature","summary":"S14 claimed timer supersession fixture.","severity":"MAJOR","qualityPolicy":"VALID_ONLY","freshnessSeconds":900,"triggerMode":"DURATION","durationSeconds":5,"raise":{"kind":"COMPARE","input":"supplyTemp","operator":"GT","value":{"type":"NUMBER","number":30}},"clear":{"kind":"COMPARE","input":"supplyTemp","operator":"LTE","value":{"type":"NUMBER","number":28}}}'::jsonb,
+  '2026-08-19T11:00:00Z',
+  'test:migrator'
+),
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-5000-7000-8000-000000000021',
+  '01910000-5000-7000-8000-000000000022',
+  1,
+  1,
+  '4364dfcb7a7dd35aa9a79bd80eb8a06fedaa39f9c45dca2d64835c606f59dfc8',
+  '{"schemaVersion":1,"policyId":"01910000-5000-7000-8000-000000000021","policyRevisionId":"01910000-5000-7000-8000-000000000022","revision":1,"digest":"4364dfcb7a7dd35aa9a79bd80eb8a06fedaa39f9c45dca2d64835c606f59dfc8","alarmType":"S14_LEASE_SUPPLY_TEMPERATURE","sourceType":"SITE_RULE","sourceReference":"alarm-policy:postgres-s14-lease","title":"S14 lease supply temperature","summary":"S14 lease expiry and reclaim fixture.","severity":"MAJOR","qualityPolicy":"VALID_ONLY","freshnessSeconds":900,"triggerMode":"DURATION","durationSeconds":5,"raise":{"kind":"COMPARE","input":"supplyTemp","operator":"GT","value":{"type":"NUMBER","number":30}},"clear":{"kind":"COMPARE","input":"supplyTemp","operator":"LTE","value":{"type":"NUMBER","number":28}}}'::jsonb,
+  '2026-08-19T11:00:00Z',
+  'test:migrator'
+);
+
+INSERT INTO alarm_runtime.alarm_policy_assignment (
+  tenant_id, site_id, assignment_id, assignment_revision, policy_revision_id, subject_type, subject_id, assigned_at, assigned_by
+) VALUES
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-7000-7000-8000-000000000001',
+  1,
+  '01910000-5000-7000-8000-000000000002',
+  'SITE',
+  '01910000-0001-7000-8000-000000000001',
+  '2026-08-19T11:01:00Z',
+  'test:migrator'
+),
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-7000-7000-8000-000000000002',
+  1,
+  '01910000-5000-7000-8000-000000000012',
+  'SITE',
+  '01910000-0001-7000-8000-000000000001',
+  '2026-08-19T11:02:00Z',
+  'test:migrator'
+),
+(
+  '0190f000-0000-7000-8000-000000000001',
+  '01910000-0001-7000-8000-000000000001',
+  '01910000-7000-7000-8000-000000000003',
+  1,
+  '01910000-5000-7000-8000-000000000022',
+  'SITE',
+  '01910000-0001-7000-8000-000000000001',
+  '2026-08-19T11:03:00Z',
+  'test:migrator'
+);
+
 COMMIT;

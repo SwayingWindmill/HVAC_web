@@ -16,10 +16,14 @@ const [
   serviceHTTP,
   store,
   postgres,
+  evaluator,
+  evaluatorPostgres,
+  evaluatorPolicyPostgres,
   readMigration,
   lifecycleMigration,
   orthogonalMigration,
   orthogonalRollback,
+  evaluatorMigration,
   alarmAuth,
   iamAuthorization,
   iamPostgres,
@@ -34,10 +38,14 @@ const [
   readText('services/alarm-service/pkg/alarmservice/http.go'),
   readText('services/alarm-service/pkg/alarmservice/store.go'),
   readText('services/alarm-service/pkg/alarmservice/postgres.go'),
+  readText('services/alarm-service/pkg/alarmservice/evaluator.go'),
+  readText('services/alarm-service/pkg/alarmservice/evaluator_postgres.go'),
+  readText('services/alarm-service/pkg/alarmservice/evaluator_policy_postgres.go'),
   readText('services/alarm-service/migrations/001_s4_alarm_runtime.sql'),
   readText('services/alarm-service/migrations/002_s4_alarm_lifecycle.sql'),
   readText('services/alarm-service/migrations/005_s13_alarm_orthogonal.sql'),
   readText('services/alarm-service/migrations/rollback/005_s13_alarm_orthogonal.sql'),
+  readText('services/alarm-service/migrations/006_s14_alarm_evaluator.sql'),
   readText('libs/alarmauth/authorization.go'),
   readText('services/iam-service/internal/iam/alarm_authorization.go'),
   readText('services/iam-service/internal/iam/postgres_alarm_authorization.go'),
@@ -111,7 +119,7 @@ assert(store.includes('func (store *MemoryStore) Publish') && store.includes('fu
 assert(store.includes('current.IncidentCorrelationID != recovery.IncidentCorrelationID'), 'S13 recovery must be bound to the exact Incident correlation');
 assert(postgres.includes('ORDER BY first_occurred_at DESC, alarm_id DESC'), 'Alarm Postgres ordering is not first-occurrence DESC / alarmId DESC');
 assert(postgres.includes('ON CONFLICT (tenant_id, site_id, fingerprint) WHERE condition = \'ACTIVE\' DO NOTHING'), 'S13 concurrent first-create authority is missing');
-assert(postgres.includes('func (store *PostgresStore) ClearActive') && postgres.includes('current.IncidentCorrelationID != recovery.IncidentCorrelationID'), 'S13 governed recovery persistence is not Incident-bound');
+assert(postgres.includes('func (store *PostgresStore) ClearActive') && evaluatorPostgres.includes('current.IncidentCorrelationID != recovery.IncidentCorrelationID'), 'S13 governed recovery persistence is not Incident-bound');
 assert(postgres.includes('func (store *PostgresStore) ResolveScope'), 'Alarm Postgres ownership resolver is missing');
 
 assert(readMigration.includes("current_setting('app.tenant_id'"), 'Alarm Postgres Tenant RLS is missing');
@@ -126,6 +134,16 @@ assert(orthogonalMigration.includes('alarm_timeline_immutable') && orthogonalMig
 for (const retired of ['DROP COLUMN status', 'DROP COLUMN severity', 'DROP COLUMN transitions', 'DROP COLUMN suppressed_until']) {
   assert(orthogonalMigration.includes(retired), `S13 did not remove retired runtime column: ${retired}`);
 }
+
+assert(evaluator.includes('ConditionHysteresis') && evaluator.includes('ConditionNoData') && evaluator.includes('ConditionStale') && evaluator.includes('ConditionAnd') && evaluator.includes('ConditionOr'), 'S14 typed Alarm predicate catalog is incomplete');
+assert(evaluator.includes('EvaluationIndeterminate') && evaluator.includes('QualityBlockerOutsideSchedule') && evaluator.includes('FreshnessSeconds'), 'S14 quality/schedule blocker semantics are incomplete');
+assert(evaluator.includes('AlarmPolicyDigest') && evaluator.includes('expectedDigest != policy.Digest'), 'S14 released Alarm policy digest is not content-authoritative');
+assert(evaluatorPolicyPostgres.includes('ReleaseAlarmPolicyRevision') && evaluatorPolicyPostgres.includes('AssignAlarmPolicyRevision') && evaluatorPolicyPostgres.includes('revision is not contiguous') && evaluatorPolicyPostgres.includes('cannot switch policy family'), 'S14 immutable release/assignment owner seam is incomplete');
+assert(evaluatorPostgres.includes('ClaimDueEvaluations') && evaluatorPostgres.includes('FOR UPDATE SKIP LOCKED') && evaluatorPostgres.includes('lease_fence'), 'S14 durable timer claim/lease implementation is missing');
+assert(evaluatorPostgres.includes('publishInTransaction') && evaluatorPostgres.includes('clearInTransaction') && evaluatorPostgres.includes('persistEvaluation'), 'S14 Alarm effect and evaluation state do not share the Alarm owner transaction');
+assert(evaluatorPostgres.includes('ErrEvaluationClaimLost') && evaluatorPostgres.includes('LeaseUntil'), 'S14 timer fencing/lease-expiry enforcement is missing');
+assert(evaluatorMigration.includes('alarm_policy_revision') && evaluatorMigration.includes('alarm_policy_assignment') && evaluatorMigration.includes('alarm_evaluation_state') && evaluatorMigration.includes('alarm_evaluation_event'), 'S14 durable evaluator schema is incomplete');
+assert(evaluatorMigration.includes('reject_alarm_evaluator_history_mutation') && evaluatorMigration.includes('FORCE ROW LEVEL SECURITY'), 'S14 immutable release/evidence or Tenant RLS enforcement is missing');
 
 assert(gatewayAlarm.includes('path == "/api/v1/alarms"') && gatewayAlarm.includes('"/api/v1/alarms/{alarmId}/ack"'), 'Gateway public Alarm route matching is incomplete');
 assert(gatewayAlarm.includes('resolveAlarmScope') && gatewayAlarm.includes('checkAlarmSiteVisibility'), 'Gateway BOLA-safe Alarm resolution chain is missing');
