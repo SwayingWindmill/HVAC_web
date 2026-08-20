@@ -1457,8 +1457,8 @@
     "/api/v1/sites/{siteId}/forecast/load": {
       "get": {
         "operationId": "getSiteLoadForecastV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "forecast-service",
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1466,8 +1466,26 @@
     "/api/v1/sites/{siteId}/forecast/pv": {
       "get": {
         "operationId": "getSitePVForecastV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "forecast-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/fdd/findings": {
+      "get": {
+        "operationId": "listSiteFddFindingsV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "fdd-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/recommendations/latest": {
+      "get": {
+        "operationId": "getLatestSiteOptimizationRecommendationV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1475,16 +1493,16 @@
     "/api/v1/optimization/runs": {
       "post": {
         "operationId": "createOptimizationRunV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
     "/api/v1/optimization/runs/{runId}": {
       "get": {
         "operationId": "getOptimizationRunV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "parameters": [{ "name": "runId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }

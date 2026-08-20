@@ -37,6 +37,8 @@ COPY infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql /opt/h
 COPY infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql
 COPY infra/s1-registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009c-metric-model-v2.sql
 COPY infra/s1-registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009d-data-governance-v2.sql
+COPY infra/s1-registry/postgres/init/009e-forecast-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009e-forecast-model-v2.sql
+COPY infra/s1-registry/postgres/init/009f-optimization-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009f-optimization-model-v2.sql
 COPY infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
 COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 COPY infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
@@ -45,6 +47,7 @@ COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 COPY infra/s1-registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/s1-registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
+COPY infra/s1-registry/postgres/init/013-s22-intelligence-products.sql /opt/hvac/repo/infra/s1-registry/postgres/init/013-s22-intelligence-products.sql
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql

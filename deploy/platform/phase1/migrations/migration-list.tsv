@@ -27,6 +27,8 @@ hvac_s1|infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009c-metric-model-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009d-data-governance-v2.sql
+hvac_s1|infra/s1-registry/postgres/init/009e-forecast-model-v2.sql
+hvac_s1|infra/s1-registry/postgres/init/009f-optimization-model-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
@@ -35,6 +37,7 @@ hvac_s1|services/outbound-delivery-service/migrations/001_s15_outbound_delivery.
 hvac_s1|infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 hvac_s1|infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 hvac_s1|infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
+hvac_s1|infra/s1-registry/postgres/init/013-s22-intelligence-products.sql
 hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
 hvac_s1|infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 hvac_s1|services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql

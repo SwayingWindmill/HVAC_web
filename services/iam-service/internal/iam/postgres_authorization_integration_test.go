@@ -43,7 +43,7 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !owner.Found || owner.Principal.ID != postgresOwnerAPrincipalID || owner.PolicyRevision != "registry-read:1" {
+	if !owner.Found || owner.Principal.ID != postgresOwnerAPrincipalID || owner.PolicyRevision != "registry-read:1/iam:1" {
 		t.Fatalf("unexpected Owner A facts: %#v", owner)
 	}
 	if len(owner.Memberships) != 1 || owner.Memberships[0].TenantID != postgresTenantAID {
@@ -89,7 +89,7 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wrongIssuer.Found || wrongIssuer.Principal.ID != "" || wrongIssuer.PolicyRevision != "registry-read:1" {
+	if wrongIssuer.Found || wrongIssuer.Principal.ID != "" || wrongIssuer.PolicyRevision != "registry-read:1/iam:1" {
 		t.Fatalf("issuer was not part of the immutable identity key: %#v", wrongIssuer)
 	}
 }
@@ -128,14 +128,14 @@ SET tenant_id = EXCLUDED.tenant_id,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentPolicyRevision != "registry-read:1" || !status.Revoked {
+	if status.CurrentPolicyRevision != "registry-read:1/iam:1" || !status.Revoked {
 		t.Fatalf("status = %#v", status)
 	}
 	other, err := store.LookupRegistryGrantStatus(ctx, postgresTenantBID, identifier)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other.CurrentPolicyRevision != "registry-read:1" || other.Revoked {
+	if other.CurrentPolicyRevision != "registry-read:1/iam:1" || other.Revoked {
 		t.Fatalf("cross-Tenant status = %#v", other)
 	}
 }
@@ -158,7 +158,7 @@ func TestPostgresTelemetryAuthorizationLoadsExactDeviceAndKeyFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.PolicyRevision != "telemetry-access:2" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ExplicitDenies) != 0 || len(facts.Devices) != 1 || len(facts.ScopeBindings) != 1 || len(facts.KeyBindings) != 2 {
+	if !facts.Found || facts.PolicyRevision != "telemetry-access:2/iam:1" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ExplicitDenies) != 0 || len(facts.Devices) != 1 || len(facts.ScopeBindings) != 1 || len(facts.KeyBindings) != 2 {
 		t.Fatalf("Telemetry facts = %#v", facts)
 	}
 }
@@ -178,7 +178,7 @@ func TestPostgresPrincipalTelemetryCapabilityLookupDoesNotEnumerateDevicesOrKeys
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.PolicyRevision != "telemetry-access:2" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ScopeBindings) != 1 {
+	if !facts.Found || facts.PolicyRevision != "telemetry-access:2/iam:1" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ScopeBindings) != 1 {
 		t.Fatalf("principal Telemetry capability facts = %#v", facts)
 	}
 	if len(facts.Devices) != 0 || len(facts.KeyBindings) != 0 {
@@ -203,7 +203,7 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "alarm-access:1" || len(facts.Permissions) != 2 {
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "alarm-access:1/iam:1" || len(facts.Permissions) != 2 {
 		t.Fatalf("Alarm facts = %#v", facts)
 	}
 	for _, permission := range facts.Permissions {
@@ -226,7 +226,7 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	if err := store.RecordAlarmDecision(ctx, iam.AlarmDecisionAudit{
 		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
 		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionRead, Allowed: true,
-		PolicyRevision: "alarm-access:1", ReasonCode: alarmauth.ReasonAllowExactScope,
+		PolicyRevision: "alarm-access:1/iam:1", ReasonCode: alarmauth.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-alarm-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode); err != nil {
 		t.Fatal(err)
 	}
-	if !allowed || policyRevision != "alarm-access:1" || reasonCode != string(alarmauth.ReasonAllowExactScope) {
+	if !allowed || policyRevision != "alarm-access:1/iam:1" || reasonCode != string(alarmauth.ReasonAllowExactScope) {
 		t.Fatalf("durable Alarm decision = allowed=%v policy=%q reason=%q", allowed, policyRevision, reasonCode)
 	}
 }
@@ -264,7 +264,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 11 || len(facts.Targets) != 2 {
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1/iam:1" || len(facts.Permissions) != 11 || len(facts.Targets) != 2 {
 		t.Fatalf("Work Order facts = %#v", facts)
 	}
 	expectedActions := map[workorderauth.Action]bool{
@@ -302,7 +302,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
 		SiteID: postgresOwnerASite1ID, WorkOrderID: "01910000-1000-7000-8000-000000000001",
 		Action: workorderauth.ActionRead, Allowed: true,
-		PolicyRevision: "work-order-access:1", ReasonCode: workorderauth.ReasonAllowExactScope,
+		PolicyRevision: "work-order-access:1/iam:1", ReasonCode: workorderauth.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-work-order-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code, work_order_id::text FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode, &workOrderID); err != nil {
 		t.Fatal(err)
 	}
-	if !allowed || policyRevision != "work-order-access:1" || reasonCode != string(workorderauth.ReasonAllowExactScope) || workOrderID != "01910000-1000-7000-8000-000000000001" {
+	if !allowed || policyRevision != "work-order-access:1/iam:1" || reasonCode != string(workorderauth.ReasonAllowExactScope) || workOrderID != "01910000-1000-7000-8000-000000000001" {
 		t.Fatalf("durable Work Order decision = allowed=%v policy=%q reason=%q workOrder=%q", allowed, policyRevision, reasonCode, workOrderID)
 	}
 }
@@ -339,8 +339,8 @@ func TestPostgresAuthorizationRuntimeIsRLSBoundAndRoleChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `SELECT count(*) FROM core_registry.equipment`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-		t.Fatalf("IAM runtime accessed Core Equipment data: %v", err)
+	if _, err := pool.Exec(ctx, `SELECT count(*) FROM core_registry.assets`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		t.Fatalf("IAM runtime accessed Core Asset data: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE iam.principals SET display_name = display_name`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
 		t.Fatalf("IAM runtime mutated IAM facts: %v", err)

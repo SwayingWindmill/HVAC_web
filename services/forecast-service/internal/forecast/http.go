@@ -25,7 +25,33 @@ func (handler *HTTPHandler) Routes() http.Handler {
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("POST /v1/forecast", handler.handleForecast)
+	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/load", handler.handleLatestSiteLoad)
+	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/pv", handler.handleLatestPV)
 	return mux
+}
+
+func (handler *HTTPHandler) handleLatestSiteLoad(writer http.ResponseWriter, request *http.Request) {
+	handler.handleLatestForecast(writer, request, "SITE_LOAD")
+}
+
+func (handler *HTTPHandler) handleLatestPV(writer http.ResponseWriter, request *http.Request) {
+	handler.handleLatestForecast(writer, request, "PV_GENERATION")
+}
+
+func (handler *HTTPHandler) handleLatestForecast(writer http.ResponseWriter, request *http.Request, target string) {
+	tenantID := request.Header.Get("X-Tenant-ID")
+	siteID := request.PathValue("siteId")
+	result, err := handler.service.LatestForecast(request.Context(), tenantID, siteID, target)
+	if errors.Is(err, ErrForecastNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "forecast_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "forecast_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
 }
 
 func (handler *HTTPHandler) handleForecast(writer http.ResponseWriter, request *http.Request) {
@@ -49,11 +75,15 @@ func (handler *HTTPHandler) handleForecast(writer http.ResponseWriter, request *
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusCreated)
+	quality := ""
+	if len(points) > 0 {
+		quality = points[0].Quality
+	}
 	_ = json.NewEncoder(writer).Encode(struct {
 		Quality string  `json:"quality"`
 		Count   int     `json:"count"`
 		Points  []Point `json:"points"`
-	}{Quality: "FALLBACK", Count: len(points), Points: points})
+	}{Quality: quality, Count: len(points), Points: points})
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

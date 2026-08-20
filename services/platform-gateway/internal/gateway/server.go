@@ -64,6 +64,7 @@ type Config struct {
 	Alarm         *AlarmConfig
 	WorkOrder     *WorkOrderConfig
 	Analytics     *AnalyticsConfig
+	Intelligence  *IntelligenceConfig
 	Operations    *OperationsAgentConfig
 	Observability *observability.Runtime
 }
@@ -81,6 +82,7 @@ type handler struct {
 	alarm         *alarmController
 	workOrder     *workOrderController
 	analytics     *analyticsController
+	intelligence  *intelligenceController
 	operations    *operationsAgentController
 	observability *observability.Runtime
 }
@@ -122,6 +124,7 @@ func NewHandler(config Config) http.Handler {
 		alarm:         newAlarmController(config.Alarm),
 		workOrder:     newWorkOrderController(config.WorkOrder),
 		analytics:     newAnalyticsController(config.Analytics),
+		intelligence:  newIntelligenceController(config.Intelligence),
 		operations:    newOperationsAgentController(config.Operations),
 		observability: telemetry,
 	}
@@ -182,8 +185,11 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
+	_, _, verifiedTelemetryWorkload := verifiedTelemetryWorkloadIdentity(request)
+	_, _, telemetryRoute := matchPublicTelemetryRoute(request.URL.Path)
+	allowTelemetryWorkloadTenant := verifiedTelemetryWorkload && telemetryRoute
 	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
-		if request.Header.Get(header) == "" {
+		if request.Header.Get(header) == "" || (header == "X-Tenant-ID" && allowTelemetryWorkloadTenant) {
 			continue
 		}
 		writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
@@ -220,6 +226,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
 			dispatchOperationsRoute(h, writer, request, operationsRoute)
+			return
+		}
+		if intelligenceRoute, matches := matchPublicIntelligenceRoute(request.Method, request.URL.Path); matches {
+			dispatchIntelligenceRoute(h, writer, request, intelligenceRoute)
 			return
 		}
 		if workOrderRoute, matches := matchPublicWorkOrderRoute(request.URL.Path); matches {

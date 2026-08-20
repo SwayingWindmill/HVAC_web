@@ -108,9 +108,9 @@ func loadTelemetryPolicyRevision(ctx context.Context, transaction pgx.Tx) (strin
 	var policyRevision int64
 	var authorizationRevision int64
 	if err := transaction.QueryRow(ctx, `
-SELECT policy.policy_key, policy.policy_revision, authorization.revision
+SELECT policy.policy_key, policy.policy_revision, auth_revision.revision
 FROM iam.policies policy
-JOIN iam.authorization_revisions authorization ON authorization.tenant_id = policy.tenant_id
+JOIN iam.authorization_revisions auth_revision ON auth_revision.tenant_id = policy.tenant_id
 WHERE policy.status = 'ACTIVE'
   AND policy.policy_key = 'telemetry-access'
 ORDER BY policy.policy_revision DESC

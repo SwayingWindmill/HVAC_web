@@ -33,9 +33,14 @@ services:
       - ./postgres/init/009f-optimization-model-v2.sql:/docker-entrypoint-initdb.d/210.sql:ro
       - ./postgres/init/009g-object-storage-governance-v2.sql:/docker-entrypoint-initdb.d/220.sql:ro
       - ./postgres/init/009i-backend-integration-v2.sql:/docker-entrypoint-initdb.d/230.sql:ro
+      - ./postgres/init/009j-operations-support-domains-v2.sql:/docker-entrypoint-initdb.d/235.sql:ro
+      - ./postgres/init/009k-mlops-metadata-v2.sql:/docker-entrypoint-initdb.d/238.sql:ro
       - ./postgres/init/009l-scheduler-job-v1.sql:/docker-entrypoint-initdb.d/240.sql:ro
       - ./postgres/init/009-s04-tenant-iam-admin.sql:/docker-entrypoint-initdb.d/250.sql:ro
       - ./postgres/init/010-s05-registry-writer.sql:/docker-entrypoint-initdb.d/260.sql:ro
+      - ./postgres/init/011-s08-metric-lifecycle.sql:/docker-entrypoint-initdb.d/270.sql:ro
+      - ./postgres/init/012-s19-settlement-projections.sql:/docker-entrypoint-initdb.d/280.sql:ro
+      - ./postgres/init/013-s22-intelligence-products.sql:/docker-entrypoint-initdb.d/290.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type HTTPHandler struct{ service *Service }
@@ -23,7 +24,64 @@ func (handler *HTTPHandler) Routes() http.Handler {
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("POST /v1/optimize", handler.handleOptimize)
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/runs/{runId}", handler.handleGetRecommendation)
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/recommendations/latest", handler.handleLatestRecommendation)
+	mux.HandleFunc("GET /v1/optimization/runs/{runId}", handler.handleGetRecommendationForAuthorizedSites)
 	return mux
+}
+
+func (handler *HTTPHandler) handleLatestRecommendation(writer http.ResponseWriter, request *http.Request) {
+	result, err := handler.service.LatestRecommendation(request.Context(), request.Header.Get("X-Tenant-ID"), request.PathValue("siteId"))
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleGetRecommendationForAuthorizedSites(writer http.ResponseWriter, request *http.Request) {
+	allowedSiteIDs := splitAuthorizedSiteIDs(request.Header.Get("X-Authorized-Site-IDs"))
+	result, err := handler.service.GetRecommendationForSites(request.Context(), request.Header.Get("X-Tenant-ID"), allowedSiteIDs, request.PathValue("runId"))
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func splitAuthorizedSiteIDs(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func (handler *HTTPHandler) handleGetRecommendation(writer http.ResponseWriter, request *http.Request) {
+	result, err := handler.service.GetRecommendation(request.Context(), request.Header.Get("X-Tenant-ID"), request.PathValue("siteId"), request.PathValue("runId"))
+	if errors.Is(err, ErrOptimizationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
 }
 
 func (handler *HTTPHandler) handleOptimize(writer http.ResponseWriter, request *http.Request) {
@@ -40,14 +98,14 @@ func (handler *HTTPHandler) handleOptimize(writer http.ResponseWriter, request *
 		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	plan, err := handler.service.Optimize(request.Context(), input)
+	recommendation, err := handler.service.Optimize(request.Context(), input)
 	if err != nil {
 		writeJSONError(writer, http.StatusUnprocessableEntity, "optimization_rejected")
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(writer).Encode(plan)
+	_ = json.NewEncoder(writer).Encode(recommendation)
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

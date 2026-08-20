@@ -3,33 +3,39 @@ package forecast
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"time"
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+type Observation struct {
+	ObservedAt time.Time `json:"observedAt"`
+	Value      float64   `json:"value"`
+}
+
 type Request struct {
-	TenantID            string    `json:"tenantId"`
-	SiteID              string    `json:"siteId"`
-	SubjectType         string    `json:"subjectType"`
-	SubjectID           string    `json:"subjectId"`
-	Target              string    `json:"target"`
-	ForecastJobID       string    `json:"forecastJobId"`
-	ForecastSnapshotID  string    `json:"forecastSnapshotId"`
-	DeploymentID        string    `json:"deploymentId"`
-	ModelID             string    `json:"modelId"`
-	ModelVersionID      string    `json:"modelVersionId"`
-	ModelVersion        uint64    `json:"modelVersion"`
-	FeatureSetVersionID string    `json:"featureSetVersionId"`
-	FeatureSetVersion   uint64    `json:"featureSetVersion"`
-	InputSnapshotID     string    `json:"inputSnapshotId"`
-	TopologyVersionID   string    `json:"topologyVersionId"`
-	ForecastOrigin      time.Time `json:"forecastOrigin"`
-	HorizonMinutes      int       `json:"horizonMinutes"`
-	Granularity         string    `json:"granularity"`
-	LastValue           *float64  `json:"lastValue"`
-	Unit                string    `json:"unit"`
+	TenantID            string        `json:"tenantId"`
+	SiteID              string        `json:"siteId"`
+	SubjectType         string        `json:"subjectType"`
+	SubjectID           string        `json:"subjectId"`
+	Target              string        `json:"target"`
+	ForecastJobID       string        `json:"forecastJobId"`
+	ForecastSnapshotID  string        `json:"forecastSnapshotId"`
+	DeploymentID        string        `json:"deploymentId"`
+	ModelID             string        `json:"modelId"`
+	ModelVersionID      string        `json:"modelVersionId"`
+	ModelVersion        uint64        `json:"modelVersion"`
+	FeatureSetVersionID string        `json:"featureSetVersionId"`
+	FeatureSetVersion   uint64        `json:"featureSetVersion"`
+	InputSnapshotID     string        `json:"inputSnapshotId"`
+	TopologyVersionID   string        `json:"topologyVersionId"`
+	ForecastOrigin      time.Time     `json:"forecastOrigin"`
+	HorizonMinutes      int           `json:"horizonMinutes"`
+	Granularity         string        `json:"granularity"`
+	Observations        []Observation `json:"observations"`
+	Unit                string        `json:"unit"`
 }
 
 type Point struct {
@@ -95,8 +101,21 @@ func (request Request) Validate() error {
 	if request.HorizonMinutes <= 0 || request.HorizonMinutes%minutes != 0 {
 		return errors.New("horizonMinutes must be positive and divisible by granularity")
 	}
-	if request.LastValue == nil {
-		return errors.New("LAST_VALUE baseline requires a valid lastValue; forecast is not fabricated when unavailable")
+	if len(request.Observations) == 0 {
+		return errors.New("forecast input observations are required; no-input forecasts are not fabricated")
+	}
+	previous := time.Time{}
+	for index, observation := range request.Observations {
+		if observation.ObservedAt.IsZero() || observation.ObservedAt.After(request.ForecastOrigin) {
+			return fmt.Errorf("observation %d must be timestamped at or before forecastOrigin", index)
+		}
+		if !previous.IsZero() && !observation.ObservedAt.After(previous) {
+			return fmt.Errorf("observation %d must be strictly later than the previous observation", index)
+		}
+		if math.IsNaN(observation.Value) || math.IsInf(observation.Value, 0) {
+			return fmt.Errorf("observation %d value must be finite", index)
+		}
+		previous = observation.ObservedAt
 	}
 	if request.Unit == "" {
 		return errors.New("unit is required")

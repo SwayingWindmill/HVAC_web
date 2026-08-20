@@ -5,180 +5,189 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 )
 
-type Problem struct {
-	Request     Request
-	Objective   Objective
-	Constraints ConstraintSet
-}
-
-type Objective struct{ Kind string }
-
-type ConstraintSet struct{ Resources []Resource }
-
-type ProblemBuilder interface {
-	Build(context.Context, Request, Objective, ConstraintSet) (Problem, error)
-}
-
-type ObjectiveBuilder interface {
-	Build(context.Context, Request) (Objective, error)
-}
-
-type ConstraintBuilder interface {
-	Build(context.Context, Request) (ConstraintSet, error)
-}
-
 type SolverAdapter interface {
-	Solve(context.Context, Problem) (Plan, error)
+	Recommend(context.Context, Request, time.Time) (Recommendation, error)
 }
 
-type defaultProblemBuilder struct{}
-type defaultObjectiveBuilder struct{}
-type defaultConstraintBuilder struct{}
-type safeNoDispatchSolver struct{}
+type HVACRecommendationSolver struct{}
 
-func (defaultObjectiveBuilder) Build(_ context.Context, request Request) (Objective, error) {
-	return Objective{Kind: request.Objective}, nil
+type candidateEvaluation struct {
+	supplyTempC       float64
+	projectedZoneTemp float64
+	dailyEnergyKWh    float64
+	dailyCost         float64
+	zoneMarginC       float64
 }
 
-func (defaultConstraintBuilder) Build(_ context.Context, request Request) (ConstraintSet, error) {
-	return ConstraintSet{Resources: append([]Resource(nil), request.Resources...)}, nil
-}
-
-func (defaultProblemBuilder) Build(_ context.Context, request Request, objective Objective, constraints ConstraintSet) (Problem, error) {
-	return Problem{Request: request, Objective: objective, Constraints: constraints}, nil
-}
-
-func (safeNoDispatchSolver) Solve(_ context.Context, problem Problem) (Plan, error) {
-	request := problem.Request
+func (HVACRecommendationSolver) Recommend(_ context.Context, request Request, at time.Time) (Recommendation, error) {
 	if err := request.Validate(); err != nil {
-		return Plan{}, err
+		return Recommendation{}, err
 	}
-	validFrom := request.ValidFrom.UTC()
-	validTo := validFrom.Add(24 * time.Hour)
-	planID := deterministicV7(request.OptimizationRunID, "plan:1", validFrom)
-	intervals := make([]Interval, 0, len(problem.Constraints.Resources)*96)
-	for _, resource := range problem.Constraints.Resources {
-		for ordinal := 0; ordinal < 96; ordinal++ {
-			startTime := validFrom.Add(time.Duration(ordinal*15) * time.Minute)
-			endTime := startTime.Add(15 * time.Minute)
-			margin := map[string]any{
-				"mode": "NO_DISPATCH", "availability": resource.Availability, "controlMode": resource.ControlMode,
-				"chargePowerLimitKw": resource.ChargePowerLimitKW, "dischargePowerLimitKw": resource.DischargePowerLimitKW,
-			}
-			intervals = append(intervals, Interval{
-				IntervalID: deterministicV7(planID, fmt.Sprintf("%s|%d", resource.ResourceID, ordinal), startTime),
-				ResourceID: resource.ResourceID, StartTime: startTime, EndTime: endTime,
-				TargetType: "POWER_SETPOINT", TargetValue: 0, Unit: "kW", ExpectedSOC: resource.SOC,
-				ConstraintMargin: margin, Ordinal: ordinal,
-			})
+	baseline := request.Baseline
+	constraints := request.Constraints
+	model := request.ResponseModel
+	costPerKWh := baseline.DailyCost / baseline.DailyEnergyKWh
+	steps := []float64{-constraints.MaxSupplyTempStep, 0, constraints.MaxSupplyTempStep}
+	var best *candidateEvaluation
+	for _, delta := range steps {
+		supplyTemp := baseline.SupplyTempC + delta
+		if supplyTemp < constraints.SupplyTempMinC || supplyTemp > constraints.SupplyTempMaxC {
+			continue
+		}
+		zoneTemp := baseline.ZoneTempC + model.ZoneTempDeltaPerSupplyTempC*delta
+		zoneLower := zoneTemp - model.ZoneTempUncertaintyP90C
+		zoneUpper := zoneTemp + model.ZoneTempUncertaintyP90C
+		if zoneLower < constraints.ZoneTempMinC || zoneUpper > constraints.ZoneTempMaxC {
+			continue
+		}
+		energy := math.Max(0, baseline.DailyEnergyKWh+model.DailyEnergyDeltaPerSupplyTempC*delta)
+		candidate := candidateEvaluation{
+			supplyTempC: supplyTemp, projectedZoneTemp: zoneTemp, dailyEnergyKWh: energy, dailyCost: energy * costPerKWh,
+			zoneMarginC: math.Min(zoneLower-constraints.ZoneTempMinC, constraints.ZoneTempMaxC-zoneUpper),
+		}
+		if best == nil || candidate.dailyCost < best.dailyCost {
+			copy := candidate
+			best = &copy
 		}
 	}
-	return Plan{
-		PlanID: planID, OptimizationRunID: request.OptimizationRunID, InputSnapshotID: request.InputSnapshotID,
-		InputChecksum: request.InputChecksum, PolicyVersionID: request.PolicyVersionID, TopologyVersionID: request.TopologyVersionID,
-		LoadForecastSnapshotID: request.LoadForecastSnapshotID, PVForecastSnapshotID: request.PVForecastSnapshotID,
-		TariffVersionID: request.TariffVersionID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
-		PlanVersion: 1, Quality: "FALLBACK", Status: "DRAFT", ValidFrom: validFrom, ValidTo: validTo,
-		Objective: problem.Objective.Kind, FallbackPolicy: "NO_DISPATCH",
-		Explanation: map[string]any{
-			"reason": "safe_no_dispatch_baseline", "dispatchMode": request.DispatchMode,
-			"inputSnapshotId": request.InputSnapshotID, "loadForecastSnapshotId": request.LoadForecastSnapshotID,
-			"tariffVersionId": request.TariffVersionID, "topologyVersionId": request.TopologyVersionID,
+	if best == nil {
+		return Recommendation{}, errors.New("no HVAC recommendation satisfies the frozen comfort and safety constraints")
+	}
+	recommendationID := deterministicV7(request.OptimizationRunID, "recommendation:1", request.ValidFrom.UTC())
+	riskLevel := "LOW"
+	if best.zoneMarginC <= math.Max(0.5, 2*model.ZoneTempUncertaintyP90C) {
+		riskLevel = "MEDIUM"
+	}
+	recommendation := Recommendation{
+		ID: recommendationID, TenantID: request.TenantID, SiteID: request.SiteID, InputSnapshotID: request.InputSnapshotID,
+		DeploymentRevision: request.DeploymentRevisionID,
+		Baseline: map[string]any{
+			"dailyEnergyKWh": baseline.DailyEnergyKWh, "dailyCost": baseline.DailyCost,
+			"supplyTempC": baseline.SupplyTempC, "zoneTempC": baseline.ZoneTempC,
 		},
-		Intervals: intervals,
-	}, nil
+		Objective: map[string]any{"kind": request.Objective, "horizon": request.Horizon, "horizonMinutes": request.HorizonMinutes},
+		Constraints: []map[string]any{
+			{"kind": "SUPPLY_TEMP", "minC": constraints.SupplyTempMinC, "maxC": constraints.SupplyTempMaxC, "maxStepC": constraints.MaxSupplyTempStep},
+			{"kind": "ZONE_COMFORT", "minC": constraints.ZoneTempMinC, "maxC": constraints.ZoneTempMaxC},
+			{"kind": "CURRENT_STATE_REVALIDATION", "required": true},
+		},
+		Candidate: map[string]any{
+			"supplyTempC": best.supplyTempC, "projectedZoneTempC": best.projectedZoneTemp,
+			"dailyEnergyKWh": best.dailyEnergyKWh, "dailyCost": best.dailyCost,
+		},
+		ExpectedImpact: map[string]any{
+			"energySavingKWhPerDay": baseline.DailyEnergyKWh - best.dailyEnergyKWh,
+			"costSavingPerDay":      baseline.DailyCost - best.dailyCost,
+		},
+		Uncertainty: map[string]any{
+			"energyP90KWh": model.EnergyUncertaintyP90KWh, "zoneTempP90C": model.ZoneTempUncertaintyP90C,
+		},
+		Risk: map[string]any{"level": riskLevel, "comfortMarginC": best.zoneMarginC},
+		RollbackPlan: map[string]any{
+			"restoreSupplyTempC": baseline.SupplyTempC,
+			"conditions":         []string{"zone_comfort_violation", "energy_saving_not_observed", "operator_cancelled"},
+		},
+		VerificationPlan: map[string]any{
+			"windowMinutes": 30, "requiredSignals": []string{"supply_temperature", "zone_temperature", "site_load"},
+			"successCriteria": []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
+		},
+		Approval: intelligencemodel.RecommendationDraft, CreatedAt: at.UTC(),
+	}
+	if err := recommendation.ValidateForApproval(); err != nil {
+		return Recommendation{}, err
+	}
+	return recommendation, nil
 }
 
 type Clock func() time.Time
 
 type Service struct {
-	problemBuilder    ProblemBuilder
-	objectiveBuilder  ObjectiveBuilder
-	constraintBuilder ConstraintBuilder
-	solver            SolverAdapter
-	publication       EvaluationPublicationStore
-	evaluations       EvaluationSink
-	clock             Clock
+	solver      SolverAdapter
+	publication EvaluationPublicationStore
+	evaluations EvaluationSink
+	clock       Clock
 }
 
-func NewService(problemBuilder ProblemBuilder, objectiveBuilder ObjectiveBuilder, constraintBuilder ConstraintBuilder, solver SolverAdapter, publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {
-	if problemBuilder == nil || objectiveBuilder == nil || constraintBuilder == nil || solver == nil {
-		return nil, fmt.Errorf("optimization builders and solver adapter are required")
-	}
-	if publication == nil || evaluations == nil {
-		return nil, fmt.Errorf("optimization PostgreSQL publication store and ClickHouse evaluation sink are required")
+func NewService(solver SolverAdapter, publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {
+	if solver == nil || publication == nil || evaluations == nil {
+		return nil, fmt.Errorf("optimization solver, PostgreSQL publication store and ClickHouse evaluation sink are required")
 	}
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{problemBuilder: problemBuilder, objectiveBuilder: objectiveBuilder, constraintBuilder: constraintBuilder, solver: solver, publication: publication, evaluations: evaluations, clock: clock}, nil
+	return &Service{solver: solver, publication: publication, evaluations: evaluations, clock: clock}, nil
 }
 
 func NewDefaultService(publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {
-	return NewService(defaultProblemBuilder{}, defaultObjectiveBuilder{}, defaultConstraintBuilder{}, safeNoDispatchSolver{}, publication, evaluations, clock)
+	return NewService(HVACRecommendationSolver{}, publication, evaluations, clock)
 }
 
-func (service *Service) Optimize(ctx context.Context, request Request) (Plan, error) {
+func (service *Service) Optimize(ctx context.Context, request Request) (Recommendation, error) {
 	if err := request.Validate(); err != nil {
-		return Plan{}, err
+		return Recommendation{}, err
 	}
 	startedAt := service.clock().UTC()
 	if err := service.publication.StartRun(ctx, request, startedAt); err != nil {
-		return Plan{}, fmt.Errorf("start optimization run: %w", err)
+		return Recommendation{}, fmt.Errorf("start optimization run: %w", err)
 	}
 	fail := func(code string) { _ = service.publication.FailRun(ctx, request, code, service.clock().UTC()) }
-	objective, err := service.objectiveBuilder.Build(ctx, request)
-	if err != nil {
-		fail("OBJECTIVE_BUILD_FAILED")
-		return Plan{}, fmt.Errorf("build objective: %w", err)
-	}
-	constraints, err := service.constraintBuilder.Build(ctx, request)
-	if err != nil {
-		fail("CONSTRAINT_BUILD_FAILED")
-		return Plan{}, fmt.Errorf("build constraints: %w", err)
-	}
-	problem, err := service.problemBuilder.Build(ctx, request, objective, constraints)
-	if err != nil {
-		fail("PROBLEM_BUILD_FAILED")
-		return Plan{}, fmt.Errorf("build optimization problem: %w", err)
-	}
-	plan, err := service.solver.Solve(ctx, problem)
+	recommendation, err := service.solver.Recommend(ctx, request, startedAt)
 	if err != nil {
 		fail("SOLVER_ERROR")
-		return Plan{}, fmt.Errorf("solve optimization problem: %w", err)
+		return Recommendation{}, fmt.Errorf("solve HVAC recommendation: %w", err)
+	}
+	if err = recommendation.ValidateForApproval(); err != nil {
+		fail("RECOMMENDATION_INVALID")
+		return Recommendation{}, err
 	}
 	evaluationID, err := optimizationUUIDv7(service.clock().UTC())
 	if err != nil {
 		fail("EVALUATION_ID_FAILED")
-		return Plan{}, err
+		return Recommendation{}, err
 	}
-	evaluationPayload, _ := json.Marshal(map[string]any{"planId": plan.PlanID, "explanation": plan.Explanation, "fallbackPolicy": plan.FallbackPolicy})
+	evaluationPayload, _ := json.Marshal(recommendation)
 	evaluation := Evaluation{
 		EvaluationID: evaluationID, TenantID: request.TenantID, SiteID: request.SiteID,
-		OptimizationRunID: request.OptimizationRunID, DispatchPlanID: plan.PlanID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
-		Objective: request.Objective, SolverOutcome: "FEASIBLE", Quality: plan.Quality, IntervalCount: uint32(len(plan.Intervals)),
+		OptimizationRunID: request.OptimizationRunID, RecommendationID: recommendation.ID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
+		Objective: request.Objective, SolverOutcome: "FEASIBLE", Quality: "FEASIBLE", ConstraintCount: uint32(len(recommendation.Constraints)),
 		InputSnapshotID: request.InputSnapshotID, PolicyVersionID: request.PolicyVersionID, TopologyVersionID: request.TopologyVersionID,
 		LoadForecastSnapshotID: request.LoadForecastSnapshotID, PVForecastSnapshotID: request.PVForecastSnapshotID, TariffVersionID: request.TariffVersionID,
 		EvaluationJSON: string(evaluationPayload), GeneratedAt: service.clock().UTC(),
 	}
-	if err = service.publication.BeginPublication(ctx, request, plan, evaluation, service.clock().UTC()); err != nil {
+	if err = service.publication.BeginPublication(ctx, request, recommendation, evaluation, service.clock().UTC()); err != nil {
 		fail("PUBLICATION_BEGIN_FAILED")
-		return Plan{}, fmt.Errorf("begin optimization evaluation publication: %w", err)
+		return Recommendation{}, fmt.Errorf("begin optimization evaluation publication: %w", err)
 	}
 	if err = service.evaluations.InsertEvaluation(ctx, evaluation); err != nil {
 		fail("CLICKHOUSE_WRITE_FAILED")
-		return Plan{}, fmt.Errorf("persist optimization evaluation: %w", err)
+		return Recommendation{}, fmt.Errorf("persist optimization evaluation: %w", err)
 	}
 	// ClickHouse success makes the Evaluation durable. A PostgreSQL completion
 	// failure intentionally leaves the run PERSISTING for reconciliation.
 	if err = service.publication.CompletePublication(ctx, evaluation, service.clock().UTC()); err != nil {
-		return Plan{}, fmt.Errorf("complete optimization evaluation publication: %w", err)
+		return Recommendation{}, fmt.Errorf("complete optimization evaluation publication: %w", err)
 	}
-	return plan, nil
+	return recommendation, nil
+}
+
+func (service *Service) GetRecommendation(ctx context.Context, tenantID, siteID, runID string) (PublishedRecommendation, error) {
+	return service.publication.GetRecommendation(ctx, tenantID, siteID, runID)
+}
+
+func (service *Service) GetRecommendationForSites(ctx context.Context, tenantID string, allowedSiteIDs []string, runID string) (PublishedRecommendation, error) {
+	return service.publication.GetRecommendationForSites(ctx, tenantID, allowedSiteIDs, runID)
+}
+
+func (service *Service) LatestRecommendation(ctx context.Context, tenantID, siteID string) (PublishedRecommendation, error) {
+	return service.publication.LatestRecommendation(ctx, tenantID, siteID)
 }
 
 func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, limit int) (int, error) {

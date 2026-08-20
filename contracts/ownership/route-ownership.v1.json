@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 26,
+  "registryRevision": 27,
   "routes": [
     {
       "method": "GET",
@@ -1061,6 +1061,78 @@
         "work-order",
         "key"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/forecast/load",
+      "owner": "forecast-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/forecast/pv",
+      "owner": "forecast-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/fdd/findings",
+      "owner": "fdd-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/optimization/recommendations/latest",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/optimization/runs",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/optimization/runs/{runId}",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
     }
   ]
 }
