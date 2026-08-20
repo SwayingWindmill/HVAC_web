@@ -514,3 +514,48 @@ The files above were read directly from the pinned official repositories before 
 ### S12 consequence
 
 `connectivity` now owns durable EdgeNode/enrollment/identity binding/handshake, immutable signed EdgeRelease and Snapshot facts, Desired/Observed state, sync/cursor/quarantine state and signed OTA campaign facts. The Edge-side `libs/edgefleet` Replica keeps staging separate from active state, resumes interrupted snapshots from disk, enforces one-writer owner domains, and retains `ACTIVE/STAGED/PREVIOUS` rollback evidence. Signed release/OTA verification occurs locally against trusted public keys; private signing keys and recoverable credentials never enter business persistence.
+
+## S16 — Notification minimum product loop
+
+Date: 2026-08-19
+
+Local issue: #277
+
+### Upstream files reviewed
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/notification/rule/trigger/AlarmTrigger.java`
+- `application/src/main/java/org/thingsboard/server/service/notification/rule/trigger/AlarmTriggerProcessor.java`
+- `common/data/src/main/java/org/thingsboard/server/common/data/notification/rule/EscalatedNotificationRuleRecipientsConfig.java`
+- `dao/src/main/java/org/thingsboard/server/dao/notification/DefaultNotifications.java`
+- `application/src/main/java/org/thingsboard/server/service/notification/rule/DefaultNotificationRuleProcessor.java`
+- `application/src/main/java/org/thingsboard/server/service/ws/notification/DefaultNotificationCommandsHandler.java`
+
+All files were read directly from the official ThingsBoard repository at pinned CE `v4.3.1.1` commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S16 implementation.
+
+### Observed upstream semantics
+
+- Alarm notification rules distinguish `CREATED`, `SEVERITY_CHANGED`, `ACKNOWLEDGED` and `CLEARED` trigger types instead of treating every Alarm occurrence as a notification event.
+- Escalated recipient configuration is an ordered delay table. The rule processor freezes the target/template choice into a scheduled request and executes later stages after the configured delay.
+- A clear-triggered rule may remove still-unsent scheduled notification requests. This correctly stops future escalation, but deletion does not preserve the durable cancellation evidence required by the HVAC architecture.
+- In-App notification read state is stored and mutated independently from the source Alarm state. Marking a notification read is not an Alarm acknowledgement.
+- The upstream Notification processor owns delivery-method execution and related retry behavior. That responsibility conflicts with the already established HVAC S15 outbound-delivery owner.
+
+### Implementation decision
+
+- `ADOPT`: explicit Alarm lifecycle trigger types, ordered delayed escalation, frozen notification content/recipient resolution before delayed execution, and Notification-local unread/read state.
+- `ADAPT`: Alarm writes an immutable, version-bound Notification outbox row in the same Alarm owner transaction for CREATED, real severity change, first ACK and Clear. A lease/fence relay transfers that owner event into Notification without Notification reading Alarm tables.
+- `ADAPT`: scheduled future stages are changed to durable `CANCELLED` intents rather than deleted rows. ACK/Clear can cancel `SCHEDULED` or already `CLAIMED` future stages; the old worker loses its fence, making the race explainable from database state.
+- `ADAPT`: `AudienceRevision`, `TemplateRevision` and `NotificationPolicyRevision` are SHA-256-bound immutable releases. Each source-event/assignment-revision/stage has one durable Notification Intent containing the frozen recipient and rendered template snapshot. A database trigger makes those snapshot fields immutable after insert, and scheduler/runtime roles receive column-level UPDATE rights only for lifecycle/lease fields.
+- `ADAPT`: ordinary user preference can suppress advisory stages only. `mandatorySafety=true` bypasses the ordinary preference table, so a safety notification cannot be opted out by the recipient.
+- `REPLACE`: external EMAIL/REST execution and provider retry are delegated to the S15 outbound-delivery owner. Notification commits an `EXTERNAL_SUBMITTED` handoff before invoking S15 and uses the Notification Intent ID as the S15 idempotency key; restart recovery reuses that same business identity. S15 `OUTCOME_UNKNOWN` remains `OUTCOME_UNKNOWN` at the Notification business layer.
+- `REJECT`: direct provider SDK/network sends from Notification, Notification reads of `alarm_runtime`, deleting cancelled stage history, browser-selected principal IDs, Notification read implicitly ACKing Alarm, and a second provider retry/dead-letter implementation.
+
+### S16 consequence
+
+Notification is now an independently owned durable business domain in `notification_runtime`. The public product surface is intentionally minimal: the authenticated principal can list their own Inbox and mark one item read through Gateway Session + Origin/CSRF + signed exact principal/item scope. Policy/Audience/Template management remains an internal owner seam in S16 rather than an unreviewed public administration API. Alarm remains the only Alarm condition/ACK authority, and S15 remains the only external delivery attempt/receipt authority.
+
+### S16 verification evidence
+
+- A clean PostgreSQL 16 `notification_runtime` initialized from the S16 migration passed replay, frozen-recipient/template, delayed-stage cancellation, mandatory-safety preference, cross-Tenant scheduler and external handoff recovery tests. All nine Notification tables use FORCE RLS; the scheduler can update only lifecycle/lease columns on `notification_intent` and cannot read Inbox rows.
+- A separate PostgreSQL 16 Alarm database initialized through migrations `001`–`007` proved exactly four business source events for create -> unchanged occurrence -> severity change -> ACK -> clear: `CREATED`, `SEVERITY_CHANGED`, `ACKNOWLEDGED`, `CLEARED`. The outbox relay reclaimed expired work with a higher fence and rejected stale completion.
+- Direct mutation of released Notification policy or the frozen Notification Intent recipient/template/body snapshot is rejected by database triggers. Notification source code contains no `alarm_runtime` access; Alarm-to-Notification transfer is through the dedicated outbox relay seam, and external disposition is read through the S15 owner store seam.

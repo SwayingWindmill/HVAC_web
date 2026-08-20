@@ -60,6 +60,7 @@
         "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
         "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql",
         "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
+        "services/notification-service/migrations/001_s16_notification.sql",
         "infra/s1-registry/postgres/init/010-s05-registry-writer.sql",
         "infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/s1-registry/postgres/init/012-s19-settlement-projections.sql",
@@ -105,7 +106,8 @@
         "services/alarm-service/migrations/003_s4_tenant_scope.sql",
         "services/alarm-service/migrations/004_s4_event_provenance.sql",
         "services/alarm-service/migrations/005_s13_alarm_orthogonal.sql",
-        "services/alarm-service/migrations/006_s14_alarm_evaluator.sql"
+        "services/alarm-service/migrations/006_s14_alarm_evaluator.sql",
+        "services/alarm-service/migrations/007_s16_notification_outbox.sql"
       ]
     },
     {
@@ -160,6 +162,7 @@
     "s4_alarm_service",
     "s5_work_order_service",
     "s5_work_order_mutation_service",
-    "outbound_delivery_runtime"
+    "outbound_delivery_runtime",
+    "s16_notification_service"
   ]
 }

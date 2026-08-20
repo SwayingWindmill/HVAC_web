@@ -248,6 +248,15 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
 		return MutationResult{}, err
 	}
+	if mutation.Operation == alarmmodel.OperationAcknowledge && updated.Version != current.Version {
+		occurredAt, parseErr := time.Parse(time.RFC3339Nano, mutation.OccurredAt)
+		if parseErr != nil {
+			return MutationResult{}, alarmmodel.ErrInvalidOperation
+		}
+		if err := enqueueNotificationEvent(ctx, tx, store, updated, NotificationAcknowledged, occurredAt); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	responseJSON, err = json.Marshal(updated)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("encode Alarm mutation response: %w", err)

@@ -286,7 +286,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 72, `production migration allowlist must contain exactly 72 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.length === 74, `production migration allowlist must contain exactly 74 migrations, got ${manifestEntries.length}`);
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
@@ -312,7 +312,7 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 72-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(phase1Readme.includes('exact 74-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {

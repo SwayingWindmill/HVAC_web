@@ -34,6 +34,7 @@ hvac_s1|infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s1|infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 hvac_s1|infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 hvac_s1|services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
+hvac_s1|services/notification-service/migrations/001_s16_notification.sql
 hvac_s1|infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 hvac_s1|infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 hvac_s1|infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
@@ -65,6 +66,7 @@ hvac_s4|services/alarm-service/migrations/003_s4_tenant_scope.sql
 hvac_s4|services/alarm-service/migrations/004_s4_event_provenance.sql
 hvac_s4|services/alarm-service/migrations/005_s13_alarm_orthogonal.sql
 hvac_s4|services/alarm-service/migrations/006_s14_alarm_evaluator.sql
+hvac_s4|services/alarm-service/migrations/007_s16_notification_outbox.sql
 hvac_s5|services/work-order-service/migrations/001_s5_work_order_runtime.sql
 hvac_s5|services/work-order-service/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|services/work-order-service/migrations/003_s5_work_order_lifecycle.sql

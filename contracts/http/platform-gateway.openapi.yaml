@@ -1355,6 +1355,53 @@
         "responses": { "201": { "description": "Retirement saga entry.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/RetirementResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/notifications/inbox": {
+      "get": {
+        "operationId": "listNotificationInbox",
+        "summary": "List the authenticated principal's durable Notification Inbox",
+        "x-owner": "notification-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated principal Inbox items only.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationInboxResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/notifications/inbox/{notificationId}/read": {
+      "post": {
+        "operationId": "markNotificationRead",
+        "summary": "Mark one Inbox item as read without changing the source Alarm",
+        "x-owner": "notification-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          { "name": "notificationId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated Notification-local read state.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationInboxItemResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/telemetry/latest": {
       "post": {
         "operationId": "readTelemetryLatestV212",
@@ -2365,6 +2412,45 @@
         "minLength": 16,
         "maxLength": 4096,
         "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+      },
+      "NotificationInboxItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["inboxItemId", "intentId", "tenantId", "siteId", "principalId", "alarmId", "incidentCorrelationId", "sourceAction", "severity", "subject", "body", "status", "createdAt"],
+        "properties": {
+          "inboxItemId": { "$ref": "#/components/schemas/UUIDv7" },
+          "intentId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "principalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+          "incidentCorrelationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceAction": { "type": "string", "enum": ["CREATED", "SEVERITY_CHANGED", "ACKNOWLEDGED", "CLEARED"] },
+          "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "subject": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "body": { "type": "string", "minLength": 1, "maxLength": 16384 },
+          "status": { "type": "string", "enum": ["UNREAD", "READ", "ACKED"] },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "readAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }
+        }
+      },
+      "NotificationInboxResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/NotificationInboxItem" } },
+          "meta": { "type": "object", "additionalProperties": false, "required": ["requestId", "count"], "properties": { "requestId": { "type": "string" }, "count": { "type": "integer", "minimum": 0 } } }
+        }
+      },
+      "NotificationInboxItemResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/NotificationInboxItem" },
+          "meta": { "type": "object", "additionalProperties": false, "required": ["requestId"], "properties": { "requestId": { "type": "string" } } }
+        }
       },
       "Site": {
         "type": "object",

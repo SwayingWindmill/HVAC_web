@@ -44,6 +44,7 @@ COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/r
 COPY infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 COPY infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
+COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac/repo/services/notification-service/migrations/001_s16_notification.sql
 COPY infra/s1-registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/s1-registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
@@ -77,6 +78,7 @@ COPY services/alarm-service/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/se
 COPY services/alarm-service/migrations/004_s4_event_provenance.sql /opt/hvac/repo/services/alarm-service/migrations/004_s4_event_provenance.sql
 COPY services/alarm-service/migrations/005_s13_alarm_orthogonal.sql /opt/hvac/repo/services/alarm-service/migrations/005_s13_alarm_orthogonal.sql
 COPY services/alarm-service/migrations/006_s14_alarm_evaluator.sql /opt/hvac/repo/services/alarm-service/migrations/006_s14_alarm_evaluator.sql
+COPY services/alarm-service/migrations/007_s16_notification_outbox.sql /opt/hvac/repo/services/alarm-service/migrations/007_s16_notification_outbox.sql
 COPY services/work-order-service/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/services/work-order-service/migrations/001_s5_work_order_runtime.sql
 COPY services/work-order-service/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/services/work-order-service/migrations/002_s5_work_order_create_assignment.sql
 COPY services/work-order-service/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/services/work-order-service/migrations/003_s5_work_order_lifecycle.sql

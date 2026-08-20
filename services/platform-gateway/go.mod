@@ -22,6 +22,7 @@ require (
 	github.com/quanlaihe/hvac-web/services/audit-ledger-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/command-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/iam-service v0.0.0
+	github.com/quanlaihe/hvac-web/services/notification-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/platform-core-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/rule-runtime-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/telemetry-query-service v0.0.0
@@ -40,6 +41,7 @@ require (
 	github.com/klauspost/compress v1.15.9 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/quanlaihe/hvac-web/libs/operationsauditevent v0.0.0 // indirect
+	github.com/quanlaihe/hvac-web/services/outbound-delivery-service v0.0.0 // indirect
 	github.com/segmentio/kafka-go v0.4.51 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
@@ -94,6 +96,10 @@ replace github.com/quanlaihe/hvac-web/services/audit-ledger-service => ../audit-
 replace github.com/quanlaihe/hvac-web/services/command-service => ../command-service
 
 replace github.com/quanlaihe/hvac-web/services/iam-service => ../iam-service
+
+replace github.com/quanlaihe/hvac-web/services/notification-service => ../notification-service
+
+replace github.com/quanlaihe/hvac-web/services/outbound-delivery-service => ../outbound-delivery-service
 
 replace github.com/quanlaihe/hvac-web/services/platform-core-service => ../platform-core-service
 

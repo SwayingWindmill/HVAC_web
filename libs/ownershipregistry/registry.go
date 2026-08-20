@@ -23,6 +23,7 @@ const (
 	OwnerFDD              = "fdd-service"
 	OwnerOptimization     = "optimization-service"
 	OwnerAlarm            = "alarm-service"
+	OwnerNotification     = "notification-service"
 	OwnerWorkOrder        = "work-order-service"
 	OwnerPresentation     = "presentation-service"
 	OwnerRuleRuntime      = "rule-runtime-service"
@@ -169,17 +170,18 @@ func validateEntry(entry RouteEntry) error {
 	}
 
 	allowedScopes := map[string]bool{
-		"tenant":     true,
-		"principal":  true,
-		"site":       true,
-		"space":      true,
-		"asset":      true,
-		"device":     true,
-		"point":      true,
-		"command":    true,
-		"key":        true,
-		"alarm":      true,
-		"work-order": true,
+		"tenant":       true,
+		"principal":    true,
+		"site":         true,
+		"space":        true,
+		"asset":        true,
+		"device":       true,
+		"point":        true,
+		"command":      true,
+		"key":          true,
+		"alarm":        true,
+		"notification": true,
+		"work-order":   true,
 	}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
@@ -193,7 +195,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
+	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
 		return true
 	default:
 		return false

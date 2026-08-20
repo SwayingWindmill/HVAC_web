@@ -95,6 +95,25 @@ VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 	return err
 }
 
+func (store *PostgresStore) GetIntent(ctx context.Context, tenantID, intentID string) (DeliveryIntent, error) {
+	if store == nil || store.pool == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(intentID) == "" {
+		return DeliveryIntent{}, errors.New("delivery intent lookup is invalid")
+	}
+	tx, err := store.beginTenant(ctx, tenantID)
+	if err != nil {
+		return DeliveryIntent{}, err
+	}
+	defer tx.Rollback(ctx)
+	intent, err := loadIntentByID(ctx, tx, tenantID, intentID)
+	if err != nil {
+		return DeliveryIntent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DeliveryIntent{}, err
+	}
+	return intent, nil
+}
+
 func (store *PostgresStore) SubmitIntent(ctx context.Context, request SubmitIntentRequest) (DeliveryIntent, error) {
 	if err := request.Validate(); err != nil {
 		return DeliveryIntent{}, err

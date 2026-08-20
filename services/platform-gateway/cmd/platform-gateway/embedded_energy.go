@@ -88,6 +88,14 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 	services.telemetry = append(services.telemetry, alarmTelemetry)
 	services.closeFuncs = append(services.closeFuncs, alarmClose)
 
+	notificationServer, notificationTelemetry, notificationClose, err := newEmbeddedNotificationServer(ctx, logger)
+	if err != nil {
+		return fail(fmt.Errorf("configure embedded Notification: %w", err))
+	}
+	services.servers = append(services.servers, notificationServer)
+	services.telemetry = append(services.telemetry, notificationTelemetry)
+	services.closeFuncs = append(services.closeFuncs, notificationClose)
+
 	workOrderServer, workOrderClose, err := newEmbeddedWorkOrderServer(ctx, logger)
 	if err != nil {
 		return fail(fmt.Errorf("configure embedded Work Order: %w", err))
