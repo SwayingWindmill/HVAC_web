@@ -22,6 +22,12 @@ const defaultLatestCacheKeyPrefix = "hvac:v2:latest:device"
 var redisLatestCAS = redis.NewScript(`
 local current = redis.call('HGET', KEYS[1], 'revision')
 local incoming = ARGV[1]
+local indexRevision = redis.call('HGET', KEYS[2], 'revision')
+if not indexRevision
+  or string.len(indexRevision) < string.len(incoming)
+  or (string.len(indexRevision) == string.len(incoming) and indexRevision < incoming) then
+  redis.call('HSET', KEYS[2], 'revision', incoming, 'site_id', ARGV[3])
+end
 if current then
   if string.len(current) > string.len(incoming) then
     return 0
@@ -43,6 +49,7 @@ return 1
 type LatestCache interface {
 	PutIfNewer(context.Context, telemetryapi.DeviceObservationSnapshot) (bool, error)
 	Get(context.Context, string, string, string) (telemetryapi.DeviceObservationSnapshot, error)
+	GetForDevice(context.Context, string, string) (telemetryapi.DeviceObservationSnapshot, error)
 	Close() error
 }
 
@@ -96,7 +103,10 @@ func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetr
 	if err != nil {
 		return false, fmt.Errorf("encode telemetry latest snapshot: %w", err)
 	}
-	result, err := redisLatestCAS.Run(ctx, cache.client, []string{cache.key(snapshot.TenantId, snapshot.SiteId, snapshot.DeviceId)},
+	result, err := redisLatestCAS.Run(ctx, cache.client, []string{
+		cache.key(snapshot.TenantId, snapshot.SiteId, snapshot.DeviceId),
+		cache.deviceSiteKey(snapshot.TenantId, snapshot.DeviceId),
+	},
 		fmt.Sprintf("%d", snapshot.BusinessRevision),
 		string(snapshot.TenantId), string(snapshot.SiteId), string(snapshot.DeviceId),
 		string(snapshot.EvaluatedAt), string(encoded),
@@ -105,6 +115,20 @@ func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetr
 		return false, fmt.Errorf("materialize telemetry latest snapshot: %w", err)
 	}
 	return result == 1, nil
+}
+
+func (cache *RedisLatestCache) GetForDevice(ctx context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
+	if cache == nil || cache.client == nil {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+	}
+	siteID, err := cache.client.HGet(ctx, cache.deviceSiteKey(telemetryapi.UUIDv7(tenantID), telemetryapi.UUIDv7(deviceID)), "site_id").Result()
+	if errors.Is(err, redis.Nil) {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheMiss
+	}
+	if err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, fmt.Errorf("read telemetry latest device site index: %w", err)
+	}
+	return cache.Get(ctx, tenantID, siteID, deviceID)
 }
 
 func (cache *RedisLatestCache) Get(ctx context.Context, tenantID, siteID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
@@ -133,6 +157,10 @@ func (cache *RedisLatestCache) Get(ctx context.Context, tenantID, siteID, device
 
 func (cache *RedisLatestCache) key(tenantID, siteID, deviceID telemetryapi.UUIDv7) string {
 	return fmt.Sprintf("%s:%s:%s:%s", cache.keyPrefix, tenantID, siteID, deviceID)
+}
+
+func (cache *RedisLatestCache) deviceSiteKey(tenantID, deviceID telemetryapi.UUIDv7) string {
+	return fmt.Sprintf("%s:index:%s:%s", cache.keyPrefix, tenantID, deviceID)
 }
 
 func validateLatestCacheSnapshot(snapshot telemetryapi.DeviceObservationSnapshot) error {

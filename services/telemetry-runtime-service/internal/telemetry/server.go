@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -35,6 +36,7 @@ var (
 
 type ServerConfig struct {
 	Store                          SnapshotStore
+	LatestCache                    LatestCache
 	Authorizer                     GrantAuthorizer
 	AllowedGatewaySPIFFE           string
 	RuntimeAudience                string
@@ -58,6 +60,7 @@ type ServerConfig struct {
 
 type handler struct {
 	store                          SnapshotStore
+	latestCache                    LatestCache
 	authorizer                     GrantAuthorizer
 	allowedGatewaySPIFFE           string
 	runtimeAudience                string
@@ -94,7 +97,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		}
 	}
 	return &handler{
-		store: config.Store, authorizer: config.Authorizer,
+		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
@@ -208,11 +211,12 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "The telemetry selection is invalid.", false)
 		return
 	}
-	if _, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target}); !ok {
+	access, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target})
+	if !ok {
 		return
 	}
-	commit, err := h.store.EvaluateAndRead(request.Context(), target, h.now().UTC())
-	if errors.Is(err, ErrDeviceNotFound) {
+	snapshot, err := h.readLatestSnapshot(request.Context(), access, target)
+	if errors.Is(err, ErrLatestCacheMiss) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
 		return
 	}
@@ -220,8 +224,8 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return
 	}
-	h.metrics.observeSnapshot(commit.Snapshot)
-	writeJSON(writer, http.StatusOK, commit.Snapshot)
+	h.metrics.observeSnapshot(snapshot)
+	writeJSON(writer, http.StatusOK, snapshot)
 }
 
 func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request) {
@@ -264,14 +268,14 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "The telemetry batch request is invalid.", false)
 		return
 	}
-	if _, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionBatchRead, targets); !ok {
+	access, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionBatchRead, targets)
+	if !ok {
 		return
 	}
-	evaluatedAt := h.now().UTC()
 	response := telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]telemetryapi.BatchObservationResult, 0, len(input.Requests))}
 	for index, item := range input.Requests {
-		commit, err := h.store.EvaluateAndRead(request.Context(), targets[index], evaluatedAt)
-		if errors.Is(err, ErrDeviceNotFound) {
+		snapshot, err := h.readLatestSnapshot(request.Context(), access, targets[index])
+		if errors.Is(err, ErrLatestCacheMiss) {
 			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
 				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
 				Problem: problemDetails(request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false),
@@ -282,12 +286,48 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 			return
 		}
-		h.metrics.observeSnapshot(commit.Snapshot)
+		h.metrics.observeSnapshot(snapshot)
 		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
-			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: commit.Snapshot,
+			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
 		}})
 	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, target telemetryauth.Target) (telemetryapi.DeviceObservationSnapshot, error) {
+	if h.latestCache == nil {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+	}
+	snapshot, err := h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
+	if err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, err
+	}
+	if len(target.Keys) == 0 {
+		snapshot.Values = []telemetryapi.TelemetryKeyState{}
+		snapshot.TelemetryReadiness = telemetryapi.TelemetryReadinessNotApplicable
+		return snapshot, nil
+	}
+	selected := make(map[string]telemetryapi.TelemetryKeyState, len(snapshot.Values))
+	for _, state := range snapshot.Values {
+		switch {
+		case state.Present != nil:
+			selected[string(state.Present.Key)] = state
+		case state.Missing != nil:
+			selected[string(state.Missing.Key)] = state
+		default:
+			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+		}
+	}
+	values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
+	for _, key := range target.Keys {
+		state, ok := selected[key]
+		if !ok {
+			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+		}
+		values = append(values, state)
+	}
+	snapshot.Values = values
+	return snapshot, nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {

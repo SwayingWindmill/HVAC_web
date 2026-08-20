@@ -26,6 +26,16 @@ func TestRedisLatestCacheNeverRegressesBusinessRevision(t *testing.T) {
 	if err != nil || !applied {
 		t.Fatalf("revision 2 applied=%t err=%v", applied, err)
 	}
+	if err := cache.client.Del(t.Context(), cache.deviceSiteKey(revision2.TenantId, revision2.DeviceId)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := cache.PutIfNewer(t.Context(), revision2)
+	if err != nil || repaired {
+		t.Fatalf("equal revision index repair appliedSnapshot=%t err=%v", repaired, err)
+	}
+	if _, err := cache.GetForDevice(t.Context(), string(revision2.TenantId), string(revision2.DeviceId)); err != nil {
+		t.Fatalf("equal revision rebuild did not repair device/site index: %v", err)
+	}
 
 	older := realtimeTestSnapshot(baseTime.Add(-time.Minute), 1)
 	older.Values[0].Present.Value = []byte(`999`)
@@ -47,7 +57,7 @@ func TestRedisLatestCacheNeverRegressesBusinessRevision(t *testing.T) {
 		t.Fatal("equal revision unexpectedly replaced Redis Latest")
 	}
 
-	cached, err := cache.Get(t.Context(), string(revision2.TenantId), string(revision2.SiteId), string(revision2.DeviceId))
+	cached, err := cache.GetForDevice(t.Context(), string(revision2.TenantId), string(revision2.DeviceId))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +71,7 @@ func TestRedisLatestCacheNeverRegressesBusinessRevision(t *testing.T) {
 	if err != nil || !applied {
 		t.Fatalf("revision 3 applied=%t err=%v", applied, err)
 	}
-	cached, err = cache.Get(t.Context(), string(revision3.TenantId), string(revision3.SiteId), string(revision3.DeviceId))
+	cached, err = cache.GetForDevice(t.Context(), string(revision3.TenantId), string(revision3.DeviceId))
 	if err != nil {
 		t.Fatal(err)
 	}

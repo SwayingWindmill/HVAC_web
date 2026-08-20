@@ -577,3 +577,22 @@ S24 introduces no new upstream behavior to copy. It is a retirement slice whose 
 ### S24 consequence
 
 Current route ownership is single-owner/native, the four Telemetry current-state routes are fully cut over to `telemetry-runtime-service`, and Phase 1 no longer includes a simulator service. Test IdP and simulator sources remain available for test/acceptance use, while Shadow rollout artifacts live under `deploy/acceptance`. Rollback is release/database recovery evidence only; no retired service is a rollback mechanism.
+
+## S25 — Release reconciliation and final Real-mode cutover
+
+Date: 2026-08-20
+
+Local issue: #299
+
+S25 adds no new generic upstream platform behavior. Its source-first authority is the already reviewed and implemented Registry, Telemetry, Connectivity, Command, Edge, Alarm, Notification and Dashboard owner slices plus their pinned ThingsBoard/OpenEMS decisions. The release step therefore locks exact repository facts instead of introducing a second release-control abstraction.
+
+### Implementation decision
+
+- `ADOPT`: an exact product release manifest that binds current route/data ownership revisions, generated HTTP/MQTT contracts, production migration manifest, LimitPolicy and retirement evidence by digest.
+- `ADAPT`: durable recovery to the actual HVAC authority split: PostgreSQL is restored from backup, Redis Latest is rebuilt from PostgreSQL business-state snapshots/owner events, and Edge rolls back only to a previous signed Edge release.
+- `REPLACE`: the remaining Telemetry current-snapshot PostgreSQL read path with the already implemented Redis Latest projection. Redis keeps business-revision CAS and now atomically records the Tenant+Device -> Site index needed for authorized reads.
+- `REJECT`: Redis snapshots as business authority, PostgreSQL fallback on Redis miss/outage, mutable release profiles, runtime Git discovery, Legacy/Shadow/Test/Simulator fallback, and revival of historical omnibus capacity/canary gates.
+
+### S25 consequence
+
+Real-mode current Telemetry reads are now Redis-Latest-only after IAM authorization; presence-only reads expose no telemetry values, requested-key reads return only authorized keys, Redis miss preserves the existing typed not-found contract, and Redis unavailability fails closed rather than falling back to PostgreSQL. The final release manifest is exact and machine-checked, while PostgreSQL restore, Registry restore/replay, Redis rebuild/CAS and signed Edge rollback each have targeted evidence.

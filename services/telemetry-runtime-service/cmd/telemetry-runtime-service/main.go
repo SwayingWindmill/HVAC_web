@@ -139,7 +139,7 @@ func main() {
 	server := &http.Server{
 		Addr: envOr("TELEMETRY_SERVICE_ADDR", "127.0.0.1:18446"),
 		Handler: telemetry.NewHandler(telemetry.ServerConfig{
-			Store: store, Authorizer: authorizer,
+			Store: store, LatestCache: latestCache, Authorizer: authorizer,
 			AllowedGatewaySPIFFE: envOr("TELEMETRY_ALLOWED_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			RuntimeAudience:      envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 			ObservationAcceptor:  store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,

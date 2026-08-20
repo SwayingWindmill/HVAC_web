@@ -2,9 +2,31 @@
   "schemaVersion": 1,
   "product": "hvac-web",
   "productVersion": "0.1.0",
+  "releaseRevision": 1,
   "targetDomainModel": "target-domain-model/v1",
+  "authorityLock": {
+    "routeOwnership": {
+      "path": "contracts/ownership/route-ownership.v1.json",
+      "registryRevision": 29,
+      "sha256": "7f0d279a19e1a7789988e7143bd2a4c60d157ee72f776bc2e738c9fb14cb4266"
+    },
+    "dataOwnership": {
+      "path": "contracts/ownership/data-ownership.v1.json",
+      "registryRevision": 23,
+      "sha256": "4001240249fe2ab1367b972c9a2adf0229153e074e23908ed4915560717e6624"
+    },
+    "httpContract": {
+      "path": "contracts/http/platform-gateway.openapi.yaml",
+      "sha256": "cbeae3497486fe6399eb8c5e2644d12b7a9e945b36ee72dd2c335b1015682513"
+    },
+    "edgeReplicationContract": {
+      "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
+      "sha256": "d2ff9b916d0fb2b4e48a6bec8a529b82232567fdbeb78f8e80432d4fecab309d"
+    }
+  },
   "schemaContract": {
-    "migrationManifest": "deploy/platform/phase1/migrations/migration-list.tsv",
+    "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
+    "migrationManifestSha256": "962d0903df5d3c13414f0963132f2b18a774b5c3e88e8ecd651ec56a6b46c1c7",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [
@@ -22,8 +44,42 @@
     "failureMode": "fail-closed"
   },
   "platformPolicy": {
-    "limitPolicy": "deploy/platform/phase1/limit-policy.v1.json"
+    "limitPolicy": "deploy/platform/phase1/limit-policy.v1.json",
+    "limitPolicySha256": "1d1f2fe34727a0484ca1bf08b3993338c2fe0be1de43c19a972f2ce9194963c4"
   },
+  "retirement": {
+    "evidence": "deploy/acceptance/s24-production-retirement.v1.json",
+    "evidenceSha256": "5793936f69ed6ad06b0c24b189d342285fb9ecd7f70fdcabeb8ce84be661c308",
+    "runtimeFallbackAllowed": false
+  },
+  "edgeRelease": {
+    "schemaAuthority": "infra/connectivity/postgres/init/003-s12-edge-fleet.sql",
+    "schemaAuthoritySha256": "7b193d911acf38718a4fc0cfb038042122401478691cb35f773800ec9456ac5a",
+    "desiredObservedReconciliationRequired": true,
+    "rollbackAuthority": "previous-signed-edge-release",
+    "privateSigningKeyPersistenceAllowed": false
+  },
+  "projectionRecovery": {
+    "postgresAuthority": "backup-and-restore",
+    "redisAuthority": "rebuild-from-authoritative-postgres-and-owner-events",
+    "redisSnapshotAsBusinessAuthority": false
+  },
+  "criticalSmoke": [
+    "test:identity",
+    "s1:registry:check",
+    "s2:hvac-web:check",
+    "s2:history:check",
+    "s11:command-readback:check",
+    "s4:alarm:check",
+    "s16:notification:check",
+    "real-dashboard:test"
+  ],
+  "rollbackEvidence": [
+    "scripts/run-phase1-postgres-restore-test.mjs",
+    "scripts/run-s1-registry-postgres-tests.mjs",
+    "scripts/run-s25-redis-rebuild-test.mjs",
+    "scripts/check-s12-edge-fleet.mjs"
+  ],
   "migrationState": {
     "states": ["APPLYING", "APPLIED", "FAILED"],
     "incompleteRequiresOperatorRecovery": true
