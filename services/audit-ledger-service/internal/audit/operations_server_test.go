@@ -38,11 +38,11 @@ func operationsEvent(spiffeID string, now time.Time) operationsauditevent.EventV
 	runID := "run-001"
 	revision := uint64(7)
 	return operationsauditevent.EventV1{
-		EventID:               "operations-audit-v1:org-001:site-001:investigation-001:run-001:7:COMMIT_EFFECT:SUCCEEDED:evidence-001",
+		EventID:               "operations-audit-v1:tenant-001:site-001:investigation-001:run-001:7:COMMIT_EFFECT:SUCCEEDED:evidence-001",
 		SchemaVersion:         operationsauditevent.SchemaVersion,
 		MessageType:           operationsauditevent.MessageType,
 		Producer:              operationsauditevent.Producer,
-		OrganizationID:        "org-001",
+		TenantID:              "tenant-001",
 		SiteID:                "site-001",
 		InvestigationID:       &investigationID,
 		RunID:                 &runID,
@@ -143,7 +143,7 @@ func TestOperationsAuditIngestRejectsConflictForgedHeadersAndInvalidContent(t *t
 	assertAuditProblem(t, recorder, http.StatusConflict, "AUDIT_EVENT_CONFLICT")
 
 	forged := operationsRequest(t, harness, event)
-	forged.Header.Set("X-Organization-ID", "org-forged")
+	forged.Header.Set("X-Tenant-ID", "tenant-forged")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, forged)
 	assertAuditProblem(t, recorder, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER")

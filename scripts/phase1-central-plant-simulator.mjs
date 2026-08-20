@@ -577,7 +577,8 @@ function startSimulatorService() {
   ]);
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    '--profile', 'local-simulator',
+    '--simulator-acceptance',
+    '--profile', 'simulator-acceptance',
     'up', '-d', '--build', 'eg8200-simulator',
   ]);
 }

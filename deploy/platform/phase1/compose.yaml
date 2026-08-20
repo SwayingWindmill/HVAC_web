@@ -462,40 +462,6 @@ services:
     mem_limit: ${IOT_SERVICE_MEMORY_LIMIT:-512m}
     mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
 
-  eg8200-simulator:
-    <<: *go-service
-    profiles: ["local-simulator"]
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-mqtt-publisher }
-    image: ${EG8200_SIMULATOR_IMAGE:-hvac/eg8200-simulator:0.1.0-dev}
-    environment:
-      EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
-      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
-      EG8200_MQTT_DIAGNOSTICS_ADDR: :19095
-    depends_on:
-      mqtt-broker:
-        condition: service_started
-      iot-service:
-        condition: service_healthy
-    volumes:
-      - ../../../tools/eg8200-simulator/configs/central-plant.local.json:/run/hvac/config/plant.json:ro
-      - ${PHASE1_RUNTIME_CONFIG_DIR:-./runtime/config}:/run/hvac/runtime-config:ro
-      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
-      - ${EG8200_QUEUE_DIR:-./runtime/data/eg8200}:/run/hvac/eg8200
-    expose: ["19095"]
-    healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19095/health/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-    networks: [mqtt]
-    cpus: ${EG8200_SIMULATOR_CPUS:-0.50}
-    mem_limit: ${EG8200_SIMULATOR_MEMORY_LIMIT:-256m}
-    mem_reservation: ${EG8200_SIMULATOR_MEMORY_RESERVATION:-64m}
-
   postgres:
     image: postgres:16.4-bookworm
     restart: unless-stopped

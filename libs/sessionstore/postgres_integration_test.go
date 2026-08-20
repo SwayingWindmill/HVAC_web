@@ -213,6 +213,9 @@ func fixtureSession(now time.Time) sessionstore.Session {
 		TenantID:                 "tenant-01",
 		CSRFTokenCiphertext:      []byte("encrypted-csrf"),
 		ProviderTokensCiphertext: []byte("seeded-provider-secret-that-must-not-enter-audit"),
+		AuthenticationACR:        "urn:hvac:loa:1",
+		AuthenticationAMR:        []string{"pwd"},
+		AuthenticationTime:       now,
 		ExpiresAt:                now.Add(time.Hour),
 	}
 }

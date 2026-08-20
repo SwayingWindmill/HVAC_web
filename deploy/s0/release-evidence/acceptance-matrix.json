@@ -66,23 +66,22 @@
       ]
     },
     {
-      "id": "rollback-window-compatibility",
-      "requirement": "Current and previous compatible contract and service behavior interoperate through the rollback window.",
+      "id": "rollback-without-runtime-fallback",
+      "requirement": "Rollback uses release/database evidence and the previous deployable release; the active runtime does not carry previous-writer compatibility paths.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L84-L90",
-        "docs/operations/s0-delivery.md#L93-L97"
+        "docs/architecture/thingsboard-implementation-roadmap.md#S24"
       ],
       "implementation": [
         "contracts/http/platform-gateway.openapi.yaml",
         "contracts/events/session-audit.v1.lock.json",
-        "contracts/ownership/ownership.v1.lock.json",
-        "infra/s0-durable/postgres/compatibility/previous-writer.sql"
+        "contracts/ownership/ownership.v1.lock.json"
       ],
       "tests": [
         "scripts/generate-platform-contracts.mjs",
         "scripts/check-session-event-contract.mjs",
         "scripts/check-ownership-registries.mjs",
-        "scripts/run-durable-postgres-tests.mjs"
+        "scripts/run-durable-postgres-tests.mjs",
+        "scripts/check-s24-production-retirement.mjs"
       ],
       "runtimeEvidence": [
         "out/s0-release-evidence/compatibility-report.json"

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createTCPServer } from 'node:net';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -69,11 +69,6 @@ async function waitForPostgres() {
   throw new Error('PostgreSQL integration fixture did not reach a stable initialized postmaster');
 }
 
-async function runCompatibilityCheck() {
-  const sql = await readFile(resolve(root, 'infra/s0-durable/postgres/compatibility/previous-writer.sql'), 'utf8');
-  run('docker', ['exec', '-i', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-v', 'ON_ERROR_STOP=1'], { input: sql });
-}
-
 async function runGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   const child = spawn(goBinary, [
@@ -103,9 +98,8 @@ try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
-  await runCompatibilityCheck();
   await runGoTests();
-  console.log('S0 durable PostgreSQL transaction and rollback-window compatibility tests passed.');
+  console.log('S0 durable PostgreSQL transaction tests passed.');
 } finally {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
 }

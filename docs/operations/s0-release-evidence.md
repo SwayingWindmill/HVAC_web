@@ -46,14 +46,14 @@ It uses:
 }
 ```
 
-The six immutable release images are the in-toto subjects. The repository commit, ref and workflow run are recorded in the predicate source metadata. `SHA256SUMS` covers every retained evidence file in the bundle directory.
+The five production release images are the in-toto subjects. Test fixtures such as `oidc-test-provider` are excluded from the release subject set. The repository commit, ref and workflow run are recorded in the predicate source metadata. `SHA256SUMS` covers every retained evidence file in the bundle directory.
 
 ## Evidence inputs
 
 The bundle indexes rather than duplicates large upstream artifacts. It records hashes, paths and workflow metadata for:
 
 - contract generation, event compatibility and ownership locks;
-- current and previous-writer PostgreSQL compatibility;
+- current-schema PostgreSQL transaction and restore evidence with no previous-writer runtime path;
 - browser login, current Principal, logout and authorized Audit query;
 - Go-owned route revision promotion and stale-revision rejection;
 - two-Organization isolation, credential absence, Outbox recovery and Audit deduplication;
@@ -61,9 +61,9 @@ The bundle indexes rather than duplicates large upstream artifacts. It records h
 - NetworkPolicy connectivity proof;
 - real Kind rolling update and `kubectl rollout undo` observations;
 - staging render receipt and migration file state;
-- six Trivy embedded-secret JSON reports;
-- six BuildKit SBOM/provenance build records;
-- six Cosign verification results and GitHub build-attestation verification results;
+- five Trivy embedded-secret JSON reports for production release images;
+- five BuildKit SBOM/provenance build records for production release images;
+- five Cosign verification results and GitHub build-attestation verification results;
 - CodeQL, Gitleaks, dependency, vulnerability and production-license job status;
 - delivery, observability, security and recovery runbooks;
 - release approval state.

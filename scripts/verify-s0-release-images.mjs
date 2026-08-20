@@ -16,7 +16,6 @@ const results = [];
 const expectedNames = [
   'audit-ledger-service',
   'iam-service',
-  'oidc-test-provider',
   'outbox-relay',
   'platform-gateway',
   's0-migrator',

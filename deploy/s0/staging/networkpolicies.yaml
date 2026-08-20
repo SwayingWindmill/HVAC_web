@@ -40,9 +40,6 @@ spec:
         - podSelector: { matchLabels: { app: audit-ledger-service } }
       ports: [{ protocol: TCP, port: 8446 }]
     - to:
-        - podSelector: { matchLabels: { app: oidc-test-provider } }
-      ports: [{ protocol: TCP, port: 8443 }]
-    - to:
         - podSelector: { matchLabels: { app: postgres } }
       ports: [{ protocol: TCP, port: 5432 }]
     - to:
@@ -63,17 +60,6 @@ spec:
       ports:
         - { protocol: TCP, port: 8444 }
         - { protocol: TCP, port: 8446 }
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: gateway-only-oidc-fixture }
-spec:
-  podSelector: { matchLabels: { app: oidc-test-provider } }
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector: { matchLabels: { app: platform-gateway } }
-      ports: [{ protocol: TCP, port: 8443 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -100,7 +86,7 @@ metadata: { name: internal-service-telemetry }
 spec:
   podSelector:
     matchExpressions:
-      - { key: app, operator: In, values: [iam-service, oidc-test-provider] }
+      - { key: app, operator: In, values: [iam-service] }
   policyTypes: [Egress]
   egress:
     - to:
@@ -143,7 +129,7 @@ spec:
     - from:
         - podSelector:
             matchExpressions:
-              - { key: app, operator: In, values: [platform-gateway, iam-service, audit-ledger-service, outbox-relay, oidc-test-provider] }
+              - { key: app, operator: In, values: [platform-gateway, iam-service, audit-ledger-service, outbox-relay] }
       ports: [{ protocol: TCP, port: 4318 }]
 ---
 apiVersion: networking.k8s.io/v1

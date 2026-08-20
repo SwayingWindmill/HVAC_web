@@ -113,10 +113,10 @@ type evidence struct {
 }
 
 func main() {
-	planPath := flag.String("plan", "deploy/s2/shadow-routing-revisions.v1.json", "rollout revision plan")
+	planPath := flag.String("plan", "deploy/acceptance/s2-shadow-routing-revisions.v1.json", "historical rollout revision plan")
 	activePath := flag.String("active", "contracts/ownership/route-ownership.v1.json", "active route registry")
 	comparisonPath := flag.String("comparison", "deploy/s2/fixtures/shadow-comparison-pass.json", "comparison fixture")
-	policyPath := flag.String("policy", "deploy/s2/shadow-comparator-policy.v1.json", "comparator policy")
+	policyPath := flag.String("policy", "deploy/acceptance/s2-shadow-comparator-policy.v1.json", "historical comparator policy")
 	outputPath := flag.String("output", "out/s2-shadow-routing/shadow-routing-harness.json", "evidence output")
 	flag.Parse()
 
