@@ -36,6 +36,16 @@ func (cache *memoryLatestCache) Get(_ context.Context, tenantID, siteID, deviceI
 	return cache.snapshot, nil
 }
 
+func (cache *memoryLatestCache) GetForDevice(_ context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
+	if cache.getErr != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, cache.getErr
+	}
+	if cache.snapshot.BusinessRevision == 0 || string(cache.snapshot.TenantId) != tenantID || string(cache.snapshot.DeviceId) != deviceID {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheMiss
+	}
+	return cache.snapshot, nil
+}
+
 func (cache *memoryLatestCache) Close() error { return nil }
 
 type memoryLatestRebuildSource struct {
@@ -143,4 +153,3 @@ func TestLatestCacheRelayBacksOffRedisFailure(t *testing.T) {
 		t.Fatalf("next retry=%s", outbox.nextRetry)
 	}
 }
-

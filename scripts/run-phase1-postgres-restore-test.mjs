@@ -29,28 +29,25 @@ async function findAvailablePort() {
   return address.port;
 }
 
-const dockerPath = run('which', ['docker']);
-if (!dockerPath.startsWith('/') || dockerPath.startsWith('/mnt/')) {
-  throw new Error(`Linux Docker CLI is required; resolved=${dockerPath}`);
-}
+const dockerPath = process.platform === 'win32' ? 'docker.exe' : 'docker';
 run(dockerPath, ['version']);
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const imageProbe = spawnSync(dockerPath, ['image', 'inspect', postgresImage], { cwd: root, stdio: 'ignore', windowsHide: true });
-if (imageProbe.status !== 0) {
-  run(dockerPath, ['pull', postgresImage], { env: { ...process.env, DOCKER_CONFIG: `/tmp/hvac-phase1-restore-docker-${process.pid}` } });
-}
+if (imageProbe.status !== 0) run(dockerPath, ['pull', postgresImage]);
 const port = await findAvailablePort();
 const env = { ...process.env, S2_POSTGRES_HOST_PORT: String(port) };
-const compose = (args) => run('docker', ['compose', '-p', projectName, '-f', composePath, ...args], { env });
-const psql = (database, sql) => run('docker', ['exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
+const composeCommand = process.platform === 'win32' ? 'docker-compose.exe' : dockerPath;
+const composePrefix = process.platform === 'win32' ? [] : ['compose'];
+const compose = (args) => run(composeCommand, [...composePrefix, '-p', projectName, '-f', composePath, ...args], { env });
+const psql = (database, sql) => run(dockerPath, ['exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 
 async function waitForDatabase(database) {
   let stableStart = '';
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
-    const probe = spawnSync('docker', ['exec', containerName, 'pg_isready', '-U', 'postgres', '-d', database], { cwd: root, stdio: 'ignore', windowsHide: true });
+    const probe = spawnSync(dockerPath, ['exec', containerName, 'pg_isready', '-U', 'postgres', '-d', database], { cwd: root, stdio: 'ignore', windowsHide: true });
     if (!probe.error && probe.status === 0) {
-      const schemaProbe = spawnSync('docker', [
+      const schemaProbe = spawnSync(dockerPath, [
         'exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-Atqc',
         "SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.registry_device_bindings') IS NOT NULL)::text",
       ], { cwd: root, encoding: 'utf8', windowsHide: true });
@@ -94,7 +91,7 @@ function databaseSnapshot(database) {
   `);
   const fixture = psql(database, `
     SELECT count(*)::text || '|'
-      || count(DISTINCT owning_organization_id)::text || '|'
+      || count(DISTINCT tenant_id)::text || '|'
       || count(DISTINCT site_id)::text
     FROM telemetry_runtime.registry_device_bindings
   `);
@@ -118,17 +115,17 @@ try {
   const before = databaseSnapshot('hvac_s2');
   if (before.tables.length < 10) throw new Error(`unexpected telemetry table count before backup: ${before.tables.length}`);
 
-  run('docker', ['exec', containerName, 'pg_dump', '-U', 'postgres', '-d', 'hvac_s2', '-Fc', '-f', '/tmp/phase1-hvac-s2.dump']);
-  const backupBytes = Number(run('docker', ['exec', containerName, 'stat', '-c', '%s', '/tmp/phase1-hvac-s2.dump']));
+  run(dockerPath, ['exec', containerName, 'pg_dump', '-U', 'postgres', '-d', 'hvac_s2', '-Fc', '-f', '/tmp/phase1-hvac-s2.dump']);
+  const backupBytes = Number(run(dockerPath, ['exec', containerName, 'stat', '-c', '%s', '/tmp/phase1-hvac-s2.dump']));
   if (!Number.isFinite(backupBytes) || backupBytes < 1024) throw new Error(`backup is unexpectedly small: ${backupBytes}`);
 
   psql('hvac_s2', "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='hvac_s2' AND pid <> pg_backend_pid()");
-  run('docker', ['exec', containerName, 'dropdb', '-U', 'postgres', 'hvac_s2']);
-  const missingProbe = spawnSync('docker', ['exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-Atqc', 'SELECT 1'], { cwd: root, encoding: 'utf8', windowsHide: true });
+  run(dockerPath, ['exec', containerName, 'dropdb', '-U', 'postgres', 'hvac_s2']);
+  const missingProbe = spawnSync(dockerPath, ['exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-Atqc', 'SELECT 1'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (missingProbe.status === 0) throw new Error('database destruction was not observed');
 
-  run('docker', ['exec', containerName, 'createdb', '-U', 'postgres', 'hvac_s2']);
-  run('docker', ['exec', containerName, 'pg_restore', '-U', 'postgres', '-d', 'hvac_s2', '--no-owner', '--exit-on-error', '/tmp/phase1-hvac-s2.dump']);
+  run(dockerPath, ['exec', containerName, 'createdb', '-U', 'postgres', 'hvac_s2']);
+  run(dockerPath, ['exec', containerName, 'pg_restore', '-U', 'postgres', '-d', 'hvac_s2', '--no-owner', '--exit-on-error', '/tmp/phase1-hvac-s2.dump']);
   await waitForDatabase('hvac_s2');
   const after = databaseSnapshot('hvac_s2');
 

@@ -33,6 +33,8 @@
     "s11:command-readback:check": "node scripts/check-s11-command-readback.mjs",
     "s12:edge-fleet:check": "node scripts/check-s12-edge-fleet.mjs",
     "s24:production-retirement:check": "node scripts/check-s24-production-retirement.mjs",
+    "s25:release-cutover:check": "node scripts/check-s25-release-cutover.mjs",
+    "s25:redis-rebuild:test": "node scripts/run-s25-redis-rebuild-test.mjs",
     "delivery:validate": "node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/local.env.example && node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/staging.env.example",
     "delivery:check": "node scripts/check-s0-delivery-assets.mjs && node scripts/test-render-s0-staging.mjs",
     "pr:gates:classify": "node scripts/classify-pr-gates.mjs",

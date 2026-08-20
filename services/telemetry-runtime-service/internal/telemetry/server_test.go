@@ -37,7 +37,7 @@ func (fake *fakeAuthorizer) Authorize(_ context.Context, peer, grant string, act
 	if fake.access.PrincipalID != "" {
 		return fake.access, nil
 	}
-	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", Subject: "subject-a", SubjectIssuer: "https://issuer.example.test", SessionID: "session-a", TenantID: orgA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
+	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", Subject: "subject-a", SubjectIssuer: "https://issuer.example.test", SessionID: "session-a", TenantID: tenantA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
 }
 
 type fakeSnapshotStore struct {
@@ -50,28 +50,75 @@ func (fake *fakeSnapshotStore) EvaluateAndRead(_ context.Context, target telemet
 	if err := fake.errByDevice[target.DeviceID]; err != nil {
 		return SnapshotCommit{}, err
 	}
+	return SnapshotCommit{Snapshot: snapshotFixture(target.DeviceID, evaluatedAt, target.Keys)}, nil
+}
+
+func snapshotFixture(deviceID string, evaluatedAt time.Time, keys []string) telemetryapi.DeviceObservationSnapshot {
 	state := telemetryapi.DevicePresenceStateOnline
 	display := telemetryapi.DeviceDisplayStateOnline
-	values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
-	for _, key := range target.Keys {
+	values := make([]telemetryapi.TelemetryKeyState, 0, len(keys))
+	for _, key := range keys {
 		values = append(values, telemetryapi.TelemetryKeyState{Missing: &telemetryapi.TelemetryMissingState{Key: telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED"}})
 	}
 	readiness := telemetryapi.TelemetryReadinessIncomplete
-	if len(target.Keys) == 0 {
+	if len(keys) == 0 {
 		readiness = telemetryapi.TelemetryReadinessNotApplicable
 	}
-	return SnapshotCommit{Snapshot: telemetryapi.DeviceObservationSnapshot{
-		SchemaVersion: 1, TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(target.DeviceID),
+	return telemetryapi.DeviceObservationSnapshot{
+		SchemaVersion: 1, TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(deviceID),
 		BusinessRevision: 3, EvaluatedAt: instant(evaluatedAt), EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		AvailabilityReasons: []telemetryapi.AvailabilityReasonCode{}, Presence: telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state},
 		TelemetryReadiness: readiness, DisplayState: &display, Values: values,
-	}}, nil
+	}
 }
+
+type fakeLatestCache struct {
+	snapshots map[string]telemetryapi.DeviceObservationSnapshot
+	err       error
+	calls     []string
+}
+
+func (fake *fakeLatestCache) PutIfNewer(_ context.Context, snapshot telemetryapi.DeviceObservationSnapshot) (bool, error) {
+	if fake.snapshots == nil {
+		fake.snapshots = map[string]telemetryapi.DeviceObservationSnapshot{}
+	}
+	fake.snapshots[string(snapshot.DeviceId)] = snapshot
+	return true, nil
+}
+
+func (fake *fakeLatestCache) Get(_ context.Context, tenantID, siteID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
+	snapshot, err := fake.GetForDevice(context.Background(), tenantID, deviceID)
+	if err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, err
+	}
+	if string(snapshot.SiteId) != siteID {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheMiss
+	}
+	return snapshot, nil
+}
+
+func (fake *fakeLatestCache) GetForDevice(_ context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
+	fake.calls = append(fake.calls, deviceID)
+	if fake.err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, fake.err
+	}
+	snapshot, ok := fake.snapshots[deviceID]
+	if !ok || string(snapshot.TenantId) != tenantID {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheMiss
+	}
+	return snapshot, nil
+}
+
+func (fake *fakeLatestCache) Close() error { return nil }
 
 func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	store := &fakeSnapshotStore{errByDevice: map[string]error{}}
-	handler := NewHandler(ServerConfig{Store: store, Authorizer: authorizer, AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC) }})
+	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
+	latestCache := &fakeLatestCache{snapshots: map[string]telemetryapi.DeviceObservationSnapshot{
+		deviceA: snapshotFixture(deviceA, now, []string{"zone.humidity", "zone.temperature"}),
+	}}
+	handler := NewHandler(ServerConfig{Store: store, LatestCache: latestCache, Authorizer: authorizer, AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now }})
 
 	request := httptest.NewRequest(http.MethodGet, InternalDeviceSnapshotPrefix+deviceA+"/observation-snapshot?key=zone.humidity&key=zone.temperature", nil)
 	request.Header.Set("Authorization", "Bearer signed-grant")
@@ -103,8 +150,15 @@ func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *t
 	if presenceRecorder.Code != http.StatusOK {
 		t.Fatalf("presence status=%d body=%s", presenceRecorder.Code, presenceRecorder.Body.String())
 	}
-	if len(store.calls) != 2 || len(store.calls[1].Keys) != 0 {
-		t.Fatalf("presence-only calls=%#v", store.calls)
+	var presenceSnapshot telemetryapi.DeviceObservationSnapshot
+	if err := json.Unmarshal(presenceRecorder.Body.Bytes(), &presenceSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(presenceSnapshot.Values) != 0 || presenceSnapshot.TelemetryReadiness != telemetryapi.TelemetryReadinessNotApplicable {
+		t.Fatalf("presence-only snapshot leaked telemetry values: %#v", presenceSnapshot)
+	}
+	if len(store.calls) != 0 || len(latestCache.calls) != 2 {
+		t.Fatalf("current read used unexpected authority: store=%#v cache=%#v", store.calls, latestCache.calls)
 	}
 }
 
@@ -130,10 +184,14 @@ func TestInternalSnapshotRejectsForgedIdentityAndWrongWorkload(t *testing.T) {
 	}
 }
 
-func TestInternalBatchPreservesOrderAndReturnsTypedNotFound(t *testing.T) {
+func TestInternalBatchPreservesOrderAndTypedNotFoundFromLatestCache(t *testing.T) {
 	deviceB := "018f2e00-3000-7000-8000-000000000003"
-	store := &fakeSnapshotStore{errByDevice: map[string]error{deviceB: ErrDeviceNotFound}}
-	handler := NewHandler(ServerConfig{Store: store, Authorizer: &fakeAuthorizer{}, AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC) }})
+	store := &fakeSnapshotStore{errByDevice: map[string]error{}}
+	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
+	latestCache := &fakeLatestCache{snapshots: map[string]telemetryapi.DeviceObservationSnapshot{
+		deviceA: snapshotFixture(deviceA, now, []string{"zone.temperature"}),
+	}}
+	handler := NewHandler(ServerConfig{Store: store, LatestCache: latestCache, Authorizer: &fakeAuthorizer{}, AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now }})
 	body := `{"requests":[{"requestId":"first","deviceId":"` + deviceA + `","keys":["zone.temperature"]},{"requestId":"second","deviceId":"` + deviceB + `","keys":[]}]}`
 	request := httptest.NewRequest(http.MethodPost, InternalBatchSnapshotPath, strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer batch-grant")
@@ -154,27 +212,32 @@ func TestInternalBatchPreservesOrderAndReturnsTypedNotFound(t *testing.T) {
 	if response.Items[1].Failure == nil || response.Items[1].Failure.RequestId != "second" || response.Items[1].Failure.Problem.Code != "RESOURCE_NOT_FOUND" || response.Items[1].Failure.Problem.Status != http.StatusNotFound {
 		t.Fatalf("second=%#v", response.Items[1])
 	}
+	if len(store.calls) != 0 || strings.Join(latestCache.calls, ",") != deviceA+","+deviceB {
+		t.Fatalf("batch used unexpected authority: store=%#v cache=%#v", store.calls, latestCache.calls)
+	}
 }
 
-func TestInternalSnapshotFailsClosedForGrantAndStoreDependencies(t *testing.T) {
+func TestInternalSnapshotFailsClosedForGrantAndLatestCacheDependencies(t *testing.T) {
 	tests := []struct {
 		name     string
 		authErr  error
-		storeErr error
+		cacheErr error
 		status   int
 		code     string
 	}{
 		{name: "grant rejected is indistinguishable from missing", authErr: ErrGrantRejected, status: http.StatusNotFound, code: "RESOURCE_NOT_FOUND"},
 		{name: "IAM unavailable", authErr: ErrAuthorizationUnavailable, status: http.StatusServiceUnavailable, code: "TELEMETRY_AUTHORIZATION_UNAVAILABLE"},
-		{name: "PostgreSQL unavailable", storeErr: errors.New("database unavailable"), status: http.StatusServiceUnavailable, code: "TELEMETRY_RUNTIME_UNAVAILABLE"},
+		{name: "Redis Latest unavailable", cacheErr: ErrLatestCacheUnavailable, status: http.StatusServiceUnavailable, code: "TELEMETRY_RUNTIME_UNAVAILABLE"},
+		{name: "Redis Latest miss returns typed not-found without PostgreSQL fallback", cacheErr: ErrLatestCacheMiss, status: http.StatusNotFound, code: "RESOURCE_NOT_FOUND"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &fakeSnapshotStore{errByDevice: map[string]error{}}
-			if test.storeErr != nil {
-				store.errByDevice[deviceA] = test.storeErr
+			latestCache := &fakeLatestCache{
+				snapshots: map[string]telemetryapi.DeviceObservationSnapshot{deviceA: snapshotFixture(deviceA, time.Now().UTC(), nil)},
+				err:       test.cacheErr,
 			}
-			handler := NewHandler(ServerConfig{Store: store, Authorizer: &fakeAuthorizer{err: test.authErr}, AllowedGatewaySPIFFE: gatewaySPIFFE})
+			handler := NewHandler(ServerConfig{Store: store, LatestCache: latestCache, Authorizer: &fakeAuthorizer{err: test.authErr}, AllowedGatewaySPIFFE: gatewaySPIFFE})
 			request := httptest.NewRequest(http.MethodGet, InternalDeviceSnapshotPrefix+deviceA+"/observation-snapshot", nil)
 			request.Header.Set("Authorization", "Bearer grant")
 			request.TLS = verifiedTLSState(gatewaySPIFFE)
@@ -182,6 +245,9 @@ func TestInternalSnapshotFailsClosedForGrantAndStoreDependencies(t *testing.T) {
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), test.code) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if len(store.calls) != 0 {
+				t.Fatalf("current read fell back to PostgreSQL: %#v", store.calls)
 			}
 		})
 	}
