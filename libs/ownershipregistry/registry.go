@@ -25,6 +25,7 @@ const (
 	OwnerAlarm            = "alarm-service"
 	OwnerWorkOrder        = "work-order-service"
 	OwnerPresentation     = "presentation-service"
+	OwnerRuleRuntime      = "rule-runtime-service"
 )
 
 var (
@@ -192,7 +193,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerWorkOrder, OwnerPresentation:
+	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
 		return true
 	default:
 		return false

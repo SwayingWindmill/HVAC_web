@@ -1,0 +1,103 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "HVAC Rule Management Public API", "version": "1.0.0" },
+  "components": {
+    "schemas": {
+      "RuleConfig": { "type": "object" },
+      "RuleNode": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "definitionId", "config"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "definitionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "config": { "$ref": "#/components/schemas/RuleConfig" }
+        }
+      },
+      "RuleEdge": {
+        "type": "object", "additionalProperties": false,
+        "required": ["fromNode", "fromPort", "toNode", "toPort"],
+        "properties": {
+          "fromNode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "fromPort": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "toNode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "toPort": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "RuleDraft": {
+        "type": "object", "additionalProperties": false,
+        "required": ["catalogVersion", "entryNodeId", "nodes", "edges", "allowedPermissions", "maxNodes", "maxDepth", "maxFanout", "maxResourceCost", "maxAttempts"],
+        "properties": {
+          "ruleId": { "type": "string", "format": "uuid" },
+          "catalogVersion": { "type": "string", "const": "core.v1" },
+          "entryNodeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "nodes": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/RuleNode" } },
+          "edges": { "type": "array", "maxItems": 512, "items": { "$ref": "#/components/schemas/RuleEdge" } },
+          "allowedPermissions": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "enum": ["owner.snapshot.read", "alarm.intent.publish"] } },
+          "maxNodes": { "type": "integer", "minimum": 1, "maximum": 128 },
+          "maxDepth": { "type": "integer", "minimum": 1, "maximum": 128 },
+          "maxFanout": { "type": "integer", "minimum": 1, "maximum": 64 },
+          "maxResourceCost": { "type": "integer", "minimum": 1, "maximum": 4096 },
+          "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 20 }
+        }
+      },
+      "RuleRevision": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "ruleId", "tenantId", "revision", "state", "catalogVersion", "entryNodeId", "nodes", "edges", "allowedPermissions", "maxNodes", "maxDepth", "maxFanout", "maxResourceCost", "maxAttempts", "digest"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "ruleId": { "type": "string", "format": "uuid" },
+          "tenantId": { "type": "string", "format": "uuid" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "state": { "type": "string", "const": "RELEASED" },
+          "catalogVersion": { "type": "string", "const": "core.v1" },
+          "entryNodeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "nodes": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/RuleNode" } },
+          "edges": { "type": "array", "maxItems": 512, "items": { "$ref": "#/components/schemas/RuleEdge" } },
+          "allowedPermissions": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "enum": ["owner.snapshot.read", "alarm.intent.publish"] } },
+          "maxNodes": { "type": "integer", "minimum": 1, "maximum": 128 },
+          "maxDepth": { "type": "integer", "minimum": 1, "maximum": 128 },
+          "maxFanout": { "type": "integer", "minimum": 1, "maximum": 64 },
+          "maxResourceCost": { "type": "integer", "minimum": 1, "maximum": 4096 },
+          "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "RuleRevisionCollection": { "type": "object", "additionalProperties": false, "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RuleRevision" } } } },
+      "RuleConfigField": {
+        "type": "object", "additionalProperties": false, "required": ["name", "kind", "required"],
+        "properties": { "name": { "type": "string" }, "kind": { "type": "string", "enum": ["STRING", "STRING_LIST", "NUMBER", "POSITIVE_INTEGER", "ENUM"] }, "required": { "type": "boolean" }, "options": { "type": "array", "items": { "type": "string" } } }
+      },
+      "RuleNodeDefinition": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "version", "inputs", "outputs", "stateSchemaVersion", "deterministic", "resourceCost", "configFields"],
+        "properties": {
+          "id": { "type": "string" }, "version": { "type": "integer", "minimum": 1 },
+          "inputs": { "type": "object", "additionalProperties": { "type": "string", "enum": ["EVENT", "NUMBER", "SNAPSHOT", "INTENT"] } },
+          "outputs": { "type": "object", "additionalProperties": { "type": "string", "enum": ["EVENT", "NUMBER", "SNAPSHOT", "INTENT"] } },
+          "requiredPermission": { "type": "string" }, "effectOwner": { "type": "string" },
+          "stateSchemaVersion": { "type": "integer", "minimum": 0 }, "deterministic": { "type": "boolean" }, "resourceCost": { "type": "integer", "minimum": 1 },
+          "configFields": { "type": "array", "items": { "$ref": "#/components/schemas/RuleConfigField" } }
+        }
+      },
+      "RuleCatalog": { "type": "object", "additionalProperties": false, "required": ["version", "definitions"], "properties": { "version": { "type": "string", "const": "core.v1" }, "definitions": { "type": "array", "items": { "$ref": "#/components/schemas/RuleNodeDefinition" } } } },
+      "RuleCompileIssue": { "type": "object", "additionalProperties": false, "required": ["code", "detail"], "properties": { "code": { "type": "string" }, "nodeId": { "type": "string" }, "detail": { "type": "string" } } },
+      "RuleValidationResult": { "type": "object", "additionalProperties": false, "required": ["valid"], "properties": { "valid": { "type": "boolean" }, "digest": { "type": "string" }, "error": { "$ref": "#/components/schemas/RuleCompileIssue" } } },
+      "RuleSimulationEvent": {
+        "type": "object", "additionalProperties": false, "required": ["eventId", "schema", "subjectType", "subjectId", "occurredAt", "payload"],
+        "properties": { "eventId": { "type": "string" }, "schema": { "type": "string" }, "siteId": { "type": "string", "format": "uuid" }, "subjectType": { "type": "string" }, "subjectId": { "type": "string" }, "occurredAt": { "type": "string", "format": "date-time" }, "payload": {} }
+      },
+      "RuleFrozenFact": {
+        "type": "object", "additionalProperties": false, "required": ["ownerDomain", "kind", "subjectType", "subjectId", "revision", "value"],
+        "properties": { "ownerDomain": { "type": "string" }, "kind": { "type": "string" }, "siteId": { "type": "string", "format": "uuid" }, "subjectType": { "type": "string" }, "subjectId": { "type": "string" }, "revision": { "type": "integer", "minimum": 1 }, "value": {} }
+      },
+      "RuleSimulationRequest": { "type": "object", "additionalProperties": false, "required": ["draft", "event"], "properties": { "draft": { "$ref": "#/components/schemas/RuleDraft" }, "event": { "$ref": "#/components/schemas/RuleSimulationEvent" }, "frozenFactsRevision": { "type": "string" }, "frozenFacts": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/RuleFrozenFact" } } } },
+      "RuleSimulationResult": { "type": "object", "additionalProperties": false, "required": ["status", "trace", "effects"], "properties": { "status": { "type": "string", "enum": ["READY", "RUNNING", "WAITING", "BLOCKED_EFFECT", "SUCCEEDED", "DEAD", "QUARANTINED", "FAILED"] }, "terminalCode": { "type": "string" }, "trace": { "type": "array", "items": { "type": "object" } }, "effects": { "type": "array", "items": { "type": "object" } } } },
+      "RuleAssignmentRequest": { "type": "object", "additionalProperties": false, "required": ["siteId", "ruleRevisionId", "priority"], "properties": { "bindingId": { "type": "string", "format": "uuid" }, "siteId": { "type": "string", "format": "uuid" }, "ruleRevisionId": { "type": "string", "format": "uuid" }, "priority": { "type": "integer", "minimum": -1000, "maximum": 1000 } } },
+      "RuleBinding": { "type": "object", "additionalProperties": false, "required": ["id", "tenantId", "siteId", "revision", "ruleRevisionId", "priority", "active", "createdAt"], "properties": { "id": { "type": "string", "format": "uuid" }, "tenantId": { "type": "string", "format": "uuid" }, "siteId": { "type": "string", "format": "uuid" }, "revision": { "type": "integer", "minimum": 1 }, "ruleRevisionId": { "type": "string", "format": "uuid" }, "priority": { "type": "integer" }, "active": { "type": "boolean" }, "createdAt": { "type": "string", "format": "date-time" }, "retiredAt": { "type": "string", "format": "date-time" } } },
+      "RuleBindingCollection": { "type": "object", "additionalProperties": false, "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RuleBinding" } } } },
+      "RuleRetirementRequest": { "type": "object", "additionalProperties": false, "required": ["siteId", "reason"], "properties": { "siteId": { "type": "string", "format": "uuid" }, "reason": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+      "RuleExecutionEvidence": { "type": "object", "additionalProperties": false, "required": ["executionId", "ruleRevisionId", "bindingId", "bindingRevision", "status", "trace", "effects", "updatedAt"], "properties": { "executionId": { "type": "string" }, "siteId": { "type": "string", "format": "uuid" }, "ruleRevisionId": { "type": "string", "format": "uuid" }, "bindingId": { "type": "string", "format": "uuid" }, "bindingRevision": { "type": "integer", "minimum": 1 }, "status": { "type": "string" }, "terminalCode": { "type": "string" }, "trace": { "type": "array", "items": { "type": "object" } }, "effects": { "type": "array", "items": { "type": "object" } }, "updatedAt": { "type": "string", "format": "date-time" } } },
+      "RuleExecutionEvidenceCollection": { "type": "object", "additionalProperties": false, "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RuleExecutionEvidence" } } } }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 27,
+  "registryRevision": 28,
   "routes": [
     {
       "method": "GET",
@@ -1131,6 +1131,96 @@
       "rollout": {
         "mode": "all"
       },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rules/catalog",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rules/revisions",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/rules/validate",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/rules/simulate",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/rules/releases",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rules/bindings",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/rules/assignments",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/rules/bindings/{bindingId}/retire",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/rules/executions",
+      "owner": "rule-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
       "compatibilityMode": "native",
       "allowedScopeDimensions": ["tenant", "site", "principal"]
     }

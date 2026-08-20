@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 10
+const CapabilitySetVersion = 11
 
 type Capability string
 
@@ -42,6 +42,7 @@ const (
 	CapabilityTemplateManage        Capability = "template.manage"
 	CapabilityRegistryImport        Capability = "registry.import"
 	CapabilityRegistryRetire        Capability = "registry.retire"
+	CapabilityRuleManage            Capability = "rule.manage"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -76,6 +77,7 @@ var supportedCapabilities = [...]Capability{
 	CapabilityTemplateManage,
 	CapabilityRegistryImport,
 	CapabilityRegistryRetire,
+	CapabilityRuleManage,
 }
 
 func SupportedCapabilities() []Capability {
@@ -114,7 +116,8 @@ func (capability Capability) Valid() bool {
 		CapabilityBindingWrite,
 		CapabilityTemplateManage,
 		CapabilityRegistryImport,
-		CapabilityRegistryRetire:
+		CapabilityRegistryRetire,
+		CapabilityRuleManage:
 		return true
 	default:
 		return false

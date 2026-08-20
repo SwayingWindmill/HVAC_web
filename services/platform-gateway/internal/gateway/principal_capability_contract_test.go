@@ -44,6 +44,7 @@ func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {
 		platformapi.CapabilityTemplateManage,
 		platformapi.CapabilityRegistryImport,
 		platformapi.CapabilityRegistryRetire,
+		platformapi.CapabilityRuleManage,
 	}
 	internalCapabilities := identitycontext.SupportedCapabilities()
 	if len(publicCapabilities) != len(internalCapabilities) {

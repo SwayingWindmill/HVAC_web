@@ -286,7 +286,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 65, `production migration allowlist must contain exactly 65 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.length === 71, `production migration allowlist must contain exactly 71 migrations, got ${manifestEntries.length}`);
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');

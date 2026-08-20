@@ -51,7 +51,9 @@ COPY infra/s1-registry/postgres/init/013-s22-intelligence-products.sql /opt/hvac
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
+COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/hvac/repo/services/rule-runtime-service/migrations/002_s21_rule_management.sql
 COPY infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql
+COPY infra/s1-registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/s1-registry/postgres/init/014-s21-rule-management-capability.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
