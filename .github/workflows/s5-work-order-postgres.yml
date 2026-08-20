@@ -15,7 +15,7 @@ on:
       - 'services/work-order-service/**'
       - 'scripts/check-s5-work-order-baseline.mjs'
       - 'scripts/check-s5-work-order-postgres.mjs'
-      - 'scripts/run-s5-work-order-postgres-tests.mjs'
+      - 'scripts/run-s5-work-order-postgres-tests.ts'
   push:
     branches: [main]
     paths:
@@ -30,7 +30,7 @@ on:
       - 'services/work-order-service/**'
       - 'scripts/check-s5-work-order-baseline.mjs'
       - 'scripts/check-s5-work-order-postgres.mjs'
-      - 'scripts/run-s5-work-order-postgres-tests.mjs'
+      - 'scripts/run-s5-work-order-postgres-tests.ts'
   workflow_dispatch:
 
 permissions:

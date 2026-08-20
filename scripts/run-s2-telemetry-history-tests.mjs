@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
-import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
+import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
@@ -12,12 +12,6 @@ const reportPath = resolve(root, process.env.S2_HISTORY_REPORT_PATH ?? 'out/s2-h
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const clickHouseImage = 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
 async function findAvailablePort() {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
@@ -49,7 +43,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 function container(service) {

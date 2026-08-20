@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createTCPServer } from 'node:net';
+import { dockerComposeInvocation } from './docker-cli.mjs';
 
 export function runCommand(command: string, args: string[], options: Record<string, unknown> = {}) {
   const result = spawnSync(command, args, {
@@ -31,12 +32,6 @@ export async function findAvailablePort(label: string, requestedPort = 0) {
 
 export function expectEqual(actual: string, expected: string, label: string) {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
-}
-
-function detectComposeInvocation() {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
 }
 
 export type PostgresAuthorityReport = {
@@ -71,7 +66,6 @@ export async function createPostgresComposeHarness(options: HarnessOptions) {
     portAllocatorLabel,
     requestedPort = 0,
   } = options;
-  const composeInvocation = detectComposeInvocation();
   const postgresHostPort = await findAvailablePort(portAllocatorLabel, Number(requestedPort) || 0);
   const composeEnvironment = { ...process.env, [hostPortEnvName]: String(postgresHostPort) };
   const containerName = `${projectName}-postgres-1`;
@@ -81,11 +75,8 @@ export async function createPostgresComposeHarness(options: HarnessOptions) {
   }
 
   function compose(args: string[]) {
-    return run(
-      composeInvocation.command,
-      [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args],
-      { env: composeEnvironment },
-    );
+    const invocation = dockerComposeInvocation(['-p', projectName, '-f', composePath, ...args]);
+    return run(invocation.command, invocation.args, { env: composeEnvironment });
   }
 
   function psql(sql: string, { expectFailure = false } = {}) {

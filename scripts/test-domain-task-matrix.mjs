@@ -333,7 +333,7 @@ test('capability task CLI preserves command order for migrated aggregates', () =
     'npm run s5:work-order:create-assign:check',
     'node scripts/run-go.mjs test -count=1 ./libs/workorderauth/... ./libs/workordermodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/iam-service/... ./services/platform-gateway/... ./services/work-order-service/...',
     'node scripts/run-go.mjs vet ./libs/workorderauth/... ./libs/workordermodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/iam-service/... ./services/platform-gateway/... ./services/work-order-service/...',
-    'node scripts/run-s5-work-order-postgres-tests.mjs',
+    'node --experimental-strip-types scripts/run-s5-work-order-postgres-tests.ts',
     'npm run s5:work-order:create-assign:browser',
   ]);
 });

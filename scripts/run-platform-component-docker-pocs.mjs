@@ -4,6 +4,8 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import WebSocket from 'ws';
 
+import { runDockerCompose } from './lib/docker-cli.mjs';
+
 const root = resolve(process.cwd());
 const argument = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const cleanup = argument('cleanup') !== 'false';
@@ -27,7 +29,6 @@ const environment = {
   POC_CENTRIFUGO_PORT: '0',
 };
 let composeStarted = false;
-let composeInvocation = null;
 let lockAcquired = false;
 const ports = {};
 
@@ -69,16 +70,7 @@ async function run(command, args, options = {}) {
 }
 
 async function compose(args, options = {}) {
-  if (!composeInvocation) {
-    try {
-      await run('docker', ['compose', 'version']);
-      composeInvocation = { command: 'docker', prefix: ['compose'] };
-    } catch {
-      await run('docker-compose', ['version']);
-      composeInvocation = { command: 'docker-compose', prefix: [] };
-    }
-  }
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-f', composeFile, '-p', project, ...args], options);
+  return runDockerCompose(run, ['-f', composeFile, '-p', project, ...args], options);
 }
 
 async function publishedPort(service, containerPort) {

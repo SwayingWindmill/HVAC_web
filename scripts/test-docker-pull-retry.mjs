@@ -1,4 +1,4 @@
-import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
+import { pullDockerImageWithRetry } from './lib/docker-cli.mjs';
 
 const image = 'example.invalid/component:v1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
