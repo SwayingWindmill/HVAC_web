@@ -516,3 +516,25 @@ Optimization 只产生 Recommendation。只有审批后才能创建 Command Inte
 | `npm run test:gateway` | `FAIL` | 一部分失败来自 `go-redis` 下载网络不可用；S3 Local Gateway 测试还引用已删除的 `OrganizationID/organizationID`，属于真实测试漂移 |
 
 所以本轮可以关闭“裁决”票，但不能把 Forecast、Optimization、Analytics/Gateway 全量回归或外部交付能力标为完成。未运行的真实 OpenAI Provider、PostgreSQL、ClickHouse、Docker、Broker 和云服务集成也不得写成已验证。
+
+## 17. S22 实施证据（Issue #282）
+
+S22 按本文固定裁决继续执行，并再次对照固定 ThingsBoard CE v4.3.1.1 / `c2a52e46c44e308ddee430e7266b8e10eddde9c4` 的 `AiModelController.java`、`AiModel.java`、`AiModelControllerTest.java` 与官方 AI Model / AI Request 文档。实现继续遵循以下 ADOPT / ADAPT / REJECT：
+
+- **ADOPT**：Model Definition 目录、明确 Provider/Model ID、结构化输出 Schema、Provider Connectivity/Failure 显式化、不可变 Revision 思路。
+- **ADAPT**：凭据从 Model JSON 中拆成 `CredentialRef`；加入 Tenant/Site/Use Case、Data Egress Policy、预算、Input Digest、Evidence IDs、Token/Cost/Latency 与 Failure Code；Deployment Revision 作为不可变事实，启用/回滚通过独立 Binding 指向别的 Revision。
+- **REJECT**：Secret-in-model、AI 普通消息直接成为领域事实、AI/FDD/Optimization 直接持有 Command/Alarm/Work Order 写权限，以及把 Rule Chain 消息流直接等价为 HVAC 控制链。
+
+S22 已把本文 12.2 / Intelligence Product Gate 的核心缺口落到代码：
+
+1. `libs/intelligencemodel` 定义 ModelDefinition、DeploymentRevision、DataEgressPolicy、Invocation Provenance、FDD Finding、Optimization Recommendation 与独立 Current-State Revalidation；公开结构没有 API Key/Password/Secret 字段。
+2. Invocation Adapter 在 Provider 调用前执行 Data Egress 与预算判定，严格 JSON Schema 解码；`PROVIDER_UNAVAILABLE`、`OUTPUT_SCHEMA_INVALID`、`BUDGET_EXCEEDED`、`DATA_EGRESS_DENIED` 为独立失败码。
+3. Forecast 只接受带时间戳 Observation；四个及以上输入进入拟合模型并输出 `VALID + uncertainty bounds`，短历史显式 `FALLBACK`，零输入直接失败；PostgreSQL Snapshot 与 ClickHouse 点集必须 provenance 一致才允许读取。
+4. Forecast/Optimization 均接入 Scheduler 的 Claim/Lease/Attempt/Retry/Lease-expiry recovery，不再只有 Job Type 和表结构。
+5. FDD 首条真实规则为 Chilled-Water Low Delta-T：冻结评估窗口、供回水 Evidence、Rule/Model Revision、Confidence；Finding 不自动生成 Alarm/Work Order，只保存显式链接。
+6. Optimization 删除运行时 ESS `NO_DISPATCH` 产品链，改为 HVAC Recommendation：Baseline、Objective、Comfort/Safety Constraints、Candidate、Expected Impact、Uncertainty、Risk、Rollback、Verification 全部齐备；Recommendation 保持非执行对象。
+7. Recommendation 即使 APPROVED，也只有在 recommendation 创建之后完成独立 Current-State Revalidation 且仍未过期时，数据库和领域模型才允许挂接 Command Intent。
+8. Gateway 通过 Wayfinder route owner 将 Forecast/FDD/Optimization 路由分别交给对应领域服务；Gateway 只做 Session、CSRF（写请求）、精确 Site 授权和代理，不拼造 Intelligence 事实。
+9. Real UI 直接读取已发布 Forecast/FDD/Optimization 事实；Forecast 的 FALLBACK/uncertainty 明示，Optimization 页面不提供直接 Command 下发入口。
+
+S22 同时保留既有 `mlops_*` Metadata Domain：它继续记录 Artifact/Evaluation/Approval/Deployment Metadata/Drift/Rollback；新增 AI Model Registry 负责 Provider Model 与 Invocation Policy，不用两套表同时充当同一个 owner。

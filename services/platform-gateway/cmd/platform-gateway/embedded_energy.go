@@ -700,7 +700,7 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 	historyClient, err := queryservice.NewHistoryClient(queryservice.HistoryConfig{
 		BaseURL: energyRequiredEnv("QUERY_HISTORY_CLICKHOUSE_ENDPOINT"), Database: envOr("QUERY_HISTORY_CLICKHOUSE_DATABASE", "telemetry_history"),
 		Table: envOr("QUERY_HISTORY_CLICKHOUSE_TABLE", "observations"), Username: envOr("QUERY_HISTORY_CLICKHOUSE_USERNAME", "telemetry_query_history_reader"),
-		Password: os.Getenv("QUERY_HISTORY_CLICKHOUSE_PASSWORD"), DatasetRevision: energyRequiredEnv("QUERY_HISTORY_DATASET_REVISION"), HTTPClient: historyHTTPClient,
+		Password: os.Getenv("QUERY_HISTORY_CLICKHOUSE_PASSWORD"), HTTPClient: historyHTTPClient,
 	})
 	if err != nil {
 		return nil, nil, err

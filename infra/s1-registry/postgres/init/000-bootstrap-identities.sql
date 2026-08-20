@@ -38,6 +38,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'optimization_runtime') THEN
     CREATE ROLE optimization_runtime LOGIN PASSWORD 'optimization-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fdd_runtime') THEN
+    CREATE ROLE fdd_runtime LOGIN PASSWORD 'fdd-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
 END
 $$;
 
@@ -50,9 +53,9 @@ REVOKE ALL ON SCHEMA core_registry FROM PUBLIC;
 
 GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler,
   s1_core_migrator, s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime,
-  forecast_runtime, optimization_runtime;
+  forecast_runtime, optimization_runtime, fdd_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler, maintenance_runtime;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime,
-  forecast_runtime, optimization_runtime;
+  forecast_runtime, optimization_runtime, fdd_runtime;
 
 COMMIT;

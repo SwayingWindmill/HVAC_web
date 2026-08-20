@@ -17,9 +17,28 @@ type Publication struct {
 	Request        Request
 	ResultCount    int
 	ResultChecksum string
+	Quality        string
 	WindowStart    time.Time
 	WindowEnd      time.Time
 }
+
+type ForecastSnapshotReference struct {
+	SnapshotID      string    `json:"snapshotId"`
+	ForecastJobID   string    `json:"forecastJobId"`
+	DeploymentID    string    `json:"deploymentId"`
+	ModelVersionID  string    `json:"modelVersionId"`
+	InputSnapshotID string    `json:"inputSnapshotId"`
+	SubjectType     string    `json:"subjectType"`
+	SubjectID       string    `json:"subjectId"`
+	Target          string    `json:"target"`
+	ForecastOrigin  time.Time `json:"forecastOrigin"`
+	WindowStart     time.Time `json:"windowStart"`
+	WindowEnd       time.Time `json:"windowEnd"`
+	ResultCount     int       `json:"resultCount"`
+	Quality         string    `json:"quality"`
+}
+
+var ErrForecastNotFound = errors.New("forecast result not found")
 
 type PublicationStore interface {
 	StartJob(context.Context, Request, time.Time) error
@@ -27,6 +46,7 @@ type PublicationStore interface {
 	CompletePublication(context.Context, Publication, time.Time) error
 	FailJob(context.Context, Request, string, time.Time) error
 	ListStalePublications(context.Context, time.Time, int) ([]Publication, error)
+	LatestForecast(context.Context, string, string, string) (ForecastSnapshotReference, error)
 }
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -91,10 +111,11 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='RUNNIN
 		return err
 	}
 	evidence, _ := json.Marshal(map[string]any{
-		"resultCount": publication.ResultCount,
+		"resultCount":    publication.ResultCount,
 		"resultChecksum": publication.ResultChecksum,
-		"windowStart": publication.WindowStart.UTC(),
-		"windowEnd": publication.WindowEnd.UTC(),
+		"quality":        publication.Quality,
+		"windowStart":    publication.WindowStart.UTC(),
+		"windowEnd":      publication.WindowEnd.UTC(),
 	})
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.cross_store_publications(
 id,tenant_id,site_id,producer,run_id,result_id,target_store,target_dataset,publication_evidence,status,started_at,revision,created_at,updated_at)
@@ -126,7 +147,7 @@ SET status='PERSISTED',completed_at=COALESCE(completed_at,$4),updated_at=$4,revi
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status IN ('PERSISTING','PERSISTED')`, request.TenantID, request.SiteID, request.ForecastJobID, at); err != nil {
 		return err
 	}
-	quality := map[string]any{"resultQuality": "FALLBACK"}
+	quality := map[string]any{"resultQuality": publication.Quality}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.forecast_snapshots(
 id,tenant_id,site_id,forecast_job_id,deployment_id,model_version_id,input_snapshot_id,forecast_origin,window_start,window_end,result_count,result_checksum,quality_summary,created_at)
 VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8,$9,$10,$11,$12,$13::jsonb,$14)
@@ -143,13 +164,13 @@ ON CONFLICT (tenant_id,site_id,forecast_job_id) DO NOTHING`,
 	}
 	payload := encodeForecastJSON(map[string]any{
 		"forecastSnapshotId": request.ForecastSnapshotID,
-		"forecastJobId": request.ForecastJobID,
-		"target": request.Target,
-		"subjectType": request.SubjectType,
-		"subjectId": request.SubjectID,
-		"forecastOrigin": request.ForecastOrigin.UTC(),
-		"windowStart": publication.WindowStart.UTC(),
-		"windowEnd": publication.WindowEnd.UTC(),
+		"forecastJobId":      request.ForecastJobID,
+		"target":             request.Target,
+		"subjectType":        request.SubjectType,
+		"subjectId":          request.SubjectID,
+		"forecastOrigin":     request.ForecastOrigin.UTC(),
+		"windowStart":        publication.WindowStart.UTC(),
+		"windowEnd":          publication.WindowEnd.UTC(),
 	})
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.domain_outbox_events(
 id,tenant_id,site_id,event_type,schema_version,subject_type,subject_id,aggregate_type,aggregate_id,aggregate_version,occurred_at,payload,created_at)
@@ -227,17 +248,61 @@ ORDER BY p.updated_at,p.id LIMIT $2`, staleBefore, limit)
 		var value struct {
 			ResultCount    int       `json:"resultCount"`
 			ResultChecksum string    `json:"resultChecksum"`
+			Quality        string    `json:"quality"`
 			WindowStart    time.Time `json:"windowStart"`
 			WindowEnd      time.Time `json:"windowEnd"`
 		}
 		if err = json.Unmarshal(evidence, &value); err != nil {
 			return nil, err
 		}
-		publication.ResultCount, publication.ResultChecksum = value.ResultCount, value.ResultChecksum
+		publication.ResultCount, publication.ResultChecksum, publication.Quality = value.ResultCount, value.ResultChecksum, value.Quality
 		publication.WindowStart, publication.WindowEnd = value.WindowStart, value.WindowEnd
 		publications = append(publications, publication)
 	}
 	return publications, rows.Err()
+}
+
+func (store *PostgresStore) LatestForecast(ctx context.Context, tenantID, siteID, target string) (ForecastSnapshotReference, error) {
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || (target != "SITE_LOAD" && target != "PV_GENERATION") {
+		return ForecastSnapshotReference{}, errors.New("latest forecast scope or target is invalid")
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ForecastSnapshotReference{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = forecastScope(ctx, tx, tenantID, siteID); err != nil {
+		return ForecastSnapshotReference{}, err
+	}
+	var reference ForecastSnapshotReference
+	var qualitySummary []byte
+	err = tx.QueryRow(ctx, `SELECT s.id::text,s.forecast_job_id::text,s.deployment_id::text,s.model_version_id::text,s.input_snapshot_id::text,
+j.subject_type,j.subject_id::text,j.target,s.forecast_origin,s.window_start,s.window_end,s.result_count,s.quality_summary
+FROM core_registry.forecast_snapshots s
+JOIN core_registry.forecast_jobs j ON j.tenant_id=s.tenant_id AND j.site_id=s.site_id AND j.id=s.forecast_job_id
+WHERE s.tenant_id=$1::uuid AND s.site_id=$2::uuid AND j.target=$3 AND j.status='PERSISTED'
+ORDER BY s.forecast_origin DESC,s.created_at DESC
+LIMIT 1`, tenantID, siteID, target).Scan(
+		&reference.SnapshotID, &reference.ForecastJobID, &reference.DeploymentID, &reference.ModelVersionID, &reference.InputSnapshotID,
+		&reference.SubjectType, &reference.SubjectID, &reference.Target, &reference.ForecastOrigin, &reference.WindowStart, &reference.WindowEnd, &reference.ResultCount, &qualitySummary,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ForecastSnapshotReference{}, ErrForecastNotFound
+	}
+	if err != nil {
+		return ForecastSnapshotReference{}, err
+	}
+	var quality struct {
+		ResultQuality string `json:"resultQuality"`
+	}
+	if err = json.Unmarshal(qualitySummary, &quality); err != nil || (quality.ResultQuality != "VALID" && quality.ResultQuality != "DEGRADED" && quality.ResultQuality != "FALLBACK") {
+		return ForecastSnapshotReference{}, errors.New("persisted forecast quality summary is invalid")
+	}
+	reference.Quality = quality.ResultQuality
+	if err = tx.Commit(ctx); err != nil {
+		return ForecastSnapshotReference{}, err
+	}
+	return reference, nil
 }
 
 func encodeForecastJSON(value any) []byte {

@@ -207,7 +207,7 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			claims.IssuedAt != now.Unix() {
 			t.Fatalf("unexpected Operations claims: %+v", claims)
 		}
-		if request.Header.Get("X-Acting-Organization-ID") != fixture.tenantID || request.Header.Get("X-Route-Policy-Revision") != "0" {
+		if request.Header.Get("X-Tenant-ID") != fixture.tenantID || request.Header.Get("X-Route-Policy-Revision") != "0" {
 			t.Fatal("missing authoritative Operations headers")
 		}
 		if fixture.rejectUnsafe.Load() && strings.HasSuffix(request.URL.Path, ":advance") {

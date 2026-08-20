@@ -246,9 +246,9 @@ WHERE job_id=$1::uuid AND state IN ('CLAIMED','RUNNING')`, job.id, state, nextRe
 			if _, err = tx.Exec(ctx, `UPDATE core_registry.job_attempts
 SET completed_at=COALESCE(completed_at,$4),result_status=COALESCE(result_status,$3),error_code=COALESCE(error_code,$5),error_message=COALESCE(error_message,$5),duration_ms=COALESCE(duration_ms,GREATEST(0,EXTRACT(EPOCH FROM ($4-started_at))*1000)::bigint)
 WHERE job_id=$1::uuid AND attempt_no=$2 AND completed_at IS NULL`, job.id, job.attempts, resultStatus, now.UTC(), errorCode); err != nil {
-			return 0, err
+				return 0, err
+			}
 		}
-	}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
@@ -552,7 +552,7 @@ func priorityForJobType(jobType string) int {
 
 func isLeaseRetrySafeJob(jobType string) bool {
 	switch jobType {
-	case "METRIC_WINDOW_CALC", "METRIC_RECALC", "METRIC_BACKFILL",
+	case "METRIC_WINDOW_CALC", "METRIC_RECALC", "METRIC_BACKFILL", "FORECAST_RUN",
 		"DATA_RETENTION_SCAN", "DATA_ARCHIVE", "CERTIFICATE_EXPIRY_SCAN",
 		"OUTBOX_CLEANUP", "INBOX_CLEANUP", "PROJECTION_REPAIR",
 		"DEAD_WORK_DISPOSITION", "TENANT_RETIREMENT":

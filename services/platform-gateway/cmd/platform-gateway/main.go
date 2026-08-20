@@ -79,6 +79,13 @@ func main() {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	intelligenceConfig := &gateway.IntelligenceConfig{
+		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "http://forecast-service:19092"),
+		FDDBaseURL:          envOr("FDD_SERVICE_URL", "http://fdd-service:19094"),
+		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
+		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
+		Timeout:             8 * time.Second,
+	}
 	operationsConfig, closeOperations, err := loadOperationsConfig(runContext, workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_operations_config_invalid", "error_code", "OPERATIONS_CONFIG_INVALID")
@@ -110,6 +117,7 @@ func main() {
 		Alarm:         alarmConfig,
 		WorkOrder:     workOrderConfig,
 		Analytics:     analyticsConfig,
+		Intelligence:  intelligenceConfig,
 		Operations:    operationsConfig,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{

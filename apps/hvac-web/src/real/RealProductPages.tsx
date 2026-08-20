@@ -45,7 +45,16 @@ import {
 } from '@/components/OperationsUI';
 import type { CurrentPrincipalResponse, DashboardMetric, Site } from '@/api/generated/platformGateway.gen';
 import { useSiteDashboardSummary } from '@/api/site-dashboard';
+import {
+  getLatestOptimizationRecommendation,
+  getSiteLoadForecast,
+  listSiteFDDFindings,
+  type FDDFinding,
+  type PublishedForecast,
+  type PublishedRecommendation,
+} from '@/api/intelligence';
 import { boundaryMeta } from '@/features/real-read-model-boundary';
+import { FDD_READ_MODEL_BOUNDARY } from '@/features/fdd/capability';
 import { FORECAST_READ_MODEL_BOUNDARY } from '@/features/forecast/capability';
 import { OPTIMIZATION_READ_MODEL_BOUNDARY } from '@/features/optimization/capability';
 import { SETTLEMENT_READ_MODEL_BOUNDARY } from '@/features/settlement/capability';
@@ -56,6 +65,37 @@ import '@/styles/real-product-pages.css';
 interface RealProductPageProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
+}
+
+function useIntelligenceResource<T>(siteId: string, load: (siteId: string, signal?: AbortSignal) => Promise<T>) {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    load(siteId, controller.signal)
+      .then((value) => setData(value))
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Intelligence 服务暂时不可用。');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [siteId, load]);
+  return { data, loading, error };
+}
+
+function numberValue(object: Record<string, unknown>, key: string): number | null {
+  const value = object[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function stringValue(object: Record<string, unknown>, key: string): string | null {
+  const value = object[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 type EmptyRow = { key: string };
@@ -99,28 +139,6 @@ function EmptyProductTable({
   );
 }
 
-const FDD_COLUMNS: ColumnsType<EmptyRow> = [
-  { title: '诊断', key: 'diagnosis', width: 160 },
-  { title: '设备 / 范围', key: 'device', width: 220 },
-  { title: '故障现象', key: 'phenomenon', width: 260 },
-  { title: '根因假设', key: 'cause', width: 220 },
-  { title: '置信度', key: 'confidence', width: 130 },
-  { title: '证据', key: 'evidence', width: 120 },
-  { title: '工单状态', key: 'workOrder', width: 130 },
-  { title: '操作', key: 'action', width: 150 },
-];
-
-const OPTIMIZE_COLUMNS: ColumnsType<EmptyRow> = [
-  { title: '建议', key: 'suggestion', width: 270 },
-  { title: '调整内容', key: 'diff', width: 210 },
-  { title: '预计收益', key: 'saving', width: 180 },
-  { title: '置信度', key: 'confidence', width: 130 },
-  { title: '风险', key: 'risk', width: 100 },
-  { title: '状态', key: 'status', width: 100 },
-  { title: '审核人', key: 'reviewer', width: 120 },
-  { title: '操作', key: 'action', width: 180 },
-];
-
 const COST_COLUMNS: ColumnsType<EmptyRow> = [
   { title: '建议', key: 'suggestion', width: 260 },
   { title: '预计节省', key: 'saving', width: 150 },
@@ -130,38 +148,44 @@ const COST_COLUMNS: ColumnsType<EmptyRow> = [
 ];
 
 export function RealFddPage({ site }: RealProductPageProps) {
+  const { data: findings, loading, error } = useIntelligenceResource<FDDFinding[]>(site.id, listSiteFDDFindings);
+  const rows = findings ?? [];
+  const linkedWorkOrders = rows.filter((finding) => Boolean(finding.workOrderId)).length;
+  const highRisk = rows.filter((finding) => finding.confidence >= 0.8).length;
+  const averageConfidence = rows.length > 0 ? Math.round(rows.reduce((sum, finding) => sum + finding.confidence, 0) / rows.length * 100) : 0;
+  const columns: ColumnsType<FDDFinding> = [
+    { title: '诊断', dataIndex: 'findingType', width: 220, render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
+    { title: 'Asset', dataIndex: 'assetId', width: 300, ellipsis: true },
+    { title: '评估窗口', key: 'window', width: 300, render: (_, row) => `${new Date(row.evaluationFrom).toLocaleString()} → ${new Date(row.evaluationTo).toLocaleString()}` },
+    { title: '置信度', dataIndex: 'confidence', width: 120, render: (value: number) => `${Math.round(value * 100)}%` },
+    { title: '证据', key: 'evidence', width: 100, render: (_, row) => `${row.evidenceIds.length} 项` },
+    { title: 'Rule / Model Revision', key: 'revision', width: 300, render: (_, row) => row.ruleRevisionId || row.modelDeploymentRevisionId || '—' },
+    { title: 'Alarm', dataIndex: 'alarmId', width: 280, render: (value?: string) => value || '未关联' },
+    { title: 'Work Order', dataIndex: 'workOrderId', width: 280, render: (value?: string) => value || '未关联' },
+  ];
   return (
-    <ProductBoundary site={site} testId="real-site-route-fdd">
+    <ProductBoundary site={site} testId="real-site-route-fdd" state={FDD_READ_MODEL_BOUNDARY.status}>
       <PageScaffold
         title="故障检测与诊断 FDD"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><BugOutlined />故障检测与诊断 FDD</Space></FocusHeading>}
-        extra={<Tag>真实诊断服务待接入</Tag>}
+        extra={<Tag>{boundaryMeta(FDD_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
-          type="info"
+          type={error ? 'error' : 'info'}
           showIcon
           icon={<BugOutlined />}
-          message="FDD 只负责发现与诊断，不直接闭环；确认后生成工单，由报警工单承接派工、处理和完成确认。"
-          description="当前站点尚未提供权威 FDD Read Model，因此保留 Demo 的指标、筛选、诊断列表和详情入口，不填充演示诊断。"
+          message={error ? 'FDD 权威结果读取失败' : 'FDD Finding 是证据化诊断事实，不等同于 Alarm 或 Work Order。'}
+          description={error ?? '每条 Finding 都保留评估窗口、证据、Rule/Model Revision 和显式 Alarm/Work Order 链接；检测本身不会直接产生控制动作。'}
         />
         <OperationsMetrics items={[
-          { label: '活跃诊断', value: '—', detail: '等待 FDD Read Model', icon: <BugOutlined />, tone: 'accent' },
-          { label: '高风险', value: '—', detail: '不会从遥测自行推断故障', icon: <SafetyCertificateOutlined /> },
-          { label: '已生成工单', value: '—', detail: '等待诊断与工单关联接口', icon: <NodeIndexOutlined /> },
-          { label: '平均置信度', value: '—', suffix: '%', detail: '没有权威模型结果', icon: <ThunderboltOutlined /> },
+          { label: '活跃诊断', value: loading ? '…' : rows.length, detail: '权威 FDD Finding', icon: <BugOutlined />, tone: 'accent' },
+          { label: '高置信 Finding', value: loading ? '…' : highRisk, detail: 'confidence ≥ 80%', icon: <SafetyCertificateOutlined /> },
+          { label: '已关联工单', value: loading ? '…' : linkedWorkOrders, detail: '显式 Work Order 链接', icon: <NodeIndexOutlined /> },
+          { label: '平均置信度', value: loading ? '…' : averageConfidence, suffix: '%', detail: rows.length ? '来自已发布 Finding' : '当前无 Finding', icon: <ThunderboltOutlined /> },
         ]} />
         <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <div className="ops-toolbar">
-              <OperationsPanelHeading icon={<NodeIndexOutlined />} title="诊断列表" meta="0 条" />
-              <Space wrap>
-                <Input.Search disabled placeholder="搜索设备、现象、根因、建议" style={{ width: 280 }} />
-                <Select disabled value="all" options={[{ label: '全部级别', value: 'all' }]} style={{ width: 130 }} />
-                <Select disabled value="all" options={[{ label: '全部状态', value: 'all' }]} style={{ width: 130 }} />
-              </Space>
-            </div>
-            <EmptyProductTable columns={FDD_COLUMNS} scroll={1450} description="FDD 权威诊断服务尚未接入；未使用 Demo 数据替代" />
-          </Space>
+          <OperationsPanelHeading icon={<NodeIndexOutlined />} title="诊断列表" meta={`${rows.length} 条`} />
+          <Table<FDDFinding> rowKey="id" loading={loading} columns={columns} dataSource={rows} pagination={{ pageSize: 20 }} scroll={{ x: 1800 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前 Site 没有已发布 FDD Finding" /> }} />
         </Card>
       </PageScaffold>
     </ProductBoundary>
@@ -169,80 +193,109 @@ export function RealFddPage({ site }: RealProductPageProps) {
 }
 
 export function RealOptimizePage({ site }: RealProductPageProps) {
+  const { data: published, loading, error } = useIntelligenceResource<PublishedRecommendation | null>(site.id, getLatestOptimizationRecommendation);
+  const recommendation = published?.recommendation ?? null;
+  const energySaving = recommendation ? numberValue(recommendation.expectedImpact, 'energySavingKWhPerDay') : null;
+  const costSaving = recommendation ? numberValue(recommendation.expectedImpact, 'costSavingPerDay') : null;
+  const risk = recommendation ? stringValue(recommendation.risk, 'level') : null;
+  const candidateSupply = recommendation ? numberValue(recommendation.candidate, 'supplyTempC') : null;
+  const revalidationState = recommendation?.currentStateRevalidation?.accepted ? '已复核' : '未复核';
   return (
-    <ProductBoundary site={site} testId="real-site-route-optimize">
+    <ProductBoundary site={site} testId="real-site-route-optimize" state={OPTIMIZATION_READ_MODEL_BOUNDARY.status}>
       <PageScaffold
         title="节能优化建议"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><ThunderboltOutlined />节能优化建议</Space></FocusHeading>}
         extra={<Tag>{boundaryMeta(OPTIMIZATION_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
-          type="info"
+          type={error ? 'error' : 'info'}
           showIcon
           icon={<ExperimentOutlined />}
-          message="人在回路：建议先评估收益、舒适度影响和回滚条件；审批通过后仍需二次确认，绝不直接静默下发设备。"
-          description={`当前站点尚未提供权威 ${OPTIMIZATION_READ_MODEL_BOUNDARY.label}。只展示契约边界，不使用 Demo 或浏览器估算替代。`}
+          message={error ? 'Optimization 权威建议读取失败' : 'Recommendation 不是 Command。审批通过后仍必须进行独立当前状态复核。'}
+          description={error ?? '页面只展示已 PUBLISHED 的 Recommendation：收益、约束、不确定性、风险、回滚和验证计划都必须完整；这里没有直接下发控制的按钮。'}
         />
         <OperationsMetrics items={[
-          { label: '预计节电', value: '—', suffix: 'kWh/天', detail: '等待优化建议数据', icon: <ThunderboltOutlined />, tone: 'accent' },
-          { label: '预计节省', value: '—', detail: '没有权威收益估算', icon: <DollarOutlined /> },
-          { label: '减排量', value: '—', suffix: 'kgCO₂/天', detail: '等待真实折算口径', icon: <CloudOutlined /> },
-          { label: '待处理', value: '—', detail: '等待审批状态投影', icon: <FieldTimeOutlined /> },
+          { label: '预计节电', value: loading ? '…' : energySaving ?? '—', suffix: 'kWh/天', detail: recommendation ? '模型预期收益' : '当前无已发布建议', icon: <ThunderboltOutlined />, tone: 'accent' },
+          { label: '预计节省', value: loading ? '…' : costSaving ?? '—', detail: recommendation ? '同一冻结基线' : '当前无已发布建议', icon: <DollarOutlined /> },
+          { label: '风险', value: loading ? '…' : risk ?? '—', detail: recommendation ? 'Recommendation 风险评估' : '当前无已发布建议', icon: <SafetyCertificateOutlined /> },
+          { label: '当前状态复核', value: loading ? '…' : recommendation ? revalidationState : '—', detail: '创建 Command 前必须通过', icon: <FieldTimeOutlined /> },
         ]} />
-        <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <div className="ops-toolbar">
-              <OperationsPanelHeading icon={<SafetyCertificateOutlined />} title="建议评估池" meta="0 条" />
-              <Space wrap>
-                <Input.Search disabled placeholder="搜索建议、设备、范围、审核人" style={{ width: 280 }} />
-                <Select disabled value="all" options={[{ label: '全部类型', value: 'all' }]} style={{ width: 150 }} />
-                <Select disabled value="all" options={[{ label: '全部状态', value: 'all' }]} style={{ width: 130 }} />
-                <Select disabled value="all" options={[{ label: '全部风险', value: 'all' }]} style={{ width: 120 }} />
-              </Space>
-            </div>
-            <EmptyProductTable columns={OPTIMIZE_COLUMNS} scroll={1360} description="Optimization 权威建议服务尚未接入；未使用 Demo 建议替代" />
+        {recommendation ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Card variant="borderless" title={<OperationsPanelHeading icon={<SafetyCertificateOutlined />} title="最新 Recommendation" meta={`${published?.runStatus ?? '—'} · ${recommendation.approval}`} />}>
+              <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+                <Descriptions.Item label="Run ID">{published?.runId}</Descriptions.Item>
+                <Descriptions.Item label="Recommendation ID">{recommendation.id}</Descriptions.Item>
+                <Descriptions.Item label="Deployment Revision">{recommendation.deploymentRevisionId}</Descriptions.Item>
+                <Descriptions.Item label="Input Snapshot">{recommendation.inputSnapshotId}</Descriptions.Item>
+                <Descriptions.Item label="Candidate Supply Temp">{candidateSupply === null ? '—' : `${candidateSupply} °C`}</Descriptions.Item>
+                <Descriptions.Item label="Risk">{risk ?? '—'}</Descriptions.Item>
+                <Descriptions.Item label="Approval">{recommendation.approval}</Descriptions.Item>
+                <Descriptions.Item label="Command Intent">{recommendation.commandIntentId || '无；Recommendation 未直接产生 Command'}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} xl={12}><Card title="约束 / 不确定性" variant="borderless"><pre className="real-json-evidence">{JSON.stringify({ constraints: recommendation.constraints, uncertainty: recommendation.uncertainty, risk: recommendation.risk }, null, 2)}</pre></Card></Col>
+              <Col xs={24} xl={12}><Card title="回滚 / 验证计划" variant="borderless"><pre className="real-json-evidence">{JSON.stringify({ rollbackPlan: recommendation.rollbackPlan, verificationPlan: recommendation.verificationPlan }, null, 2)}</pre></Card></Col>
+            </Row>
           </Space>
-        </Card>
+        ) : !loading && !error ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前 Site 没有已发布 Optimization Recommendation" /> : null}
       </PageScaffold>
     </ProductBoundary>
   );
 }
 
 export function RealForecastPage({ site }: RealProductPageProps) {
+  const { data: forecast, loading, error } = useIntelligenceResource<PublishedForecast | null>(site.id, getSiteLoadForecast);
+  const points = forecast?.points ?? [];
+  const first = points[0];
+  const last = points[points.length - 1];
+  const columns: ColumnsType<PublishedForecast['points'][number]> = [
+    { title: '预测时间', dataIndex: 'forecast_for', width: 220, render: (value: string) => new Date(value).toLocaleString() },
+    { title: 'Horizon', dataIndex: 'horizon_minutes', width: 120, render: (value: number) => `${value} min` },
+    { title: '预测值', dataIndex: 'value', width: 140, render: (value: number, row) => `${value.toFixed(1)} ${row.unit}` },
+    { title: '下界', dataIndex: 'lower_bound', width: 120, render: (value: number | null, row) => value === null ? '—' : `${value.toFixed(1)} ${row.unit}` },
+    { title: '上界', dataIndex: 'upper_bound', width: 120, render: (value: number | null, row) => value === null ? '—' : `${value.toFixed(1)} ${row.unit}` },
+    { title: '质量', dataIndex: 'quality', width: 120, render: (value: string) => <Tag color={value === 'FALLBACK' ? 'warning' : value === 'VALID' ? 'success' : 'processing'}>{value}</Tag> },
+    { title: 'Model Version', key: 'model', width: 320, render: (_, row) => `${row.model_version_id} · r${row.model_version}` },
+    { title: 'Input Snapshot', dataIndex: 'input_snapshot_id', width: 300, ellipsis: true },
+  ];
   return (
-    <ProductBoundary site={site} testId="real-site-route-forecast">
+    <ProductBoundary site={site} testId="real-site-route-forecast" state={FORECAST_READ_MODEL_BOUNDARY.status}>
       <PageScaffold
         title="预测与基线"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><LineChartOutlined />预测与基线</Space></FocusHeading>}
         extra={<Tag>{boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
-          type="info"
+          type={error ? 'error' : forecast?.snapshot.quality === 'FALLBACK' ? 'warning' : 'info'}
           showIcon
           icon={<CalendarOutlined />}
-          message={`${FORECAST_READ_MODEL_BOUNDARY.label} 尚未接入`}
-          description={`Real Mode 不会用 Demo 预测替代权威结果。接入前必须提供：${FORECAST_READ_MODEL_BOUNDARY.requiredFields.join('、')}。`}
+          message={error ? 'Forecast 权威结果读取失败' : forecast?.snapshot.quality === 'FALLBACK' ? '当前结果为 FALLBACK，不是模型预测。' : '预测来自已 PERSISTED Forecast Snapshot。'}
+          description={error ?? (forecast?.snapshot.quality === 'FALLBACK' ? '历史样本不足时只返回最后观测值，且不提供伪造的不确定性区间；UI 必须显式区分。' : '每个点保留 Model/Feature/Input/Topology provenance，并展示模型不确定性区间。')}
         />
         <OperationsMetrics items={[
-          { label: '预测目标', value: '—', detail: '等待站点预测对象', icon: <LineChartOutlined />, tone: 'accent' },
-          { label: '预测起点', value: '—', detail: '等待 asOf 时间', icon: <CalendarOutlined /> },
-          { label: '预测窗口', value: '—', detail: '等待 forecastFor 与 horizon', icon: <FieldTimeOutlined /> },
-          { label: '模型版本', value: '—', detail: '等待 modelVersion / featureSetVersion', icon: <SafetyCertificateOutlined /> },
+          { label: '预测状态', value: loading ? '…' : forecast?.snapshot.quality ?? '—', detail: forecast ? forecast.snapshot.target : '当前无已发布预测', icon: <LineChartOutlined />, tone: 'accent' },
+          { label: '预测点数', value: loading ? '…' : points.length, detail: first && last ? `${new Date(first.forecast_for).toLocaleString()} → ${new Date(last.forecast_for).toLocaleString()}` : '当前无已发布预测', icon: <FieldTimeOutlined /> },
+          { label: '模型版本', value: loading ? '…' : first ? `r${first.model_version}` : '—', detail: first?.model_version_id ?? '当前无模型结果', icon: <SafetyCertificateOutlined /> },
+          { label: '不确定性', value: loading ? '…' : first?.lower_bound !== null && first?.lower_bound !== undefined ? '有区间' : '无区间', detail: forecast?.snapshot.quality === 'FALLBACK' ? 'Fallback 不伪造区间' : '95% 回归残差带', icon: <FundOutlined /> },
         ]} />
-        <Card variant="borderless" title={<OperationsPanelHeading icon={<LineChartOutlined />} title="预测契约状态" meta={boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)} />}>
-          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-            <Descriptions.Item label="Target">—</Descriptions.Item>
-            <Descriptions.Item label="Origin / As Of">—</Descriptions.Item>
-            <Descriptions.Item label="Forecast For">—</Descriptions.Item>
-            <Descriptions.Item label="Horizon / Granularity">—</Descriptions.Item>
-            <Descriptions.Item label="Model Version">—</Descriptions.Item>
-            <Descriptions.Item label="Feature Set Version">—</Descriptions.Item>
-            <Descriptions.Item label="Quality / Fallback">—</Descriptions.Item>
-            <Descriptions.Item label="Site Timezone">{site.timezone}</Descriptions.Item>
-          </Descriptions>
-        </Card>
-        <Card variant="borderless" title={<OperationsPanelHeading icon={<FundOutlined />} title="预测序列" meta="0 条" />}>
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="权威 Forecast 序列尚未接入；不会显示示例预测曲线" />
+        {forecast ? (
+          <Card variant="borderless" title={<OperationsPanelHeading icon={<LineChartOutlined />} title="预测契约状态" meta={boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)} />}>
+            <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+              <Descriptions.Item label="Target">{forecast.snapshot.target}</Descriptions.Item>
+              <Descriptions.Item label="Forecast Origin">{new Date(forecast.snapshot.forecastOrigin).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Window">{new Date(forecast.snapshot.windowStart).toLocaleString()} → {new Date(forecast.snapshot.windowEnd).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Snapshot">{forecast.snapshot.snapshotId}</Descriptions.Item>
+              <Descriptions.Item label="Deployment">{forecast.snapshot.deploymentId}</Descriptions.Item>
+              <Descriptions.Item label="Model Version">{forecast.snapshot.modelVersionId}</Descriptions.Item>
+              <Descriptions.Item label="Quality / Fallback"><Tag color={forecast.snapshot.quality === 'FALLBACK' ? 'warning' : 'success'}>{forecast.snapshot.quality}</Tag></Descriptions.Item>
+              <Descriptions.Item label="Site Timezone">{site.timezone}</Descriptions.Item>
+            </Descriptions>
+          </Card>
+        ) : null}
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<FundOutlined />} title="预测序列" meta={`${points.length} 条`} />}>
+          <Table<PublishedForecast['points'][number]> rowKey="forecast_id" loading={loading} columns={columns} dataSource={points} pagination={{ pageSize: 24 }} scroll={{ x: 1600 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前 Site 没有已发布 SITE_LOAD Forecast" /> }} />
         </Card>
       </PageScaffold>
     </ProductBoundary>

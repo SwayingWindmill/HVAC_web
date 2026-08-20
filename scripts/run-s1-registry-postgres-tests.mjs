@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -32,6 +33,8 @@ async function findAvailablePort(requestedPort = 0) {
 }
 
 const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
+const telemetryGrantPassword = randomBytes(24).toString('hex');
+const coreServicePassword = randomBytes(24).toString('hex');
 const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
 
 function run(command, args, options = {}) {
@@ -91,6 +94,64 @@ function expectEqual(actual, expected, label) {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
+function seedIAMIntegrationFixtures() {
+  psql(`
+    INSERT INTO iam.policies (id, tenant_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
+      ('018f1e00-2500-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', 'telemetry-access', 2, 'ACTIVE', '{}'::jsonb, now(), now()),
+      ('018f1e00-2500-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', 'alarm-access', 1, 'ACTIVE', '{}'::jsonb, now(), now()),
+      ('018f1e00-2500-7000-8000-000000000004', '018f1d00-0000-7000-8000-000000000001', 'work-order-access', 1, 'ACTIVE', '{}'::jsonb, now(), now()),
+      ('018f1e00-2500-7000-8000-000000000005', '018f1d00-0000-7000-8000-000000000002', 'registry-read', 1, 'ACTIVE', '{}'::jsonb, now(), now());
+
+    UPDATE iam.role_templates
+    SET capabilities = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
+    WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'registry-reader';
+    UPDATE iam.site_bindings
+    SET actions = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
+    WHERE id = '018f1e00-2300-7000-8000-000000000001';
+
+    INSERT INTO iam.telemetry_scope_bindings (
+      id, tenant_id, principal_id, site_id, device_id, actions, effect, status,
+      valid_from, valid_to, revision, created_at, updated_at
+    ) VALUES (
+      '018f1e00-2600-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002',
+      '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'],
+      'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
+    );
+    INSERT INTO iam.telemetry_key_bindings (
+      id, tenant_id, principal_id, device_id, telemetry_key, actions, effect, status,
+      valid_from, valid_to, revision, created_at, updated_at
+    ) VALUES
+      ('018f1e00-2700-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
+      ('018f1e00-2700-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
+
+    INSERT INTO iam.alarm_permissions (
+      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
+    ) VALUES
+      ('018f1e00-2800-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:read', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
+      ('018f1e00-2800-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:ack', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
+
+    INSERT INTO iam.work_order_permissions (
+      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
+    ) VALUES
+      ('018f1e00-2900-7000-8000-000000000001','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:list','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000002','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:read','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000003','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:create','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000004','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:assign','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000005','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:plan','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000006','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:start','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000007','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:block','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000008','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:resume','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000009','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:complete','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000010','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:cancel','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2900-7000-8000-000000000011','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:reopen','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
+    INSERT INTO iam.work_order_ownership_targets (
+      id, tenant_id, site_id, target_type, target_id, effect, status, valid_from, valid_to, revision, created_at, updated_at
+    ) VALUES
+      ('018f1e00-2a00-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','PRINCIPAL','018f1e00-2000-7000-8000-000000000001','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
+      ('018f1e00-2a00-7000-8000-000000000002','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','TEAM','operations-a','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
+  `);
+}
+
 function scopedCounts(tenantID, siteIDs) {
   return psql(`
     BEGIN;
@@ -98,7 +159,7 @@ function scopedCounts(tenantID, siteIDs) {
     SET LOCAL app.tenant_id = '${tenantID}';
     SET LOCAL app.authorized_site_ids = '${siteIDs}';
     SELECT (SELECT count(*) FROM core_registry.sites)::text || '|'
-      || (SELECT count(*) FROM core_registry.equipment)::text || '|'
+      || (SELECT count(*) FROM core_registry.assets)::text || '|'
       || (SELECT count(*) FROM core_registry.devices)::text;
     ROLLBACK;
   `).split('|').map(Number);
@@ -106,6 +167,7 @@ function scopedCounts(tenantID, siteIDs) {
 
 async function runIAMGoTests() {
   await mkdir(goCacheDir, { recursive: true });
+  psql(`ALTER ROLE s2_iam_grant_runtime PASSWORD '${telemetryGrantPassword}'`);
   const child = spawn(goBinary, ['test', '-count=1', '-v', './services/iam-service/internal/iam'], {
     cwd: root,
     stdio: 'inherit',
@@ -116,7 +178,7 @@ async function runIAMGoTests() {
       S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_DATABASE_URL: `postgres://s1_iam_runtime:s1-iam-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_RECONCILER_DATABASE_URL: `postgres://s1_iam_reconciler:s1-iam-reconciler-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
-      S2_IAM_GRANT_DATABASE_URL: `postgres://s2_iam_grant_runtime:s2-iam-grant-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S2_IAM_GRANT_DATABASE_URL: `postgres://s2_iam_grant_runtime:${telemetryGrantPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
@@ -125,6 +187,7 @@ async function runIAMGoTests() {
 
 async function runCoreGoTests() {
   await mkdir(goCacheDir, { recursive: true });
+  psql(`ALTER ROLE s1_core_service PASSWORD '${coreServicePassword}'`);
   const child = spawn(goBinary, ['test', '-count=1', '-v', './services/platform-core-service/internal/core'], {
     cwd: root,
     stdio: 'inherit',
@@ -132,7 +195,7 @@ async function runCoreGoTests() {
     env: {
       ...process.env,
       GOCACHE: goCacheDir,
-      S1_CORE_DATABASE_URL: `postgres://s1_core_service:s1-core-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_CORE_DATABASE_URL: `postgres://s1_core_service:${coreServicePassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
@@ -149,7 +212,7 @@ async function runLegacyMigrationGoTests() {
       ...process.env,
       GOCACHE: goCacheDir,
       S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
-      S1_CORE_DATABASE_URL: `postgres://s1_core_service:s1-core-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_CORE_DATABASE_URL: `postgres://s1_core_service:${coreServicePassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_LEGACY_MIGRATION_DSN: `postgres://s1_legacy_migration_service:s1-legacy-migration-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
@@ -180,6 +243,7 @@ try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
+  seedIAMIntegrationFixtures();
 
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
@@ -499,14 +563,14 @@ try {
 
   const topologyActivation = psql(`
     UPDATE core_registry.energy_topology_versions
-    SET status = 'ACTIVE', released_at = now(), effective_from = '2026-08-01T00:00:00Z', revision = revision + 1, updated_at = now()
+    SET status = 'ACTIVE', released_at = now(), effective_from = '2026-08-01T00:00:00Z', revision = revision + 1, updated_at = now() + interval '1 second'
     WHERE id = '${topologyVersionId}';
     SELECT status FROM core_registry.energy_topology_versions WHERE id = '${topologyVersionId}';
   `);
   expectEqual(topologyActivation, 'ACTIVE', 'Topology activation');
   const duplicateActiveTopology = psql(`
     UPDATE core_registry.energy_topology_versions
-    SET status = 'ACTIVE', released_at = now(), effective_from = '2026-09-01T00:00:00Z', revision = revision + 1, updated_at = now()
+    SET status = 'ACTIVE', released_at = now(), effective_from = '2026-09-01T00:00:00Z', revision = revision + 1, updated_at = now() + interval '1 second'
     WHERE id = '${topologyVersion2Id}';
   `, { expectFailure: true });
   if (!duplicateActiveTopology.includes('energy_topology_versions_one_active_site_uidx')) throw new Error(`second ACTIVE Topology Version was accepted: ${duplicateActiveTopology}`);
@@ -676,13 +740,13 @@ try {
       id, tenant_id, site_id, settlement_period_id, boundary_id, revision_no,
       previous_snapshot_id, settlement_revision_id, meter_binding_refs, metric_version_refs,
       tariff_version_refs, source_reading_refs, energy_breakdown, demand, cost,
-      quality, completeness, created_at
+      quality, completeness, dataset_revision, created_at
     ) VALUES (
       '${settlementSnapshot0}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${settlementPeriodId}', '${settlementBoundaryId}', 0,
       NULL, NULL, '["${meterBindingId}"]'::jsonb, '[]'::jsonb,
       '["${tariffVersion1}","${tariffVersion2}"]'::jsonb, '["clickhouse:telemetry_history:2026-08"]'::jsonb,
       '{"energy_kwh":1000}'::jsonb, '{"billing_demand_kw":120}'::jsonb, '{"currency":"CNY","amount":880}'::jsonb,
-      'GOOD', 1.0, '2026-09-01T02:00:00Z'
+      'GOOD', 1.0, 1, '2026-09-01T02:00:00Z'
     );
     UPDATE core_registry.settlement_periods
     SET status = 'LOCKED', locked_at = '2026-09-01T02:05:00Z', revision = revision + 1, updated_at = now()
@@ -728,13 +792,13 @@ try {
       id, tenant_id, site_id, settlement_period_id, boundary_id, revision_no,
       previous_snapshot_id, settlement_revision_id, meter_binding_refs, metric_version_refs,
       tariff_version_refs, source_reading_refs, energy_breakdown, demand, cost,
-      quality, completeness, created_at
+      quality, completeness, dataset_revision, created_at
     ) VALUES (
       '${settlementSnapshot1}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${settlementPeriodId}', '${settlementBoundaryId}', 1,
       '${settlementSnapshot0}', '${settlementRevision1}', '["${meterBindingId}"]'::jsonb, '[]'::jsonb,
       '["${tariffVersion1}","${tariffVersion2}"]'::jsonb, '["clickhouse:telemetry_history:2026-08","late:2026-09-01T03:00Z"]'::jsonb,
       '{"energy_kwh":1012}'::jsonb, '{"billing_demand_kw":120}'::jsonb, '{"currency":"CNY","amount":890}'::jsonb,
-      'GOOD', 1.0, '2026-09-01T03:20:00Z'
+      'GOOD', 1.0, 2, '2026-09-01T03:20:00Z'
     );
     UPDATE core_registry.settlement_periods
     SET status = 'REVISED', revision = revision + 1, updated_at = '2026-09-01T03:25:00Z'
@@ -925,19 +989,22 @@ try {
     SET status = 'SUCCEEDED', started_at = now(), completed_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${calculationRunId}';
   `, { expectFailure: true });
-  if (!calculationRunSkip.includes('Metric Calculation Run must start before succeeding')) throw new Error(`Metric Calculation Run skipped RUNNING: ${calculationRunSkip}`);
+  if (!calculationRunSkip.includes('Metric Calculation Run must start before publication')) throw new Error(`Metric Calculation Run skipped RUNNING: ${calculationRunSkip}`);
 
   const calculationRunFlow = psql(`
     UPDATE core_registry.metric_calculation_runs
     SET status = 'RUNNING', started_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${calculationRunId}';
     UPDATE core_registry.metric_calculation_runs
-    SET status = 'SUCCEEDED', completed_at = now(), revision = revision + 1, updated_at = now()
+    SET status = 'PERSISTING', revision = revision + 1, updated_at = now()
+    WHERE id = '${calculationRunId}';
+    UPDATE core_registry.metric_calculation_runs
+    SET status = 'PERSISTED', completed_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${calculationRunId}';
     SELECT status || '|' || granularity || '|' || run_reason
     FROM core_registry.metric_calculation_runs WHERE id = '${calculationRunId}';
   `);
-  expectEqual(calculationRunFlow, 'SUCCEEDED|DAY|SCHEDULED', 'Metric Calculation Run lifecycle');
+  expectEqual(calculationRunFlow, 'PERSISTED|DAY|SCHEDULED', 'Metric Calculation Run lifecycle');
 
   const metricRls = psql(`
     BEGIN;
@@ -1393,18 +1460,18 @@ try {
 
   const trainingSkipRunning = psql(`
     UPDATE core_registry.forecast_training_runs
-    SET status = 'SUCCEEDED', started_at = now(), finished_at = now(), revision = revision + 1, updated_at = now()
+    SET status = 'SUCCEEDED', started_at = now(), finished_at = now(), revision = revision + 1, updated_at = now() + interval '1 second'
     WHERE id = '${forecastTrainingRunId}';
   `, { expectFailure: true });
   if (!trainingSkipRunning.includes('Forecast Training Run must start before succeeding')) throw new Error(`Forecast Training Run skipped RUNNING: ${trainingSkipRunning}`);
 
   psql(`
     UPDATE core_registry.forecast_training_runs
-    SET status = 'RUNNING', started_at = now(), revision = revision + 1, updated_at = now()
+    SET status = 'RUNNING', started_at = now(), revision = revision + 1, updated_at = now() + interval '1 second'
     WHERE id = '${forecastTrainingRunId}';
     UPDATE core_registry.forecast_training_runs
     SET status = 'SUCCEEDED', evaluation = '{"wape":0.10,"baseline":"LAST_VALUE"}'::jsonb,
-        finished_at = now(), revision = revision + 1, updated_at = now()
+        finished_at = now(), revision = revision + 1, updated_at = now() + interval '1 second'
     WHERE id = '${forecastTrainingRunId}';
   `);
 
@@ -1437,14 +1504,14 @@ try {
 
   const modelVersionSkipValidation = psql(`
     UPDATE core_registry.forecast_model_versions
-    SET status = 'ACTIVE', revision = revision + 1, updated_at = now()
+    SET status = 'ACTIVE', revision = revision + 1, updated_at = GREATEST(now(), created_at)
     WHERE id = '${forecastModelVersionId}';
   `, { expectFailure: true });
   if (!modelVersionSkipValidation.includes('must be validated before shadow/active use')) throw new Error(`Forecast Model Version skipped validation: ${modelVersionSkipValidation}`);
 
   psql(`
     UPDATE core_registry.forecast_model_versions
-    SET status = 'VALIDATED', revision = revision + 1, updated_at = now()
+    SET status = 'VALIDATED', revision = revision + 1, updated_at = GREATEST(now(), created_at)
     WHERE id = '${forecastModelVersionId}';
   `);
 
@@ -1554,21 +1621,24 @@ try {
       repeat('d',64), '{"FALLBACK":96}'::jsonb, now()
     );
   `, { expectFailure: true });
-  if (!snapshotBeforeJobSuccess.includes('requires a SUCCEEDED Forecast Job')) throw new Error(`Forecast Snapshot was created before Job succeeded: ${snapshotBeforeJobSuccess}`);
+  if (!snapshotBeforeJobSuccess.includes('requires a PERSISTED Forecast Job')) throw new Error(`Forecast Snapshot was created before Job persisted: ${snapshotBeforeJobSuccess}`);
 
   const jobSkipRunning = psql(`
     UPDATE core_registry.forecast_jobs
-    SET status = 'SUCCEEDED', started_at = now(), completed_at = now(), revision = revision + 1, updated_at = now()
+    SET status = 'PERSISTED', started_at = now(), completed_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${forecastJobId}';
   `, { expectFailure: true });
-  if (!jobSkipRunning.includes('Forecast Job must start before succeeding')) throw new Error(`Forecast Job skipped RUNNING: ${jobSkipRunning}`);
+  if (!jobSkipRunning.includes('Forecast Job must start before persisting')) throw new Error(`Forecast Job skipped RUNNING: ${jobSkipRunning}`);
 
   const forecastTraceabilityFlow = psql(`
     UPDATE core_registry.forecast_jobs
     SET status = 'RUNNING', started_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${forecastJobId}';
     UPDATE core_registry.forecast_jobs
-    SET status = 'SUCCEEDED', completed_at = now(), revision = revision + 1, updated_at = now()
+    SET status = 'PERSISTING', revision = revision + 1, updated_at = now()
+    WHERE id = '${forecastJobId}';
+    UPDATE core_registry.forecast_jobs
+    SET status = 'PERSISTED', completed_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${forecastJobId}';
     INSERT INTO core_registry.forecast_snapshots (
       id, tenant_id, site_id, forecast_job_id, deployment_id, model_version_id,
@@ -1587,7 +1657,7 @@ try {
       || (SELECT status FROM core_registry.forecast_jobs WHERE id = '${forecastJobId}') || '|'
       || (SELECT result_count::text FROM core_registry.forecast_snapshots WHERE id = '${forecastSnapshotId}');
   `);
-  expectEqual(forecastTraceabilityFlow, 'SUCCEEDED|VALIDATED|ACTIVE|SUCCEEDED|96', 'Forecast traceability lifecycle');
+  expectEqual(forecastTraceabilityFlow, 'SUCCEEDED|VALIDATED|ACTIVE|PERSISTED|96', 'Forecast traceability lifecycle');
 
   const forecastSnapshotMutation = psql(`
     UPDATE core_registry.forecast_snapshots SET result_count = 95 WHERE id = '${forecastSnapshotId}';
@@ -1634,8 +1704,7 @@ try {
     SET LOCAL ROLE s1_iam_runtime;
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000002';
     SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
-    SET LOCAL app.acting_organization_id = '018f1e00-0000-7000-8000-000000000003';
-    SELECT (SELECT count(*) FROM iam.organization_memberships)::text || '|'
+    SELECT (SELECT count(*) FROM iam.tenant_memberships)::text || '|'
       || (SELECT count(*) FROM iam.role_bindings)::text || '|'
       || (SELECT count(*) FROM iam.site_bindings)::text || '|'
       || (SELECT count(*) FROM iam.explicit_denies)::text;
@@ -1646,12 +1715,11 @@ try {
     SET LOCAL ROLE s1_iam_runtime;
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000003';
     SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
-    SET LOCAL app.acting_organization_id = '018f1e00-0000-7000-8000-000000000003';
     SELECT count(*) FROM iam.explicit_denies;
     ROLLBACK;
   `);
-  expectEqual(iamDelegated, '1|2|1|0', 'delegated IAM fixture');
-  expectEqual(iamDenied, '2', 'explicit deny fixture');
+  expectEqual(iamDelegated, '1|1|1|0', 'delegated IAM fixture');
+  expectEqual(iamDenied, '1', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
 
   await runIAMGoTests();
@@ -1663,25 +1731,22 @@ try {
   await runGatewayRoutingGoTests();
   report.assertions.gatewayRegistryRouting = 'passed';
 
-  const optimizationEss1 = '01990000-1900-7000-8000-000000000001';
-  const optimizationEss2 = '01990000-1900-7000-8000-000000000002';
   const optimizationPolicyId = '01990000-1910-7000-8000-000000000001';
   const optimizationPolicyVersionId = '01990000-1920-7000-8000-000000000001';
   const optimizationInputSnapshotId = '01990000-1930-7000-8000-000000000001';
-  const optimizationEmptySnapshotId = '01990000-1930-7000-8000-000000000002';
   const optimizationRunId = '01990000-1950-7000-8000-000000000001';
-  const dispatchPlanId = '01990000-1960-7000-8000-000000000001';
+  const optimizationRecommendationId = '01990000-1960-7000-8000-000000000001';
+  const intelligenceModelId = '01990000-1980-7000-8000-000000000001';
+  const intelligenceEgressPolicyId = '01990000-1981-7000-8000-000000000001';
+  const optimizationDeploymentRevisionId = '01990000-1982-7000-8000-000000000001';
+  const optimizationDeploymentBindingId = '01990000-1983-7000-8000-000000000001';
+  const fddFindingId = '01990000-1984-7000-8000-000000000001';
 
   const optimizationFixture = psql(`
-    INSERT INTO core_registry.equipment (
-      id, tenant_id, site_id, code, display_name, equipment_type, status, revision, created_at, updated_at
-    ) VALUES
-      ('${optimizationEss1}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'ess-optimization-1', 'Optimization ESS 1', 'ESS', 'ACTIVE', 1, now(), now()),
-      ('${optimizationEss2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'ess-optimization-2', 'Optimization ESS 2', 'ESS', 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.optimization_policies (
       id, tenant_id, policy_code, subject_type, resource_type, status, revision, created_at, updated_at
     ) VALUES (
-      '${optimizationPolicyId}', '018f1d00-0000-7000-8000-000000000001', 'site_ess_cost_shadow', 'SITE', 'ESS', 'ACTIVE', 1, now(), now()
+      '${optimizationPolicyId}', '018f1d00-0000-7000-8000-000000000001', 'site_hvac_cost_shadow', 'SITE', 'HVAC', 'ACTIVE', 1, now(), now()
     );
     INSERT INTO core_registry.optimization_policy_versions (
       id, tenant_id, policy_id, version, objective, weights, constraints, dispatch_mode,
@@ -1689,8 +1754,8 @@ try {
       effective_from, status, revision, created_at, updated_at
     ) VALUES (
       '${optimizationPolicyVersionId}', '018f1d00-0000-7000-8000-000000000001', '${optimizationPolicyId}', 1,
-      'COST', '{"cost":1}'::jsonb, '{"minSoc":0.2,"maxSoc":0.9}'::jsonb, 'SHADOW',
-      'NO_DISPATCH', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-08-01T00:00:00Z', 'RELEASED', 1, now(), now()
+      'COST', '{"cost":1}'::jsonb, '{"comfort":{"zoneTempMinC":22,"zoneTempMaxC":27},"safety":{"maxChwSupplyC":12}}'::jsonb, 'SHADOW',
+      'RULE_STRATEGY', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-08-01T00:00:00Z', 'RELEASED', 1, now(), now()
     );
     INSERT INTO core_registry.optimization_input_snapshots (
       id, tenant_id, site_id, subject_type, subject_id, policy_version_id,
@@ -1700,17 +1765,17 @@ try {
     ) VALUES (
       '${optimizationInputSnapshotId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'SITE', '018f1e00-1000-7000-8000-000000000001', '${optimizationPolicyVersionId}',
       '${topologyVersionId}', '${forecastSnapshotId}', NULL, '${tariffVersion1}',
-      '{"siteLoadKw":812.5,"gridPowerKw":800}'::jsonb,
-      '{"emergencyStop":false,"maxSiteImportKw":1200}'::jsonb,
+      '{"siteLoadKw":812.5,"gridPowerKw":800,"chwSupplyTempC":7}'::jsonb,
+      '{"emergencyStop":false,"maxSiteImportKw":1200,"maxChwSupplyC":12}'::jsonb,
       '{"outOfService":[]}'::jsonb, '{"resources":[]}'::jsonb,
       '2026-08-13T00:05:00Z', NULL, 'BUILDING', 1, now(), now()
     );
     SELECT
       (SELECT status FROM core_registry.optimization_policy_versions WHERE id = '${optimizationPolicyVersionId}') || '|'
       || (SELECT status FROM core_registry.optimization_input_snapshots WHERE id = '${optimizationInputSnapshotId}') || '|'
-      || (SELECT dispatch_mode FROM core_registry.optimization_policy_versions WHERE id = '${optimizationPolicyVersionId}');
+      || (SELECT resource_type FROM core_registry.optimization_policies WHERE id = '${optimizationPolicyId}');
   `);
-  expectEqual(optimizationFixture, 'RELEASED|BUILDING|SHADOW', 'Optimization V2 policy/input fixture');
+  expectEqual(optimizationFixture, 'RELEASED|BUILDING|HVAC', 'S22 HVAC Optimization policy/input fixture');
 
   const wrongOptimizationPvForecast = psql(`
     INSERT INTO core_registry.optimization_input_snapshots (
@@ -1741,55 +1806,13 @@ try {
   `, { expectFailure: true });
   if (!draftTopologyOptimizationInput.includes('requires a released Topology Version')) throw new Error(`Optimization Input accepted DRAFT Topology Version: ${draftTopologyOptimizationInput}`);
 
-  psql(`
-    INSERT INTO core_registry.optimization_input_snapshots (
-      id, tenant_id, site_id, subject_type, subject_id, policy_version_id,
-      topology_version_id, load_forecast_snapshot_id, tariff_version_id,
-      current_state, safety_constraints, maintenance_constraints, manual_locks,
-      captured_at, input_checksum, status, revision, created_at, updated_at
-    ) VALUES (
-      '${optimizationEmptySnapshotId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'SITE', '018f1e00-1000-7000-8000-000000000001', '${optimizationPolicyVersionId}',
-      '${topologyVersionId}', '${forecastSnapshotId}', '${tariffVersion1}', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
-      '2026-08-13T00:05:00Z', NULL, 'BUILDING', 1, now(), now()
-    );
-  `);
-  const optimizationSealWithoutResource = psql(`
-    UPDATE core_registry.optimization_input_snapshots
-    SET status = 'SEALED', input_checksum = repeat('9', 64), revision = revision + 1, updated_at = now()
-    WHERE id = '${optimizationEmptySnapshotId}';
-  `, { expectFailure: true });
-  if (!optimizationSealWithoutResource.includes('requires at least one ESS Resource before sealing')) throw new Error(`Optimization Input sealed without ESS Resource: ${optimizationSealWithoutResource}`);
-  psql(`DELETE FROM core_registry.optimization_input_snapshots WHERE id = '${optimizationEmptySnapshotId}';`);
-
-  const nonEssOptimizationResource = psql(`
-    INSERT INTO core_registry.optimization_input_resources (
-      id, tenant_id, site_id, input_snapshot_id, resource_id, resource_type,
-      rated_power_kw, rated_capacity_kwh, usable_capacity_kwh, soc, soh, current_power_kw,
-      charge_power_limit_kw, discharge_power_limit_kw, min_soc, max_soc,
-      charge_efficiency, discharge_efficiency, availability, control_mode, ordinal, created_at
-    ) VALUES (
-      '01990000-1940-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${optimizationInputSnapshotId}',
-      '018f1e00-3000-7000-8000-000000000001', 'ESS', 100, 200, 180, 0.5, 0.98, 0,
-      100, 100, 0.2, 0.9, 0.95, 0.95, true, 'REMOTE', 2, now()
-    );
-  `, { expectFailure: true });
-  if (!nonEssOptimizationResource.includes('Optimization P0 Resource must be ESS equipment')) throw new Error(`Optimization Input accepted non-ESS equipment: ${nonEssOptimizationResource}`);
-
-  psql(`
-    INSERT INTO core_registry.optimization_input_resources (
-      id, tenant_id, site_id, input_snapshot_id, resource_id, resource_type,
-      rated_power_kw, rated_capacity_kwh, usable_capacity_kwh, soc, soh, current_power_kw,
-      charge_power_limit_kw, discharge_power_limit_kw, min_soc, max_soc,
-      charge_efficiency, discharge_efficiency, availability, control_mode, ordinal, created_at
-    ) VALUES
-      ('01990000-1940-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${optimizationInputSnapshotId}', '${optimizationEss1}', 'ESS',
-       100, 200, 180, 0.50, 0.98, 0, 100, 100, 0.20, 0.90, 0.95, 0.95, true, 'REMOTE', 0, now()),
-      ('01990000-1940-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${optimizationInputSnapshotId}', '${optimizationEss2}', 'ESS',
-       50, 100, 90, 0.60, 0.97, 0, 50, 50, 0.20, 0.90, 0.94, 0.94, false, 'LOCAL', 1, now());
+  const optimizationSealWithoutEssResource = psql(`
     UPDATE core_registry.optimization_input_snapshots
     SET status = 'SEALED', input_checksum = repeat('a', 64), revision = revision + 1, updated_at = now()
     WHERE id = '${optimizationInputSnapshotId}';
+    SELECT status FROM core_registry.optimization_input_snapshots WHERE id = '${optimizationInputSnapshotId}';
   `);
+  expectEqual(optimizationSealWithoutEssResource, 'SEALED', 'HVAC Optimization snapshot seals without obsolete ESS child rows');
 
   const optimizationSnapshotMutation = psql(`
     UPDATE core_registry.optimization_input_snapshots
@@ -1797,12 +1820,6 @@ try {
     WHERE id = '${optimizationInputSnapshotId}';
   `, { expectFailure: true });
   if (!optimizationSnapshotMutation.includes('SEALED Optimization Input Snapshot is immutable')) throw new Error(`SEALED Optimization Input Snapshot was mutable: ${optimizationSnapshotMutation}`);
-
-  const optimizationResourceMutation = psql(`
-    UPDATE core_registry.optimization_input_resources SET soc = 0.7
-    WHERE input_snapshot_id = '${optimizationInputSnapshotId}' AND resource_id = '${optimizationEss1}';
-  `, { expectFailure: true });
-  if (!optimizationResourceMutation.includes('can only change while Snapshot is BUILDING')) throw new Error(`SEALED Optimization Resource was mutable: ${optimizationResourceMutation}`);
 
   psql(`
     INSERT INTO core_registry.optimization_runs (
@@ -1813,14 +1830,14 @@ try {
     ) VALUES (
       '${optimizationRunId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
       'SITE', '018f1e00-1000-7000-8000-000000000001', '${optimizationPolicyVersionId}', '${optimizationInputSnapshotId}',
-      'COST', 'DAY_AHEAD', 1440, '15MIN', 'go_no_dispatch_baseline', '1',
+      'COST', 'DAY_AHEAD', 1440, '15MIN', 'hvac_recommendation_solver', '1',
       'CREATED', NULL, NULL, NULL, NULL, NULL, 1, now(), now()
     );
   `);
 
   const optimizationRunSkipValidation = psql(`
     UPDATE core_registry.optimization_runs
-    SET status = 'FEASIBLE', quality = 'FALLBACK', revision = revision + 1, updated_at = now()
+    SET status = 'FEASIBLE', quality = 'FEASIBLE', revision = revision + 1, updated_at = now()
     WHERE id = '${optimizationRunId}';
   `, { expectFailure: true });
   if (!optimizationRunSkipValidation.includes('must validate before solving')) throw new Error(`Optimization Run skipped validation/solving: ${optimizationRunSkipValidation}`);
@@ -1833,125 +1850,145 @@ try {
     SET status = 'SOLVING', revision = revision + 1, updated_at = now()
     WHERE id = '${optimizationRunId}';
     UPDATE core_registry.optimization_runs
-    SET status = 'FEASIBLE', quality = 'FALLBACK', objective_value = 0,
-        constraint_status = '{"mode":"NO_DISPATCH","feasible":true}'::jsonb,
+    SET status = 'FEASIBLE', quality = 'FEASIBLE', objective_value = 42,
+        constraint_status = '{"comfort":true,"safety":true}'::jsonb,
         finished_at = now(), revision = revision + 1, updated_at = now()
     WHERE id = '${optimizationRunId}';
   `);
 
-  const nonDraftDispatchPlan = psql(`
-    INSERT INTO core_registry.dispatch_plans (
-      id, tenant_id, site_id, optimization_run_id, input_snapshot_id, policy_version_id,
-      subject_type, subject_id, plan_version, quality, status, valid_from, valid_to,
-      expected_cost, expected_saving, objective_value, explanation, revision, created_at, updated_at
+  const invalidRemoteModel = psql(`
+    INSERT INTO core_registry.ai_model_definitions (
+      id, tenant_id, name, provider, model_id, capabilities, credential_ref, status, revision, created_at, updated_at
     ) VALUES (
-      '01990000-1960-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
-      '${optimizationRunId}', '${optimizationInputSnapshotId}', '${optimizationPolicyVersionId}', 'SITE', '018f1e00-1000-7000-8000-000000000001',
-      2, 'FALLBACK', 'VALIDATED', '2026-08-13T00:00:00Z', '2026-08-14T00:00:00Z', 0, 0, 0,
-      '{"mode":"NO_DISPATCH"}'::jsonb, 1, now(), now()
+      '01990000-1980-7000-8000-000000000099', '018f1d00-0000-7000-8000-000000000001', 'invalid-remote-model',
+      'OPENAI', 'gpt-invalid', ARRAY['OPTIMIZATION'], NULL, 'ACTIVE', 1, now(), now()
     );
   `, { expectFailure: true });
-  if (!nonDraftDispatchPlan.includes('Dispatch Plan must start as DRAFT')) throw new Error(`Dispatch Plan skipped DRAFT: ${nonDraftDispatchPlan}`);
+  if (!invalidRemoteModel.includes('ai_model_definitions_check')) throw new Error(`Remote AI Model accepted without CredentialRef: ${invalidRemoteModel}`);
 
   psql(`
-    INSERT INTO core_registry.dispatch_plans (
-      id, tenant_id, site_id, optimization_run_id, input_snapshot_id, policy_version_id,
-      subject_type, subject_id, plan_version, quality, status, valid_from, valid_to,
-      expected_cost, expected_saving, objective_value, explanation, revision, created_at, updated_at
+    INSERT INTO core_registry.ai_model_definitions (
+      id, tenant_id, name, provider, model_id, capabilities, credential_ref, status, revision, created_at, updated_at
     ) VALUES (
-      '${dispatchPlanId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
-      '${optimizationRunId}', '${optimizationInputSnapshotId}', '${optimizationPolicyVersionId}', 'SITE', '018f1e00-1000-7000-8000-000000000001',
-      1, 'FALLBACK', 'DRAFT', '2026-08-13T00:00:00Z', '2026-08-14T00:00:00Z', 0, 0, 0,
-      '{"mode":"NO_DISPATCH","reason":"safe_fallback"}'::jsonb, 1, now(), now()
+      '${intelligenceModelId}', '018f1d00-0000-7000-8000-000000000001', 'hvac-intelligence-local',
+      'LOCAL', 'hvac-intelligence-v1', ARRAY['FDD','OPTIMIZATION'], NULL, 'ACTIVE', 1, '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z'
+    );
+    INSERT INTO core_registry.ai_data_egress_policies (
+      id, tenant_id, name, allowed_data_classes, allowed_regions, max_input_bytes, enabled, revision, created_at
+    ) VALUES (
+      '${intelligenceEgressPolicyId}', '018f1d00-0000-7000-8000-000000000001', 'local-only', ARRAY['HVAC_TELEMETRY'], ARRAY['LOCAL'], 1048576, true, 1, '2026-08-13T00:00:00Z'
+    );
+    INSERT INTO core_registry.ai_deployment_revisions (
+      id, tenant_id, model_definition_id, use_case, revision, output_schema_version,
+      data_egress_policy_id, prompt_policy_version, enabled, created_at
+    ) VALUES (
+      '${optimizationDeploymentRevisionId}', '018f1d00-0000-7000-8000-000000000001', '${intelligenceModelId}',
+      'OPTIMIZATION', 1, 'optimization-recommendation/v1', '${intelligenceEgressPolicyId}', NULL, true, '2026-08-13T00:00:00Z'
+    );
+    INSERT INTO core_registry.ai_deployment_bindings (
+      id, tenant_id, site_id, use_case, deployment_revision_id, status, revision, created_at, updated_at
+    ) VALUES (
+      '${optimizationDeploymentBindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      'OPTIMIZATION', '${optimizationDeploymentRevisionId}', 'ACTIVE', 1, '2026-08-13T00:00:00Z', '2026-08-13T00:00:00Z'
     );
   `);
 
-  const dispatchOverLimit = psql(`
-    INSERT INTO core_registry.dispatch_intervals (
-      id, tenant_id, site_id, dispatch_plan_id, resource_id, start_time, end_time,
-      target_type, target_value, unit, expected_soc, constraint_margin, ordinal, created_at
+  const deploymentRevisionMutation = psql(`
+    UPDATE core_registry.ai_deployment_revisions SET enabled = false WHERE id = '${optimizationDeploymentRevisionId}';
+  `, { expectFailure: true });
+  if (!deploymentRevisionMutation.includes('AI Deployment Revision is immutable')) throw new Error(`AI Deployment Revision was mutable: ${deploymentRevisionMutation}`);
+
+  const mismatchedDeploymentBinding = psql(`
+    INSERT INTO core_registry.ai_deployment_bindings (
+      id, tenant_id, site_id, use_case, deployment_revision_id, status, revision, created_at, updated_at
     ) VALUES (
-      '01990000-1979-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${dispatchPlanId}', '${optimizationEss1}',
-      '2026-08-13T00:00:00Z', '2026-08-13T00:15:00Z', 'POWER_SETPOINT', 101, 'kW', 0.5, '{}'::jsonb, 0, now()
+      '01990000-1983-7000-8000-000000000099', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000002',
+      'FDD', '${optimizationDeploymentRevisionId}', 'ACTIVE', 1, now(), now()
     );
   `, { expectFailure: true });
-  if (!dispatchOverLimit.includes('exceeds snapshotted ESS charge/discharge power limit')) throw new Error(`Dispatch setpoint exceeded ESS limit: ${dispatchOverLimit}`);
+  if (!mismatchedDeploymentBinding.includes('use case must match immutable Deployment Revision')) throw new Error(`AI binding accepted mismatched use case: ${mismatchedDeploymentBinding}`);
 
-  const dispatchUnavailableNonzero = psql(`
-    INSERT INTO core_registry.dispatch_intervals (
-      id, tenant_id, site_id, dispatch_plan_id, resource_id, start_time, end_time,
-      target_type, target_value, unit, expected_soc, constraint_margin, ordinal, created_at
+  const recommendationPublished = psql(`
+    UPDATE core_registry.optimization_runs
+    SET status = 'PERSISTING', revision = revision + 1, updated_at = now()
+    WHERE id = '${optimizationRunId}';
+    INSERT INTO core_registry.optimization_recommendations (
+      id, tenant_id, site_id, optimization_run_id, input_snapshot_id, deployment_revision_id,
+      baseline, objective, constraints, candidate, expected_impact, uncertainty, risk,
+      rollback_plan, verification_plan, approval_state, current_state_revalidation,
+      command_intent_id, revision, created_at, updated_at
     ) VALUES (
-      '01990000-1979-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${dispatchPlanId}', '${optimizationEss2}',
-      '2026-08-13T00:00:00Z', '2026-08-13T00:15:00Z', 'POWER_SETPOINT', 1, 'kW', 0.6, '{}'::jsonb, 0, now()
+      '${optimizationRecommendationId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      '${optimizationRunId}', '${optimizationInputSnapshotId}', '${optimizationDeploymentRevisionId}',
+      '{"chwSupplyTempC":7,"dailyEnergyKWh":12000}'::jsonb,
+      '{"kind":"MINIMIZE_COST"}'::jsonb,
+      '[{"kind":"COMFORT","zoneTempMinC":22,"zoneTempMaxC":27},{"kind":"SAFETY","maxChwSupplyC":12}]'::jsonb,
+      '{"supplyTempC":7.5}'::jsonb,
+      '{"energySavingKWhPerDay":420,"costSavingPerDay":310}'::jsonb,
+      '{"energySavingKWhPerDay":{"lower":300,"upper":510}}'::jsonb,
+      '{"level":"LOW","reason":"bounded-setpoint-change"}'::jsonb,
+      '{"action":"restore-baseline","supplyTempC":7}'::jsonb,
+      '{"windowMinutes":60,"metrics":["energy","comfort"]}'::jsonb,
+      'DRAFT', NULL, NULL, 1, '2026-08-13T01:00:00Z', '2026-08-13T01:00:00Z'
     );
-  `, { expectFailure: true });
-  if (!dispatchUnavailableNonzero.includes('can only receive a zero Dispatch setpoint')) throw new Error(`Unavailable/LOCAL ESS accepted nonzero Dispatch setpoint: ${dispatchUnavailableNonzero}`);
-
-  psql(`
-    INSERT INTO core_registry.dispatch_intervals (
-      id, tenant_id, site_id, dispatch_plan_id, resource_id, start_time, end_time,
-      target_type, target_value, unit, expected_soc, expected_grid_power, expected_cost,
-      constraint_margin, ordinal, created_at
-    ) VALUES (
-      '01990000-1971-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${dispatchPlanId}', '${optimizationEss1}',
-      '2026-08-13T00:00:00Z', '2026-08-13T00:15:00Z', 'POWER_SETPOINT', 0, 'kW', 0.5, 800, 0,
-      '{"mode":"NO_DISPATCH"}'::jsonb, 0, now()
-    );
-  `);
-  const incompleteDispatchPlan = psql(`
-    UPDATE core_registry.dispatch_plans SET status = 'VALIDATED', revision = revision + 1, updated_at = now()
-    WHERE id = '${dispatchPlanId}';
-  `, { expectFailure: true });
-  if (!incompleteDispatchPlan.includes('complete 15-minute horizon for every ESS Resource')) throw new Error(`Incomplete multi-resource Dispatch Plan was validated: ${incompleteDispatchPlan}`);
-
-  const optimizationIntervals = [
-    ...Array.from({ length: 95 }, (_, offset) => {
-      const index = offset + 1;
-      const id = `01990000-1971-7000-8000-${String(index + 1).padStart(12, '0')}`;
-      return `('${id}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${dispatchPlanId}', '${optimizationEss1}', '2026-08-13T00:00:00Z'::timestamptz + interval '${index * 15} minutes', '2026-08-13T00:00:00Z'::timestamptz + interval '${(index + 1) * 15} minutes', 'POWER_SETPOINT', 0, 'kW', 0.5, 800, 0, '{"mode":"NO_DISPATCH"}'::jsonb, ${index}, now())`;
-    }),
-    ...Array.from({ length: 96 }, (_, index) => {
-      const id = `01990000-1972-7000-8000-${String(index + 1).padStart(12, '0')}`;
-      return `('${id}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${dispatchPlanId}', '${optimizationEss2}', '2026-08-13T00:00:00Z'::timestamptz + interval '${index * 15} minutes', '2026-08-13T00:00:00Z'::timestamptz + interval '${(index + 1) * 15} minutes', 'POWER_SETPOINT', 0, 'kW', 0.6, 800, 0, '{"mode":"NO_DISPATCH","availability":false,"controlMode":"LOCAL"}'::jsonb, ${index}, now())`;
-    }),
-  ].join(',\n');
-  psql(`
-    INSERT INTO core_registry.dispatch_intervals (
-      id, tenant_id, site_id, dispatch_plan_id, resource_id, start_time, end_time,
-      target_type, target_value, unit, expected_soc, expected_grid_power, expected_cost,
-      constraint_margin, ordinal, created_at
-    ) VALUES ${optimizationIntervals};
-  `);
-
-  const optimizationPlanFlow = psql(`
-    UPDATE core_registry.dispatch_plans
-    SET status = 'VALIDATED', revision = revision + 1, updated_at = now()
-    WHERE id = '${dispatchPlanId}';
-    UPDATE core_registry.dispatch_plans
-    SET status = 'SHADOW', revision = revision + 1, updated_at = now()
-    WHERE id = '${dispatchPlanId}';
     UPDATE core_registry.optimization_runs
     SET status = 'PUBLISHED', revision = revision + 1, updated_at = now()
     WHERE id = '${optimizationRunId}';
     SELECT
       (SELECT status FROM core_registry.optimization_runs WHERE id = '${optimizationRunId}') || '|'
-      || (SELECT status FROM core_registry.dispatch_plans WHERE id = '${dispatchPlanId}') || '|'
-      || (SELECT count(*) FROM core_registry.dispatch_intervals WHERE dispatch_plan_id = '${dispatchPlanId}')::text;
+      || (SELECT approval_state FROM core_registry.optimization_recommendations WHERE id = '${optimizationRecommendationId}') || '|'
+      || (SELECT candidate->>'supplyTempC' FROM core_registry.optimization_recommendations WHERE id = '${optimizationRecommendationId}');
   `);
-  expectEqual(optimizationPlanFlow, 'PUBLISHED|SHADOW|192', 'Optimization multi-resource Shadow Plan flow');
+  expectEqual(recommendationPublished, 'PUBLISHED|DRAFT|7.5', 'S22 Optimization Recommendation publication flow');
 
-  const shadowPlanExecution = psql(`
-    UPDATE core_registry.dispatch_plans SET status = 'APPROVED', revision = revision + 1, updated_at = now()
-    WHERE id = '${dispatchPlanId}';
+  const recommendationCommandWithoutRevalidation = psql(`
+    UPDATE core_registry.optimization_recommendations
+    SET approval_state = 'APPROVED', command_intent_id = '01990000-1990-7000-8000-000000000001',
+        revision = revision + 1, updated_at = '2026-08-13T01:01:00Z'
+    WHERE id = '${optimizationRecommendationId}';
   `, { expectFailure: true });
-  if (!shadowPlanExecution.includes('SHADOW Dispatch Plan cannot enter execution states')) throw new Error(`SHADOW Dispatch Plan entered execution state: ${shadowPlanExecution}`);
+  if (!recommendationCommandWithoutRevalidation.includes('fresh independent current-state revalidation')) throw new Error(`Recommendation produced Command intent without revalidation: ${recommendationCommandWithoutRevalidation}`);
 
-  const validatedIntervalMutation = psql(`
-    UPDATE core_registry.dispatch_intervals SET target_value = 1
-    WHERE dispatch_plan_id = '${dispatchPlanId}' AND resource_id = '${optimizationEss1}' AND ordinal = 0;
+  const staleRecommendationRevalidation = psql(`
+    UPDATE core_registry.optimization_recommendations
+    SET approval_state = 'APPROVED',
+        current_state_revalidation = '{"snapshotId":"state-before-recommendation","accepted":true,"validatedAt":"2026-08-13T00:59:00Z","expiresAt":"2026-08-13T02:00:00Z"}'::jsonb,
+        command_intent_id = '01990000-1990-7000-8000-000000000001', revision = revision + 1,
+        updated_at = '2026-08-13T01:01:00Z'
+    WHERE id = '${optimizationRecommendationId}';
   `, { expectFailure: true });
-  if (!validatedIntervalMutation.includes('Dispatch Intervals are immutable after Plan validation')) throw new Error(`Validated Dispatch Interval was mutable: ${validatedIntervalMutation}`);
+  if (!staleRecommendationRevalidation.includes('fresh independent current-state revalidation')) throw new Error(`Recommendation accepted pre-computation revalidation: ${staleRecommendationRevalidation}`);
+
+  const recommendationControlGate = psql(`
+    UPDATE core_registry.optimization_recommendations
+    SET approval_state = 'APPROVED',
+        current_state_revalidation = '{"snapshotId":"state-after-recommendation","accepted":true,"reasonCode":"CURRENT_STATE_SAFE","validatedAt":"2026-08-13T01:02:00Z","expiresAt":"2026-08-13T02:00:00Z"}'::jsonb,
+        command_intent_id = '01990000-1990-7000-8000-000000000001', revision = revision + 1,
+        updated_at = '2026-08-13T01:03:00Z'
+    WHERE id = '${optimizationRecommendationId}';
+    SELECT approval_state || '|' || (current_state_revalidation->>'accepted') || '|' || (command_intent_id IS NOT NULL)::text
+    FROM core_registry.optimization_recommendations WHERE id = '${optimizationRecommendationId}';
+  `);
+  expectEqual(recommendationControlGate, 'APPROVED|true|true', 'Recommendation requires independent current-state revalidation before Command intent');
+
+  psql(`
+    INSERT INTO core_registry.fdd_findings (
+      id, tenant_id, site_id, asset_id, finding_type, evaluation_from, evaluation_to, evidence_ids,
+      model_deployment_revision_id, rule_revision_id, confidence, quality_blocker, alarm_id, work_order_id, created_at
+    ) VALUES (
+      '${fddFindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      '018f1e00-3000-7000-8000-000000000001', 'CHILLED_WATER_LOW_DELTA_T',
+      '2026-08-13T00:00:00Z', '2026-08-13T00:30:00Z', ARRAY['telemetry:chw_supply','telemetry:chw_return'],
+      NULL, 'low-delta-t/v1', 0.91, NULL, NULL, NULL, '2026-08-13T00:31:00Z'
+    );
+  `);
+
+  const obsoleteDispatchPrivileges = psql(`
+    SELECT has_table_privilege('optimization_runtime','core_registry.dispatch_plans','INSERT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.dispatch_intervals','INSERT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.optimization_input_resources','SELECT')::text;
+  `);
+  expectEqual(obsoleteDispatchPrivileges, 'false|false|false', 'Optimization runtime cannot use obsolete ESS Dispatch surface');
 
   const optimizationRls = psql(`
     BEGIN;
@@ -1962,29 +1999,28 @@ try {
       (SELECT count(*) FROM core_registry.optimization_policies)::text || '|'
       || (SELECT count(*) FROM core_registry.optimization_policy_versions)::text || '|'
       || (SELECT count(*) FROM core_registry.optimization_input_snapshots)::text || '|'
-      || (SELECT count(*) FROM core_registry.optimization_input_resources)::text || '|'
       || (SELECT count(*) FROM core_registry.optimization_runs)::text || '|'
-      || (SELECT count(*) FROM core_registry.dispatch_plans)::text || '|'
-      || (SELECT count(*) FROM core_registry.dispatch_intervals)::text;
+      || (SELECT count(*) FROM core_registry.optimization_recommendations)::text || '|'
+      || (SELECT count(*) FROM core_registry.ai_model_definitions)::text || '|'
+      || (SELECT count(*) FROM core_registry.fdd_findings)::text;
     ROLLBACK;
   `);
-  expectEqual(optimizationRls, '1|1|1|2|1|1|192', 'Optimization runtime RLS');
-  report.assertions.optimizationV2 = {
+  expectEqual(optimizationRls, '1|1|1|1|1|1|1', 'S22 Intelligence Core RLS');
+  report.assertions.optimizationS22 = {
     fixture: optimizationFixture,
     wrongPvForecastRejected: true,
     draftTopologyRejected: true,
-    sealWithoutResourceRejected: true,
-    nonEssResourceRejected: true,
+    sealsWithoutObsoleteEssResources: true,
     sealedSnapshotImmutable: true,
-    sealedResourceImmutable: true,
     runSkipValidationRejected: true,
-    planMustStartDraft: true,
-    overLimitSetpointRejected: true,
-    unavailableNonzeroSetpointRejected: true,
-    incompleteMultiResourcePlanRejected: true,
-    lifecycle: optimizationPlanFlow,
-    shadowCannotExecute: true,
-    validatedIntervalsImmutable: true,
+    remoteModelRequiresCredentialRef: true,
+    deploymentRevisionImmutable: true,
+    deploymentBindingUseCaseBound: true,
+    recommendationPublication: recommendationPublished,
+    commandWithoutRevalidationRejected: true,
+    staleRevalidationRejected: true,
+    currentStateRevalidationGate: recommendationControlGate,
+    obsoleteDispatchPrivileges,
     runtimeRls: optimizationRls,
   };
 
@@ -2019,15 +2055,15 @@ try {
     SET enable_seqscan = off;
     EXPLAIN (FORMAT JSON)
     SELECT id, tenant_id, site_id, code, display_name
-    FROM core_registry.equipment
+    FROM core_registry.assets
     WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001'
       AND site_id = '018f1e00-1000-7000-8000-000000000001'
       AND (display_name COLLATE "C", id) > ('', '00000000-0000-0000-0000-000000000000')
     ORDER BY display_name COLLATE "C", id
     LIMIT 51;
   `);
-  if (!plan.includes('equipment_tenant_page_idx')) throw new Error('Equipment keyset query did not use the Tenant+Site index');
-  report.assertions.queryPlanIndex = 'equipment_tenant_page_idx';
+  if (!plan.includes('asset_tenant_page_idx')) throw new Error('Asset keyset query did not use the Tenant+Site index');
+  report.assertions.queryPlanIndex = 'asset_tenant_page_idx';
 
   const schemaOwners = psql("SELECT nspname || ':' || pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname IN ('iam','core_registry') ORDER BY nspname");
   expectEqual(schemaOwners, 'core_registry:s1_core_migrator\niam:s1_iam_migrator', 'schema owners');

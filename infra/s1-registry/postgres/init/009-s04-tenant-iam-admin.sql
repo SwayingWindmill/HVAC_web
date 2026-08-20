@@ -260,8 +260,12 @@ CREATE POLICY capability_catalog_admin_read ON iam.capability_catalog_revisions
   FOR SELECT TO s1_iam_admin USING (status = 'ACTIVE');
 CREATE POLICY authorization_revisions_runtime_read ON iam.authorization_revisions
   FOR SELECT TO s1_iam_runtime USING (tenant_id = iam.current_tenant_id());
+CREATE POLICY authorization_revisions_migrator_read ON iam.authorization_revisions
+  FOR SELECT TO s1_iam_migrator USING (true);
 CREATE POLICY role_templates_runtime_read ON iam.role_templates
   FOR SELECT TO s1_iam_runtime USING (tenant_id = iam.current_tenant_id());
+CREATE POLICY role_templates_reconciler_scope ON iam.role_templates
+  FOR ALL TO s1_iam_reconciler USING (true) WITH CHECK (true);
 
 CREATE POLICY tenants_admin_scope ON iam.tenants
   FOR ALL TO s1_iam_admin
@@ -296,6 +300,8 @@ CREATE POLICY admin_outbox_admin_scope ON iam.admin_outbox
   FOR ALL TO s1_iam_admin USING (tenant_id = iam.current_tenant_id()) WITH CHECK (tenant_id = iam.current_tenant_id());
 
 GRANT SELECT ON iam.capability_catalog_revisions, iam.authorization_revisions, iam.role_templates TO s1_iam_runtime;
+GRANT SELECT, INSERT ON iam.role_templates TO s1_iam_reconciler;
+GRANT UPDATE (capabilities, status, revision, updated_at) ON iam.role_templates TO s1_iam_reconciler;
 GRANT EXECUTE ON FUNCTION iam.resolve_principal_identity(text, text) TO s1_iam_admin;
 GRANT SELECT, UPDATE (display_name, timezone, currency, country, status, revision, updated_at) ON iam.tenants TO s1_iam_admin;
 GRANT SELECT, INSERT, UPDATE ON iam.principals, iam.tenant_memberships, iam.role_templates,
