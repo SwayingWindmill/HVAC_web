@@ -15,6 +15,7 @@ use (
 	./libs/operationsauditevent
 	./libs/oidctest
 	./libs/ownershipregistry
+	./libs/presentationmodel
 	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
@@ -32,10 +33,12 @@ use (
 	./services/identity-service
 	./services/optimization-service
 	./services/outbound-delivery-service
+	./services/notification-service
+	./services/rule-runtime-service
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
 	./services/metric-engine-service
-	./services/notification-service
+	./services/maintenance-service
 	./services/scheduler-service
 	./services/settlement-service
 	./services/oidc-test-provider

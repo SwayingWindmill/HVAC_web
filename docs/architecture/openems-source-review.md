@@ -40,7 +40,7 @@ All modules below existed locally before completing their pinned-source review a
 | Remote Intent Lease | VERIFIED | external write timeout / controller API behavior |
 | Edge Timedata | VERIFIED | local latest/history/query authority; Cloud resend worker remains separate |
 | Simulator Driver | VERIFIED | Simulator/DataSource acting/reacting implementations |
-| MQTT Command Edge Adapter | UNVERIFIED | project-specific S11 boundary; must still be checked against governed Cloud command/readback lifecycle |
+| MQTT Command Edge Adapter | VERIFIED | S11 governed Edge execution evidence + Cloud independent readback; CycleWorker boundary retained |
 
 A state may change to `VERIFIED` only when the reviewed source files, relevant upstream tests, material differences, local justification for every retained conflict, and focused behavior tests are all recorded below.
 
@@ -402,6 +402,34 @@ The pinned Modbus TCP test is `@Disabled` upstream. It is used here only as sour
 - `go test ./...` in `libs/edgecontrol` — PASS;
 - `go test ./...` in `tools/eg8200-simulator` — PASS;
 - `cmd.exe /c node scripts/check-s3-target-runtime.mjs` — PASS (`files=18`, native MQTT, OpenEMS-informed Edge, production traffic remains `0`).
+
+## Review 004 — S11 governed MQTT command execution evidence
+
+Date: 2026-08-19
+HVAC issue: #270
+
+### Upstream source reviewed
+
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java` from release `2026.7.0`, commit `2e2792d`;
+- the Channel/Process Image/Scheduler/Write sources and tests already pinned in Reviews 001–003 remain the reference for execution ordering.
+
+### Source-level decision
+
+OpenEMS keeps one stable Process Image for controller evaluation and performs writes only after the Scheduler/Controller phase. S11 preserves that boundary: the MQTT adapter does not write Plant state itself; it creates a leased Edge Intent, then the existing Scheduler/Arbiter/Interlock decides the effective value and the normal write phase applies it.
+
+- `ADOPT`: command execution remains inside the normal Process Image -> Controllers -> Write lifecycle;
+- `ADAPT`: each governed Cloud command emits durable HVAC execution evidence containing requested, effective/applied, constraints, winning Controller and Cycle number;
+- `ADAPT`: a durable `MAY_EXECUTE` record is written before scheduling the Intent. Recovery from that state is `EDGE_OUTCOME_UNKNOWN`, not a second physical execution;
+- `ADAPT`: Cloud transport acknowledgement is deliberately weaker than business success; only a later independent S2 readback can produce `SUCCEEDED`;
+- `REJECT`: an MQTT callback that writes the simulated/physical Plant directly, or any Edge-local `VERIFIED` status that bypasses independent Cloud readback.
+
+### Focused local evidence
+
+- constrained 55 Hz -> 50 Hz records requested/effective/constraint/winner/cycle and writes only through the Edge Cycle;
+- local interlock rejection stays an Edge execution rejection and does not mutate Cloud approval/authorization facts;
+- persisted terminal replies survive restart; persisted `MAY_EXECUTE` state never replays the actuator command and recovers the maximum fence;
+- transport-only ACK without Edge execution evidence is rejected by Command Service;
+- numeric independent readback verifies the Edge applied/effective target while the original Cloud Intent parameter remains immutable.
 
 ## Review queue
 

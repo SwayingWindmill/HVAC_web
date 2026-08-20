@@ -343,6 +343,107 @@ All files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308dde
 
 Work Order remains independently operable while Alarm links are formal, immutable relationship evidence. Settlement/cost recomputation becomes traceable to exact Metric revisions and a source watermark; missing or partial inputs remain visible in quality/completeness; immutable Snapshot history can rebuild the Current projection. Phase1 now includes the canonical `009a` topology/metering, `009c` Metric, and `009b` Settlement foundation in the dependency order proven by a fresh PostgreSQL install.
 
+## S11 — Governed Cloud Command -> Edge -> readback chain
+
+Date: 2026-08-19
+
+Local issue: #270
+
+### Upstream files reviewed
+
+- `application/src/main/java/org/thingsboard/server/controller/RpcV2Controller.java`
+- `application/src/main/java/org/thingsboard/server/actors/device/DeviceActorMessageProcessor.java`
+
+Both files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before S11 implementation.
+
+### Observed upstream semantics
+
+- A successful one-way RPC HTTP response means the request was sent to the device transport; it does not prove the physical effect.
+- Persistent RPC has explicit `QUEUED`, `SENT`, `DELIVERED`, `SUCCESSFUL`, `TIMEOUT`, `EXPIRED`, and `FAILED` lifecycle states. A device response can make the RPC `SUCCESSFUL`, but that remains RPC completion rather than independent plant-state proof.
+- Expiry, retry and restored device sessions are transport concerns. They are valuable for delivery recovery, but they do not replace HVAC execution fencing or authoritative readback.
+
+### Implementation decision
+
+- `ADOPT`: explicit transport delivery states, expiry handling and restart-recoverable RPC/session state.
+- `ADAPT`: Edge persists a `MAY_EXECUTE` commit point before scheduling a physical action and records structured requested/effective/applied/constraint/winner/cycle evidence. A restart from `MAY_EXECUTE` returns `EDGE_OUTCOME_UNKNOWN` and never blindly repeats the physical action.
+- `ADAPT`: an Edge `EXECUTED` reply with valid structured execution evidence may advance the Cloud Attempt only to `ACKNOWLEDGED`; numeric verification targets the governed Edge applied/effective value while action capabilities retain their semantic readback target such as `RUNNING` or `STOPPED`.
+- `ADAPT`: explicit Edge rejection/expiry is a proven non-execution failure, while write failure or timeout remains `OUTCOME_UNKNOWN` because absence of physical effect cannot be proven.
+- `REJECT`: HTTP 200, MQTT/device ACK, RPC `DELIVERED`, RPC `SUCCESSFUL`, or an Edge-declared `VERIFIED` status as Cloud business success. `SUCCEEDED` remains exclusive to fresh authoritative S2 State/Telemetry readback after acknowledgement.
+
+### S11 consequence
+
+Cloud Intent, approval, authorization, idempotency, lease and execution-fence facts remain immutable Cloud authority. Edge Scheduler/Arbiter/Interlock may constrain or reject the requested command without rewriting those facts. Connector and Connectivity persistence carry Edge execution evidence across restart, and the verifier reloads that durable evidence before independent S2 readback. A transport acknowledgement without governed Edge execution evidence cannot advance the Command, and ambiguous execution paths remain frozen as `OUTCOME_UNKNOWN` rather than being retried blindly.
+
+## S17 — SiteDashboardSummary and BigScreen truthfulness
+
+Date: 2026-08-19
+
+Local issue: #273
+
+### Upstream files reviewed
+
+The implementation read these files directly from the pinned ThingsBoard CE `v4.3.1.1` checkout at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` immediately before implementation:
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/Dashboard.java`
+- `application/src/main/java/org/thingsboard/server/controller/DashboardController.java`
+- `ui-ngx/src/app/shared/models/dashboard.models.ts`
+- `ui-ngx/src/app/core/api/alias-controller.ts`
+- `ui-ngx/src/app/core/api/widget-subscription.ts`
+
+### Observed upstream semantics
+
+- ThingsBoard models Dashboard state, layout and time window explicitly, and resolves datasource aliases separately from the stored Dashboard definition.
+- Alias changes invalidate prior resolutions and re-resolve affected aliases; Dashboard state changes invalidate only state-bound aliases instead of silently retaining stale entity targets.
+- Widget subscriptions have an explicit start/update/unsubscribe lifecycle. Unsubscribe stops Entity/Alarm subscriptions, clears listener state and releases the subscribed state.
+- The generic `DashboardConfiguration` intentionally remains open-ended and can carry arbitrary widget/configuration fields. That flexibility is useful for a low-code platform but is broader than the fixed first-party HVAC operations product boundary.
+
+### Implementation decision
+
+- `ADOPT`: explicit presentation state/time context, bounded subscription lifecycle, deterministic cleanup on navigation/scope change, and re-resolution/reconciliation when the presentation target changes.
+- `ADAPT`: replace generic alias/widget datasource resolution with one versioned `SiteDashboardSummary` projection scoped by the authenticated Tenant and validated Site. Every meaningful value carries explicit source/quality/watermark semantics and Site local-calendar calculations use the Registry IANA timezone.
+- `REPLACE`: browser-side Site truth reconstructed from sampled Device lists, Presence batches and rolling 24-hour Energy queries with a server-side Presentation projection assembled only through authorized owner query ports. Dashboard and BigScreen consume the same summary contract/query identity.
+- `REPLACE`: an unconditional visual “Live/healthy” interpretation with explicit `READY/ATTENTION/NO_DATA/PARTIAL/STALE/SUSPECT/UNAVAILABLE/NOT_AUTHORIZED/NOT_INTEGRATED` states. `ATTENTION` means complete data with known operational concern; incomplete or unknown Device population never publishes a Site availability denominator or percentage.
+- `REJECT`: arbitrary Dashboard/Widget JavaScript/HTML/CSS/resources, Presentation-owned business facts or authorization, direct control actions, Demo/Mock fallback in Real mode, and fixed 24-hour arithmetic for a Site-local calendar day.
+
+### S17 consequence
+
+Presentation becomes a logical owner of derived presentation projections only; Registry, Telemetry, Metric/Analytics, Alarm, Command and authorization facts remain with their existing owners. Phase 1 may physically co-locate the projection with `energy-api/platform-gateway`, but the Summary implementation consumes owner query ports rather than write/read owner schemas directly. Live presentation uses a bounded `text/event-stream` replacement stream only after a REST `SiteDashboardSummary` handshake: the browser supplies that Snapshot's `generatedAt` as `baseGeneratedAt`, accepts an owner-issued replacement only when the base still matches its current Snapshot, and performs a fresh REST reconciliation before reopening the stream after disconnect, malformed data or base mismatch. The Gateway revalidates the durable BFF Session on the configured revocation objective independently of the lower-frequency Summary refresh, so stream lifetime cannot weaken Session revocation. The stream is recovery acceleration, not a new durable fact authority or a browser-side recomputation path.
+
+## S20 — Rule Runtime core
+
+Date: 2026-08-19
+
+Local issue: #280
+
+### Upstream files reviewed
+
+All implementation-time source was re-read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4`:
+
+- `dao/src/main/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidator.java`
+- `dao/src/test/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidatorTest.java`
+- `application/src/main/java/org/thingsboard/server/actors/ruleChain/RuleNodeActorMessageProcessor.java`
+- `application/src/main/java/org/thingsboard/server/service/queue/ruleengine/TbRuleEngineQueueConsumerManager.java`
+- `application/src/test/java/org/thingsboard/server/service/queue/ruleengine/TbRuleEngineStrategyTest.java`
+
+### Observed upstream semantics
+
+- Rule Chain validation rejects invalid entity metadata and direct same-chain loops before execution; Rule Node construction/configuration is class/reflection based and node lifecycle is explicit through init/destroy/re-init.
+- Rule Node execution supports a per-message execution count guard, but an upstream value of zero means unlimited execution rather than a hard production bound.
+- Queue processing separates submit strategy from processing/ack strategy. Burst, Batch and sequential-by-originator execution are explicit behaviors, and the upstream tests exercise failure/timeout retry decisions for each strategy.
+- Queue commit happens only after the processing strategy decides the current pack may commit. A failed/timeout pack may be reprocessed according to queue policy.
+- Upstream Rule Engine message/node identities and mutable chain/configuration lifecycle are not sufficient evidence for deterministic replay, immutable release pinning or crash-safe exactly-identifiable HVAC owner effects.
+
+### Implementation decision
+
+- `ADOPT`: publish-time graph validation, explicit typed node lifecycle, separation of execution from acknowledgement, and an ordering seam equivalent to sequential-by-originator for the same business subject.
+- `ADAPT`: replace class/reflection nodes with a closed versioned `NodeDefinition` catalog; replace generic relation strings with typed input/output ports; replace mutable active Rule Chain configuration with immutable released `RuleRevision` plus append-only `RuleBinding` revisions.
+- `REPLACE`: random/ephemeral execution identity with deterministic `executionId`, `workItemId`, `effectId` and `continuationId`; pack-level retry with bounded per-work retry and terminal `DEAD`/`QUARANTINED`; in-memory delay with a durable continuation record; node-owned external/domain writes with persisted typed Effect Intent addressed to the owner domain.
+- `REJECT`: arbitrary JS/TBEL/class loading, credential reads, direct database/network/owner mutation from Rule nodes, zero-as-unlimited attempts, blind replay of ambiguous effects, and debug/replay paths that can call the real Effect Sink.
+
+### S20 consequence
+
+The S20 runtime compiles a released immutable plan before execution, pins each execution to the exact Rule Revision and Binding revision, and serializes the same Tenant/Site/subject ordering key under lease/fence. Authoritative Rule State is separate from any one Execution and is keyed by Tenant + Rule Revision + Node Instance + Scope Key; CAS updates and the corresponding Execution transition evidence commit in one storage transaction, so concurrent executions cannot overwrite each other. Node evaluation is pure with respect to business owners: owner reads go through exact snapshot ports and owner writes become stable Effect Intents. Work, continuation, state-transition, effect and trace evidence are durable at execution boundaries. Before an owner call, an Effect is durably marked `DISPATCHING`; if the process dies before the receipt is persisted, restart freezes that Effect as `AMBIGUOUS` instead of blindly replaying it. Replay accepts frozen snapshot facts only, cannot accept a live Effect Sink, and records simulated effects without invoking production owners.
+
 ## S16 — Notification minimum product loop
 
 Date: 2026-08-19
@@ -373,9 +474,9 @@ All files were read directly from the official ThingsBoard repository at pinned 
 - `ADOPT`: explicit Alarm lifecycle trigger types, ordered delayed escalation, frozen notification content/recipient resolution before delayed execution, and Notification-local unread/read state.
 - `ADAPT`: Alarm writes an immutable, version-bound Notification outbox row in the same Alarm owner transaction for CREATED, real severity change, first ACK and Clear. A lease/fence relay transfers that owner event into Notification without Notification reading Alarm tables.
 - `ADAPT`: scheduled future stages are changed to durable `CANCELLED` intents rather than deleted rows. ACK/Clear can cancel `SCHEDULED` or already `CLAIMED` future stages; the old worker loses its fence, making the race explainable from database state.
-- `ADAPT`: `AudienceRevision`, `TemplateRevision` and `NotificationPolicyRevision` are SHA-256-bound immutable releases. Each source-event/assignment-revision/stage has one durable Notification Intent containing the frozen recipient and rendered template snapshot.
+- `ADAPT`: `AudienceRevision`, `TemplateRevision` and `NotificationPolicyRevision` are SHA-256-bound immutable releases. Each source-event/assignment-revision/stage has one durable Notification Intent containing the frozen recipient and rendered template snapshot. A database trigger makes those snapshot fields immutable after insert, and scheduler/runtime roles receive column-level UPDATE rights only for lifecycle/lease fields.
 - `ADAPT`: ordinary user preference can suppress advisory stages only. `mandatorySafety=true` bypasses the ordinary preference table, so a safety notification cannot be opted out by the recipient.
-- `REPLACE`: external EMAIL/REST execution and provider retry are delegated to the S15 outbound-delivery owner. Notification commits an `EXTERNAL_SUBMITTED` handoff before invoking S15 and uses the Notification Intent ID as the S15 idempotency key; restart recovery reuses that same business identity. S15 `MAYBE_SENT` / accepted-not-confirmed outcomes remain `OUTCOME_UNKNOWN` at the Notification business layer.
+- `REPLACE`: external EMAIL/REST execution and provider retry are delegated to the S15 outbound-delivery owner. Notification commits an `EXTERNAL_SUBMITTED` handoff before invoking S15 and uses the Notification Intent ID as the S15 idempotency key; restart recovery reuses that same business identity. S15 `OUTCOME_UNKNOWN` remains `OUTCOME_UNKNOWN` at the Notification business layer.
 - `REJECT`: direct provider SDK/network sends from Notification, Notification reads of `alarm_runtime`, deleting cancelled stage history, browser-selected principal IDs, Notification read implicitly ACKing Alarm, and a second provider retry/dead-letter implementation.
 
 ### S16 consequence
@@ -384,6 +485,6 @@ Notification is now an independently owned durable business domain in `notificat
 
 ### S16 verification evidence
 
-- A clean PostgreSQL 16 `notification_runtime` initialized from the S16 migration passed replay, frozen-recipient/template, delayed-stage cancellation, mandatory-safety preference, cross-Tenant scheduler and external handoff recovery tests. All nine Notification tables use FORCE RLS; the scheduler can update only `notification_intent` and cannot read Inbox rows.
+- A clean PostgreSQL 16 `notification_runtime` initialized from the S16 migration passed replay, frozen-recipient/template, delayed-stage cancellation, mandatory-safety preference, cross-Tenant scheduler and external handoff recovery tests. All nine Notification tables use FORCE RLS; the scheduler can update only lifecycle/lease columns on `notification_intent` and cannot read Inbox rows.
 - A separate PostgreSQL 16 Alarm database initialized through migrations `001`–`007` proved exactly four business source events for create -> unchanged occurrence -> severity change -> ACK -> clear: `CREATED`, `SEVERITY_CHANGED`, `ACKNOWLEDGED`, `CLEARED`. The outbox relay reclaimed expired work with a higher fence and rejected stale completion.
-- Direct mutation of a released Notification policy is rejected by the immutable database trigger. Notification source code contains no `alarm_runtime` access; Alarm-to-Notification transfer is through the dedicated outbox relay seam, and external disposition is read through the S15 owner store seam.
+- Direct mutation of released Notification policy or the frozen Notification Intent recipient/template/body snapshot is rejected by database triggers. Notification source code contains no `alarm_runtime` access; Alarm-to-Notification transfer is through the dedicated outbox relay seam, and external disposition is read through the S15 owner store seam.

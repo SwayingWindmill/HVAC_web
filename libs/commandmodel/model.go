@@ -1,6 +1,9 @@
 package commandmodel
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Capability string
 
@@ -10,10 +13,10 @@ const (
 	CapabilityResetFault                         Capability = "RESET_FAULT"
 	CapabilitySetTemperatureSetpoint             Capability = "SET_TEMPERATURE_SETPOINT"
 	CapabilitySetChilledWaterTemperatureSetpoint Capability = "SET_CHILLED_WATER_TEMPERATURE_SETPOINT"
-	CapabilitySetFrequency                        Capability = "SET_FREQUENCY"
-	CapabilitySetFanSpeed                         Capability = "SET_FAN_SPEED"
-	CapabilitySetLoadLimit                        Capability = "SET_LOAD_LIMIT"
-	CapabilitySetOpening                          Capability = "SET_OPENING"
+	CapabilitySetFrequency                       Capability = "SET_FREQUENCY"
+	CapabilitySetFanSpeed                        Capability = "SET_FAN_SPEED"
+	CapabilitySetLoadLimit                       Capability = "SET_LOAD_LIMIT"
+	CapabilitySetOpening                         Capability = "SET_OPENING"
 )
 
 const (
@@ -193,9 +196,10 @@ const (
 type ConnectorPhase string
 
 const (
-	ConnectorPreSendRejected  ConnectorPhase = "PRE_SEND_REJECTED"
-	ConnectorRequestCommitted ConnectorPhase = "REQUEST_COMMITTED"
-	ConnectorAcknowledged     ConnectorPhase = "ACKNOWLEDGED"
+	ConnectorPreSendRejected   ConnectorPhase = "PRE_SEND_REJECTED"
+	ConnectorExecutionRejected ConnectorPhase = "EXECUTION_REJECTED"
+	ConnectorRequestCommitted  ConnectorPhase = "REQUEST_COMMITTED"
+	ConnectorAcknowledged      ConnectorPhase = "ACKNOWLEDGED"
 )
 
 type CurrentStateEvidence struct {
@@ -213,7 +217,7 @@ type AuthorizationSnapshot struct {
 	PolicyRevision              string
 	Purpose                     AuthorizationPurpose
 	PrincipalID                 string
-	TenantID              string
+	TenantID                    string
 	SiteID                      string
 	DeviceID                    string
 	Capability                  Capability
@@ -270,6 +274,72 @@ type Transition struct {
 	EvidenceID string
 }
 
+type EdgeConstraintEvidence struct {
+	ControllerID string `json:"controllerId"`
+	Reason       string `json:"reason"`
+}
+
+type EdgeExecutionEvidence struct {
+	Requested          ScalarValue              `json:"requested"`
+	Effective          *ScalarValue             `json:"effective,omitempty"`
+	Applied            *ScalarValue             `json:"applied,omitempty"`
+	Constraints        []EdgeConstraintEvidence `json:"constraints,omitempty"`
+	WinnerControllerID string                   `json:"winnerControllerId"`
+	Cycle              uint64                   `json:"cycle"`
+}
+
+func (e EdgeExecutionEvidence) Valid() bool {
+	if e.Cycle == 0 || strings.TrimSpace(e.WinnerControllerID) == "" || !e.Requested.Valid() {
+		return false
+	}
+	if e.Effective != nil && !e.Effective.Valid() {
+		return false
+	}
+	if e.Applied != nil && !e.Applied.Valid() {
+		return false
+	}
+	for _, constraint := range e.Constraints {
+		if strings.TrimSpace(constraint.ControllerID) == "" || strings.TrimSpace(constraint.Reason) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (e EdgeExecutionEvidence) ValidExecuted() bool {
+	return e.Valid() && e.Effective != nil
+}
+
+func (value ScalarValue) Valid() bool {
+	count := 0
+	if value.Number != nil {
+		count++
+	}
+	if value.Text != nil {
+		count++
+	}
+	if value.Boolean != nil {
+		count++
+	}
+	return count == 1
+}
+
+func ExpectedVerificationValue(capability Capability, parameters CommandParameters, edge *EdgeExecutionEvidence) (ScalarValue, bool) {
+	profile, supported := CapabilityProfileFor(capability)
+	if !supported {
+		return ScalarValue{}, false
+	}
+	if profile.ParameterKey != "" && edge != nil && edge.ValidExecuted() {
+		if edge.Applied != nil && edge.Applied.Number != nil {
+			return *edge.Applied, true
+		}
+		if edge.Effective != nil && edge.Effective.Number != nil {
+			return *edge.Effective, true
+		}
+	}
+	return ExpectedReportedValue(capability, parameters)
+}
+
 type CommandAttempt struct {
 	ID                     string
 	CommandID              string
@@ -285,6 +355,7 @@ type CommandAttempt struct {
 	VerificationLeaseOwner string
 	VerificationLeaseUntil time.Time
 	VerificationEvidenceID string
+	EdgeExecution          *EdgeExecutionEvidence
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -321,15 +392,15 @@ type CommandIntent struct {
 }
 
 type ApproveRequest struct {
-	TenantID string
-	CommandID      string
-	Approval       ApprovalEvidence
+	TenantID  string
+	CommandID string
+	Approval  ApprovalEvidence
 }
 
 type DispatchEnvelope struct {
 	CommandID             string
 	AttemptID             string
-	TenantID        string
+	TenantID              string
 	SiteID                string
 	DeviceID              string
 	PointID               string
@@ -355,7 +426,7 @@ const (
 type VerificationEnvelope struct {
 	CommandID                string
 	AttemptID                string
-	TenantID           string
+	TenantID                 string
 	SiteID                   string
 	DeviceID                 string
 	PointID                  string
@@ -371,10 +442,11 @@ type VerificationEnvelope struct {
 	LeaseOwner               string
 	LeaseUntil               time.Time
 	ConnectorEvidenceID      string
+	EdgeExecution            *EdgeExecutionEvidence
 }
 
 type ReportedStateEvidence struct {
-	TenantID         string
+	TenantID               string
 	SiteID                 string
 	DeviceID               string
 	EvaluationAvailability string
@@ -397,7 +469,7 @@ type VerificationResult struct {
 type PreparedConnectorEvidence struct {
 	AttemptID        string
 	CommandID        string
-	TenantID   string
+	TenantID         string
 	SiteID           string
 	DeviceID         string
 	ExternalDeviceID string
@@ -419,12 +491,14 @@ type CompletedConnectorEvidence struct {
 	ConnectorPhase     ConnectorPhase
 	FailureCode        string
 	CompletedAt        time.Time
+	EdgeExecution      *EdgeExecutionEvidence
 }
 
 type ConnectorResult struct {
-	Phase        ConnectorPhase
-	Verified     bool
-	FailureCode  string
-	EvidenceID   string
-	Acknowledged bool
+	Phase         ConnectorPhase
+	Verified      bool
+	FailureCode   string
+	EvidenceID    string
+	Acknowledged  bool
+	EdgeExecution *EdgeExecutionEvidence
 }

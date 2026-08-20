@@ -11,6 +11,7 @@ services:
       - ../../services/command-service/migrations/002_s3_target_runtime.sql:/docker-entrypoint-initdb.d/002_s3_target_runtime.sql:ro
       - ../../services/command-service/migrations/003_s3_tenant_scope.sql:/docker-entrypoint-initdb.d/003_s3_tenant_scope.sql:ro
       - ../../services/command-service/migrations/004_s3_command_point_identity.sql:/docker-entrypoint-initdb.d/004_s3_command_point_identity.sql:ro
+      - ../../services/command-service/migrations/005_s11_edge_execution_evidence.sql:/docker-entrypoint-initdb.d/005_s11_edge_execution_evidence.sql:ro
     ports:
       - "127.0.0.1:${S3_POSTGRES_HOST_PORT:-57432}:5432"
     healthcheck:

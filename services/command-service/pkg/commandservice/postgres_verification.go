@@ -59,15 +59,20 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID 
 
 	var envelope commandmodel.VerificationEnvelope
 	var capability string
-	var parameters []byte
+	var parameters, edgeExecutionJSON []byte
 	var attemptVersion uint64
 	err = tx.QueryRow(ctx, `
 SELECT i.command_id::text, a.attempt_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, a.execution_fence, i.snapshot_revision,
-       a.acknowledged_at, a.verification_deadline, a.connector_evidence_id, a.version
+       a.acknowledged_at, a.verification_deadline, a.connector_evidence_id, a.version,
+       ce.edge_execution_evidence
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
+JOIN command_runtime.connector_evidence ce
+  ON ce.tenant_id = i.tenant_id AND ce.command_id = i.command_id
+  AND ce.attempt_id = a.attempt_id AND ce.execution_fence = a.execution_fence
+  AND ce.connector_phase = 'ACKNOWLEDGED'
 JOIN command_runtime.device_control_state d
   ON d.tenant_id = i.tenant_id AND d.device_id = i.device_id
 WHERE i.tenant_id = $1::uuid
@@ -85,7 +90,7 @@ LIMIT 1
 		&envelope.CommandID, &envelope.AttemptID, &envelope.TenantID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
 		&capability, &envelope.CapabilityRevision, &parameters, &envelope.VerificationPointKey,
 		&envelope.PayloadHash, &envelope.ExecutionFence, &envelope.BaselineBusinessRevision,
-		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion,
+		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion, &edgeExecutionJSON,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.Commit(ctx); err != nil {
@@ -99,6 +104,14 @@ LIMIT 1
 	if err := json.Unmarshal(parameters, &envelope.Parameters); err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("decode verification command parameters: %w", err)
 	}
+	if len(edgeExecutionJSON) == 0 {
+		return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
+	}
+	var edgeExecution commandmodel.EdgeExecutionEvidence
+	if err := json.Unmarshal(edgeExecutionJSON, &edgeExecution); err != nil || !edgeExecution.ValidExecuted() {
+		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
+	}
+	envelope.EdgeExecution = &edgeExecution
 	envelope.Capability = commandmodel.Capability(capability)
 	leaseUntil := now.Add(leaseFor).UTC().Truncate(time.Microsecond)
 	if envelope.VerificationDeadline.Before(leaseUntil) {

@@ -1119,6 +1119,74 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/dashboard-summary": {
+      "get": {
+        "operationId": "getSiteDashboardSummary",
+        "summary": "Read one coherent Site dashboard presentation projection",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized Site dashboard summary.",
+            "headers": {
+              "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+              "traceparent": { "$ref": "#/components/headers/Traceparent" },
+              "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SiteDashboardSummary" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/dashboard-summary/events": {
+      "get": {
+        "operationId": "streamSiteDashboardSummary",
+        "summary": "Stream authoritative Site dashboard summary replacements after a REST snapshot handshake",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          {
+            "name": "baseGeneratedAt",
+            "in": "query",
+            "required": true,
+            "schema": { "$ref": "#/components/schemas/Instant" }
+          },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Short-lived SSE stream. Each event carries a SiteDashboardSummaryDelta whose baseGeneratedAt must match the consumer's current REST snapshot.",
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string" },
+                "x-event-name": "dashboard-summary",
+                "x-event-data-schema": { "$ref": "#/components/schemas/SiteDashboardSummaryDelta" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/devices/{deviceId}": {
       "get": {
         "operationId": "getDevice",
@@ -2795,6 +2863,107 @@
           "telemetryPoints": { "type": "array", "items": { "$ref": "#/components/schemas/TelemetryPoint" } },
           "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/AssetRelationship" } },
           "counts": { "$ref": "#/components/schemas/AssetModelCounts" }
+        }
+      },
+      "PresentationState": {
+        "type": "string",
+        "enum": ["READY", "ATTENTION", "NO_DATA", "PARTIAL", "STALE", "SUSPECT", "UNAVAILABLE", "NOT_AUTHORIZED", "NOT_INTEGRATED"]
+      },
+      "DashboardMetric": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "value", "unit", "source", "dataWatermark", "aggregateWatermark", "reason"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/PresentationState" },
+          "value": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "unit": { "oneOf": [{ "type": "string", "maxLength": 32 }, { "type": "null" }] },
+          "source": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "dataWatermark": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "aggregateWatermark": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "reason": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] }
+        }
+      },
+      "DevicePopulationSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "registered", "applicable", "observable", "online", "offline", "stale", "unknown", "unavailable", "denominatorPolicy", "denominator", "availabilityPercent", "evaluatedAt"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/PresentationState" },
+          "registered": { "type": "integer", "minimum": 0 },
+          "applicable": { "type": "integer", "minimum": 0 },
+          "observable": { "type": "integer", "minimum": 0 },
+          "online": { "type": "integer", "minimum": 0 },
+          "offline": { "type": "integer", "minimum": 0 },
+          "stale": { "type": "integer", "minimum": 0 },
+          "unknown": { "type": "integer", "minimum": 0 },
+          "unavailable": { "type": "integer", "minimum": 0 },
+          "denominatorPolicy": { "type": "string", "enum": ["APPLICABLE_WITH_KNOWN_PRESENCE"] },
+          "denominator": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+          "availabilityPercent": { "oneOf": [{ "type": "number", "minimum": 0, "maximum": 100 }, { "type": "null" }] },
+          "evaluatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }
+        }
+      },
+      "OpenAlarmSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "activeCount", "highestSeverity", "watermark", "reason"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/PresentationState" },
+          "activeCount": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+          "highestSeverity": { "oneOf": [{ "type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "WARNING", "INFO"] }, { "type": "null" }] },
+          "watermark": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "reason": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] }
+        }
+      },
+      "SiteDashboardSlowMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteLocalDayEnergy", "cost", "baselineSavings", "cop"],
+        "properties": {
+          "siteLocalDayEnergy": { "$ref": "#/components/schemas/DashboardMetric" },
+          "cost": { "$ref": "#/components/schemas/DashboardMetric" },
+          "baselineSavings": { "$ref": "#/components/schemas/DashboardMetric" },
+          "cop": { "$ref": "#/components/schemas/DashboardMetric" }
+        }
+      },
+      "SiteDashboardFastMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["currentPower", "openAlarms"],
+        "properties": {
+          "currentPower": { "$ref": "#/components/schemas/DashboardMetric" },
+          "openAlarms": { "$ref": "#/components/schemas/OpenAlarmSummary" }
+        }
+      },
+      "SiteDashboardSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "tenantId", "siteId", "siteTimezone", "asOf", "generatedAt", "dataWatermark", "aggregateWatermark", "completeness", "quality", "reasons", "devicePopulation", "slowMetrics", "fastMetrics"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "enum": [1] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteTimezone": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "asOf": { "$ref": "#/components/schemas/Instant" },
+          "generatedAt": { "$ref": "#/components/schemas/Instant" },
+          "dataWatermark": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "aggregateWatermark": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "completeness": { "$ref": "#/components/schemas/PresentationState" },
+          "quality": { "$ref": "#/components/schemas/PresentationState" },
+          "reasons": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 128 } },
+          "devicePopulation": { "$ref": "#/components/schemas/DevicePopulationSummary" },
+          "slowMetrics": { "$ref": "#/components/schemas/SiteDashboardSlowMetrics" },
+          "fastMetrics": { "$ref": "#/components/schemas/SiteDashboardFastMetrics" }
+        }
+      },
+      "SiteDashboardSummaryDelta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "baseGeneratedAt", "summary"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "enum": [1] },
+          "baseGeneratedAt": { "$ref": "#/components/schemas/Instant" },
+          "summary": { "$ref": "#/components/schemas/SiteDashboardSummary" }
         }
       },
       "FieldError": {

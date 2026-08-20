@@ -230,7 +230,7 @@ LIMIT $2`, now.UTC(), batch)
 		var completed any = now.UTC()
 		if job.cancelRequested {
 			state, resultStatus, errorCode = "CANCELLED", "CANCELLED", "CANCEL_REQUESTED"
-		} else if isMetricJob(job.jobType) && job.attempts < job.max {
+		} else if isLeaseRetrySafeJob(job.jobType) && job.attempts < job.max {
 			state, resultStatus, errorCode = "RETRY_WAIT", "RETRY_WAIT", "LEASE_EXPIRED"
 			nextRetry = now.UTC().Add(retryDelay(job.attempts))
 			completed = nil
@@ -550,8 +550,16 @@ func priorityForJobType(jobType string) int {
 	}
 }
 
-func isMetricJob(jobType string) bool {
-	return jobType == "METRIC_WINDOW_CALC" || jobType == "METRIC_RECALC" || jobType == "METRIC_BACKFILL"
+func isLeaseRetrySafeJob(jobType string) bool {
+	switch jobType {
+	case "METRIC_WINDOW_CALC", "METRIC_RECALC", "METRIC_BACKFILL",
+		"DATA_RETENTION_SCAN", "DATA_ARCHIVE", "CERTIFICATE_EXPIRY_SCAN",
+		"OUTBOX_CLEANUP", "INBOX_CLEANUP", "PROJECTION_REPAIR",
+		"DEAD_WORK_DISPOSITION", "TENANT_RETIREMENT":
+		return true
+	default:
+		return false
+	}
 }
 
 func retryDelay(attempt int) time.Duration {

@@ -255,9 +255,12 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	}
 
 	switch result.Phase {
-	case commandmodel.ConnectorPreSendRejected, commandmodel.ConnectorRequestCommitted:
+	case commandmodel.ConnectorPreSendRejected, commandmodel.ConnectorExecutionRejected, commandmodel.ConnectorRequestCommitted:
+		if result.EdgeExecution != nil && !result.EdgeExecution.Valid() {
+			return ErrUnsupportedResult
+		}
 	case commandmodel.ConnectorAcknowledged:
-		if !result.Acknowledged || result.Verified || strings.TrimSpace(result.EvidenceID) == "" {
+		if !result.Acknowledged || result.Verified || strings.TrimSpace(result.EvidenceID) == "" || result.EdgeExecution == nil || !result.EdgeExecution.ValidExecuted() {
 			return ErrUnsupportedResult
 		}
 	default:
@@ -272,12 +275,20 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	case commandmodel.ConnectorPreSendRejected:
 		attempt.Status = commandmodel.AttemptNotSent
 		transition(intent, commandmodel.IntentQueued, "PRE_SEND_REJECTED_SAFE_TO_RETRY", "command-dispatcher", now, attempt.ID, result.EvidenceID)
+	case commandmodel.ConnectorExecutionRejected:
+		attempt.Status = commandmodel.AttemptFailed
+		reason := strings.TrimSpace(result.FailureCode)
+		if reason == "" {
+			reason = "EDGE_EXECUTION_REJECTED"
+		}
+		transition(intent, commandmodel.IntentFailed, reason, "command-dispatcher", now, attempt.ID, result.EvidenceID)
 	case commandmodel.ConnectorRequestCommitted:
 		attempt.Status = commandmodel.AttemptOutcomeUnknown
 		transition(intent, commandmodel.IntentOutcomeUnknown, "REQUEST_COMMITTED_WITHOUT_PROVABLE_OUTCOME", "command-dispatcher", now, attempt.ID, result.EvidenceID)
 	case commandmodel.ConnectorAcknowledged:
 		attempt.Status = commandmodel.AttemptAcknowledged
 		attempt.ConnectorEvidenceID = result.EvidenceID
+		attempt.EdgeExecution = cloneEdgeExecutionEvidence(result.EdgeExecution)
 		attempt.AcknowledgedAt = now
 		attempt.VerificationDeadline = now.Add(verificationWindow)
 		transition(intent, commandmodel.IntentDispatching, "PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE", "command-dispatcher", now, attempt.ID, result.EvidenceID)
@@ -329,6 +340,7 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 			BaselineBusinessRevision: intent.SnapshotRevision, AcknowledgedAt: attempt.AcknowledgedAt,
 			VerificationDeadline: attempt.VerificationDeadline, LeaseOwner: leaseOwner,
 			LeaseUntil: attempt.VerificationLeaseUntil, ConnectorEvidenceID: attempt.ConnectorEvidenceID,
+			EdgeExecution: cloneEdgeExecutionEvidence(attempt.EdgeExecution),
 		}, nil
 	}
 	return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
@@ -390,7 +402,7 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 }
 
 func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel.VerificationEnvelope, reported commandmodel.ReportedStateEvidence) bool {
-	expected, ok := commandmodel.ExpectedReportedValue(intent.Capability, intent.Parameters)
+	expected, ok := commandmodel.ExpectedVerificationValue(intent.Capability, intent.Parameters, envelope.EdgeExecution)
 	profile, supported := commandmodel.CapabilityProfileFor(intent.Capability)
 	if !ok || !supported {
 		return false
@@ -476,6 +488,9 @@ func cloneIntent(intent commandmodel.CommandIntent) commandmodel.CommandIntent {
 	intent.Parameters = cloneParameters(intent.Parameters)
 	intent.Transitions = append([]commandmodel.Transition(nil), intent.Transitions...)
 	intent.Attempts = append([]commandmodel.CommandAttempt(nil), intent.Attempts...)
+	for index := range intent.Attempts {
+		intent.Attempts[index].EdgeExecution = cloneEdgeExecutionEvidence(intent.Attempts[index].EdgeExecution)
+	}
 	intent.Approvals = append([]commandmodel.ApprovalEvidence(nil), intent.Approvals...)
 	intent.Authorizations = append([]commandmodel.AuthorizationSnapshot(nil), intent.Authorizations...)
 	intent.RiskSnapshot.Reasons = append([]string(nil), intent.RiskSnapshot.Reasons...)
@@ -489,6 +504,41 @@ func cloneParameters(parameters commandmodel.CommandParameters) commandmodel.Com
 	cloned := make(commandmodel.CommandParameters, len(parameters))
 	for key, value := range parameters {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneEdgeExecutionEvidence(evidence *commandmodel.EdgeExecutionEvidence) *commandmodel.EdgeExecutionEvidence {
+	if evidence == nil {
+		return nil
+	}
+	cloned := *evidence
+	cloned.Requested = cloneScalarValue(evidence.Requested)
+	if evidence.Effective != nil {
+		value := cloneScalarValue(*evidence.Effective)
+		cloned.Effective = &value
+	}
+	if evidence.Applied != nil {
+		value := cloneScalarValue(*evidence.Applied)
+		cloned.Applied = &value
+	}
+	cloned.Constraints = append([]commandmodel.EdgeConstraintEvidence(nil), evidence.Constraints...)
+	return &cloned
+}
+
+func cloneScalarValue(value commandmodel.ScalarValue) commandmodel.ScalarValue {
+	cloned := commandmodel.ScalarValue{}
+	if value.Number != nil {
+		number := *value.Number
+		cloned.Number = &number
+	}
+	if value.Text != nil {
+		text := *value.Text
+		cloned.Text = &text
+	}
+	if value.Boolean != nil {
+		boolean := *value.Boolean
+		cloned.Boolean = &boolean
 	}
 	return cloned
 }

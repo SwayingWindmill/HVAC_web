@@ -15,8 +15,12 @@ schema_manifest_sha256="$(sha256sum "${manifest}" | awk '{print $1}')"
 
 for database in "${databases[@]}"; do
   state="$(psql --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --dbname="${database}" \
-    --set=product="${product}" \
-    --command="SELECT product_version || '|' || schema_manifest_sha256 FROM phase1_deployment.product_schema WHERE product = :'product'" | tr -d '[:space:]')"
+    --set=product="${product}" <<'SQL' | tr -d '[:space:]'
+SELECT product_version || '|' || schema_manifest_sha256
+FROM phase1_deployment.product_schema
+WHERE product = :'product';
+SQL
+  )"
   if [[ -z "${state}" ]]; then
     echo "schema compatibility state is missing for ${database}" >&2
     exit 1

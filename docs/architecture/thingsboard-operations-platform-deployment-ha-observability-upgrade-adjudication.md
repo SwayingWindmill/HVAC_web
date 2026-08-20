@@ -528,3 +528,27 @@ HVAC Web 在“安全控制与耐久业务执行”上有更适合自身场景�
 - 已对本地 Rate Limit、Observability、Scheduler、Outbox、Command、Cache、Migration、Recovery 和 Deployment 做源码级反向审查。
 - 已记录本地优于 ThingsBoard、ThingsBoard 优于本地及双方都不适合直接保留的部分。
 - 本轮只完成架构裁决和实施门槛，没有宣称缺口已实现或生产已认证。
+
+## 17. S23 Housekeeping / Retention / Tenant Retirement 实施源码复核
+
+Date: 2026-08-19
+
+Issue: #281
+
+S23 实施前再次固定审查 ThingsBoard CE `v4.3.1.1` / commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` 的以下源码与测试，而不是仅依据本裁决文档实现：
+
+- `application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperService.java`；
+- `application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperReprocessingService.java`；
+- `common/data/src/main/java/org/thingsboard/server/common/data/housekeeper/HousekeeperTaskType.java`；
+- `application/src/test/java/org/thingsboard/server/service/housekeeper/HousekeeperServiceTest.java`。
+
+S23 的逐项裁决如下：
+
+- **ADOPT**：类型化维护任务、单任务超时、最大尝试次数、失败后的显式可观测结果，以及测试中“验证真实清理结果而非只验证调用次数”的原则。
+- **ADAPT**：ThingsBoard 的 Kafka Housekeeper/Reprocessing 改为 HVAC Web 已有 PostgreSQL `job_instances` / `job_attempts`、`SKIP LOCKED` Claim、Lease Renewal、`RETRY_WAIT` 与 `DEAD`；重试使用有界退避与抖动，不复制固定 `sleep`。
+- **ADAPT**：ThingsBoard 的 Tenant 级实体删除改为跨 Owner 的 Retirement Saga。IAM、Registry、Telemetry、Metric、Alarm、Outbound Delivery 必须分别留下成功 Proof；任一 Owner 失败时状态只能是 `INCOMPLETE`，不能宣告 Tenant 已退休。
+- **ADAPT**：Housekeeper 的失败通知改为持久 `maintenance_events`。证书/Secret 到期、`DEAD` 工作和 Retirement 不完整都必须可查询并带明确 `action_code`，而不是只存在日志中。
+- **REJECT**：固定睡眠重试、单一重处理分区作为可靠性前提、达到重试上限后没有持久处置记录，以及未证明 Producer 交付结果就推进任务状态。
+- **KEEP**：HVAC Web S08 已有 Legal Hold、Archive Manifest、Deletion Tombstone 与 Restore Tombstone 语义。S23 复用这些真值，不另建平行 Retention/Archive 删除模型。
+
+本轮没有复制 ThingsBoard Java 源码；只采用经裁决的行为模式。ThingsBoard 上述源码许可证为 Apache-2.0。

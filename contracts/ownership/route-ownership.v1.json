@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 25,
+  "registryRevision": 27,
   "routes": [
     {
       "method": "GET",
@@ -216,6 +216,38 @@
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/asset-model",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/dashboard-summary",
+      "owner": "presentation-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/dashboard-summary/events",
+      "owner": "presentation-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
       "rollout": {

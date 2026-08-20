@@ -243,6 +243,32 @@ services:
     mem_limit: ${SCHEDULER_MEMORY_LIMIT:-256m}
     mem_reservation: ${SCHEDULER_MEMORY_RESERVATION:-64m}
 
+  maintenance:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/maintenance-service/cmd/maintenance-service }
+    image: ${MAINTENANCE_IMAGE:-hvac/maintenance:0.1.0-dev}
+    environment:
+      MAINTENANCE_DIAGNOSTICS_ADDR: :19093
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    expose: ["19093"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${MAINTENANCE_CPUS:-0.50}
+    mem_limit: ${MAINTENANCE_MEMORY_LIMIT:-256m}
+    mem_reservation: ${MAINTENANCE_MEMORY_RESERVATION:-64m}
+
   telemetry-worker:
     <<: *go-service
     build:

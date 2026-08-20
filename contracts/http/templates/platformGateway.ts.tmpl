@@ -214,6 +214,70 @@ export const siteAssetModelSchema = z.object({
   counts: assetModelCountsSchema,
 }).strict();
 
+export const presentationStateSchema = z.enum(['READY', 'ATTENTION', 'NO_DATA', 'PARTIAL', 'STALE', 'SUSPECT', 'UNAVAILABLE', 'NOT_AUTHORIZED', 'NOT_INTEGRATED']);
+export const dashboardMetricSchema = z.object({
+  state: presentationStateSchema,
+  value: z.number().nullable(),
+  unit: z.string().max(32).nullable(),
+  source: z.string().min(1).max(64),
+  dataWatermark: instantSchema.nullable(),
+  aggregateWatermark: instantSchema.nullable(),
+  reason: z.string().max(256).nullable(),
+}).strict();
+export const devicePopulationSummarySchema = z.object({
+  state: presentationStateSchema,
+  registered: z.number().int().nonnegative(),
+  applicable: z.number().int().nonnegative(),
+  observable: z.number().int().nonnegative(),
+  online: z.number().int().nonnegative(),
+  offline: z.number().int().nonnegative(),
+  stale: z.number().int().nonnegative(),
+  unknown: z.number().int().nonnegative(),
+  unavailable: z.number().int().nonnegative(),
+  denominatorPolicy: z.literal('APPLICABLE_WITH_KNOWN_PRESENCE'),
+  denominator: z.number().int().positive().nullable(),
+  availabilityPercent: z.number().min(0).max(100).nullable(),
+  evaluatedAt: instantSchema.nullable(),
+}).strict();
+export const openAlarmSummarySchema = z.object({
+  state: presentationStateSchema,
+  activeCount: z.number().int().nonnegative().nullable(),
+  highestSeverity: z.enum(['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO']).nullable(),
+  watermark: instantSchema.nullable(),
+  reason: z.string().max(256).nullable(),
+}).strict();
+export const siteDashboardSlowMetricsSchema = z.object({
+  siteLocalDayEnergy: dashboardMetricSchema,
+  cost: dashboardMetricSchema,
+  baselineSavings: dashboardMetricSchema,
+  cop: dashboardMetricSchema,
+}).strict();
+export const siteDashboardFastMetricsSchema = z.object({
+  currentPower: dashboardMetricSchema,
+  openAlarms: openAlarmSummarySchema,
+}).strict();
+export const siteDashboardSummarySchema = z.object({
+  schemaVersion: z.literal(1),
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  siteTimezone: z.string().min(1).max(128),
+  asOf: instantSchema,
+  generatedAt: instantSchema,
+  dataWatermark: instantSchema.nullable(),
+  aggregateWatermark: instantSchema.nullable(),
+  completeness: presentationStateSchema,
+  quality: presentationStateSchema,
+  reasons: z.array(z.string().max(128)).max(32),
+  devicePopulation: devicePopulationSummarySchema,
+  slowMetrics: siteDashboardSlowMetricsSchema,
+  fastMetrics: siteDashboardFastMetricsSchema,
+}).strict();
+export const siteDashboardSummaryDeltaSchema = z.object({
+  schemaVersion: z.literal(1),
+  baseGeneratedAt: instantSchema,
+  summary: siteDashboardSummarySchema,
+}).strict();
+
 export const mutationMetaSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
@@ -451,6 +515,14 @@ export type TelemetryPoint = z.infer<typeof telemetryPointSchema>;
 export type AssetRelationship = z.infer<typeof assetRelationshipSchema>;
 export type AssetModelCounts = z.infer<typeof assetModelCountsSchema>;
 export type SiteAssetModel = z.infer<typeof siteAssetModelSchema>;
+export type PresentationState = z.infer<typeof presentationStateSchema>;
+export type DashboardMetric = z.infer<typeof dashboardMetricSchema>;
+export type DevicePopulationSummary = z.infer<typeof devicePopulationSummarySchema>;
+export type OpenAlarmSummary = z.infer<typeof openAlarmSummarySchema>;
+export type SiteDashboardSlowMetrics = z.infer<typeof siteDashboardSlowMetricsSchema>;
+export type SiteDashboardFastMetrics = z.infer<typeof siteDashboardFastMetricsSchema>;
+export type SiteDashboardSummary = z.infer<typeof siteDashboardSummarySchema>;
+export type SiteDashboardSummaryDelta = z.infer<typeof siteDashboardSummaryDeltaSchema>;
 export type ExternalBinding = z.infer<typeof externalBindingSchema>;
 export type SiteCollection = z.infer<typeof siteCollectionSchema>;
 export type AssetCollection = z.infer<typeof assetCollectionSchema>;
@@ -578,6 +650,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     getSiteAssetModel: (siteId: string, init?: RequestInit) => request(
       '__SITE_ASSET_MODEL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteAssetModelSchema, { ...init, method: 'GET' },
+    ),
+    getSiteDashboardSummary: (siteId: string, init?: RequestInit) => request(
+      '__SITE_DASHBOARD_SUMMARY_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteDashboardSummarySchema, { ...init, method: 'GET' },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

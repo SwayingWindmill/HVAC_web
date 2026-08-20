@@ -12,6 +12,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/oidctest v0.0.0
 	github.com/quanlaihe/hvac-web/libs/ownershipregistry v0.0.0
+	github.com/quanlaihe/hvac-web/libs/presentationmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/sessionevent v0.0.0
 	github.com/quanlaihe/hvac-web/libs/sessionstore v0.0.0
 	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
@@ -74,6 +75,8 @@ replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observabi
 replace github.com/quanlaihe/hvac-web/libs/operationsauditevent => ../../libs/operationsauditevent
 
 replace github.com/quanlaihe/hvac-web/libs/ownershipregistry => ../../libs/ownershipregistry
+
+replace github.com/quanlaihe/hvac-web/libs/presentationmodel => ../../libs/presentationmodel
 
 replace github.com/quanlaihe/hvac-web/libs/sessionevent => ../../libs/sessionevent
 

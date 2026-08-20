@@ -37,6 +37,9 @@ hvac_s1|infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 hvac_s1|infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql
 hvac_s1|infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
 hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
+hvac_s1|infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
+hvac_s1|services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
+hvac_s1|infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql
 hvac_s2|infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -47,8 +50,10 @@ hvac_s2|infra/s2-telemetry/postgres/init/004c-s2-counter-semantics.sql
 hvac_s2|infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql
 hvac_s2|infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql
 hvac_s3|services/command-service/migrations/001_s3_command_runtime.sql
+hvac_s3|services/command-service/migrations/002_s3_target_runtime.sql
 hvac_s3|services/command-service/migrations/003_s3_tenant_scope.sql
 hvac_s3|services/command-service/migrations/004_s3_command_point_identity.sql
+hvac_s3|services/command-service/migrations/005_s11_edge_execution_evidence.sql
 hvac_s4|services/alarm-service/migrations/001_s4_alarm_runtime.sql
 hvac_s4|services/alarm-service/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|services/alarm-service/migrations/003_s4_tenant_scope.sql

@@ -35,8 +35,9 @@ func TestEdgeControlRuntimeArbitratesAndExecutesSimulatorDriver(t *testing.T) {
 	}
 
 	frequency := runEdgeCommand(t, runtime, at, "command-frequency", config.Plant.ChilledWaterPump.ID, "SET_FREQUENCY", map[string]float64{"frequencyHz": 55})
-	if !frequency.Accepted || frequency.Effective == nil || frequency.Effective.Double != 50 || frequency.Code != "APPLIED" {
-		t.Fatalf("capability limit did not arbitrate 55 Hz to 50 Hz: %#v", frequency)
+	if !frequency.Accepted || frequency.Effective == nil || frequency.Effective.Double != 50 || frequency.Code != "APPLIED" ||
+		frequency.WinnerControllerID != "cloud-command-intent" || frequency.Cycle == 0 || len(frequency.ConstraintReasons) == 0 {
+		t.Fatalf("capability limit did not record requested/effective/constraint/winner/cycle evidence: %#v", frequency)
 	}
 	if got := plant.Snapshot().Devices[config.Plant.ChilledWaterPump.ID]["frequencyHz"]; got != 50.0 {
 		t.Fatalf("simulator driver did not apply effective frequency: %v", got)

@@ -21,7 +21,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-const commandSchemaVersion = "1.0"
+const commandSchemaVersion = "2.0"
 
 var (
 	ErrPayloadMismatch = errors.New("MQTT command attempt payload mismatch")
@@ -74,15 +74,15 @@ type commandEnvelope struct {
 }
 
 type commandReply struct {
-	SchemaVersion  string             `json:"schemaVersion"`
-	MessageID      string             `json:"messageId"`
-	CommandID      string             `json:"commandId"`
-	TraceID        string             `json:"traceId,omitempty"`
-	EventTime      int64              `json:"eventTime"`
-	EdgeStatus     string             `json:"edgeStatus"`
-	Reported       map[string]float64 `json:"reported,omitempty"`
-	ReasonCode     *string            `json:"reasonCode"`
-	ExecutionFence uint64             `json:"executionFence"`
+	SchemaVersion     string                              `json:"schemaVersion"`
+	MessageID         string                              `json:"messageId"`
+	CommandID         string                              `json:"commandId"`
+	TraceID           string                              `json:"traceId,omitempty"`
+	EventTime         int64                               `json:"eventTime"`
+	EdgeStatus        string                              `json:"edgeStatus"`
+	ExecutionEvidence *commandmodel.EdgeExecutionEvidence `json:"executionEvidence,omitempty"`
+	ReasonCode        *string                             `json:"reasonCode"`
+	ExecutionFence    uint64                              `json:"executionFence"`
 }
 
 type Connector struct {
@@ -322,16 +322,19 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 		reason = strings.ToUpper(strings.TrimSpace(*reply.ReasonCode))
 	}
 	eventTime := time.UnixMilli(reply.EventTime).UTC()
-	if reply.SchemaVersion != commandSchemaVersion || strings.TrimSpace(reply.MessageID) == "" || reply.EventTime <= 0 {
+	if reply.SchemaVersion != commandSchemaVersion || strings.TrimSpace(reply.MessageID) == "" || reply.EventTime <= 0 ||
+		(status == "EXECUTED" && (reply.ExecutionEvidence == nil || !reply.ExecutionEvidence.ValidExecuted())) ||
+		(reply.ExecutionEvidence != nil && !reply.ExecutionEvidence.Valid()) {
 		status = "INVALID"
 		reason = ""
 		eventTime = time.Time{}
+		reply.ExecutionEvidence = nil
 	}
 	ctx, cancel := context.WithTimeout(connector.rootContext, 5*time.Second)
 	defer cancel()
 	correlation, err := connector.config.TransportState.RecordCommandReply(
 		ctx, connector.config.IntegrationInstanceID, reply.CommandID, reply.ExecutionFence,
-		sha256Hex(replyBody), status, eventTime, reason, connector.config.Now().UTC(),
+		sha256Hex(replyBody), status, eventTime, reason, reply.ExecutionEvidence, connector.config.Now().UTC(),
 	)
 	if err != nil {
 		return true, nil
@@ -425,6 +428,7 @@ func completedEvidenceFromCorrelation(correlation CommandCorrelation) commandmod
 		RequestWritten:            true,
 		ResponseSHA256:            correlation.ReplySHA256,
 		CompletedAt:               correlation.RepliedAt,
+		EdgeExecution:             correlation.EdgeExecution,
 	}
 	status := strings.ToUpper(strings.TrimSpace(correlation.ReplyStatus))
 	if correlation.ReplyEventTime.IsZero() {
@@ -432,16 +436,25 @@ func completedEvidenceFromCorrelation(correlation CommandCorrelation) commandmod
 		completed.FailureCode = "MQTT_COMMAND_REPLY_INVALID"
 		return completed
 	}
+	reason := status
+	if strings.TrimSpace(correlation.ReplyReasonCode) != "" {
+		reason = strings.ToUpper(strings.TrimSpace(correlation.ReplyReasonCode))
+	}
 	switch status {
-	case "DEVICE_ACK", "EXECUTED", "VERIFIED":
+	case "EXECUTED":
+		if correlation.EdgeExecution == nil || !correlation.EdgeExecution.ValidExecuted() {
+			completed.ConnectorPhase = commandmodel.ConnectorRequestCommitted
+			completed.FailureCode = "MQTT_COMMAND_REPLY_INVALID"
+			break
+		}
 		completed.ProviderStatusCode = 200
 		completed.ConnectorPhase = commandmodel.ConnectorAcknowledged
-	case "REJECTED", "FAILED", "TIMEOUT", "EXPIRED":
+	case "REJECTED", "EXPIRED":
+		completed.ProviderStatusCode = 200
+		completed.ConnectorPhase = commandmodel.ConnectorExecutionRejected
+		completed.FailureCode = "MQTT_EDGE_" + reason
+	case "FAILED", "TIMEOUT":
 		completed.ConnectorPhase = commandmodel.ConnectorRequestCommitted
-		reason := status
-		if strings.TrimSpace(correlation.ReplyReasonCode) != "" {
-			reason = strings.ToUpper(strings.TrimSpace(correlation.ReplyReasonCode))
-		}
 		completed.FailureCode = "MQTT_EDGE_" + reason
 	default:
 		completed.ConnectorPhase = commandmodel.ConnectorRequestCommitted
@@ -452,11 +465,12 @@ func completedEvidenceFromCorrelation(correlation CommandCorrelation) commandmod
 
 func connectorResult(evidence commandmodel.CompletedConnectorEvidence) commandmodel.ConnectorResult {
 	return commandmodel.ConnectorResult{
-		Phase:        evidence.ConnectorPhase,
-		FailureCode:  evidence.FailureCode,
-		EvidenceID:   "mqtt:" + evidence.AttemptID + ":" + fmt.Sprint(evidence.ExecutionFence),
-		Acknowledged: evidence.ConnectorPhase == commandmodel.ConnectorAcknowledged,
-		Verified:     false,
+		Phase:         evidence.ConnectorPhase,
+		FailureCode:   evidence.FailureCode,
+		EvidenceID:    "mqtt:" + evidence.AttemptID + ":" + fmt.Sprint(evidence.ExecutionFence),
+		Acknowledged:  evidence.ConnectorPhase == commandmodel.ConnectorAcknowledged,
+		Verified:      false,
+		EdgeExecution: evidence.EdgeExecution,
 	}
 }
 
