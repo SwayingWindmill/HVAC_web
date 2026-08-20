@@ -33,11 +33,12 @@ test('pins the patched React Router stack and its supported runtime', async () =
   assert.equal(packageJson.devDependencies?.['@types/react-dom'], '19.2.3');
 });
 
-test('removes the exact GHSA-qwww-vcr4-c8h2 temporary exceptions', async () => {
-  const baseline = JSON.parse(await readFile(join(root, 'deploy/s0/security/dependency-audit-baseline.json'), 'utf8'));
-  const exceptions = Object.values(baseline.projects ?? {}).flatMap((project) => project.exceptions ?? []);
-  assert.equal(exceptions.some((entry) => entry.remediationIssue === '#79'), false);
-  assert.equal(exceptions.some((entry) => entry.advisoryUrls?.includes('https://github.com/advisories/GHSA-qwww-vcr4-c8h2')), false);
+test('pins patched transitive security dependencies without an audit waiver', async () => {
+  const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  assert.equal(packageJson.overrides?.['path-to-regexp'], '8.4.2');
+  assert.equal(packageJson.overrides?.mermaid, '11.17.0');
+  assert.equal(packageJson.overrides?.dompurify, '3.4.14');
+  await assert.rejects(readFile(join(root, 'deploy/s0/security/dependency-audit-baseline.json'), 'utf8'), { code: 'ENOENT' });
 });
 
 test('contains no react-router-dom imports in application or test fixture source', async () => {
