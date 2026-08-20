@@ -559,3 +559,21 @@ Notification is now an independently owned durable business domain in `notificat
 - A clean PostgreSQL 16 `notification_runtime` initialized from the S16 migration passed replay, frozen-recipient/template, delayed-stage cancellation, mandatory-safety preference, cross-Tenant scheduler and external handoff recovery tests. All nine Notification tables use FORCE RLS; the scheduler can update only lifecycle/lease columns on `notification_intent` and cannot read Inbox rows.
 - A separate PostgreSQL 16 Alarm database initialized through migrations `001`–`007` proved exactly four business source events for create -> unchanged occurrence -> severity change -> ACK -> clear: `CREATED`, `SEVERITY_CHANGED`, `ACKNOWLEDGED`, `CLEARED`. The outbox relay reclaimed expired work with a higher fence and rejected stale completion.
 - Direct mutation of released Notification policy or the frozen Notification Intent recipient/template/body snapshot is rejected by database triggers. Notification source code contains no `alarm_runtime` access; Alarm-to-Notification transfer is through the dedicated outbox relay seam, and external disposition is read through the S15 owner store seam.
+
+## S24 — Retire Legacy/Shadow/Simulator production wiring
+
+Date: 2026-08-20
+
+Local issue: #295
+
+S24 introduces no new upstream behavior to copy. It is a retirement slice whose source-first inputs are the already-pinned S05/S09/S11/S12 owner implementations plus the repository's completed Registry, Telemetry and Edge acceptance evidence. Re-reading a generic ThingsBoard migration or Edge fallback path would be the wrong authority for deciding whether an HVAC compatibility path may remain.
+
+### Implementation decision
+
+- `ADOPT`: retain historical migration/shadow tools only when they remain useful as one-shot or offline acceptance evidence.
+- `REPLACE`: production simulator/test wiring with explicit acceptance-only overlays or externally supplied real identity configuration.
+- `REJECT`: runtime fallback to `legacy-hvac-backend`, previous-writer schema compatibility, production `telemetry-shadow-comparator`, production `oidc-test-provider`, and canonical production Compose wiring for EG8200 Simulator.
+
+### S24 consequence
+
+Current route ownership is single-owner/native, the four Telemetry current-state routes are fully cut over to `telemetry-runtime-service`, and Phase 1 no longer includes a simulator service. Test IdP and simulator sources remain available for test/acceptance use, while Shadow rollout artifacts live under `deploy/acceptance`. Rollback is release/database recovery evidence only; no retired service is a rollback mechanism.

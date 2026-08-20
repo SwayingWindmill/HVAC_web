@@ -41,6 +41,7 @@ for (const name of placeholders) {
   else if (name === 'WORKLOAD_KEY_PATH') bindings[name] = '/var/run/s0/pki/tls.key';
   else if (name === 'TRUST_BUNDLE_PATH') bindings[name] = '/var/run/s0/pki/ca.crt';
   else if (name === 'POSTGRES_HOST') bindings[name] = 'postgres.s0-staging.svc.cluster.local';
+  else if (name === 'OIDC_ISSUER') bindings[name] = 'https://idp.staging.local';
   else if (name.endsWith('_DATABASE_URL')) bindings[name] = 'postgres://runtime@postgres.s0-staging.svc.cluster.local/hvac_s0?sslmode=verify-full';
   else bindings[name] = 'test-binding';
 }

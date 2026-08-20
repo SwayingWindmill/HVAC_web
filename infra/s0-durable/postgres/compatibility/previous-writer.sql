@@ -1,1 +1,0 @@
--- Retired. Data Architecture V2 does not support previous-writer compatibility paths.

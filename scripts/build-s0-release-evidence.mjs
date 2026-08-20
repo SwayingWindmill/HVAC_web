@@ -194,16 +194,14 @@ async function collectMigrationState() {
   const files = [];
   for (const path of sqlFiles) files.push({ path: portable(path), sha256: await sha256File(path), bytes: (await readFile(path)).length });
   const migrationSQL = await readFile(resolve(migrationRoot, 'init/001-s0-durable.sql'), 'utf8');
-  const compatibilitySQL = await readFile(resolve(migrationRoot, 'compatibility/previous-writer.sql'), 'utf8');
-  const expandDefaults = (migrationSQL.match(/traceparent text NOT NULL DEFAULT ''/g) ?? []).length;
-  assert(expandDefaults === 3, `expected three rollback-window traceparent defaults, found ${expandDefaults}`);
-  assert(compatibilitySQL.includes('previous') || compatibilitySQL.includes('traceparent'), 'previous-writer compatibility fixture is incomplete');
+  const traceparentDefaults = (migrationSQL.match(/traceparent text NOT NULL DEFAULT ''/g) ?? []).length;
+  assert(traceparentDefaults === 3, `expected three traceparent defaults, found ${traceparentDefaults}`);
   return {
     status: 'passed',
-    strategy: 'expand-contract',
+    strategy: 'current-schema-only',
     reverseMigrationDuringRollbackWindow: false,
-    expandCompatibilityDefaults: expandDefaults,
-    previousWriterFixture: 'infra/s0-durable/postgres/compatibility/previous-writer.sql',
+    traceparentDefaults,
+    previousWriterFixture: null,
     migrationIdentity: 's0_migrator',
     runtimeExecutesDDL: false,
     files,
@@ -244,8 +242,8 @@ async function renderStaging(images) {
     SIGNED_IMAGE_IAM_SERVICE: byName.get('iam-service'),
     SIGNED_IMAGE_AUDIT_LEDGER_SERVICE: byName.get('audit-ledger-service'),
     SIGNED_IMAGE_OUTBOX_RELAY: byName.get('outbox-relay'),
-    SIGNED_IMAGE_OIDC_TEST_PROVIDER: byName.get('oidc-test-provider'),
     SIGNED_IMAGE_S0_MIGRATOR: byName.get('s0-migrator'),
+    OIDC_ISSUER: 'https://idp.staging.local',
     GATEWAY_DATABASE_URL: 'postgres://s0_gateway@postgres:5432/s0?sslmode=require',
     SESSION_TOKEN_KEY: '[REDACTED_SECRET]',
     AUDIT_CONSUMER_DATABASE_URL: 'postgres://s0_audit_consumer@postgres:5432/s0?sslmode=require',
@@ -259,7 +257,6 @@ async function renderStaging(images) {
     RUNTIME_BINDINGS_IAM_SERVICE: [],
     RUNTIME_BINDINGS_AUDIT_LEDGER_SERVICE: [],
     RUNTIME_BINDINGS_OUTBOX_RELAY: [],
-    RUNTIME_BINDINGS_OIDC_TEST_PROVIDER: [],
     RUNTIME_IDENTITY_MOUNTS: [],
     RUNTIME_IDENTITY_VOLUMES: [],
     RUNTIME_IDENTITY_AND_ROUTE_MOUNTS: [],

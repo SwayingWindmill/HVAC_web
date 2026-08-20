@@ -58,8 +58,8 @@ npm run build:real
 - `platform-core-service/`：站点、设备和 Registry 权威数据。
 - `audit-ledger-service/`：追加式审计账本和事务 Inbox。
 - `outbox-relay/`：事务 Outbox 事件转发。
-- `oidc-test-provider/`：确定性本地 OIDC 测试提供方。
-- `legacy-migration-service/`：旧 Registry 数据迁移边界。
+- `oidc-test-provider/`：仅测试使用的确定性 OIDC fixture，不进入 Staging/Production 发布图。
+- `legacy-migration-service/`：仅保留一次性 Registry 迁移源码与历史验证，不是运行时服务。
 
 ### 遥测与分析
 
@@ -67,7 +67,7 @@ npm run build:real
 - `mqtt-telemetry-adapter/`：MQTT TLS/QoS1 遥测进入 Telemetry Runtime 的 Edge/Cloud 适配边界。
 - `telemetry-query-service/`：历史遥测与能源分析产品查询。
 - `analytics-read-model-projector/`：分析读取模型投影。
-- `telemetry-shadow-comparator/`：迁移与切换期间的遥测影子比较。
+- `telemetry-shadow-comparator/`：仅保留离线迁移验收/历史比较工具，不进入当前生产 serving path。
 - `thingsboard-telemetry-adapter/`：ThingsBoard 遥测适配。
 
 ### 命令、告警与工单

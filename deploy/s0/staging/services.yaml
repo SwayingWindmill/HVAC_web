@@ -21,11 +21,3 @@ spec:
   selector: { app: audit-ledger-service }
   ports:
     - { name: https, port: 8446, targetPort: https }
----
-apiVersion: v1
-kind: Service
-metadata: { name: oidc-test-provider }
-spec:
-  selector: { app: oidc-test-provider }
-  ports:
-    - { name: https, port: 8443, targetPort: https }

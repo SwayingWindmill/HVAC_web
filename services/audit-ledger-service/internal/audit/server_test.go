@@ -16,11 +16,11 @@ import (
 	"github.com/quanlaihe/hvac-web/services/audit-ledger-service/internal/audit"
 )
 
-func TestAuditQueryRequiresWorkloadAndOrganizationScopedDelegation(t *testing.T) {
+func TestAuditQueryRequiresWorkloadAndTenantScopedDelegation(t *testing.T) {
 	harness := newAuditHarness(t)
 	record := audit.Record{
 		LedgerSequence: 1, MessageID: "message-01", SchemaVersion: 1,
-		OrganizationID: "org-01", ActingOrganizationID: "org-01",
+		TenantID: "tenant-01",
 		AggregateType: "bff-session", AggregateID: "session-01", AggregateVersion: 1,
 		OccurredAt: harness.now, InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test",
 		ExecutingService: "platform-gateway", ExecutingSPIFFEID: harness.spiffeID,
@@ -29,10 +29,10 @@ func TestAuditQueryRequiresWorkloadAndOrganizationScopedDelegation(t *testing.T)
 		Traceparent:   "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		PayloadSHA256: stringOf('a', 64), PreviousRecordHash: stringOf('0', 64), RecordHash: stringOf('b', 64), RecordedAt: harness.now,
 	}
-	store := &fakeRecordStore{records: map[string]audit.Record{"org-01/message-01": record}}
+	store := &fakeRecordStore{records: map[string]audit.Record{"tenant-01/message-01": record}}
 	handler := audit.NewHandler(audit.ServerConfig{Store: store, AllowedWorkloadSPIFFE: harness.spiffeID, Audience: "audit-ledger-service", Now: func() time.Time { return harness.now }})
 
-	request := harness.request(t, "org-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "organization:org-01")
+	request := harness.request(t, "tenant-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "tenant:tenant-01")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -42,21 +42,21 @@ func TestAuditQueryRequiresWorkloadAndOrganizationScopedDelegation(t *testing.T)
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.MessageID != record.MessageID || response.OrganizationID != "org-01" {
+	if response.MessageID != record.MessageID || response.TenantID != "tenant-01" {
 		t.Fatalf("unexpected audit record: %#v", response)
 	}
 
-	crossOrganization := harness.request(t, "org-02", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "organization:org-02")
+	crossTenant := harness.request(t, "tenant-02", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "tenant:tenant-02")
 	recorder = httptest.NewRecorder()
-	handler.ServeHTTP(recorder, crossOrganization)
+	handler.ServeHTTP(recorder, crossTenant)
 	assertAuditProblem(t, recorder, http.StatusNotFound, "AUDIT_RECORD_NOT_FOUND")
 
-	wrongAudience := harness.request(t, "org-01", "message-01", []string{"audit-reader"}, "iam-service", "audit:read", "organization:org-01")
+	wrongAudience := harness.request(t, "tenant-01", "message-01", []string{"audit-reader"}, "iam-service", "audit:read", "tenant:tenant-01")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, wrongAudience)
 	assertAuditProblem(t, recorder, http.StatusForbidden, "AUDIT_DELEGATION_REJECTED")
 
-	wrongAction := harness.request(t, "org-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "principal:read", "organization:org-01")
+	wrongAction := harness.request(t, "tenant-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "principal:read", "tenant:tenant-01")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, wrongAction)
 	assertAuditProblem(t, recorder, http.StatusForbidden, "AUDIT_DELEGATION_REJECTED")
@@ -66,8 +66,8 @@ func TestAuditQueryRejectsForgedHeadersAndMissingVerifiedTLS(t *testing.T) {
 	harness := newAuditHarness(t)
 	handler := audit.NewHandler(audit.ServerConfig{Store: &fakeRecordStore{}, AllowedWorkloadSPIFFE: harness.spiffeID, Now: func() time.Time { return harness.now }})
 
-	forged := harness.request(t, "org-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "organization:org-01")
-	forged.Header.Set("X-Organization-ID", "org-forged")
+	forged := harness.request(t, "tenant-01", "message-01", []string{"audit-reader"}, "audit-ledger-service", "audit:read", "tenant:tenant-01")
+	forged.Header.Set("X-Tenant-ID", "tenant-forged")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, forged)
 	assertAuditProblem(t, recorder, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER")
@@ -107,12 +107,12 @@ func newAuditHarness(t *testing.T) auditHarness {
 	return auditHarness{now: now, spiffeID: bundle.ClientSPIFFEID, cert: certificate, signer: signer}
 }
 
-func (h auditHarness) request(t *testing.T, organizationID, messageID string, roles []string, audience, action, scope string) *http.Request {
+func (h auditHarness) request(t *testing.T, tenantID, messageID string, roles []string, audience, action, scope string) *http.Request {
 	t.Helper()
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.spiffeID, Subject: "fixture-user", SubjectIssuer: "https://issuer.example.test",
 		DisplayName: "Fixture User", Email: "fixture@example.test", Roles: roles,
-		ExecutingService: h.spiffeID, Audience: audience, ActingOrganizationID: organizationID,
+		ExecutingService: h.spiffeID, Audience: audience, TenantID: tenantID,
 		Actions: []string{action}, Scopes: []string{scope}, PolicyRevision: "policy-v1",
 		SessionID: "session-01", IssuedAt: h.now.Unix(), ExpiresAt: h.now.Add(30 * time.Second).Unix(), TokenID: "grant-01",
 	}
@@ -130,8 +130,8 @@ type fakeRecordStore struct {
 	records map[string]audit.Record
 }
 
-func (store *fakeRecordStore) GetRecord(_ context.Context, organizationID, messageID string) (audit.Record, error) {
-	if record, exists := store.records[organizationID+"/"+messageID]; exists {
+func (store *fakeRecordStore) GetRecord(_ context.Context, tenantID, messageID string) (audit.Record, error) {
+	if record, exists := store.records[tenantID+"/"+messageID]; exists {
 		return record, nil
 	}
 	return audit.Record{}, audit.ErrRecordNotFound

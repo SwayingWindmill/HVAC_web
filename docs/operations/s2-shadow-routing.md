@@ -15,7 +15,7 @@ The business identity is the acting Organization plus the initiating principal s
 
 ## Phase revisions
 
-`deploy/s2/shadow-routing-revisions.v1.json` freezes the adjacent sequence:
+`deploy/acceptance/s2-shadow-routing-revisions.v1.json` retains the retired rollout sequence as acceptance/history evidence only:
 
 | Phase | Registry revision | Route revision | Public reader | S2 behavior |
 | --- | ---: | ---: | --- | --- |
@@ -44,7 +44,7 @@ The existing production registry remains R0, so Ticket 08 itself introduces no d
 
 `telemetry-shadow-comparator` is an offline CLI. It reads one bounded JSON input and writes one audit report. It imports generated S2 Snapshot DTOs and has no HTTP server, database driver, service identity, token signer, message client, Redis/Centrifugo client, ThingsBoard client, or route mutation API.
 
-`deploy/s2/shadow-comparator-policy.v1.json` denies all ingress and egress and grants no database, publish, subscribe, authorization, mapping-repair, token-mint, route-change, or serving-path capability. Comparator failure blocks promotion evidence but cannot affect Legacy or S2 serving.
+`deploy/acceptance/s2-shadow-comparator-policy.v1.json` is retained only to reproduce historical cutover evidence. It denies all ingress and egress and grants no database, publish, subscribe, authorization, mapping-repair, token-mint, route-change, or serving-path capability. It is not a production deployment asset and cannot affect current S2 serving.
 
 The report records:
 

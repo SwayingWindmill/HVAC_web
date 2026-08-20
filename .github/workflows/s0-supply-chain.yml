@@ -16,7 +16,6 @@ on:
       - "scripts/check-observability-assets.mjs"
       - "scripts/check-ownership-registries.mjs"
       - "scripts/check-production-licenses.mjs"
-      - "scripts/check-production-rollout.mjs"
       - "scripts/check-rms-real-build-graph.mjs"
       - "scripts/check-rms-real-bundle.mjs"
       - "scripts/check-s0-delivery-assets.mjs"

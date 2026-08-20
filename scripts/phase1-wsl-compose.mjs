@@ -43,12 +43,22 @@ const env = {
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
 };
 
+const args = process.argv.slice(2);
+const simulatorAcceptanceIndex = args.indexOf('--simulator-acceptance');
+const composeFiles = [
+  path.join(phase1Dir, 'compose.yaml'),
+  path.join(phase1Dir, 'wsl.override.yaml'),
+];
+if (simulatorAcceptanceIndex >= 0) {
+  args.splice(simulatorAcceptanceIndex, 1);
+  composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
+}
+
 const result = spawnSync('docker', [
   'compose',
   '--env-file', runtimeEnv,
-  '-f', path.join(phase1Dir, 'compose.yaml'),
-  '-f', path.join(phase1Dir, 'wsl.override.yaml'),
-  ...process.argv.slice(2),
+  ...composeFiles.flatMap((composeFile) => ['-f', composeFile]),
+  ...args,
 ], {
   cwd: repoRoot,
   env,

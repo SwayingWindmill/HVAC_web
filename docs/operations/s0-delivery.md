@@ -85,18 +85,16 @@ npm run audit:s0-rollout
 
 Release procedure:
 
-1. Verify all new digests and provenance, run the migration Job, and retain the previous compatible digest set.
+1. Verify all new digests and provenance, take the required database backup, then run the migration Job against the exact release manifest.
 2. Roll out Gateway-facing stateless services first, waiting for ready replicas before draining old replicas.
 3. Roll out Relay and Audit workers one at a time and watch Outbox age, consumer lag and Audit ingestion alerts.
 4. Run the browser observability audit against staging.
-5. To roll back, surge a previous compatible replica and wait for readiness before draining a current replica. Repeat until every workload uses the previous digest.
-6. Do not reverse an expand migration during the rollback window.
+5. If rollback is required after a durable schema change, stop the new writers, restore the matching pre-release database backup, then redeploy the previous signed release manifest as one coordinated state transition.
+6. Do not run a previous application binary against a newer schema as a compatibility fallback.
 
-## Expand-contract compatibility
+## Current-schema-only runtime
 
-Schema expansion must remain readable and writable by the previous compatible application version for the declared rollback window. New `traceparent` columns therefore retain a safe empty-string default; current writers populate the value while previous writers may omit it.
-
-`infra/s0-durable/postgres/compatibility/previous-writer.sql` executes previous-style Gateway/Outbox and Audit inserts that omit the new column under their real runtime roles. `npm run test:durable-postgres` runs this transaction before current Go integration tests and rolls it back after proving the defaults. A later contract migration may remove compatibility defaults only after the rollback window closes and no previous binary is deployable.
+The active S0 runtime supports exactly the current Product/Schema contract. Historical binaries and previous-writer SQL fixtures are not runtime compatibility dependencies. `traceparent` defaults remain data-shape defaults for current writers, not a promise that an older release may write the current schema. Rollback evidence is the previous signed release manifest plus the matching database backup/restore proof.
 
 ## Recovery
 

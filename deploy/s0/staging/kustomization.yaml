@@ -9,7 +9,6 @@ resources:
   - workloads/iam-service.yaml
   - workloads/audit-ledger-service.yaml
   - workloads/outbox-relay.yaml
-  - workloads/oidc-test-provider.yaml
   - services.yaml
   - networkpolicies.yaml
   - migration-job.yaml

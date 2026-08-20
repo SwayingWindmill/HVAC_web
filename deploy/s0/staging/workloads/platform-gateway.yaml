@@ -27,6 +27,7 @@ spec:
           envFrom:
             - configMapRef: { name: s0-runtime-config }
           env:
+            - { name: OIDC_ISSUER, value: "[OIDC_ISSUER]" }
             - { name: PLATFORM_GATEWAY_ADDR, value: ":8080" }
             - { name: PLATFORM_GATEWAY_DIAGNOSTICS_ADDR, value: ":19080" }
             - { name: GATEWAY_DATABASE_URL, value: "[GATEWAY_DATABASE_URL]" }

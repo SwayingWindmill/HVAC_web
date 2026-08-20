@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "issue": 295,
+  "slice": "S24",
+  "status": "IMPLEMENTED",
+  "principle": "Retired migration, shadow, test and simulator components may remain as source or acceptance evidence but are not production runtime dependencies or fallbacks.",
+  "retirements": [
+    {
+      "component": "legacy-migration-service",
+      "productionState": "ABSENT",
+      "retainedState": "ONE_SHOT_SOURCE_AND_HISTORY_ONLY",
+      "replacementOwner": "platform-core-service",
+      "evidence": [
+        "contracts/ownership/route-ownership.v1.json",
+        "contracts/ownership/data-ownership.v1.json",
+        "deploy/platform/phase1/migrations/manifest.v1.json"
+      ]
+    },
+    {
+      "component": "telemetry-shadow-comparator",
+      "productionState": "ABSENT",
+      "retainedState": "OFFLINE_ACCEPTANCE_ONLY",
+      "replacementOwner": "telemetry-runtime-service",
+      "evidence": [
+        "deploy/acceptance/s2-shadow-comparator-policy.v1.json",
+        "deploy/acceptance/s2-shadow-routing-revisions.v1.json",
+        "deploy/s2/legacy-current-state-retirement.v1.json"
+      ]
+    },
+    {
+      "component": "oidc-test-provider",
+      "productionState": "ABSENT",
+      "retainedState": "TEST_FIXTURE_ONLY",
+      "replacementOwner": "configured-real-oidc-issuer",
+      "evidence": [
+        "deploy/s0/staging/bindings.schema.json",
+        "deploy/s0/staging/workloads/platform-gateway.yaml"
+      ]
+    },
+    {
+      "component": "eg8200-simulator",
+      "productionState": "ABSENT",
+      "retainedState": "EXPLICIT_ACCEPTANCE_OVERLAY_ONLY",
+      "replacementOwner": "real-edge-through-iot-service",
+      "evidence": [
+        "deploy/platform/phase1/compose.yaml",
+        "deploy/acceptance/phase1-simulator.compose.yaml"
+      ]
+    }
+  ],
+  "productionInvariants": {
+    "singleRouteOwner": true,
+    "runtimeFallback": false,
+    "realBundleCanReachDemoOrSimulatorTruth": false,
+    "previousWriterCompatibilityPath": false
+  },
+  "rollback": {
+    "serviceFallbackAllowed": false,
+    "requiredEvidence": [
+      "previous signed release manifest",
+      "matching pre-release database backup and restore proof"
+    ]
+  },
+  "verificationCommands": [
+    "npm run s24:production-retirement:check",
+    "npm run ownership:check",
+    "npm run rms:real:graph",
+    "npm run rms:real:bundle",
+    "npm run s2:shadow-routing:check",
+    "npm run deployment:phase1:check",
+    "npm run delivery:validate",
+    "npm run test:durable-postgres"
+  ]
+}

@@ -87,7 +87,7 @@ func TestDuplicateMessageWithDifferentProtobufIsRejected(t *testing.T) {
 	}
 }
 
-func TestOperationsAuditPersistsExactlyOnceAndAdvancesOrganizationHashChain(t *testing.T) {
+func TestOperationsAuditPersistsExactlyOnceAndAdvancesTenantHashChain(t *testing.T) {
 	harness := newLedgerHarness(t)
 	harness.reset(t)
 	now := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
@@ -114,7 +114,7 @@ func TestOperationsAuditPersistsExactlyOnceAndAdvancesOrganizationHashChain(t *t
 	if err != nil || inserted {
 		t.Fatalf("duplicate operations consume inserted=%v err=%v", inserted, err)
 	}
-	firstRecord, err := store.GetRecord(context.Background(), firstEvent.OrganizationID, firstEvent.EventID)
+	firstRecord, err := store.GetRecord(context.Background(), firstEvent.TenantID, firstEvent.EventID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,22 +155,22 @@ func TestOperationsAuditPersistsExactlyOnceAndAdvancesOrganizationHashChain(t *t
 	if err != nil || !inserted {
 		t.Fatalf("second same-revision Operations event inserted=%v err=%v", inserted, err)
 	}
-	secondRecord, err := store.GetRecord(context.Background(), secondEvent.OrganizationID, secondEvent.EventID)
+	secondRecord, err := store.GetRecord(context.Background(), secondEvent.TenantID, secondEvent.EventID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if secondRecord.PreviousRecordHash != firstRecord.RecordHash || secondRecord.RecordHash == firstRecord.RecordHash {
 		t.Fatalf("operations hash chain did not advance: first=%#v second=%#v", firstRecord, secondRecord)
 	}
-	if _, err := store.GetRecord(context.Background(), "org-other", firstEvent.EventID); !errors.Is(err, audit.ErrRecordNotFound) {
-		t.Fatalf("cross-Organization operations query disclosed existence: %v", err)
+	if _, err := store.GetRecord(context.Background(), "tenant-other", firstEvent.EventID); !errors.Is(err, audit.ErrRecordNotFound) {
+		t.Fatalf("cross-Tenant operations query disclosed existence: %v", err)
 	}
 	if _, err := harness.admin.Exec(context.Background(), `UPDATE audit_ledger.records SET result='FORGED' WHERE message_id=$1`, firstEvent.EventID); err == nil {
 		t.Fatal("append-only Audit Ledger allowed Operations record UPDATE")
 	}
 }
 
-func TestAuditQueryIsOrganizationScopedAndLedgerIsAppendOnly(t *testing.T) {
+func TestAuditQueryIsTenantScopedAndLedgerIsAppendOnly(t *testing.T) {
 	harness := newLedgerHarness(t)
 	harness.reset(t)
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
@@ -179,12 +179,12 @@ func TestAuditQueryIsOrganizationScopedAndLedgerIsAppendOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	event := fixtureAuditEvent(now, "message-org-01", "session-01", "org-01", 1, "SESSION_CREATED")
+	event := fixtureAuditEvent(now, "message-tenant-01", "session-01", "tenant-01", 1, "SESSION_CREATED")
 	if _, err := store.Consume(context.Background(), marshalEvent(t, event), audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 2, Offset: 30, ReceivedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetRecord(context.Background(), "org-02", event.MessageID); !errors.Is(err, audit.ErrRecordNotFound) {
-		t.Fatalf("cross-Organization query disclosed existence: %v", err)
+	if _, err := store.GetRecord(context.Background(), "tenant-02", event.MessageID); !errors.Is(err, audit.ErrRecordNotFound) {
+		t.Fatalf("cross-Tenant query disclosed existence: %v", err)
 	}
 	if _, err := harness.admin.Exec(context.Background(), `UPDATE audit_ledger.records SET action='FORGED' WHERE message_id=$1`, event.MessageID); err == nil {
 		t.Fatal("append-only Audit Ledger allowed UPDATE")
@@ -229,21 +229,21 @@ func newLedgerHarness(t *testing.T) ledgerHarness {
 
 func (h ledgerHarness) reset(t *testing.T) {
 	t.Helper()
-	_, err := h.admin.Exec(context.Background(), `TRUNCATE audit_ledger.records, audit_ledger.organization_heads, audit_ledger.inbox RESTART IDENTITY CASCADE`)
+	_, err := h.admin.Exec(context.Background(), `TRUNCATE audit_ledger.records, audit_ledger.tenant_heads, audit_ledger.inbox RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func fixtureAuditEvent(now time.Time, messageID, sessionID, organizationID string, version uint64, action string) sessionevent.SessionAuditEventV1 {
+func fixtureAuditEvent(now time.Time, messageID, sessionID, tenantID string, version uint64, action string) sessionevent.SessionAuditEventV1 {
 	auditAggregateID := sessionevent.AuditAggregateID(sessionID)
 	return sessionevent.SessionAuditEventV1{
 		MessageID: messageID, SchemaVersion: sessionevent.SchemaVersion, MessageType: sessionevent.MessageType, Producer: sessionevent.Producer,
-		OrganizationID: organizationID, PartitionKey: sessionevent.AggregateType + ":" + auditAggregateID, AggregateType: sessionevent.AggregateType,
+		TenantID: tenantID, PartitionKey: sessionevent.AggregateType + ":" + auditAggregateID, AggregateType: sessionevent.AggregateType,
 		AggregateID: auditAggregateID, AggregateVersion: version, OccurredAtUnixMS: now.UnixMilli(), PublishedAtUnixMS: now.UnixMilli(),
 		CorrelationID: "request-01", TraceID: "0123456789abcdef0123456789abcdef",
 		Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-		Actor:       sessionevent.ActorChainV1{InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test", ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", ActingOrganizationID: organizationID},
+		Actor:       sessionevent.ActorChainV1{InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test", ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", TenantID: tenantID},
 		Action:      action, Result: "SUCCEEDED", PolicyRevision: "policy-v1", PayloadSHA256: sessionevent.SafePayloadHash(sessionID, strings.TrimPrefix(action, "SESSION_"), now.UnixMilli()), SessionState: strings.TrimPrefix(action, "SESSION_"),
 	}
 }

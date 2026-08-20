@@ -9,7 +9,6 @@ data:
   ALLOW_PRODUCTION_EGRESS: "false"
   THINGSBOARD_BASE_URL: ""
   WEBHOOK_BASE_URL: ""
-  OIDC_ISSUER: https://oidc-test-provider:8443
   OIDC_CLIENT_ID: hvac-web-s0-staging
   OIDC_REDIRECT_URI: https://s0-staging.local/api/v1/auth/callback
   PLATFORM_PUBLIC_ORIGIN: https://s0-staging.local

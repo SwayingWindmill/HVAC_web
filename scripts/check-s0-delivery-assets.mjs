@@ -79,7 +79,6 @@ const serviceMains = [
   'services/iam-service/cmd/iam-service/main.go',
   'services/audit-ledger-service/cmd/audit-ledger-service/main.go',
   'services/outbox-relay/cmd/outbox-relay/main.go',
-  'services/oidc-test-provider/cmd/oidc-test-provider/main.go',
 ];
 for (const path of serviceMains) {
   const text = await read(path);
@@ -99,32 +98,32 @@ includesAll(bootstrapSQL, ['CREATE ROLE s0_migrator', 'gateway_runtime', 'gatewa
 const migrationSQL = await read('infra/s0-durable/postgres/init/001-s0-durable.sql');
 includesAll(migrationSQL, ['SET LOCAL ROLE s0_migrator', "traceparent text NOT NULL DEFAULT ''"], 'database migration');
 assert((migrationSQL.match(/traceparent text NOT NULL DEFAULT ''/g) || []).length === 3, 'all rollback-window traceparent columns require a default');
-const compatibilitySQL = await read('infra/s0-durable/postgres/compatibility/previous-writer.sql');
-includesAll(compatibilitySQL, ['SET LOCAL ROLE gateway_runtime', 'SET LOCAL ROLE audit_consumer_runtime', 'omitting', 'ROLLBACK;'], 'previous writer compatibility test');
-
 const serviceAccounts = await read('deploy/s0/staging/serviceaccounts.yaml');
-for (const name of ['platform-gateway', 'iam-service', 'audit-ledger-service', 'outbox-relay', 'oidc-test-provider', 's0-migrator']) {
+for (const name of ['platform-gateway', 'iam-service', 'audit-ledger-service', 'outbox-relay', 's0-migrator']) {
   assert(serviceAccounts.includes(`name: ${name}`), `missing ServiceAccount ${name}`);
 }
-assert((serviceAccounts.match(/automountServiceAccountToken: false/g) || []).length === 6, 'all ServiceAccounts must disable token automount');
+assert((serviceAccounts.match(/automountServiceAccountToken: false/g) || []).length === 5, 'all ServiceAccounts must disable token automount');
+assert(!serviceAccounts.includes('oidc-test-provider'), 'test OIDC provider must not have a staging ServiceAccount');
 
 const workloadDirectory = resolve(root, 'deploy/s0/staging/workloads');
 const workloadFiles = (await readdir(workloadDirectory)).filter((name) => name.endsWith('.yaml')).sort();
-assert(workloadFiles.length === 5, 'five active S0 workload templates are required');
+assert(workloadFiles.length === 4, 'four production-shaped S0 workload templates are required');
 for (const file of workloadFiles) {
   const text = await read(`deploy/s0/staging/workloads/${file}`);
   includesAll(text, ['digest-required', 'render-before-apply', 'serviceAccountName:', 'terminationGracePeriodSeconds:', 'startupProbe:', 'livenessProbe:', 'readinessProbe:', 'runAsNonRoot: true', 'allowPrivilegeEscalation: false', 'readOnlyRootFilesystem: true', 'drop: ["ALL"]', 'requests:', 'limits:', '[SIGNED_IMAGE_'], file);
-  if (file !== 'outbox-relay.yaml' && file !== 'oidc-test-provider.yaml') {
+  if (file !== 'outbox-relay.yaml') {
     assert(text.includes('maxUnavailable: 0'), `${file} rolling update must preserve availability`);
   }
 }
 assert(!workloadFiles.includes('legacy-private.yaml'), 'retired Legacy workload must not be present in active staging');
+assert(!workloadFiles.includes('oidc-test-provider.yaml'), 'test OIDC provider must not be present in active staging');
 
 const namespace = await read('deploy/s0/staging/namespace.yaml');
 includesAll(namespace, ['pod-security.kubernetes.io/enforce: restricted', 'pod-security.kubernetes.io/audit: restricted'], 'staging namespace');
 const networkPolicies = await read('deploy/s0/staging/networkpolicies.yaml');
 includesAll(networkPolicies, ['default-deny-all', 'policyTypes: [Ingress, Egress]', 'gateway-only-private-services', 'platform-gateway', 'redpanda', 'postgres', 'otel-collector'], 'staging NetworkPolicy');
 assert(!networkPolicies.includes('legacy-private'), 'retired Legacy workload must not appear in active NetworkPolicy');
+assert(!networkPolicies.includes('oidc-test-provider'), 'test OIDC provider must not appear in active staging NetworkPolicy');
 const budgets = await read('deploy/s0/staging/disruption-budgets.yaml');
 assert((budgets.match(/minAvailable: 1/g) || []).length >= 3, 'availability-critical workloads require disruption budgets');
 const migrationJob = await read('deploy/s0/staging/migration-job.yaml');
