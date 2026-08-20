@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 10
+	CapabilitySetVersion                 = 11
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -121,6 +121,7 @@ const (
 	CapabilityTemplateManage        Capability = "template.manage"
 	CapabilityRegistryImport        Capability = "registry.import"
 	CapabilityRegistryRetire        Capability = "registry.retire"
+	CapabilityRuleManage            Capability = "rule.manage"
 )
 
 type EffectiveAuthorization struct {

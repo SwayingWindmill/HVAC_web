@@ -71,6 +71,7 @@
     "web:energy:test": "node --experimental-strip-types --test scripts/test-web-energy-analytics.mjs",
     "web:real:architecture:test": "node --experimental-strip-types --test scripts/test-real-command-stage.mjs",
     "web:real:registry-admin:test": "node --experimental-strip-types --test scripts/test-real-registry-admin.mjs",
+    "web:real:rules:test": "node --experimental-strip-types --test scripts/test-real-rule-management.mjs",
     "real-dashboard:test": "node --experimental-strip-types --test scripts/test-rms-site-routing.mjs scripts/test-real-dashboard-summary.mjs",
     "web:real-assets:test": "node --experimental-strip-types --test scripts/test-real-assets-model.mjs scripts/test-real-assets-data.mjs scripts/test-real-assets-detail.mjs scripts/test-real-assets-history.mjs scripts/test-real-assets-realtime.mjs",
     "real-commands:test": "node --experimental-strip-types --test scripts/test-real-commands.mjs",

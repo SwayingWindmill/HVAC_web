@@ -21,6 +21,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
+	"github.com/quanlaihe/hvac-web/services/rule-runtime-service/pkg/rulemanagement"
 )
 
 const (
@@ -52,39 +53,41 @@ const (
 // Config contains edge-only dependencies. It intentionally has no business
 // domain or persistence dependencies.
 type Config struct {
-	Build         platformapi.BuildInfo
-	Logger        *slog.Logger
-	Now           func() time.Time
-	Identity      *IdentityConfig
-	RouteManager  *ownershipregistry.Manager
-	RouteAudit    ownershipregistry.AuditSink
-	Registry      *RegistryConfig
-	Telemetry     *TelemetryConfig
-	Command       *CommandConfig
-	Alarm         *AlarmConfig
-	WorkOrder     *WorkOrderConfig
-	Analytics     *AnalyticsConfig
-	Intelligence  *IntelligenceConfig
-	Operations    *OperationsAgentConfig
-	Observability *observability.Runtime
+	Build          platformapi.BuildInfo
+	Logger         *slog.Logger
+	Now            func() time.Time
+	Identity       *IdentityConfig
+	RouteManager   *ownershipregistry.Manager
+	RouteAudit     ownershipregistry.AuditSink
+	Registry       *RegistryConfig
+	Telemetry      *TelemetryConfig
+	Command        *CommandConfig
+	Alarm          *AlarmConfig
+	WorkOrder      *WorkOrderConfig
+	Analytics      *AnalyticsConfig
+	Intelligence   *IntelligenceConfig
+	Operations     *OperationsAgentConfig
+	RuleManagement *rulemanagement.Manager
+	Observability  *observability.Runtime
 }
 
 type handler struct {
-	build         platformapi.BuildInfo
-	logger        *slog.Logger
-	now           func() time.Time
-	identity      *identityController
-	routeManager  *ownershipregistry.Manager
-	routeAudit    ownershipregistry.AuditSink
-	registry      *registryController
-	telemetry     *telemetryController
-	command       *commandController
-	alarm         *alarmController
-	workOrder     *workOrderController
-	analytics     *analyticsController
-	intelligence  *intelligenceController
-	operations    *operationsAgentController
-	observability *observability.Runtime
+	build          platformapi.BuildInfo
+	logger         *slog.Logger
+	now            func() time.Time
+	identity       *identityController
+	routeManager   *ownershipregistry.Manager
+	routeAudit     ownershipregistry.AuditSink
+	registry       *registryController
+	telemetry      *telemetryController
+	command        *commandController
+	alarm          *alarmController
+	workOrder      *workOrderController
+	analytics      *analyticsController
+	intelligence   *intelligenceController
+	operations     *operationsAgentController
+	ruleManagement *rulemanagement.Manager
+	observability  *observability.Runtime
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -112,21 +115,22 @@ func NewHandler(config Config) http.Handler {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: serviceName})
 	}
 	return &handler{
-		build:         build,
-		logger:        logger,
-		now:           now,
-		identity:      newIdentityController(config.Identity, now),
-		routeManager:  config.RouteManager,
-		routeAudit:    routeAudit,
-		registry:      newRegistryController(config.Registry),
-		telemetry:     newTelemetryController(config.Telemetry),
-		command:       newCommandController(config.Command),
-		alarm:         newAlarmController(config.Alarm),
-		workOrder:     newWorkOrderController(config.WorkOrder),
-		analytics:     newAnalyticsController(config.Analytics),
-		intelligence:  newIntelligenceController(config.Intelligence),
-		operations:    newOperationsAgentController(config.Operations),
-		observability: telemetry,
+		build:          build,
+		logger:         logger,
+		now:            now,
+		identity:       newIdentityController(config.Identity, now),
+		routeManager:   config.RouteManager,
+		routeAudit:     routeAudit,
+		registry:       newRegistryController(config.Registry),
+		telemetry:      newTelemetryController(config.Telemetry),
+		command:        newCommandController(config.Command),
+		alarm:          newAlarmController(config.Alarm),
+		workOrder:      newWorkOrderController(config.WorkOrder),
+		analytics:      newAnalyticsController(config.Analytics),
+		intelligence:   newIntelligenceController(config.Intelligence),
+		operations:     newOperationsAgentController(config.Operations),
+		ruleManagement: config.RuleManagement,
+		observability:  telemetry,
 	}
 }
 
@@ -222,6 +226,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
+			return
+		}
+		if ruleRoute, matches := matchPublicRuleRoute(request.Method, request.URL.Path); matches {
+			dispatchRuleRoute(h, writer, request, ruleRoute)
 			return
 		}
 		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
@@ -422,6 +430,13 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	}
 	if session.ID == "" && workloadCaller.contextID == "" {
 		if _, _, registryRoute := matchPublicRegistryRoute(request.Method, request.URL.Path); registryRoute {
+			resolved, failure := h.identitySession(request)
+			if failure != nil {
+				writeIdentityFailure(writer, request, *failure)
+				return request, false
+			}
+			session = resolved
+		} else if _, ruleRoute := matchPublicRuleRoute(request.Method, request.URL.Path); ruleRoute {
 			resolved, failure := h.identitySession(request)
 			if failure != nil {
 				writeIdentityFailure(writer, request, *failure)

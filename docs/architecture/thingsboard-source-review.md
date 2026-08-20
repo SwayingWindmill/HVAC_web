@@ -443,3 +443,37 @@ All implementation-time source was re-read from ThingsBoard CE `v4.3.1.1` at com
 ### S20 consequence
 
 The S20 runtime compiles a released immutable plan before execution, pins each execution to the exact Rule Revision and Binding revision, and serializes the same Tenant/Site/subject ordering key under lease/fence. Authoritative Rule State is separate from any one Execution and is keyed by Tenant + Rule Revision + Node Instance + Scope Key; CAS updates and the corresponding Execution transition evidence commit in one storage transaction, so concurrent executions cannot overwrite each other. Node evaluation is pure with respect to business owners: owner reads go through exact snapshot ports and owner writes become stable Effect Intents. Work, continuation, state-transition, effect and trace evidence are durable at execution boundaries. Before an owner call, an Effect is durably marked `DISPATCHING`; if the process dies before the receipt is persisted, restart freezes that Effect as `AMBIGUOUS` instead of blindly replaying it. Replay accepts frozen snapshot facts only, cannot accept a live Effect Sink, and records simulated effects without invoking production owners.
+
+## S21 — Rule management UI
+
+Date: 2026-08-20
+
+Local issue: #286
+
+### Upstream files reviewed
+
+The implementation re-read the official ThingsBoard source from CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before building the Rule management surface:
+
+- `ui-ngx/src/app/modules/home/pages/rulechain/rulechain-page.component.ts`
+- `dao/src/test/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidatorTest.java`
+- the pinned S20 source set already recorded above for `RuleChainDataValidator`, Rule Node execution and queue processing, because S21 manages the same execution artifact rather than introducing a second Rule model.
+
+### Observed upstream semantics
+
+- The Rule Chain page is a real visual graph editor: it maintains a node library, flowchart callbacks, selected-node editing, graph validation and an explicit dirty flag. Model changes mark the page dirty and validation can identify invalid nodes before save.
+- Rule Node configuration is edited through node-specific forms, and the UI has dedicated debug/test affordances. This is preferable to asking operators to edit one opaque Rule JSON document.
+- Saving upstream Rule Chain metadata is a mutable operation with version-conflict handling. The generic platform also permits component/class-driven nodes, scripting-oriented nodes and dynamic link labels, which are intentionally broader than this product's governed automation boundary.
+- The upstream validator test confirms that validation is a server-side concern rather than a browser-only decision. S20's pinned runtime source further shows why execution safety, retries and effects must remain in the Rule owner rather than in the graph editor.
+
+### Implementation decision
+
+- `ADOPT`: visual catalog-driven graph construction, explicit node/edge editing, dirty-state protection, server-side validation before publication, and read-only execution/debug evidence as operator feedback.
+- `ADAPT`: the node library is exactly the S20 `core.v1` typed `NodeDefinition` catalog. Each node exposes only descriptor-declared typed configuration fields, and required owner permissions are derived from catalog metadata instead of being freely typed by the browser.
+- `REPLACE`: mutable Rule Chain save becomes browser draft -> Rule Runtime compile/validate -> immutable `RuleRevision` release -> append-only `RuleBinding` assignment. Rollback is another binding revision targeting a previous immutable release, not mutation of released content.
+- `ADAPT`: ThingsBoard's test/debug idea becomes S20 `ModeReplay` simulation over an in-memory execution store and optional frozen owner facts. The replay runtime receives no live Effect Sink, so an effect-capable graph records `SIMULATED` evidence but cannot mutate Alarm or another owner.
+- `ADAPT`: management authorization is the explicit `rule.manage` capability plus authoritative Registry Site visibility and normal BFF CSRF protection. Rule ID is a Tenant-local resource selector, not a new authorization scope dimension.
+- `REJECT`: raw component/class names, arbitrary JavaScript/TBEL or other executable scripts, free-form credential fields, browser-side permission invention, direct owner/database/network effects from the editor, Demo/Mock Rule fallback in Real mode, and UI claims that trace/dead/quarantine state is authoritative without reading S20 owner evidence.
+
+### S21 consequence
+
+Rule Runtime remains the single logical owner of Rule revisions, bindings, simulation semantics and execution evidence. Phase 1 physically co-locates the management adapter in the Platform Gateway process, but persistence and lifecycle code live in the `rule-runtime-service` module and connect under the Rule Runtime RLS identity; route and data ownership registries still name `rule-runtime-service` as the owner. The Gateway contributes only BFF Session/capability/CSRF checks, Registry-backed Site visibility and public-contract adaptation. The Real system page consumes generated Rule APIs only, protects unsaved drafts, and exposes validate/diff/test/simulate/release/assign/rollback/retire plus Site-scoped execution evidence without creating a second Rule authority.

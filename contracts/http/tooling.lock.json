@@ -1,6 +1,6 @@
 {
   "generator": "scripts/generate-platform-contracts.mjs",
-  "generatorVersion": "7.0.0",
+  "generatorVersion": "7.1.0",
   "node": "22.22.0",
   "go": "1.25.12",
   "runtimeValidation": "zod@3.25.76",
