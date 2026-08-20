@@ -20,6 +20,7 @@ const (
 	OwnerAnalyticsQuery   = "telemetry-query-service"
 	OwnerOperationsAgent  = "operations-agent-service"
 	OwnerAlarm            = "alarm-service"
+	OwnerNotification     = "notification-service"
 	OwnerWorkOrder        = "work-order-service"
 )
 
@@ -173,8 +174,9 @@ func validateEntry(entry RouteEntry) error {
 		"point":      true,
 		"command":    true,
 		"key":        true,
-		"alarm":      true,
-		"work-order": true,
+		"alarm":        true,
+		"notification": true,
+		"work-order":   true,
 	}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
@@ -188,7 +190,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerAlarm, OwnerWorkOrder:
+	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerAlarm, OwnerNotification, OwnerWorkOrder:
 		return true
 	default:
 		return false

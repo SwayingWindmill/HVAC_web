@@ -60,7 +60,10 @@ services:
       AUDIT_SERVICE_ADDR: :8446
       COMMAND_SERVICE_ADDR: :8447
       ALARM_SERVICE_ADDR: :8448
+      NOTIFICATION_SERVICE_ADDR: :8450
       WORK_ORDER_SERVICE_ADDR: :8449
+      NOTIFICATION_SERVICE_URL: https://notification-service:8450
+      NOTIFICATION_SERVICE_SERVER_NAME: notification-service
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
@@ -86,7 +89,7 @@ services:
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
-    expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449"]
+    expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
       interval: 10s
@@ -95,7 +98,7 @@ services:
       start_period: 10s
     networks:
       application:
-        aliases: [platform-gateway, iam-service, platform-core-service, telemetry-query-service, audit-ledger-service, command-service, alarm-service, work-order-service]
+        aliases: [platform-gateway, iam-service, platform-core-service, telemetry-query-service, audit-ledger-service, command-service, alarm-service, notification-service, work-order-service]
       data: {}
     cpus: ${ENERGY_API_CPUS:-1.50}
     mem_limit: ${ENERGY_API_MEMORY_LIMIT:-768m}

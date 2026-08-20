@@ -77,6 +77,7 @@
     "real-alarms:lifecycle-browser": "node scripts/run-real-alarm-lifecycle-browser-audit.mjs",
     "s4:alarm:check": "node scripts/check-s4-alarm-baseline.mjs",
     "s4:alarm:postgres": "node scripts/run-s4-alarm-postgres-tests.mjs",
+    "s16:notification:check": "node scripts/check-s16-notification.mjs",
     "s4:alarm:promotion:preflight": "node scripts/run-s4-alarm-read-promotion-certification.mjs --profile=preflight",
     "s4:alarm:promotion:test": "node --test scripts/test-s4-alarm-read-promotion-certification.mjs",
     "s4:alarm:promotion:verify": "node scripts/verify-s4-alarm-read-promotion-certification.mjs",

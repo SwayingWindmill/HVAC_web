@@ -23,6 +23,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_service') THEN CREATE ROLE s1_core_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'outbound_delivery_migrator') THEN CREATE ROLE outbound_delivery_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'outbound_delivery_runtime') THEN CREATE ROLE outbound_delivery_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's16_notification_migrator') THEN CREATE ROLE s16_notification_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's16_notification_runtime') THEN CREATE ROLE s16_notification_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's16_notification_scheduler') THEN CREATE ROLE s16_notification_scheduler NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's16_notification_service') THEN CREATE ROLE s16_notification_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metric_engine_runtime') THEN CREATE ROLE metric_engine_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_runtime') THEN CREATE ROLE scheduler_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'connectivity_migrator') THEN CREATE ROLE connectivity_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -50,6 +54,7 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's4_alarm_migrator') THEN CREATE ROLE s4_alarm_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's4_alarm_runtime') THEN CREATE ROLE s4_alarm_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's4_alarm_notification_relay') THEN CREATE ROLE s4_alarm_notification_relay NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's4_alarm_service') THEN CREATE ROLE s4_alarm_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's5_work_order_migrator') THEN CREATE ROLE s5_work_order_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -83,20 +88,27 @@ REVOKE CONNECT ON DATABASE hvac_s1 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS iam AUTHORIZATION s1_iam_migrator;
 CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
 CREATE SCHEMA IF NOT EXISTS outbound_delivery AUTHORIZATION outbound_delivery_migrator;
+CREATE SCHEMA IF NOT EXISTS notification_runtime AUTHORIZATION s16_notification_migrator;
 CREATE SCHEMA IF NOT EXISTS connectivity AUTHORIZATION connectivity_migrator;
 ALTER SCHEMA iam OWNER TO s1_iam_migrator;
 ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 ALTER SCHEMA outbound_delivery OWNER TO outbound_delivery_migrator;
+ALTER SCHEMA notification_runtime OWNER TO s16_notification_migrator;
 ALTER SCHEMA connectivity OWNER TO connectivity_migrator;
-REVOKE ALL ON SCHEMA iam, core_registry, outbound_delivery, connectivity FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, s2_iam_grant_runtime, connectivity_runtime;
+REVOKE ALL ON SCHEMA iam, core_registry, outbound_delivery, notification_runtime, connectivity FROM PUBLIC;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, s16_notification_service, metric_engine_runtime, scheduler_runtime, settlement_runtime, s2_iam_grant_runtime, connectivity_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_admin, s1_iam_reconciler;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
 GRANT USAGE ON SCHEMA outbound_delivery TO outbound_delivery_runtime;
+GRANT USAGE ON SCHEMA notification_runtime TO s16_notification_runtime;
 GRANT USAGE ON SCHEMA connectivity TO connectivity_runtime;
 GRANT s1_core_runtime TO s1_core_service;
+GRANT s16_notification_runtime TO s16_notification_service;
+GRANT s16_notification_scheduler TO s16_notification_service;
 ALTER DEFAULT PRIVILEGES FOR ROLE outbound_delivery_migrator IN SCHEMA outbound_delivery REVOKE ALL ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE outbound_delivery_migrator IN SCHEMA outbound_delivery REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE s16_notification_migrator IN SCHEMA notification_runtime REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE s16_notification_migrator IN SCHEMA notification_runtime REVOKE ALL ON FUNCTIONS FROM PUBLIC;
 
 \connect hvac_s2
 REVOKE CONNECT ON DATABASE hvac_s2 FROM PUBLIC;
@@ -129,6 +141,7 @@ CREATE SCHEMA IF NOT EXISTS alarm_runtime AUTHORIZATION s4_alarm_migrator;
 ALTER SCHEMA alarm_runtime OWNER TO s4_alarm_migrator;
 REVOKE ALL ON SCHEMA alarm_runtime FROM PUBLIC;
 GRANT s4_alarm_runtime TO s4_alarm_service;
+GRANT s4_alarm_notification_relay TO s4_alarm_service;
 GRANT CONNECT ON DATABASE hvac_s4 TO s4_alarm_service;
 
 \connect hvac_s5

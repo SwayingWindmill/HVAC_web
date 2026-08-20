@@ -69,6 +69,11 @@ func main() {
 		logger.Error("gateway_alarm_config_invalid", "error_code", "ALARM_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	notificationConfig, err := loadNotificationConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_notification_config_invalid", "error_code", "NOTIFICATION_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	workOrderConfig, err := loadWorkOrderConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_work_order_config_invalid", "error_code", "WORK_ORDER_CONFIG_INVALID")
@@ -108,6 +113,7 @@ func main() {
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,
 		Alarm:         alarmConfig,
+		Notification:  notificationConfig,
 		WorkOrder:     workOrderConfig,
 		Analytics:     analyticsConfig,
 		Operations:    operationsConfig,
@@ -440,6 +446,38 @@ func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error)
 			roots,
 			certificate,
 			envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+		)},
+	}, nil
+}
+
+func loadNotificationConfig(certificate *tls.Certificate) (*gateway.NotificationConfig, error) {
+	serviceURL := strings.TrimSpace(os.Getenv("NOTIFICATION_SERVICE_URL"))
+	if serviceURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(serviceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("NOTIFICATION_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
+	}
+	if certificate == nil {
+		return nil, errors.New("Notification Service requires the authenticated Gateway workload certificate")
+	}
+	caPath := strings.TrimSpace(os.Getenv("NOTIFICATION_SERVICE_SERVER_CA"))
+	if caPath == "" {
+		return nil, errors.New("NOTIFICATION_SERVICE_SERVER_CA is required when NOTIFICATION_SERVICE_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Notification Service server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.NotificationConfig{
+		BackendBaseURL:   strings.TrimRight(parsed.String(), "/"),
+		BackendAudience:  envOr("NOTIFICATION_SERVICE_AUDIENCE", "notification-service"),
+		Timeout:          5 * time.Second,
+		MaxResponseBytes: 2 << 20,
+		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+			roots, certificate, envOr("NOTIFICATION_SERVICE_SERVER_NAME", "localhost"),
 		)},
 	}, nil
 }

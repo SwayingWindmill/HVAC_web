@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 22,
+  "registryRevision": 23,
   "resources": [
     {
       "kind": "schema",
@@ -42,6 +42,12 @@
       "kind": "schema",
       "name": "alarm_runtime",
       "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "notification_runtime",
+      "writer": "notification-service",
       "revision": 1
     },
     {
@@ -356,6 +362,61 @@
       "revision": 1
     },
     {
+      "kind": "outbox",
+      "name": "alarm-notification-outbox",
+      "writer": "alarm-service",
+      "relay": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-policy-revision",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-audience-revision",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-template-revision",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-source-alarm-event",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-intent",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-inbox",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-intent-event",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "notification-user-preference",
+      "writer": "notification-service",
+      "revision": 1
+    },
+    {
       "kind": "projection",
       "name": "work-order-current",
       "writer": "work-order-service",
@@ -512,6 +573,19 @@
     {
       "service": "alarm-service",
       "schema": "alarm_runtime",
+      "mode": "write"
+    },
+    {
+      "service": "notification-service",
+      "schema": "alarm_runtime",
+      "mode": "relay",
+      "restrictedTo": [
+        "notification_outbox"
+      ]
+    },
+    {
+      "service": "notification-service",
+      "schema": "notification_runtime",
       "mode": "write"
     },
     {
@@ -697,6 +771,41 @@
       "runtimeRole": "s4_alarm_service",
       "runtimeBypassRls": false,
       "activationRole": "s4_alarm_runtime",
+      "accessMode": "write"
+    },
+    {
+      "schema": "alarm_runtime",
+      "migrationRole": "s4_alarm_migrator",
+      "runtimeRole": "s4_alarm_notification_relay",
+      "runtimeBypassRls": false,
+      "accessMode": "relay",
+      "restrictedTo": [
+        "notification_outbox"
+      ]
+    },
+    {
+      "schema": "notification_runtime",
+      "migrationRole": "s16_notification_migrator",
+      "runtimeRole": "s16_notification_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "write"
+    },
+    {
+      "schema": "notification_runtime",
+      "migrationRole": "s16_notification_migrator",
+      "runtimeRole": "s16_notification_scheduler",
+      "runtimeBypassRls": false,
+      "accessMode": "write",
+      "restrictedTo": [
+        "notification_intent"
+      ]
+    },
+    {
+      "schema": "notification_runtime",
+      "migrationRole": "s16_notification_migrator",
+      "runtimeRole": "s16_notification_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s16_notification_runtime",
       "accessMode": "write"
     },
     {

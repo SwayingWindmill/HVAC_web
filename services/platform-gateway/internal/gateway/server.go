@@ -62,6 +62,7 @@ type Config struct {
 	Telemetry     *TelemetryConfig
 	Command       *CommandConfig
 	Alarm         *AlarmConfig
+	Notification  *NotificationConfig
 	WorkOrder     *WorkOrderConfig
 	Analytics     *AnalyticsConfig
 	Operations    *OperationsAgentConfig
@@ -79,6 +80,7 @@ type handler struct {
 	telemetry     *telemetryController
 	command       *commandController
 	alarm         *alarmController
+	notification  *notificationController
 	workOrder     *workOrderController
 	analytics     *analyticsController
 	operations    *operationsAgentController
@@ -119,6 +121,7 @@ func NewHandler(config Config) http.Handler {
 		telemetry:     newTelemetryController(config.Telemetry),
 		command:       newCommandController(config.Command),
 		alarm:         newAlarmController(config.Alarm),
+		notification:  newNotificationController(config.Notification),
 		workOrder:     newWorkOrderController(config.WorkOrder),
 		analytics:     newAnalyticsController(config.Analytics),
 		operations:    newOperationsAgentController(config.Operations),
@@ -181,7 +184,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}
@@ -229,6 +232,15 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 			dispatchAlarmRoute(h, writer, request, alarmRoute)
+			return
+		}
+		if notificationRoute, matches := matchPublicNotificationRoute(request.URL.Path); matches {
+			decision := routeDecisionFromContext(request.Context())
+			if decision.SelectedOwner != ownershipregistry.OwnerNotification {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "The Notification route is not active for this Session.", true, nil)
+				return
+			}
+			dispatchNotificationRoute(h, writer, request, notificationRoute)
 			return
 		}
 	}

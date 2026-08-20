@@ -35,6 +35,7 @@ use (
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
 	./services/metric-engine-service
+	./services/notification-service
 	./services/scheduler-service
 	./services/settlement-service
 	./services/oidc-test-provider
