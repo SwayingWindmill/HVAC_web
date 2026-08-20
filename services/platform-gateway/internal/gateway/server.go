@@ -21,6 +21,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
+	"github.com/quanlaihe/hvac-web/services/rule-runtime-service/pkg/rulemanagement"
 )
 
 const (
@@ -52,39 +53,43 @@ const (
 // Config contains edge-only dependencies. It intentionally has no business
 // domain or persistence dependencies.
 type Config struct {
-	Build         platformapi.BuildInfo
-	Logger        *slog.Logger
-	Now           func() time.Time
-	Identity      *IdentityConfig
-	RouteManager  *ownershipregistry.Manager
-	RouteAudit    ownershipregistry.AuditSink
-	Registry      *RegistryConfig
-	Telemetry     *TelemetryConfig
-	Command       *CommandConfig
-	Alarm         *AlarmConfig
-	Notification  *NotificationConfig
-	WorkOrder     *WorkOrderConfig
-	Analytics     *AnalyticsConfig
-	Operations    *OperationsAgentConfig
-	Observability *observability.Runtime
+	Build          platformapi.BuildInfo
+	Logger         *slog.Logger
+	Now            func() time.Time
+	Identity       *IdentityConfig
+	RouteManager   *ownershipregistry.Manager
+	RouteAudit     ownershipregistry.AuditSink
+	Registry       *RegistryConfig
+	Telemetry      *TelemetryConfig
+	Command        *CommandConfig
+	Alarm          *AlarmConfig
+	Notification   *NotificationConfig
+	WorkOrder      *WorkOrderConfig
+	Analytics      *AnalyticsConfig
+	Intelligence   *IntelligenceConfig
+	Operations     *OperationsAgentConfig
+	RuleManagement *rulemanagement.Manager
+	Observability  *observability.Runtime
 }
 
 type handler struct {
-	build         platformapi.BuildInfo
-	logger        *slog.Logger
-	now           func() time.Time
-	identity      *identityController
-	routeManager  *ownershipregistry.Manager
-	routeAudit    ownershipregistry.AuditSink
-	registry      *registryController
-	telemetry     *telemetryController
-	command       *commandController
-	alarm         *alarmController
-	notification  *notificationController
-	workOrder     *workOrderController
-	analytics     *analyticsController
-	operations    *operationsAgentController
-	observability *observability.Runtime
+	build          platformapi.BuildInfo
+	logger         *slog.Logger
+	now            func() time.Time
+	identity       *identityController
+	routeManager   *ownershipregistry.Manager
+	routeAudit     ownershipregistry.AuditSink
+	registry       *registryController
+	telemetry      *telemetryController
+	command        *commandController
+	alarm          *alarmController
+	notification   *notificationController
+	workOrder      *workOrderController
+	analytics      *analyticsController
+	intelligence   *intelligenceController
+	operations     *operationsAgentController
+	ruleManagement *rulemanagement.Manager
+	observability  *observability.Runtime
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -112,21 +117,23 @@ func NewHandler(config Config) http.Handler {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: serviceName})
 	}
 	return &handler{
-		build:         build,
-		logger:        logger,
-		now:           now,
-		identity:      newIdentityController(config.Identity, now),
-		routeManager:  config.RouteManager,
-		routeAudit:    routeAudit,
-		registry:      newRegistryController(config.Registry),
-		telemetry:     newTelemetryController(config.Telemetry),
-		command:       newCommandController(config.Command),
-		alarm:         newAlarmController(config.Alarm),
-		notification:  newNotificationController(config.Notification),
-		workOrder:     newWorkOrderController(config.WorkOrder),
-		analytics:     newAnalyticsController(config.Analytics),
-		operations:    newOperationsAgentController(config.Operations),
-		observability: telemetry,
+		build:          build,
+		logger:         logger,
+		now:            now,
+		identity:       newIdentityController(config.Identity, now),
+		routeManager:   config.RouteManager,
+		routeAudit:     routeAudit,
+		registry:       newRegistryController(config.Registry),
+		telemetry:      newTelemetryController(config.Telemetry),
+		command:        newCommandController(config.Command),
+		alarm:          newAlarmController(config.Alarm),
+		notification:   newNotificationController(config.Notification),
+		workOrder:      newWorkOrderController(config.WorkOrder),
+		analytics:      newAnalyticsController(config.Analytics),
+		intelligence:   newIntelligenceController(config.Intelligence),
+		operations:     newOperationsAgentController(config.Operations),
+		ruleManagement: config.RuleManagement,
+		observability:  telemetry,
 	}
 }
 
@@ -185,8 +192,11 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
+	_, _, verifiedTelemetryWorkload := verifiedTelemetryWorkloadIdentity(request)
+	_, _, telemetryRoute := matchPublicTelemetryRoute(request.URL.Path)
+	allowTelemetryWorkloadTenant := verifiedTelemetryWorkload && telemetryRoute
 	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
-		if request.Header.Get(header) == "" {
+		if request.Header.Get(header) == "" || (header == "X-Tenant-ID" && allowTelemetryWorkloadTenant) {
 			continue
 		}
 		writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
@@ -221,8 +231,16 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
 		}
+		if ruleRoute, matches := matchPublicRuleRoute(request.Method, request.URL.Path); matches {
+			dispatchRuleRoute(h, writer, request, ruleRoute)
+			return
+		}
 		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
 			dispatchOperationsRoute(h, writer, request, operationsRoute)
+			return
+		}
+		if intelligenceRoute, matches := matchPublicIntelligenceRoute(request.Method, request.URL.Path); matches {
+			dispatchIntelligenceRoute(h, writer, request, intelligenceRoute)
 			return
 		}
 		if workOrderRoute, matches := matchPublicWorkOrderRoute(request.URL.Path); matches {
@@ -424,6 +442,13 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	}
 	if session.ID == "" && workloadCaller.contextID == "" {
 		if _, _, registryRoute := matchPublicRegistryRoute(request.Method, request.URL.Path); registryRoute {
+			resolved, failure := h.identitySession(request)
+			if failure != nil {
+				writeIdentityFailure(writer, request, *failure)
+				return request, false
+			}
+			session = resolved
+		} else if _, ruleRoute := matchPublicRuleRoute(request.Method, request.URL.Path); ruleRoute {
 			resolved, failure := h.identitySession(request)
 			if failure != nil {
 				writeIdentityFailure(writer, request, *failure)

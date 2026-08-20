@@ -10,7 +10,9 @@ use (
 	./libs/commandmodel
 	./libs/domainoutbox
 	./libs/edgecontrol
+	./libs/edgefleet
 	./libs/identitycontext
+	./libs/intelligencemodel
 	./libs/observability
 	./libs/operationsauditevent
 	./libs/oidctest
@@ -29,6 +31,7 @@ use (
 	./services/command-dispatcher
 	./services/command-service
 	./services/forecast-service
+	./services/fdd-service
 	./services/iam-service
 	./services/identity-service
 	./services/optimization-service

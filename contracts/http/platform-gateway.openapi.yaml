@@ -1504,8 +1504,8 @@
     "/api/v1/sites/{siteId}/forecast/load": {
       "get": {
         "operationId": "getSiteLoadForecastV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "forecast-service",
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1513,8 +1513,26 @@
     "/api/v1/sites/{siteId}/forecast/pv": {
       "get": {
         "operationId": "getSitePVForecastV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "forecast-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/fdd/findings": {
+      "get": {
+        "operationId": "listSiteFddFindingsV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "fdd-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/recommendations/latest": {
+      "get": {
+        "operationId": "getLatestSiteOptimizationRecommendationV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
@@ -1522,18 +1540,145 @@
     "/api/v1/optimization/runs": {
       "post": {
         "operationId": "createOptimizationRunV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
     "/api/v1/optimization/runs/{runId}": {
       "get": {
         "operationId": "getOptimizationRunV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
         "parameters": [{ "name": "runId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/rules/catalog": {
+      "get": {
+        "operationId": "getRuleCatalog",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "responses": {
+          "200": { "description": "Approved typed Rule node catalog.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleCatalog" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/revisions": {
+      "get": {
+        "operationId": "listRuleRevisions",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "ruleId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": {
+          "200": { "description": "Immutable released Rule revisions.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleRevisionCollection" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/validate": {
+      "post": {
+        "operationId": "validateRuleDraft",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleDraft" } } } },
+        "responses": {
+          "200": { "description": "Rule compile/validation result.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleValidationResult" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/simulate": {
+      "post": {
+        "operationId": "simulateRuleDraft",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleSimulationRequest" } } } },
+        "responses": {
+          "200": { "description": "Replay-only simulation trace/effects.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleSimulationResult" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/releases": {
+      "post": {
+        "operationId": "releaseRuleRevision",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleDraft" } } } },
+        "responses": {
+          "201": { "description": "New immutable Rule revision.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleRevision" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/bindings": {
+      "get": {
+        "operationId": "listRuleBindings",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": {
+          "200": { "description": "Current Rule binding revisions.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleBindingCollection" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/assignments": {
+      "post": {
+        "operationId": "assignRuleRevision",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [{ "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleAssignmentRequest" } } } },
+        "responses": {
+          "201": { "description": "New append-only Rule binding revision.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleBinding" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/bindings/{bindingId}/retire": {
+      "post": {
+        "operationId": "retireRuleBinding",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [
+          { "name": "bindingId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleRetirementRequest" } } } },
+        "responses": {
+          "200": { "description": "Retired current Rule binding revision.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleBinding" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
+    "/api/v1/rules/executions": {
+      "get": {
+        "operationId": "listRuleExecutionEvidence",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s21-rule-management-public.openapi.json",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+        ],
+        "responses": {
+          "200": { "description": "Scoped Rule execution trace/dead/quarantine evidence.", "content": { "application/json": { "schema": { "$ref": "./s21-rule-management-public.openapi.json#/components/schemas/RuleExecutionEvidenceCollection" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     }
   },
@@ -1913,7 +2058,7 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 10 IAM-authored browser capability identifier. Registry reads and governed writes are capability-authorized; IAM administration is capability-authorized rather than Role-name-authorized.",
+        "description": "Version 11 IAM-authored browser capability identifier. Registry reads, Rule management and governed writes are capability-authorized; IAM administration is capability-authorized rather than Role-name-authorized.",
         "enum": [
           "site.list",
           "site.read",
@@ -1945,7 +2090,8 @@
           "session.revoke",
           "audit.read",
           "iam.admin",
-          "api-credential.manage"
+          "api-credential.manage",
+          "rule.manage"
         ]
       },
       "EffectiveAuthorization": {
@@ -1960,7 +2106,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 10
+            "const": 11
           },
           "policyRevision": {
             "type": "string",
@@ -1969,7 +2115,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 31,
+            "maxItems": 32,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"

@@ -15,10 +15,6 @@ var v212ContractOnlyRoutes = []v212ContractOnlyRoute{
 	{method: http.MethodGet, template: "/api/v1/devices"},
 	{method: http.MethodPost, template: "/api/v1/telemetry/latest"},
 	{method: http.MethodGet, template: "/api/v1/telemetry/history"},
-	{method: http.MethodGet, template: "/api/v1/sites/{siteId}/forecast/load", placeholder: "{siteId}"},
-	{method: http.MethodGet, template: "/api/v1/sites/{siteId}/forecast/pv", placeholder: "{siteId}"},
-	{method: http.MethodPost, template: "/api/v1/optimization/runs"},
-	{method: http.MethodGet, template: "/api/v1/optimization/runs/{runId}", placeholder: "{runId}"},
 }
 
 func matchV212ContractOnlyRoute(path string) (v212ContractOnlyRoute, bool) {

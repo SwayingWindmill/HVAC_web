@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const generatorVersion = '7.0.0';
+const generatorVersion = '7.1.0';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
 const toolingLockPath = resolve(root, 'contracts/http/tooling.lock.json');
@@ -113,11 +113,20 @@ const expectedOperations = {
   listAlarmsV212: ['get', '/api/v1/alarms'],
   getAlarmV212: ['get', '/api/v1/alarms/{alarmId}'],
   ackAlarmV212: ['post', '/api/v1/alarms/{alarmId}/ack'],
+  getRuleCatalog: ['get', '/api/v1/rules/catalog'],
+  listRuleRevisions: ['get', '/api/v1/rules/revisions'],
+  validateRuleDraft: ['post', '/api/v1/rules/validate'],
+  simulateRuleDraft: ['post', '/api/v1/rules/simulate'],
+  releaseRuleRevision: ['post', '/api/v1/rules/releases'],
+  listRuleBindings: ['get', '/api/v1/rules/bindings'],
+  assignRuleRevision: ['post', '/api/v1/rules/assignments'],
+  retireRuleBinding: ['post', '/api/v1/rules/bindings/{bindingId}/retire'],
+  listRuleExecutionEvidence: ['get', '/api/v1/rules/executions'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
   const value = operation(operationId);
-  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 7`);
+  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 7.1`);
   operations[operationId] = value;
 }
 
@@ -151,6 +160,33 @@ invariant(schemaRef(operations.listAlarmsV212.operation, '200') === './s4-alarm-
 invariant(schemaRef(operations.getAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm detail success schema is unsupported');
 invariant(schemaRef(operations.ackAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm ACK success schema is unsupported');
 invariant(operations.ackAlarmV212.operation.requestBody?.content?.['application/json']?.schema?.$ref === './s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest', 'Alarm ACK request schema is unsupported');
+
+const ruleOperations = [
+  'getRuleCatalog', 'listRuleRevisions', 'validateRuleDraft', 'simulateRuleDraft', 'releaseRuleRevision',
+  'listRuleBindings', 'assignRuleRevision', 'retireRuleBinding', 'listRuleExecutionEvidence',
+];
+for (const operationId of ruleOperations) {
+  invariant(operations[operationId].operation?.['x-architecture-status'] === 'ACTIVE' && operations[operationId].operation?.['x-shape-status'] === 'READY', `${operationId} must be active with a synchronized Rule shape`);
+  invariant(operations[operationId].operation?.['x-shape-source'] === 'contracts/http/s21-rule-management-public.openapi.json', `${operationId} must use the S21 Rule subordinate contract`);
+}
+const ruleSuccessRefs = {
+  getRuleCatalog: ['200', 'RuleCatalog'],
+  listRuleRevisions: ['200', 'RuleRevisionCollection'],
+  validateRuleDraft: ['200', 'RuleValidationResult'],
+  simulateRuleDraft: ['200', 'RuleSimulationResult'],
+  releaseRuleRevision: ['201', 'RuleRevision'],
+  listRuleBindings: ['200', 'RuleBindingCollection'],
+  assignRuleRevision: ['201', 'RuleBinding'],
+  retireRuleBinding: ['200', 'RuleBinding'],
+  listRuleExecutionEvidence: ['200', 'RuleExecutionEvidenceCollection'],
+};
+for (const [operationId, [status, schemaName]] of Object.entries(ruleSuccessRefs)) {
+  invariant(schemaRef(operations[operationId].operation, status) === `./s21-rule-management-public.openapi.json#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
+}
+for (const operationId of ['listRuleBindings', 'listRuleExecutionEvidence']) {
+  const siteParameter = operations[operationId].operation.parameters?.find((parameter) => parameter.name === 'siteId' && parameter.in === 'query');
+  invariant(siteParameter?.required === true && siteParameter.schema?.$ref === '#/components/schemas/UUIDv7', `${operationId} must require a UUIDv7 siteId query`);
+}
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {
@@ -246,10 +282,11 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'audit.read',
   'iam.admin',
   'api-credential.manage',
+  'rule.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 10, 'EffectiveAuthorization capability set version must be 10');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 11, 'EffectiveAuthorization capability set version must be 11');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 31, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 32, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
@@ -314,6 +351,15 @@ const replacements = {
   __ALARMS_PATH__: operations.listAlarmsV212.path,
   __ALARM_PATH__: operations.getAlarmV212.path,
   __ALARM_ACK_PATH__: operations.ackAlarmV212.path,
+  __RULE_CATALOG_PATH__: operations.getRuleCatalog.path,
+  __RULE_REVISIONS_PATH__: operations.listRuleRevisions.path,
+  __RULE_VALIDATE_PATH__: operations.validateRuleDraft.path,
+  __RULE_SIMULATE_PATH__: operations.simulateRuleDraft.path,
+  __RULE_RELEASES_PATH__: operations.releaseRuleRevision.path,
+  __RULE_BINDINGS_PATH__: operations.listRuleBindings.path,
+  __RULE_ASSIGNMENTS_PATH__: operations.assignRuleRevision.path,
+  __RULE_RETIRE_PATH__: operations.retireRuleBinding.path,
+  __RULE_EXECUTIONS_PATH__: operations.listRuleExecutionEvidence.path,
 };
 
 function render(template) {

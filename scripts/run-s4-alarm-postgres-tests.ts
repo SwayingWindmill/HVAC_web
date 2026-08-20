@@ -1,59 +1,19 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
+import { createPostgresComposeHarness, expectEqual, type PostgresAuthorityReport } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s4-alarm/compose.yaml');
 const projectName = `hvac-s4-alarm-${process.pid}`;
-const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S4_ALARM_REPORT_PATH ?? 'out/s4-alarm-authority/postgres-authority.json');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('S4 PostgreSQL port allocator did not expose a TCP address');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
-
-const postgresHostPort = await findAvailablePort();
-const composeEnvironment = { ...process.env, S4_POSTGRES_HOST_PORT: String(postgresHostPort) };
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
-  if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
-  }
-  return String(result.stdout ?? '').trim();
-}
-
-function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
-}
-
-function psql(sql, { expectFailure = false } = {}) {
-  const result = spawnSync('docker', [
-    'exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s4', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql,
-  ], { cwd: root, encoding: 'utf8', windowsHide: true });
-  const stdout = String(result.stdout ?? '').trim();
-  const stderr = String(result.stderr ?? '').trim();
-  if (expectFailure) {
-    if (!result.error && result.status === 0) throw new Error(`SQL unexpectedly succeeded: ${sql}`);
-    return `${stdout}\n${stderr}`.trim();
-  }
-  if (result.error || result.status !== 0) throw new Error(`SQL failed: ${result.error?.message ?? stderr ?? result.status}\n${sql}`);
-  return stdout;
-}
+const { postgresHostPort, run, compose, psql, pause } = await createPostgresComposeHarness({
+  root,
+  composePath,
+  projectName,
+  database: 'hvac_s4',
+  hostPortEnvName: 'S4_POSTGRES_HOST_PORT',
+  portAllocatorLabel: 'S4 PostgreSQL',
+});
 
 async function waitForPostgres() {
   for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -68,11 +28,7 @@ async function waitForPostgres() {
   throw new Error(`S4 PostgreSQL fixture did not initialize\n${logs}`);
 }
 
-function expectEqual(actual, expected, label) {
-  if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
-}
-
-const report = {
+const report: PostgresAuthorityReport = {
   schemaVersion: 1,
   slice: 'S4',
   ticket: 'S4-P2',

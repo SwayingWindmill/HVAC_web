@@ -37,6 +37,7 @@ import {
 import { FocusHeading } from './FocusHeading';
 import type { ProtectedScopeDraft } from './protected-scope';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
+import { RuleManagement } from './rule-management/RuleManagement';
 import type { ShellSnapshot } from './shell-runtime';
 
 interface RealSystemManagementProps {
@@ -203,16 +204,6 @@ export function RealSystemManagement({ snapshot, registerUnsavedDraft }: RealSys
     </Space>
   );
 
-  const rules = (
-    <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <OperationsPanelHeading icon={<SettingOutlined />} title="报警与自动化规则" meta="0 条权威规则" />
-        <Alert type="warning" showIcon message="规则管理接口尚未接入" description="保留 Demo 的规则管理区域，但不会显示或编辑 Demo 规则。" />
-        <EmptyGovernanceTable description="当前部署没有可验证的规则目录" />
-      </Space>
-    </Card>
-  );
-
   const audit = (
     <Card variant="borderless" styles={{ body: { padding: 16 } }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -235,7 +226,7 @@ export function RealSystemManagement({ snapshot, registerUnsavedDraft }: RealSys
     { key: 'site', label: '站点与租户', children: siteTab },
     { key: 'registry', label: 'Registry 管理', children: <RegistryAdministration capabilities={principal.authorization.capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'integrations', label: '数据接入', children: integrations },
-    { key: 'rules', label: '报警规则', children: rules },
+    { key: 'rules', label: '自动化规则', children: <RuleManagement principal={principal} sites={sites} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '审计日志', children: audit },
   ];
 

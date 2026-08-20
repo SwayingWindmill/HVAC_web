@@ -24,6 +24,7 @@ on:
       - 'scripts/check-s2-telemetry-public-contract.mjs'
       - 'scripts/check-s2-telemetry-rollout-gates.mjs'
       - 'scripts/generate-s2-telemetry-contracts.mjs'
+      - 'scripts/lib/docker-cli.mjs'
       - 'scripts/run-s2-telemetry-postgres-tests.mjs'
       - 'services/telemetry-runtime-service/**'
   push:
@@ -49,6 +50,7 @@ on:
       - 'scripts/check-s2-telemetry-public-contract.mjs'
       - 'scripts/check-s2-telemetry-rollout-gates.mjs'
       - 'scripts/generate-s2-telemetry-contracts.mjs'
+      - 'scripts/lib/docker-cli.mjs'
       - 'scripts/run-s2-telemetry-postgres-tests.mjs'
       - 'services/telemetry-runtime-service/**'
 

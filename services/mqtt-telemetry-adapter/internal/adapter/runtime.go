@@ -406,6 +406,10 @@ func (runtime *Runtime) recordProcessingSuccess() {
 	runtime.lastSuccess = time.Now().UTC()
 }
 
+func NewMQTTTLSConfig(config MQTTConfig) (*tls.Config, error) {
+	return newMQTTTLSConfig(config)
+}
+
 func newMQTTTLSConfig(config MQTTConfig) (*tls.Config, error) {
 	certificate, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 	if err != nil {

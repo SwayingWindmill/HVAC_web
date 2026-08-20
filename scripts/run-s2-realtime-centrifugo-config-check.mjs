@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
+import { pullDockerImageWithRetry } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
 const output = resolve(root, 'out/s2-realtime-backend/centrifugo-config.json');

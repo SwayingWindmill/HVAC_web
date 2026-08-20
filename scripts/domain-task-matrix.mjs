@@ -455,7 +455,7 @@ export const capabilityTaskMatrix = Object.freeze({
       './services/platform-gateway/...',
       './services/work-order-service/...',
     ),
-    nodeRun('scripts/run-s5-work-order-postgres-tests.mjs'),
+    nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts'),
     npmRun('s5:work-order:create-assign:browser'),
   ]),
   's5:work-order:lifecycle': Object.freeze([
@@ -486,7 +486,7 @@ export const capabilityTaskMatrix = Object.freeze({
       './services/platform-gateway/...',
       './services/work-order-service/...',
     ),
-    nodeRun('scripts/run-s5-work-order-postgres-tests.mjs'),
+    nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts'),
     npmRun('s5:work-order:lifecycle:browser'),
   ]),
 });

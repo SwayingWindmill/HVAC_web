@@ -170,4 +170,3 @@ func (point PointConfig) PublishEvery() time.Duration {
 	duration, _ := time.ParseDuration(point.PublishInterval)
 	return duration
 }
-

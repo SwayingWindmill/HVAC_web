@@ -11,7 +11,7 @@ on:
       - "services/telemetry-runtime-service/**"
       - "scripts/check-s2-telemetry-history.mjs"
       - "scripts/run-s2-telemetry-history-tests.mjs"
-      - "scripts/lib/docker-pull-retry.mjs"
+      - "scripts/lib/docker-cli.mjs"
       - "scripts/run-isolated-go.mjs"
       - "go.work"
       - "go.work.sum"

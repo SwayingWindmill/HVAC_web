@@ -431,6 +431,36 @@ OpenEMS keeps one stable Process Image for controller evaluation and performs wr
 - transport-only ACK without Edge execution evidence is rejected by Command Service;
 - numeric independent readback verifies the Edge applied/effective target while the original Cloud Intent parameter remains immutable.
 
+## Review 005 — S12 signed Desired Edge state and local activation
+
+Date: 2026-08-19
+HVAC issue: #279
+
+### Upstream source reviewed
+
+OpenEMS release `2026.7.0`, commit `2e2792d`:
+
+- `io.openems.common/src/io/openems/common/types/EdgeConfig.java`
+- `io.openems.common/src/io/openems/common/types/EdgeConfigDiff.java`
+- `io.openems.edge.core/src/io/openems/edge/core/componentmanager/EdgeConfigWorker.java`
+
+### Source-level decision
+
+OpenEMS treats the running Edge configuration as a self-describing set of Components/Factories/Channels and exposes explicit created/deleted/updated component diffs. `EdgeConfigWorker` rebuilds its cache from actual configuration events, emits configuration/channel update events and redacts password properties from serialized configuration.
+
+- `ADOPT`: self-describing component/capability/configuration evidence, explicit config diff semantics and event-driven observed configuration updates;
+- `ADAPT`: HVAC Cloud Desired state is an immutable signed `EdgeRelease` plus owner-revision Snapshot rather than mutable Edge-local configuration being the Cloud authority;
+- `ADAPT`: configuration is first staged, digest/signature/capability/reference/preflight checked, then atomically activated. Health/readback failure records the failed revision and restores the previous signed release instead of mutating release history;
+- `ADAPT`: OpenEMS password redaction becomes the stricter HVAC rule that SecretRef/credential identity may be referenced but signing private keys, credential values and recoverable secrets are never members of the Fleet release/snapshot model;
+- `REJECT`: direct remote mutation of arbitrary Edge component JSON, Edge-local config as the master copy of Cloud-owned fields, or a rollback that edits an already released revision.
+
+### Focused local evidence
+
+- disk-backed Replica restart leaves the active snapshot untouched while an interrupted newer snapshot remains resumable staging state;
+- Cloud-owned change items use one owner domain/revision and Edge-owned observed/control/telemetry/audit domains are rejected from the downlink path;
+- signed EdgeRelease activation preserves active/staged/previous identities and automatically rolls back after failed health verification;
+- offline pressure evicts diagnostic/normal telemetry before safety/control/alarm/audit evidence.
+
 ## Review queue
 
 The next source reviews are performed before their implementation slices:

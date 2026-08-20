@@ -13,9 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/mqtt-telemetry-adapter/internal/adapter"
 	"github.com/quanlaihe/hvac-web/services/mqtt-telemetry-adapter/internal/connectivity"
+	fleetruntime "github.com/quanlaihe/hvac-web/services/mqtt-telemetry-adapter/internal/fleet"
 )
 
 type moduleHealth struct {
@@ -91,7 +93,20 @@ func main() {
 	} else if commandRuntime != nil {
 		commandRuntime.SetReadySink(health.commandReady.Store)
 	}
-	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, health, telemetry)
+	fleetRuntime, fleetErr := fleetruntime.NewRuntime(ctx, fleetruntime.Config{
+		MQTT: config.MQTT, IntegrationInstanceID: integration.ID, TenantID: integration.TenantID, SiteID: integration.SiteID, GatewayID: integration.GatewayExternalID,
+		Policy: edgefleet.HandshakePolicy{
+			ProtocolSchemaVersion: 1,
+			MinRuntimeVersion:     "1.0.0",
+			MaxRuntimeVersion:     "1.99.99",
+			RequiredCapabilities:  []string{"registry.v1", "config.v1", "ota.v1", "rollback.v1"},
+			MaxPayloadBytes:       2 << 20,
+		},
+	}, connectivityStore, logger, telemetry.Metrics)
+	if fleetErr != nil {
+		logger.Error("iot_edge_fleet_runtime_unavailable", "error_code", "EDGE_FLEET_MODULE_UNAVAILABLE", "error", fleetErr.Error())
+	}
+	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, health, fleetRuntime, telemetry)
 	diagnosticsErr := make(chan error, 1)
 	go func() {
 		logger.Info("mqtt_telemetry_adapter_diagnostics_started", "address", *diagnosticsAddress)
@@ -109,6 +124,13 @@ func main() {
 	}()
 	if commandRuntime != nil {
 		go commandRuntime.Run(ctx, logger)
+	}
+	if fleetRuntime != nil {
+		go func() {
+			if runErr := fleetRuntime.Run(ctx); runErr != nil && ctx.Err() == nil {
+				logger.Error("iot_edge_fleet_module_stopped", "error_code", "EDGE_FLEET_MODULE_STOPPED", "error", runErr.Error())
+			}
+		}()
 	}
 	go runCredentialExpiry(ctx, connectivityStore, logger)
 
@@ -141,13 +163,14 @@ func runCredentialExpiry(ctx context.Context, store *connectivity.Store, logger 
 	}
 }
 
-func diagnosticsServer(address string, runtime *adapter.Runtime, health *moduleHealth, telemetry *observability.Runtime) *http.Server {
+func diagnosticsServer(address string, runtime *adapter.Runtime, health *moduleHealth, fleetRuntime *fleetruntime.Runtime, telemetry *observability.Runtime) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", telemetry.Metrics.Handler())
 	mux.HandleFunc("/health/live", getHealthHandler(func() bool { return true }))
 	mux.HandleFunc("/health/ready", getHealthHandler(runtime.Ready))
 	mux.HandleFunc("/health/telemetry/ready", getHealthHandler(runtime.Ready))
 	mux.HandleFunc("/health/command/ready", getHealthHandler(func() bool { return health.commandReady.Load() }))
+	mux.HandleFunc("/health/fleet/ready", getHealthHandler(func() bool { return fleetRuntime != nil && fleetRuntime.Ready() }))
 	return &http.Server{
 		Addr:              address,
 		Handler:           mux,

@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { createServer as createHTTPSServer } from 'node:https';
 import { dirname, join, resolve } from 'node:path';
-import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
+import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
 const outputDir = resolve(root, process.env.S2_MQTT_REPORT_DIR ?? 'out/s2-mqtt-integration');
@@ -108,7 +108,7 @@ async function readPrometheusMetric(url, name) {
 }
 
 function compose(args, env) {
-  return run('docker', ['compose', '-p', projectName, '-f', composePath, ...args], { env });
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env });
 }
 
 async function stopChild(child) {

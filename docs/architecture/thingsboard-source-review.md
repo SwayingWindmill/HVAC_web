@@ -443,6 +443,77 @@ All implementation-time source was re-read from ThingsBoard CE `v4.3.1.1` at com
 ### S20 consequence
 
 The S20 runtime compiles a released immutable plan before execution, pins each execution to the exact Rule Revision and Binding revision, and serializes the same Tenant/Site/subject ordering key under lease/fence. Authoritative Rule State is separate from any one Execution and is keyed by Tenant + Rule Revision + Node Instance + Scope Key; CAS updates and the corresponding Execution transition evidence commit in one storage transaction, so concurrent executions cannot overwrite each other. Node evaluation is pure with respect to business owners: owner reads go through exact snapshot ports and owner writes become stable Effect Intents. Work, continuation, state-transition, effect and trace evidence are durable at execution boundaries. Before an owner call, an Effect is durably marked `DISPATCHING`; if the process dies before the receipt is persisted, restart freezes that Effect as `AMBIGUOUS` instead of blindly replaying it. Replay accepts frozen snapshot facts only, cannot accept a live Effect Sink, and records simulated effects without invoking production owners.
+## S21 — Rule management UI
+
+Date: 2026-08-20
+
+Local issue: #286
+
+### Upstream files reviewed
+
+The implementation re-read the official ThingsBoard source from CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` before building the Rule management surface:
+
+- `ui-ngx/src/app/modules/home/pages/rulechain/rulechain-page.component.ts`
+- `dao/src/test/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidatorTest.java`
+- the pinned S20 source set already recorded above for `RuleChainDataValidator`, Rule Node execution and queue processing, because S21 manages the same execution artifact rather than introducing a second Rule model.
+
+### Observed upstream semantics
+
+- The Rule Chain page is a real visual graph editor: it maintains a node library, flowchart callbacks, selected-node editing, graph validation and an explicit dirty flag. Model changes mark the page dirty and validation can identify invalid nodes before save.
+- Rule Node configuration is edited through node-specific forms, and the UI has dedicated debug/test affordances. This is preferable to asking operators to edit one opaque Rule JSON document.
+- Saving upstream Rule Chain metadata is a mutable operation with version-conflict handling. The generic platform also permits component/class-driven nodes, scripting-oriented nodes and dynamic link labels, which are intentionally broader than this product's governed automation boundary.
+- The upstream validator test confirms that validation is a server-side concern rather than a browser-only decision. S20's pinned runtime source further shows why execution safety, retries and effects must remain in the Rule owner rather than in the graph editor.
+
+### Implementation decision
+
+- `ADOPT`: visual catalog-driven graph construction, explicit node/edge editing, dirty-state protection, server-side validation before publication, and read-only execution/debug evidence as operator feedback.
+- `ADAPT`: the node library is exactly the S20 `core.v1` typed `NodeDefinition` catalog. Each node exposes only descriptor-declared typed configuration fields, and required owner permissions are derived from catalog metadata instead of being freely typed by the browser.
+- `REPLACE`: mutable Rule Chain save becomes browser draft -> Rule Runtime compile/validate -> immutable `RuleRevision` release -> append-only `RuleBinding` assignment. Rollback is another binding revision targeting a previous immutable release, not mutation of released content.
+- `ADAPT`: ThingsBoard's test/debug idea becomes S20 `ModeReplay` simulation over an in-memory execution store and optional frozen owner facts. The replay runtime receives no live Effect Sink, so an effect-capable graph records `SIMULATED` evidence but cannot mutate Alarm or another owner.
+- `ADAPT`: management authorization is the explicit `rule.manage` capability plus authoritative Registry Site visibility and normal BFF CSRF protection. Rule ID is a Tenant-local resource selector, not a new authorization scope dimension.
+- `REJECT`: raw component/class names, arbitrary JavaScript/TBEL or other executable scripts, free-form credential fields, browser-side permission invention, direct owner/database/network effects from the editor, Demo/Mock Rule fallback in Real mode, and UI claims that trace/dead/quarantine state is authoritative without reading S20 owner evidence.
+
+### S21 consequence
+
+Rule Runtime remains the single logical owner of Rule revisions, bindings, simulation semantics and execution evidence. Phase 1 physically co-locates the management adapter in the Platform Gateway process, but persistence and lifecycle code live in the `rule-runtime-service` module and connect under the Rule Runtime RLS identity; route and data ownership registries still name `rule-runtime-service` as the owner. The Gateway contributes only BFF Session/capability/CSRF checks, Registry-backed Site visibility and public-contract adaptation. The Real system page consumes generated Rule APIs only, protects unsaved drafts, and exposes validate/diff/test/simulate/release/assign/rollback/retire plus Site-scoped execution evidence without creating a second Rule authority.
+
+## S12 — Edge Fleet, sync, Desired Config and signed OTA
+
+Date: 2026-08-19
+
+Local issue: #279
+
+### Upstream files reviewed
+
+ThingsBoard CE `v4.3.1.1`, commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4`:
+
+- `application/src/main/java/org/thingsboard/server/service/edge/rpc/EdgeSyncCursor.java`
+- `common/edge-api/src/main/proto/edge.proto`
+
+ThingsBoard Edge `v4.3.1.1`, commit `04d9daf4a557a13483de2310e35b6493aff751fc`:
+
+- `application/src/main/java/org/thingsboard/server/service/cloud/event/postgres/PostgresCloudEventUplinkRetriever.java`
+
+The files above were read directly from the pinned official repositories before S12 implementation.
+
+### Observed upstream semantics
+
+- ThingsBoard models Edge connection/version/max-message-size negotiation and uses typed bidirectional Edge messages with explicit response identifiers. This gives a useful transport/session boundary instead of treating reconnect as an untyped socket event.
+- Full synchronization is driven through an ordered cursor of typed fetchers, while incremental Edge events are durably retained in PostgreSQL and retrieved from a persisted queue position. The upstream event retriever also contains explicit timestamp/sequence compensation logic for imperfect event ordering.
+- The pinned `edge.proto` still permits a routing-key/secret connection shape, a boolean `fullSync` request and deprecated compatibility fields. The full-sync cursor itself is process-local and does not provide an immutable snapshot revision, chunk digest, resumable staging set or atomic activation contract.
+- Upstream delivery acknowledgement proves replication progress, not HVAC owner authority. It therefore cannot justify Cloud and Edge both mutating the same governed field.
+
+### Implementation decision
+
+- `ADOPT`: typed bidirectional sync messages, explicit Edge runtime/version/capability/max-payload negotiation, durable incremental delivery records, acknowledgement identities and a retained reconnect cursor.
+- `ADAPT`: MQTT+mTLS/`CredentialRef` remains the transport identity boundary established by S09. Fleet handshake additionally binds the active logical Session and credential revision; no second static Edge secret is introduced.
+- `ADAPT`: replace boolean full-sync with immutable `DesiredEdgeState -> EdgeRelease -> SnapshotRevision`, digest-bound chunks, resumable staging, tombstones and atomic activation. Reconnect chooses resumable snapshot, full snapshot or delta from durable revision/cursor evidence.
+- `ADAPT`: delivery items carry one Cloud owner domain, ordering key, owner revision, payload digest and tombstone. Independent keys may apply while a bad item is quarantined, but the contiguous committed cursor stops until an explicit governed disposition closes that gap.
+- `REJECT`: process-local full-sync cursor as durability authority, static routing secret, deprecated version fallbacks, silent cursor advance across quarantine, generic entity replication and Cloud writes to Edge-owned observed/control/telemetry/audit fields.
+
+### S12 consequence
+
+`connectivity` now owns durable EdgeNode/enrollment/identity binding/handshake, immutable signed EdgeRelease and Snapshot facts, Desired/Observed state, sync/cursor/quarantine state and signed OTA campaign facts. The Edge-side `libs/edgefleet` Replica keeps staging separate from active state, resumes interrupted snapshots from disk, enforces one-writer owner domains, and retains `ACTIVE/STAGED/PREVIOUS` rollback evidence. Signed release/OTA verification occurs locally against trusted public keys; private signing keys and recoverable credentials never enter business persistence.
 
 ## S16 — Notification minimum product loop
 

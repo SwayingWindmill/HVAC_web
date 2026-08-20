@@ -41,8 +41,12 @@ type fixedPrincipalCapabilityResolver struct {
 	authorization identitycontext.EffectiveAuthorization
 }
 
-func (resolver fixedPrincipalCapabilityResolver) ResolvePrincipalCapabilities(context.Context, iamserver.PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
-	return resolver.authorization, nil
+func (resolver fixedPrincipalCapabilityResolver) ResolvePrincipalCapabilities(_ context.Context, lookup iamserver.PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
+	authorization := resolver.authorization
+	if lookup.Subject == "fixture-admin" || lookup.Subject == "fixture-other-admin" {
+		authorization.Capabilities = append(append([]identitycontext.Capability{}, authorization.Capabilities...), identitycontext.CapabilitySessionRevoke)
+	}
+	return authorization, nil
 }
 
 func TestAuthenticatedPrincipalLoop(t *testing.T) {

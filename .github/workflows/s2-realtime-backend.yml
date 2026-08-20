@@ -23,6 +23,7 @@ on:
       - "scripts/check-s2-centrifugo-poc-assets.mjs"
       - "scripts/run-s2-realtime-centrifugo-config-check.mjs"
       - "scripts/run-s2-realtime-postgres-tests.mjs"
+      - "scripts/lib/docker-cli.mjs"
       - "scripts/run-s2-telemetry-runtime-postgres-tests.mjs"
       - "scripts/run-s2-centrifugo-poc.mjs"
       - "docs/operations/s2-realtime-backend.md"

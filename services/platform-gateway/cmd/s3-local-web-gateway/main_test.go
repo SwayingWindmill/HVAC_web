@@ -20,7 +20,6 @@ import (
 
 const (
 	testTenantID       = "018f3d00-0000-7000-8000-000000000001"
-	testOrganizationID = "018f3e00-0000-7000-8000-000000000001"
 	testSiteID         = "018f3e00-1000-7000-8000-000000000001"
 	testDeviceID       = "018f3e00-3000-7000-8000-000000000001"
 	testCommandPointID = "018f3e00-4000-7000-8000-000000000001"
@@ -50,7 +49,7 @@ func TestLocalWebGatewayCreatesExactShortLivedCommandGrant(t *testing.T) {
 			t.Fatal(err)
 		}
 		if claims.Purpose != commandmodel.AuthorizationCommandSubmit || claims.PrincipalID != testPrincipalID ||
-			claims.OrganizationID != testOrganizationID || claims.SiteID != testSiteID || claims.DeviceID != testDeviceID ||
+			claims.TenantID != testTenantID || claims.SiteID != testSiteID || claims.DeviceID != testDeviceID ||
 			claims.Presenter != "spiffe://hvac.local/platform-gateway" || claims.Issuer != "spiffe://hvac.local/iam-service" ||
 			claims.Audience != "command-service" || claims.ExpiresAt-claims.IssuedAt != 25 || claims.Transitive {
 			t.Fatalf("grant claims=%#v", claims)
@@ -59,7 +58,7 @@ func TestLocalWebGatewayCreatesExactShortLivedCommandGrant(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.TenantID != testTenantID || body.OrganizationID != testOrganizationID || body.SiteID != testSiteID ||
+		if body.TenantID != testTenantID || body.SiteID != testSiteID ||
 			body.DeviceID != testDeviceID || body.PointID != testCommandPointID || body.IdempotencyKey != "hvac-web-test-1" ||
 			body.Parameters[commandmodel.ParameterSetpointC] != 24 || body.VerificationPointKey != "zone.temperature_setpoint" ||
 			body.CurrentState.BusinessRevision != 21 || body.CurrentState.CurrentValue == nil || *body.CurrentState.CurrentValue != 23 {
@@ -90,8 +89,8 @@ func TestLocalWebGatewayReadUsesExactDelegation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if request.Header.Get("X-Acting-Organization-ID") != testOrganizationID || claims.Actions[0] != "command:read" ||
-			len(claims.Scopes) != 2 || claims.Scopes[0] != "organization:"+testOrganizationID || claims.Scopes[1] != "command:"+testCommandID ||
+		if claims.TenantID != testTenantID || claims.Actions[0] != "command:read" ||
+			len(claims.Scopes) != 2 || claims.Scopes[0] != "tenant:"+testTenantID || claims.Scopes[1] != "command:"+testCommandID ||
 			claims.ExpiresAt-claims.IssuedAt != 30 {
 			t.Fatalf("delegation claims=%#v", claims)
 		}
@@ -135,7 +134,7 @@ func TestLocalDeviceProjectionDoesNotExposeAuthorityMetadata(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	if strings.Contains(body, "tenantId") || strings.Contains(body, "commandPointId") || strings.Contains(body, "verificationPointKey") || !strings.Contains(body, testDeviceID) {
+	if strings.Contains(body, "commandPointId") || strings.Contains(body, "verificationPointKey") || !strings.Contains(body, testTenantID) || !strings.Contains(body, testSiteID) || !strings.Contains(body, testDeviceID) {
 		t.Fatalf("local Device projection leaked authority metadata: %s", body)
 	}
 }
@@ -146,14 +145,14 @@ func TestLoadDeviceCatalogRequiresV2TenantAndPointAuthority(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	devices, err := loadDeviceCatalog(path, testOrganizationID, testSiteID)
+	devices, err := loadDeviceCatalog(path, testTenantID, testSiteID)
 	if err != nil || len(devices) != 1 || devices[0].TenantID != testTenantID || devices[0].CommandPointID != testCommandPointID {
 		t.Fatalf("catalog=%#v err=%v", devices, err)
 	}
 	if err := os.WriteFile(path, []byte(strings.Replace(body, `"schemaVersion":2`, `"schemaVersion":1`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadDeviceCatalog(path, testOrganizationID, testSiteID); err == nil {
+	if _, err := loadDeviceCatalog(path, testTenantID, testSiteID); err == nil {
 		t.Fatal("schemaVersion 1 catalog must be rejected")
 	}
 }
@@ -162,10 +161,10 @@ func testGateway(grantKey, delegationKey *rsa.PrivateKey, client *http.Client, n
 	return &gateway{config: config{
 		publicOrigin:      "http://127.0.0.1:5173",
 		commandServiceURL: "https://command.local",
-		organizationID:    testOrganizationID,
+		tenantID:          testTenantID,
 		siteID:            testSiteID,
 		deviceCatalog: []localDevice{{
-			TenantID: testTenantID, OrganizationID: testOrganizationID, SiteID: testSiteID,
+			TenantID: testTenantID, SiteID: testSiteID,
 			DeviceID: testDeviceID, CommandPointID: testCommandPointID, VerificationPointKey: "zone.temperature_setpoint",
 			Name: "AHU-01", Type: "AHU",
 		}},

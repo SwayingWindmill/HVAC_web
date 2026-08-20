@@ -24,6 +24,7 @@ require (
 	github.com/quanlaihe/hvac-web/services/iam-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/notification-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/platform-core-service v0.0.0
+	github.com/quanlaihe/hvac-web/services/rule-runtime-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/telemetry-query-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/work-order-service v0.0.0
 )
@@ -101,6 +102,8 @@ replace github.com/quanlaihe/hvac-web/services/notification-service => ../notifi
 replace github.com/quanlaihe/hvac-web/services/outbound-delivery-service => ../outbound-delivery-service
 
 replace github.com/quanlaihe/hvac-web/services/platform-core-service => ../platform-core-service
+
+replace github.com/quanlaihe/hvac-web/services/rule-runtime-service => ../rule-runtime-service
 
 replace github.com/quanlaihe/hvac-web/services/telemetry-query-service => ../telemetry-query-service
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "catalogRevision": "s05-v1",
-  "effectiveAuthorizationVersion": 10,
+  "catalogRevision": "s21-v1",
+  "effectiveAuthorizationVersion": 11,
   "capabilities": [
     "registry.read",
     "site.list",
@@ -43,6 +43,7 @@
     "work-order:complete",
     "work-order:cancel",
     "work-order:reopen",
+    "rule.manage",
     "session.revoke",
     "audit.read",
     "iam.admin",

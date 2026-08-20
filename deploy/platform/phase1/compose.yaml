@@ -64,6 +64,9 @@ services:
       WORK_ORDER_SERVICE_ADDR: :8449
       NOTIFICATION_SERVICE_URL: https://notification-service:8450
       NOTIFICATION_SERVICE_SERVER_NAME: notification-service
+      FORECAST_SERVICE_URL: http://forecast-service:19092
+      FDD_SERVICE_URL: http://fdd-service:19094
+      OPTIMIZATION_SERVICE_URL: http://optimization-service:19093
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
@@ -85,6 +88,12 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      forecast-service:
+        condition: service_healthy
+      fdd-service:
+        condition: service_healthy
+      optimization-service:
         condition: service_healthy
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
@@ -335,6 +344,97 @@ services:
     cpus: ${METRIC_WORKER_CPUS:-1.00}
     mem_limit: ${METRIC_WORKER_MEMORY_LIMIT:-512m}
     mem_reservation: ${METRIC_WORKER_MEMORY_RESERVATION:-192m}
+
+  forecast-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/forecast-service/cmd/forecast-service }
+    image: ${FORECAST_SERVICE_IMAGE:-hvac/forecast-service:0.1.0-dev}
+    environment:
+      FORECAST_HTTP_ADDR: :19092
+      FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:?FORECAST_POSTGRES_DSN is required}
+      FORECAST_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      FORECAST_CLICKHOUSE_DATABASE: analytics
+      FORECAST_CLICKHOUSE_TABLE: forecast_series
+      FORECAST_CLICKHOUSE_USERNAME: forecast_service_writer
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    expose: ["19092"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${FORECAST_SERVICE_CPUS:-0.75}
+    mem_limit: ${FORECAST_SERVICE_MEMORY_LIMIT:-384m}
+    mem_reservation: ${FORECAST_SERVICE_MEMORY_RESERVATION:-128m}
+
+  optimization-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/optimization-service/cmd/optimization-service }
+    image: ${OPTIMIZATION_SERVICE_IMAGE:-hvac/optimization-service:0.1.0-dev}
+    environment:
+      OPTIMIZATION_HTTP_ADDR: :19093
+      OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:?OPTIMIZATION_POSTGRES_DSN is required}
+      OPTIMIZATION_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    expose: ["19093"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${OPTIMIZATION_SERVICE_CPUS:-0.75}
+    mem_limit: ${OPTIMIZATION_SERVICE_MEMORY_LIMIT:-384m}
+    mem_reservation: ${OPTIMIZATION_SERVICE_MEMORY_RESERVATION:-128m}
+
+  fdd-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/fdd-service/cmd/fdd-service }
+    image: ${FDD_SERVICE_IMAGE:-hvac/fdd-service:0.1.0-dev}
+    environment:
+      FDD_HTTP_ADDR: :19094
+      FDD_DATABASE_URL: ${FDD_DATABASE_URL:?FDD_DATABASE_URL is required}
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    expose: ["19094"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${FDD_SERVICE_CPUS:-0.50}
+    mem_limit: ${FDD_SERVICE_MEMORY_LIMIT:-256m}
+    mem_reservation: ${FDD_SERVICE_MEMORY_RESERVATION:-96m}
 
   iot-service:
     <<: *go-service

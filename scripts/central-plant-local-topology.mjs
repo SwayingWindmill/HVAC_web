@@ -18,6 +18,8 @@ import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.m
 import { buildCentralPlantSpatialIdentities, buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
 import { buildCentralPlantControlPoints, buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } from './central-plant-spatial-model.mjs';
 
+import { runDockerCompose } from './lib/docker-cli.mjs';
+
 const root = resolve(process.cwd());
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
@@ -36,12 +38,6 @@ const databasePasswords = Object.freeze({
   logto: joined(['central', 'plant', 'logto', 'local', 'only']),
 });
 
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { cwd: root, stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -58,12 +54,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(project, file, args, env = {}) {
-  return run(composeInvocation.command, [
-    ...composeInvocation.prefix,
-    '-p', project,
-    '-f', file,
-    ...args,
-  ], { env });
+  return runDockerCompose(run, ['-p', project, '-f', file, ...args], { env });
 }
 
 async function findAvailablePort() {

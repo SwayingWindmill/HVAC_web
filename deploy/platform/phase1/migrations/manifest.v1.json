@@ -53,6 +53,8 @@
         "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
         "infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql",
         "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
+        "infra/s1-registry/postgres/init/009e-forecast-model-v2.sql",
+        "infra/s1-registry/postgres/init/009f-optimization-model-v2.sql",
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
         "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
         "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
@@ -62,10 +64,14 @@
         "infra/s1-registry/postgres/init/010-s05-registry-writer.sql",
         "infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/s1-registry/postgres/init/012-s19-settlement-projections.sql",
+        "infra/s1-registry/postgres/init/013-s22-intelligence-products.sql",
         "infra/connectivity/postgres/init/001-s09-connectivity.sql",
         "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql",
         "services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql",
-        "infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql"
+        "services/rule-runtime-service/migrations/002_s21_rule_management.sql",
+        "infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql",
+        "infra/s1-registry/postgres/init/014-s21-rule-management-capability.sql",
+        "infra/connectivity/postgres/init/003-s12-edge-fleet.sql"
       ]
     },
     {

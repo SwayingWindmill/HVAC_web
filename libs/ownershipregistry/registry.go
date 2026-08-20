@@ -19,10 +19,14 @@ const (
 	OwnerCommand          = "command-service"
 	OwnerAnalyticsQuery   = "telemetry-query-service"
 	OwnerOperationsAgent  = "operations-agent-service"
+	OwnerForecast         = "forecast-service"
+	OwnerFDD              = "fdd-service"
+	OwnerOptimization     = "optimization-service"
 	OwnerAlarm            = "alarm-service"
 	OwnerNotification     = "notification-service"
 	OwnerWorkOrder        = "work-order-service"
 	OwnerPresentation     = "presentation-service"
+	OwnerRuleRuntime      = "rule-runtime-service"
 )
 
 var (
@@ -166,14 +170,14 @@ func validateEntry(entry RouteEntry) error {
 	}
 
 	allowedScopes := map[string]bool{
-		"tenant":     true,
-		"principal":  true,
-		"site":       true,
-		"space":      true,
-		"asset":      true,
-		"device":     true,
-		"point":      true,
-		"command":    true,
+		"tenant":       true,
+		"principal":    true,
+		"site":         true,
+		"space":        true,
+		"asset":        true,
+		"device":       true,
+		"point":        true,
+		"command":      true,
 		"key":          true,
 		"alarm":        true,
 		"notification": true,
@@ -191,7 +195,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerPresentation:
+	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
 		return true
 	default:
 		return false

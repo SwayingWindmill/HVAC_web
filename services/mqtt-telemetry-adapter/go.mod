@@ -6,6 +6,7 @@ require (
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/edgefleet v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 	github.com/quanlaihe/hvac-web/services/command-dispatcher v0.0.0
@@ -19,6 +20,8 @@ replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
 replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
 
 replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
+
+replace github.com/quanlaihe/hvac-web/libs/edgefleet => ../../libs/edgefleet
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
 

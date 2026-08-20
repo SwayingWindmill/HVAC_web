@@ -41,12 +41,12 @@ export const capabilitySchema = z.enum([
   'template.manage', 'registry.import', 'registry.retire',
   'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
   'alarm.list', 'alarm.read', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle',
-  'session.revoke', 'audit.read', 'iam.admin', 'api-credential.manage',
+  'session.revoke', 'audit.read', 'iam.admin', 'api-credential.manage', 'rule.manage',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(10),
+  capabilitySetVersion: z.literal(11),
   policyRevision: z.string().min(1).max(128),
-  capabilities: z.array(capabilitySchema).max(31).refine((values) => new Set(values).size === values.length, {
+  capabilities: z.array(capabilitySchema).max(32).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',
   }),
 }).strict();
@@ -458,6 +458,104 @@ export const retirementResultSchema = z.object({
   replayed: z.boolean(),
 }).strict();
 
+export const rulePortTypeSchema = z.enum(['EVENT', 'NUMBER', 'SNAPSHOT', 'INTENT']);
+export const ruleConfigFieldSchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['STRING', 'STRING_LIST', 'NUMBER', 'POSITIVE_INTEGER', 'ENUM']),
+  required: z.boolean(),
+  options: z.array(z.string()).optional(),
+}).strict();
+export const ruleNodeDefinitionSchema = z.object({
+  id: z.string().min(1),
+  version: z.number().int().positive(),
+  inputs: z.record(rulePortTypeSchema),
+  outputs: z.record(rulePortTypeSchema),
+  requiredPermission: z.string().optional(),
+  effectOwner: z.string().optional(),
+  stateSchemaVersion: z.number().int().nonnegative(),
+  deterministic: z.literal(true),
+  resourceCost: z.number().int().positive(),
+  configFields: z.array(ruleConfigFieldSchema),
+}).strict();
+export const ruleCatalogSchema = z.object({
+  version: z.literal('core.v1'),
+  definitions: z.array(ruleNodeDefinitionSchema),
+}).strict();
+export const ruleNodeSchema = z.object({
+  id: z.string().min(1).max(128),
+  definitionId: z.string().min(1).max(128),
+  config: z.record(z.unknown()),
+}).strict();
+export const ruleEdgeSchema = z.object({
+  fromNode: z.string().min(1).max(128),
+  fromPort: z.string().min(1).max(128),
+  toNode: z.string().min(1).max(128),
+  toPort: z.string().min(1).max(128),
+}).strict();
+export const rulePermissionSchema = z.enum(['owner.snapshot.read', 'alarm.intent.publish']);
+export const ruleDraftSchema = z.object({
+  ruleId: uuidV7Schema.optional(),
+  catalogVersion: z.literal('core.v1'),
+  entryNodeId: z.string().min(1).max(128),
+  nodes: z.array(ruleNodeSchema).max(128),
+  edges: z.array(ruleEdgeSchema).max(512),
+  allowedPermissions: z.array(rulePermissionSchema).max(32).refine((values) => new Set(values).size === values.length),
+  maxNodes: z.number().int().min(1).max(128),
+  maxDepth: z.number().int().min(1).max(128),
+  maxFanout: z.number().int().min(1).max(64),
+  maxResourceCost: z.number().int().min(1).max(4096),
+  maxAttempts: z.number().int().min(1).max(20),
+}).strict();
+export const ruleRevisionSchema = ruleDraftSchema.extend({
+  id: uuidV7Schema,
+  ruleId: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  revision: z.number().int().positive(),
+  state: z.literal('RELEASED'),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export const ruleRevisionCollectionSchema = z.object({ items: z.array(ruleRevisionSchema) }).strict();
+export const ruleCompileIssueSchema = z.object({
+  code: z.string().min(1), nodeId: z.string().optional(), detail: z.string().min(1),
+}).strict();
+export const ruleValidationResultSchema = z.object({
+  valid: z.boolean(), digest: z.string().optional(), error: ruleCompileIssueSchema.optional(),
+}).strict();
+export const ruleSimulationEventSchema = z.object({
+  eventId: z.string().min(1), schema: z.string().min(1), siteId: uuidV7Schema.optional(),
+  subjectType: z.string().min(1), subjectId: z.string().min(1), occurredAt: z.string().datetime({ offset: true }), payload: z.unknown(),
+}).strict();
+export const ruleFrozenFactSchema = z.object({
+  ownerDomain: z.string().min(1), kind: z.string().min(1), siteId: uuidV7Schema.optional(), subjectType: z.string().min(1),
+  subjectId: z.string().min(1), revision: z.number().int().positive(), value: z.unknown(),
+}).strict();
+export const ruleSimulationRequestSchema = z.object({
+  draft: ruleDraftSchema, event: ruleSimulationEventSchema, frozenFactsRevision: z.string().min(1).optional(),
+  frozenFacts: z.array(ruleFrozenFactSchema).max(100).optional(),
+}).strict();
+const ruleEvidenceRecordSchema = z.record(z.unknown());
+export const ruleSimulationResultSchema = z.object({
+  status: z.enum(['READY', 'RUNNING', 'WAITING', 'BLOCKED_EFFECT', 'SUCCEEDED', 'DEAD', 'QUARANTINED', 'FAILED']),
+  terminalCode: z.string().optional(), trace: z.array(ruleEvidenceRecordSchema), effects: z.array(ruleEvidenceRecordSchema),
+}).strict();
+export const ruleAssignmentRequestSchema = z.object({
+  bindingId: uuidV7Schema.optional(), siteId: uuidV7Schema, ruleRevisionId: uuidV7Schema, priority: z.number().int().min(-1000).max(1000),
+}).strict();
+export const ruleBindingSchema = z.object({
+  id: uuidV7Schema, tenantId: uuidV7Schema, siteId: uuidV7Schema, revision: z.number().int().positive(),
+  ruleRevisionId: uuidV7Schema, priority: z.number().int(), active: z.boolean(), createdAt: z.string().datetime({ offset: true }),
+  retiredAt: z.string().datetime({ offset: true }).optional(),
+}).strict();
+export const ruleBindingCollectionSchema = z.object({ items: z.array(ruleBindingSchema) }).strict();
+export const ruleRetirementRequestSchema = z.object({ siteId: uuidV7Schema, reason: z.string().trim().min(1).max(256) }).strict();
+export const ruleExecutionEvidenceSchema = z.object({
+  executionId: z.string().min(1), siteId: uuidV7Schema.optional(), ruleRevisionId: uuidV7Schema, bindingId: uuidV7Schema,
+  bindingRevision: z.number().int().positive(), status: z.enum(['READY', 'RUNNING', 'WAITING', 'BLOCKED_EFFECT', 'SUCCEEDED', 'DEAD', 'QUARANTINED', 'FAILED']),
+  terminalCode: z.string().optional(), trace: z.array(ruleEvidenceRecordSchema), effects: z.array(ruleEvidenceRecordSchema),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export const ruleExecutionEvidenceCollectionSchema = z.object({ items: z.array(ruleExecutionEvidenceSchema) }).strict();
+
 export const externalBindingSchema = z.object({
   id: uuidV7Schema,
   tenantId: uuidV7Schema,
@@ -552,6 +650,22 @@ export type ImportCommitRequest = z.infer<typeof importCommitRequestSchema>;
 export type ImportCommitResult = z.infer<typeof importCommitResultSchema>;
 export type RetireRequest = z.infer<typeof retireRequestSchema>;
 export type RetirementResult = z.infer<typeof retirementResultSchema>;
+export type RulePortType = z.infer<typeof rulePortTypeSchema>;
+export type RuleConfigField = z.infer<typeof ruleConfigFieldSchema>;
+export type RuleNodeDefinition = z.infer<typeof ruleNodeDefinitionSchema>;
+export type RuleCatalog = z.infer<typeof ruleCatalogSchema>;
+export type RuleNode = z.infer<typeof ruleNodeSchema>;
+export type RuleEdge = z.infer<typeof ruleEdgeSchema>;
+export type RulePermission = z.infer<typeof rulePermissionSchema>;
+export type RuleDraft = z.infer<typeof ruleDraftSchema>;
+export type RuleRevision = z.infer<typeof ruleRevisionSchema>;
+export type RuleValidationResult = z.infer<typeof ruleValidationResultSchema>;
+export type RuleSimulationRequest = z.infer<typeof ruleSimulationRequestSchema>;
+export type RuleSimulationResult = z.infer<typeof ruleSimulationResultSchema>;
+export type RuleAssignmentRequest = z.infer<typeof ruleAssignmentRequestSchema>;
+export type RuleBinding = z.infer<typeof ruleBindingSchema>;
+export type RuleRetirementRequest = z.infer<typeof ruleRetirementRequestSchema>;
+export type RuleExecutionEvidence = z.infer<typeof ruleExecutionEvidenceSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -720,5 +834,27 @@ export function createPlatformGatewayClient(baseUrl = '') {
     beginRegistryRetirement: (siteId: string, body: RetireRequest, init?: RequestInit) => mutation(
       '__SITE_RETIRE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), 'POST', body, retireRequestSchema, retirementResultSchema, init,
     ),
+    getRuleCatalog: (init?: RequestInit) => request('__RULE_CATALOG_PATH__', ruleCatalogSchema, { ...init, method: 'GET' }),
+    listRuleRevisions: (ruleId?: string, init?: RequestInit) => {
+      const query = new URLSearchParams();
+      if (ruleId) query.set('ruleId', ruleId);
+      return request(`__RULE_REVISIONS_PATH__${query.size ? `?${query.toString()}` : ''}`, ruleRevisionCollectionSchema, { ...init, method: 'GET' });
+    },
+    validateRuleDraft: (body: RuleDraft, init?: RequestInit) => mutation('__RULE_VALIDATE_PATH__', 'POST', body, ruleDraftSchema, ruleValidationResultSchema, init),
+    simulateRuleDraft: (body: RuleSimulationRequest, init?: RequestInit) => mutation('__RULE_SIMULATE_PATH__', 'POST', body, ruleSimulationRequestSchema, ruleSimulationResultSchema, init),
+    releaseRuleRevision: (body: RuleDraft, init?: RequestInit) => mutation('__RULE_RELEASES_PATH__', 'POST', body, ruleDraftSchema, ruleRevisionSchema, init),
+    listRuleBindings: (siteId: string, init?: RequestInit) => {
+      const query = new URLSearchParams({ siteId });
+      return request(`__RULE_BINDINGS_PATH__?${query.toString()}`, ruleBindingCollectionSchema, { ...init, method: 'GET' });
+    },
+    assignRuleRevision: (body: RuleAssignmentRequest, init?: RequestInit) => mutation('__RULE_ASSIGNMENTS_PATH__', 'POST', body, ruleAssignmentRequestSchema, ruleBindingSchema, init),
+    retireRuleBinding: (bindingId: string, body: RuleRetirementRequest, init?: RequestInit) => mutation(
+      '__RULE_RETIRE_PATH__'.replace('{bindingId}', encodeURIComponent(bindingId)), 'POST', body, ruleRetirementRequestSchema, ruleBindingSchema, init,
+    ),
+    listRuleExecutionEvidence: (params: { siteId: string; limit?: number }, init?: RequestInit) => {
+      const query = new URLSearchParams({ siteId: params.siteId });
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      return request(`__RULE_EXECUTIONS_PATH__?${query.toString()}`, ruleExecutionEvidenceCollectionSchema, { ...init, method: 'GET' });
+    },
   };
 }

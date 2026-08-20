@@ -106,6 +106,52 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 	return nil
 }
 
+func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID string) ([]Point, error) {
+	if !uuidPattern.MatchString(forecastJobID) {
+		return nil, errors.New("forecast job id must be a UUID")
+	}
+	endpoint := *sink.baseURL
+	query := endpoint.Query()
+	query.Set("database", sink.database)
+	query.Set("query", fmt.Sprintf(`SELECT
+ toString(forecast_id) AS forecast_id,toString(tenant_id) AS tenant_id,toString(site_id) AS site_id,subject_type,toString(subject_id) AS subject_id,target,
+ toString(forecast_job_id) AS forecast_job_id,toString(forecast_snapshot_id) AS forecast_snapshot_id,toString(deployment_id) AS deployment_id,toString(model_id) AS model_id,
+ toString(model_version_id) AS model_version_id,model_version,toString(feature_set_version_id) AS feature_set_version_id,feature_set_version,toString(input_snapshot_id) AS input_snapshot_id,
+ toString(topology_version_id) AS topology_version_id,formatDateTime(forecast_origin,'%%FT%%TZ','UTC') AS forecast_origin,formatDateTime(forecast_for,'%%FT%%TZ','UTC') AS forecast_for,
+ horizon_minutes,value,unit,lower_bound,upper_bound,quantile,quality,formatDateTime(generated_at,'%%FT%%TZ','UTC') AS generated_at
+ FROM %s.%s WHERE forecast_job_id=toUUID('%s') ORDER BY forecast_for FORMAT JSONEachRow`, sink.database, sink.table, forecastJobID))
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if sink.username != "" {
+		request.SetBasicAuth(sink.username, sink.password)
+	}
+	response, err := sink.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("query forecast ClickHouse result: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	decoder := json.NewDecoder(response.Body)
+	points := make([]Point, 0)
+	for {
+		var point Point
+		if err = decoder.Decode(&point); errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode forecast ClickHouse result: %w", err)
+		}
+		points = append(points, point)
+	}
+	return points, nil
+}
+
 func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, forecastJobID string, expectedCount int) (bool, error) {
 	if expectedCount <= 0 {
 		return false, errors.New("forecast expected result count must be positive")

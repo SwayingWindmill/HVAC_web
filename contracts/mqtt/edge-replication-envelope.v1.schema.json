@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quanlaihe.com/contracts/mqtt/edge-replication-envelope.v1.schema.json",
+  "title": "HVAC Edge Replication Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "messageId", "edgeId", "sentAt", "type", "payload"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "messageId": { "type": "string", "format": "uuid" },
+    "edgeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sentAt": { "type": "integer", "minimum": 1 },
+    "type": {
+      "enum": [
+        "HANDSHAKE",
+        "HANDSHAKE_RESULT",
+        "SNAPSHOT_BEGIN",
+        "SNAPSHOT_CHUNK",
+        "SNAPSHOT_COMMIT",
+        "CHANGE_BATCH",
+        "CHANGE_ACK",
+        "QUARANTINE_DISPOSITION",
+        "OBSERVED_STATE",
+        "CAPACITY_STATE",
+        "RELEASE_STAGE",
+        "RELEASE_RESULT",
+        "OTA_STAGE",
+        "OTA_RESULT"
+      ]
+    },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "HANDSHAKE" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["edgeId", "runtimeVersion", "protocolSchemaVersion", "capabilities", "maxPayloadBytes", "credentialRevision"],
+            "properties": {
+              "edgeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "runtimeVersion": { "type": "string", "minLength": 1 },
+              "protocolSchemaVersion": { "type": "integer", "minimum": 1 },
+              "capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+              "maxPayloadBytes": { "type": "integer", "minimum": 1 },
+              "credentialRevision": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "CHANGE_ACK" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cursor", "deliveryId", "status", "payloadDigest"],
+            "properties": {
+              "cursor": { "type": "integer", "minimum": 1 },
+              "deliveryId": { "type": "string", "format": "uuid" },
+              "status": { "enum": ["ACKED", "QUARANTINED"] },
+              "appliedOwnerRevision": { "type": "integer", "minimum": 1 },
+              "reason": { "type": "string" },
+              "payloadDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "CHANGE_BATCH" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["items"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cursor", "deliveryId", "ownerDomain", "orderingKey", "sourceRevision", "payloadDigest", "tombstone"],
+                  "properties": {
+                    "cursor": { "type": "integer", "minimum": 1 },
+                    "deliveryId": { "type": "string", "format": "uuid" },
+                    "ownerDomain": { "enum": ["REGISTRY", "PROFILE", "RULE", "SCHEDULE", "SAFETY_POLICY", "DRIVER_CONFIG"] },
+                    "orderingKey": { "type": "string", "minLength": 1 },
+                    "sourceRevision": { "type": "integer", "minimum": 1 },
+                    "payloadDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                    "tombstone": { "type": "boolean" },
+                    "payload": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
