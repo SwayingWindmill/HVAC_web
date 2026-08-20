@@ -1,1 +1,8 @@
 deploy/s2/images/*.sh text eol=lf
+
+# Ancillary repository tooling is governed separately from product/runtime source.
+scripts/** -linguist-detectable
+benchmarks/** -linguist-detectable
+pocs/** -linguist-detectable
+services/operations-agent-service/test/** -linguist-detectable
+.agents/** -linguist-detectable

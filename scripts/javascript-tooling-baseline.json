@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "policy": "legacy-js-ratchet",
+  "trackedExtensions": [".js", ".mjs", ".cjs", ".jsx"],
+  "allowedLegacyRoots": {
+    "scripts/": {
+      "fileCount": 227,
+      "maxBytes": 2532640
+    },
+    "services/operations-agent-service/test/": {
+      "fileCount": 22,
+      "maxBytes": 275562
+    },
+    "benchmarks/": {
+      "fileCount": 4,
+      "maxBytes": 71459
+    },
+    "pocs/": {
+      "fileCount": 2,
+      "maxBytes": 6890
+    },
+    ".agents/": {
+      "fileCount": 1,
+      "maxBytes": 3827
+    }
+  },
+  "fileCount": 256,
+  "maxBytes": 2890378,
+  "pathSetSha256": "e6620090d51fb5203bcb7e8f2cffdfa2beb3862e20adbfc752fb69c95a469fa0",
+  "policyNotes": [
+    "New repository tooling must use TypeScript rather than adding .js or .mjs files.",
+    "Product/runtime source must not use this baseline as an exception mechanism.",
+    "Deleting or migrating legacy JavaScript requires updating fileCount and pathSetSha256 downward; increasing maxBytes requires explicit review."
+  ]
+}
