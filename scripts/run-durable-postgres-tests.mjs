@@ -6,6 +6,8 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { runDockerCompose } from './lib/docker-cli.mjs';
+
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
 const projectName = `hvac-s0-pg-test-${process.pid}`;
@@ -14,12 +16,6 @@ const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
 async function findAvailablePort(requestedPort = 0) {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
@@ -42,7 +38,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 async function waitForPostgres() {

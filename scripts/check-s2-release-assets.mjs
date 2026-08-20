@@ -29,7 +29,7 @@ const [envelope, gates, attestationSchema, runtimeImage, historyProjectorImage, 
   text('services/platform-gateway/internal/gateway/telemetry_metrics.go'),
   text('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
   text('scripts/run-s2-realtime-centrifugo-config-check.mjs'),
-  text('scripts/lib/docker-pull-retry.mjs'),
+  text('scripts/lib/docker-cli.mjs'),
   json('package.json'),
 ]);
 

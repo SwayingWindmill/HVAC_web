@@ -34,6 +34,7 @@ on:
       - "scripts/render-s0-staging.mjs"
       - "scripts/rms-certification-evidence-lib.mjs"
       - "scripts/rms-real-build-audit-lib.mjs"
+      - "scripts/lib/docker-cli.mjs"
       - "scripts/run-durable-postgres-tests.mjs"
       - "scripts/run-durable-session-browser-audit.mjs"
       - "scripts/run-go-vulnerability-scan.mjs"

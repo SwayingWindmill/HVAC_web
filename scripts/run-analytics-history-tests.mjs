@@ -3,18 +3,13 @@ import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
+import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
 const projectName = `hvac-analytics-history-${process.pid}`;
 const reportPath = resolve(root, process.env.ANALYTICS_HISTORY_REPORT_PATH ?? 'out/analytics-history/clickhouse-integration.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
 async function findAvailablePort() {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
@@ -50,7 +45,7 @@ function runExpectFailure(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 function container(service) {

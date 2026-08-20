@@ -20,7 +20,7 @@ const [routes, data, storeRead, storeMutation, cursor, http, main, migration001,
   readText('services/work-order-service/testdata/postgres/000_roles.sql'),
   readText('services/work-order-service/testdata/postgres/010_seed.sql'),
   readText('infra/s5-work-order/compose.yaml'),
-  readText('scripts/run-s5-work-order-postgres-tests.mjs'),
+  readText('scripts/run-s5-work-order-postgres-tests.ts'),
   readText('.github/workflows/s5-work-order-postgres.yml'),
 ]);
 const store = storeRead + '\n' + storeMutation;

@@ -13,6 +13,7 @@ on:
       - "scripts/check-s2-telemetry-runtime-snapshot.mjs"
       - "scripts/check-s2-telemetry-ingest.mjs"
       - "scripts/run-s2-telemetry-postgres-tests.mjs"
+      - "scripts/lib/docker-cli.mjs"
       - "scripts/run-s2-telemetry-runtime-postgres-tests.mjs"
       - "scripts/run-s2-telemetry-ingest-postgres-tests.mjs"
       - "scripts/check-s0-release-evidence-assets.mjs"

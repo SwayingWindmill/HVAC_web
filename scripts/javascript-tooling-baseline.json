@@ -4,8 +4,8 @@
   "trackedExtensions": [".js", ".mjs", ".cjs", ".jsx"],
   "allowedLegacyRoots": {
     "scripts/": {
-      "fileCount": 227,
-      "maxBytes": 2532640
+      "fileCount": 224,
+      "maxBytes": 2505216
     },
     "services/operations-agent-service/test/": {
       "fileCount": 22,
@@ -24,9 +24,9 @@
       "maxBytes": 3827
     }
   },
-  "fileCount": 256,
-  "maxBytes": 2890378,
-  "pathSetSha256": "e6620090d51fb5203bcb7e8f2cffdfa2beb3862e20adbfc752fb69c95a469fa0",
+  "fileCount": 253,
+  "maxBytes": 2862954,
+  "pathSetSha256": "28505e53ea8390cfa3d6eab2b96cce6d7c0a7285d8d67a20ed0bb0fd97defe4f",
   "policyNotes": [
     "New repository tooling must use TypeScript rather than adding .js or .mjs files.",
     "Product/runtime source must not use this baseline as an exception mechanism.",

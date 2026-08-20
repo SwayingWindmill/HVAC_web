@@ -23,7 +23,7 @@ GitHub language statistics must describe product/runtime source rather than repo
 4. Product/runtime JavaScript cannot be legalized by adding another legacy root to normal feature code; new Node/browser implementation uses TypeScript/TSX.
 5. The required Linguist exclusions must remain present in `.gitattributes`.
 
-The initial ratchet after migrating the S3/S4 PostgreSQL runners and repository-governance checks is 256 JavaScript files / 2,890,378 bytes, including 227 files / 2,532,640 bytes under `scripts/`. This is a ceiling, not a target.
+The initial #288 ratchet was 256 JavaScript files / 2,890,378 bytes, including 227 files / 2,532,640 bytes under `scripts/`. After S22 updated existing tooling on `main`, the same path set reached 2,895,222 bytes overall / 2,537,484 bytes under `scripts/`. Issue #291 ratchets the latest `main` down to 253 files / 2,862,954 bytes overall and 224 files / 2,505,216 bytes under `scripts/`. These values are ceilings, not targets.
 
 ## Linguist policy
 
@@ -39,4 +39,4 @@ This changes repository language presentation only. It does not weaken testing, 
 
 ## Refactoring direction
 
-Do not bulk-rename `.mjs` to `.ts`. Migrate at real duplication seams. The first seam is PostgreSQL/Docker Compose test orchestration: S3 and S4 now share `scripts/lib/postgres-compose-harness.ts` for process execution, Compose detection, temporary port allocation, and `psql` handling. Subsequent migrations should reuse and deepen that seam instead of creating another runner framework.
+Do not bulk-rename `.mjs` to `.ts`. Migrate at real duplication seams. PostgreSQL/Docker Compose test orchestration is the first shared seam: S3, S4, and S5 use `scripts/lib/postgres-compose-harness.ts` for process execution, Compose v2 invocation, temporary port allocation, and `psql` handling. Repository tooling uses a deterministic Compose v2/v5 invocation: `docker-compose` on Windows and `docker compose` on Linux/WSL; it does not probe and switch implementations at runtime. Subsequent migrations should reuse and deepen that seam instead of creating another runner framework.

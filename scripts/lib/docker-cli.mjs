@@ -11,6 +11,17 @@ const boundedInteger = (name, value, minimum, maximum) => {
 const boundedDetail = (value) => String(value ?? '').trim().slice(0, 2000);
 const defaultPause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
+export function dockerComposeInvocation(args) {
+  return process.platform === 'win32'
+    ? { command: 'docker-compose', args }
+    : { command: 'docker', args: ['compose', ...args] };
+}
+
+export function runDockerCompose(run, args, options) {
+  const invocation = dockerComposeInvocation(args);
+  return run(invocation.command, invocation.args, options);
+}
+
 export async function pullDockerImageWithRetry(image, options = {}) {
   if (typeof image !== 'string' || !image.trim()) throw new Error('docker image reference is required');
   if (!/@sha256:[0-9a-f]{64}$/.test(image)) throw new Error('docker image reference must use an immutable sha256 digest');

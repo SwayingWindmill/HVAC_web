@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
-import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
+import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
 const s2ComposePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
@@ -17,12 +17,6 @@ const cubeImage = 'cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192
 const cubeKey = randomBytes(32).toString('base64url');
 const tenantId = '018f4f00-0100-7000-8000-000000000001';
 const siteId = '018f4f00-1000-7000-8000-000000000001';
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
-
 async function findAvailablePort() {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
@@ -58,7 +52,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(composePath, projectName, args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 const s2Compose = (args) => compose(s2ComposePath, s2ProjectName, args);

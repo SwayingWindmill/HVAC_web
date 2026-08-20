@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import tls from 'node:tls';
 
+import { runDockerCompose } from './lib/docker-cli.mjs';
+
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
 const projectName = process.env.S0_DURABLE_COMPOSE_PROJECT ?? `hvac-s0-durable-${process.pid}-${randomBytes(3).toString('hex')}`;
@@ -19,12 +21,6 @@ const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && exist
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 let serviceStdio = 'inherit';
 const serviceProcessGroups = new WeakSet();
-
-const composeInvocation = (() => {
-  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
-  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
-  return { command: 'docker-compose', prefix: [] };
-})();
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -40,12 +36,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args, options = {}) {
-  return run(composeInvocation.command, [
-    ...composeInvocation.prefix,
-    '-p', projectName,
-    '-f', composePath,
-    ...args,
-  ], options);
+  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], options);
 }
 
 function docker(args, options = {}) {
