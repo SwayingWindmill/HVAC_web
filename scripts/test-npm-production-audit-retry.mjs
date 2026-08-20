@@ -26,7 +26,7 @@ if (attempt < succeedOn) {
     auditReportVersion: 2,
     vulnerabilities: {},
     metadata: {
-      vulnerabilities: { info: 0, low: 5, moderate: 2, high: 0, critical: 0, total: 7 },
+      vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 },
     },
   }));
   process.exitCode = 1;

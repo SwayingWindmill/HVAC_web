@@ -148,20 +148,14 @@ assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depen
 assert(!workflow.includes('legacy-private'), 'supply-chain workflow must not build the retired Legacy fixture');
 const licenseGate = await read('scripts/check-production-licenses.mjs');
 assert(!licenseGate.includes('hvac-backend'), 'license gate must not scan the local migration reference');
-const dependencyBaseline = JSON.parse(await read('deploy/s0/security/dependency-audit-baseline.json'));
-assert(dependencyBaseline.primaryOwner === 'security-platform', 'dependency audit baseline requires a Security Platform owner');
-assert(dependencyBaseline.remediationIssue === '07-security-and-failure-gates', 'dependency audit baseline must be assigned to ticket 07');
-assert(new Date(`${dependencyBaseline.expiresOn}T23:59:59Z`).getTime() > Date.now(), 'dependency audit baseline is expired');
-for (const [name, project] of Object.entries(dependencyBaseline.projects || {})) {
-  assert(Number(project.allowed?.critical || 0) === 0, `${name} baseline permits production critical vulnerabilities`);
-}
 const dependencyAudit = await read('scripts/check-npm-production-audit.mjs');
-includesAll(dependencyAudit, ['--omit=dev', 'production critical vulnerabilities', 'expiresOn', 'vulnerabilities increased'], 'production dependency audit gate');
+includesAll(dependencyAudit, ['--omit=dev', "blockingSeverities = ['moderate', 'high', 'critical']", 'no waiver is permitted'], 'production dependency audit gate');
+assert(!dependencyAudit.includes('dependency-audit-baseline.json'), 'production dependency audit must not depend on an exception baseline');
 
 const rollout = await read('scripts/audit-s0-rollout.mjs');
 includesAll(rollout, ['rolling policy allowed zero ready replicas', 'rollback-surge-previous', 'rollback-complete'], 'rolling update audit');
 const docs = await read('docs/operations/s0-delivery.md');
-for (const heading of ['## Ownership', '## Local delivery', '## Configuration contract', '## Probes and graceful shutdown', '## Staging security boundary', '## Signed supply chain', '## Rolling update and rollback', '## Expand-contract compatibility', '## Recovery']) {
+for (const heading of ['## Ownership', '## Local delivery', '## Configuration contract', '## Probes and graceful shutdown', '## Staging security boundary', '## Signed supply chain', '## Rolling update and rollback', '## Current-schema-only runtime', '## Recovery']) {
   assert(docs.includes(heading), `delivery documentation is missing ${heading}`);
 }
 
