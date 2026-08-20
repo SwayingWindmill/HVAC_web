@@ -27,7 +27,7 @@ func TestEdgeMQTTCommandRestartDoesNotReplayMayExecuteRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, err := newEdgeCommandHandler(runtime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	handler, err := newEdgeCommandHandler(runtime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}

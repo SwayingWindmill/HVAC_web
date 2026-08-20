@@ -69,7 +69,8 @@
         "services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql",
         "services/rule-runtime-service/migrations/002_s21_rule_management.sql",
         "infra/s1-registry/postgres/init/013-s23-maintenance-retirement.sql",
-        "infra/s1-registry/postgres/init/014-s21-rule-management-capability.sql"
+        "infra/s1-registry/postgres/init/014-s21-rule-management-capability.sql",
+        "infra/connectivity/postgres/init/003-s12-edge-fleet.sql"
       ]
     },
     {

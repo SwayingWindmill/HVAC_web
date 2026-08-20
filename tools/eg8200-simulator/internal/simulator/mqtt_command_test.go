@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+func testMQTTEvidenceSpool(t testing.TB) *mqttEvidenceSpool {
+	t.Helper()
+	spool, err := newMQTTEvidenceSpool(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spool
+}
+
 func evaluateMQTTCommandWithEdgeCycle(t *testing.T, handler *edgeCommandHandler, runtime *EdgeControlRuntime, request mqttCommandEnvelope, cycleAt time.Time) mqttCommandReply {
 	t.Helper()
 	replies := make(chan mqttCommandReply, 1)
@@ -51,7 +60,7 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 		QueueDirectory:             t.TempDir(),
 		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
 	}
-	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +89,7 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("duplicate command must return cached reply without re-execution: first=%+v second=%+v", first, second)
 	}
-	restarted, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	restarted, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +122,7 @@ func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 		QueueDirectory:             t.TempDir(),
 		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
 	}
-	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,8 +19,8 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
-	filequeue "github.com/eclipse/paho.golang/autopaho/queue/file"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -61,8 +60,9 @@ type MQTTPublisher struct {
 	pointByKey     map[string]PointConfig
 	manager        *autopaho.ConnectionManager
 	commandHandler *edgeCommandHandler
+	fleetHandler   *edgeFleetHandler
+	evidenceSpool  *mqttEvidenceSpool
 	commandTopic   string
-	queueDirectory string
 	metrics        *observability.Registry
 	connected      *atomic.Bool
 }
@@ -82,9 +82,9 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err := os.MkdirAll(config.QueueDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("create MQTT queue directory: %w", err)
 	}
-	persistentQueue, err := filequeue.New(config.QueueDirectory, "mqtt", ".packet")
+	evidenceSpool, err := newMQTTEvidenceSpool(filepath.Join(config.QueueDirectory, "outbound"), config.MaximumQueueBytes)
 	if err != nil {
-		return nil, fmt.Errorf("open MQTT persistent queue: %w", err)
+		return nil, fmt.Errorf("open MQTT evidence spool: %w", err)
 	}
 	brokerURL, err := url.Parse(strings.TrimSpace(config.BrokerURL))
 	if err != nil {
@@ -94,7 +94,11 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err != nil {
 		return nil, err
 	}
-	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.GatewayID)
+	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.GatewayID, evidenceSpool)
+	if err != nil {
+		return nil, err
+	}
+	fleetHandler, err := newEdgeFleetHandler(config, plantConfig.GatewayID, edgeRuntime, evidenceSpool)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +116,6 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		SessionExpiryInterval:         24 * 60 * 60,
 		ConnectTimeout:                10 * time.Second,
 		ReconnectBackoff:              autopaho.DefaultExponentialBackoff(),
-		Queue:                         persistentQueue,
 		OnConnectError: func(error) {
 			connected.Store(false)
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
@@ -132,12 +135,30 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			go func() {
 				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				_, _ = manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: commandTopic, QoS: 1}}})
+				if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{
+					{Topic: commandTopic, QoS: 1},
+					{Topic: fleetHandler.DownlinkTopic(), QoS: 1},
+				}}); err != nil {
+					return
+				}
+				handshake, err := fleetHandler.HandshakeEnvelope()
+				if err != nil {
+					return
+				}
+				publishContext, publishCancel := context.WithTimeout(ctx, 5*time.Second)
+				if _, err := manager.Publish(publishContext, &paho.Publish{QoS: 1, Retain: false, Topic: fleetHandler.UplinkTopic(), Payload: handshake}); err != nil {
+					publishCancel()
+					return
+				}
+				publishCancel()
+				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer flushCancel()
+				_ = evidenceSpool.Flush(flushContext, manager)
 			}()
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID:          strings.TrimSpace(config.ClientID),
-			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle, fleetHandler.Handle},
 		},
 	})
 	if err != nil {
@@ -153,8 +174,9 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		pointByKey:     pointByKey,
 		manager:        manager,
 		commandHandler: commandHandler,
+		fleetHandler:   fleetHandler,
+		evidenceSpool:  evidenceSpool,
 		commandTopic:   "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command",
-		queueDirectory: config.QueueDirectory,
 		metrics:        metrics,
 		connected:      connected,
 	}, nil
@@ -175,10 +197,7 @@ func (publisher *MQTTPublisher) RefreshMetrics() error {
 	if publisher == nil || publisher.metrics == nil {
 		return nil
 	}
-	queueBytes, err := directoryBytes(publisher.queueDirectory)
-	if err != nil {
-		return err
-	}
+	queueBytes := publisher.evidenceSpool.UsedBytes()
 	_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_bytes", "Bytes currently retained in the Edge persistent MQTT queue.", nil, float64(queueBytes))
 	utilization := 0.0
 	if publisher.config.MaximumQueueBytes > 0 {
@@ -207,20 +226,6 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_values_total", "Point values queued for MQTT delivery.", map[string]string{"outcome": "queued"}, float64(len(measurements)))
 		}
 	}()
-	queueBytes, err := directoryBytes(publisher.queueDirectory)
-	if err != nil {
-		return fmt.Errorf("measure MQTT queue size: %w", err)
-	}
-	if publisher.metrics != nil {
-		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_bytes", "Bytes currently retained in the Edge persistent MQTT queue.", nil, float64(queueBytes))
-		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_utilization_ratio", "Persistent MQTT queue utilization ratio.", nil, float64(queueBytes)/float64(publisher.config.MaximumQueueBytes))
-	}
-	if queueBytes >= publisher.config.MaximumQueueBytes {
-		if publisher.metrics != nil {
-			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_limit_rejections_total", "Edge MQTT publishes rejected because the persistent queue reached its configured byte limit.", nil, 1)
-		}
-		return fmt.Errorf("MQTT persistent queue reached limit: %d >= %d", queueBytes, publisher.config.MaximumQueueBytes)
-	}
 	envelope, err := publisher.buildEnvelope(measurements)
 	if err != nil {
 		return err
@@ -229,22 +234,28 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 	if err != nil {
 		return fmt.Errorf("encode MQTT telemetry envelope: %w", err)
 	}
-	if int64(len(payload))+queueBytes > publisher.config.MaximumQueueBytes {
-		if publisher.metrics != nil {
+	topic := "energy/v1/" + publisher.config.TenantID + "/" + publisher.config.SiteID + "/" + publisher.gatewayID + "/telemetry"
+	admission, err := publisher.evidenceSpool.Enqueue(envelope.MessageID, edgefleet.EvidenceTelemetryNormal, topic, payload)
+	if err != nil {
+		if publisher.metrics != nil && errors.Is(err, edgefleet.ErrOfflineCapacity) {
 			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_limit_rejections_total", "Edge MQTT publishes rejected because the persistent queue reached its configured byte limit.", nil, 1)
 		}
-		return fmt.Errorf("MQTT persistent queue would exceed limit: %d + %d > %d", queueBytes, len(payload), publisher.config.MaximumQueueBytes)
-	}
-	topic := "energy/v1/" + publisher.config.TenantID + "/" + publisher.config.SiteID + "/" + publisher.gatewayID + "/telemetry"
-	if err := publisher.manager.PublishViaQueue(ctx, &autopaho.QueuePublish{Publish: &paho.Publish{
-		QoS:     1,
-		Retain:  false,
-		Topic:   topic,
-		Payload: payload,
-	}}); err != nil {
 		return err
 	}
+	queueBytes := publisher.evidenceSpool.UsedBytes()
+	if publisher.metrics != nil {
+		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_bytes", "Bytes currently retained in the Edge persistent MQTT queue.", nil, float64(queueBytes))
+		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_utilization_ratio", "Persistent MQTT queue utilization ratio.", nil, float64(queueBytes)/float64(publisher.config.MaximumQueueBytes))
+		if len(admission.ShedIDs) > 0 {
+			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_shed_total", "Lower-priority Edge MQTT evidence shed under offline capacity pressure.", map[string]string{"class": string(edgefleet.EvidenceTelemetryNormal)}, float64(len(admission.ShedIDs)))
+		}
+	}
 	outcome = "queued"
+	if publisher.connected.Load() {
+		flushContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_ = publisher.evidenceSpool.Flush(flushContext, publisher.manager)
+	}
 	return nil
 }
 
@@ -348,25 +359,6 @@ func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {
 		Certificates: []tls.Certificate{certificate},
 		ServerName:   strings.TrimSpace(config.ServerName),
 	}, nil
-}
-
-func directoryBytes(directory string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".packet" {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	return total, err
 }
 
 func newUUIDV7(at time.Time) (string, error) {

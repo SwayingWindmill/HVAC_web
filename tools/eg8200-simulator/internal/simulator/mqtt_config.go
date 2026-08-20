@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const MQTTGatewayConfigSchemaVersion = 1
+const MQTTGatewayConfigSchemaVersion = 2
 
 var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
@@ -26,6 +26,9 @@ type MQTTGatewayConfig struct {
 	ServerName                 string            `json:"serverName"`
 	QueueDirectory             string            `json:"queueDirectory"`
 	MaximumQueueBytes          int64             `json:"maximumQueueBytes"`
+	CredentialRevision         uint64            `json:"credentialRevision"`
+	FleetReleaseKeyID          string            `json:"fleetReleaseKeyId"`
+	FleetReleasePublicKeyFile  string            `json:"fleetReleasePublicKeyFile"`
 	DeviceExternalIDByDeviceID map[string]string `json:"deviceExternalIdByDeviceId"`
 }
 
@@ -58,12 +61,14 @@ func (config MQTTGatewayConfig) Validate() error {
 		return errors.New("MQTT gateway brokerUrl must be a tls:// origin")
 	}
 	for name, value := range map[string]string{
-		"clientId":       config.ClientID,
-		"caFile":         config.CAFile,
-		"certFile":       config.CertFile,
-		"keyFile":        config.KeyFile,
-		"serverName":     config.ServerName,
-		"queueDirectory": config.QueueDirectory,
+		"clientId":                  config.ClientID,
+		"caFile":                    config.CAFile,
+		"certFile":                  config.CertFile,
+		"keyFile":                   config.KeyFile,
+		"serverName":                config.ServerName,
+		"queueDirectory":            config.QueueDirectory,
+		"fleetReleaseKeyId":         config.FleetReleaseKeyID,
+		"fleetReleasePublicKeyFile": config.FleetReleasePublicKeyFile,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("MQTT gateway %s is required", name)
@@ -71,6 +76,9 @@ func (config MQTTGatewayConfig) Validate() error {
 	}
 	if config.MaximumQueueBytes < 1<<20 || config.MaximumQueueBytes > 100<<30 {
 		return errors.New("MQTT gateway maximumQueueBytes must be between 1 MiB and 100 GiB")
+	}
+	if config.CredentialRevision == 0 {
+		return errors.New("MQTT gateway credentialRevision must be positive")
 	}
 	if len(config.DeviceExternalIDByDeviceID) == 0 {
 		return errors.New("MQTT gateway deviceExternalIdByDeviceId is required")
