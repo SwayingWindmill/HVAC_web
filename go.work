@@ -10,6 +10,7 @@ use (
 	./libs/commandmodel
 	./libs/domainoutbox
 	./libs/edgecontrol
+	./libs/edgefleet
 	./libs/identitycontext
 	./libs/intelligencemodel
 	./libs/observability

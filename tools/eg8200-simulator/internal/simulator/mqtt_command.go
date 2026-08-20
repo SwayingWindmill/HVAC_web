@@ -14,6 +14,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 )
 
 const mqttCommandSchemaVersion = "2.0"
@@ -73,15 +74,16 @@ type edgeCommandHandler struct {
 	replyTopic     string
 	now            func() time.Time
 	ledgerPath     string
+	spool          *mqttEvidenceSpool
 
 	mu               sync.Mutex
 	results          map[string]edgeCommandRecord
 	maxFenceByDevice map[string]uint64
 }
 
-func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayConfig, gatewayID string) (*edgeCommandHandler, error) {
-	if edgeRuntime == nil {
-		return nil, errors.New("MQTT command handler requires Edge Control Runtime")
+func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayConfig, gatewayID string, spool *mqttEvidenceSpool) (*edgeCommandHandler, error) {
+	if edgeRuntime == nil || spool == nil {
+		return nil, errors.New("MQTT command handler requires Edge Control Runtime and evidence spool")
 	}
 	deviceByWireID := make(map[string]string, len(config.DeviceExternalIDByDeviceID))
 	for deviceID, wireID := range config.DeviceExternalIDByDeviceID {
@@ -118,6 +120,7 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 		replyTopic:       "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + gatewayID + "/command/reply",
 		now:              time.Now,
 		ledgerPath:       ledgerPath,
+		spool:            spool,
 		results:          results,
 		maxFenceByDevice: maxFenceByDevice,
 	}, nil
@@ -171,10 +174,13 @@ func (handler *edgeCommandHandler) Handle(received paho.PublishReceived) (bool, 
 	if err != nil {
 		return true, err
 	}
+	if _, err := handler.spool.Enqueue(reply.MessageID, edgefleet.EvidenceControl, handler.replyTopic, payload); err != nil {
+		return true, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = received.Client.Publish(ctx, &paho.Publish{QoS: 1, Retain: false, Topic: handler.replyTopic, Payload: payload})
-	return true, err
+	_ = handler.spool.Flush(ctx, received.Client)
+	return true, nil
 }
 
 func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCommandReply {
@@ -221,6 +227,10 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		}
 		handler.mu.Unlock()
 		return edgeFailed(base, "EDGE_OUTCOME_UNKNOWN")
+	}
+	if handler.spool.State() == edgefleet.CapacityReadOnlySafety {
+		handler.mu.Unlock()
+		return edgeRejected(base, "EDGE_CAPACITY_READ_ONLY")
 	}
 	if request.ExecutionFence <= handler.maxFenceByDevice[deviceID] {
 		handler.mu.Unlock()
