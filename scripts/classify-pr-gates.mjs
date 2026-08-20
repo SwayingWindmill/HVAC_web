@@ -144,7 +144,7 @@ for (const file of files) {
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
   match([
-    'scripts/check-repository-governance.mjs',
+    'scripts/check-repository-governance.ts',
     'scripts/classify-pr-gates.mjs',
     'scripts/domain-task-matrix.mjs',
     'scripts/package-script-long-chain-baseline.json',
@@ -153,7 +153,7 @@ for (const file of files) {
     'scripts/run-pr-gate.mjs',
     'scripts/test-domain-task-matrix.mjs',
     'scripts/test-pr-gate-classifier.mjs',
-    'scripts/test-repository-governance.mjs',
+    'scripts/test-repository-governance.ts',
     'scripts/update-package-script-long-chain-baseline.mjs',
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
@@ -216,7 +216,7 @@ for (const file of files) {
       callback();
     };
     scriptMatch([
-      'scripts/check-repository-governance.mjs',
+      'scripts/check-repository-governance.ts',
       'scripts/classify-pr-gates.mjs',
       'scripts/domain-task-matrix.mjs',
       'scripts/package-script-long-chain-baseline.json',
@@ -225,7 +225,7 @@ for (const file of files) {
       'scripts/run-pr-gate.mjs',
       'scripts/test-domain-task-matrix.mjs',
       'scripts/test-pr-gate-classifier.mjs',
-      'scripts/test-repository-governance.mjs',
+      'scripts/test-repository-governance.ts',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('ui-audit') || lower.includes('bigscreen') || lower.includes('ops-loop'), () => selectWeb(file, 'browser or RMS automation changed'));

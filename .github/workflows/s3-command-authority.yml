@@ -20,7 +20,8 @@ on:
       - 'scripts/check-s3-command-governance-dispatch.mjs'
       - 'scripts/check-s3-command-postgres-authority.mjs'
       - 'scripts/check-s3-command-verification.mjs'
-      - 'scripts/run-s3-command-postgres-tests.mjs'
+      - 'scripts/run-s3-command-postgres-tests.ts'
+      - 'scripts/lib/postgres-compose-harness.ts'
       - 'go.work'
       - 'go.work.sum'
   push:
@@ -42,7 +43,8 @@ on:
       - 'scripts/check-s3-command-governance-dispatch.mjs'
       - 'scripts/check-s3-command-postgres-authority.mjs'
       - 'scripts/check-s3-command-verification.mjs'
-      - 'scripts/run-s3-command-postgres-tests.mjs'
+      - 'scripts/run-s3-command-postgres-tests.ts'
+      - 'scripts/lib/postgres-compose-harness.ts'
       - 'go.work'
       - 'go.work.sum'
 

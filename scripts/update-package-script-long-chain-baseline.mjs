@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createPackageScriptLongChainBaseline } from './check-repository-governance.mjs';
+import { createPackageScriptLongChainBaseline } from './check-repository-governance.ts';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));

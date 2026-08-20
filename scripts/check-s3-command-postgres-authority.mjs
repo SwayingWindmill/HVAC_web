@@ -15,7 +15,7 @@ const [plan, ownership, dataOwnership, migration, store, integration, bootstrap,
   read('infra/s3-command/postgres/init/000-bootstrap-identities.sql'),
   read('infra/s3-command/compose.yaml'),
   read('.github/workflows/s3-command-authority.yml'),
-  read('scripts/run-s3-command-postgres-tests.mjs'),
+  read('scripts/run-s3-command-postgres-tests.ts'),
 ]);
 
 const errors = [];
