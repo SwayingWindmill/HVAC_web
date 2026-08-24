@@ -17,6 +17,12 @@ x-go-service: &go-service
     - /tmp
   logging: *default-logging
 
+x-phase1-deployment-tiers:
+  schemaVersion: 1
+  contract: ./deployment-tiers.v1.json
+  availabilityContract: ./availability-tier.v1.json
+  note: Observability services are profile-gated. Select one observability profile and optionally the intelligence profile.
+
 services:
   nginx:
     build:
@@ -51,7 +57,7 @@ services:
       args: { SERVICE_PACKAGE: ./services/platform-gateway/cmd/platform-gateway }
     image: ${ENERGY_API_IMAGE:-hvac/energy-api:0.1.0-dev}
     environment:
-      ENERGY_API_IN_PROCESS_ENABLED: "true"
+      ENERGY_API_EMBEDDED_OWNERS: all
       PLATFORM_GATEWAY_ADDR: :8080
       PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: :19080
       IAM_SERVICE_ADDR: :8444
@@ -88,12 +94,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      forecast-service:
-        condition: service_healthy
-      fdd-service:
-        condition: service_healthy
-      optimization-service:
         condition: service_healthy
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
@@ -346,6 +346,7 @@ services:
     mem_reservation: ${METRIC_WORKER_MEMORY_RESERVATION:-192m}
 
   forecast-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
@@ -354,7 +355,7 @@ services:
     image: ${FORECAST_SERVICE_IMAGE:-hvac/forecast-service:0.1.0-dev}
     environment:
       FORECAST_HTTP_ADDR: :19092
-      FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:?FORECAST_POSTGRES_DSN is required}
+      FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:-}
       FORECAST_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
       FORECAST_CLICKHOUSE_DATABASE: analytics
       FORECAST_CLICKHOUSE_TABLE: forecast_series
@@ -379,6 +380,7 @@ services:
     mem_reservation: ${FORECAST_SERVICE_MEMORY_RESERVATION:-128m}
 
   optimization-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
@@ -387,7 +389,7 @@ services:
     image: ${OPTIMIZATION_SERVICE_IMAGE:-hvac/optimization-service:0.1.0-dev}
     environment:
       OPTIMIZATION_HTTP_ADDR: :19093
-      OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:?OPTIMIZATION_POSTGRES_DSN is required}
+      OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
       OPTIMIZATION_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
     depends_on:
@@ -410,6 +412,7 @@ services:
     mem_reservation: ${OPTIMIZATION_SERVICE_MEMORY_RESERVATION:-128m}
 
   fdd-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
@@ -418,7 +421,7 @@ services:
     image: ${FDD_SERVICE_IMAGE:-hvac/fdd-service:0.1.0-dev}
     environment:
       FDD_HTTP_ADDR: :19094
-      FDD_DATABASE_URL: ${FDD_DATABASE_URL:?FDD_DATABASE_URL is required}
+      FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -561,10 +564,13 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.12.3
     restart: unless-stopped
+    environment:
+      CLICKHOUSE_SERVER_MEMORY_USAGE: ${CLICKHOUSE_SERVER_MEMORY_USAGE:-3221225472}
     volumes:
       - ${CLICKHOUSE_DATA_DIR:-./runtime/data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
+      - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
       - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
@@ -643,11 +649,12 @@ services:
     logging: *default-logging
 
   otel-collector:
+    profiles: ["observability-logs", "observability-full"]
     image: otel/opentelemetry-collector-contrib:0.111.0
     restart: unless-stopped
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    command: ["--config=/etc/otelcol-contrib/configs/${PHASE1_OBSERVABILITY_PROFILE:-logs}.yaml"]
     volumes:
-      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./observability/otel-collector:/etc/otelcol-contrib/configs:ro
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
     expose: ["4317", "4318", "9464", "13133"]
     networks: [application, observability]
@@ -657,6 +664,7 @@ services:
     logging: *default-logging
 
   prometheus:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
@@ -672,6 +680,7 @@ services:
     logging: *default-logging
 
   node-exporter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/node-exporter:v1.8.2
     restart: unless-stopped
     command:
@@ -690,6 +699,7 @@ services:
     logging: *default-logging
 
   loki:
+    profiles: ["observability-logs", "observability-full"]
     image: ${LOKI_IMAGE:-grafana/loki:3.2.1}
     restart: unless-stopped
     command: ["-config.file=/etc/loki/local-config.yaml"]
@@ -704,6 +714,7 @@ services:
     logging: *default-logging
 
   tempo:
+    profiles: ["observability-full"]
     image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
@@ -718,6 +729,7 @@ services:
     logging: *default-logging
 
   grafana:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
     restart: unless-stopped
     environment:

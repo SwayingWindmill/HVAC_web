@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT + D10 ThingsBoard deployment adjudication",
+  "name": "Phase 1 availability tier and single-node upgrade path",
+  "currentTier": "SINGLE_NODE_RECOVERABLE",
+  "tiers": [
+    {
+      "id": "SINGLE_NODE_RECOVERABLE",
+      "highlyAvailable": false,
+      "availabilityClaim": "No numeric availability claim until measured. RPO/RTO are recovery objectives, not HA guarantees.",
+      "productionAllowed": true,
+      "prerequisites": [
+        "off-server-backup",
+        "versioned-config",
+        "timestamped-restore-drill",
+        "edge-store-and-forward"
+      ]
+    },
+    {
+      "id": "COMPONENT_REDUNDANT",
+      "highlyAvailable": false,
+      "availabilityClaim": "Component-level redundancy for measured availability. Does not make the whole platform HA.",
+      "productionAllowed": true,
+      "entryEvidence": [
+        "capacity-or-availability-evidence",
+        "single-node-failure-drill-record"
+      ]
+    },
+    {
+      "id": "HA",
+      "highlyAvailable": true,
+      "availabilityClaim": "Numeric SLO may be declared only with multi-node topology evidence and measured error budget.",
+      "productionAllowed": true,
+      "entryEvidence": [
+        "multi-node-failure-injection-record",
+        "data-plane-failover-drill-record",
+        "rolling-upgrade-drill-record"
+      ]
+    }
+  ],
+  "spofInventory": [
+    {
+      "component": "postgresql",
+      "spof": true,
+      "currentProtection": "continuous WAL archive + daily base backup; no streaming standby",
+      "businessImpact": "Platform-wide outage: registry, IAM, telemetry current state, scheduler, outbox, commands and audit are unavailable",
+      "recoveryObjectives": { "rpoSeconds": 300, "rtoSeconds": 7200 },
+      "upgradePath": [
+        "Add a streaming standby with synchronous_commit policy chosen by the RPO requirement",
+        "Add automatic failover (Patroni/repmgr or managed PostgreSQL) with fencing of the old primary",
+        "Make application DSNs failover-aware and prove switchover with a real drill",
+        "Publish replication lag, failover and backup readiness metrics"
+      ],
+      "trigger": "Required availability exceeds measured single-node availability, or the accepted data-loss window is smaller than achievable PITR."
+    },
+    {
+      "component": "clickhouse",
+      "spof": true,
+      "currentProtection": "daily native backup; raw telemetry remains rebuildable from PostgreSQL history relay and Edge replay",
+      "businessImpact": "History and analytics queries degrade; telemetry ingestion continues and Edge Store and Forward protects the source data",
+      "recoveryObjectives": { "rpoSeconds": 1800, "rtoSeconds": 14400 },
+      "upgradePath": [
+        "Prefer rebuild-from-authority for phase 1: keep ClickHouse as a rebuildable projection",
+        "Before ClickHouse HA, change MergeTree objects to ReplicatedMergeTree/ReplicatedAggregatingMergeTree under ClickHouse Keeper",
+        "Add a versioned rebuild-and-verify procedure that proves row counts and watermarks after restore",
+        "Only then add a second replica and query routing policy"
+      ],
+      "trigger": "History/analytics query availability becomes a hard business requirement and rebuild time exceeds its RTO."
+    },
+    {
+      "component": "redis",
+      "spof": true,
+      "currentProtection": "documented as rebuildable projection; appendonly is disabled",
+      "businessImpact": "Realtime transport, OIDC correlation and the fail-closed Operations limit policy can be affected",
+      "recoveryObjectives": { "rpoSeconds": null, "rtoSeconds": 900 },
+      "upgradePath": [
+        "First make Redis non-authoritative on every read/write path, including current telemetry reads and LimitPolicy failure modes",
+        "Split non-rebuildable short-TTL state (OIDC correlation) from rebuildable caches",
+        "Then decide between Redis Sentinel, multiple independent Redis instances or removing the shared dependency",
+        "Do not claim HA while a request correctness path still depends on Redis"
+      ],
+      "trigger": "Realtime availability requirement exceeds acceptable degradation, after the Redis authority boundary is fixed."
+    },
+    {
+      "component": "mqtt-broker",
+      "spof": true,
+      "currentProtection": "Mosquitto TLS persistence; Edge Store and Forward keeps data but not command reachability during outage",
+      "businessImpact": "Edge telemetry ingress and cloud command egress are unavailable",
+      "recoveryObjectives": { "rpoSeconds": null, "rtoSeconds": 1800 },
+      "upgradePath": [
+        "Publish a stable broker endpoint that supports failover without Edge credential rotation",
+        "Evaluate a clustered broker (for example EMQX OSS) or Mosquitto bridging with shared PKI/ACL source",
+        "Prove Edge reconnect and replay behavior in a broker failover drill before claiming command-path availability"
+      ],
+      "trigger": "Command reachability or telemetry ingress needs component-level redundancy."
+    },
+    {
+      "component": "centrifugo",
+      "spof": true,
+      "currentProtection": "stateless node over shared Redis; clients can recover with the bounded recovery contract",
+      "businessImpact": "Browser realtime delivery is degraded; snapshots and history queries remain available",
+      "recoveryObjectives": { "rpoSeconds": null, "rtoSeconds": 900 },
+      "upgradePath": [
+        "Run multiple Centrifugo nodes behind the existing Nginx dynamic resolver",
+        "Keep history/recovery authority in Redis and Telemetry Runtime, not in a single node",
+        "Prove reconnect and recovery success in a node-kill drill"
+      ],
+      "trigger": "Realtime delivery requires process-level redundancy before the data plane is made HA."
+    },
+    {
+      "component": "observability-stack",
+      "spof": true,
+      "currentProtection": "single compose profiles; logs are rotated on host",
+      "businessImpact": "Business services continue to run, but alerting and incident diagnosis are lost exactly when they are most needed",
+      "recoveryObjectives": null,
+      "upgradePath": [
+        "Keep observability single-instance in phase 1",
+        "Add an independent dead-man switch or external check path for page-critical alerts",
+        "Only scale observability after the business services it observes"
+      ],
+      "trigger": "Compliance or operational requirements demand an independent alerting path."
+    }
+  ],
+  "monolithToMultiInstancePath": {
+    "reference": {
+      "project": "thingsboard/thingsboard",
+      "tag": "v4.3.1.1",
+      "commit": "c2a52e46c44e308ddee430e7266b8e10eddde9c4",
+      "adoptedPattern": "One artifact selects monolith or service role via service.type; the queue backend is selected separately via queue.type. HVAC Web adopts the topology-switch pattern but keeps PostgreSQL Outbox/Job leases as the durable backbone.",
+      "rejected": [
+        "thingsboard-actor-runtime",
+        "zookeeper-for-phase-1",
+        "kafka-as-phase-1-requirement",
+        "in-memory-queue-as-durable-backbone"
+      ]
+    },
+    "stages": [
+      {
+        "id": "stage-0",
+        "name": "Single-server compose",
+        "state": "current",
+        "capabilities": [
+          "energy-api embeds IAM/Core/Query/Audit/Command/Alarm/Notification/WorkOrder",
+          "PostgreSQL durable Outbox/Inbox and Job leases",
+          "single data-plane instances"
+        ]
+      },
+      {
+        "id": "stage-1",
+        "name": "Toggle embedded owners to independent service containers",
+        "state": "implemented-runtime-drill-required",
+        "capabilities": [
+          "ENERGY_API_EMBEDDED_OWNERS selects the remaining in-process roles",
+          "existing Go owner binaries run in the owner-split Compose overlay",
+          "Notification remains the only embedded owner until it has an independently reviewed artifact"
+        ],
+        "exitEvidence": [
+          "owner-split-compose-config-gate",
+          "same-version-live-contract-drill"
+        ]
+      },
+      {
+        "id": "stage-2",
+        "name": "Scale stateless owners and PostgreSQL-claimed workers",
+        "state": "designed-not-certified",
+        "capabilities": [
+          "Nginx dynamic DNS upstreams",
+          "multiple energy-api replicas",
+          "multiple telemetry/metric workers using SKIP LOCKED leases",
+          "scheduler and outbox relays run multiple owners"
+        ],
+        "exitEvidence": [
+          "single-owner-kill drill",
+          "no duplicate command side effects",
+          "scheduler deduplication under concurrent owners"
+        ]
+      },
+      {
+        "id": "stage-3",
+        "name": "Data-plane redundancy by component",
+        "state": "gated",
+        "capabilities": [
+          "PostgreSQL standby first",
+          "Redis authority boundary fix before Redis HA",
+          "MQTT failover after Edge reconnect proof",
+          "ClickHouse rebuild-before-replicate"
+        ],
+        "exitEvidence": [
+          "component failover drills with measured RPO/RTO",
+          "application SLO remains valid during failover"
+        ]
+      }
+    ]
+  },
+  "sloScopingRules": [
+    "A numeric availability SLO on a single-node deployment must state that it is conditioned on infrastructure availability unless measured end to end.",
+    "s2 release-gate snapshotHttp.availabilityPercent applies only to COMPONENT_REDUNDANT and HA, is conditional on required infrastructure, and cannot be cited as a whole-platform 99.9% claim.",
+    "RPO/RTO attainment requires a timestamped restore drill with real external backup artifacts; container startup is not completion.",
+    "No stage in monolithToMultiInstancePath may be claimed as certified without its exitEvidence."
+  ]
+}

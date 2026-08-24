@@ -39,9 +39,46 @@ type embeddedEnergyServices struct {
 	closeFuncs []func()
 }
 
+var embeddedOwnerNames = []string{"iam", "audit", "core", "telemetry-query", "alarm", "notification", "work-order", "command"}
+
+func parseEmbeddedOwners(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("ENERGY_API_EMBEDDED_OWNERS is required")
+	}
+	if raw == "all" {
+		return append([]string(nil), embeddedOwnerNames...), nil
+	}
+	if raw == "none" {
+		return nil, nil
+	}
+	requested := make(map[string]struct{})
+	for _, owner := range strings.Split(raw, ",") {
+		owner = strings.TrimSpace(owner)
+		if _, duplicate := requested[owner]; duplicate {
+			return nil, fmt.Errorf("embedded owner %q is duplicated", owner)
+		}
+		requested[owner] = struct{}{}
+	}
+	owners := make([]string, 0, len(requested))
+	for _, owner := range embeddedOwnerNames {
+		if _, selected := requested[owner]; selected {
+			owners = append(owners, owner)
+			delete(requested, owner)
+		}
+	}
+	if len(requested) > 0 {
+		for owner := range requested {
+			return nil, fmt.Errorf("embedded owner %q is unknown", owner)
+		}
+	}
+	return owners, nil
+}
+
 func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*embeddedEnergyServices, error) {
-	if !envEnabled("ENERGY_API_IN_PROCESS_ENABLED") {
-		return &embeddedEnergyServices{}, nil
+	owners, err := parseEmbeddedOwners(os.Getenv("ENERGY_API_EMBEDDED_OWNERS"))
+	if err != nil {
+		return nil, err
 	}
 	services := &embeddedEnergyServices{}
 	fail := func(err error) (*embeddedEnergyServices, error) {
@@ -49,67 +86,72 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 		return nil, err
 	}
 
-	iamServer, iamTelemetry, iamClose, err := newEmbeddedIAMServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded IAM: %w", err))
+	for _, owner := range owners {
+		switch owner {
+		case "iam":
+			server, telemetry, closeOwner, configureErr := newEmbeddedIAMServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded IAM: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "audit":
+			server, telemetry, closeOwner, configureErr := newEmbeddedAuditServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Audit: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "core":
+			server, telemetry, closeOwner, configureErr := newEmbeddedCoreServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Core: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "telemetry-query":
+			server, telemetry, configureErr := newEmbeddedQueryServer(logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Telemetry Query: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+		case "alarm":
+			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Alarm: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "notification":
+			server, telemetry, closeOwner, configureErr := newEmbeddedNotificationServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Notification: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "work-order":
+			server, closeOwner, configureErr := newEmbeddedWorkOrderServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Work Order: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		case "command":
+			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(ctx, logger)
+			if configureErr != nil {
+				return fail(fmt.Errorf("configure embedded Command: %w", configureErr))
+			}
+			services.servers = append(services.servers, server)
+			services.telemetry = append(services.telemetry, telemetry)
+			services.closeFuncs = append(services.closeFuncs, closeOwner)
+		}
 	}
-	services.servers = append(services.servers, iamServer)
-	services.telemetry = append(services.telemetry, iamTelemetry)
-	services.closeFuncs = append(services.closeFuncs, iamClose)
-
-	auditServer, auditTelemetry, auditClose, err := newEmbeddedAuditServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Audit: %w", err))
-	}
-	services.servers = append(services.servers, auditServer)
-	services.telemetry = append(services.telemetry, auditTelemetry)
-	services.closeFuncs = append(services.closeFuncs, auditClose)
-
-	coreServer, coreTelemetry, coreClose, err := newEmbeddedCoreServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Core: %w", err))
-	}
-	services.servers = append(services.servers, coreServer)
-	services.telemetry = append(services.telemetry, coreTelemetry)
-	services.closeFuncs = append(services.closeFuncs, coreClose)
-
-	queryServer, queryTelemetry, err := newEmbeddedQueryServer(logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Telemetry Query: %w", err))
-	}
-	services.servers = append(services.servers, queryServer)
-	services.telemetry = append(services.telemetry, queryTelemetry)
-
-	alarmServer, alarmTelemetry, alarmClose, err := newEmbeddedAlarmServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Alarm: %w", err))
-	}
-	services.servers = append(services.servers, alarmServer)
-	services.telemetry = append(services.telemetry, alarmTelemetry)
-	services.closeFuncs = append(services.closeFuncs, alarmClose)
-
-	notificationServer, notificationTelemetry, notificationClose, err := newEmbeddedNotificationServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Notification: %w", err))
-	}
-	services.servers = append(services.servers, notificationServer)
-	services.telemetry = append(services.telemetry, notificationTelemetry)
-	services.closeFuncs = append(services.closeFuncs, notificationClose)
-
-	workOrderServer, workOrderClose, err := newEmbeddedWorkOrderServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Work Order: %w", err))
-	}
-	services.servers = append(services.servers, workOrderServer)
-	services.closeFuncs = append(services.closeFuncs, workOrderClose)
-
-	commandServer, commandTelemetry, commandClose, err := newEmbeddedCommandServer(ctx, logger)
-	if err != nil {
-		return fail(fmt.Errorf("configure embedded Command: %w", err))
-	}
-	services.servers = append(services.servers, commandServer)
-	services.telemetry = append(services.telemetry, commandTelemetry)
-	services.closeFuncs = append(services.closeFuncs, commandClose)
 
 	for _, runtime := range services.telemetry {
 		runtime.MarkReady()
@@ -123,7 +165,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			}
 		}()
 	}
-	logger.Info("energy_api_embedded_services_started", "service_count", len(services.servers))
+	logger.Info("energy_api_embedded_services_started", "owners", strings.Join(owners, ","), "service_count", len(services.servers))
 	return services, nil
 }
 

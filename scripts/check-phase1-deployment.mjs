@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { parseRuntimeEnvironment, resolveDeploymentTier } from './phase1-deployment-tier.ts';
+import { validateRecoveryAttainment } from './phase1-recovery-attainment.ts';
+
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
@@ -9,11 +12,17 @@ const paths = {
   baseline: 'deploy/platform/phase1/architecture-baseline.v1.json',
   matrix: 'deploy/platform/phase1/alignment-matrix.v1.json',
   compose: 'deploy/platform/phase1/compose.yaml',
+  ownerSplitCompose: 'deploy/platform/phase1/owner-split.compose.yaml',
   nginx: 'deploy/platform/phase1/nginx/nginx.conf',
   webDockerfile: 'deploy/platform/phase1/nginx/Dockerfile',
   prometheus: 'deploy/platform/phase1/observability/prometheus.yaml',
   hostAlerts: 'infra/s0-durable/observability/alerts/host-resource.yaml',
-  otel: 'deploy/platform/phase1/observability/otel-collector.yaml',
+  otel: 'deploy/platform/phase1/observability/otel-collector/full.yaml',
+  otelLogs: 'deploy/platform/phase1/observability/otel-collector/logs.yaml',
+  deploymentTiers: 'deploy/platform/phase1/deployment-tiers.v1.json',
+  availabilityTier: 'deploy/platform/phase1/availability-tier.v1.json',
+  s2ReleaseGates: 'deploy/s2/release-gates.v1.json',
+  recoveryAttainment: 'deploy/platform/phase1/recovery/attainment.v1.json',
   loki: 'deploy/platform/phase1/observability/loki.yaml',
   tempo: 'deploy/platform/phase1/observability/tempo.yaml',
   grafanaDatasources: 'deploy/platform/phase1/observability/grafana/provisioning/datasources/datasources.yaml',
@@ -22,10 +31,12 @@ const paths = {
   backupReadiness: 'deploy/platform/phase1/backup/verify-recovery-readiness.sh',
   clickhouseBackup: 'deploy/platform/phase1/backup/clickhouse-backup.sh',
   clickhouseBackupConfig: 'deploy/platform/phase1/backup/clickhouse-backup.xml',
+  clickhouseResourceLimits: 'deploy/platform/phase1/clickhouse/resource-limits.xml',
   backupReadme: 'deploy/platform/phase1/backup/README.md',
   recoveryTargets: 'deploy/platform/phase1/recovery/recovery-targets.v1.json',
   recoveryReadme: 'deploy/platform/phase1/recovery/README.md',
   recoveryDrillTemplate: 'deploy/platform/phase1/recovery/drill-record.template.json',
+  processFailureScenarios: 'deploy/platform/phase1/recovery/process-failure-scenarios.v1.json',
   gitignore: '.gitignore',
   phase1Databases: 'deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql',
   phase1Readme: 'deploy/platform/phase1/README.md',
@@ -40,12 +51,14 @@ const paths = {
   packageJson: 'package.json',
   observabilityRuntime: 'libs/observability/runtime.go',
   gatewayMain: 'services/platform-gateway/cmd/platform-gateway/main.go',
+  embeddedEnergy: 'services/platform-gateway/cmd/platform-gateway/embedded_energy.go',
   operationsGateway: 'services/platform-gateway/internal/gateway/operations_agent.go',
   identityMain: 'services/identity-service/cmd/identity-service/main.go',
   schedulerMain: 'services/scheduler-service/cmd/scheduler-service/main.go',
   telemetryRuntimeMain: 'services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go',
   metricMain: 'services/metric-engine-service/cmd/metric-engine-service/main.go',
   iotRuntime: 'services/mqtt-telemetry-adapter/internal/adapter/runtime.go',
+  thingsboardSourceReview: 'docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md',
 };
 
 const environmentFiles = {
@@ -90,6 +103,18 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.packageJson),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
+const [otelLogs, deploymentTiers, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
+  read(paths.otelLogs),
+  readJSON(paths.deploymentTiers),
+  readJSON(paths.availabilityTier),
+  readJSON(paths.recoveryAttainment),
+  readJSON(paths.s2ReleaseGates),
+  read(paths.clickhouseResourceLimits),
+  readJSON(paths.processFailureScenarios),
+  read(paths.ownerSplitCompose),
+  read(paths.embeddedEnergy),
+  read(paths.thingsboardSourceReview),
+]);
 const runtimeSources = Object.fromEntries(await Promise.all([
   'observabilityRuntime', 'gatewayMain', 'operationsGateway', 'identityMain', 'schedulerMain', 'telemetryRuntimeMain', 'metricMain', 'iotRuntime',
 ].map(async (name) => [name, await read(paths[name])])));
@@ -114,6 +139,53 @@ assert(limitPolicy.limits?.operationsAgent?.windowSeconds === 60 && limitPolicy.
 assert(baseline.recovery?.sourceOfTruth === 'SE-OPS-009 V1.0 CURRENT CANDIDATE' && baseline.recovery?.rpoRtoTargetsDefined === true, 'Phase 1 baseline must freeze SE-OPS-009 recovery targets');
 assert(baseline.recovery?.postgresRpoSeconds === 300 && baseline.recovery?.postgresRtoSeconds === 7200 && baseline.recovery?.controlRtoSeconds === 3600, 'Phase 1 baseline must preserve PostgreSQL/Control recovery objectives');
 assert(baseline.recovery?.offServerBackupCopyRequired === true && baseline.recovery?.wholeServerFourHourTargetRequiresColdStandby === true, 'whole-server recovery target must preserve off-server backup and cold-standby prerequisites');
+assert(baseline.deploymentTiers?.contract === paths.deploymentTiers && baseline.deploymentTiers?.profileSelectionRequired === true && baseline.deploymentTiers?.intelligenceServicesOptional === true, 'baseline must pin the tier contract and require explicit profile selection');
+assert(baseline.availabilityTier?.contract === paths.availabilityTier && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false && baseline.availabilityTier?.numericAvailabilitySloAllowed === false, 'baseline must pin SINGLE_NODE_RECOVERABLE and forbid unmeasured numeric SLO claims');
+assert(baseline.recovery?.attainmentContract === paths.recoveryAttainment && baseline.recovery?.numericAvailabilitySloClaimForbiddenWithoutEvidence === true, 'baseline must pin the recovery attainment contract');
+assert(productRelease.deploymentTiers === paths.deploymentTiers && productRelease.availabilityTier === paths.availabilityTier && productRelease.recoveryAttainment === paths.recoveryAttainment, 'Product Release must pin tier, availability and recovery attainment contracts');
+assert(deploymentTiers.schemaVersion === 1 && deploymentTiers.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT', 'deployment tier contract identity must be versioned and governed');
+for (const tierId of ['demo', 'single-lite', 'single-full']) {
+  const tier = (deploymentTiers.tiers ?? []).find((entry) => entry.id === tierId);
+  assert(tier && Array.isArray(tier.profiles) && tier.profiles.length === 1, `deployment tier ${tierId} must declare exactly one observability profile`);
+  try {
+    resolveDeploymentTier({ contract: deploymentTiers, compose, tierId, environment: tierId === 'demo' ? 'testing' : 'production' });
+  } catch (error) {
+    assert(false, error.message);
+  }
+}
+assert(deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define optional intelligence and three observability shapes');
+assert(clickhouseResourceLimits.includes('max_server_memory_usage') && clickhouseResourceLimits.includes('from_env="CLICKHOUSE_SERVER_MEMORY_USAGE"'), 'ClickHouse internal memory must be bound by the selected deployment tier');
+assert(compose.includes('./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro'), 'Compose must mount the ClickHouse internal resource limit');
+assert(availabilityTier.schemaVersion === 1 && availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE', 'availability tier contract must fix the current tier');
+const ownerSplitStage = availabilityTier.monolithToMultiInstancePath?.stages?.find((stage) => stage.id === 'stage-1');
+assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerSplitStage.exitEvidence?.includes('same-version-live-contract-drill'), 'Stage 1 must remain implemented but uncertified until the live same-version drill');
+for (const owner of ['iam-owner', 'audit-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
+  assert(ownerSplitCompose.includes(`  ${owner}:`), `owner-split Compose must define ${owner}`);
+}
+assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Notification in-process without adding a message backbone');
+assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
+assert(thingsboardSourceReview.includes('## 18. Phase 1 deployment tiers / owner split 实施源码复核') && thingsboardSourceReview.includes('DefaultTbServiceInfoProvider.java') && thingsboardSourceReview.includes('DefaultInMemoryStorageTest.java'), 'deployment topology changes must retain the pinned ThingsBoard source/test review');
+assert(
+  s2ReleaseGates.slo?.snapshotHttp?.availabilityScope === 'snapshot-http-conditional-on-required-infrastructure'
+    && JSON.stringify(s2ReleaseGates.slo?.snapshotHttp?.appliesToAvailabilityTiers) === JSON.stringify(['COMPONENT_REDUNDANT', 'HA'])
+    && s2ReleaseGates.slo?.snapshotHttp?.wholePlatformClaimAllowed === false,
+  'S2 Snapshot 99.9 objective must be scoped away from SINGLE_NODE_RECOVERABLE and whole-platform claims',
+);
+assert((availabilityTier.spofInventory ?? []).length >= 6 && availabilityTier.spofInventory.every((entry) => entry.spof === true && entry.component && Array.isArray(entry.upgradePath) && entry.upgradePath.length > 0), 'availability tier must enumerate SPOF impacts and upgrade costs');
+assert(availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'upgrade path reference must pin the reviewed ThingsBoard source');
+try {
+  validateRecoveryAttainment(recoveryAttainment);
+} catch (error) {
+  assert(false, error.message);
+}
+assert(
+  processFailureScenarios.environment === 'staging'
+    && processFailureScenarios.productionClaimAllowed === false
+    && processFailureScenarios.containerOnlyEvidenceSufficient === false
+    && processFailureScenarios.scenarios?.length === 9,
+  'process failure drill must cover the staging single points without creating production DR evidence',
+);
+assert(compose.includes('x-phase1-deployment-tiers:') && compose.includes('availabilityContract: ./availability-tier.v1.json'), 'Compose must expose the tier and availability contracts as static metadata');
 
 const requiredServices = [
   'nginx',
@@ -135,7 +207,25 @@ const requiredServices = [
   'tempo',
   'grafana',
 ];
+const profileExpectations = {
+  'otel-collector': ['observability-logs', 'observability-full'],
+  prometheus: ['observability-core', 'observability-logs', 'observability-full'],
+  'node-exporter': ['observability-core', 'observability-logs', 'observability-full'],
+  loki: ['observability-logs', 'observability-full'],
+  tempo: ['observability-full'],
+  grafana: ['observability-core', 'observability-logs', 'observability-full'],
+};
 for (const service of requiredServices) assert(new RegExp(`^  ${service}:`, 'm').test(compose), `compose is missing required service ${service}`);
+const serviceBlocksEarly = [...compose.matchAll(/^  ([a-z0-9-]+):\n([\s\S]*?)(?=^  [a-z0-9-]+:\n|^networks:|^volumes:)/gm)];
+for (const [service, expectedProfiles] of Object.entries(profileExpectations)) {
+  const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
+  assert(block.includes(`profiles: ["${expectedProfiles.join('", "')}"]`), `${service} must be gated to profiles ${expectedProfiles.join(', ')}`);
+}
+for (const service of ['forecast-service', 'optimization-service', 'fdd-service']) {
+  const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
+  assert(block.includes('profiles: ["intelligence"]'), `${service} must be an explicit optional intelligence profile service`);
+}
+assert(!compose.includes('forecast-service:\n          condition: service_healthy') && !compose.includes('optimization-service:\n          condition: service_healthy') && !compose.includes('fdd-service:\n          condition: service_healthy'), 'energy-api must not hard-depend on optional intelligence services');
 assert(/^  phase1-schema-preflight:/m.test(compose), 'Compose must include the one-shot Product/Schema preflight');
 assert(compose.includes('PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json'), 'energy-api must receive the pinned LimitPolicy path');
 assert(compose.includes('./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro'), 'energy-api must mount LimitPolicy read-only');
@@ -174,12 +264,12 @@ for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], 
   assert(block.includes(`/healthcheck", "http://127.0.0.1:${port}/health/ready`), `${service} must have a Compose readiness healthcheck`);
   assert(block.includes('cpus:') && block.includes('mem_limit:') && block.includes('mem_reservation:'), `${service} must have CPU/memory limits and reservations`);
 }
-assert(runtimeSources.observabilityRuntime.includes('SetReadinessCheck') && runtimeSources.observabilityRuntime.includes('readinessCheck'), 'shared readiness runtime must evaluate live dependency callbacks');
-assert(runtimeSources.gatewayMain.includes('telemetry.SetReadinessCheck(identity.ReadinessCheck)'), 'energy-api readiness must track Identity Redis and Session persistence');
-assert(runtimeSources.identityMain.includes('telemetry.SetReadinessCheck(server.Ping)'), 'identity-service readiness must track PostgreSQL');
-assert(runtimeSources.schedulerMain.includes('telemetry.SetReadinessCheck(store.Ping)'), 'scheduler readiness must track PostgreSQL');
-assert(runtimeSources.telemetryRuntimeMain.includes('observabilityRuntime.SetReadinessCheck(store.Ping)'), 'telemetry-worker readiness must track PostgreSQL');
-assert(runtimeSources.metricMain.includes('telemetry.SetReadinessCheck(runtime.Ping)'), 'metric-worker readiness must track its required stores');
+assert(runtimeSources.observabilityRuntime.includes('SetDependencies') && runtimeSources.observabilityRuntime.includes('probeDependencies') && runtimeSources.observabilityRuntime.includes('Required bool') && runtimeSources.observabilityRuntime.includes('status.Required'), 'shared readiness runtime must evaluate live required dependency callbacks');
+assert(runtimeSources.gatewayMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres-session"') && runtimeSources.gatewayMain.includes('Check: identity.ReadinessCheck'), 'energy-api readiness must track Identity Redis and Session persistence');
+assert(runtimeSources.identityMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.identityMain.includes('Check: server.Ping'), 'identity-service readiness must track PostgreSQL');
+assert(runtimeSources.schedulerMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.schedulerMain.includes('Check: store.Ping'), 'scheduler readiness must track PostgreSQL');
+assert(runtimeSources.telemetryRuntimeMain.includes('observabilityRuntime.SetDependencies'), 'telemetry-worker readiness must track its required stores through live dependencies');
+assert(runtimeSources.metricMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime"') && runtimeSources.metricMain.includes('Check: runtime.Ping'), 'metric-worker readiness must track its required stores');
 assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'iot-service readiness must track live MQTT connection/subscription state');
 assert(!runtimeSources.operationsGateway.includes('rateWindows') && !runtimeSources.operationsGateway.includes('RateLimitPerMinute') && runtimeSources.operationsGateway.includes('rateLimiter.Allow'), 'Operations Agent high-risk limit must not use an in-process authoritative map');
 
@@ -208,9 +298,29 @@ assert(nginx.includes('try_files $uri $uri/ /index.html;'), 'Nginx must serve th
 assert(webDockerfile.includes('npm run build:real'), 'production web image must build the Real artifact');
 assert(!webDockerfile.includes('npm run dev'), 'production web image must never run a Vite development server');
 
+const environmentObservability = {
+  development: { tier: 'single-lite', profile: 'observability-logs', collectorRequired: true },
+  testing: { tier: 'demo', profile: 'observability-core', collectorRequired: false },
+  staging: { tier: 'single-lite', profile: 'observability-logs', collectorRequired: true },
+  production: { tier: 'single-lite', profile: 'observability-logs', collectorRequired: true },
+};
 for (const [name, content] of Object.entries(envs)) {
   assert(content.includes(`HVAC_ENV=${name}`), `${name} environment contract must identify itself`);
-  assert(content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318'), `${name} must send telemetry to the Phase 1 collector`);
+  const obs = environmentObservability[name];
+  const runtime = parseRuntimeEnvironment(content);
+  assert(runtime.PHASE1_DEPLOYMENT_TIER === obs.tier, `${name} must select deployment tier ${obs.tier}`);
+  assert(content.includes(`PHASE1_OBSERVABILITY_PROFILE=${obs.profile}`), `${name} must declare observability profile ${obs.profile}`);
+  try {
+    const resolved = resolveDeploymentTier({ contract: deploymentTiers, compose, tierId: runtime.PHASE1_DEPLOYMENT_TIER, environment: name });
+    assert(resolved.profiles[0] === obs.profile, `${name} deployment tier and observability profile must agree`);
+  } catch (error) {
+    assert(false, error.message);
+  }
+  if (obs.collectorRequired) {
+    assert(content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318'), `${name} must send telemetry to the Phase 1 collector`);
+  } else {
+    assert(content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=') && !content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318'), `${name} must not export telemetry when the collector profile is not selected`);
+  }
   assert(content.includes('MQTT_BROKER_URL=mqtts://mqtt-broker:8883'), `${name} must use MQTT TLS`);
   assert(content.includes('TELEMETRY_LATEST_CACHE_REDIS_URL=redis://redis:6379/0'), `${name} must use the canonical Redis service for latest telemetry`);
   assert(content.includes('HVAC_WEB_REALTIME_PROTOCOL=centrifugo-v1'), `${name} must use the supported realtime protocol contract`);
@@ -250,7 +360,9 @@ assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production 
 assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('iot-service:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning and 90% critical thresholds');
-assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'OTel Collector must route logs and traces to central backends');
+assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'observability-full OTel Collector must route logs and traces to central backends');
+assert(otelLogs.includes('filelog/docker') && otelLogs.includes('otlphttp/loki') && !otelLogs.includes('otlp/tempo'), 'observability-logs OTel Collector must collect logs without requiring Tempo');
+assert(!prometheus.includes('otel-collector:9464'), 'Prometheus must scrape Go diagnostics endpoints directly instead of depending on the collector');
 assert(loki.includes('replication_factor: 1'), 'Phase 1 logging backend must stay single-instance rather than introducing a cluster');
 assert(tempo.includes('backend: local'), 'Phase 1 trace backend must use local single-instance storage');
 assert(grafanaDatasources.includes('Prometheus') && grafanaDatasources.includes('Loki') && grafanaDatasources.includes('Tempo'), 'Grafana must provision metrics, logs and traces datasources');
@@ -313,6 +425,8 @@ assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
 assert(phase1Readme.includes('exact 74-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(phase1Readme.includes('Deployment tiers and observability profiles') && phase1Readme.includes('observability-core') && phase1Readme.includes('observability-logs') && phase1Readme.includes('observability-full') && phase1Readme.includes('intelligence'), 'Phase 1 README must document tier profiles');
+assert(phase1Readme.includes('Availability and recovery evidence') && phase1Readme.includes('SINGLE_NODE_RECOVERABLE'), 'Phase 1 README must document the availability tier');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {
@@ -325,10 +439,13 @@ for (const id of ['REALTIME-001', 'HEALTH-001', 'RESOURCE-001', 'HOST-MONITOR-00
 }
 assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO target definition and recovery evidence mechanism must remain implemented');
 assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional/deferred until the deployment needs it');
+for (const id of ['DEPLOY-TIER-001', 'OBS-PROFILE-001', 'AVAILABILITY-001', 'RECOVERY-ATTESTATION-001']) {
+  assert(byId.get(id)?.status === 'KEEP', `${id} must remain a canonical deployment contract`);
+}
 
 if (failures.length > 0) {
   console.error('Phase 1 deployment check failed:\n' + failures.map((failure) => `- ${failure}`).join('\n'));
   process.exit(1);
 }
 
-console.log(`Phase 1 deployment check passed: services=${requiredServices.length}, publicPorts=443/8883, environments=${Object.keys(envs).length}`);
+console.log(`Phase 1 deployment check passed: services=${requiredServices.length}, publicPorts=443/8883, environments=${Object.keys(envs).length}, profiles=${Object.keys(profileExpectations).length + 1}`);

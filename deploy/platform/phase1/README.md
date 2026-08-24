@@ -45,13 +45,11 @@ npm run architecture:phase1:check
 npm run deployment:phase1:check
 ```
 
-Compose parsing can be verified without starting services:
+Compose parsing can be verified without starting services. The launcher is the canonical entry because it resolves `PHASE1_DEPLOYMENT_TIER`, applies that tier's CPU/memory and ClickHouse internal-memory limits, and selects the matching observability profile:
 
 ```bash
-docker compose \
-  --env-file deploy/platform/phase1/environments/development.runtime.env \
-  -f deploy/platform/phase1/compose.yaml \
-  config --quiet
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/development.runtime.env \
+  node --experimental-strip-types scripts/phase1-compose.ts config --quiet
 ```
 
 For the local WSL deployment, use the tracked `wsl.override.yaml` together with the launcher below. The launcher reads the Git-ignored `runtime/db-role-credentials/roles.sql`, builds the least-privilege Identity/IAM DSNs in memory, and passes them only to the Compose process; it does not copy database-role passwords into the runtime env file or print them.
@@ -79,15 +77,10 @@ The checked-in examples are contracts, not production secrets.
 Staging and Production environment contracts require every first-party application image to be bound to an immutable `@sha256:` digest. After replacing the digest placeholders and completing the migration pre-step, Production rollout must consume the approved images without rebuilding them on the host:
 
 ```bash
-docker compose \
-  --env-file deploy/platform/phase1/environments/production.runtime.env \
-  -f deploy/platform/phase1/compose.yaml \
-  pull
-
-docker compose \
-  --env-file deploy/platform/phase1/environments/production.runtime.env \
-  -f deploy/platform/phase1/compose.yaml \
-  up -d --no-build
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
+  node --experimental-strip-types scripts/phase1-compose.ts pull
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
+  node --experimental-strip-types scripts/phase1-compose.ts up -d --no-build
 ```
 
 ## Database migration boundary
@@ -144,20 +137,52 @@ docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm 
 
 Scheduler management HTTP routes remain `DESIGN_PROPOSED` in the source design. Until those URIs enter the OpenAPI contract, an operator can provision a reviewed schedule with `scheduler/schedule-definition.sql.example`; this does not make direct PostgreSQL access a public application API. PostgreSQL/ClickHouse backup scheduling remains outside the Application Scheduler and continues to use the infrastructure backup mechanism.
 
-## Observability
+## Deployment tiers and observability profiles
 
-The Phase 1 Monitoring Platform is deliberately single-instance:
+Phase 1 keeps one Compose file with explicit profiles instead of one all-inclusive default. The machine contract is `deployment-tiers.v1.json`.
 
 ```text
-OTel Collector
-├─ Metrics -> Prometheus
-├─ Logs    -> Loki
-└─ Traces  -> Tempo
-              ↓
-           Grafana
+observability-core  = Prometheus + node-exporter + Grafana
+observability-logs  = core + OTel Collector + Loki
+observability-full  = logs + Tempo
+intelligence        = forecast-service + optimization-service + fdd-service
 ```
 
-This follows the document requirement without introducing a multi-node observability cluster in Phase 1.
+Select the deployment tier in the runtime environment; do not pass an observability profile separately:
+
+```bash
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
+  node --experimental-strip-types scripts/phase1-compose.ts up -d --no-build
+```
+
+`PHASE1_DEPLOYMENT_TIER` is authoritative. `PHASE1_OBSERVABILITY_PROFILE` must match the tier contract and controls the OTel Collector pipeline (`observability/otel-collector/{core,logs,full}.yaml`). Both launchers validate and inject the selected resource/profile contract. The tier also caps ClickHouse's internal allocator below the container memory limit.
+
+The recommended production baselines:
+
+| Tier | Observability profile | Notes |
+|---|---|---|
+| `single-lite` | `observability-logs` | 8C/16G target; centralized metrics + logs, no centralized traces |
+| `single-full` | `observability-full` | 16C/32G target; adds single-instance Tempo |
+
+`observability-core` is the minimal Tier 0/demo form. The current Compose no longer starts Tempo or the intelligence services by default; they are profile-gated.
+
+## Observability
+
+The Phase 1 Monitoring Platform is deliberately single-instance and tiered:
+
+```text
+observability-core
+  Metrics -> Prometheus -> Grafana
+  Host    -> node-exporter -> Prometheus
+
+observability-logs
+  + Docker JSON logs -> OTel Collector -> Loki -> Grafana
+
+observability-full
+  + OTLP traces -> OTel Collector -> Tempo -> Grafana
+```
+
+All application metrics are scraped directly from each Go diagnostics endpoint by Prometheus. The OTel Collector is required only for centralized logs/traces, so removing it in `observability-core` does not remove alerting or dashboards. No multi-node observability cluster is introduced in Phase 1.
 
 ## Single-server storage and resource boundary
 
@@ -167,10 +192,37 @@ All long-running canonical containers have bounded CPU/memory settings and Docke
 
 Kafka/Redpanda is not present in the canonical Phase 1 Compose. Any historical Kafka compatibility assets elsewhere in the repository are non-canonical future/certification references.
 
-## Remaining production evidence
+## Availability and recovery evidence
 
-The Phase 1 alignment matrix has no architecture item left in `MISSING`: Scheduler coordination and the RPO/RTO target definition are both represented by explicit machine contracts and runbooks.
+Phase 1 is `SINGLE_NODE_RECOVERABLE`, not HA. `availability-tier.v1.json` is the machine contract that:
 
-This does not waive site evidence. A production deployment may claim the `SE-OPS-009` targets only after a real timestamped restore drill verifies the external backup, recovery hardware/path, actual PostgreSQL recovery point, component restoration times, Control reconciliation, Scheduler/Outbox recovery and final business validation. A local container-only test is insufficient.
+- enumerates PostgreSQL/ClickHouse/Redis/MQTT/Centrifugo/observability single points of failure;
+- records each component upgrade path and trigger condition; and
+- defines the Stage 0 -> Stage 3 monolith-to-multi-instance path that follows the ThingsBoard `service.type` topology-switch pattern while keeping PostgreSQL Outbox/Job leases as the durable backbone.
+
+The frozen RPO/RTO values remain recovery objectives. `recovery/attainment.v1.json` defaults to `TARGET_DEFINED` with `productionClaimAllowed=false`. A production deployment may claim the `SE-OPS-009` targets only after a real timestamped restore drill verifies the external backup, recovery hardware/path, actual PostgreSQL recovery point, component restoration times, Control reconciliation, Scheduler/Outbox recovery and final business validation. A local container-only test is insufficient, and numeric availability SLOs must cite the availability tier and measured evidence.
+
+After verifying a real whole-server drill record, generate and validate the time-bounded attainment claim explicitly:
+
+```bash
+npm run deployment:phase1:recovery:verify -- --file=/evidence/drill-record.json --attainment-output=/evidence/attainment.json
+npm run deployment:phase1:recovery:claim:check -- --file=/evidence/attainment.json --drill-record=/evidence/drill-record.json
+```
+
+The staging process-failure drill is separate from disaster recovery. It kills and restarts each critical container, checks its recovery bound and reruns the critical smoke set, but always records `productionClaimAllowed=false`.
+
+Stage 1 owner separation follows ThingsBoard's explicit topology-role selection pattern without adopting its in-memory queue or Kafka/actor runtime. It runs the existing same-version owner binaries and leaves only Notification embedded in `energy-api`. It requires the `single-full` tier:
+
+```bash
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
+  PHASE1_DEPLOYMENT_TIER=single-full \
+  node --experimental-strip-types scripts/phase1-compose.ts --owner-split config --quiet
+
+PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
+  npm run deployment:phase1:owner-split:drill -- \
+  --confirm-staging-owner-split --output=/evidence/owner-split.json
+```
+
+Configuration success is not certification: Stage 1 stays `implemented-runtime-drill-required` until the staging live-contract drill passes. The operator must copy `owner-split-release.v1.json.example` and `owner-split-live-journeys.v1.json.example` into the Git-ignored runtime directory, replace every placeholder, bind the complete `energy-api` + Owner digest set to one product/source revision, set the approved manifest SHA-256, and provide authenticated live API journeys covering every extracted Owner. The evidence records no authorization headers or response bodies.
 
 Optimization is optional in `SE-ARCH-DEPLOY-001 V1.0 CURRENT` and remains deferred until a deployment actually requires it.

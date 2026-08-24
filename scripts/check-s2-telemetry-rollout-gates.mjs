@@ -115,6 +115,12 @@ assert(transport.snapshotFallbackRequired === true, 'Snapshot fallback must rema
 const slo = gate.slo ?? {};
 assert(slo.windowDays === 30, 'SLO window drifted');
 assert(slo.snapshotHttp?.availabilityPercent === 99.9, 'Snapshot availability objective drifted');
+assert(slo.snapshotHttp?.availabilityScope === 'snapshot-http-conditional-on-required-infrastructure', 'Snapshot availability scope must remain explicit');
+assert(
+  JSON.stringify(slo.snapshotHttp?.appliesToAvailabilityTiers) === JSON.stringify(['COMPONENT_REDUNDANT', 'HA']),
+  'Snapshot numeric availability objective must not apply to SINGLE_NODE_RECOVERABLE',
+);
+assert(slo.snapshotHttp?.wholePlatformClaimAllowed === false, 'Snapshot SLO cannot be cited as whole-platform availability');
 assert(slo.snapshotHttp?.singleP95Milliseconds === 250, 'single Snapshot p95 drifted');
 assert(slo.snapshotHttp?.singleP99Milliseconds === 750, 'single Snapshot p99 drifted');
 assert(slo.snapshotHttp?.batchP95Milliseconds === 1000, 'batch p95 drifted');

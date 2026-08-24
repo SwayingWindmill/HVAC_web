@@ -1,0 +1,4 @@
+<clickhouse>
+    <!-- Bound ClickHouse internal allocation below the container memory limit. -->
+    <max_server_memory_usage from_env="CLICKHOUSE_SERVER_MEMORY_USAGE"/>
+</clickhouse>

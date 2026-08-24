@@ -552,3 +552,41 @@ S23 的逐项裁决如下：
 - **KEEP**：HVAC Web S08 已有 Legal Hold、Archive Manifest、Deletion Tombstone 与 Restore Tombstone 语义。S23 复用这些真值，不另建平行 Retention/Archive 删除模型。
 
 本轮没有复制 ThingsBoard Java 源码；只采用经裁决的行为模式。ThingsBoard 上述源码许可证为 Apache-2.0。
+
+## 18. Phase 1 deployment tiers / owner split 实施源码复核
+
+Date: 2026-08-24
+
+本轮在官方仓库重新检出 ThingsBoard CE `v4.3.1.1`，并用 `git rev-parse HEAD` 确认精确提交为 `c2a52e46c44e308ddee430e7266b8e10eddde9c4`。实施前直接阅读了以下官方源码，而不是从架构图推断行为：
+
+- `application/src/main/resources/thingsboard.yml`：`TB_SERVICE_TYPE` 默认 `monolith`，`TB_QUEUE_TYPE` 默认 `in-memory`，两个选择相互独立；
+- `common/queue/src/main/java/org/thingsboard/server/queue/discovery/DefaultTbServiceInfoProvider.java`：monolith 注册全部 `ServiceType`，非 monolith 只注册配置角色；
+- `common/queue/src/main/java/org/thingsboard/server/queue/provider/InMemoryMonolithQueueFactory.java`；
+- `common/queue/src/main/java/org/thingsboard/server/queue/provider/KafkaMonolithQueueFactory.java`；
+- `common/queue/src/main/java/org/thingsboard/server/queue/provider/KafkaTbCoreQueueFactory.java`：三者分别由 `queue.type + service.type` 的精确组合装配；
+- `common/queue/src/main/java/org/thingsboard/server/queue/memory/InMemoryTbQueueConsumer.java`：`poll()` 从内存存储取走消息，`commit()` 无行为，不能作为耐久工作基础；
+- `docker/.env`、`docker/docker-compose.yml`、`docker/docker-compose.prometheus-grafana.yml` 与 `docker/monitoring/prometheus/prometheus.yml`：官方 Docker 监控由 `MONITORING_ENABLED` 显式启用，仅增加 Prometheus/Grafana；微服务 Compose 明确部署多个 Core、Rule Engine、Transport、JS Executor 与 ZooKeeper，不适合小型单机照搬；
+- `docker/README.md`：确认监控开关、数据库/缓存选择和升级入口的官方运行说明。
+
+同时阅读了最接近本次机制的上游测试：
+
+- `common/queue/src/test/java/org/thingsboard/server/queue/memory/DefaultInMemoryStorageTest.java`：验证 poll 会降低 lag 并取走批次，支持“不采用内存队列作为耐久基础”的判断；
+- `common/queue/src/test/java/org/thingsboard/server/queue/discovery/QueueKeyTest.java`：验证服务类型与租户共同构成稳定队列身份。
+
+固定版本没有为三个 Queue Factory 的条件装配或 `DefaultTbServiceInfoProvider` 的 monolith 角色展开提供直接单元测试，因此本地没有虚构“上游测试已证明”的结论；这些行为以固定源码为证据，并由本地部署档位与 Owner 选择测试保护。
+
+实施裁决：
+
+- **ADOPT**：部署拓扑必须由一个显式、可验证的机器选择决定；轻量监控必须可选，不能把完整观测栈强制进最小档。
+- **ADAPT**：ThingsBoard 的 `service.type` 改为 `PHASE1_DEPLOYMENT_TIER`、Compose profile 与 `ENERGY_API_EMBEDDED_OWNERS`。Stage 0 使用同一 `energy-api` 制品聚合 Owner；Stage 1 使用相同产品版本的现有 Go Owner binary 和 `owner-split` overlay。Notification 在形成独立、源码复核过的制品前保持唯一内嵌角色。
+- **KEEP local**：PostgreSQL Outbox/Inbox、Scheduler Job、Lease/Fence、Command Verification 继续作为耐久骨干。拓扑切换不改变业务真值和幂等边界。
+- **REJECT**：不增加 `queue.type` 运行时切换，不采用 In-memory Queue、Kafka、ZooKeeper、自定义 Actor Runtime、十副本 JS Executor 或 ThingsBoard 微服务清单作为 Phase 1 前提。
+- **REJECT claim**：Owner-split Compose 配置通过不等于 Stage 1 已运行认证；必须完成同版本 live contract drill 后才能更新认证状态。
+
+本轮对应的本地实现与证据入口：
+
+- `deploy/platform/phase1/deployment-tiers.v1.json`；
+- `deploy/platform/phase1/owner-split.compose.yaml`；
+- `scripts/phase1-deployment-tier.mjs` 与 `scripts/phase1-wsl-compose.mjs`；
+- `services/platform-gateway/cmd/platform-gateway/embedded_energy.go`；
+- `scripts/test-phase1-deployment-tier.mjs` 与 `scripts/test-phase1-owner-split.mjs`。

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "name": "Phase 1 staging process failure drill",
+  "environment": "staging",
+  "productionClaimAllowed": false,
+  "containerOnlyEvidenceSufficient": false,
+  "killSignal": "SIGKILL",
+  "scenarios": [
+    {
+      "id": "postgres-process",
+      "target": "postgres",
+      "maximumRecoverySeconds": 1800,
+      "recoveryProbeServices": ["postgres", "energy-api", "scheduler"]
+    },
+    {
+      "id": "redis-process",
+      "target": "redis",
+      "maximumRecoverySeconds": 900,
+      "recoveryProbeServices": ["redis", "energy-api"]
+    },
+    {
+      "id": "mqtt-process",
+      "target": "mqtt-broker",
+      "maximumRecoverySeconds": 1800,
+      "recoveryProbeServices": ["iot-service"]
+    },
+    {
+      "id": "clickhouse-process",
+      "target": "clickhouse",
+      "maximumRecoverySeconds": 1800,
+      "recoveryProbeServices": ["clickhouse", "telemetry-worker"]
+    },
+    {
+      "id": "energy-api-process",
+      "target": "energy-api",
+      "maximumRecoverySeconds": 300,
+      "recoveryProbeServices": ["energy-api"]
+    },
+    {
+      "id": "scheduler-process",
+      "target": "scheduler",
+      "maximumRecoverySeconds": 300,
+      "recoveryProbeServices": ["scheduler"]
+    },
+    {
+      "id": "telemetry-worker-process",
+      "target": "telemetry-worker",
+      "maximumRecoverySeconds": 300,
+      "recoveryProbeServices": ["telemetry-worker"]
+    },
+    {
+      "id": "metric-worker-process",
+      "target": "metric-worker",
+      "maximumRecoverySeconds": 300,
+      "recoveryProbeServices": ["metric-worker"]
+    },
+    {
+      "id": "iot-service-process",
+      "target": "iot-service",
+      "maximumRecoverySeconds": 300,
+      "recoveryProbeServices": ["iot-service"]
+    }
+  ],
+  "repositoryRegressionValidation": {
+    "source": "deploy/platform/phase1/product-release.v1.json#criticalSmoke",
+    "required": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "PHASE1_OWNER_SPLIT_LIVE_CONTRACT",
+  "owners": {
+    "iam-owner": { "method": "GET", "pathPattern": "^/api/v1/auth/tenant-contexts$" },
+    "audit-owner": { "method": "POST", "pathPattern": "^/api/v1/audit/search$" },
+    "core-owner": { "method": "GET", "pathPattern": "^/api/v1/sites$" },
+    "telemetry-query-owner": { "method": "POST", "pathPattern": "^/api/v1/telemetry/device-series:query$" },
+    "command-owner": { "method": "GET", "pathPattern": "^/api/v1/commands/[0-9a-fA-F-]+$" },
+    "alarm-owner": { "method": "GET", "pathPattern": "^/api/v1/alarms(?:\\?.*)?$" },
+    "work-order-owner": { "method": "GET", "pathPattern": "^/api/v1/sites/[0-9a-fA-F-]+/work-orders(?:\\?.*)?$" }
+  }
+}

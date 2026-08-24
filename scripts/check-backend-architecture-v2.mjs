@@ -189,7 +189,7 @@ invariant(!compose.includes('\n  alarm-service:'), 'Phase1 must not deploy alarm
 invariant(!compose.includes('\n  work-order-service:'), 'Phase1 must not deploy work-order-service as a standalone process');
 invariant(!compose.includes('\n  command-service:'), 'Phase1 must not deploy command-service as a standalone process');
 invariant(!compose.includes('\n  audit-ledger-service:'), 'Phase1 must not deploy audit-ledger-service as a standalone process');
-invariant(compose.includes('ENERGY_API_IN_PROCESS_ENABLED: "true"'), 'Phase1 energy-api must own Gateway, IAM, Core, Telemetry Query, Audit, Alarm, Work Order and Command in-process');
+invariant(compose.includes('ENERGY_API_EMBEDDED_OWNERS: all'), 'Phase1 energy-api must select all embedded owners in the Stage 0 topology');
 const embeddedEnergy = await readFile(resolve(root, 'services/platform-gateway/cmd/platform-gateway/embedded_energy.go'), 'utf8');
 invariant(embeddedEnergy.includes('sessionstore.OpenOutbox') && embeddedEnergy.includes('auditserver.OpenStore'), 'Phase1 Audit must use PostgreSQL Outbox -> Audit Ledger in-process');
 
