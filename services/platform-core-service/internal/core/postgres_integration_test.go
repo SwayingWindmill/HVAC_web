@@ -134,6 +134,65 @@ func TestPostgresStoreAppliesTenantAndExactSiteRLSWithStablePagination(t *testin
 	}
 }
 
+func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testing.T) {
+	databaseURL := os.Getenv("S1_CORE_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S1_CORE_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const (
+		meterDeviceID = "018f1e00-4000-7000-8000-000000000001"
+		meterPointID  = "01990000-1340-7000-8000-000000000001"
+		meterID       = "01990000-1330-7000-8000-000000000001"
+		bindingID     = "01990000-1360-7000-8000-000000000001"
+		topologyID    = "01990000-1300-7000-8000-000000000001"
+		energyTypeID  = "01990000-0000-7000-8000-000000000001"
+	)
+	claims := integrationClaims(registryauth.ActionMeterBindingResolve)
+	claims.AllowedSiteIDs = []string{testSiteA1}
+	resolved, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
+		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != "MATCH" || resolved.TenantID != testTenantA || resolved.SiteID != testSiteA1 ||
+		resolved.MeterID != meterID || resolved.MeterBindingID != bindingID || resolved.TopologyVersionID != topologyID ||
+		resolved.EnergyTypeID != energyTypeID || resolved.EnergyType != "electricity" || resolved.MeterRole != "PRIMARY" ||
+		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 {
+		t.Fatalf("resolved Meter Binding = %#v", resolved)
+	}
+
+	beforeEffective, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
+		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeEffective.Status != "NO_MATCH" {
+		t.Fatalf("binding resolved before effective_from: %#v", beforeEffective)
+	}
+
+	deniedClaims := claims
+	deniedClaims.AllowedSiteIDs = []string{testSiteA2}
+	denied, err := store.ResolveMeterBinding(ctx, deniedClaims, testSiteA1, MeterBindingResolveRequest{
+		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.Status != "NO_MATCH" {
+		t.Fatalf("binding escaped exact Site RLS: %#v", denied)
+	}
+}
+
 func TestPostgresBackedServerRejectsWrongActionStaleAndRevokedGrants(t *testing.T) {
 	databaseURL := os.Getenv("S1_CORE_DATABASE_URL")
 	if databaseURL == "" {

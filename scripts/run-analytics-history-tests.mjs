@@ -226,7 +226,7 @@ try {
     || toString(any(deployment_id)) || '|' || toString(any(model_version_id)) || '|' || toString(any(input_snapshot_id)) || '|'
     || toString(any(topology_version_id)) || '|' || toString(countIf(forecast_for > forecast_origin))
     FROM analytics.forecast_series WHERE forecast_job_id = toUUID('${forecastJobId}') FORMAT TSVRaw`);
-  const expectedForecastTraceability = '4|15|60|FALLBACK|3|7|01990000-1720-7000-8000-000000000001|01990000-1740-7000-8000-000000000001|01990000-1760-7000-8000-000000000001|01990000-1770-7000-8000-000000000001|4';
+  const expectedForecastTraceability = '4|15|60|VALID|3|7|01990000-1720-7000-8000-000000000001|01990000-1740-7000-8000-000000000001|01990000-1760-7000-8000-000000000001|01990000-1770-7000-8000-000000000001|4';
   if (report.assertions.forecastSeriesTraceability !== expectedForecastTraceability) throw new Error(`unexpected Forecast traceability ${report.assertions.forecastSeriesTraceability}`);
 
   report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', 'SELECT count() FROM telemetry_history.counter_deltas']);

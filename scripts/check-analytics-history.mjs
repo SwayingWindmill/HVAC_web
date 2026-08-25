@@ -119,6 +119,7 @@ for (const marker of [
   'randomBytes(32)',
   "CUBEJS_DB_HOST: 'clickhouse'",
   "CUBEJS_DB_PORT: '8123'",
+  'waitForClickHouseHTTP',
   "'network', 'connect', sourceNetwork, cubeContainer",
 ]) {
   assert(cubeIntegration.includes(marker), `missing Cube integration marker ${marker}`);

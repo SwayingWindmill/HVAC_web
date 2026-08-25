@@ -85,6 +85,25 @@ async function waitForClickHouse() {
   throw new Error(`analytics ClickHouse source did not initialize\n${s2Compose(['logs', '--no-color', 'clickhouse'])}`);
 }
 
+async function waitForClickHouseHTTP() {
+  let lastError;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      const response = await fetch(`${clickHouseURL}/?query=SELECT%201`, {
+        headers: { Authorization: `Basic ${Buffer.from('telemetry_history:').toString('base64')}` },
+        signal: AbortSignal.timeout(1000),
+      });
+      const body = await response.text();
+      if (response.ok && body.trim() === '1') return;
+      lastError = new Error(`HTTP ${response.status}: ${body.trim()}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await pause(250);
+  }
+  throw new Error(`analytics ClickHouse HTTP endpoint did not become ready: ${lastError}`);
+}
+
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
 
 function cubeToken(overrides = {}) {
@@ -176,6 +195,7 @@ try {
   try { s2Compose(['down', '--volumes', '--remove-orphans']); } catch {}
   s2Compose(['up', '-d', 'clickhouse']);
   await waitForClickHouse();
+  await waitForClickHouseHTTP();
   report.assertions.sourceProjection = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/analytics-read-model-projector',
@@ -193,22 +213,31 @@ try {
   connectCubeToClickHouse();
   const response = await waitForCube();
   const rows = response.data ?? [];
-  if (rows.length !== 1) throw new Error(`unexpected Cube row count ${rows.length}`);
-  const row = rows[0];
-  if (Number(row['energy_usage.energy_valid_kwh']) !== 4) throw new Error(`unexpected Cube valid energy ${row['energy_usage.energy_valid_kwh']}`);
-  if (Number(row['energy_usage.valid_count']) !== 3 || Number(row['energy_usage.suspect_count']) !== 0 || Number(row['energy_usage.invalid_count']) !== 0) {
-    throw new Error(`unexpected Cube quality counts ${JSON.stringify(row)}`);
+  if (rows.length !== 2) throw new Error(`unexpected Cube row count ${rows.length}`);
+  const [firstHour, secondHour] = rows;
+  if (Number(firstHour['energy_usage.energy_valid_kwh']) !== 2 || Number(secondHour['energy_usage.energy_valid_kwh']) !== 2) {
+    throw new Error(`unexpected Cube valid energy ${JSON.stringify(rows)}`);
   }
-  if (Number(row['energy_usage.max_dataset_revision']) !== 1722258300000) throw new Error(`unexpected Cube revision ${row['energy_usage.max_dataset_revision']}`);
-  const watermarkValue = String(row['energy_usage.max_data_watermark']);
-  const watermarkUTC = watermarkValue.endsWith('Z') ? watermarkValue : `${watermarkValue}Z`;
-  if (new Date(watermarkUTC).toISOString() !== '2026-07-29T13:05:00.000Z') {
-    throw new Error(`unexpected Cube watermark ${watermarkValue}`);
+  if (Number(firstHour['energy_usage.valid_count']) !== 1 || Number(secondHour['energy_usage.valid_count']) !== 2 ||
+      Number(firstHour['energy_usage.suspect_count']) !== 0 || Number(secondHour['energy_usage.suspect_count']) !== 0 ||
+      Number(firstHour['energy_usage.invalid_count']) !== 0 || Number(secondHour['energy_usage.invalid_count']) !== 0) {
+    throw new Error(`unexpected Cube quality counts ${JSON.stringify(rows)}`);
+  }
+  if (Number(firstHour['energy_usage.max_dataset_revision']) !== 1722257880000 || Number(secondHour['energy_usage.max_dataset_revision']) !== 1722258300000) {
+    throw new Error(`unexpected Cube revision ${JSON.stringify(rows)}`);
+  }
+  const firstWatermark = String(firstHour['energy_usage.max_data_watermark']);
+  const secondWatermark = String(secondHour['energy_usage.max_data_watermark']);
+  const firstWatermarkUTC = firstWatermark.endsWith('Z') ? firstWatermark : `${firstWatermark}Z`;
+  const secondWatermarkUTC = secondWatermark.endsWith('Z') ? secondWatermark : `${secondWatermark}Z`;
+  if (new Date(firstWatermarkUTC).toISOString() !== '2026-07-29T12:58:00.000Z' ||
+      new Date(secondWatermarkUTC).toISOString() !== '2026-07-29T13:05:00.000Z') {
+    throw new Error(`unexpected Cube watermark ${JSON.stringify(rows)}`);
   }
 
   const denied = await queryCube(cubeToken({ siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] }));
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
-  report.assertions.energyQuery = row;
+  report.assertions.energyQuery = rows;
   report.assertions.deniedSiteRows = (denied.data ?? []).length;
   report.status = 'passed';
   report.finishedAt = new Date().toISOString();
