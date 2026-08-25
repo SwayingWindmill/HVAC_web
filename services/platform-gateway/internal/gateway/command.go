@@ -16,6 +16,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -250,6 +251,9 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	if !ok {
 		return
 	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
+		return
+	}
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Command request must use application/json.", false, nil)
 		return
@@ -326,6 +330,9 @@ func (h *handler) getCommand(writer http.ResponseWriter, request *http.Request, 
 func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
 	session, ok := h.commandSession(writer, request, true)
 	if !ok {
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
 		return
 	}
 	if !isLowerUUIDv7(commandID) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
@@ -106,6 +107,9 @@ func dispatchNotificationRoute(h *handler, writer http.ResponseWriter, request *
 	session, failure := h.identitySession(request)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionNotification, session.TenantID) {
 		return
 	}
 	if route.markRead {

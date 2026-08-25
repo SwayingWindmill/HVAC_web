@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/services/alarm-service/pkg/alarmservice"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
@@ -31,22 +33,6 @@ const (
 	maximumAlarmQueryLength    = 2048
 	maximumAlarmDecisionLength = int64(256 << 10)
 )
-
-type AlarmConfig struct {
-	BackendBaseURL    string
-	BackendHTTPClient *http.Client
-	BackendAudience   string
-	Timeout           time.Duration
-	MaxResponseBytes  int64
-}
-
-type alarmController struct {
-	baseURL          string
-	httpClient       *http.Client
-	backendAudience  string
-	timeout          time.Duration
-	maxResponseBytes int64
-}
 
 type publicAlarmRoute struct {
 	template string
@@ -68,27 +54,349 @@ type alarmFailure struct {
 	retryable bool
 }
 
+type AlarmOperations interface {
+	ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *alarmFailure)
+	Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure)
+}
+
+type AlarmConfig struct {
+	Operations        AlarmOperations
+	Store             alarmservice.Store
+	BackendBaseURL    string
+	BackendHTTPClient *http.Client
+	BackendAudience   string
+	Timeout           time.Duration
+	MaxResponseBytes  int64
+}
+
+type alarmController struct {
+	operations       AlarmOperations
+	baseURL          string
+	httpClient       *http.Client
+	backendAudience  string
+	timeout          time.Duration
+	maxResponseBytes int64
+}
+
+type directAlarmAdapter struct {
+	store alarmservice.Store
+}
+
+func newDirectAlarmAdapter(store alarmservice.Store) AlarmOperations {
+	return &directAlarmAdapter{store: store}
+}
+
+func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, _ string) (alarmScope, *alarmFailure) {
+	scope, err := a.store.ResolveScope(ctx, tenantID, alarmID)
+	if err != nil {
+		if errors.Is(err, alarmservice.ErrNotFound) {
+			failure := alarmNotFound()
+			return alarmScope{}, &failure
+		}
+		failure := alarmUnavailable("Alarm ownership resolution failed.")
+		return alarmScope{}, &failure
+	}
+	if scope.TenantID != tenantID || !alarmmodel.IsUUIDv7(scope.SiteID) {
+		failure := alarmUnavailable("Alarm ownership resolution returned an invalid scope.")
+		return alarmScope{}, &failure
+	}
+	return alarmScope{TenantID: scope.TenantID, SiteID: scope.SiteID}, nil
+}
+
+func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *alarmFailure) {
+	query := publicRequest.URL.Query()
+	tenantID := ""
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
+		tenantID = session.TenantID
+	}
+	if route.alarmID == "" {
+		limit := 50
+		if raw := query.Get("limit"); raw != "" {
+			if val, err := strconv.Atoi(raw); err == nil && val >= 1 && val <= 200 {
+				limit = val
+			}
+		}
+		filter := alarmservice.Filter{
+			Limit: limit,
+		}
+		if cursor := query.Get("cursor"); cursor != "" {
+			filter.Cursor = cursor
+		}
+		if condition := alarmmodel.Condition(query.Get("condition")); condition != "" {
+			filter.Condition = condition
+		}
+		if severity := alarmmodel.Severity(query.Get("severity")); severity != "" {
+			filter.Severity = severity
+		}
+		if raw := query.Get("acknowledged"); raw != "" {
+			if val, err := strconv.ParseBool(raw); err == nil {
+				filter.Acknowledged = &val
+			}
+		}
+		if raw := query.Get("suppressed"); raw != "" {
+			if val, err := strconv.ParseBool(raw); err == nil {
+				filter.Suppressed = &val
+			}
+		}
+		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
+		if err != nil {
+			if errors.Is(err, alarmservice.ErrInvalidCursor) {
+				failure := alarmInvalidCursor()
+				return nil, http.StatusBadRequest, &failure
+			}
+			failure := alarmUnavailable("Alarm Service could not complete the request.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		bytes, err := json.Marshal(resp)
+		if err != nil {
+			failure := alarmUnavailable("Alarm Service returned an invalid list projection.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return bytes, http.StatusOK, nil
+	}
+
+	if route.action == alarmauth.ActionRead {
+		alarm, err := a.store.Get(ctx, tenantID, route.siteID, route.alarmID)
+		if err != nil {
+			if errors.Is(err, alarmservice.ErrNotFound) {
+				failure := alarmNotFound()
+				return nil, http.StatusNotFound, &failure
+			}
+			failure := alarmUnavailable("Alarm Service could not complete the request.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		bytes, err := json.Marshal(alarm)
+		if err != nil {
+			failure := alarmUnavailable("Alarm Service returned an invalid Alarm projection.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return bytes, http.StatusOK, nil
+	}
+
+	if route.action == alarmauth.ActionAck {
+		var payload struct {
+			Reason          string  `json:"reason"`
+			AssigneeID      *string `json:"assigneeId"`
+			SuppressedUntil *string `json:"suppressedUntil"`
+			ExpectedVersion uint64  `json:"expectedVersion"`
+		}
+		if publicRequest.Body != nil && publicRequest.ContentLength != 0 {
+			body, err := readBoundedBody(publicRequest.Body, 16<<10)
+			if err != nil {
+				failure := alarmInvalid("The Alarm acknowledgement body is too large or unreadable.")
+				return nil, 0, &failure
+			}
+			if len(body) > 0 {
+				if err := decodeStrictAlarmJSON(body, &payload); err != nil {
+					failure := alarmInvalid("The Alarm acknowledgement request is invalid.")
+					return nil, 0, &failure
+				}
+			}
+		}
+		idempotencyKey := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key"))
+		actorID := "principal:operator"
+		if session, ok := routeSessionFromContext(publicRequest.Context()); ok && session.Principal.Subject != "" {
+			actorID = session.Principal.Subject
+		}
+		corrID := idempotencyKey
+		if corrID == "" {
+			corrID = "ack-" + route.alarmID
+		}
+		mutation := alarmservice.Mutation{
+			Operation:       alarmmodel.OperationAcknowledge,
+			ExpectedVersion: payload.ExpectedVersion,
+			Reason:          payload.Reason,
+			AssigneeID:      payload.AssigneeID,
+			SuppressedUntil: payload.SuppressedUntil,
+			IdempotencyKey:  idempotencyKey,
+			ActorType:       "PRINCIPAL",
+			ActorID:         actorID,
+			PolicyRevision:  "1",
+			CorrelationID:   corrID,
+			OccurredAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		res, err := a.store.Apply(ctx, tenantID, route.siteID, route.alarmID, mutation)
+		if err != nil {
+			if errors.Is(err, alarmservice.ErrNotFound) {
+				failure := alarmNotFound()
+				return nil, http.StatusNotFound, &failure
+			}
+			if errors.Is(err, alarmservice.ErrIdempotencyConflict) {
+				failure := alarmIdempotencyConflict()
+				return nil, http.StatusConflict, &failure
+			}
+			failure := alarmUnavailable("Alarm Service could not complete the request.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		bytes, err := json.Marshal(res.Alarm)
+		if err != nil {
+			failure := alarmUnavailable("Alarm Service returned an invalid Alarm projection.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return bytes, http.StatusOK, nil
+	}
+
+	failure := alarmUnavailable("Alarm Service returned an unsupported response.")
+	return nil, http.StatusServiceUnavailable, &failure
+}
+
+type httpAlarmAdapter struct {
+	baseURL          string
+	httpClient       *http.Client
+	timeout          time.Duration
+	maxResponseBytes int64
+}
+
+func newHTTPAlarmAdapter(config AlarmConfig) AlarmOperations {
+	return &httpAlarmAdapter{
+		baseURL:          config.BackendBaseURL,
+		httpClient:       config.BackendHTTPClient,
+		timeout:          config.Timeout,
+		maxResponseBytes: config.MaxResponseBytes,
+	}
+}
+
+func (a *httpAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *alarmFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	upstream, err := http.NewRequestWithContext(callCtx, http.MethodGet, a.baseURL+internalAlarmScopePrefix+url.PathEscape(alarmID)+"/scope", nil)
+	if err != nil {
+		failure := alarmUnavailable("Alarm ownership resolution request could not be constructed.")
+		return alarmScope{}, &failure
+	}
+	upstream.Header.Set("Accept", "application/json, application/problem+json")
+	upstream.Header.Set(alarmReadContextHeader, serviceContext)
+	upstream.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(ctx, upstream.Header)
+	response, err := a.httpClient.Do(upstream)
+	if err != nil {
+		failure := alarmUnavailable("Alarm ownership resolution is temporarily unavailable.")
+		return alarmScope{}, &failure
+	}
+	defer response.Body.Close()
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := alarmUnavailable("Alarm ownership resolution returned an unreadable response.")
+		return alarmScope{}, &failure
+	}
+	if response.StatusCode == http.StatusNotFound {
+		failure := alarmNotFound()
+		return alarmScope{}, &failure
+	}
+	if response.StatusCode != http.StatusOK {
+		failure := alarmUnavailable("Alarm ownership resolution failed.")
+		return alarmScope{}, &failure
+	}
+	var scope alarmScope
+	if decodeStrictAlarmJSON(body, &scope) != nil || scope.TenantID != tenantID || !alarmmodel.IsUUIDv7(scope.SiteID) {
+		failure := alarmUnavailable("Alarm ownership resolution returned an invalid scope.")
+		return alarmScope{}, &failure
+	}
+	return scope, nil
+}
+
+func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
+	method := http.MethodGet
+	var requestBody io.Reader
+	if route.alarmID != "" {
+		path += "/" + url.PathEscape(route.alarmID)
+	}
+	upstreamURL := a.baseURL + path
+	if route.alarmID == "" {
+		query := publicRequest.URL.Query()
+		query.Del("siteId")
+		if encoded := query.Encode(); encoded != "" {
+			upstreamURL += "?" + encoded
+		}
+	}
+	if route.action == alarmauth.ActionAck {
+		method = http.MethodPost
+		path += ":acknowledge"
+		upstreamURL = a.baseURL + path
+		if publicRequest.Body != nil && publicRequest.ContentLength != 0 {
+			body, err := readBoundedBody(publicRequest.Body, 16<<10)
+			if err != nil {
+				failure := alarmInvalid("The Alarm acknowledgement body is too large or unreadable.")
+				return nil, 0, &failure
+			}
+			requestBody = bytes.NewReader(body)
+		}
+	}
+	request, err := http.NewRequestWithContext(callCtx, method, upstreamURL, requestBody)
+	if err != nil {
+		failure := alarmUnavailable("The Alarm service request could not be constructed.")
+		return nil, 0, &failure
+	}
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	if route.action == alarmauth.ActionAck {
+		request.Header.Set(alarmWriteContextHeader, serviceContext)
+		if publicRequest.ContentLength != 0 {
+			request.Header.Set("Content-Type", publicRequest.Header.Get("Content-Type"))
+		}
+		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
+			request.Header.Set("Idempotency-Key", key)
+		}
+	} else {
+		request.Header.Set(alarmReadContextHeader, serviceContext)
+	}
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		failure := alarmUnavailable("Alarm Service is temporarily unavailable.")
+		return nil, 0, &failure
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode > 599 {
+		failure := alarmUnavailable("Alarm Service returned an invalid status.")
+		return nil, 0, &failure
+	}
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := alarmUnavailable("Alarm Service returned an oversized or unreadable response.")
+		return nil, 0, &failure
+	}
+	return body, response.StatusCode, nil
+}
+
 func newAlarmController(config *AlarmConfig) *alarmController {
 	if config == nil {
 		return nil
 	}
 	resolved := *config
-	resolved.BackendBaseURL = strings.TrimRight(strings.TrimSpace(resolved.BackendBaseURL), "/")
-	if resolved.BackendHTTPClient == nil {
-		resolved.BackendHTTPClient = &http.Client{Timeout: defaultAlarmTimeout}
-	}
-	if resolved.BackendAudience == "" {
-		resolved.BackendAudience = "alarm-service"
-	}
 	if resolved.Timeout <= 0 || resolved.Timeout > 30*time.Second {
 		resolved.Timeout = defaultAlarmTimeout
 	}
 	if resolved.MaxResponseBytes <= 0 || resolved.MaxResponseBytes > 16<<20 {
 		resolved.MaxResponseBytes = defaultAlarmResponseLimit
 	}
+	if resolved.BackendAudience == "" {
+		resolved.BackendAudience = "alarm-service"
+	}
+	var ops AlarmOperations
+	if resolved.Operations != nil {
+		ops = resolved.Operations
+	} else if resolved.Store != nil {
+		ops = newDirectAlarmAdapter(resolved.Store)
+	} else if strings.TrimSpace(resolved.BackendBaseURL) != "" {
+		resolved.BackendBaseURL = strings.TrimRight(strings.TrimSpace(resolved.BackendBaseURL), "/")
+		if resolved.BackendHTTPClient == nil {
+			resolved.BackendHTTPClient = &http.Client{Timeout: resolved.Timeout}
+		}
+		ops = newHTTPAlarmAdapter(resolved)
+	} else {
+		return nil
+	}
 	return &alarmController{
-		baseURL: resolved.BackendBaseURL, httpClient: resolved.BackendHTTPClient,
-		backendAudience: resolved.BackendAudience, timeout: resolved.Timeout, maxResponseBytes: resolved.MaxResponseBytes,
+		operations:       ops,
+		baseURL:          resolved.BackendBaseURL,
+		httpClient:       resolved.BackendHTTPClient,
+		backendAudience:  resolved.BackendAudience,
+		timeout:          resolved.Timeout,
+		maxResponseBytes: resolved.MaxResponseBytes,
 	}
 }
 
@@ -130,7 +438,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		writeMethodNotAllowedFor(writer, request, expectedMethod)
 		return
 	}
-	if h.alarm == nil || h.alarm.baseURL == "" || h.alarm.httpClient == nil {
+	if h.alarm == nil || h.alarm.operations == nil {
 		h.writeAlarmFailure(writer, request, alarmUnavailable("The Alarm service is not configured."))
 		return
 	}
@@ -285,7 +593,7 @@ func (h *handler) alarmSession(writer http.ResponseWriter, request *http.Request
 }
 
 func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, alarmID string) (alarmScope, *alarmFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !alarmmodel.IsUUIDv7(alarmID) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || h.alarm.operations == nil || !alarmmodel.IsUUIDv7(alarmID) {
 		failure := alarmUnavailable("Alarm ownership resolution is unavailable.")
 		return alarmScope{}, &failure
 	}
@@ -307,42 +615,7 @@ func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, a
 		failure := alarmUnavailable("Alarm ownership resolution context could not be signed.")
 		return alarmScope{}, &failure
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), h.alarm.timeout)
-	defer cancel()
-	upstream, err := http.NewRequestWithContext(ctx, http.MethodGet, h.alarm.baseURL+internalAlarmScopePrefix+url.PathEscape(alarmID)+"/scope", nil)
-	if err != nil {
-		failure := alarmUnavailable("Alarm ownership resolution request could not be constructed.")
-		return alarmScope{}, &failure
-	}
-	upstream.Header.Set("Accept", "application/json, application/problem+json")
-	upstream.Header.Set(alarmReadContextHeader, token)
-	upstream.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	observability.InjectHTTP(request.Context(), upstream.Header)
-	response, err := h.alarm.httpClient.Do(upstream)
-	if err != nil {
-		failure := alarmUnavailable("Alarm ownership resolution is temporarily unavailable.")
-		return alarmScope{}, &failure
-	}
-	defer response.Body.Close()
-	body, err := readBoundedBody(response.Body, h.alarm.maxResponseBytes)
-	if err != nil {
-		failure := alarmUnavailable("Alarm ownership resolution returned an unreadable response.")
-		return alarmScope{}, &failure
-	}
-	if response.StatusCode == http.StatusNotFound {
-		failure := alarmNotFound()
-		return alarmScope{}, &failure
-	}
-	if response.StatusCode != http.StatusOK {
-		failure := alarmUnavailable("Alarm ownership resolution failed.")
-		return alarmScope{}, &failure
-	}
-	var scope alarmScope
-	if decodeStrictAlarmJSON(body, &scope) != nil || scope.TenantID != session.TenantID || !alarmmodel.IsUUIDv7(scope.SiteID) {
-		failure := alarmUnavailable("Alarm ownership resolution returned an invalid scope.")
-		return alarmScope{}, &failure
-	}
-	return scope, nil
+	return h.alarm.operations.ResolveScope(request.Context(), session.TenantID, alarmID, token)
 }
 
 func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSession, siteID string, list bool) *alarmFailure {
@@ -519,70 +792,11 @@ func (h *handler) signAlarmServiceContext(session bffSession, route publicAlarmR
 }
 
 func (h *handler) executeAlarmOperation(publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure) {
-	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.alarm.timeout)
-	defer cancel()
-	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
-	method := http.MethodGet
-	var requestBody io.Reader
-	if route.alarmID != "" {
-		path += "/" + url.PathEscape(route.alarmID)
-	}
-	upstreamURL := h.alarm.baseURL + path
-	if route.alarmID == "" {
-		query := publicRequest.URL.Query()
-		query.Del("siteId")
-		if encoded := query.Encode(); encoded != "" {
-			upstreamURL += "?" + encoded
-		}
-	}
-	if route.action == alarmauth.ActionAck {
-		method = http.MethodPost
-		path += ":acknowledge"
-		upstreamURL = h.alarm.baseURL + path
-		if publicRequest.Body != nil && publicRequest.ContentLength != 0 {
-			body, err := readBoundedBody(publicRequest.Body, 16<<10)
-			if err != nil {
-				failure := alarmInvalid("The Alarm acknowledgement body is too large or unreadable.")
-				return nil, 0, &failure
-			}
-			requestBody = bytes.NewReader(body)
-		}
-	}
-	request, err := http.NewRequestWithContext(ctx, method, upstreamURL, requestBody)
-	if err != nil {
-		failure := alarmUnavailable("The Alarm service request could not be constructed.")
+	if h.alarm == nil || h.alarm.operations == nil {
+		failure := alarmUnavailable("The Alarm service is not configured.")
 		return nil, 0, &failure
 	}
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	if route.action == alarmauth.ActionAck {
-		request.Header.Set(alarmWriteContextHeader, serviceContext)
-		if publicRequest.ContentLength != 0 {
-			request.Header.Set("Content-Type", publicRequest.Header.Get("Content-Type"))
-		}
-		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
-			request.Header.Set("Idempotency-Key", key)
-		}
-	} else {
-		request.Header.Set(alarmReadContextHeader, serviceContext)
-	}
-	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
-	observability.InjectHTTP(publicRequest.Context(), request.Header)
-	response, err := h.alarm.httpClient.Do(request)
-	if err != nil {
-		failure := alarmUnavailable("Alarm Service is temporarily unavailable.")
-		return nil, 0, &failure
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode > 599 {
-		failure := alarmUnavailable("Alarm Service returned an invalid status.")
-		return nil, 0, &failure
-	}
-	body, err := readBoundedBody(response.Body, h.alarm.maxResponseBytes)
-	if err != nil {
-		failure := alarmUnavailable("Alarm Service returned an oversized or unreadable response.")
-		return nil, 0, &failure
-	}
-	return body, response.StatusCode, nil
+	return h.alarm.operations.Execute(publicRequest.Context(), publicRequest, route, serviceContext)
 }
 
 func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte, route publicAlarmRoute) {

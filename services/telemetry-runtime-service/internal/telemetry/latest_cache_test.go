@@ -48,6 +48,8 @@ func (cache *memoryLatestCache) GetForDevice(_ context.Context, tenantID, device
 
 func (cache *memoryLatestCache) Close() error { return nil }
 
+func (cache *memoryLatestCache) Ping(context.Context) error { return nil }
+
 type memoryLatestRebuildSource struct {
 	snapshots []telemetryapi.DeviceObservationSnapshot
 }

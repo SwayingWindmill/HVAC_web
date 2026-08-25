@@ -1,18 +1,14 @@
 package gateway
 
 import (
-	"bytes"
-	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
@@ -104,7 +100,7 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 }
 
 func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicWorkOrderRoute) {
-	if h.workOrder == nil || h.workOrder.baseURL == "" || h.workOrder.httpClient == nil {
+	if h.workOrder == nil || h.workOrder.operations == nil {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The Work Order mutation service is not configured."))
 		return
 	}
@@ -340,44 +336,11 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 }
 
 func (h *handler) executeWorkOrderMutation(publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderMutation, writeContext string) ([]byte, int, bool, *workOrderFailure) {
-	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.workOrder.timeout)
-	defer cancel()
-	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders"
-	if route.kind == publicWorkOrderAssignment {
-		path += "/" + url.PathEscape(route.workOrderID) + ":assign"
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.workOrder.baseURL+path, bytes.NewReader(mutation.body))
-	if err != nil {
-		failure := workOrderUnavailable("The Work Order mutation request could not be constructed.")
+	if h.workOrder == nil || h.workOrder.operations == nil {
+		failure := workOrderUnavailable("The Work Order mutation service is not configured.")
 		return nil, 0, false, &failure
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("Idempotency-Key", mutation.idempotencyKey)
-	request.Header.Set(workOrderWriteContextHeader, writeContext)
-	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
-	observability.InjectHTTP(publicRequest.Context(), request.Header)
-	response, err := h.workOrder.httpClient.Do(request)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
-		return nil, 0, false, &failure
-	}
-	defer response.Body.Close()
-	body, err := readBoundedBody(response.Body, h.workOrder.maxResponseBytes)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
-		return nil, 0, false, &failure
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
-		return nil, 0, false, &failure
-	}
-	replayedHeader := response.Header.Get("Idempotency-Replayed")
-	if replayedHeader != "" && replayedHeader != "true" {
-		failure := workOrderUnavailable("Work Order Service returned an invalid idempotency replay marker.")
-		return nil, 0, false, &failure
-	}
-	return body, response.StatusCode, replayedHeader == "true", nil
+	return h.workOrder.operations.ExecuteMutation(publicRequest.Context(), publicRequest, route, mutation, writeContext)
 }
 
 func validWorkOrderMutationStatus(route publicWorkOrderRoute, status int, replayed bool) bool {

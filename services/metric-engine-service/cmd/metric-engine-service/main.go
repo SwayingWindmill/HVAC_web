@@ -61,7 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer runtime.Close()
-	telemetry.SetReadinessCheck(runtime.Ping)
+	telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime", Required: true, Check: runtime.Ping})
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("METRIC_WORKER_MODE")), "oneshot") {
 		if err := runOneShot(ctx, runtime, os.Stdin, os.Stdout); err != nil {

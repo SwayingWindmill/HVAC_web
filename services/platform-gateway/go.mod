@@ -9,6 +9,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
+	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/oidctest v0.0.0
 	github.com/quanlaihe/hvac-web/libs/ownershipregistry v0.0.0
@@ -68,6 +69,8 @@ replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
 replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
+
+replace github.com/quanlaihe/hvac-web/libs/limitpolicy => ../../libs/limitpolicy
 
 replace github.com/quanlaihe/hvac-web/libs/oidctest => ../../libs/oidctest
 

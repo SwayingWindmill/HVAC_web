@@ -3,7 +3,10 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,6 +18,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
+	"github.com/quanlaihe/hvac-web/services/work-order-service/pkg/workorderservice"
 )
 
 const (
@@ -27,22 +31,6 @@ const (
 	maximumWorkOrderQueryLength    = 2048
 	maximumWorkOrderDecisionLength = int64(256 << 10)
 )
-
-type WorkOrderConfig struct {
-	BackendBaseURL    string
-	BackendHTTPClient *http.Client
-	BackendAudience   string
-	Timeout           time.Duration
-	MaxResponseBytes  int64
-}
-
-type workOrderController struct {
-	baseURL          string
-	httpClient       *http.Client
-	backendAudience  string
-	timeout          time.Duration
-	maxResponseBytes int64
-}
 
 type publicWorkOrderRouteKind uint8
 
@@ -70,27 +58,482 @@ type workOrderFailure struct {
 	retryable bool
 }
 
+type WorkOrderOperations interface {
+	ExecuteRead(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, readContext string) ([]byte, int, *workOrderFailure)
+	ExecuteMutation(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderMutation, writeContext string) ([]byte, int, bool, *workOrderFailure)
+	ExecuteLifecyclePrecondition(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, idempotencyKey, writeContext string) (workordermodel.WorkOrder, *workOrderFailure)
+	ExecuteLifecycle(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, writeContext string) ([]byte, int, bool, *workOrderFailure)
+}
+
+type WorkOrderConfig struct {
+	Operations        WorkOrderOperations
+	Store             workorderservice.Store
+	BackendBaseURL    string
+	BackendHTTPClient *http.Client
+	BackendAudience   string
+	Timeout           time.Duration
+	MaxResponseBytes  int64
+}
+
+type workOrderController struct {
+	operations       WorkOrderOperations
+	baseURL          string
+	httpClient       *http.Client
+	backendAudience  string
+	timeout          time.Duration
+	maxResponseBytes int64
+}
+
+type directWorkOrderAdapter struct {
+	store workorderservice.Store
+}
+
+func newDirectWorkOrderAdapter(store workorderservice.Store) WorkOrderOperations {
+	return &directWorkOrderAdapter{store: store}
+}
+
+func (a *directWorkOrderAdapter) ExecuteRead(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, _ string) ([]byte, int, *workOrderFailure) {
+	tenantID := ""
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
+		tenantID = session.TenantID
+	}
+	if route.workOrderID == "" {
+		limit := 50
+		if raw := publicRequest.URL.Query().Get("limit"); raw != "" {
+			if val, err := strconv.Atoi(raw); err == nil && val >= 1 && val <= 100 {
+				limit = val
+			}
+		}
+		filter := workorderservice.Filter{
+			Limit: limit,
+		}
+		query := publicRequest.URL.Query()
+		if cursor := query.Get("cursor"); cursor != "" {
+			filter.Cursor = cursor
+		}
+		if status := workordermodel.Status(query.Get("status")); status != "" {
+			filter.Status = status
+		}
+		if priority := workordermodel.Priority(query.Get("priority")); priority != "" {
+			filter.Priority = priority
+		}
+		if assigneeID := query.Get("assigneeId"); assigneeID != "" {
+			filter.AssigneeID = assigneeID
+		}
+		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
+		if err != nil {
+			if errors.Is(err, workorderservice.ErrInvalidFilter) {
+				failure := workOrderInvalid("The Work Order read filter is invalid.")
+				return nil, http.StatusBadRequest, &failure
+			}
+			failure := workOrderUnavailable("Work Order Service could not complete the read.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		bytes, err := json.Marshal(resp)
+		if err != nil {
+			failure := workOrderUnavailable("Work Order Service returned an invalid list projection.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return bytes, http.StatusOK, nil
+	}
+
+	workOrder, err := a.store.Get(ctx, tenantID, route.siteID, route.workOrderID)
+	if err != nil {
+		if errors.Is(err, workorderservice.ErrNotFound) {
+			failure := workOrderDenied()
+			return nil, http.StatusNotFound, &failure
+		}
+		failure := workOrderUnavailable("Work Order Service could not complete the read.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	bytes, err := json.Marshal(workOrder)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an invalid detail projection.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
+	return bytes, http.StatusOK, nil
+}
+
+func (a *directWorkOrderAdapter) ExecuteMutation(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderMutation, _ string) ([]byte, int, bool, *workOrderFailure) {
+	tenantID := ""
+	actorID := "principal:operator"
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
+		tenantID = session.TenantID
+		if session.Principal.Subject != "" {
+			actorID = session.Principal.Subject
+		}
+	}
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	if route.kind == publicWorkOrderCollection {
+		if mutation.create == nil {
+			failure := workOrderInvalid("The Work Order create body is missing.")
+			return nil, 0, false, &failure
+		}
+		workOrderID, err := newWorkOrderUUIDv7(now)
+		if err != nil {
+			failure := workOrderUnavailable("Work Order Service cannot allocate an authoritative identity.")
+			return nil, http.StatusServiceUnavailable, false, &failure
+		}
+		createMut := workorderservice.CreateMutation{
+			WorkOrderID:      workOrderID,
+			Title:            mutation.create.Title,
+			Description:      mutation.create.Description,
+			Priority:         mutation.create.Priority,
+			SourceReferences: mutation.create.SourceReferences,
+			AssigneeID:       mutation.create.AssigneeID,
+			TeamID:           mutation.create.TeamID,
+			ScheduledStart:   mutation.create.ScheduledStart,
+			DueAt:            mutation.create.DueAt,
+			ActorType:        "PRINCIPAL",
+			ActorID:          actorID,
+			PolicyRevision:   "1",
+			CorrelationID:    mutation.idempotencyKey,
+			IdempotencyKey:   mutation.idempotencyKey,
+			OccurredAt:       nowStr,
+		}
+		res, err := a.store.Create(ctx, tenantID, route.siteID, createMut)
+		if err != nil {
+			if errors.Is(err, workorderservice.ErrIdempotencyConflict) {
+				failure := workOrderFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The Idempotency-Key was already committed with a different Work Order request."}
+				return nil, http.StatusConflict, false, &failure
+			}
+			failure := workOrderUnavailable("Work Order Service could not complete the mutation.")
+			return nil, http.StatusServiceUnavailable, false, &failure
+		}
+		bytes, err := json.Marshal(res.WorkOrder)
+		if err != nil {
+			failure := workOrderUnavailable("Work Order Service returned an invalid mutation projection.")
+			return nil, http.StatusServiceUnavailable, false, &failure
+		}
+		status := http.StatusCreated
+		if res.Replayed {
+			status = http.StatusOK
+		}
+		return bytes, status, res.Replayed, nil
+	}
+
+	if route.kind == publicWorkOrderAssignment {
+		if mutation.assignment == nil {
+			failure := workOrderInvalid("The Work Order assignment body is missing.")
+			return nil, 0, false, &failure
+		}
+		assignMut := workorderservice.AssignmentMutation{
+			ExpectedVersion: mutation.assignment.ExpectedVersion,
+			AssigneeID:      mutation.assignmentTarget,
+			TeamID:          mutation.assignmentTeam,
+			Reason:          mutation.assignment.Reason,
+			ActorType:       "PRINCIPAL",
+			ActorID:         actorID,
+			PolicyRevision:  "1",
+			CorrelationID:   mutation.idempotencyKey,
+			IdempotencyKey:  mutation.idempotencyKey,
+			OccurredAt:      nowStr,
+		}
+		res, err := a.store.Assign(ctx, tenantID, route.siteID, route.workOrderID, assignMut)
+		if err != nil {
+			if errors.Is(err, workorderservice.ErrNotFound) {
+				failure := workOrderDenied()
+				return nil, http.StatusNotFound, false, &failure
+			}
+			if errors.Is(err, workordermodel.ErrVersionConflict) {
+				failure := workOrderFailure{status: http.StatusConflict, code: "VERSION_CONFLICT", title: "Version conflict", detail: "The Work Order changed before this mutation could commit."}
+				return nil, http.StatusConflict, false, &failure
+			}
+			if errors.Is(err, workorderservice.ErrIdempotencyConflict) {
+				failure := workOrderFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The Idempotency-Key was already committed with a different Work Order request."}
+				return nil, http.StatusConflict, false, &failure
+			}
+			failure := workOrderUnavailable("Work Order Service could not complete the mutation.")
+			return nil, http.StatusServiceUnavailable, false, &failure
+		}
+		bytes, err := json.Marshal(res.WorkOrder)
+		if err != nil {
+			failure := workOrderUnavailable("Work Order Service returned an invalid mutation projection.")
+			return nil, http.StatusServiceUnavailable, false, &failure
+		}
+		return bytes, http.StatusOK, res.Replayed, nil
+	}
+
+	failure := workOrderUnavailable("The requested Work Order mutation is not supported.")
+	return nil, http.StatusBadRequest, false, &failure
+}
+
+func (a *directWorkOrderAdapter) ExecuteLifecyclePrecondition(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, _ string, _ string) (workordermodel.WorkOrder, *workOrderFailure) {
+	tenantID := ""
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
+		tenantID = session.TenantID
+	}
+	workOrder, err := a.store.Get(ctx, tenantID, route.siteID, route.workOrderID)
+	if err != nil {
+		if errors.Is(err, workorderservice.ErrNotFound) {
+			failure := workOrderDenied()
+			return workordermodel.WorkOrder{}, &failure
+		}
+		failure := workOrderUnavailable("Work Order Service could not complete the read.")
+		return workordermodel.WorkOrder{}, &failure
+	}
+	return workOrder, nil
+}
+
+func (a *directWorkOrderAdapter) ExecuteLifecycle(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, _ string) ([]byte, int, bool, *workOrderFailure) {
+	tenantID := ""
+	actorID := "principal:operator"
+	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
+		tenantID = session.TenantID
+		if session.Principal.Subject != "" {
+			actorID = session.Principal.Subject
+		}
+	}
+	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+	transMut := workorderservice.LifecycleMutation{
+		Operation:          route.operation,
+		ExpectedVersion:    mutation.expectedVersion,
+		ScheduledStart:     mutation.scheduledStart,
+		DueAt:              mutation.dueAt,
+		CompletionEvidence: mutation.completionEvidence,
+		Reason:             mutation.reason,
+		ActorType:          "PRINCIPAL",
+		ActorID:            actorID,
+		PolicyRevision:     "1",
+		CorrelationID:      mutation.idempotencyKey,
+		IdempotencyKey:     mutation.idempotencyKey,
+		OccurredAt:         nowStr,
+	}
+	res, err := a.store.Transition(ctx, tenantID, route.siteID, route.workOrderID, transMut)
+	if err != nil {
+		if errors.Is(err, workorderservice.ErrNotFound) {
+			failure := workOrderDenied()
+			return nil, http.StatusNotFound, false, &failure
+		}
+		if errors.Is(err, workordermodel.ErrVersionConflict) {
+			failure := workOrderFailure{status: http.StatusConflict, code: "VERSION_CONFLICT", title: "Version conflict", detail: "The Work Order changed before this mutation could commit."}
+			return nil, http.StatusConflict, false, &failure
+		}
+		if errors.Is(err, workorderservice.ErrIdempotencyConflict) {
+			failure := workOrderFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The Idempotency-Key was already committed with a different Work Order request."}
+			return nil, http.StatusConflict, false, &failure
+		}
+		if errors.Is(err, workordermodel.ErrInvalidLifecycle) {
+			failure := workOrderFailure{status: http.StatusUnprocessableEntity, code: "WORK_ORDER_LIFECYCLE_INVALID", title: "Work Order mutation invalid", detail: "The Work Order mutation violates the authoritative contract."}
+			return nil, http.StatusUnprocessableEntity, false, &failure
+		}
+		failure := workOrderUnavailable("Work Order Service could not complete the mutation.")
+		return nil, http.StatusServiceUnavailable, false, &failure
+	}
+	bytes, err := json.Marshal(res.WorkOrder)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an invalid mutation projection.")
+		return nil, http.StatusServiceUnavailable, false, &failure
+	}
+	return bytes, http.StatusOK, res.Replayed, nil
+}
+
+type httpWorkOrderAdapter struct {
+	baseURL          string
+	httpClient       *http.Client
+	timeout          time.Duration
+	maxResponseBytes int64
+}
+
+func newHTTPWorkOrderAdapter(config WorkOrderConfig) WorkOrderOperations {
+	return &httpWorkOrderAdapter{
+		baseURL:          config.BackendBaseURL,
+		httpClient:       config.BackendHTTPClient,
+		timeout:          config.Timeout,
+		maxResponseBytes: config.MaxResponseBytes,
+	}
+}
+
+func (a *httpWorkOrderAdapter) ExecuteRead(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, readContext string) ([]byte, int, *workOrderFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders"
+	if route.workOrderID != "" {
+		path += "/" + url.PathEscape(route.workOrderID)
+	}
+	upstreamURL := a.baseURL + path
+	if route.workOrderID == "" && publicRequest.URL.RawQuery != "" {
+		upstreamURL += "?" + publicRequest.URL.RawQuery
+	}
+	request, err := http.NewRequestWithContext(callCtx, http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		failure := workOrderUnavailable("The Work Order read request could not be constructed.")
+		return nil, 0, &failure
+	}
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set(workOrderReadContextHeader, readContext)
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
+		return nil, 0, &failure
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode > 599 {
+		failure := workOrderUnavailable("Work Order Service returned an invalid status.")
+		return nil, 0, &failure
+	}
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
+		return nil, 0, &failure
+	}
+	return body, response.StatusCode, nil
+}
+
+func (a *httpWorkOrderAdapter) ExecuteMutation(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderMutation, writeContext string) ([]byte, int, bool, *workOrderFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders"
+	if route.kind == publicWorkOrderAssignment {
+		path += "/" + url.PathEscape(route.workOrderID) + ":assign"
+	}
+	request, err := http.NewRequestWithContext(callCtx, http.MethodPost, a.baseURL+path, bytes.NewReader(mutation.body))
+	if err != nil {
+		failure := workOrderUnavailable("The Work Order mutation request could not be constructed.")
+		return nil, 0, false, &failure
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set("Idempotency-Key", mutation.idempotencyKey)
+	request.Header.Set(workOrderWriteContextHeader, writeContext)
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
+		return nil, 0, false, &failure
+	}
+	defer response.Body.Close()
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
+		return nil, 0, false, &failure
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
+		return nil, 0, false, &failure
+	}
+	replayedHeader := response.Header.Get("Idempotency-Replayed")
+	if replayedHeader != "" && replayedHeader != "true" {
+		failure := workOrderUnavailable("Work Order Service returned an invalid idempotency replay marker.")
+		return nil, 0, false, &failure
+	}
+	return body, response.StatusCode, replayedHeader == "true", nil
+}
+
+func (a *httpWorkOrderAdapter) ExecuteLifecyclePrecondition(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, idempotencyKey, writeContext string) (workordermodel.WorkOrder, *workOrderFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(callCtx, http.MethodGet, a.baseURL+internalSiteWorkOrdersPrefix+url.PathEscape(route.siteID)+"/work-orders/"+url.PathEscape(route.workOrderID)+":lifecycle-precondition", nil)
+	if err != nil {
+		failure := workOrderUnavailable("The Work Order lifecycle precondition request could not be constructed.")
+		return workordermodel.WorkOrder{}, &failure
+	}
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set(workOrderWriteContextHeader, writeContext)
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
+		return workordermodel.WorkOrder{}, &failure
+	}
+	defer response.Body.Close()
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an unreadable precondition response.")
+		return workordermodel.WorkOrder{}, &failure
+	}
+	if response.StatusCode != http.StatusOK {
+		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
+		return workordermodel.WorkOrder{}, &failure
+	}
+	var workOrder workordermodel.WorkOrder
+	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
+		failure := workOrderUnavailable("Work Order Service returned an invalid precondition projection.")
+		return workordermodel.WorkOrder{}, &failure
+	}
+	return workOrder, nil
+}
+
+func (a *httpWorkOrderAdapter) ExecuteLifecycle(ctx context.Context, publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, writeContext string) ([]byte, int, bool, *workOrderFailure) {
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	actionSuffix := strings.TrimPrefix(route.template, "/api/v1/sites/{siteId}/work-orders/{workOrderId}")
+	upstreamURL := a.baseURL + internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders/" + url.PathEscape(route.workOrderID) + actionSuffix
+	request, err := http.NewRequestWithContext(callCtx, http.MethodPost, upstreamURL, bytes.NewReader(mutation.body))
+	if err != nil {
+		failure := workOrderUnavailable("The Work Order lifecycle request could not be constructed.")
+		return nil, 0, false, &failure
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set("Idempotency-Key", mutation.idempotencyKey)
+	request.Header.Set(workOrderWriteContextHeader, writeContext)
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
+		return nil, 0, false, &failure
+	}
+	defer response.Body.Close()
+	body, err := readBoundedBody(response.Body, a.maxResponseBytes)
+	if err != nil {
+		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
+		return nil, 0, false, &failure
+	}
+	if response.StatusCode != http.StatusOK {
+		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
+		return nil, 0, false, &failure
+	}
+	replayedHeader := response.Header.Get("Idempotency-Replayed")
+	if replayedHeader != "" && replayedHeader != "true" {
+		failure := workOrderUnavailable("Work Order Service returned an invalid idempotency replay marker.")
+		return nil, 0, false, &failure
+	}
+	return body, response.StatusCode, replayedHeader == "true", nil
+}
+
 func newWorkOrderController(config *WorkOrderConfig) *workOrderController {
 	if config == nil {
 		return nil
 	}
 	resolved := *config
-	resolved.BackendBaseURL = strings.TrimRight(strings.TrimSpace(resolved.BackendBaseURL), "/")
-	if resolved.BackendHTTPClient == nil {
-		resolved.BackendHTTPClient = &http.Client{Timeout: defaultWorkOrderTimeout}
-	}
-	if resolved.BackendAudience == "" {
-		resolved.BackendAudience = "work-order-service"
-	}
 	if resolved.Timeout <= 0 || resolved.Timeout > 30*time.Second {
 		resolved.Timeout = defaultWorkOrderTimeout
 	}
 	if resolved.MaxResponseBytes <= 0 || resolved.MaxResponseBytes > 16<<20 {
 		resolved.MaxResponseBytes = defaultWorkOrderResponseLimit
 	}
+	if resolved.BackendAudience == "" {
+		resolved.BackendAudience = "work-order-service"
+	}
+	var ops WorkOrderOperations
+	if resolved.Operations != nil {
+		ops = resolved.Operations
+	} else if resolved.Store != nil {
+		ops = newDirectWorkOrderAdapter(resolved.Store)
+	} else if strings.TrimSpace(resolved.BackendBaseURL) != "" {
+		resolved.BackendBaseURL = strings.TrimRight(strings.TrimSpace(resolved.BackendBaseURL), "/")
+		if resolved.BackendHTTPClient == nil {
+			resolved.BackendHTTPClient = &http.Client{Timeout: resolved.Timeout}
+		}
+		ops = newHTTPWorkOrderAdapter(resolved)
+	} else {
+		return nil
+	}
 	return &workOrderController{
-		baseURL: resolved.BackendBaseURL, httpClient: resolved.BackendHTTPClient,
-		backendAudience: resolved.BackendAudience, timeout: resolved.Timeout, maxResponseBytes: resolved.MaxResponseBytes,
+		operations:       ops,
+		baseURL:          resolved.BackendBaseURL,
+		httpClient:       resolved.BackendHTTPClient,
+		backendAudience:  resolved.BackendAudience,
+		timeout:          resolved.Timeout,
+		maxResponseBytes: resolved.MaxResponseBytes,
 	}
 }
 
@@ -170,7 +613,7 @@ func dispatchWorkOrderReadRoute(h *handler, writer http.ResponseWriter, request 
 		writeMethodNotAllowedFor(writer, request, http.MethodGet)
 		return
 	}
-	if h.workOrder == nil || h.workOrder.baseURL == "" || h.workOrder.httpClient == nil {
+	if h.workOrder == nil || h.workOrder.operations == nil {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The Work Order read service is not configured."))
 		return
 	}
@@ -423,41 +866,11 @@ func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkO
 }
 
 func (h *handler) executeWorkOrderRead(publicRequest *http.Request, route publicWorkOrderRoute, readContext string) ([]byte, int, *workOrderFailure) {
-	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.workOrder.timeout)
-	defer cancel()
-	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders"
-	if route.workOrderID != "" {
-		path += "/" + url.PathEscape(route.workOrderID)
-	}
-	upstreamURL := h.workOrder.baseURL + path
-	if route.workOrderID == "" && publicRequest.URL.RawQuery != "" {
-		upstreamURL += "?" + publicRequest.URL.RawQuery
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		failure := workOrderUnavailable("The Work Order read request could not be constructed.")
+	if h.workOrder == nil || h.workOrder.operations == nil {
+		failure := workOrderUnavailable("The Work Order read service is not configured.")
 		return nil, 0, &failure
 	}
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set(workOrderReadContextHeader, readContext)
-	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
-	observability.InjectHTTP(publicRequest.Context(), request.Header)
-	response, err := h.workOrder.httpClient.Do(request)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
-		return nil, 0, &failure
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode > 599 {
-		failure := workOrderUnavailable("Work Order Service returned an invalid status.")
-		return nil, 0, &failure
-	}
-	body, err := readBoundedBody(response.Body, h.workOrder.maxResponseBytes)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
-		return nil, 0, &failure
-	}
-	return body, response.StatusCode, nil
+	return h.workOrder.operations.ExecuteRead(publicRequest.Context(), publicRequest, route, readContext)
 }
 
 func (h *handler) forwardWorkOrderProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte) {
@@ -519,3 +932,35 @@ func sameOptionalWorkOrderTarget(left, right *string) bool {
 	}
 	return *left == *right
 }
+
+func newWorkOrderUUIDv7(now time.Time) (string, error) {
+	millis := now.UTC().UnixMilli()
+	if millis < 0 || millis > (1<<48)-1 {
+		return "", errors.New("UUIDv7 timestamp is out of range")
+	}
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[0] = byte(millis >> 40)
+	value[1] = byte(millis >> 32)
+	value[2] = byte(millis >> 24)
+	value[3] = byte(millis >> 16)
+	value[4] = byte(millis >> 8)
+	value[5] = byte(millis)
+	value[6] = (value[6] & 0x0f) | 0x70
+	value[8] = (value[8] & 0x3f) | 0x80
+
+	encoded := make([]byte, 36)
+	hex.Encode(encoded[0:8], value[0:4])
+	encoded[8] = '-'
+	hex.Encode(encoded[9:13], value[4:6])
+	encoded[13] = '-'
+	hex.Encode(encoded[14:18], value[6:8])
+	encoded[18] = '-'
+	hex.Encode(encoded[19:23], value[8:10])
+	encoded[23] = '-'
+	hex.Encode(encoded[24:36], value[10:16])
+	return string(encoded), nil
+}
+

@@ -15,6 +15,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -80,6 +81,9 @@ func newAnalyticsController(config *AnalyticsConfig) *analyticsController {
 func (h *handler) QueryEnergySeries(writer http.ResponseWriter, request *http.Request) {
 	session, ok := h.analyticsSession(writer, request)
 	if !ok {
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionExpensiveQuery, session.TenantID) {
 		return
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maximumAnalyticsRequestSize))

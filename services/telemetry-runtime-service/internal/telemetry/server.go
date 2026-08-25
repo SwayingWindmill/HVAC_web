@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/pkg/telemetryapi"
@@ -56,6 +57,7 @@ type ServerConfig struct {
 	CommandVerifierDeviceIDs       []string
 	Metrics                        *observability.Registry
 	Now                            func() time.Time
+	RateLimiter                    *limitpolicy.Limiter
 }
 
 type handler struct {
@@ -80,6 +82,7 @@ type handler struct {
 	commandVerifierDeviceIDs       map[string]struct{}
 	metrics                        *s2Metrics
 	now                            func() time.Time
+	rateLimiter                    *limitpolicy.Limiter
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -115,6 +118,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		commandVerifierDeviceIDs:       commandVerifierDeviceIDs,
 		metrics:                        newS2Metrics(config.Metrics, now),
 		now:                            now,
+		rateLimiter:                    config.RateLimiter,
 	}
 }
 

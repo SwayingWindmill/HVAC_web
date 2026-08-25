@@ -5,6 +5,7 @@ go 1.25.12
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
+	github.com/quanlaihe/hvac-web/libs/schemagate v0.0.0
 	golang.org/x/crypto v0.53.0
 )
 
@@ -20,3 +21,5 @@ require (
 )
 
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
+
+replace github.com/quanlaihe/hvac-web/libs/schemagate => ../../libs/schemagate

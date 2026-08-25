@@ -32,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	telemetry.SetReadinessCheck(store.Ping)
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 
 	scanInterval := durationEnv("SCHEDULER_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
 	scanBatch := integerEnv("SCHEDULER_SCAN_BATCH", 100, 1, 1000)

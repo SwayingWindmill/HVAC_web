@@ -111,6 +111,8 @@ func (fake *fakeLatestCache) GetForDevice(_ context.Context, tenantID, deviceID 
 
 func (fake *fakeLatestCache) Close() error { return nil }
 
+func (fake *fakeLatestCache) Ping(context.Context) error { return nil }
+
 func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	store := &fakeSnapshotStore{errByDevice: map[string]error{}}

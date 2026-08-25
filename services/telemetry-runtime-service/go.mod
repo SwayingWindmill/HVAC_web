@@ -5,6 +5,7 @@ go 1.25.12
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
+	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
 	github.com/quanlaihe/hvac-web/services/analytics-read-model-projector v0.0.0
@@ -23,6 +24,8 @@ require (
 )
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
+
+replace github.com/quanlaihe/hvac-web/libs/limitpolicy => ../../libs/limitpolicy
 
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 

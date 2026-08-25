@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/pkg/telemetryapi"
 )
 
@@ -132,6 +133,10 @@ func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *h
 	}
 	if !h.sourceAuthenticator.AllowsSource(peer, candidate.IntegrationInstanceID) {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
+		return
+	}
+	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.IntegrationInstanceID).Allowed {
+		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The telemetry source observation rate has been exceeded.", true)
 		return
 	}
 	receipt, err := h.observationAcceptor.AcceptObservation(request.Context(), candidate)

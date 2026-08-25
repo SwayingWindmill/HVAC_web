@@ -1,16 +1,12 @@
 package gateway
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
@@ -34,7 +30,7 @@ type parsedPublicWorkOrderLifecycle struct {
 }
 
 func dispatchWorkOrderLifecycleRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicWorkOrderRoute) {
-	if h.workOrder == nil || h.workOrder.baseURL == "" || h.workOrder.httpClient == nil {
+	if h.workOrder == nil || h.workOrder.operations == nil {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The Work Order lifecycle service is not configured."))
 		return
 	}
@@ -149,78 +145,19 @@ func (h *handler) parsePublicWorkOrderLifecycle(request *http.Request, route pub
 }
 
 func (h *handler) executeWorkOrderLifecyclePrecondition(publicRequest *http.Request, route publicWorkOrderRoute, idempotencyKey, writeContext string) (workordermodel.WorkOrder, *workOrderFailure) {
-	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.workOrder.timeout)
-	defer cancel()
-	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders/" + url.PathEscape(route.workOrderID) + ":lifecycle-precondition"
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, h.workOrder.baseURL+path, nil)
-	if err != nil {
-		failure := workOrderUnavailable("The Work Order lifecycle precondition request could not be constructed.")
+	if h.workOrder == nil || h.workOrder.operations == nil {
+		failure := workOrderUnavailable("The Work Order lifecycle service is not configured.")
 		return workordermodel.WorkOrder{}, &failure
 	}
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("Idempotency-Key", idempotencyKey)
-	request.Header.Set(workOrderWriteContextHeader, writeContext)
-	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
-	observability.InjectHTTP(publicRequest.Context(), request.Header)
-	response, err := h.workOrder.httpClient.Do(request)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service lifecycle precondition is temporarily unavailable.")
-		return workordermodel.WorkOrder{}, &failure
-	}
-	defer response.Body.Close()
-	body, err := readBoundedBody(response.Body, h.workOrder.maxResponseBytes)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable precondition response.")
-		return workordermodel.WorkOrder{}, &failure
-	}
-	if response.StatusCode != http.StatusOK {
-		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
-		return workordermodel.WorkOrder{}, &failure
-	}
-	var workOrder workordermodel.WorkOrder
-	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.TenantID == "" || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
-		failure := workOrderUnavailable("Work Order Service returned an invalid lifecycle precondition projection.")
-		return workordermodel.WorkOrder{}, &failure
-	}
-	return workOrder, nil
+	return h.workOrder.operations.ExecuteLifecyclePrecondition(publicRequest.Context(), publicRequest, route, idempotencyKey, writeContext)
 }
 
 func (h *handler) executeWorkOrderLifecycle(publicRequest *http.Request, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, writeContext string) ([]byte, int, bool, *workOrderFailure) {
-	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.workOrder.timeout)
-	defer cancel()
-	path := internalSiteWorkOrdersPrefix + url.PathEscape(route.siteID) + "/work-orders/" + url.PathEscape(route.workOrderID) + lifecycleRouteSuffix(route.operation)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.workOrder.baseURL+path, bytes.NewReader(mutation.body))
-	if err != nil {
-		failure := workOrderUnavailable("The Work Order lifecycle request could not be constructed.")
+	if h.workOrder == nil || h.workOrder.operations == nil {
+		failure := workOrderUnavailable("The Work Order lifecycle service is not configured.")
 		return nil, 0, false, &failure
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("Idempotency-Key", mutation.idempotencyKey)
-	request.Header.Set(workOrderWriteContextHeader, writeContext)
-	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
-	observability.InjectHTTP(publicRequest.Context(), request.Header)
-	response, err := h.workOrder.httpClient.Do(request)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service is temporarily unavailable.")
-		return nil, 0, false, &failure
-	}
-	defer response.Body.Close()
-	body, err := readBoundedBody(response.Body, h.workOrder.maxResponseBytes)
-	if err != nil {
-		failure := workOrderUnavailable("Work Order Service returned an oversized or unreadable response.")
-		return nil, 0, false, &failure
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		failure := mapWorkOrderMutationProblem(response.StatusCode, body)
-		return nil, 0, false, &failure
-	}
-	replayed := response.Header.Get("Idempotency-Replayed")
-	if replayed != "" && replayed != "true" {
-		failure := workOrderUnavailable("Work Order Service returned an invalid idempotency replay marker.")
-		return nil, 0, false, &failure
-	}
-	return body, response.StatusCode, replayed == "true", nil
+	return h.workOrder.operations.ExecuteLifecycle(publicRequest.Context(), publicRequest, route, mutation, writeContext)
 }
 
 func workOrderMutationKeyScope(idempotencyKey string) string {

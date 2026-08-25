@@ -73,6 +73,20 @@ type loginState struct {
 	CreatedAt   time.Time
 }
 
+// ensureJSONEOF reports an error when a JSON body carries more than one value
+// or trailing data after the decoded value.
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("request body contains trailing JSON values")
+	}
+	return err
+}
+
 type bffSession struct {
 	sessionstore.Session
 	CSRFToken string

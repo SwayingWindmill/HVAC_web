@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/pkg/analyticsprojector"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/internal/telemetry"
@@ -60,13 +61,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	observabilityRuntime.SetReadinessCheck(store.Ping)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
 		logger.Warn("telemetry_latest_cache_projection_unavailable", "error_code", "TELEMETRY_LATEST_CACHE_PROJECTION_UNAVAILABLE")
 		latestCache, latestRelay, latestContext, latestCancel = nil, nil, context.Background(), nil
 	}
+	dependencies := []observability.Dependency{
+		{Name: "postgres", Required: true, Check: store.Ping},
+	}
+	if latestCache != nil {
+		// Redis 只承载可重建的 Latest 投影：不可用时降级，不影响真值与就绪判定。
+		dependencies = append(dependencies, observability.Dependency{Name: "redis-latest-cache", Required: false, Check: latestCache.Ping})
+	}
+	observabilityRuntime.SetDependencies(dependencies...)
 	if latestCache != nil {
 		defer func() { _ = latestCache.Close() }()
 	}
@@ -154,6 +162,7 @@ func main() {
 			CommandVerifierDeviceID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
 			CommandVerifierDeviceIDs:       commaSeparated(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS")),
 			Metrics:                        observabilityRuntime.Metrics,
+			RateLimiter:                    limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), telemetryLimitPolicy()),
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},
@@ -517,6 +526,17 @@ func loadCertificatePublicKey(path string) (any, error) {
 		return nil, err
 	}
 	return certificate.PublicKey, nil
+}
+
+// telemetryLimitPolicy 提供单机阶段的默认配额。ingest 维度 fail-open：限流后端
+// 不可用时放行，宁可多收遥测也不丢数据。额度从版本化配置发布加载是后续工作。
+func telemetryLimitPolicy() *limitpolicy.Policy {
+	return &limitpolicy.Policy{
+		Version: 1,
+		Limits: []limitpolicy.Limit{
+			{Dimension: limitpolicy.DimensionTelemetryIngest, Window: time.Minute, Burst: 6000, FailClosed: false},
+		},
+	}
 }
 
 func envOr(name, fallback string) string {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 )
 
 var (
@@ -100,6 +101,10 @@ func (store *Store) Close() {
 
 func (store *Store) Ping(ctx context.Context) error {
 	return store.pool.Ping(ctx)
+}
+
+func (store *Store) VerifyProductSchema(ctx context.Context, expectedVersion string) error {
+	return schemagate.VerifyProductSchema(ctx, store.pool, expectedVersion)
 }
 
 func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (CreatedUser, error) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
@@ -24,6 +25,9 @@ const (
 func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.DeviceHistoryRequest) {
 	caller, ok := h.telemetryCaller(writer, request, true)
 	if !ok {
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionExpensiveQuery, caller.tenantID) {
 		return
 	}
 	selection, failure := historySelection(input)

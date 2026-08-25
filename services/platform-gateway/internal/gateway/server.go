@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
@@ -70,6 +71,7 @@ type Config struct {
 	Operations     *OperationsAgentConfig
 	RuleManagement *rulemanagement.Manager
 	Observability  *observability.Runtime
+	RateLimiter    *limitpolicy.Limiter
 }
 
 type handler struct {
@@ -90,6 +92,7 @@ type handler struct {
 	operations     *operationsAgentController
 	ruleManagement *rulemanagement.Manager
 	observability  *observability.Runtime
+	rateLimiter    *limitpolicy.Limiter
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -134,6 +137,7 @@ func NewHandler(config Config) http.Handler {
 		operations:     newOperationsAgentController(config.Operations),
 		ruleManagement: config.RuleManagement,
 		observability:  telemetry,
+		rateLimiter:    config.RateLimiter,
 	}
 }
 
@@ -219,6 +223,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		request = resolved
+		if !h.allowRateLimited(writer, request, limitpolicy.DimensionRest) {
+			return
+		}
 		if siteID, matches := matchPublicDashboardStreamRoute(request.URL.Path); matches {
 			dispatchDashboardStreamRoute(h, writer, request, siteID)
 			return
@@ -419,6 +426,30 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
+}
+
+// allowRateLimited consumes the session tenant's budget for dimension and
+// writes a 429 problem when exceeded. It returns true when the request may
+// continue. Requests without an authenticated session are not limited here.
+func (h *handler) allowRateLimited(writer http.ResponseWriter, request *http.Request, dimension limitpolicy.Dimension) bool {
+	session, ok := routeSessionFromContext(request.Context())
+	if !ok || session.ID == "" {
+		return true
+	}
+	return h.allowRateLimitedTenant(writer, request, dimension, session.TenantID)
+}
+
+// allowRateLimitedTenant consumes one tenant's budget for dimension and writes
+// a 429 problem when exceeded. It returns true when the request may continue.
+func (h *handler) allowRateLimitedTenant(writer http.ResponseWriter, request *http.Request, dimension limitpolicy.Dimension, tenantID string) bool {
+	if h.rateLimiter == nil {
+		return true
+	}
+	if h.rateLimiter.Allow(request.Context(), dimension, tenantID).Allowed {
+		return true
+	}
+	writeProblem(writer, request, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", "Rate limit exceeded", "Too many requests. Retry later.", false, nil)
+	return false
 }
 
 func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {

@@ -13,6 +13,7 @@ use (
 	./libs/edgefleet
 	./libs/identitycontext
 	./libs/intelligencemodel
+	./libs/limitpolicy
 	./libs/observability
 	./libs/operationsauditevent
 	./libs/oidctest
@@ -21,6 +22,7 @@ use (
 	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
+	./libs/schemagate
 	./libs/telemetryauth
 	./libs/telemetryhistorymodel
 	./libs/testpki

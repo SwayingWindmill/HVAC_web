@@ -15,6 +15,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -41,7 +42,7 @@ type OperationsAgentConfig struct {
 	Timeout          time.Duration
 	MaxRequestBytes  int64
 	MaxResponseBytes int64
-	RateLimiter      OperationsRateLimiter
+	RateLimiter      *limitpolicy.Limiter
 }
 
 type operationsAgentController struct {
@@ -52,7 +53,7 @@ type operationsAgentController struct {
 	timeout          time.Duration
 	maxRequestBytes  int64
 	maxResponseBytes int64
-	rateLimiter      OperationsRateLimiter
+	rateLimiter      *limitpolicy.Limiter
 }
 
 type publicOperationsRoute struct {
@@ -416,12 +417,12 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Operations Investigation limit policy could not be evaluated.", true, nil)
 		return
 	}
-	allowed, limitErr := h.operations.rateLimiter.Allow(request.Context(), session.ID)
-	if limitErr != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Operations Investigation limit policy could not be evaluated.", true, nil)
-		return
-	}
-	if !allowed {
+	decision := h.operations.rateLimiter.Allow(request.Context(), limitpolicy.DimensionOperationsAgent, session.ID)
+	if !decision.Allowed {
+		if decision.Reason == "counter-unavailable" {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Operations Investigation limit policy could not be evaluated.", true, nil)
+			return
+		}
 		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Operations Investigation request rate has been exceeded.", true, nil)
 		return
 	}

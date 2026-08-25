@@ -15,6 +15,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
@@ -26,7 +27,7 @@ type fakeOperationsRateLimiter struct {
 	fail  atomic.Bool
 }
 
-func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string) (bool, error) {
+func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string, time.Duration, int) (bool, error) {
 	if limiter.fail.Load() {
 		return false, errors.New("limit backend unavailable")
 	}
@@ -39,7 +40,8 @@ type operationsGatewayFixture struct {
 	siteID           string
 	sessionID        string
 	gatewaySigner    *ecdsa.PrivateKey
-	limiter          *fakeOperationsRateLimiter
+	counter          *fakeOperationsRateLimiter
+	limiter          *limitpolicy.Limiter
 	iamCalls         atomic.Int32
 	operationsCalls  atomic.Int32
 	denySite         atomic.Bool
@@ -53,11 +55,16 @@ type operationsGatewayFixture struct {
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {
 	t.Helper()
 	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	counter := &fakeOperationsRateLimiter{max: int32(rateLimit)}
+	limiter := limitpolicy.NewLimiter(counter, &limitpolicy.Policy{Version: 1, Limits: []limitpolicy.Limit{
+		{Dimension: limitpolicy.DimensionOperationsAgent, Window: time.Minute, Burst: 1 << 20, FailClosed: true},
+	}})
 	fixture := &operationsGatewayFixture{
 		tenantID:      "018f3d00-0000-7000-8000-000000000001",
 		siteID:        "018f3e00-2000-7000-8000-000000000001",
 		gatewaySigner: commandTestSigner(t),
-		limiter:       &fakeOperationsRateLimiter{max: int32(rateLimit)},
+		counter:       counter,
+		limiter:       limiter,
 	}
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
@@ -911,7 +918,7 @@ func TestOperationsGatewayDenialIsNondiscoverableAndRateLimited(t *testing.T) {
 
 func TestOperationsGatewayFailsClosedWhenLimitBackendUnavailable(t *testing.T) {
 	fixture := newOperationsGatewayFixture(t, 30)
-	fixture.limiter.fail.Store(true)
+	fixture.counter.fail.Store(true)
 	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001"
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	fixture.authenticate(request, false)

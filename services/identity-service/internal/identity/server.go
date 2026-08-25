@@ -22,6 +22,7 @@ type Config struct {
 	DatabaseURL           string
 	SigningKeyFile        string
 	MFAEncryptionKeyFile  string
+	SchemaVersion         string
 	Now                   func() time.Time
 }
 
@@ -61,6 +62,10 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 	}
 	store, err := OpenStore(ctx, config.DatabaseURL)
 	if err != nil {
+		return nil, err
+	}
+	if err := store.VerifyProductSchema(ctx, config.SchemaVersion); err != nil {
+		store.Close()
 		return nil, err
 	}
 	now := config.Now

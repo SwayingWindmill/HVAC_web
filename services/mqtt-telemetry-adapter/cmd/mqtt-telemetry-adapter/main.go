@@ -44,7 +44,7 @@ func main() {
 	config, err := adapter.DecodeConfig(configFile)
 	_ = configFile.Close()
 	if err != nil {
-		logger.Error("mqtt_telemetry_adapter_config_invalid", "error", err.Error())
+		logger.Error("mqtt_telemetry_adapter_config_invalid", "cause", err.Error())
 		os.Exit(1)
 	}
 

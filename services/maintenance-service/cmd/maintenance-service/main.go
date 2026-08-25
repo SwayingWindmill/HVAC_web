@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	telemetry.SetReadinessCheck(store.Ping)
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 
 	hostname, _ := os.Hostname()
 	workerID := strings.TrimSpace(os.Getenv("MAINTENANCE_WORKER_ID"))

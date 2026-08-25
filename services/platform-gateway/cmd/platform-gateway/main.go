@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/internal/gateway"
@@ -41,7 +42,7 @@ func main() {
 	defer cancelRun()
 	embeddedServices, err := startEmbeddedEnergyServices(runContext, logger)
 	if err != nil {
-		logger.Error("energy_api_embedded_services_invalid", "error_code", "ENERGY_API_EMBEDDED_SERVICES_INVALID")
+		logger.Error("energy_api_embedded_services_invalid", "error_code", "ENERGY_API_EMBEDDED_SERVICES_INVALID", "cause", err.Error())
 		os.Exit(1)
 	}
 	defer embeddedServices.Close()
@@ -52,7 +53,7 @@ func main() {
 	}
 	defer closeIdentity()
 	if identity != nil && identity.ReadinessCheck != nil {
-		telemetry.SetReadinessCheck(identity.ReadinessCheck)
+		telemetry.SetDependencies(observability.Dependency{Name: "postgres-session", Required: true, Check: identity.ReadinessCheck})
 	}
 	telemetryConfig, err := loadTelemetryConfig(workloadCertificate)
 	if err != nil {
@@ -97,6 +98,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeOperations()
+	rateLimiter := limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), defaultLimitPolicy())
+	if operationsConfig != nil {
+		operationsConfig.RateLimiter = rateLimiter
+	}
 	ruleManagement, closeRuleManagement, err := loadRuleManagement(runContext)
 	if err != nil {
 		logger.Error("gateway_rule_management_config_invalid", "error_code", "RULE_MANAGEMENT_CONFIG_INVALID")
@@ -111,7 +116,7 @@ func main() {
 
 	routing, err := loadRoutingRuntime(runContext, logger, identity != nil)
 	if err != nil {
-		logger.Error("gateway_route_config_invalid", "error_code", "ROUTE_CONFIG_INVALID")
+		logger.Error("gateway_route_config_invalid", "error_code", "ROUTE_CONFIG_INVALID", "cause", err.Error())
 		os.Exit(1)
 	}
 	defer routing.close()
@@ -133,6 +138,7 @@ func main() {
 		Operations:     operationsConfig,
 		RuleManagement: ruleManagement,
 		Observability:  telemetry,
+		RateLimiter:    rateLimiter,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
 			Version: version,
@@ -581,15 +587,6 @@ func loadOperationsConfig(ctx context.Context, certificate *tls.Certificate) (*g
 	if err != nil {
 		return nil, func() {}, err
 	}
-	limiter, err := gateway.OpenRedisOperationsRateLimiter(
-		ctx,
-		strings.TrimSpace(os.Getenv("PLATFORM_LIMIT_POLICY_FILE")),
-		envOr("LIMIT_POLICY_REDIS_URL", "redis://redis:6379/2"),
-	)
-	if err != nil {
-		return nil, func() {}, err
-	}
-	closeLimiter := func() { _ = limiter.Close() }
 	return &gateway.OperationsAgentConfig{
 		BaseURL:          strings.TrimRight(parsed.String(), "/"),
 		Audience:         envOr("OPERATIONS_AGENT_AUDIENCE", "operations-agent-service"),
@@ -597,13 +594,12 @@ func loadOperationsConfig(ctx context.Context, certificate *tls.Certificate) (*g
 		Timeout:          8 * time.Second,
 		MaxRequestBytes:  8 << 10,
 		MaxResponseBytes: 1 << 20,
-		RateLimiter:      limiter,
 		HTTPClient: &http.Client{Transport: workloadTransport(
 			roots,
 			certificate,
 			envOr("OPERATIONS_AGENT_SERVER_NAME", "localhost"),
 		)},
-	}, closeLimiter, nil
+	}, func() {}, nil
 }
 
 func workloadTransport(roots *x509.CertPool, certificate *tls.Certificate, serverName string) *http.Transport {
@@ -642,6 +638,21 @@ func sessionEncryptionKey() ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// defaultLimitPolicy 提供单机阶段的默认配额。额度从版本化配置发布加载是后续
+// 工作（D10 P1）；本轮先跑通限流机制，默认额度偏宽松以免误伤正常使用。
+func defaultLimitPolicy() *limitpolicy.Policy {
+	return &limitpolicy.Policy{
+		Version: 1,
+		Limits: []limitpolicy.Limit{
+			{Dimension: limitpolicy.DimensionRest, Window: time.Minute, Burst: 600, FailClosed: false},
+			{Dimension: limitpolicy.DimensionCommandWrite, Window: time.Minute, Burst: 60, FailClosed: true},
+			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 30, FailClosed: false},
+			{Dimension: limitpolicy.DimensionNotification, Window: time.Minute, Burst: 120, FailClosed: false},
+			{Dimension: limitpolicy.DimensionOperationsAgent, Window: time.Minute, Burst: 30, FailClosed: true},
+		},
+	}
 }
 
 func envOr(name, fallback string) string {

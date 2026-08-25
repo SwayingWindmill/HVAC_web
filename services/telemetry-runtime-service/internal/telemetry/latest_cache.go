@@ -50,6 +50,7 @@ type LatestCache interface {
 	PutIfNewer(context.Context, telemetryapi.DeviceObservationSnapshot) (bool, error)
 	Get(context.Context, string, string, string) (telemetryapi.DeviceObservationSnapshot, error)
 	GetForDevice(context.Context, string, string) (telemetryapi.DeviceObservationSnapshot, error)
+	Ping(context.Context) error
 	Close() error
 }
 
@@ -90,6 +91,13 @@ func (cache *RedisLatestCache) Close() error {
 		return nil
 	}
 	return cache.client.Close()
+}
+
+func (cache *RedisLatestCache) Ping(ctx context.Context) error {
+	if cache == nil || cache.client == nil {
+		return ErrLatestCacheUnavailable
+	}
+	return cache.client.Ping(ctx).Err()
 }
 
 func (cache *RedisLatestCache) PutIfNewer(ctx context.Context, snapshot telemetryapi.DeviceObservationSnapshot) (bool, error) {

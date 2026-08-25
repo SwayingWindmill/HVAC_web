@@ -95,7 +95,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	telemetry.SetReadinessCheck(store.Ping)
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
 			embeddedWriteProblem(writer, http.StatusForbidden, "NOTIFICATION_GATEWAY_WORKLOAD_FORBIDDEN")
