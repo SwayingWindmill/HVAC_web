@@ -5,8 +5,8 @@
     "version": "2.1.2",
     "status": "CURRENT / FROZEN CANDIDATE",
     "sourceOfTruth": "User-provided SE-ARCH-004 V2.1.2",
-    "repositoryMirror": "架构规划/智慧能源系统后端架构与接口设计.md",
-    "repositoryMirrorStatus": "SUPERSEDED_V2_0_PENDING_VERBATIM_REFRESH"
+    "repositoryMirror": "docs/architecture/backend-energy-platform-architecture.md",
+    "repositoryMirrorStatus": "SUPERSEDED_BY_SOURCE_ALIGNED_TARGET"
   },
   "authorityOverrides": {
     "tenantModel": "User adjudication over V2.1.2: every Organization concept in this project is Tenant; no Organization compatibility layer",
@@ -29,10 +29,11 @@
     { "domain": "Space/Asset", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql"], "alignment": "ALIGNED" },
     { "domain": "Device/Product/Point", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
     { "domain": "IoT Runtime", "implementation": ["services/mqtt-telemetry-adapter", "services/telemetry-runtime-service", "services/command-dispatcher"], "alignment": "PARTIAL", "reason": "Cloud MQTT/S2 runtime is implemented, but the adjudicated target now also requires a first-class HVAC Edge Control Plane with Channel Runtime, Process Image, Cycle, Controller/Scheduler, Capability Profiles, Drivers/Bridges, Edge Manifest and Edge Timedata." },
-    { "domain": "Telemetry", "implementation": ["services/telemetry-runtime-service", "services/telemetry-query-service", "services/analytics-read-model-projector"], "alignment": "ALIGNED" },
-    { "domain": "Energy Topology", "implementation": ["infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
+    { "domain": "Telemetry", "implementation": ["services/telemetry-runtime-service", "services/telemetry-query-service"], "alignment": "ALIGNED" },
+    { "domain": "Energy Topology", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql"], "alignment": "PARTIAL", "reason": "Registry topology structures exist, but released Energy Content ownership, read/mutation contracts and Energy Processing integration are not complete." },
     { "domain": "Metric", "implementation": ["services/metric-engine-service"], "alignment": "ALIGNED" },
-    { "domain": "Energy", "implementation": ["services/analytics-read-model-projector", "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
+    { "domain": "Energy Processing", "implementation": ["services/analytics-read-model-projector", "services/telemetry-query-service"], "alignment": "PARTIAL", "reason": "The current implementation covers the electricity interval-fact and fixed energy-series slice; it does not yet resolve Registry Meter/MeterBinding semantics or the broader Energy Content boundary." },
+    { "domain": "Energy Content", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql"], "alignment": "PARTIAL", "reason": "The Registry boundary is the Phase 1 logical owner for Meter, MeterBinding and Virtual Meter content, but Platform Core currently exposes only Site/Asset/Device routes and the Energy Content contracts are not implemented." },
     { "domain": "Tariff", "implementation": ["infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Settlement", "implementation": ["services/settlement-service"], "alignment": "ALIGNED" },
     { "domain": "Alarm", "implementation": ["services/alarm-service"], "alignment": "PARTIAL" },
