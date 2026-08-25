@@ -248,16 +248,16 @@
       "area": "observability",
       "requirement": "Central Logging",
       "status": "KEEP",
-      "current": "Phase 1 OTel Collector 使用 filelog 收集 Docker JSON logs 并发送到单实例 Loki",
-      "action": "保持单实例、短保留期；日志集群化延后"
+      "current": "observability-logs/full profile 中 OTel Collector 使用 filelog 收集 Docker JSON logs 并发送到单实例 Loki",
+      "action": "保持单实例、短保留期；observability-core profile 允许仅宿主 Docker log rotation，不建日志集群"
     },
     {
       "id": "OBS-TRACE-001",
       "area": "observability",
       "requirement": "OpenTelemetry 类 Trace 并可集中查询",
       "status": "KEEP",
-      "current": "Phase 1 OTel Collector 将 OTLP traces 写入单实例 Tempo，并由 Grafana provision 查询",
-      "action": "保持单实例 local storage；HA trace backend 延后"
+      "current": "OTel Collector full profile 将 OTLP traces 写入单实例 Tempo，并由 Grafana provision 查询；observability-logs profile 不启动 Tempo，应用层不导出 trace",
+      "action": "保持单实例 local storage；trace 只在 observability-full profile 提供，HA trace backend 延后"
     },
     {
       "id": "BACKUP-001",
@@ -344,8 +344,8 @@
       "area": "application",
       "requirement": "第一阶段推荐部署独立 Optimization Service",
       "status": "DEFER",
-      "current": "Optimization 属于按需智能服务，不进入当前单服务器基础运行清单；仓库已有实现资产但未作为默认 Compose 常驻服务",
-      "action": "只有现场阶段需要 Optimization 时才加入 Compose；不得让其影响 Telemetry 或 Control Safety"
+      "current": "Optimization 属于按需智能服务，与 Forecast/FDD 一起通过 intelligence Compose profile 提供，不进入默认常驻服务清单",
+      "action": "只有现场阶段需要 Optimization 时才启用 --profile intelligence；不得让其影响 Telemetry 或 Control Safety"
     },
     {
       "id": "DOC-CONSISTENCY-001",
@@ -362,6 +362,38 @@
       "status": "KEEP",
       "current": "deployment:phase1:check 会扫描 Production contract，拒绝 localhost/127.0.0.1/demo/fixture/oidc-test-provider",
       "action": "继续保持 Production contract fail-closed；真实生产 Secret/endpoint 由部署环境注入"
+    },
+    {
+      "id": "DEPLOY-TIER-001",
+      "area": "deployment",
+      "requirement": "单服务器部署必须提供显式资源档位，允许按站点规模选择观测与智能服务组合",
+      "status": "KEEP",
+      "current": "deployment-tiers.v1.json 定义 demo/single-lite/single-full 三档；observability 拆为 core/logs/full 三个 profile，Forecast/Optimization/FDD 拆为 intelligence profile",
+      "action": "生产上线必须声明 tier 与启用的 profiles；deployment:phase1:check 校验 tier、profile、环境 contract 三者一致"
+    },
+    {
+      "id": "OBS-PROFILE-001",
+      "area": "observability",
+      "requirement": "观测栈必须有精简档，不能要求所有站点运行六容器完整观测栈",
+      "status": "KEEP",
+      "current": "observability-core=Prometheus+node-exporter+Grafana；observability-logs=+OTel Collector+Loki；observability-full=+Tempo",
+      "action": "小规模生产默认使用 observability-logs；只有需要集中 trace 的站点启用 observability-full；同一时间只选一个 observability profile"
+    },
+    {
+      "id": "AVAILABILITY-001",
+      "area": "deployment",
+      "requirement": "单机 SPOF、RPO/RTO 与未来 HA 升级代价必须作为机器契约公开，不得把恢复目标写成高可用保证",
+      "status": "KEEP",
+      "current": "availability-tier.v1.json 将当前档固定为 SINGLE_NODE_RECOVERABLE，枚举 PG/CH/Redis/MQTT/Centrifugo/观测 SPOF 及组件级升级路径；ThingsBoard v4.3.1.1 单体/微服务切换模式被记录为 stage-0→3 参考",
+      "action": "任何 SLO/发布声明必须引用 availability tier；进入 COMPONENT_REDUNDANT 或 HA 前必须先提供该档 entryEvidence"
+    },
+    {
+      "id": "RECOVERY-ATTESTATION-001",
+      "area": "recovery",
+      "requirement": "RPO/RTO 目标定义完成不等于达标；生产恢复能力由时间戳化真实恢复演练证据证明",
+      "status": "KEEP",
+      "current": "recovery/attainment.v1.json 将默认状态固定为 TARGET_DEFINED 且 productionClaimAllowed=false；drill template/verifier/runbook 保留",
+      "action": "只有真实 external backup + 恢复主机 + 业务校验完成的 timestamped drill 才能把状态改为 DRILL_PASSED；发布流程引用 attainment 状态"
     }
   ]
 }

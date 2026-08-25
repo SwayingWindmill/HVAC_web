@@ -301,6 +301,8 @@ CoolingTowerClusterController
 
 ## 7. Phase 1 部署边界
 
+Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。
+
 Phase 1 canonical Cloud deployment：
 
 ```text
@@ -315,7 +317,7 @@ Docker Compose
 
 以下能力不作为 Phase 1 Cloud 前置：
 
-- Kubernetes
+- Kubernetes 不作为 Phase 1 前置
 - Service Mesh
 - Auto Scaling
 - PostgreSQL Replica HA
@@ -347,6 +349,8 @@ Production
 Whole Server 的 4 小时目标只有在 Cold Standby/可及时替换硬件、External Backup、Versioned Config 和 Recovery Runbook 同时成立时才可声明。单服务器不承诺 Zero Downtime、Automatic Failover、Database RPO=0 或 99.99% Availability。
 
 目标定义不等于达标证明。RTO 从故障被确认影响服务开始，到 Business Service Restored + 关键业务验证通过结束；Container Running 不是 RTO End。真实生产达标必须通过 timestamped Restore Drill 记录 Actual RPO/RTO。
+
+Phase 1 可用性档位固定为 `SINGLE_NODE_RECOVERABLE`，机器契约位于 `deploy/platform/phase1/availability-tier.v1.json`。观测栈按 `observability-core` / `observability-logs` / `observability-full` 三档 profile 选择，Forecast / Optimization / FDD 通过 `intelligence` profile 按需启用；资源档位位于 `deploy/platform/phase1/deployment-tiers.v1.json`。
 
 ## 10. 验收来源
 

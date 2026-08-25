@@ -96,7 +96,29 @@
   "observability": {
     "requiredSignals": ["metrics", "logs", "traces", "events", "audit"],
     "requiredOperationalViews": ["platform", "iot", "data", "control"],
-    "phase1Topology": "single-instance-compose"
+    "phase1Topology": "single-instance-compose-with-profiles",
+    "profiles": {
+      "observability-core": [
+        "prometheus",
+        "node-exporter",
+        "grafana"
+      ],
+      "observability-logs": [
+        "prometheus",
+        "node-exporter",
+        "grafana",
+        "otel-collector",
+        "loki"
+      ],
+      "observability-full": [
+        "prometheus",
+        "node-exporter",
+        "grafana",
+        "otel-collector",
+        "loki",
+        "tempo"
+      ]
+    }
   },
   "delivery": {
     "pipeline": ["git", "ci", "test", "build", "image", "registry", "staging", "approval", "production"],
@@ -122,7 +144,9 @@
     "metricRtoSeconds": 14400,
     "wholeServerReplacementRtoSeconds": 14400,
     "wholeServerFourHourTargetRequiresColdStandby": true,
-    "edgeStoreAndForwardCountsTowardTelemetryRecovery": true
+    "edgeStoreAndForwardCountsTowardTelemetryRecovery": true,
+    "attainmentContract": "deploy/platform/phase1/recovery/attainment.v1.json",
+    "numericAvailabilitySloClaimForbiddenWithoutEvidence": true
   },
   "phase1DeferredCapabilities": [
     "kubernetes-as-primary-orchestrator",
@@ -135,5 +159,22 @@
     "kafka-or-redpanda-as-required-platform-backbone",
     "gitops-controller",
     "multi-node-observability-cluster"
-  ]
+  ],
+  "deploymentTiers": {
+    "contract": "deploy/platform/phase1/deployment-tiers.v1.json",
+    "profiles": [
+      "observability-core",
+      "observability-logs",
+      "observability-full",
+      "intelligence"
+    ],
+    "profileSelectionRequired": true,
+    "intelligenceServicesOptional": true
+  },
+  "availabilityTier": {
+    "contract": "deploy/platform/phase1/availability-tier.v1.json",
+    "currentTier": "SINGLE_NODE_RECOVERABLE",
+    "highAvailability": false,
+    "numericAvailabilitySloAllowed": false
+  }
 }

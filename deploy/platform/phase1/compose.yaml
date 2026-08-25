@@ -652,7 +652,7 @@ services:
     profiles: ["observability-logs", "observability-full"]
     image: otel/opentelemetry-collector-contrib:0.111.0
     restart: unless-stopped
-    command: ["--config=/etc/otelcol-contrib/configs/${PHASE1_OBSERVABILITY_PROFILE:-logs}.yaml"]
+    command: ["--config=/etc/otelcol-contrib/configs/${PHASE1_OBSERVABILITY_CONFIG:-logs}.yaml"]
     volumes:
       - ./observability/otel-collector:/etc/otelcol-contrib/configs:ro
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro

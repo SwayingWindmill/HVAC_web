@@ -24,8 +24,10 @@ let deploymentTier = resolveDeploymentTier({
   runtimeEnvironment: { ...runtimeValues, ...process.env },
 });
 const args = process.argv.slice(2);
-if (args.some((arg) => arg === '--profile' || arg.startsWith('--profile='))) {
-  throw new Error('Compose profiles are selected only by PHASE1_DEPLOYMENT_TIER');
+if (args.some((arg, index) =>
+  (arg === '--profile' && args[index + 1] === 'intelligence') ||
+  arg === '--profile=intelligence')) {
+  throw new Error('The intelligence profile requires a separately certified capacity tier');
 }
 const ownerSplitIndex = args.indexOf('--owner-split');
 const ownerSplit = ownerSplitIndex >= 0;
@@ -69,6 +71,7 @@ const env = {
   ...process.env,
   COMPOSE_PROFILES: '',
   ...deploymentTier.environment,
+  PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
   IDENTITY_ADMIN_DATABASE_URL: databaseUrl('identity_admin', 'hvac_identity'),

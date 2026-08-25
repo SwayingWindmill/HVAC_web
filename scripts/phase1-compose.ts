@@ -34,9 +34,15 @@ let deploymentTier = resolveDeploymentTier({
 });
 
 const args = process.argv.slice(2);
-if (args.some((arg) => arg === "--profile" || arg.startsWith("--profile="))) {
+if (
+  args.some(
+    (arg, index) =>
+      (arg === "--profile" && args[index + 1] === "intelligence") ||
+      arg === "--profile=intelligence",
+  )
+) {
   throw new Error(
-    "Compose profiles are selected only by PHASE1_DEPLOYMENT_TIER",
+    "The intelligence profile requires a separately certified capacity tier",
   );
 }
 const ownerSplitIndex = args.indexOf("--owner-split");
@@ -84,6 +90,7 @@ const result = spawnSync(
       ...process.env,
       COMPOSE_PROFILES: "",
       ...deploymentTier.environment,
+      PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ""),
       PHASE1_ENV_FILE: runtimeEnvPath,
     },
     stdio: "inherit",

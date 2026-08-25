@@ -41,6 +41,9 @@ services:
       - ./postgres/init/011-s08-metric-lifecycle.sql:/docker-entrypoint-initdb.d/270.sql:ro
       - ./postgres/init/012-s19-settlement-projections.sql:/docker-entrypoint-initdb.d/280.sql:ro
       - ./postgres/init/013-s22-intelligence-products.sql:/docker-entrypoint-initdb.d/290.sql:ro
+      - ../connectivity/postgres/init/001-s09-connectivity.sql:/docker-entrypoint-initdb.d/300.sql:ro
+      - ../connectivity/postgres/init/002-s11-command-reply-evidence.sql:/docker-entrypoint-initdb.d/310.sql:ro
+      - ../connectivity/postgres/init/003-s12-edge-fleet.sql:/docker-entrypoint-initdb.d/320.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

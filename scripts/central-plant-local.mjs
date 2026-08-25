@@ -10,7 +10,6 @@ import WebSocket from 'ws';
 import { centralPlantDevices, centralPlantIdentity } from './central-plant-local-contract.mjs';
 import {
   centralPlantAreas,
-  centralPlantCalculatedPointCount,
   centralPlantDeviceEndpoints,
   centralPlantEquipment,
   centralPlantSensors,
@@ -337,13 +336,11 @@ async function browserAudit(topology) {
     });
     const sitePath = `/sites/${centralPlantIdentity.siteId}/assets`;
     const expectedAssetCounts = {
-      areas: centralPlantAreas.length,
-      equipment: centralPlantEquipment.length,
+      spaces: centralPlantAreas.length,
+      assets: centralPlantEquipment.length,
       deviceEndpoints: centralPlantDeviceEndpoints.length,
-      sensors: centralPlantSensors.length,
-      telemetryPoints: topology.pointCount,
-      calculatedPoints: centralPlantCalculatedPointCount,
-      independentSensorDevices: centralPlantSensors.filter((sensor) => sensor.mode === 'INDEPENDENT_DEVICE').length,
+      physicalSensors: centralPlantSensors.length,
+      points: topology.registryPointCount,
     };
     await client.send('Page.navigate', {
       url: `${topology.webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(sitePath)}`,
@@ -352,17 +349,15 @@ async function browserAudit(topology) {
     await waitForCondition(client, `(() => {
       const root = document.querySelector('[data-testid="real-site-route-assets"]');
       return location.pathname === ${JSON.stringify(sitePath)}
-        && root?.dataset.areaCount === ${JSON.stringify(String(expectedAssetCounts.areas))}
-        && root?.dataset.equipmentCount === ${JSON.stringify(String(expectedAssetCounts.equipment))}
+        && root?.dataset.spaceCount === ${JSON.stringify(String(expectedAssetCounts.spaces))}
+        && root?.dataset.assetCount === ${JSON.stringify(String(expectedAssetCounts.assets))}
         && root?.dataset.deviceEndpointCount === ${JSON.stringify(String(expectedAssetCounts.deviceEndpoints))}
-        && root?.dataset.sensorCount === ${JSON.stringify(String(expectedAssetCounts.sensors))}
-        && root?.dataset.telemetryPointCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
-        && root?.dataset.independentSensorDeviceCount === ${JSON.stringify(String(expectedAssetCounts.independentSensorDevices))}
-        && root?.dataset.calculatedPointCount === ${JSON.stringify(String(expectedAssetCounts.calculatedPoints))}
-        && root?.dataset.pointLedgerCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
-        && root?.dataset.filteredPointCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
+        && root?.dataset.sensorCount === ${JSON.stringify(String(expectedAssetCounts.physicalSensors))}
+        && root?.dataset.telemetryPointCount === ${JSON.stringify(String(expectedAssetCounts.points))}
+        && root?.dataset.pointLedgerCount === ${JSON.stringify(String(expectedAssetCounts.points))}
+        && root?.dataset.filteredPointCount === ${JSON.stringify(String(expectedAssetCounts.points))}
         && root?.dataset.ledgerMode === 'points'
-        && document.querySelectorAll('[data-testid="real-assets-table-wrap"] [data-point-id]').length >= ${JSON.stringify(expectedAssetCounts.telemetryPoints)}
+        && document.querySelectorAll('[data-testid="real-assets-table-wrap"] [data-point-id]').length >= ${JSON.stringify(expectedAssetCounts.points)}
         && document.body.innerText.includes('中央机房')
         && document.body.innerText.includes('资产导航')
         && document.body.innerText.includes('点位');
@@ -403,19 +398,19 @@ async function browserAudit(topology) {
         );
         const assetModel = await assetModelResponse.json();
         const expectedCounts = ${JSON.stringify(expectedAssetCounts)};
-        if (!assetModelResponse.ok || assetModel?.schemaVersion !== 1 || assetModel?.siteId !== ${JSON.stringify(centralPlantIdentity.siteId)}) return false;
+        if (!assetModelResponse.ok || assetModel?.schemaVersion !== 2 || assetModel?.siteId !== ${JSON.stringify(centralPlantIdentity.siteId)}) return false;
         if (!assetModel?.counts || Object.entries(expectedCounts).some(([key, value]) => assetModel.counts[key] !== value)) return false;
-        const areas = Array.isArray(assetModel.areas) ? assetModel.areas : [];
-        const equipment = Array.isArray(assetModel.equipment) ? assetModel.equipment : [];
+        const spaces = Array.isArray(assetModel.spaces) ? assetModel.spaces : [];
+        const assets = Array.isArray(assetModel.assets) ? assetModel.assets : [];
         const devices = Array.isArray(assetModel.devices) ? assetModel.devices : [];
         const sensors = Array.isArray(assetModel.sensors) ? assetModel.sensors : [];
         const telemetryPoints = Array.isArray(assetModel.telemetryPoints) ? assetModel.telemetryPoints : [];
         const relationships = Array.isArray(assetModel.relationships) ? assetModel.relationships : [];
-        if (areas.length !== expectedCounts.areas
-          || equipment.length !== expectedCounts.equipment
+        if (spaces.length !== expectedCounts.spaces
+          || assets.length !== expectedCounts.assets
           || devices.length !== expectedCounts.deviceEndpoints
-          || sensors.length !== expectedCounts.sensors
-          || telemetryPoints.length !== expectedCounts.telemetryPoints
+          || sensors.length !== expectedCounts.physicalSensors
+          || telemetryPoints.length !== expectedCounts.points
           || relationships.length === 0) return false;
         const chiller = devices.find((device) => device.id === ${JSON.stringify(chiller.platformDeviceId)} && device.displayName.includes('CHILLER-01'));
         if (!chiller) return false;

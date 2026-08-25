@@ -31,6 +31,14 @@ deploy/platform/phase1/
 └─ backup/
 ```
 
+## Deployment tiers
+
+Phase 1 keeps one canonical Compose and selects resource shape through profiles. `deploy/platform/phase1/deployment-tiers.v1.json` defines `demo`, `single-lite` and `single-full`. `observability-core` keeps Prometheus + node-exporter + Grafana; `observability-logs` adds OTel Collector + Loki; `observability-full` adds Tempo. Forecast/Optimization/FDD are optional through `intelligence`. Exactly one observability profile must be selected for a running deployment; the environment contract records the selection in `PHASE1_OBSERVABILITY_PROFILE`.
+
+## Availability tier
+
+Phase 1 availability tier is fixed as `SINGLE_NODE_RECOVERABLE` in `deploy/platform/phase1/availability-tier.v1.json`. This contract lists every SPOF and its upgrade cost, and records the ThingsBoard v4.3.1.1 topology-switch reference for the Stage 0 -> Stage 3 monolith-to-multi-instance path. It is not a promise to deliver that path now. No numeric availability SLO may be derived from single-node recovery targets without measured evidence.
+
 ## Delivery rule
 
 Phase 1 发布流程遵循：

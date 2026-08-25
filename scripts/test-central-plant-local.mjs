@@ -4,6 +4,7 @@ import test from 'node:test';
 import { resolve } from 'node:path';
 import { centralPlantDevices } from './central-plant-local-contract.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildHistoricalEnergyBootstrap } from './central-plant-local-topology.mjs';
 import {
   buildCentralPlantSimulatorConfig,
@@ -12,6 +13,7 @@ import {
 
 const root = resolve(process.cwd());
 const pointContract = JSON.parse(await readFile(resolve(root, 'contracts/registry/central-plant-device-points.v2.json'), 'utf8'));
+const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 const simulatorConfig = buildCentralPlantSimulatorConfig(pointContract);
 const mqttCompose = await readFile(resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
@@ -52,6 +54,8 @@ test('central plant seeds cover every canonical telemetry Point', () => {
     principalSubject: 'logto-central-plant-user',
     pointKeysByDevice,
     spatialPoints: simulatorConfig.points,
+    mqttBrokerURL: 'tls://127.0.0.1:58883',
+    gatewayExternalId: simulatorConfig.gatewayId,
   });
   const s2 = buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points });
   for (const device of centralPlantDevices) {
@@ -62,8 +66,22 @@ test('central plant seeds cover every canonical telemetry Point', () => {
       assert.ok(s2.includes(point.telemetryKey));
     }
   }
+  assert.ok(s1.includes("'RESET_TO_ZERO'"));
+  assert.ok(s1.includes('INSERT INTO connectivity.transport_profiles'));
+  assert.ok(s1.includes('INSERT INTO connectivity.integration_instances'));
+  assert.ok(s1.includes('INSERT INTO connectivity.gateway_child_bindings'));
+  assert.ok(s1.includes('tls://127.0.0.1:58883'));
+  assert.ok(s2.includes("'RESET_TO_ZERO'"));
   assert.ok(!s1.includes('ACCESS_TOKEN'));
   assert.ok(!s2.includes('ACCESS_TOKEN'));
+});
+
+test('central plant local route registry preserves the final S25 contract', () => {
+  const local = buildCentralPlantRouteOwnership(routeOwnershipSource);
+  assert.deepEqual(local, routeOwnershipSource);
+  assert.ok(local.routes.filter((route) => route.owner === 'telemetry-runtime-service').every((route) => route.rollout.mode === 'all'));
+  assert.ok(!JSON.stringify(local).includes('activationStatus'));
+  assert.ok(!JSON.stringify(local).includes('migrationPhase'));
 });
 
 test('central plant local runtime uses MQTT only', () => {
@@ -75,10 +93,20 @@ test('central plant local runtime uses MQTT only', () => {
     './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter',
     './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher',
     "'spiffe://hvac.local/mqtt-telemetry-adapter'",
-    "topicFilter: 'energy/v1/+/+/+/telemetry'",
+    "'energy/v1/+/+/+/telemetry'",
+    "'energy/v1/+/+/+/state'",
+    "'energy/v1/+/+/+/event'",
+    "'energy/v1/+/+/+/heartbeat'",
     'mqttGatewayConfig',
+    'credentialRevision: 1',
+    "fleetReleaseKeyId: 'central-plant-local-ed25519-v1'",
+    'fleetReleasePublicKeyFile: paths.fleetReleasePublicKey',
     'EG8200 MQTT Publisher',
     'MQTT Telemetry Adapter',
+    'configureLocalDatabaseRoleCredentials',
+    "'s2_iam_grant_runtime'",
+    'OIDC_STATE_REDIS_URL',
+    'CENTRAL_PLANT_REDIS_PORT',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);
   assert.ok(!topology.toLowerCase().includes('thingsboard'));
 });

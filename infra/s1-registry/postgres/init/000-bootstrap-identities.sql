@@ -41,21 +41,31 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fdd_runtime') THEN
     CREATE ROLE fdd_runtime LOGIN PASSWORD 'fdd-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'connectivity_migrator') THEN
+    CREATE ROLE connectivity_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'connectivity_runtime') THEN
+    CREATE ROLE connectivity_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
 END
 $$;
 
 CREATE SCHEMA IF NOT EXISTS iam AUTHORIZATION s1_iam_migrator;
 CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
+CREATE SCHEMA IF NOT EXISTS connectivity AUTHORIZATION connectivity_migrator;
 ALTER SCHEMA iam OWNER TO s1_iam_migrator;
 ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
+ALTER SCHEMA connectivity OWNER TO connectivity_migrator;
 REVOKE ALL ON SCHEMA iam FROM PUBLIC;
 REVOKE ALL ON SCHEMA core_registry FROM PUBLIC;
+REVOKE ALL ON SCHEMA connectivity FROM PUBLIC;
 
 GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler,
   s1_core_migrator, s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime,
-  forecast_runtime, optimization_runtime, fdd_runtime;
+  forecast_runtime, optimization_runtime, fdd_runtime, connectivity_migrator, connectivity_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler, maintenance_runtime;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime,
   forecast_runtime, optimization_runtime, fdd_runtime;
+GRANT USAGE ON SCHEMA connectivity TO connectivity_runtime;
 
 COMMIT;
