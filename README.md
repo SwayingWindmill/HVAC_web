@@ -4,7 +4,7 @@
 
 ## 系统结构
 
-Phase 1 总体与部署架构以 `架构规划/智慧能源系统部署与运维架构设计.md` 为准，工程基线见 `docs/architecture/phase1-overall-architecture.md`：
+Phase 1 总体与部署架构以 `docs/architecture/deployment-architecture-v1.md` 与 `docs/architecture/deployment-topology-matrix-v1.md` 为准，工程基线见 `docs/architecture/phase1-overall-architecture.md`：
 
 ```text
 User
