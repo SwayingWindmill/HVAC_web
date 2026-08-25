@@ -1,6 +1,6 @@
 # platform-core-service
 
-`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Tenant-scoped Site, Asset and Device representations to `platform-gateway`. This service is not browser-facing and does not perform migration or business double writes.
+`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Tenant-scoped Site, Asset, Device and Energy Content representations to authorized internal callers. This service is not browser-facing and does not perform migration or business double writes.
 
 ## Internal routes
 
@@ -12,6 +12,7 @@ All routes are `GET` under `/internal/v1/registry`:
 - `/assets/{assetId}`
 - `/sites/{siteId}/devices`
 - `/devices/{deviceId}`
+- `/sites/{siteId}/meter-bindings/resolve?deviceId=...&pointId=...&sampledAt=...`
 
 The caller must present a verified client certificate whose single SPIFFE URI matches the configured Gateway/Operations Agent presenter allowlist. Each request must also carry `X-Delegation-Grant`, signed directly by IAM for that exact mTLS presenter, one concrete Registry action and audience `platform-core-service`. Grants remain non-transitive; a Gateway-presenter grant cannot be replayed by Operations Agent.
 
@@ -50,6 +51,7 @@ Optional:
 - `CORE_GRANT_ISSUER` (default IAM SPIFFE ID)
 - `CORE_ALLOWED_WORKLOAD_SPIFFE` (default Gateway SPIFFE ID)
 - `CORE_OPERATIONS_AGENT_SPIFFE` (default Operations Agent SPIFFE ID)
+- `CORE_ANALYTICS_PROJECTOR_SPIFFE` (default analytics projector SPIFFE ID)
 - `CORE_AUDIENCE` (default `platform-core-service`)
 - `OTEL_EXPORTER_OTLP_ENDPOINT`
 

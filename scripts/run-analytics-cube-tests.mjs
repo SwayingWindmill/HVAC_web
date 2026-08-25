@@ -179,7 +179,7 @@ try {
   report.assertions.sourceProjection = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/analytics-read-model-projector',
-    'test', '-count=1', '-run', 'TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
+    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
   ], {
     env: {
       ...process.env,
@@ -195,8 +195,8 @@ try {
   const rows = response.data ?? [];
   if (rows.length !== 1) throw new Error(`unexpected Cube row count ${rows.length}`);
   const row = rows[0];
-  if (Number(row['energy_usage.energy_valid_kwh']) !== 3) throw new Error(`unexpected Cube valid energy ${row['energy_usage.energy_valid_kwh']}`);
-  if (Number(row['energy_usage.valid_count']) !== 1 || Number(row['energy_usage.suspect_count']) !== 1 || Number(row['energy_usage.invalid_count']) !== 0) {
+  if (Number(row['energy_usage.energy_valid_kwh']) !== 4) throw new Error(`unexpected Cube valid energy ${row['energy_usage.energy_valid_kwh']}`);
+  if (Number(row['energy_usage.valid_count']) !== 3 || Number(row['energy_usage.suspect_count']) !== 0 || Number(row['energy_usage.invalid_count']) !== 0) {
     throw new Error(`unexpected Cube quality counts ${JSON.stringify(row)}`);
   }
   if (Number(row['energy_usage.max_dataset_revision']) !== 1722258300000) throw new Error(`unexpected Cube revision ${row['energy_usage.max_dataset_revision']}`);

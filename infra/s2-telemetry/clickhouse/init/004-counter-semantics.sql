@@ -9,7 +9,11 @@ ALTER TABLE telemetry_history.observations
 ALTER TABLE telemetry_history.observations
   ADD COLUMN IF NOT EXISTS counter_rollover_modulus Nullable(Float64);
 
-CREATE VIEW IF NOT EXISTS telemetry_history.counter_deltas AS
+-- The projector receives SELECT only on this canonical view. DEFINER keeps the
+-- raw observations table outside the projector identity's read boundary.
+CREATE OR REPLACE VIEW telemetry_history.counter_deltas
+DEFINER = CURRENT_USER
+SQL SECURITY DEFINER AS
 WITH ordered AS (
   SELECT
     tenant_id,
@@ -25,10 +29,17 @@ WITH ordered AS (
     sampled_at,
     received_at,
     observation_id,
+    source_event_id,
+    source_partition,
+    source_offset,
     quality,
     quality_reasons,
     value_number,
+    lagInFrame(toNullable(observation_id)) OVER point_window AS previous_observation_id,
     lagInFrame(value_number) OVER point_window AS previous_value,
+    lagInFrame(sampled_at) OVER point_window AS previous_sampled_at,
+    lagInFrame(quality, 1, '') OVER point_window AS previous_quality,
+    lagInFrame(quality_reasons, 1, []) OVER point_window AS previous_quality_reasons,
     lagInFrame(point_revision) OVER point_window AS previous_point_revision,
     lagInFrame(unit) OVER point_window AS previous_unit,
     max(value_number) OVER revision_window AS previous_max_value
@@ -67,8 +78,15 @@ SELECT
   observation_id,
   quality,
   quality_reasons,
+  source_event_id,
+  source_partition,
+  source_offset,
   value_number AS counter_value,
+  previous_observation_id,
   previous_value,
+  previous_sampled_at,
+  previous_quality,
+  previous_quality_reasons,
   multiIf(
     previous_value IS NULL, 'INITIAL',
     previous_point_revision IS NULL OR point_revision != previous_point_revision, 'REVISION_BOUNDARY',

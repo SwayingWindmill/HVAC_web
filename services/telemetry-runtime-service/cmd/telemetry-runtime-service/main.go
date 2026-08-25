@@ -96,7 +96,7 @@ func main() {
 		go runHistoryProjection(historyContext, historyRelay, logger)
 	}
 
-	analyticsProjector, analyticsContext, analyticsCancel, err := loadAnalyticsProjection()
+	analyticsProjector, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
 	if err != nil {
 		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -333,7 +333,7 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, lo
 	}
 }
 
-func loadAnalyticsProjection() (*analyticsprojector.Projector, context.Context, context.CancelFunc, error) {
+func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
 		return nil, context.Background(), nil, nil
 	}
@@ -345,7 +345,7 @@ func loadAnalyticsProjection() (*analyticsprojector.Projector, context.Context, 
 	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
 		BaseURL:           baseURL,
 		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
-		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "observations"),
+		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "counter_deltas"),
 		AnalyticsDatabase: envOr("ANALYTICS_DATABASE", "analytics"),
 		AnalyticsTable:    envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
 		Username:          strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_READER_USERNAME")),
@@ -366,8 +366,27 @@ func loadAnalyticsProjection() (*analyticsprojector.Projector, context.Context, 
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	coreRoots, err := loadCertPool(requiredEnv("ANALYTICS_CORE_CA"))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	coreClient := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			Proxy:              http.ProxyFromEnvironment,
+			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: coreRoots, Certificates: []tls.Certificate{certificate}},
+			DisableCompression: true,
+		},
+	}
+	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
+		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), Grant: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT"), GrantFile: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT_FILE"), HTTPClient: coreClient,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
-		Source: reader, Sink: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
+		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
 	})
 	if err != nil {
 		return nil, nil, nil, err

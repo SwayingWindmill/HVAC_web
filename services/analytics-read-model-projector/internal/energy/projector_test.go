@@ -11,6 +11,10 @@ import (
 const (
 	testTenantID            = "018f4d00-0000-7000-8000-000000000001"
 	testSiteID              = "018f4e00-1000-7000-8000-000000000001"
+	testMeterID             = "018f4e00-1100-7000-8000-000000000001"
+	testBindingID           = "018f4e00-1200-7000-8000-000000000001"
+	testTopologyVersionID   = "018f4e00-1300-7000-8000-000000000001"
+	testEnergyTypeID        = "018f4e00-1400-7000-8000-000000000001"
 	testDeviceID            = "018f4e00-2000-7000-8000-000000000001"
 	testPointID             = "018f4e00-2100-7000-8000-000000000001"
 	testSensorID            = "018f4e00-2200-7000-8000-000000000001"
@@ -18,16 +22,22 @@ const (
 	testCurrentObservation  = "018f4e00-3000-7000-8000-000000000002"
 )
 
-func TestBuildFactConvertsCumulativeReadingToAdditiveInterval(t *testing.T) {
+func TestBuildFactUsesCanonicalDeltaAndBindingSnapshot(t *testing.T) {
 	projectedAt := time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC)
-	fact, err := BuildFact(validCandidate(), projectedAt)
+	delta := validDelta()
+	delta.PreviousValue = 100.25
+	delta.DeltaValue = float64Pointer(2.75)
+	fact, err := BuildFact(delta, validBinding(), projectedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fact.FactID != testCurrentObservation || fact.EnergyType != EnergyTypeElectricity || fact.EnergyKWh != 2.75 {
 		t.Fatalf("fact=%#v", fact)
 	}
-	if fact.Quality != QualityValid || fact.ObservationCount != 2 || fact.DatasetRevision != 1722258003000 {
+	if fact.MeterBindingID != testBindingID || fact.TelemetryKey != "site.energy.total" || fact.FactRevision != 0 {
+		t.Fatalf("fact=%#v", fact)
+	}
+	if fact.Quality != FactQualityValid || fact.DatasetRevision != 1722258003000 || fact.SourceOffset != 1722258003000 {
 		t.Fatalf("fact=%#v", fact)
 	}
 	if !fact.PeriodStart.Equal(time.Date(2026, 7, 29, 12, 55, 0, 0, time.UTC)) ||
@@ -37,85 +47,50 @@ func TestBuildFactConvertsCumulativeReadingToAdditiveInterval(t *testing.T) {
 	}
 }
 
-func TestBuildFactPropagatesSuspectSourceQuality(t *testing.T) {
-	candidate := validCandidate()
-	candidate.PreviousQuality = SourceQualitySuspect
-	candidate.PreviousQualityReasons = []string{"SOURCE_LAG_EXCEEDED"}
-	fact, err := BuildFact(candidate, time.Now())
+func TestBuildFactMapsRawQualityWithoutRecomputingDelta(t *testing.T) {
+	delta := validDelta()
+	delta.CurrentQuality = SourceQualityPartial
+	delta.PreviousQuality = SourceQualityGood
+	delta.CurrentQualityReasons = []string{"SOURCE_LAG_EXCEEDED"}
+	delta.DeltaValue = float64Pointer(0)
+	fact, err := BuildFact(delta, validBinding(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fact.Quality != QualitySuspect || !reflect.DeepEqual(fact.QualityReasons, []string{"SOURCE_LAG_EXCEEDED"}) {
+	if fact.EnergyKWh != 0 || fact.Quality != FactQualitySuspect || !reflect.DeepEqual(fact.QualityReasons, []string{"SOURCE_LAG_EXCEEDED"}) {
 		t.Fatalf("fact=%#v", fact)
 	}
 }
 
-func TestBuildFactMarksUnknownSourceQualityInvalid(t *testing.T) {
-	candidate := validCandidate()
-	candidate.CurrentQuality = "UNKNOWN"
-	fact, err := BuildFact(candidate, time.Now())
+func TestBuildFactMapsUnknownRawQualityToInvalid(t *testing.T) {
+	delta := validDelta()
+	delta.CurrentQuality = "UNKNOWN"
+	fact, err := BuildFact(delta, validBinding(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fact.Quality != QualityInvalid || !reflect.DeepEqual(fact.QualityReasons, []string{ReasonSourceQualityInvalid}) {
+	if fact.Quality != FactQualityInvalid || !reflect.DeepEqual(fact.QualityReasons, []string{ReasonSourceQualityInvalid}) {
 		t.Fatalf("fact=%#v", fact)
 	}
 }
 
-func TestBuildFactTreatsMeterRollbackAsSuspectZeroEnergy(t *testing.T) {
-	candidate := validCandidate()
-	candidate.PreviousValue = 120.5
-	candidate.CurrentValue = 4.25
-	fact, err := BuildFact(candidate, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fact.EnergyKWh != 0 || fact.Quality != QualitySuspect || !reflect.DeepEqual(fact.QualityReasons, []string{ReasonMeterResetOrRollback}) {
-		t.Fatalf("fact=%#v", fact)
+func TestBuildFactRejectsInvalidDecreaseInsteadOfWritingZero(t *testing.T) {
+	delta := validDelta()
+	delta.TransitionType = TransitionInvalidDecrease
+	delta.DeltaValue = nil
+	if _, err := BuildFact(delta, validBinding(), time.Now()); err == nil {
+		t.Fatal("BuildFact() error = nil")
 	}
 }
 
-func TestBuildFactRejectsInvalidStructuralCandidate(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*Candidate)
-	}{
-		{"missing tenant", func(candidate *Candidate) { candidate.TenantID = "" }},
-		{"missing site", func(candidate *Candidate) { candidate.SiteID = "" }},
-		{"missing point", func(candidate *Candidate) { candidate.PointID = "" }},
-		{"wrong telemetry key", func(candidate *Candidate) { candidate.TelemetryKey = "chiller.power" }},
-		{"non increasing time", func(candidate *Candidate) { candidate.CurrentSampledAt = candidate.PreviousSampledAt }},
-		{"missing source offset", func(candidate *Candidate) { candidate.SourceOffset = 0 }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := validCandidate()
-			test.mutate(&candidate)
-			if _, err := BuildFact(candidate, time.Now()); err == nil {
-				t.Fatal("BuildFact() error = nil")
-			}
-		})
-	}
-}
-
-func TestBuildFactPreservesNegativeCumulativeEvidenceAsInvalid(t *testing.T) {
-	candidate := validCandidate()
-	candidate.CurrentValue = -1
-	fact, err := BuildFact(candidate, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fact.EnergyKWh != 0 || fact.Quality != QualityInvalid || !reflect.DeepEqual(fact.QualityReasons, []string{ReasonNegativeCumulativeValue}) {
-		t.Fatalf("fact=%#v", fact)
-	}
-}
-
-func TestProjectorProcessesOneBatch(t *testing.T) {
-	source := &fakeSource{candidates: []Candidate{validCandidate()}}
+func TestProjectorProcessesOneCanonicalBatch(t *testing.T) {
+	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
+	resolver := &fakeResolver{resolution: validBinding()}
 	sink := &fakeSink{}
-	projector, err := NewProjector(ProjectorConfig{Source: source, Sink: sink, BatchSize: 100, Now: func() time.Time {
-		return time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC)
-	}})
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 100,
+		Now: func() time.Time { return time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,28 +98,52 @@ func TestProjectorProcessesOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || source.limit != 100 || len(sink.facts) != 1 {
-		t.Fatalf("count=%d source=%#v sink=%#v", count, source, sink)
+	if count != 1 || source.limit != 100 || resolver.calls != 1 || len(sink.facts) != 1 {
+		t.Fatalf("count=%d source=%#v resolver=%#v sink=%#v", count, source, resolver, sink)
 	}
 }
 
-func TestProjectorDoesNotWriteEmptyBatch(t *testing.T) {
-	source := &fakeSource{}
+func TestProjectorDoesNotWriteWhenBindingIsNotUnique(t *testing.T) {
+	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
+	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingAmbiguous}}
 	sink := &fakeSink{}
-	projector, err := NewProjector(ProjectorConfig{Source: source, Sink: sink, BatchSize: 10})
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := projector.ProjectOnce(context.Background())
-	if err != nil || count != 0 || sink.called {
-		t.Fatalf("count=%d err=%v sink=%#v", count, err, sink)
+	if _, err := projector.ProjectOnce(context.Background()); err == nil || sink.called {
+		t.Fatalf("ProjectOnce() err=%v sink=%#v", err, sink)
 	}
 }
 
-func TestProjectorReturnsSinkFailure(t *testing.T) {
-	source := &fakeSource{candidates: []Candidate{validCandidate()}}
-	sink := &fakeSink{err: errors.New("write failed")}
-	projector, err := NewProjector(ProjectorConfig{Source: source, Sink: sink, BatchSize: 10})
+func TestProjectorDoesNotWriteWhenBindingIsMissing(t *testing.T) {
+	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
+	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingNoMatch}}
+	sink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projector.ProjectOnce(context.Background()); err == nil || sink.called {
+		t.Fatalf("ProjectOnce() err=%v sink=%#v", err, sink)
+	}
+}
+
+func TestBuildFactRejectsBindingOutsideEventTime(t *testing.T) {
+	binding := validBinding()
+	end := validDelta().CurrentSampledAt.Add(-time.Minute)
+	binding.EffectiveTo = &end
+	if _, err := BuildFact(validDelta(), binding, time.Now()); err == nil {
+		t.Fatal("BuildFact() error = nil")
+	}
+}
+
+func TestProjectorRejectsDuplicateLogicalFactKey(t *testing.T) {
+	first := validDelta()
+	second := validDelta()
+	second.CurrentObservationID = first.CurrentObservationID
+	source := &fakeSource{deltas: []CounterDelta{first, second}}
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: &fakeResolver{resolution: validBinding()}, FactSink: &fakeSink{}, BatchSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,46 +152,77 @@ func TestProjectorReturnsSinkFailure(t *testing.T) {
 	}
 }
 
-func validCandidate() Candidate {
-	sensorID := testSensorID
-	return Candidate{
-		PreviousObservationID: testPreviousObservation,
-		CurrentObservationID:  testCurrentObservation,
-		TenantID:              testTenantID,
-		SiteID:                testSiteID,
-		DeviceID:              testDeviceID,
-		PointID:               testPointID,
-		SensorID:              &sensorID,
-		TelemetryKey:          CumulativeElectricityTelemetryKey,
-		PreviousValue:         100.25,
-		CurrentValue:          103,
-		PreviousQuality:       SourceQualityGood,
-		CurrentQuality:        SourceQualityGood,
-		PreviousSampledAt:     time.Date(2026, 7, 29, 12, 55, 0, 0, time.UTC),
-		CurrentSampledAt:      time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
-		SourceOffset:          1722258003000,
+func TestProjectorReturnsSinkFailure(t *testing.T) {
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource:   &fakeSource{deltas: []CounterDelta{validDelta()}},
+		BindingResolver: &fakeResolver{resolution: validBinding()},
+		FactSink:        &fakeSink{err: errors.New("write failed")}, BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projector.ProjectOnce(context.Background()); err == nil {
+		t.Fatal("ProjectOnce() error = nil")
 	}
 }
 
+func validDelta() CounterDelta {
+	delta := 2.75
+	return CounterDelta{
+		PreviousObservationID: testPreviousObservation,
+		CurrentObservationID:  testCurrentObservation,
+		TenantID:              testTenantID, SiteID: testSiteID, DeviceID: testDeviceID, PointID: testPointID, SensorID: testSensorID,
+		TelemetryKey: "site.energy.total", PointRevision: 3, Unit: "kWh", CounterDecreaseMode: "RESET_TO_ZERO",
+		PreviousValue: 100.25, PreviousSampledAt: time.Date(2026, 7, 29, 12, 55, 0, 0, time.UTC),
+		PreviousQuality: SourceQualityGood, CurrentSampledAt: time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		CurrentQuality: SourceQualityGood, CurrentSourceEventID: "018f4e00-3100-7000-8000-000000000001",
+		CurrentSourcePartition: "telemetry-0", CurrentSourceOffset: 1722258003000,
+		TransitionType: TransitionIncrease, DeltaValue: &delta,
+	}
+}
+
+func validBinding() BindingResolution {
+	return BindingResolution{
+		Status: BindingMatch, TenantID: testTenantID, SiteID: testSiteID, MeterID: testMeterID,
+		MeterBindingID: testBindingID, TopologyVersionID: testTopologyVersionID, BindingVersion: 4,
+		EnergyTypeID: testEnergyTypeID, EnergyType: EnergyTypeElectricity, MeterRole: MeterRolePrimary,
+		Direction: "IMPORT", DeviceID: testDeviceID, PointID: testPointID, PointType: PointTypeCounter,
+		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+func float64Pointer(value float64) *float64 { return &value }
+
 type fakeSource struct {
-	candidates []Candidate
-	limit      int
+	deltas []CounterDelta
+	limit  int
+	err    error
+}
+
+func (source *fakeSource) ListDeltas(_ context.Context, limit int) ([]CounterDelta, error) {
+	source.limit = limit
+	return append([]CounterDelta(nil), source.deltas...), source.err
+}
+
+type fakeResolver struct {
+	resolution BindingResolution
+	calls      int
 	err        error
 }
 
-func (source *fakeSource) ListCandidates(_ context.Context, limit int) ([]Candidate, error) {
-	source.limit = limit
-	return append([]Candidate(nil), source.candidates...), source.err
+func (resolver *fakeResolver) Resolve(_ context.Context, _ BindingResolveInput) (BindingResolution, error) {
+	resolver.calls++
+	return resolver.resolution, resolver.err
 }
 
 type fakeSink struct {
-	facts  []Fact
+	facts  []EnergyIntervalFact
 	called bool
 	err    error
 }
 
-func (sink *fakeSink) InsertFacts(_ context.Context, facts []Fact) error {
+func (sink *fakeSink) InsertFacts(_ context.Context, facts []EnergyIntervalFact) error {
 	sink.called = true
-	sink.facts = append([]Fact(nil), facts...)
+	sink.facts = append([]EnergyIntervalFact(nil), facts...)
 	return sink.err
 }

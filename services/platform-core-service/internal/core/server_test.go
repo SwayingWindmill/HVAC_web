@@ -48,20 +48,21 @@ func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registr
 }
 
 type fakeRegistryStore struct {
-	sites         PageResult[Site]
-	site          Site
-	assets        PageResult[Asset]
-	assetItem     Asset
-	devices       PageResult[Device]
-	device        Device
-	bindings      PageResult[DeviceBinding]
-	spaceChildren PageResult[Space]
-	devicePoints  PageResult[TelemetryPoint]
-	assetModel    SiteAssetModel
-	err           error
-	lastClaims    registryauth.GrantClaims
-	lastPage      PageRequest
-	lastID        string
+	sites           PageResult[Site]
+	site            Site
+	assets          PageResult[Asset]
+	assetItem       Asset
+	devices         PageResult[Device]
+	device          Device
+	bindings        PageResult[DeviceBinding]
+	meterResolution MeterBindingResolution
+	spaceChildren   PageResult[Space]
+	devicePoints    PageResult[TelemetryPoint]
+	assetModel      SiteAssetModel
+	err             error
+	lastClaims      registryauth.GrantClaims
+	lastPage        PageRequest
+	lastID          string
 }
 
 func (store *fakeRegistryStore) ListSites(_ context.Context, claims registryauth.GrantClaims, page PageRequest) (PageResult[Site], error) {
@@ -91,6 +92,10 @@ func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth
 func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[DeviceBinding], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
 	return store.bindings, store.err
+}
+func (store *fakeRegistryStore) ResolveMeterBinding(_ context.Context, claims registryauth.GrantClaims, siteID string, input MeterBindingResolveRequest) (MeterBindingResolution, error) {
+	store.lastClaims, store.lastID = claims, siteID+"|"+input.DeviceID+"|"+input.PointID
+	return store.meterResolution, store.err
 }
 func (store *fakeRegistryStore) ListSpaceChildren(_ context.Context, claims registryauth.GrantClaims, siteID, parentSpaceID string, page PageRequest) (PageResult[Space], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, siteID+"|"+parentSpaceID, page
@@ -130,6 +135,27 @@ func TestServerListsSitesAndReturnsBoundCursor(t *testing.T) {
 	page, err := harness.codec.Decode(*collection.NextCursor, "sites", "", registryauth.ActionSiteList, claims)
 	if err != nil || page.ID != testSiteA1 {
 		t.Fatalf("decode cursor: page=%#v err=%v", page, err)
+	}
+}
+
+func TestServerResolvesMeterBindingWithinPrivateCoreRoute(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{meterResolution: MeterBindingResolution{
+		Status: "MATCH", TenantID: testTenantA, SiteID: testSiteA1, MeterID: testBindingA1,
+		MeterBindingID: testBindingA1, EnergyType: "electricity", MeterRole: "PRIMARY", PointType: "COUNTER",
+	}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/meter-bindings/resolve?deviceId=" + url.QueryEscape(testDeviceA1) + "&pointId=" + url.QueryEscape(testBindingA1) + "&sampledAt=" + url.QueryEscape(now.Format(time.RFC3339Nano))
+	response := harness.serve(t, http.MethodGet, path, testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var result MeterBindingResolution
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "MATCH" || store.lastID != testSiteA1+"|"+testDeviceA1+"|"+testBindingA1 {
+		t.Fatalf("result=%#v lastID=%q", result, store.lastID)
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/energy"
 )
 
-func TestReaderListsOnlyUnprojectedCumulativeEnergyCandidates(t *testing.T) {
+func TestReaderListsCanonicalCounterDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		username, _, ok := request.BasicAuth()
 		if !ok || username != "analytics_reader" {
@@ -26,13 +26,13 @@ func TestReaderListsOnlyUnprojectedCumulativeEnergyCandidates(t *testing.T) {
 		}
 		query := string(body)
 		for _, required := range []string{
-			"FROM telemetry_history.observations",
+			"FROM telemetry_history.counter_deltas",
 			"LEFT ANTI JOIN analytics.energy_interval_facts",
-			"PARTITION BY tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key",
-			"telemetry_key = 'hvac_meter.energy'",
-			"acceptance_status = 'ACCEPTED'",
-			"AND isFinite(value_number)",
-			"ORDER BY sampled_at, source_offset, observation_id",
+			"fact.source_previous_observation_id = delta.previous_observation_id",
+			"delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')",
+			"delta.source_event_id",
+			"delta.previous_quality_reasons",
+			"ORDER BY delta.sampled_at, delta.source_offset, delta.observation_id",
 			"LIMIT 32",
 			"FORMAT JSONEachRow",
 		} {
@@ -41,31 +41,31 @@ func TestReaderListsOnlyUnprojectedCumulativeEnergyCandidates(t *testing.T) {
 			}
 		}
 		writer.Header().Set("Content-Type", "application/x-ndjson")
-		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","point_id":"018f4e00-2100-7000-8000-000000000001","sensor_id":"018f4e00-2200-7000-8000-000000000001","telemetry_key":"hvac_meter.energy","previous_value":100.25,"current_value":103,"previous_quality":"GOOD","current_quality":"SUSPECT","previous_quality_reasons":[],"current_quality_reasons":["SOURCE_LAG_EXCEEDED"],"previous_sampled_at":"2026-07-29T12:55:00.000Z","current_sampled_at":"2026-07-29T13:00:00.000Z","source_offset":1722258003000}`+"\n")
+		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","point_id":"018f4e00-2100-7000-8000-000000000001","sensor_id":"018f4e00-2200-7000-8000-000000000001","telemetry_key":"site.energy.total","point_revision":3,"unit":"kWh","counter_decrease_mode":"RESET_TO_ZERO","counter_rollover_modulus":null,"previous_value":100.25,"previous_quality":"GOOD","previous_quality_reasons":[],"previous_sampled_at":"2026-07-29T12:55:00.000Z","current_sampled_at":"2026-07-29T13:00:00.000Z","current_received_at":"2026-07-29T13:00:01.000Z","current_quality":"PARTIAL","current_quality_reasons":["SOURCE_LAG_EXCEEDED"],"source_event_id":"018f4e00-3100-7000-8000-000000000001","source_partition":"telemetry-0","source_offset":1722258003000,"transition_type":"INCREASE","delta_value":2.75}`+"\n")
 	}))
 	defer server.Close()
 
 	reader, err := NewReader(ReaderConfig{
-		BaseURL: server.URL, SourceDatabase: "telemetry_history", SourceTable: "observations",
+		BaseURL: server.URL, SourceDatabase: "telemetry_history", SourceTable: "counter_deltas",
 		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
 		Username: "analytics_reader", HTTPClient: server.Client(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := reader.ListCandidates(context.Background(), 32)
+	deltas, err := reader.ListDeltas(context.Background(), 32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("candidates=%#v", candidates)
+	if len(deltas) != 1 {
+		t.Fatalf("deltas=%#v", deltas)
 	}
-	candidate := candidates[0]
-	if candidate.CurrentObservationID != "018f4e00-3000-7000-8000-000000000002" || candidate.CurrentValue != 103 || candidate.SourceOffset != 1722258003000 {
-		t.Fatalf("candidate=%#v", candidate)
+	delta := deltas[0]
+	if delta.CurrentObservationID != "018f4e00-3000-7000-8000-000000000002" || delta.DeltaValue == nil || *delta.DeltaValue != 2.75 || delta.CurrentSourceOffset != 1722258003000 {
+		t.Fatalf("delta=%#v", delta)
 	}
-	if candidate.CurrentQuality != energy.SourceQualitySuspect || !candidate.CurrentSampledAt.Equal(time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)) {
-		t.Fatalf("candidate=%#v", candidate)
+	if delta.CurrentQuality != energy.SourceQualityPartial || !delta.CurrentSampledAt.Equal(time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)) {
+		t.Fatalf("delta=%#v", delta)
 	}
 }
 
@@ -87,9 +87,11 @@ func TestWriterBatchesEnergyFactsWithDeterministicDeduplication(t *testing.T) {
 			t.Fatalf("dedup token=%q", token)
 		}
 		decoder := json.NewDecoder(request.Body)
-		for decoder.More() {
+		for {
 			var row map[string]any
-			if err := decoder.Decode(&row); err != nil {
+			if err := decoder.Decode(&row); err == io.EOF {
+				break
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			captured = append(captured, row)
@@ -105,20 +107,20 @@ func TestWriterBatchesEnergyFactsWithDeterministicDeduplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := energy.BuildFact(validCandidate(), time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC))
+	fact, err := energy.BuildFact(validDelta(), validBinding(), time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.InsertFacts(context.Background(), []energy.Fact{fact}); err != nil {
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) != 1 || captured[0]["source_current_observation_id"] != fact.SourceCurrentObservationID || captured[0]["energy_kwh"] != 2.75 {
+	if len(captured) != 1 || captured[0]["source_current_observation_id"] != fact.CurrentObservationID || captured[0]["energy_kwh"] != 2.75 {
 		t.Fatalf("captured=%#v", captured)
 	}
 }
 
 func TestWriterRejectsInconsistentFactMetadata(t *testing.T) {
-	fact, err := energy.BuildFact(validCandidate(), time.Now())
+	fact, err := energy.BuildFact(validDelta(), validBinding(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestWriterRejectsInconsistentFactMetadata(t *testing.T) {
 	if err := validateFact(fact); err == nil {
 		t.Fatal("validateFact() error = nil")
 	}
-	fact, err = energy.BuildFact(validCandidate(), time.Now())
+	fact, err = energy.BuildFact(validDelta(), validBinding(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +139,7 @@ func TestWriterRejectsInconsistentFactMetadata(t *testing.T) {
 }
 
 func TestReaderAndWriterRejectUnsafeConfiguration(t *testing.T) {
-	if _, err := NewReader(ReaderConfig{BaseURL: "https://clickhouse.example/path", SourceDatabase: "telemetry_history", SourceTable: "observations", AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts"}); err == nil {
+	if _, err := NewReader(ReaderConfig{BaseURL: "https://clickhouse.example/path", SourceDatabase: "telemetry_history", SourceTable: "counter_deltas", AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts"}); err == nil {
 		t.Fatal("NewReader() error = nil")
 	}
 	if _, err := NewWriter(WriterConfig{BaseURL: "https://clickhouse.example", Database: "analytics; DROP DATABASE analytics", Table: "energy_interval_facts"}); err == nil {
@@ -154,32 +156,39 @@ func TestWriterSurfacesClickHouseFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fact, err := energy.BuildFact(validCandidate(), time.Now())
+	fact, err := energy.BuildFact(validDelta(), validBinding(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.InsertFacts(context.Background(), []energy.Fact{fact}); err == nil || !strings.Contains(err.Error(), "403") {
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("InsertFacts() error = %v", err)
 	}
 }
 
-func validCandidate() energy.Candidate {
-	sensorID := "018f4e00-2200-7000-8000-000000000001"
-	return energy.Candidate{
+func validDelta() energy.CounterDelta {
+	delta := 2.75
+	return energy.CounterDelta{
 		PreviousObservationID: "018f4e00-3000-7000-8000-000000000001",
 		CurrentObservationID:  "018f4e00-3000-7000-8000-000000000002",
-		TenantID:              "018f4d00-0000-7000-8000-000000000001",
-		SiteID:                "018f4e00-1000-7000-8000-000000000001",
-		DeviceID:              "018f4e00-2000-7000-8000-000000000001",
-		PointID:               "018f4e00-2100-7000-8000-000000000001",
-		SensorID:              &sensorID,
-		TelemetryKey:          energy.CumulativeElectricityTelemetryKey,
-		PreviousValue:         100.25,
-		CurrentValue:          103,
-		PreviousQuality:       energy.SourceQualityGood,
-		CurrentQuality:        energy.SourceQualityGood,
-		PreviousSampledAt:     time.Date(2026, 7, 29, 12, 55, 0, 0, time.UTC),
-		CurrentSampledAt:      time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
-		SourceOffset:          1722258003000,
+		TenantID:              "018f4d00-0000-7000-8000-000000000001", SiteID: "018f4e00-1000-7000-8000-000000000001",
+		DeviceID: "018f4e00-2000-7000-8000-000000000001", PointID: "018f4e00-2100-7000-8000-000000000001",
+		SensorID: "018f4e00-2200-7000-8000-000000000001", TelemetryKey: "site.energy.total", PointRevision: 3,
+		Unit: "kWh", CounterDecreaseMode: "RESET_TO_ZERO", PreviousValue: 100.25,
+		PreviousQuality: energy.SourceQualityGood, PreviousSampledAt: time.Date(2026, 7, 29, 12, 55, 0, 0, time.UTC),
+		CurrentQuality: energy.SourceQualityGood, CurrentSampledAt: time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		CurrentSourceEventID: "018f4e00-3100-7000-8000-000000000001", CurrentSourcePartition: "telemetry-0",
+		CurrentSourceOffset: 1722258003000, TransitionType: energy.TransitionIncrease, DeltaValue: &delta,
+	}
+}
+
+func validBinding() energy.BindingResolution {
+	return energy.BindingResolution{
+		Status: energy.BindingMatch, TenantID: "018f4d00-0000-7000-8000-000000000001", SiteID: "018f4e00-1000-7000-8000-000000000001",
+		MeterID: "018f4e00-1100-7000-8000-000000000001", MeterBindingID: "018f4e00-1200-7000-8000-000000000001",
+		TopologyVersionID: "018f4e00-1300-7000-8000-000000000001", BindingVersion: 4,
+		EnergyTypeID: "018f4e00-1400-7000-8000-000000000001", EnergyType: energy.EnergyTypeElectricity,
+		MeterRole: energy.MeterRolePrimary, Direction: "IMPORT", DeviceID: "018f4e00-2000-7000-8000-000000000001",
+		PointID: "018f4e00-2100-7000-8000-000000000001", PointType: energy.PointTypeCounter,
+		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }

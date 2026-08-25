@@ -22,6 +22,7 @@ type RegistryStore interface {
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
+	ResolveMeterBinding(context.Context, registryauth.GrantClaims, string, MeterBindingResolveRequest) (MeterBindingResolution, error)
 	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
 	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
@@ -361,6 +362,78 @@ LIMIT $5
 	}
 	result.Items, result.HasMore = trimPage(result.Items, limit)
 	return result, nil
+}
+
+func (store *PostgresStore) ResolveMeterBinding(ctx context.Context, claims registryauth.GrantClaims, siteID string, input MeterBindingResolveRequest) (MeterBindingResolution, error) {
+	if !validUUIDv7(siteID) || !validUUIDv7(input.DeviceID) || !validUUIDv7(input.PointID) || input.SampledAt.IsZero() {
+		return MeterBindingResolution{}, ErrInvalidBindingResolution
+	}
+	var matches []MeterBindingResolution
+	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
+		rows, err := transaction.Query(ctx, `
+SELECT mb.tenant_id::text,
+       mb.site_id::text,
+       mb.meter_id::text,
+       mb.id::text,
+       mb.topology_version_id::text,
+       mb.version,
+       mb.revision,
+       mb.energy_type_id::text,
+       et.energy_code,
+       mb.meter_role,
+       mb.direction,
+       mb.device_id::text,
+       mb.point_id::text,
+       mb.point_type,
+       mb.effective_from,
+       mb.effective_to
+FROM core_registry.meter_bindings AS mb
+JOIN core_registry.energy_types AS et ON et.id = mb.energy_type_id
+WHERE mb.site_id = $1::uuid
+  AND mb.device_id = $2::uuid
+  AND mb.point_id = $3::uuid
+  AND mb.point_type = 'COUNTER'
+  AND mb.meter_role = 'PRIMARY'
+  AND et.energy_code = 'electricity'
+  AND mb.status IN ('RELEASED', 'ACTIVE')
+  AND mb.effective_from <= $4
+  AND (mb.effective_to IS NULL OR $4 < mb.effective_to)
+ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
+`, siteID, input.DeviceID, input.PointID, input.SampledAt.UTC())
+		if err != nil {
+			return fmt.Errorf("query Core meter binding resolution: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item MeterBindingResolution
+			if err := rows.Scan(
+				&item.TenantID, &item.SiteID, &item.MeterID, &item.MeterBindingID, &item.TopologyVersionID,
+				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
+				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo,
+			); err != nil {
+				return fmt.Errorf("scan Core meter binding resolution: %w", err)
+			}
+			item.EffectiveFrom = item.EffectiveFrom.UTC()
+			if item.EffectiveTo != nil {
+				value := item.EffectiveTo.UTC()
+				item.EffectiveTo = &value
+			}
+			matches = append(matches, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return MeterBindingResolution{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return MeterBindingResolution{Status: "NO_MATCH"}, nil
+	case 1:
+		matches[0].Status = "MATCH"
+		return matches[0], nil
+	default:
+		return MeterBindingResolution{Status: "AMBIGUOUS"}, nil
+	}
 }
 
 type rowScanner interface {

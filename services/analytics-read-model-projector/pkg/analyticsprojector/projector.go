@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	clickhouseclient "github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/clickhouse"
+	coreclient "github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/coreclient"
 	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/energy"
 )
 
@@ -12,6 +13,8 @@ const EnergyTypeElectricity = energy.EnergyTypeElectricity
 type ReaderConfig = clickhouseclient.ReaderConfig
 type WriterConfig = clickhouseclient.WriterConfig
 type ProjectorConfig = energy.ProjectorConfig
+type BindingResolverConfig = coreclient.Config
+type BindingResolver = energy.BindingResolver
 type Reader = clickhouseclient.Reader
 type Writer = clickhouseclient.Writer
 type Projector = energy.Projector
@@ -26,6 +29,10 @@ func NewWriter(config WriterConfig) (*Writer, error) {
 
 func NewProjector(config ProjectorConfig) (*Projector, error) {
 	return energy.NewProjector(config)
+}
+
+func NewBindingResolver(config BindingResolverConfig) (BindingResolver, error) {
+	return coreclient.NewResolver(config)
 }
 
 func DefaultHTTPClient() *http.Client {

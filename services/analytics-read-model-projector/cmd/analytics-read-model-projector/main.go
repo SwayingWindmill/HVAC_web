@@ -17,6 +17,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	clickhouseclient "github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/clickhouse"
 	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/internal/energy"
+	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/pkg/analyticsprojector"
 )
 
 func main() {
@@ -40,7 +41,7 @@ func main() {
 	reader, err := clickhouseclient.NewReader(clickhouseclient.ReaderConfig{
 		BaseURL:           baseURL,
 		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
-		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "observations"),
+		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "counter_deltas"),
 		AnalyticsDatabase: envOr("ANALYTICS_DATABASE", "analytics"),
 		AnalyticsTable:    envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
 		Username:          strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_READER_USERNAME")),
@@ -63,9 +64,20 @@ func main() {
 		logger.Error("analytics_clickhouse_writer_invalid", "error_code", "ANALYTICS_CLICKHOUSE_WRITER_INVALID")
 		os.Exit(1)
 	}
+	coreClient, err := newCoreHTTPClient(requiredEnv("ANALYTICS_CORE_CA"), requiredEnv("ANALYTICS_CORE_TLS_CERT"), requiredEnv("ANALYTICS_CORE_TLS_KEY"))
+	if err != nil {
+		logger.Error("analytics_core_client_invalid", "error_code", "ANALYTICS_CORE_CLIENT_INVALID")
+		os.Exit(1)
+	}
+	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
+		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), Grant: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT"), GrantFile: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT_FILE"), HTTPClient: coreClient,
+	})
+	if err != nil {
+		logger.Error("analytics_core_binding_resolver_invalid", "error_code", "ANALYTICS_CORE_BINDING_RESOLVER_INVALID")
+		os.Exit(1)
+	}
 	projector, err := energy.NewProjector(energy.ProjectorConfig{
-		Source:    reader,
-		Sink:      writer,
+		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer,
 		BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
 	})
 	if err != nil {
@@ -145,6 +157,38 @@ func newClickHouseHTTPClient(caPath string) (*http.Client, error) {
 		tlsConfig.RootCAs = pool
 	}
 	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+}
+
+func newCoreHTTPClient(caPath, certPath, keyPath string) (*http.Client, error) {
+	roots, err := loadCertPool(caPath)
+	if err != nil {
+		return nil, err
+	}
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			Proxy:              http.ProxyFromEnvironment,
+			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}},
+			DisableCompression: true,
+		},
+	}, nil
+}
+
+func loadCertPool(path string) (*x509.CertPool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(content) {
+		return nil, errors.New("Core CA pool is empty")
+	}
+	return pool, nil
 }
 
 func envOr(name, fallback string) string {

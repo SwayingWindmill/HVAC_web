@@ -88,6 +88,7 @@ func main() {
 			AllowedPresenterSPIFFE: envOr("CORE_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AdditionalAllowedPresenterSPIFFEs: []string{
 				envOr("CORE_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+				envOr("CORE_ANALYTICS_PROJECTOR_SPIFFE", "spiffe://hvac.local/analytics-read-model-projector"),
 			},
 			Audience:      envOr("CORE_AUDIENCE", "platform-core-service"),
 			GrantStatus:   grantStatus,

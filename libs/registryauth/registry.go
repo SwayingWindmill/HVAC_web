@@ -46,25 +46,26 @@ type GrantStatus struct {
 type Action string
 
 const (
-	ActionRegistryRead      Action = "registry.read"
-	ActionSiteList          Action = "site.list"
-	ActionSiteRead          Action = "site.read"
-	ActionAssetList         Action = "asset.list"
-	ActionAssetRead         Action = "asset.read"
-	ActionDeviceList        Action = "device.list"
-	ActionDeviceRead        Action = "device.read"
-	ActionDeviceBindingList Action = "device-binding.list"
-	ActionAssetModelRead    Action = "asset-model.read"
-	ActionSiteWrite         Action = "site.write"
-	ActionSpaceWrite        Action = "space.write"
-	ActionAssetWrite        Action = "asset.write"
-	ActionDeviceWrite       Action = "device.write"
-	ActionSensorWrite       Action = "sensor.write"
-	ActionPointWrite        Action = "point.write"
-	ActionBindingWrite      Action = "binding.write"
-	ActionTemplateManage    Action = "template.manage"
-	ActionRegistryImport    Action = "registry.import"
-	ActionRegistryRetire    Action = "registry.retire"
+	ActionRegistryRead        Action = "registry.read"
+	ActionSiteList            Action = "site.list"
+	ActionSiteRead            Action = "site.read"
+	ActionAssetList           Action = "asset.list"
+	ActionAssetRead           Action = "asset.read"
+	ActionDeviceList          Action = "device.list"
+	ActionDeviceRead          Action = "device.read"
+	ActionDeviceBindingList   Action = "device-binding.list"
+	ActionMeterBindingResolve Action = "meter-binding.resolve"
+	ActionAssetModelRead      Action = "asset-model.read"
+	ActionSiteWrite           Action = "site.write"
+	ActionSpaceWrite          Action = "space.write"
+	ActionAssetWrite          Action = "asset.write"
+	ActionDeviceWrite         Action = "device.write"
+	ActionSensorWrite         Action = "sensor.write"
+	ActionPointWrite          Action = "point.write"
+	ActionBindingWrite        Action = "binding.write"
+	ActionTemplateManage      Action = "template.manage"
+	ActionRegistryImport      Action = "registry.import"
+	ActionRegistryRetire      Action = "registry.retire"
 )
 
 func (action Action) Valid() bool {
@@ -77,6 +78,7 @@ func (action Action) Valid() bool {
 		ActionDeviceList,
 		ActionDeviceRead,
 		ActionDeviceBindingList,
+		ActionMeterBindingResolve,
 		ActionAssetModelRead,
 		ActionSiteWrite,
 		ActionSpaceWrite,
@@ -96,7 +98,7 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead,
+	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
 		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire:
 		return true
