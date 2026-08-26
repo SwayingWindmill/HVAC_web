@@ -68,7 +68,7 @@ services:
   clickhouse:
     volumes:
       - phase1_wsl_clickhouse_data:/var/lib/clickhouse
-      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./runtime/backups/clickhouse:/backups
 
   redis:
@@ -77,8 +77,8 @@ services:
 
   mqtt-broker:
     volumes:
-      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ./runtime/mqtt-pki:/mosquitto/certs:ro
       - phase1_wsl_mqtt_data:/mosquitto/data
 

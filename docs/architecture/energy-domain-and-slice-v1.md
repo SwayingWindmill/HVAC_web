@@ -29,11 +29,11 @@
 | 本地文件 | 事实 |
 | --- | --- |
 | [`CONTEXT.md`](../../CONTEXT.md) | Telemetry Runtime 拥有当前运行时真相；Telemetry Quality 与 ingest acceptance 分离；Metric 是有定义、单位、质量策略和溯源的版本化派生事实。 |
-| [`009a-energy-topology-metering-v2.sql`](../../infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql) | `energy_meters` 定义物理计量身份；`meter_bindings` 将 Meter、Accounting Edge、Device 和 `COUNTER` Point 通过版本、角色、方向和有效期绑定。还存在 Virtual Meter，但本切片不使用。 |
-| [`002-analytics-energy-interval.sql`](../../infra/s2-telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 当前事实表记录 Site、Device、Point、Telemetry Key、Energy Type、区间、质量、源观察 ID、offset、watermark 和 dataset revision；没有 `meter_id`、`meter_binding_id` 或绑定版本。 |
-| [`projector.go`](../../services/analytics-read-model-projector/internal/energy/projector.go) | 当前只接受 `hvac_meter.energy`，把两条累计电量观察转换为 electricity interval fact；负值为 INVALID，回退为 SUSPECT。 |
-| [`analytics-read-model-projector/README.md`](../../services/analytics-read-model-projector/README.md) | 当前链路是 `telemetry_history.observations -> analytics.energy_interval_facts`，并以 current observation ID 和 ClickHouse 去重令牌避免重复投影。 |
-| [`telemetry-query-service/README.md`](../../services/telemetry-query-service/README.md) | 当前查询边界是固定的 electricity energy series，返回 hour/day/month、质量摘要、watermark、partial 和 dataset revision；明确不负责构造区间、费率、成本、基线或比较模型。 |
+| [`009a-energy-topology-metering-v2.sql`](../../infra/registry/postgres/init/009a-energy-topology-metering-v2.sql) | `energy_meters` 定义物理计量身份；`meter_bindings` 将 Meter、Accounting Edge、Device 和 `COUNTER` Point 通过版本、角色、方向和有效期绑定。还存在 Virtual Meter，但本切片不使用。 |
+| [`002-analytics-energy-interval.sql`](../../infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 当前事实表记录 Site、Device、Point、Telemetry Key、Energy Type、区间、质量、源观察 ID、offset、watermark 和 dataset revision；没有 `meter_id`、`meter_binding_id` 或绑定版本。 |
+| [`projector.go`](../../modules/energy/internal/energy/projector.go) | 当前只接受 `hvac_meter.energy`，把两条累计电量观察转换为 electricity interval fact；负值为 INVALID，回退为 SUSPECT。 |
+| [`analytics-read-model-projector/README.md`](../../modules/energy/README.md) | 当前链路是 `telemetry_history.observations -> analytics.energy_interval_facts`，并以 current observation ID 和 ClickHouse 去重令牌避免重复投影。 |
+| [`telemetry-query-service/README.md`](../../modules/telemetry/README.md) | 当前查询边界是固定的 electricity energy series，返回 hour/day/month、质量摘要、watermark、partial 和 dataset revision；明确不负责构造区间、费率、成本、基线或比较模型。 |
 | [`energy.go`](../../libs/analyticsmodel/energy.go) | 当前产品合同只允许 `electricity`、`hour/day/month` 和两种质量策略。 |
 | [`energy-analytics.ts`](../../apps/hvac-web/src/api/energy-analytics.ts) | UI 通过固定 `/api/v1/analytics/energy-series` 合同查询，不直接访问 Cube 或 Telemetry Query Service。 |
 | [`EnergyAnalytics.tsx`](../../apps/hvac-web/src/real/EnergyAnalytics.tsx) | `RealEnergyWorkspace` 使用真实查询结果，并展示 quality、partial、watermark、dataset revision 和当前/比较周期状态。 |

@@ -85,6 +85,7 @@
     "incompleteRequiresOperatorRecovery": true
   },
   "deploymentTiers": "deploy/platform/phase1/deployment-tiers.v1.json",
+  "runtimeInventory": "deploy/platform/phase1/runtime-inventory.v1.json",
   "availabilityTier": "deploy/platform/phase1/availability-tier.v1.json",
   "recoveryAttainment": "deploy/platform/phase1/recovery/attainment.v1.json",
   "ownerSplitRelease": {

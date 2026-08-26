@@ -1,0 +1,85 @@
+name: S3 Command Authority
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - '.github/workflows/s3-command-authority.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-command/**'
+      - 'libs/commandauth/**'
+      - 'libs/commandmodel/**'
+      - 'services/command-service/**'
+      - 'services/command-dispatcher/**'
+      - 'services/thingsboard-connector-control/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s3-command-governance-dispatch.mjs'
+      - 'scripts/check-s3-command-postgres-authority.mjs'
+      - 'scripts/check-s3-command-verification.mjs'
+      - 'scripts/run-s3-command-postgres-tests.ts'
+      - 'scripts/lib/postgres-compose-harness.ts'
+      - 'go.work'
+      - 'go.work.sum'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s3-command-authority.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-command/**'
+      - 'libs/commandauth/**'
+      - 'libs/commandmodel/**'
+      - 'services/command-service/**'
+      - 'services/command-dispatcher/**'
+      - 'services/thingsboard-connector-control/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s3-command-governance-dispatch.mjs'
+      - 'scripts/check-s3-command-postgres-authority.mjs'
+      - 'scripts/check-s3-command-verification.mjs'
+      - 'scripts/run-s3-command-postgres-tests.ts'
+      - 'scripts/lib/postgres-compose-harness.ts'
+      - 'go.work'
+      - 'go.work.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s3-command-authority-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+      S3_COMMAND_REPORT_PATH: out/s3-command-authority/postgres-authority.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run s3:topology:check
+      - run: npm run s3:command-authority
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s3-command-authority-postgres
+          path: out/s3-command-authority/postgres-authority.json
+          if-no-files-found: error
+          retention-days: 14

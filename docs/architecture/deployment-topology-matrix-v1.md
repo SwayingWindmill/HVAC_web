@@ -1,6 +1,6 @@
 # 部署拓扑矩阵 V1
 
-状态：PROPOSED / SOURCE-ALIGNED  
+状态：CURRENT / RUNTIME-INVENTORY-ALIGNED  
 关联基线：docs/architecture/deployment-architecture-v1.md
 
 ## 1. 拓扑不是环境
@@ -38,6 +38,7 @@ Environment
 | Energy API | 1 | 1 | 1 gateway | 2+ stateless nodes | 不部署 |
 | Identity/IAM | embedded/local | embedded/local | independent owner | replicated or managed | 不部署 |
 | Scheduler | 1 | 1 | 1 | multiple claim owners | Edge scheduler is different module |
+| Maintenance Worker | 1 | 1 | 1 | multiple leased workers only after evidence | 不部署 |
 | Telemetry Worker | 1 | 1 | 1 | multiple leased workers | Edge runtime separate |
 | Metric/Energy Worker | 1 | 1 | 1 | multiple leased workers | 不部署 |
 | iot-service | simulator adapter optional | integration optional | integration optional | external/replicated | protocol bridge on Edge |
@@ -47,6 +48,8 @@ Environment
 | Redis | local | rebuildable single | rebuildable single | HA only after authority audit | Edge local cache separate |
 | Realtime | local optional | single node | single node | multiple nodes + recovery | local UI channel optional |
 | Observability | core | selected profile | full for drill | externalized | local diagnostics + cloud |
+
+`energy-api + iot-service + telemetry-worker + metric-worker` 是四个默认业务 deployable；`scheduler + maintenance` 是默认 supporting workload；`identity-service` 属于 Identity Infrastructure；Forecast / Optimization / FDD 只在可选 `intelligence` profile 中运行。完整 service-by-service 分类以 `deploy/platform/phase1/runtime-inventory.v1.json` 为机器权威。
 
 ## 4. Backend/UI 最小形态
 

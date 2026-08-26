@@ -126,7 +126,7 @@ Keep verification focused on the changed command path:
 ```bash
 npm run s3:baseline:check
 npm run s3:verification:check
-node scripts/run-go.mjs test ./services/command-dispatcher/...
+node scripts/run-go.mjs test ./modules/command/... ./cmd/iot-service/...
 ```
 
 Run PostgreSQL or target-runtime integration checks only when those layers are changed. There is no aggregate certification or release-gate command.

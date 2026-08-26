@@ -9,7 +9,7 @@ analytics. Cube is not a public application endpoint: only
 ```text
 telemetry_history.observations
     -> analytics-read-model-projector
-        -> analytics.energy_interval_facts
+        -> analytics.energy_interval_facts_visible
             -> Cube Core
                 -> telemetry-query-service
 ```
@@ -24,7 +24,7 @@ Model Projector.
 `energy_usage` maps to:
 
 ```text
-analytics.energy_interval_facts
+analytics.energy_interval_facts_visible
 ```
 
 Important members include:
@@ -55,8 +55,9 @@ The semantic model exposes separate energy measures for:
 - maximum dataset revision.
 
 Cube pre-aggregations are intentionally disabled. ClickHouse facts remain the
-durable authority, and Cube provides metric definitions, timezone-aware grouping
-and access policy enforcement.
+durable authority, while the visible view applies latest-revision-wins before
+Cube provides metric definitions, timezone-aware grouping and access policy
+enforcement.
 
 ## Security
 
@@ -74,7 +75,7 @@ access, with row filters bound to `securityContext.organizationId` and
 `securityContext.siteId`.
 
 The ClickHouse account configured for Cube is `cube_analytics_reader`, which has
-SELECT access to `analytics.energy_interval_facts` and no write access.
+SELECT access to `analytics.energy_interval_facts_visible` and no write access.
 
 ## Local scaffold
 
@@ -82,7 +83,7 @@ First start the S2 ClickHouse fixture, which initializes the raw history and
 analytics schemas:
 
 ```bash
-docker compose -f infra/s2-telemetry/compose.yaml up -d clickhouse
+docker compose -f infra/telemetry/compose.yaml up -d clickhouse
 ```
 
 Copy `local.env.example` to a local untracked environment file, replace the Cube

@@ -10,8 +10,8 @@ const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const args = process.argv.slice(2);
-const modulePattern = /^\.\/((?:libs|services|tools)\/[^/]+)\/\.\.\.$/;
-const categoryPattern = /^\.\/(libs|services|tools)\/\.\.\.$/;
+const modulePattern = /^\.\/((?:cmd|libs|modules|services|tools)\/[^/]+)\/\.\.\.$/;
+const categoryPattern = /^\.\/(cmd|libs|modules|services|tools)\/\.\.\.$/;
 
 if (args.length === 0) {
   console.error('usage: node scripts/run-go.mjs <go arguments...>');
@@ -24,7 +24,7 @@ await Promise.all([
 ]);
 
 const workspace = await readFile(join(root, 'go.work'), 'utf8');
-const configuredModules = [...workspace.matchAll(/^\s*\.\/((?:libs|services|tools)\/[^\s)]+)\s*$/gm)]
+const configuredModules = [...workspace.matchAll(/^\s*\.\/((?:cmd|libs|modules|services|tools)\/[^\s)]+)\s*$/gm)]
   .map((match) => match[1]);
 
 async function runGo(commandArgs, cwd) {

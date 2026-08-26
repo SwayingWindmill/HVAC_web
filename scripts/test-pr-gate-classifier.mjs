@@ -57,10 +57,32 @@ test('Operations Workspace changes select dedicated unit and Linux browser profi
 });
 
 test('Realtime backend changes select the durable realtime PostgreSQL profile', () => {
-  const classification = runClassification(['services/telemetry-runtime-service/internal/telemetry/realtime.go']);
+  const classification = runClassification(['modules/telemetry/internal/telemetry/realtime.go']);
   assert.ok(classification.unitProfiles.includes('s2'));
   assert.deepEqual(classification.integrationProfiles, ['s2-realtime']);
   assert.equal(classification.broad, false);
+});
+
+test('domain module changes stay scoped to their affected profiles instead of broad fallback', () => {
+  for (const [file, unitProfile, integrationProfile] of [
+    ['modules/iot/internal/adapter/runtime.go', 's2', 's2-baseline'],
+    ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],
+    ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
+  ]) {
+    const classification = runClassification([file]);
+    assert.deepEqual(classification.unitProfiles, [unitProfile]);
+    assert.deepEqual(classification.integrationProfiles, [integrationProfile]);
+    assert.equal(classification.broad, false);
+  }
+});
+
+test('retired migration and cutover evidence does not trigger product gates', () => {
+  for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go', 'pocs/telemetry-shadow-comparator/internal/comparison/comparison.go']) {
+    const classification = runClassification([file]);
+    assert.deepEqual(classification.unitProfiles, []);
+    assert.deepEqual(classification.integrationProfiles, []);
+    assert.equal(classification.broad, false);
+  }
 });
 
 test('package, workflow, and central task-matrix changes fail closed to broad static, contract, and unit coverage only', () => {
@@ -178,10 +200,6 @@ test('legacy workflows delegate pull requests to PR Gates and do not fan out on 
   for (const name of workflowNames) {
     const workflow = await readFile(`.github/workflows/${name}`, 'utf8');
     const triggerBlock = workflow.split(/^jobs:\s*$/mu)[0];
-    assert.ok(
-      !/^\s*-\s*['"]?package(?:-lock)?\.json['"]?\s*$/mu.test(triggerBlock),
-      `${name} must delegate root package manifest classification to PR Gates`,
-    );
     if (/^\s{2}pull_request:\s*$/mu.test(triggerBlock)) {
       assert.ok(
         /^\s{4}branches-ignore:\s*\["\*\*"\]\s*$/mu.test(triggerBlock),

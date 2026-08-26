@@ -189,7 +189,7 @@ async function collectImageManifests() {
 }
 
 async function collectMigrationState() {
-  const migrationRoot = resolve(root, 'infra/s0-durable/postgres');
+  const migrationRoot = resolve(root, 'infra/durability/postgres');
   const sqlFiles = (await filesUnder(migrationRoot)).filter((path) => path.endsWith('.sql')).sort();
   const files = [];
   for (const path of sqlFiles) files.push({ path: portable(path), sha256: await sha256File(path), bytes: (await readFile(path)).length });
@@ -324,10 +324,10 @@ async function environmentVersions() {
 
 async function collectObservabilityAssets() {
   const assetPaths = [
-    resolve(root, 'infra/s0-durable/observability/dashboards/s0-platform.json'),
-    resolve(root, 'infra/s0-durable/observability/alerts/s0-platform.yaml'),
-    resolve(root, 'infra/s0-durable/otel-collector-config.yaml'),
-    resolve(root, 'infra/s0-durable/prometheus.yaml'),
+    resolve(root, 'infra/observability/dashboards/s0-platform.json'),
+    resolve(root, 'infra/observability/alerts/s0-platform.yaml'),
+    resolve(root, 'infra/observability/otel-collector-config.yaml'),
+    resolve(root, 'infra/observability/prometheus.yaml'),
   ];
   const assets = [];
   for (const path of assetPaths) {

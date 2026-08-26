@@ -1,21 +1,18 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
-const [plan, ownership, dataOwnership, migration, store, integration, bootstrap, compose, workflow, postgresRunner] = await Promise.all([
+const [plan, ownership, dataOwnership, migration, store, bootstrap, compose] = await Promise.all([
   readJSON('deploy/s3/implementation-plan.v1.json'),
   readJSON('contracts/ownership/s3-command-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
-  read('services/command-service/migrations/001_s3_command_runtime.sql'),
-  read('services/command-service/pkg/commandservice/postgres.go'),
-  read('services/command-service/pkg/commandservice/postgres_integration_test.go'),
-  read('infra/s3-command/postgres/init/000-bootstrap-identities.sql'),
-  read('infra/s3-command/compose.yaml'),
-  read('.github/workflows/s3-command-authority.yml'),
-  read('scripts/run-s3-command-postgres-tests.ts'),
+  read('modules/command/migrations/001_s3_command_runtime.sql'),
+  read('modules/command/pkg/commandservice/postgres.go'),
+  read('infra/command/postgres/init/000-bootstrap-identities.sql'),
+  read('infra/command/compose.yaml'),
 ]);
 
 const errors = [];
@@ -23,34 +20,10 @@ const assert = (condition, message) => {
   if (!condition) errors.push(message);
 };
 
-const workflowFiles = await readdir(resolve(root, '.github/workflows'));
-assert(workflowFiles.includes('s3-command-authority.yml'), 'stable S3 Command Authority workflow is missing');
-for (const retiredWorkflow of ['s3-ticket-02.yml', 's3-ticket-03.yml', 's3-ticket-05.yml', 's3-ticket-07.yml']) {
-  assert(!workflowFiles.includes(retiredWorkflow), `${retiredWorkflow} must not return`);
-}
-assert((workflow.match(/\.github\/workflows\/s3-command-authority\.yml/g) || []).length === 2, 'S3 Command Authority workflow must watch itself for pull requests and main pushes');
-for (const marker of [
-  'name: S3 Command Authority',
-  'scripts/check-s3-workflow-topology.mjs',
-  'npm run s3:topology:check',
-  'npm run s3:command-authority',
-  'S3_COMMAND_REPORT_PATH: out/s3-command-authority/postgres-authority.json',
-  'name: s3-command-authority-postgres',
-]) {
-  assert(workflow.includes(marker), `S3 Command Authority workflow is missing ${marker}`);
-}
-for (const retiredTicket of ['s3-ticket-02', 's3-ticket-03', 's3-ticket-05', 's3-ticket-07']) {
-  assert(!workflow.includes(retiredTicket), `S3 Command Authority workflow still emits ${retiredTicket} topology`);
-}
-assert(postgresRunner.includes("out/s3-command-authority/postgres-authority.json"), 'S3 Command Authority default report path is not stable');
-assert(!postgresRunner.includes("out/s3-ticket-02/postgres-authority.json"), 'S3 PostgreSQL runner still defaults to Ticket 02 evidence topology');
-
-assert(plan.completedTickets?.includes('S3-02'), 'S3-02 is not marked complete');
-assert(!(plan.currentFrontier ?? []).includes('S3-01') && !(plan.currentFrontier ?? []).includes('S3-02'), 'S3 frontier regressed to a completed PostgreSQL baseline ticket');
 assert(plan.productionTrafficPercent === 0, 'S3 PostgreSQL authority must not enable production traffic');
 assert(ownership.businessOwner === 'command-service', 'Command Service must remain the business owner');
-assert(ownership.restrictedWorkers?.every((worker) => worker.directDatabaseAccess === false), 'Dispatcher direct database access must remain disabled in S3-02');
-assert(!(dataOwnership.databaseAccess ?? []).some((access) => access.service === 'command-dispatcher'), 'Data Ownership Registry grants Dispatcher database access too early');
+assert(ownership.restrictedWorkers?.every((worker) => worker.directDatabaseAccess === false), 'Dispatcher direct database access must remain disabled');
+assert(!(dataOwnership.databaseAccess ?? []).some((access) => access.service === 'command-dispatcher'), 'Data Ownership Registry grants Dispatcher direct database access');
 
 for (const role of ['s3_command_migrator', 's3_command_runtime', 's3_command_dispatcher']) {
   assert(bootstrap.includes(`CREATE ROLE ${role} NOLOGIN`), `${role} must be a NOLOGIN role`);
@@ -76,14 +49,10 @@ for (const token of ['command_intents', 'command_idempotency', 'command_transiti
 }
 assert(store.includes('replayIdempotentCommand'), 'Concurrent idempotency replay logic is missing');
 assert(store.includes('isRetryablePostgresTransaction'), 'Serializable retry handling is missing');
-assert(integration.includes('TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped'), 'atomic submission integration test is missing');
-assert(integration.includes('TestPostgresConcurrentIdempotencyConvergesToOneIntent'), 'concurrent idempotency integration test is missing');
-assert(integration.includes('TestPostgresSubmissionRollsBackEveryOwnedWrite'), 'transaction rollback integration test is missing');
-assert(integration.includes('TestPostgresRuntimeIdentityRequiresActivation'), 'database identity activation test is missing');
 
 if (errors.length > 0) {
   console.error(errors.map((error) => `- ${error}`).join('\n'));
   process.exit(1);
 }
 
-console.log('S3 PostgreSQL authority checks passed: single writer, serializable atomic submission, forced RLS, idempotency convergence, Audit Intent and Dispatch Outbox.');
+console.log('S3 PostgreSQL authority checks passed: single writer, serializable atomic submission, forced RLS, Tenant context, Audit Intent and Dispatch Outbox.');

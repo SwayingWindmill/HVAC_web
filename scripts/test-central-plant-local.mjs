@@ -15,7 +15,7 @@ const root = resolve(process.cwd());
 const pointContract = JSON.parse(await readFile(resolve(root, 'contracts/registry/central-plant-device-points.v2.json'), 'utf8'));
 const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 const simulatorConfig = buildCentralPlantSimulatorConfig(pointContract);
-const mqttCompose = await readFile(resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml'), 'utf8');
+const mqttCompose = await readFile(resolve(root, 'infra/telemetry/mqtt/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
 
 function pointMaps() {
@@ -90,7 +90,7 @@ test('central plant local runtime uses MQTT only', () => {
     '${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}',
   ]) assert.ok(mqttCompose.includes(marker));
   for (const marker of [
-    './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter',
+    './cmd/iot-service',
     './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher',
     "'spiffe://hvac.local/mqtt-telemetry-adapter'",
     "'energy/v1/+/+/+/telemetry'",

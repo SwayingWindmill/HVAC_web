@@ -19,6 +19,18 @@
 
 MyEMS v6.7.0 已通过官方 tag 解析到完整提交 `be6e6ce8ddeac57afb04bddb9621501fb555cab0`，本次逐文件研究记录见 `docs/research/wayfinder-energy-reference-source-review-2026-08.md`。基线仍保持 SOURCE-ALIGNED；未覆盖的行为继续标记为 VERIFY，不因固定提交而自动成为 VERIFIED。
 
+### 2.1 本地参考源码位置
+
+固定版本和固定提交是架构证据，**仓库内 clone 路径不是证据的一部分**。OpenEMS、ThingsBoard、MyEMS 等上游源码必须 checkout 到产品仓库根目录之外，例如统一放在本机 reference root 下：
+
+```text
+<reference-root>/openems-2026.7.0/
+<reference-root>/thingsboard-v4.3.1.1/
+<reference-root>/myems-v6.7.0/
+```
+
+每个 checkout 必须检出本表固定提交，源码审查记录继续引用官方仓库、release/tag、commit 和具体文件路径；不得依赖 `HVAC_web/.clones/` 之类的仓库内副本。这样既保留 source-first 可复现性，也避免上游完整仓库进入本项目的代码索引、测试发现和 Agent 上下文。
+
 ## 3. 证据优先级
 
 从高到低：

@@ -19,10 +19,10 @@ const requiredFiles = [
   'libs/edgecontrol/cycle.go',
   'libs/edgecontrol/driver.go',
   'libs/edgecontrol/intent.go',
-  'services/command-service/pkg/commandservice/runtime_http.go',
-  'services/command-dispatcher/pkg/commanddispatcher/runtime_client.go',
-  'services/command-dispatcher/pkg/commanddispatcher/reported_state_client.go',
-  'services/telemetry-runtime-service/internal/telemetry/command_verifier_server.go',
+  'modules/command/pkg/commandservice/runtime_http.go',
+  'modules/command/pkg/commanddispatcher/runtime_client.go',
+  'modules/command/pkg/commanddispatcher/reported_state_client.go',
+  'modules/telemetry/internal/telemetry/command_verifier_server.go',
   'tools/eg8200-simulator/internal/simulator/edge_runtime.go',
   'tools/eg8200-simulator/internal/simulator/edge_driver.go',
   'tools/eg8200-simulator/internal/simulator/mqtt_command.go',
@@ -68,14 +68,14 @@ if (failures.length === 0) {
   for (const token of ['SubmitCommand', 'STALE_FENCE', 'EXPIRED', 'COMMAND_MAPPING_INVALID', 'command/reply']) {
     requireText('tools/eg8200-simulator/internal/simulator/mqtt_command.go', token);
   }
-  requireText('services/command-dispatcher/pkg/commanddispatcher/runtime_client.go', 'ClaimDispatch');
-  requireText('services/command-dispatcher/pkg/commanddispatcher/reported_state_client.go', 'validS2EvidenceID');
-  requireText('services/telemetry-runtime-service/internal/telemetry/command_verifier_server.go', 'allowedCommandVerifierSPIFFE');
+  requireText('modules/command/pkg/commanddispatcher/runtime_client.go', 'ClaimDispatch');
+  requireText('modules/command/pkg/commanddispatcher/reported_state_client.go', 'validS2EvidenceID');
+  requireText('modules/telemetry/internal/telemetry/command_verifier_server.go', 'allowedCommandVerifierSPIFFE');
 
   requireText('deploy/platform/phase1/wsl.override.yaml', 'COMMAND_RUNTIME_COHORTS_FILE');
   requireText('deploy/platform/phase1/wsl.override.yaml', 'COMMAND_RUNTIME_BINDINGS_FILE');
   requireText('deploy/platform/phase1/wsl.override.yaml', 'TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS');
-  forbidText('services/command-service/pkg/commandservice/runtime_http.go', 'OrganizationID');
+  forbidText('modules/command/pkg/commandservice/runtime_http.go', 'OrganizationID');
   forbidText('tools/eg8200-simulator/internal/simulator/mqtt_command.go', 'thingsboard');
 }
 

@@ -46,8 +46,8 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/iam-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/iam-owner }
     image: ${IAM_SERVICE_IMAGE:-hvac/iam-service:0.1.0-dev}
     environment:
       IAM_SERVICE_ADDR: :8444
@@ -65,10 +65,10 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args:
         {
-          SERVICE_PACKAGE: ./services/audit-ledger-service/cmd/audit-ledger-service,
+          SERVICE_PACKAGE: ./modules/audit/cmd/audit-owner,
         }
     image: ${AUDIT_SERVICE_IMAGE:-hvac/audit-ledger-service:0.1.0-dev}
     environment:
@@ -87,10 +87,10 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args:
         {
-          SERVICE_PACKAGE: ./services/platform-core-service/cmd/platform-core-service,
+          SERVICE_PACKAGE: ./modules/registry/cmd/registry-owner,
         }
     image: ${CORE_SERVICE_IMAGE:-hvac/platform-core-service:0.1.0-dev}
     environment:
@@ -111,10 +111,10 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args:
         {
-          SERVICE_PACKAGE: ./services/telemetry-query-service/cmd/telemetry-query-service,
+          SERVICE_PACKAGE: ./modules/telemetry/cmd/telemetry-query-owner,
         }
     image: ${TELEMETRY_QUERY_SERVICE_IMAGE:-hvac/telemetry-query-service:0.1.0-dev}
     environment:
@@ -133,8 +133,8 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/command-service/cmd/command-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/command/cmd/command-owner }
     image: ${COMMAND_SERVICE_IMAGE:-hvac/command-service:0.1.0-dev}
     environment:
       COMMAND_SERVICE_ADDR: :8447
@@ -152,8 +152,8 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/alarm-service/cmd/alarm-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/alarm/cmd/alarm-owner }
     image: ${ALARM_SERVICE_IMAGE:-hvac/alarm-service:0.1.0-dev}
     environment:
       ALARM_SERVICE_ADDR: :8448
@@ -171,10 +171,10 @@ services:
     <<: *owner-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args:
         {
-          SERVICE_PACKAGE: ./services/work-order-service/cmd/work-order-service,
+          SERVICE_PACKAGE: ./modules/workorder/cmd/work-order-owner,
         }
     image: ${WORK_ORDER_SERVICE_IMAGE:-hvac/work-order-service:0.1.0-dev}
     environment:

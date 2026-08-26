@@ -5,7 +5,7 @@ import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-phase1-restore-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.PHASE1_RESTORE_REPORT_PATH ?? 'out/phase1-acceptance/restore-report.json');

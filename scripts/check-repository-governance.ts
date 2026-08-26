@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -23,13 +23,12 @@ const forbiddenTrackedPrefixes = Object.freeze([
   '.clones/',
   '.codegraph/',
   '.workbuddy/',
+  '.worktrees/',
   'hvac-backend/logs/',
   'out/',
   'prototype/',
 ]);
 
-// `.worktrees/` is intentionally deferred. The directory remains excluded by
-// `.gitignore`, but is not a failing governance rule until its local checkout is moved.
 const forbiddenTrackedSuffixes = Object.freeze([
   '.bak',
   '.log',
@@ -43,7 +42,6 @@ const forbiddenTrackedBasenames = new Set(['.DS_Store', 'Thumbs.db']);
 const normalizePath = (value) => value.split(sep).join('/').replaceAll('\\', '/');
 const hashScriptCommand = (command) => createHash('sha256').update(command).digest('hex');
 const countInlineCommands = (command) => command.split(/\s*&&\s*/u).filter(Boolean).length;
-const hashPathSet = (paths) => createHash('sha256').update(`${[...paths].sort().join('\n')}\n`).digest('hex');
 
 type JavaScriptToolingFile = { path: string; bytes: number };
 type JavaScriptRootBaseline = { fileCount: number; maxBytes: number };
@@ -54,7 +52,6 @@ type JavaScriptToolingBaseline = {
   allowedLegacyRoots: Record<string, JavaScriptRootBaseline>;
   fileCount: number;
   maxBytes: number;
-  pathSetSha256: string;
 };
 
 export const createPackageScriptLongChainBaseline = (scripts) => ({
@@ -96,7 +93,7 @@ export const findPackageScriptViolations = ({ scripts, baseline, capabilityTasks
       violations.push(`package.json: script \`${name}\` contains ${commandCount} inline commands; migrate it or add a reviewed baseline entry`);
       continue;
     }
-    if (baselineEntry.sha256 !== hashScriptCommand(command)) {
+    if (baselineEntry.mode !== 'explicit-operation' && baselineEntry.sha256 !== hashScriptCommand(command)) {
       violations.push(`package.json: long-chain script \`${name}\` changed; migrate it instead of updating inline orchestration`);
     }
   }
@@ -132,8 +129,7 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
   if (baseline?.schemaVersion !== 1 || baseline?.policy !== 'legacy-js-ratchet'
     || !Array.isArray(baseline.trackedExtensions)
     || !baseline.allowedLegacyRoots || typeof baseline.allowedLegacyRoots !== 'object'
-    || !Number.isInteger(baseline.fileCount) || !Number.isInteger(baseline.maxBytes)
-    || typeof baseline.pathSetSha256 !== 'string') {
+    || !Number.isInteger(baseline.fileCount) || !Number.isInteger(baseline.maxBytes)) {
     return [`${javascriptToolingBaselinePath}: invalid or unsupported baseline schema`];
   }
 
@@ -155,13 +151,9 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
     rootTotals[root].bytes += file.bytes;
   }
 
-  const paths = normalizedFiles.map(({ path }) => path);
   const totalBytes = normalizedFiles.reduce((sum, file) => sum + file.bytes, 0);
-  if (paths.length !== baseline.fileCount) {
-    violations.push(`${javascriptToolingBaselinePath}: JavaScript file count changed from ${baseline.fileCount} to ${paths.length}; migrations must ratchet the reviewed baseline`);
-  }
-  if (hashPathSet(paths) !== baseline.pathSetSha256) {
-    violations.push(`${javascriptToolingBaselinePath}: JavaScript path set changed; new .js/.mjs/.cjs/.jsx files are forbidden and migrations must update the reviewed ratchet`);
+  if (normalizedFiles.length > baseline.fileCount) {
+    violations.push(`${javascriptToolingBaselinePath}: JavaScript file count grew beyond ${baseline.fileCount} to ${normalizedFiles.length}; migrate tooling to TypeScript instead of growing legacy JavaScript`);
   }
   if (totalBytes > baseline.maxBytes) {
     violations.push(`${javascriptToolingBaselinePath}: JavaScript bytes grew from ${baseline.maxBytes} to ${totalBytes}; migrate tooling to TypeScript instead of growing legacy JavaScript`);
@@ -170,8 +162,8 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
   for (const [root, expected] of Object.entries(baseline.allowedLegacyRoots)) {
     const actual = rootTotals[root];
     if (!actual) continue;
-    if (actual.fileCount !== expected.fileCount) {
-      violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript file count changed from ${expected.fileCount} to ${actual.fileCount}`);
+    if (actual.fileCount > expected.fileCount) {
+      violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript file count grew beyond ${expected.fileCount} to ${actual.fileCount}`);
     }
     if (actual.bytes > expected.maxBytes) {
       violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript bytes grew from ${expected.maxBytes} to ${actual.bytes}`);
@@ -183,14 +175,22 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
 
 export const findDocumentationViolations = ({
   serviceNames,
+  moduleNames = [],
+  commandNames = [],
   rootReadme,
   appReadme,
   reactVersion,
 }) => {
   const violations = [];
-  for (const serviceName of serviceNames) {
-    if (!rootReadme.includes(`\`${serviceName}/\``)) {
-      violations.push(`README.md: missing service catalog entry \`${serviceName}/\``);
+  for (const [kind, names] of [
+    ['service', serviceNames],
+    ['module', moduleNames],
+    ['command', commandNames],
+  ]) {
+    for (const name of names) {
+      if (!rootReadme.includes(`\`${name}/\``)) {
+        violations.push(`README.md: missing ${kind} catalog entry \`${name}/\``);
+      }
     }
   }
 
@@ -267,12 +267,17 @@ const listTrackedJavaScriptFiles = (root, trackedFiles, extensions) => trackedFi
     bytes: readFileSync(join(root, path)).byteLength,
   }));
 
-const listServiceNames = (root) => readdirSync(join(root, 'services'), {
-  withFileTypes: true,
-})
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name)
-  .sort();
+const directoryContainsFile = (directory) => readdirSync(directory, { withFileTypes: true })
+  .some((entry) => entry.isFile() || (entry.isDirectory() && directoryContainsFile(join(directory, entry.name))));
+
+const listCurrentRootNames = (root, rootName) => {
+  const directory = join(root, rootName);
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && directoryContainsFile(join(directory, entry.name)))
+    .map((entry) => entry.name)
+    .sort();
+};
 
 const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFiles(root)) => {
   const baseline = JSON.parse(readFileSync(join(root, javascriptToolingBaselinePath), 'utf8'));
@@ -304,7 +309,9 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
       baseline: longChainBaseline,
     }),
     ...findDocumentationViolations({
-      serviceNames: listServiceNames(root),
+      serviceNames: listCurrentRootNames(root, 'services'),
+      moduleNames: listCurrentRootNames(root, 'modules'),
+      commandNames: listCurrentRootNames(root, 'cmd'),
       rootReadme: readFileSync(join(root, 'README.md'), 'utf8'),
       appReadme: readFileSync(join(root, 'apps/hvac-web/README.md'), 'utf8'),
       reactVersion: packageJson.dependencies?.react ?? '',

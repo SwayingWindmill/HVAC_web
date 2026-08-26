@@ -171,6 +171,15 @@
     "profileSelectionRequired": true,
     "intelligenceServicesOptional": true
   },
+  "runtimeInventory": {
+    "contract": "deploy/platform/phase1/runtime-inventory.v1.json",
+    "canonicalCompose": "deploy/platform/phase1/compose.yaml",
+    "defaultBusinessDeployables": ["energy-api", "iot-service", "telemetry-worker", "metric-worker"],
+    "defaultSupportingWorkloads": ["scheduler", "maintenance"],
+    "defaultIdentityInfrastructure": ["identity-service"],
+    "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service"],
+    "allComposeServicesClassified": true
+  },
   "availabilityTier": {
     "contract": "deploy/platform/phase1/availability-tier.v1.json",
     "currentTier": "SINGLE_NODE_RECOVERABLE",

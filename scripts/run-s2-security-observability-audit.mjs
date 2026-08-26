@@ -14,7 +14,6 @@ const [
   commandEvidence,
   harness,
   liveClient,
-  shadowRouting,
   browserJourney,
   networkAudit,
   alertRules,
@@ -25,13 +24,12 @@ const [
   readJSON('out/s2-security-observability/security-command-evidence.json'),
   readJSON('out/s2-security-observability/observability-harness.json'),
   readJSON('out/s2-telemetry-live-client/browser-live-client.json'),
-  readJSON('out/s2-shadow-routing/shadow-routing.json'),
   readJSON('out/s2-hvac-web-presence/browser-journey.json'),
   readJSON('out/s2-hvac-web-presence/network-audit.json'),
-  readText('infra/s0-durable/observability/alerts/s2-telemetry.yaml'),
+  readText('infra/observability/alerts/s2-telemetry.yaml'),
 ]);
 
-for (const [name, report] of Object.entries({ commandEvidence, harness, liveClient, shadowRouting, browserJourney, networkAudit })) {
+for (const [name, report] of Object.entries({ commandEvidence, harness, liveClient, browserJourney, networkAudit })) {
   assert(passed(report), `${name} prerequisite evidence did not pass`);
 }
 
@@ -54,7 +52,7 @@ const evidenceChecks = {
   'unauthorized-key-delivery': [commandNames.has('test:security-negative'), liveClient.multipleExactSubscriptions === true, browserAssertions.has('exact-key-last-known-rendering')],
   'post-revocation-delivery': [commandNames.has('test:security-negative'), browserAssertions.has('revocation-purges-browser-state'), liveClient.revocationPurgedLastKnown === true],
   'cursor-replay-or-scope-expansion': [commandNames.has('test:security-negative'), commandNames.has('s2:live-client:browser'), liveClient.checkpointAndPageRestore === true, liveClient.wrongScopeFailedClosed === true],
-  'non-owner-write': [commandNames.has('test:security-negative'), commandNames.has('s2:shadow-routing:harness'), passed(shadowRouting)],
+  'non-owner-write': [commandNames.has('test:security-negative')],
   'legacy-or-mock-request-fallback': [exactNetworkZeros.legacyOrMockRoutes === 0, exactNetworkZeros.thingsBoardDirectCalls === 0, exactNetworkZeros.socketIoCalls === 0, exactNetworkZeros.legacyTelemetryCalls === 0],
   'undetected-business-revision-gap': [commandNames.has('s2:live-client:browser'), browserAssertions.has('gap-requires-resynchronization'), liveClient.gapSnapshotFallback === true],
 };
@@ -98,7 +96,6 @@ const reports = {
     ],
     prerequisiteEvidence: {
       liveClient: 'out/s2-telemetry-live-client/browser-live-client.json',
-      shadowRouting: 'out/s2-shadow-routing/shadow-routing.json',
       browserJourney: 'out/s2-hvac-web-presence/browser-journey.json',
       networkAudit: 'out/s2-hvac-web-presence/network-audit.json',
     },

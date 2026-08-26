@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-s2-ingest-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S2_INGEST_REPORT_PATH ?? 'out/s2-telemetry-ingest/telemetry-ingest-postgres.json');
@@ -85,7 +85,7 @@ try {
 
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/telemetry-runtime-service',
+    '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestPostgresIngestEndToEnd', '-v', './internal/telemetry/...',
   ], {
     env: {
@@ -173,13 +173,13 @@ try {
   if (report.assertions.relayRetry !== '2|CENTRIFUGO_UNAVAILABLE|8') {
     throw new Error(`unexpected relay retry state ${report.assertions.relayRetry}`);
   }
-  report.assertions.twoOrganizationIsolation = psql(`
-    SELECT snapshot ->> 'owningOrganizationId'
+  report.assertions.twoTenantIsolation = psql(`
+    SELECT snapshot ->> 'tenantId'
     FROM telemetry_runtime.device_observation_snapshots
     WHERE device_id = '018f2e00-3000-7000-8000-000000000003'::uuid
   `);
-  if (report.assertions.twoOrganizationIsolation !== '018f2e00-0000-7000-8000-000000000002') {
-    throw new Error(`unexpected Organization B snapshot ${report.assertions.twoOrganizationIsolation}`);
+  if (report.assertions.twoTenantIsolation !== '018f2d00-0000-7000-8000-000000000002') {
+    throw new Error(`unexpected Tenant B snapshot ${report.assertions.twoTenantIsolation}`);
   }
 
   run('docker', ['restart', containerName]);

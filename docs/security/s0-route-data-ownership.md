@@ -122,7 +122,7 @@ npm run contracts:check
 npm run test:ownership
 npm run test:legacy-compatibility
 npm run test:durable-postgres
-npm run build:gateway
+npm run build:energy-api
 npm run build:legacy-compatibility
 npm run lint
 npm run build

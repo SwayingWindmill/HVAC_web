@@ -304,7 +304,7 @@
       "area": "operations",
       "requirement": "核心 Go 进程提供 /health/live 与 /health/ready，并由 Compose healthcheck 消费 readiness",
       "status": "KEEP",
-      "current": "energy-api、scheduler、iot-service、telemetry-worker、metric-worker 均已接入容器 healthcheck；关键数据依赖使用 service_healthy",
+      "current": "energy-api、identity-service、scheduler、maintenance、iot-service、telemetry-worker、metric-worker 均已接入容器 healthcheck；关键数据依赖使用 service_healthy",
       "action": "保持 readiness 与真实依赖一致，不用容器启动状态替代服务可用状态"
     },
     {
@@ -338,6 +338,14 @@
       "status": "KEEP",
       "current": "已按 SE-PLATFORM-006 V1 建立 PostgreSQL schedule_definitions/job_instances/job_attempts durable queue、独立 scheduler runtime、SKIP LOCKED/dedup/misfire/retry/lease recovery；metric-worker 已移除自调度 authority，只 Claim/Lease/Attempt/Execute METRIC_* Job。数据库备份仍由 infrastructure scheduler/systemd timer 独立负责",
       "action": "保持 Scheduler 只协调应用 Job；Forecast/Optimization/Settlement/Lifecycle 等后续按各自交付需求接入同一 Job contract，不引入通用 DAG Workflow Engine"
+    },
+    {
+      "id": "RUNTIME-INVENTORY-001",
+      "area": "deployment",
+      "requirement": "Canonical Compose 中每个 service 必须属于唯一运行类别，源码目录名不得隐式定义 Deployable",
+      "status": "KEEP",
+      "current": "runtime-inventory.v1.json 已冻结四个默认业务 deployable、scheduler/maintenance supporting workload、identity infrastructure、data/realtime infrastructure、profiled observability、optional intelligence 与 one-shot operator actions",
+      "action": "deployment:phase1:check 必须校验 Compose service 集合与 runtime inventory 完全一致；任何未分类新增进程直接失败"
     },
     {
       "id": "OPTIMIZATION-001",

@@ -12,8 +12,8 @@ const openAPIPath = resolve(root, 'contracts/http/s2-telemetry-public.openapi.js
 const eventPath = resolve(root, 'contracts/events/s2-device-observation-publication.v1.schema.json');
 const toolingLockPath = resolve(root, 'contracts/http/s2-tooling.lock.json');
 const compatibilityPath = resolve(root, 'contracts/telemetry/s2-baseline-compatibility.v1.json');
-const goOutputPath = resolve(root, 'services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go');
-const gatewayGoOutputPath = resolve(root, 'services/platform-gateway/pkg/s2telemetryapi/api.gen.go');
+const goOutputPath = resolve(root, 'modules/telemetry/pkg/telemetryapi/api.gen.go');
+const gatewayGoOutputPath = resolve(root, 'cmd/energy-api/internal/s2telemetryapi/api.gen.go');
 const tsOutputPath = resolve(root, 'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts');
 const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
 const gofmtBinary = process.env.GOFMT_BINARY ?? (process.platform === 'win32' && existsSync(windowsGofmtPath) ? windowsGofmtPath : 'gofmt');
@@ -95,8 +95,8 @@ invariant(exact(toolingLock.inputs, [
   'contracts/telemetry/s2-baseline-compatibility.v1.json',
 ]), 'tooling lock inputs drifted');
 invariant(exact(toolingLock.outputs, [
-  'services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go',
-  'services/platform-gateway/pkg/s2telemetryapi/api.gen.go',
+  'modules/telemetry/pkg/telemetryapi/api.gen.go',
+  'cmd/energy-api/internal/s2telemetryapi/api.gen.go',
   'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts',
 ]), 'tooling lock outputs drifted');
 invariant(openAPI.openapi === '3.1.0', 'OpenAPI must remain 3.1.0');

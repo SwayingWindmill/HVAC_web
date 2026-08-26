@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-s2-telemetry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const redisContainerName = `${projectName}-latest-redis-1`;
@@ -473,7 +473,7 @@ try {
 
   report.assertions.redisLatestCAS = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/telemetry-runtime-service',
+    '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestRedisLatestCacheNeverRegressesBusinessRevision', '-v', './internal/telemetry/...',
   ], {
     env: {

@@ -152,10 +152,10 @@
   },
   "evidence": [
     "libs/telemetryauth/telemetry_test.go",
-    "services/iam-service/internal/iam/telemetry_authorization_test.go",
-    "services/iam-service/internal/iam/telemetry_server_test.go",
-    "services/iam-service/internal/iam/telemetry_grant_store_integration_test.go",
-    "services/iam-service/internal/iam/postgres_authorization_integration_test.go",
+    "modules/iam/internal/iam/telemetry_authorization_test.go",
+    "modules/iam/internal/iam/telemetry_server_test.go",
+    "modules/iam/internal/iam/telemetry_grant_store_integration_test.go",
+    "modules/iam/internal/iam/postgres_authorization_integration_test.go",
     "out/s2-iam-authorization/iam-authorization-evidence.json"
   ]
 }

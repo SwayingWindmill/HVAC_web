@@ -5,24 +5,23 @@ const root = resolve(process.cwd());
 const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const [openapi, routes, data, model, store, postgresMutation, http, serviceMain, gateway, gatewayMutation, iam, auth, migration, roles, compose, browser, workflow] = await Promise.all([
+const [openapi, routes, data, model, store, postgresMutation, http, serviceMain, gateway, gatewayMutation, iam, auth, migration, roles, compose, browser] = await Promise.all([
   readJSON('contracts/http/s5-work-order-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('libs/workordermodel/model.go'),
-  readText('services/work-order-service/pkg/workorderservice/store.go'),
-  readText('services/work-order-service/pkg/workorderservice/postgres_mutation.go'),
-  readText('services/work-order-service/pkg/workorderservice/http.go'),
-  readText('services/work-order-service/cmd/work-order-service/main.go'),
-  readText('services/platform-gateway/internal/gateway/work_order.go'),
-  readText('services/platform-gateway/internal/gateway/work_order_mutation.go'),
-  readText('services/iam-service/internal/iam/work_order_authorization.go'),
+  readText('modules/workorder/pkg/workorderservice/store.go'),
+  readText('modules/workorder/pkg/workorderservice/postgres_mutation.go'),
+  readText('modules/workorder/pkg/workorderservice/http.go'),
+  readText('modules/workorder/cmd/work-order-owner/main.go'),
+  readText('cmd/energy-api/internal/gateway/work_order.go'),
+  readText('cmd/energy-api/internal/gateway/work_order_mutation.go'),
+  readText('modules/iam/internal/iam/work_order_authorization.go'),
   readText('libs/workorderauth/authorization.go'),
-  readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
-  readText('services/work-order-service/testdata/postgres/000_roles.sql'),
-  readText('infra/s5-work-order/compose.yaml'),
+  readText('modules/workorder/migrations/002_s5_work_order_create_assignment.sql'),
+  readText('modules/workorder/testdata/postgres/000_roles.sql'),
+  readText('infra/workorder/compose.yaml'),
   readText('scripts/run-s5-work-order-create-assign-browser-audit.mjs'),
-  readText('.github/workflows/s5-work-order-create-assign.yml'),
 ]);
 const paths = openapi.paths ?? {};
 assert(!JSON.stringify(openapi).includes('"":'), 'public Work Order OpenAPI contains an empty schema key');
@@ -45,6 +44,4 @@ assert(iam.includes('ReasonDenyExplicit') && auth.includes('ActionCreate') && au
 assert(migration.includes('GRANT UPDATE (assignee_id, team_id, version, updated_at)') && migration.includes('FORCE ROW LEVEL SECURITY') && !migration.includes('GRANT DELETE') && !migration.includes('GRANT ALL'), 'Work Order writer SQL authority is too broad');
 assert(roles.includes('s5_work_order_mutation_service LOGIN') && serviceMain.includes('WORK_ORDER_MUTATION_DATABASE_URL_FILE') && serviceMain.includes('OpenPostgresStoreWithMutations') && compose.includes('002_s5_work_order_create_assignment.sql'), 'isolated Work Order mutation login wiring is missing');
 for (const marker of ['authorized-create-assign', 'exact-idempotent-retry', 'stale-version-conflict', 'authorization-denial-no-data', 'non-selected-session-route-absence', 'cross-site-nondiscovery', 'session-loss-purge', 'unreviewed-lifecycle-absence', 'public-gateway-mutation-only']) assert(browser.includes(marker), `Work Order browser certification is missing ${marker}`);
-assert(workflow.includes('npm run s5:work-order:create-assign') && workflow.includes('npm run contracts:check'), 'P4 workflow omits required gates');
-for (const forbidden of ["- 'package.json'", "- 'package-lock.json'", "- 'go.work'", "- 'go.work.sum'"]) assert(!workflow.includes(forbidden), `Work Order workflow directly watches broad root manifest ${forbidden}`);
 console.log('S5 Work Order governed create/assignment assets passed.');

@@ -45,9 +45,9 @@
 
 - Real 路由：`apps/hvac-web/src/real/RealApp.tsx`、`SiteScopedShell.tsx`、`RealProductPages.tsx`、`EnergyAnalytics.tsx`。
 - AI：`services/operations-agent-service/`、Operations Agent HTTP/AG-UI/Gateway 投影、OpenAI Finding Synthesizer、PostgreSQL Persistence、测试和契约。
-- Analytics：`apps/hvac-web/src/api/energy-analytics.ts`、`services/platform-gateway/internal/gateway/analytics.go`、`services/analytics-read-model-projector/`、`services/telemetry-query-service/`、`libs/analyticsmodel/`。
+- Analytics：`apps/hvac-web/src/api/energy-analytics.ts`、`cmd/energy-api/internal/gateway/analytics.go`、`modules/energy/`、`modules/telemetry/`、`libs/analyticsmodel/`。
 - Forecast/Optimization：对应 Go Service、HTTP、PostgreSQL/ClickHouse Store、Migrations、Real Feature Boundary、Gateway Contract-only Route 和部署清单。
-- Scheduler：`services/scheduler-service/`、Phase 1 Compose、Schedule SQL Example、Metric Worker 的 Claim 入口。
+- Scheduler：`modules/scheduler/`、Phase 1 Compose、Schedule SQL Example、Metric Worker 的 Claim 入口。
 - Integration：MQTT Telemetry Adapter、Command Connector、Domain Outbox/Delivery 表、Ownership/Registry 契约和全仓 Outbound Connector 搜索结果。
 
 ## 3. 参考项目功能与它解决的问题

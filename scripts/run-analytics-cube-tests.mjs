@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const s2ComposePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const s2ComposePath = resolve(root, 'infra/telemetry/compose.yaml');
 const cubeComposePath = resolve(root, 'semantic/cube/compose.yaml');
 const s2ProjectName = `hvac-analytics-cube-source-${process.pid}`;
 const cubeProjectName = `hvac-analytics-cube-${process.pid}`;
@@ -198,7 +198,7 @@ try {
   await waitForClickHouseHTTP();
   report.assertions.sourceProjection = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/analytics-read-model-projector',
+    '--module=modules/energy',
     'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
   ], {
     env: {

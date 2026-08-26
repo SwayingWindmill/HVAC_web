@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 29,
+  "registryRevision": 30,
   "routes": [
     {
       "method": "GET",
@@ -756,6 +756,24 @@
     {
       "method": "POST",
       "path": "/api/v1/telemetry/device-series:query",
+      "owner": "telemetry-query-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/device-series:aggregate",
       "owner": "telemetry-query-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

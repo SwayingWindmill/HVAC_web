@@ -1,8 +1,10 @@
 {
   "exclude": [
+    ".ai-bridge/",
     ".worktrees/",
     ".clones/",
     ".scratch/",
+    ".workbuddy/",
     "hvac-backend/",
     "references/",
     "out/",

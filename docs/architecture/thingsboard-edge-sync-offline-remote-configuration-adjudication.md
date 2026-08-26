@@ -84,7 +84,7 @@ Edge 基线固定在 Apache-2.0 的 `thingsboard/thingsboard-edge` tag `v4.3.1.1
 - `libs/edgecontrol/{channel,component,cycle,controller,intent,timedata}.go`；
 - `tools/eg8200-simulator/internal/simulator/{edge_runtime,edge_driver,mqtt_publisher,mqtt_command,mqtt_config}.go`；
 - `tools/eg8200-simulator/cmd/eg8200-mqtt-publisher/main.go`；
-- `services/mqtt-telemetry-adapter/internal/adapter/runtime.go` 及 Command Runtime；
+- `modules/iot/internal/adapter/runtime.go` 及 Command Runtime；
 - `contracts/architecture/edge-control-plane.v1.json`；
 - `docs/adr/0012-openems-informed-edge-control-plane.md` 和 `docs/architecture/openems-source-review.md`。
 

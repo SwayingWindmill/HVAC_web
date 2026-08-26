@@ -21,7 +21,8 @@ x-phase1-deployment-tiers:
   schemaVersion: 1
   contract: ./deployment-tiers.v1.json
   availabilityContract: ./availability-tier.v1.json
-  note: Observability services are profile-gated. Select one observability profile and optionally the intelligence profile.
+  runtimeInventoryContract: ./runtime-inventory.v1.json
+  note: Observability services are profile-gated. Select one observability profile and optionally the intelligence profile. Runtime classes are authoritative in runtime-inventory.v1.json.
 
 services:
   nginx:
@@ -53,8 +54,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/platform-gateway/cmd/platform-gateway }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/energy-api }
     image: ${ENERGY_API_IMAGE:-hvac/energy-api:0.1.0-dev}
     environment:
       ENERGY_API_EMBEDDED_OWNERS: all
@@ -117,7 +118,7 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-service }
     image: ${IDENTITY_SERVICE_IMAGE:-hvac/identity-service:0.1.0-dev}
     environment:
@@ -150,7 +151,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/signing-keygen }
     image: ${IDENTITY_KEYGEN_IMAGE:-hvac/identity-keygen:0.1.0-dev}
     environment:
@@ -164,7 +165,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/mfa-keygen }
     image: ${IDENTITY_MFA_KEYGEN_IMAGE:-hvac/identity-mfa-keygen:0.1.0-dev}
     environment:
@@ -178,8 +179,8 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/api-credential-keygen }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/api-credential-keygen }
     image: ${IAM_API_CREDENTIAL_KEYGEN_IMAGE:-hvac/iam-api-credential-keygen:0.1.0-dev}
     environment:
       IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper
@@ -192,7 +193,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-admin }
     image: ${IDENTITY_ADMIN_IMAGE:-hvac/identity-admin:0.1.0-dev}
     environment:
@@ -218,8 +219,8 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/identity-reconciler }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/identity-reconciler }
     image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
     depends_on:
       postgres:
@@ -230,8 +231,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/scheduler-service/cmd/scheduler-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/scheduler }
     image: ${SCHEDULER_IMAGE:-hvac/scheduler:0.1.0-dev}
     environment:
       SCHEDULER_DIAGNOSTICS_ADDR: :19092
@@ -256,8 +257,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/maintenance-service/cmd/maintenance-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/maintenance-worker }
     image: ${MAINTENANCE_IMAGE:-hvac/maintenance:0.1.0-dev}
     environment:
       MAINTENANCE_DIAGNOSTICS_ADDR: :19093
@@ -282,8 +283,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-runtime-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/telemetry-worker }
     image: ${TELEMETRY_WORKER_IMAGE:-hvac/telemetry-worker:0.1.0-dev}
     environment:
       TELEMETRY_SERVICE_ADDR: :8446
@@ -318,8 +319,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/metric-engine-service/cmd/metric-engine-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/metric-worker }
     image: ${METRIC_WORKER_IMAGE:-hvac/metric-worker:0.1.0-dev}
     environment:
       METRIC_DIAGNOSTICS_ADDR: :19090
@@ -350,7 +351,7 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/forecast-service/cmd/forecast-service }
     image: ${FORECAST_SERVICE_IMAGE:-hvac/forecast-service:0.1.0-dev}
     environment:
@@ -384,7 +385,7 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/optimization-service/cmd/optimization-service }
     image: ${OPTIMIZATION_SERVICE_IMAGE:-hvac/optimization-service:0.1.0-dev}
     environment:
@@ -416,7 +417,7 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/fdd-service/cmd/fdd-service }
     image: ${FDD_SERVICE_IMAGE:-hvac/fdd-service:0.1.0-dev}
     environment:
@@ -443,8 +444,8 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/iot-service }
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
@@ -571,7 +572,7 @@ services:
       - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
       - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
-      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 5s
@@ -617,8 +618,8 @@ services:
     ports:
       - "${MQTT_TLS_PORT:-8883}:8883"
     volumes:
-      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-./runtime/mqtt-pki}:/mosquitto/config/pki:ro
       - ${MQTT_DATA_DIR:-./runtime/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
@@ -670,7 +671,7 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
-      - ../../../infra/s0-durable/observability/alerts:/etc/prometheus/alerts:ro
+      - ../../../infra/observability/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     expose: ["9090"]
     networks: [application, observability]
@@ -739,7 +740,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../../../infra/s0-durable/observability/dashboards:/var/lib/grafana/dashboards:ro
+      - ../../../infra/observability/dashboards:/var/lib/grafana/dashboards:ro
     expose: ["3000"]
     networks: [observability]
     cpus: ${GRAFANA_CPUS:-0.50}

@@ -9,7 +9,7 @@
     "contracts/http/templates/platformGateway.ts.tmpl"
   ],
   "outputs": [
-    "services/platform-gateway/pkg/platformapi/api.gen.go",
+    "cmd/energy-api/internal/platformapi/api.gen.go",
     "apps/hvac-web/src/api/generated/platformGateway.gen.ts"
   ]
 }

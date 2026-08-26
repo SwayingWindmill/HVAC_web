@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { createPostgresComposeHarness, expectEqual, type PostgresAuthorityReport } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s3-command/compose.yaml');
+const composePath = resolve(root, 'infra/command/compose.yaml');
 const projectName = `hvac-s3-command-${process.pid}`;
 const reportPath = resolve(root, process.env.S3_COMMAND_REPORT_PATH ?? 'out/s3-command-authority/postgres-authority.json');
 const { postgresHostPort, run, compose, psql, pause } = await createPostgresComposeHarness({
@@ -132,7 +132,7 @@ try {
     S3_COMMAND_TEST_DATABASE_URL: `postgres://s3_command_service:s3-command-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s3?sslmode=disable`,
     S3_COMMAND_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s3?sslmode=disable`,
   };
-  run(process.execPath, ['scripts/run-go.mjs', 'test', './services/command-service/...'], { env: testEnvironment, stdio: 'inherit' });
+  run(process.execPath, ['scripts/run-go.mjs', 'test', './modules/command/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
 
   report.status = 'passed';

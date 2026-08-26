@@ -4,22 +4,17 @@ import { resolve } from 'node:path';
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const [packageRaw, routeRaw, dataRaw, openapi, capabilities, ownership, workOrderAuth, iamMainServer, iamServer, iamAuthorization, iamPostgres, gateway, gatewayTests, sql, browser, workflow, postgresWorkflow, postgresChecker, releaseEvidenceChecker] = await Promise.all([
-  read('package.json'), read('contracts/ownership/route-ownership.v1.json'), read('contracts/ownership/data-ownership.v1.json'),
+const [routeRaw, dataRaw, openapi, capabilities, ownership, workOrderAuth, iamMainServer, iamServer, iamAuthorization, iamPostgres, gateway, gatewayTests, sql, browser] = await Promise.all([
+  read('contracts/ownership/route-ownership.v1.json'), read('contracts/ownership/data-ownership.v1.json'),
   read('contracts/http/platform-gateway.openapi.yaml'), read('libs/identitycontext/capabilities.go'),
   read('libs/ownershipregistry/registry.go'), read('libs/workorderauth/authorization.go'),
-  read('services/iam-service/internal/iam/server.go'), read('services/iam-service/internal/iam/work_order_server.go'), read('services/iam-service/internal/iam/work_order_authorization.go'),
-  read('services/iam-service/internal/iam/postgres_work_order_authorization.go'), read('services/platform-gateway/internal/gateway/work_order.go'),
-  read('services/platform-gateway/internal/gateway/work_order_test.go'), read('infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql'),
-  read('scripts/run-s5-work-order-read-browser-audit.mjs'), read('.github/workflows/s5-work-order-read-canary.yml'),
-  read('.github/workflows/s5-work-order-postgres.yml'), read('scripts/check-s5-work-order-postgres.mjs'), read('scripts/check-s0-release-evidence-assets.mjs'),
+  read('modules/iam/internal/iam/server.go'), read('modules/iam/internal/iam/work_order_server.go'), read('modules/iam/internal/iam/work_order_authorization.go'),
+  read('modules/iam/internal/iam/postgres_work_order_authorization.go'), read('cmd/energy-api/internal/gateway/work_order.go'),
+  read('cmd/energy-api/internal/gateway/work_order_test.go'), read('infra/registry/postgres/init/008-s5-work-order-authorization.sql'),
+  read('scripts/run-s5-work-order-read-browser-audit.mjs'),
 ]);
-const packageJSON = JSON.parse(packageRaw);
 const registry = JSON.parse(routeRaw);
 const dataRegistry = JSON.parse(dataRaw);
-assert(typeof packageJSON.scripts?.['s5:work-order:read-canary:check'] === 'string', 'package.json is missing s5:work-order:read-canary:check');
-assert(typeof packageJSON.scripts?.['s5:work-order:read-canary:browser'] === 'string', 'package.json is missing s5:work-order:read-canary:browser');
-assert(typeof packageJSON.scripts?.['s5:work-order:read-canary'] === 'string', 'package.json is missing s5:work-order:read-canary');
 const routes = registry.routes.filter((route) => route.owner === 'work-order-service' && route.method === 'GET');
 assert(routes.length === 2, 'Work Order must expose exactly the list/detail GET pair');
 for (const route of routes) {
@@ -49,9 +44,4 @@ for (const marker of ['X-Work-Order-Read-Context', 'work-order:authorize', 'work
 for (const marker of ['ExactSignedReadContext', 'RejectsCrossSiteProjection', 'RejectsBrowserWorkOrderAuthorityHeaders']) assert(gatewayTests.includes(marker), `Gateway Work Order tests are missing ${marker}`);
 for (const marker of ['FORCE ROW LEVEL SECURITY', 'work-order:list', 'work-order:read', 'DENY_EXPLICIT']) assert(sql.includes(marker), `Work Order IAM migration is missing ${marker}`);
 assert(browser.includes('public-gateway-get-only') && browser.includes('authorization-denial-no-data') && browser.includes('non-selected-session-route-absence') && browser.includes('session-loss-purge'), 'Work Order browser evidence is incomplete');
-assert(workflow.includes('npm run s5:work-order:read-canary') && workflow.includes('npm run s1:registry:postgres'), 'Work Order read canary workflow omits required gates');
-assert(!workflow.includes("- 'package.json'") && !workflow.includes("- 'package-lock.json'") && !workflow.includes("- 'go.work'") && !workflow.includes("- 'go.work.sum'"), 'S5 Read Canary workflow directly watches a broad root manifest');
-assert((postgresWorkflow.match(/^\s+- 'go\.work'$/gm) ?? []).length === 2 && (postgresWorkflow.match(/^\s+- 'go\.work\.sum'$/gm) ?? []).length === 2, 'P2 PostgreSQL workflow lost root Go workspace triggers');
-assert(postgresChecker.includes('goWorkTriggers === 2 && goWorkSumTriggers === 2'), 'P2 checker no longer enforces root Go workspace triggers');
-for (const name of ['iam-work-order-permission', 'iam-work-order-authorization-decision']) assert(releaseEvidenceChecker.includes(name), 'S0 release evidence checker is missing ' + name);
 console.log('S5 Work Order exact IAM/Gateway 1% read canary assets passed.');

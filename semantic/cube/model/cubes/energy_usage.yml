@@ -4,7 +4,7 @@ cubes:
     description: >-
       Authorized additive HVAC energy intervals projected from accepted cumulative meter
       observations, with explicit quality, data watermark and dataset revision semantics.
-    sql_table: analytics.energy_interval_facts
+    sql_table: analytics.energy_interval_facts_visible
 
     measures:
       - name: energy_valid_kwh

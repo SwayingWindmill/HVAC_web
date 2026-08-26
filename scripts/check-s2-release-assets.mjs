@@ -25,9 +25,9 @@ const [envelope, gates, attestationSchema, runtimeImage, historyProjectorImage, 
   text('scripts/write-s2-release-report.mjs'),
   text('.github/workflows/s2-telemetry-release.yml'),
   text('docs/operations/s2-capacity-release-evidence.md'),
-  text('services/telemetry-runtime-service/internal/telemetry/metrics.go'),
-  text('services/platform-gateway/internal/gateway/telemetry_metrics.go'),
-  text('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
+  text('modules/telemetry/internal/telemetry/metrics.go'),
+  text('cmd/energy-api/internal/gateway/telemetry_metrics.go'),
+  text('cmd/telemetry-worker/main.go'),
   text('scripts/run-s2-realtime-centrifugo-config-check.mjs'),
   text('scripts/lib/docker-cli.mjs'),
   json('package.json'),
@@ -92,7 +92,7 @@ for (const source of [bundleBuilder, bundleVerifier]) {
 
 const jobs = ['contracts-and-static', 'security-negative', 'postgres-integration', 'history-integration', 'transport-integration', 'capacity-and-failure', 'browser-real-mode', 'production-images', 'kind-rollout-rollback', 'release-evidence'];
 for (const job of jobs) assert(workflow.includes(`  ${job}:`), `workflow job ${job} is missing`);
-for (const marker of ['runs-on: ubuntu-24.04', 'actions/checkout@v6', 'actions/setup-go@v6', 'cache-dependency-path: |', '**/go.sum', 'go.work.sum', 'actions/setup-node@v6', 'actions/upload-artifact@v6', 'actions/download-artifact@v6', 'gitleaks/gitleaks-action@v2', 'npm run s2:telemetry-release', 'npm run s2:security-observability', 'npm run s2:postgres-integration', 'npm run s2:history:integration', 'npm run s2:transport-integration', 'npm run s2:hvac-web:browser', 'docker/setup-buildx-action@v4', 'docker/login-action@v4', 'docker/build-push-action@v7', 'telemetry-history-projector', 'deploy/s2/images/telemetry-history-projector.Dockerfile', 'actions/attest-build-provenance@v4', 'Stage flat image evidence artifact', 'path: out/s2-image-artifact/*', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
+for (const marker of ['runs-on: ubuntu-24.04', 'actions/checkout@v6', 'actions/setup-go@v6', 'cache-dependency-path: |', '**/go.sum', 'go.work.sum', 'actions/setup-node@v6', 'actions/upload-artifact@v6', 'actions/download-artifact@v6', 'gitleaks/gitleaks-action@v2', 'npm run s2:telemetry-release', 'npm run s2:security-negative', 'npm run s2:observability:harness', 'npm run s2:postgres-integration', 'npm run s2:history:integration', 'npm run s2:transport-integration', 'npm run s2:hvac-web:browser', 'docker/setup-buildx-action@v4', 'docker/login-action@v4', 'docker/build-push-action@v7', 'telemetry-history-projector', 'deploy/s2/images/telemetry-history-projector.Dockerfile', 'actions/attest-build-provenance@v4', 'Stage flat image evidence artifact', 'path: out/s2-image-artifact/*', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
   assert(workflow.includes(marker), `release workflow is missing ${marker}`);
 }
 assert(workflow.includes('options: [preflight, full]') && workflow.includes('wall_clock_attestation_json') && workflow.includes('S2_CAPACITY_PROFILE'), 'formal workflow profile or attestation input is missing');

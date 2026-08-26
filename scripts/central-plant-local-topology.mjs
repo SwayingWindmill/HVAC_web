@@ -456,14 +456,14 @@ async function installDatabaseSeed(container, localPath, remotePath, database) {
 function buildGoBinaries(paths, goCache, quiet) {
   const builds = [
     [paths.pkiGeneratorBinary, './tools/s0-auth-fixture/cmd/generate-central-plant-pki'],
-    [paths.iamBinary, './services/iam-service/cmd/iam-service'],
-    [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
-    [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
-    [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
-    [paths.queryBinary, './services/telemetry-query-service/cmd/telemetry-query-service'],
-    [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
+    [paths.iamBinary, './modules/iam/cmd/iam-owner'],
+    [paths.coreBinary, './modules/registry/cmd/registry-owner'],
+    [paths.telemetryBinary, './cmd/telemetry-worker'],
+    [paths.historyProjectorBinary, './modules/telemetry/cmd/telemetry-history-projector'],
+    [paths.queryBinary, './modules/telemetry/cmd/telemetry-query-owner'],
+    [paths.gatewayBinary, './cmd/energy-api'],
     [paths.publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher'],
-    [paths.mqttAdapterBinary, './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter'],
+    [paths.mqttAdapterBinary, './cmd/iot-service'],
   ];
   for (const [output, source] of builds) {
     run(goBinary, ['build', '-trimpath', '-buildvcs=false', '-o', output, source], {
@@ -549,11 +549,11 @@ export async function startCentralPlantLocalTopology(options = {}) {
   let logtoProxy;
   let logtoAdminProxy;
 
-  const s1Compose = resolve(root, 'infra/s1-registry/compose.yaml');
-  const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
+  const s1Compose = resolve(root, 'infra/registry/compose.yaml');
+  const s2Compose = resolve(root, 'infra/telemetry/compose.yaml');
   const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
   const logtoCompose = resolve(root, 'infra/central-plant-local/logto.compose.yaml');
-  const mqttCompose = resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml');
+  const mqttCompose = resolve(root, 'infra/telemetry/mqtt/compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
   const s2Environment = {

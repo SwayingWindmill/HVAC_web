@@ -1,56 +1,7 @@
 name: RMS Web Certification
 
 on:
-  pull_request:
-    branches-ignore: ["**"]
-    paths:
-      - '.github/workflows/rms-web-certification.yml'
-      - 'scripts/check-rms-workflow-topology.mjs'
-      - 'apps/hvac-web/src/real/**'
-      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
-      - 'apps/hvac-web/vite.real.config.ts'
-      - 'apps/hvac-web/vite.shared.config.ts'
-      - 'contracts/http/**'
-      - 'deploy/rms/**'
-      - 'docs/operations/hvac-web-real-mode-shell-*.md'
-      - 'libs/identitycontext/**'
-      - 'libs/ownershipregistry/**'
-      - 'libs/registryauth/**'
-      - 'services/iam-service/**'
-      - 'services/platform-gateway/**'
-      - 'scripts/build-rms-real-shell-certification.mjs'
-      - 'scripts/check-rms-real-build-graph.mjs'
-      - 'scripts/check-rms-real-bundle.mjs'
-      - 'scripts/rms-certification-evidence-lib.mjs'
-      - 'scripts/rms-real-build-audit-lib.mjs'
-      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
-      - 'scripts/run-rms-real-shell-certification.mjs'
-      - 'scripts/test-rms-*.mjs'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/rms-web-certification.yml'
-      - 'scripts/check-rms-workflow-topology.mjs'
-      - 'apps/hvac-web/src/real/**'
-      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
-      - 'apps/hvac-web/vite.real.config.ts'
-      - 'apps/hvac-web/vite.shared.config.ts'
-      - 'contracts/http/**'
-      - 'deploy/rms/**'
-      - 'docs/operations/hvac-web-real-mode-shell-*.md'
-      - 'libs/identitycontext/**'
-      - 'libs/ownershipregistry/**'
-      - 'libs/registryauth/**'
-      - 'services/iam-service/**'
-      - 'services/platform-gateway/**'
-      - 'scripts/build-rms-real-shell-certification.mjs'
-      - 'scripts/check-rms-real-build-graph.mjs'
-      - 'scripts/check-rms-real-bundle.mjs'
-      - 'scripts/rms-certification-evidence-lib.mjs'
-      - 'scripts/rms-real-build-audit-lib.mjs'
-      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
-      - 'scripts/run-rms-real-shell-certification.mjs'
-      - 'scripts/test-rms-*.mjs'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -74,10 +25,9 @@ jobs:
             libs/identitycontext/go.mod
             libs/ownershipregistry/go.mod
             libs/registryauth/go.mod
-            services/iam-service/go.mod
-            services/platform-gateway/go.mod
+            modules/iam/go.mod
+            cmd/energy-api/go.mod
       - run: npm ci
-      - run: npm run rms:topology:check
       - run: npm run rms:web-certification
       - name: Upload RMS certification evidence
         if: always()

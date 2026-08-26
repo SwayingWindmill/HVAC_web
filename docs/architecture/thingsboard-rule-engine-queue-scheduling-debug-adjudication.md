@@ -92,14 +92,14 @@ HVAC Web 需要实现完整 Rule Engine，但“完整”不等于复制 ThingsB
 本地通过 CodeGraph 先行审查，主要证据为：
 
 - `libs/alarmmodel/rule.go`
-- `services/alarm-service/pkg/alarmservice/store.go`
-- `services/alarm-service/pkg/alarmservice/postgres.go`
-- `services/metric-engine-service/internal/metric/engine.go`
-- `services/metric-engine-service/internal/metric/postgres.go`
-- `services/metric-engine-service/internal/metric/scheduler.go`
-- `services/scheduler-service/internal/scheduler/store.go`
+- `modules/alarm/pkg/alarmservice/store.go`
+- `modules/alarm/pkg/alarmservice/postgres.go`
+- `modules/metric/internal/metric/engine.go`
+- `modules/metric/internal/metric/postgres.go`
+- `modules/metric/internal/metric/scheduler.go`
+- `modules/scheduler/internal/scheduler/store.go`
 - `libs/domainoutbox/store.go`
-- `services/command-dispatcher/pkg/commanddispatcher/dynamic_safety.go`
+- `modules/command/pkg/commanddispatcher/dynamic_safety.go`
 - `services/operations-agent-service/src/runtime-langgraph/internal/langgraph-agent-execution-runtime.ts`
 - `libs/edgecontrol/*`
 - `docs/architecture/thingsboard-pattern-adoption.md`

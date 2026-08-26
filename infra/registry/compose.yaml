@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
+    environment:
+      POSTGRES_DB: hvac_s1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-local-only
+    volumes:
+      # Mount migrations with deterministic numeric names. Relying on the host
+      # directory/glob collation made 001a execute before 001 on some locales.
+      - ./postgres/init/000-bootstrap-identities.sql:/docker-entrypoint-initdb.d/000.sql:ro
+      - ./postgres/init/001-s1-registry-baseline.sql:/docker-entrypoint-initdb.d/010.sql:ro
+      - ./postgres/init/001a-tenant-foundation.sql:/docker-entrypoint-initdb.d/020.sql:ro
+      - ./postgres/init/001b-device-binding-invariants.sql:/docker-entrypoint-initdb.d/030.sql:ro
+      - ./postgres/init/002-s1-registry-fixtures.sql:/docker-entrypoint-initdb.d/040.sql:ro
+      - ./postgres/init/003-iam-runtime-identity-resolution.sql:/docker-entrypoint-initdb.d/050.sql:ro
+      - ./postgres/init/004-iam-reconciliation.sql:/docker-entrypoint-initdb.d/060.sql:ro
+      - ./postgres/init/005-core-read-service.sql:/docker-entrypoint-initdb.d/070.sql:ro
+      - ./postgres/init/006-legacy-migration-execution.sql:/docker-entrypoint-initdb.d/080.sql:ro
+      - ./postgres/init/006-s2-telemetry-authorization.sql:/docker-entrypoint-initdb.d/090.sql:ro
+      - ./postgres/init/007-s4-alarm-authorization.sql:/docker-entrypoint-initdb.d/100.sql:ro
+      - ./postgres/init/007-spatial-sensor-point-model.sql:/docker-entrypoint-initdb.d/110.sql:ro
+      - ./postgres/init/007a-tenant-spatial-scope.sql:/docker-entrypoint-initdb.d/120.sql:ro
+      - ./postgres/init/007b-control-point-invariants.sql:/docker-entrypoint-initdb.d/130.sql:ro
+      - ./postgres/init/007c-counter-semantics.sql:/docker-entrypoint-initdb.d/135.sql:ro
+      - ./postgres/init/008-s5-work-order-authorization.sql:/docker-entrypoint-initdb.d/140.sql:ro
+      - ./postgres/init/009-energy-data-foundation.sql:/docker-entrypoint-initdb.d/150.sql:ro
+      - ./postgres/init/009a-energy-topology-metering-v2.sql:/docker-entrypoint-initdb.d/160.sql:ro
+      - ./postgres/init/009c-metric-model-v2.sql:/docker-entrypoint-initdb.d/170.sql:ro
+      - ./postgres/init/009b-settlement-foundation-v2.sql:/docker-entrypoint-initdb.d/180.sql:ro
+      - ./postgres/init/009d-data-governance-v2.sql:/docker-entrypoint-initdb.d/190.sql:ro
+      - ./postgres/init/009e-forecast-model-v2.sql:/docker-entrypoint-initdb.d/200.sql:ro
+      - ./postgres/init/009f-optimization-model-v2.sql:/docker-entrypoint-initdb.d/210.sql:ro
+      - ./postgres/init/009g-object-storage-governance-v2.sql:/docker-entrypoint-initdb.d/220.sql:ro
+      - ./postgres/init/009i-backend-integration-v2.sql:/docker-entrypoint-initdb.d/230.sql:ro
+      - ./postgres/init/009j-operations-support-domains-v2.sql:/docker-entrypoint-initdb.d/235.sql:ro
+      - ./postgres/init/009k-mlops-metadata-v2.sql:/docker-entrypoint-initdb.d/238.sql:ro
+      - ./postgres/init/009l-scheduler-job-v1.sql:/docker-entrypoint-initdb.d/240.sql:ro
+      - ./postgres/init/009-s04-tenant-iam-admin.sql:/docker-entrypoint-initdb.d/250.sql:ro
+      - ./postgres/init/010-s05-registry-writer.sql:/docker-entrypoint-initdb.d/260.sql:ro
+      - ./postgres/init/011-s08-metric-lifecycle.sql:/docker-entrypoint-initdb.d/270.sql:ro
+      - ./postgres/init/012-s19-settlement-projections.sql:/docker-entrypoint-initdb.d/280.sql:ro
+      - ./postgres/init/013-s22-intelligence-products.sql:/docker-entrypoint-initdb.d/290.sql:ro
+      - ../connectivity/postgres/init/001-s09-connectivity.sql:/docker-entrypoint-initdb.d/300.sql:ro
+      - ../connectivity/postgres/init/002-s11-command-reply-evidence.sql:/docker-entrypoint-initdb.d/310.sql:ro
+      - ../connectivity/postgres/init/003-s12-edge-fleet.sql:/docker-entrypoint-initdb.d/320.sql:ro
+    ports:
+      - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s1"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    networks: [s1]
+
+networks:
+  s1: {}

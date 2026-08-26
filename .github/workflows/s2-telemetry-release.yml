@@ -78,7 +78,8 @@ jobs:
           node-version: "22.22.0"
           cache: npm
       - run: npm ci
-      - run: npm run s2:security-observability
+      - run: npm run s2:security-negative
+      - run: npm run s2:observability:harness
       - name: Upload security and observability release evidence
         uses: actions/upload-artifact@v6
         with:

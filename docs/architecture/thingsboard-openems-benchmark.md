@@ -59,12 +59,12 @@ MyEMS 不是第四层，而是 Cloud Energy Platform 的重要内容参考：它
 | OpenEMS Device/Nature 抽象 | Capability Profile、Component Registry、Point/Channel 映射 | 基础已具备，真实协议仍缺失 |
 | OpenEMS Edge App | `tools/eg8200-simulator/internal/simulator/edge_runtime.go` | 目前只在 simulator 组装，没有正式生产 Edge Host |
 | OpenEMS Timedata/resend | `libs/edgecontrol/timedata.go`、MQTT publisher、`libs/edgefleet` | 本地历史、队列、快照已有，但 Replay Coordinator 未闭合 |
-| ThingsBoard Transport/Integration | `services/mqtt-telemetry-adapter` | MQTT transport 已有，仍需清楚区分 Cloud adapter 与 Edge ingress |
+| ThingsBoard Transport/Integration | `modules/iot` | MQTT transport 已有，仍需清楚区分 Cloud adapter 与 Edge ingress |
 | ThingsBoard Entity hierarchy | Tenant/Site/Space/Asset/Device/Point | HVAC 领域模型比通用 Device/Asset 更具体，应保留 |
 | ThingsBoard Rule Engine | 当前多个 telemetry/metric/alarm/control module | 应形成事件自动化能力，但不能接管 Edge 快速控制 |
 | ThingsBoard Dashboard/Widget/Alias | React UI、Centrifugo、静态 profile/catalog | 实时链路已有，自描述 Manifest 到 UI 尚未闭合 |
 | ThingsBoard Edge synchronization | `libs/edgefleet`、MQTT queue、telemetry runtime | 需要统一 Edge 数据同步、版本和 cursor 语义 |
-| MyEMS 数据采集/清洗/规范化/汇总 | `services/mqtt-telemetry-adapter`、`services/telemetry-runtime-service`、`services/metric-engine-service` | 当前已有分散能力，但尚未形成 MyEMS 式的能源数据 processing chain |
+| MyEMS 数据采集/清洗/规范化/汇总 | `modules/iot`、`modules/telemetry`、`modules/metric` | 当前已有分散能力，但尚未形成 MyEMS 式的能源数据 processing chain |
 | MyEMS 多数据库能源内容模型 | PostgreSQL、ClickHouse、Redis 与现有领域表 | 方向相近，但 HVAC 仍需补齐 baseline、plan、prediction、carbon、billing、FDD 等明确 ownership |
 | MyEMS 能源/计费/碳排/报表 UI | React real mode、telemetry/history 页面 | 当前 UI 更偏运行监控，能源管理报表和管理型分析深度不足 |
 

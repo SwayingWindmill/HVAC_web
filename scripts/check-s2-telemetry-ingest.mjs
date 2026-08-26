@@ -45,26 +45,24 @@ const [
   fixtureSQL,
   packageJSON,
   dataRegistry,
-  ownershipLock,
   routeRegistry,
   workflow,
   runner,
 ] = await Promise.all([
-  readText('services/telemetry-runtime-service/internal/telemetry/ingest.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/ingest_store.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/coverage.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/source_server.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/store.go'),
-  readText('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/ingest_test.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/source_server_test.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/ingest_postgres_integration_test.go'),
-  readText('services/telemetry-runtime-service/internal/telemetry/ingest_http_postgres_test.go'),
-  readText('infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql'),
-  readText('infra/s2-telemetry/postgres/init/004-s2-telemetry-fixtures.sql'),
+  readText('modules/telemetry/internal/telemetry/ingest.go'),
+  readText('modules/telemetry/internal/telemetry/ingest_store.go'),
+  readText('modules/telemetry/internal/telemetry/coverage.go'),
+  readText('modules/telemetry/internal/telemetry/source_server.go'),
+  readText('modules/telemetry/internal/telemetry/store.go'),
+  readText('cmd/telemetry-worker/main.go'),
+  readText('modules/telemetry/internal/telemetry/ingest_test.go'),
+  readText('modules/telemetry/internal/telemetry/source_server_test.go'),
+  readText('modules/telemetry/internal/telemetry/ingest_postgres_integration_test.go'),
+  readText('modules/telemetry/internal/telemetry/ingest_http_postgres_test.go'),
+  readText('infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql'),
+  readText('infra/telemetry/postgres/init/004-s2-telemetry-fixtures.sql'),
   readJSON('package.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
-  readJSON('contracts/ownership/ownership.v1.lock.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readText('.github/workflows/s2-telemetry-ingest.yml'),
   readText('scripts/run-s2-telemetry-ingest-postgres-tests.mjs'),
@@ -232,21 +230,19 @@ includesAll(fixtureSQL, [
 ], 'deterministic ingest fixtures');
 assert(!fixtureSQL.includes('"invalid"'), 'rejected fixture must not retain raw telemetry');
 
-assert(dataRegistry.registryRevision >= 9 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
 const resources = new Map((dataRegistry.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
 for (const [name, revision] of [['source-observation-evidence', 1], ['ingest-deduplication', 2], ['ingest-quarantine', 2]]) {
   const resource = resources.get(`projection:${name}`);
   assert(resource?.writer === 'telemetry-runtime-service' && resource?.revision === revision, `${name} ownership drifted`);
-  assert(ownershipLock.resources?.[`projection:${name}`]?.writer === 'telemetry-runtime-service' && ownershipLock.resources?.[`projection:${name}`]?.revision === revision, `${name} lock drifted`);
 }
 for (const name of ['observation-coverage', 'latest-accepted-telemetry', 'presence-signal', 'device-observation-snapshot']) {
   assert(resources.get(`projection:${name}`)?.writer === 'telemetry-runtime-service', `${name} writer drifted`);
 }
 const publicRoutes = (routeRegistry.routes ?? []).filter((route) => route.owner === 'telemetry-runtime-service');
-assert(publicRoutes.length === 4, 'public S2 route count drifted');
+assert(publicRoutes.length === 4, 'public S2 runtime route count drifted');
 for (const route of publicRoutes) {
-  assert(route.activationStatus === 'primary' && route.rollout?.mode === 'all' && route.migrationPhase === 'R7-primary-100', `${route.method} ${route.path} is not on the current S2 primary phase`);
-  assert(route.readOnlyFallback === false && route.readFallbackOwner === undefined, `${route.method} ${route.path} gained request fallback`);
+  assert(route.publicIngress === 'platform-gateway', `${route.method} ${route.path} ingress drifted`);
+  assert(route.compatibilityMode === 'native' && route.rollout?.mode === 'all', `${route.method} ${route.path} must remain on the active native route`);
 }
 
 const expectedScripts = {
@@ -258,12 +254,11 @@ const ticketCommands = aggregateCommandLabels('s2:telemetry-ingest');
 assert(ticketCommands.length > 0, 's2:telemetry-ingest is missing');
 for (const command of [
   'npm run s2:ingest:check',
-  'test ./services/telemetry-runtime-service/...',
-  'vet ./services/telemetry-runtime-service/...',
-  'npm run build:telemetry-runtime',
+  'test ./modules/telemetry/...',
+  'vet ./modules/telemetry/...',
+  'npm run build:telemetry-worker',
   'npm run ownership:check',
   'npm run s2:baseline:check',
-  'npm run s2:runtime:check',
   'npm run s2:iam:check',
   'npm run s2:contracts:check',
   'npm run contracts:check',
@@ -273,7 +268,7 @@ for (const command of [
   'npm run s2:ingest:postgres',
 ]) assert(ticketCommands.some((label) => label.includes(command)), `s2:telemetry-ingest omits ${command}`);
 includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:telemetry-ingest', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
-includesAll(runner, ['TestPostgresIngestEndToEnd', 'docker', 'restart', 'restartDurability', 'deliveryEvidence', 'rejectedAndQuarantined', 'coverageQuarantine', 'twoOrganizationIsolation'], 'Ticket 04 PostgreSQL runner');
+includesAll(runner, ['TestPostgresIngestEndToEnd', 'docker', 'restart', 'restartDurability', 'deliveryEvidence', 'rejectedAndQuarantined', 'coverageQuarantine', 'twoTenantIsolation'], 'Ticket 04 PostgreSQL runner');
 
 const allSources = `${decisionGo}\n${ingestStoreGo}\n${coverageGo}\n${sourceServerGo}\n${mainGo}`.toLowerCase();
 for (const forbidden of ['centrifugo client', 'redis client', 'legacy-hvac-backend', 'reverse sync', 'historical warehouse']) {

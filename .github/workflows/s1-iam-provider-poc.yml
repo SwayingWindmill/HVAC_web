@@ -6,8 +6,8 @@ on:
     paths:
       - '.github/workflows/s1-iam-provider-poc.yml'
       - 'scripts/check-s1-workflow-topology.mjs'
-      - '.scratch/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
-      - '.scratch/go-data-ai-platform-s1/research/reuse-first.md'
+      - 'docs/evidence/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
+      - 'docs/evidence/go-data-ai-platform-s1/research/reuse-first.md'
       - 'pocs/logto-sdk-adoption/**'
       - 'scripts/run-s1-logto-sdk-adoption-poc.mjs'
       - 'scripts/run-auth-principal-browser-audit.mjs'
@@ -17,8 +17,8 @@ on:
     paths:
       - '.github/workflows/s1-iam-provider-poc.yml'
       - 'scripts/check-s1-workflow-topology.mjs'
-      - '.scratch/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
-      - '.scratch/go-data-ai-platform-s1/research/reuse-first.md'
+      - 'docs/evidence/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
+      - 'docs/evidence/go-data-ai-platform-s1/research/reuse-first.md'
       - 'pocs/logto-sdk-adoption/**'
       - 'scripts/run-s1-logto-sdk-adoption-poc.mjs'
       - 'scripts/run-auth-principal-browser-audit.mjs'

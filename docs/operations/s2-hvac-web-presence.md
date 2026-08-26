@@ -83,7 +83,6 @@ Purge 同时执行：
 ```bash
 npm run s2:hvac-web:check
 npm run s2:hvac-web:browser
-npm run s2:hvac-web-presence
 ```
 
 Ticket 09 输出：

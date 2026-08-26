@@ -1,0 +1,50 @@
+name: Dependency Security
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - ".github/workflows/dependency-security.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-npm-production-audit.mjs"
+      - "scripts/check-production-licenses.mjs"
+      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/test-react-router-security-upgrade.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/dependency-security.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-npm-production-audit.mjs"
+      - "scripts/check-production-licenses.mjs"
+      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/test-react-router-security-upgrade.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run --silent security:dependency-audit
+      - run: npm run --silent security:licenses
+      - run: npm run --silent test:dependency-audit-retry

@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { createPostgresComposeHarness, expectEqual, type PostgresAuthorityReport } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s4-alarm/compose.yaml');
+const composePath = resolve(root, 'infra/alarm/compose.yaml');
 const projectName = `hvac-s4-alarm-${process.pid}`;
 const reportPath = resolve(root, process.env.S4_ALARM_REPORT_PATH ?? 'out/s4-alarm-authority/postgres-authority.json');
 const { postgresHostPort, run, compose, psql, pause } = await createPostgresComposeHarness({
@@ -153,7 +153,7 @@ try {
     ...process.env,
     S4_ALARM_TEST_DATABASE_URL: `postgres://s4_alarm_service:s4-alarm-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s4?sslmode=disable`,
   };
-  run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './services/alarm-service/...'], { env: testEnvironment, stdio: 'inherit' });
+  run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './modules/alarm/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
   expectEqual(psql("SELECT condition || '|' || version::text || '|' || (acknowledged_at IS NOT NULL)::text || '|' || coalesce(assignee_id, '') || '|' || coalesce(suppression::text, '') || '|' || current_severity || '|' || peak_severity FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'ACTIVE|5|true|principal:postgres-operator-2||MAJOR|MAJOR', 'durable orthogonal projection');
   expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_timeline WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), '5', 'durable immutable timeline');

@@ -81,7 +81,7 @@ try {
   ]);
   await waitForPostgres();
 
-  execute(['cp', 'infra/s2-telemetry/postgres/init/000-bootstrap-identities.sql', `${databaseContainer}:/tmp/000-bootstrap-identities.sql`]);
+  execute(['cp', 'infra/telemetry/postgres/init/000-bootstrap-identities.sql', `${databaseContainer}:/tmp/000-bootstrap-identities.sql`]);
   execute(['exec', databaseContainer, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-f', '/tmp/000-bootstrap-identities.sql']);
 
   const imageUser = execute(['image', 'inspect', '--format', '{{.Config.User}}', migratorImage], { quiet: true }).stdout.trim();

@@ -12,9 +12,9 @@ const [openapi, routes, data, lock, model, migration001, migration002, migration
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readText('libs/workordermodel/model.go'),
-  readText('services/work-order-service/migrations/001_s5_work_order_runtime.sql'),
-  readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
-  readText('services/work-order-service/migrations/003_s5_work_order_lifecycle.sql'),
+  readText('modules/workorder/migrations/001_s5_work_order_runtime.sql'),
+  readText('modules/workorder/migrations/002_s5_work_order_create_assignment.sql'),
+  readText('modules/workorder/migrations/003_s5_work_order_lifecycle.sql'),
 ]);
 const migration = migration001 + '\n' + migration002 + '\n' + migration003;
 

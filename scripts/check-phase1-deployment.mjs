@@ -16,10 +16,11 @@ const paths = {
   nginx: 'deploy/platform/phase1/nginx/nginx.conf',
   webDockerfile: 'deploy/platform/phase1/nginx/Dockerfile',
   prometheus: 'deploy/platform/phase1/observability/prometheus.yaml',
-  hostAlerts: 'infra/s0-durable/observability/alerts/host-resource.yaml',
+  hostAlerts: 'infra/observability/alerts/host-resource.yaml',
   otel: 'deploy/platform/phase1/observability/otel-collector/full.yaml',
   otelLogs: 'deploy/platform/phase1/observability/otel-collector/logs.yaml',
   deploymentTiers: 'deploy/platform/phase1/deployment-tiers.v1.json',
+  runtimeInventory: 'deploy/platform/phase1/runtime-inventory.v1.json',
   availabilityTier: 'deploy/platform/phase1/availability-tier.v1.json',
   s2ReleaseGates: 'deploy/s2/release-gates.v1.json',
   recoveryAttainment: 'deploy/platform/phase1/recovery/attainment.v1.json',
@@ -49,15 +50,18 @@ const paths = {
   limitPolicy: 'deploy/platform/phase1/limit-policy.v1.json',
   roleCredentialTemplate: 'deploy/platform/phase1/migrations/role-credentials.sql.example',
   packageJson: 'package.json',
+  goWork: 'go.work',
+  goServiceDockerfile: 'deploy/platform/phase1/images/go-service.Dockerfile',
   observabilityRuntime: 'libs/observability/runtime.go',
-  gatewayMain: 'services/platform-gateway/cmd/platform-gateway/main.go',
-  embeddedEnergy: 'services/platform-gateway/cmd/platform-gateway/embedded_energy.go',
-  operationsGateway: 'services/platform-gateway/internal/gateway/operations_agent.go',
+  gatewayMain: 'cmd/energy-api/main.go',
+  embeddedEnergy: 'cmd/energy-api/embedded_energy.go',
+  operationsGateway: 'cmd/energy-api/internal/gateway/operations_agent.go',
   identityMain: 'services/identity-service/cmd/identity-service/main.go',
-  schedulerMain: 'services/scheduler-service/cmd/scheduler-service/main.go',
-  telemetryRuntimeMain: 'services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go',
-  metricMain: 'services/metric-engine-service/cmd/metric-engine-service/main.go',
-  iotRuntime: 'services/mqtt-telemetry-adapter/internal/adapter/runtime.go',
+  schedulerMain: 'cmd/scheduler/main.go',
+  maintenanceMain: 'cmd/maintenance-worker/main.go',
+  telemetryRuntimeMain: 'cmd/telemetry-worker/main.go',
+  metricMain: 'cmd/metric-worker/main.go',
+  iotRuntime: 'modules/iot/internal/adapter/runtime.go',
   thingsboardSourceReview: 'docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md',
 };
 
@@ -103,9 +107,10 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.packageJson),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
-const [otelLogs, deploymentTiers, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
+const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
   read(paths.otelLogs),
   readJSON(paths.deploymentTiers),
+  readJSON(paths.runtimeInventory),
   readJSON(paths.availabilityTier),
   readJSON(paths.recoveryAttainment),
   readJSON(paths.s2ReleaseGates),
@@ -116,8 +121,12 @@ const [otelLogs, deploymentTiers, availabilityTier, recoveryAttainment, s2Releas
   read(paths.thingsboardSourceReview),
 ]);
 const runtimeSources = Object.fromEntries(await Promise.all([
-  'observabilityRuntime', 'gatewayMain', 'operationsGateway', 'identityMain', 'schedulerMain', 'telemetryRuntimeMain', 'metricMain', 'iotRuntime',
+  'observabilityRuntime', 'gatewayMain', 'operationsGateway', 'identityMain', 'schedulerMain', 'maintenanceMain', 'telemetryRuntimeMain', 'metricMain', 'iotRuntime',
 ].map(async (name) => [name, await read(paths[name])])));
+const [goWork, goServiceDockerfile] = await Promise.all([
+  read(paths.goWork),
+  read(paths.goServiceDockerfile),
+]);
 
 const failures = [];
 const assert = (condition, message) => {
@@ -140,9 +149,13 @@ assert(baseline.recovery?.sourceOfTruth === 'SE-OPS-009 V1.0 CURRENT CANDIDATE' 
 assert(baseline.recovery?.postgresRpoSeconds === 300 && baseline.recovery?.postgresRtoSeconds === 7200 && baseline.recovery?.controlRtoSeconds === 3600, 'Phase 1 baseline must preserve PostgreSQL/Control recovery objectives');
 assert(baseline.recovery?.offServerBackupCopyRequired === true && baseline.recovery?.wholeServerFourHourTargetRequiresColdStandby === true, 'whole-server recovery target must preserve off-server backup and cold-standby prerequisites');
 assert(baseline.deploymentTiers?.contract === paths.deploymentTiers && baseline.deploymentTiers?.profileSelectionRequired === true && baseline.deploymentTiers?.intelligenceServicesOptional === true, 'baseline must pin the tier contract and require explicit profile selection');
+assert(baseline.runtimeInventory?.contract === paths.runtimeInventory && baseline.runtimeInventory?.canonicalCompose === paths.compose && baseline.runtimeInventory?.allComposeServicesClassified === true, 'baseline must pin the canonical runtime inventory and require complete Compose classification');
+assert(JSON.stringify(baseline.runtimeInventory?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'iot-service', 'telemetry-worker', 'metric-worker']), 'baseline must freeze the four default business deployables');
+assert(JSON.stringify(baseline.runtimeInventory?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'baseline must classify scheduler and maintenance as supporting workloads');
+assert(JSON.stringify(baseline.runtimeInventory?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service']), 'baseline must classify Forecast/Optimization/FDD as optional intelligence');
 assert(baseline.availabilityTier?.contract === paths.availabilityTier && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false && baseline.availabilityTier?.numericAvailabilitySloAllowed === false, 'baseline must pin SINGLE_NODE_RECOVERABLE and forbid unmeasured numeric SLO claims');
 assert(baseline.recovery?.attainmentContract === paths.recoveryAttainment && baseline.recovery?.numericAvailabilitySloClaimForbiddenWithoutEvidence === true, 'baseline must pin the recovery attainment contract');
-assert(productRelease.deploymentTiers === paths.deploymentTiers && productRelease.availabilityTier === paths.availabilityTier && productRelease.recoveryAttainment === paths.recoveryAttainment, 'Product Release must pin tier, availability and recovery attainment contracts');
+assert(productRelease.deploymentTiers === paths.deploymentTiers && productRelease.runtimeInventory === paths.runtimeInventory && productRelease.availabilityTier === paths.availabilityTier && productRelease.recoveryAttainment === paths.recoveryAttainment, 'Product Release must pin runtime inventory, tier, availability and recovery attainment contracts');
 assert(deploymentTiers.schemaVersion === 1 && deploymentTiers.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT', 'deployment tier contract identity must be versioned and governed');
 for (const tierId of ['demo', 'single-lite', 'single-full']) {
   const tier = (deploymentTiers.tiers ?? []).find((entry) => entry.id === tierId);
@@ -154,6 +167,22 @@ for (const tierId of ['demo', 'single-lite', 'single-full']) {
   }
 }
 assert(deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define optional intelligence and three observability shapes');
+assert(runtimeInventory.schemaVersion === 1 && runtimeInventory.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT' && runtimeInventory.canonicalCompose === paths.compose, 'runtime inventory identity must be versioned and point to the canonical Compose');
+assert(JSON.stringify(runtimeInventory.classes?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'iot-service', 'telemetry-worker', 'metric-worker']), 'runtime inventory must freeze the four default business deployables');
+assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'runtime inventory must freeze scheduler and maintenance as supporting workloads');
+assert(JSON.stringify(runtimeInventory.classes?.defaultIdentityInfrastructure) === JSON.stringify(['identity-service']), 'runtime inventory must keep identity-service outside business deployables');
+assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service']), 'runtime inventory must freeze all optional intelligence services');
+assert(runtimeInventory.semantics?.maintenanceDecision === 'KEEP_AS_SUPPORTING_WORKER' && runtimeInventory.semantics?.identityDecision === 'SEPARATE_INFRASTRUCTURE' && runtimeInventory.semantics?.intelligenceDecision === 'OPTIONAL_PROFILE', 'runtime inventory decisions must preserve maintenance, identity and intelligence boundaries');
+const canonicalSourceEntrypoints = {
+  'energy-api': 'cmd/energy-api',
+  'iot-service': 'cmd/iot-service',
+  'telemetry-worker': 'cmd/telemetry-worker',
+  'metric-worker': 'cmd/metric-worker',
+  scheduler: 'cmd/scheduler',
+  maintenance: 'cmd/maintenance-worker',
+};
+assert(JSON.stringify(runtimeInventory.sourceEntrypoints) === JSON.stringify(canonicalSourceEntrypoints), 'runtime inventory must freeze canonical cmd/* source entrypoints');
+assert(goServiceDockerfile.includes('COPY cmd ./cmd'), 'canonical Go image build must copy root cmd/ entrypoints');
 assert(clickhouseResourceLimits.includes('max_server_memory_usage') && clickhouseResourceLimits.includes('from_env="CLICKHOUSE_SERVER_MEMORY_USAGE"'), 'ClickHouse internal memory must be bound by the selected deployment tier');
 assert(compose.includes('./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro'), 'Compose must mount the ClickHouse internal resource limit');
 assert(availabilityTier.schemaVersion === 1 && availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE', 'availability tier contract must fix the current tier');
@@ -162,6 +191,8 @@ assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerS
 for (const owner of ['iam-owner', 'audit-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
   assert(ownerSplitCompose.includes(`  ${owner}:`), `owner-split Compose must define ${owner}`);
 }
+assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile') && !compose.includes('dockerfile: deploy/s'), 'canonical Compose must build Go workloads from the canonical Phase 1 image definition, not historical deploy/s* paths');
+assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile') && !ownerSplitCompose.includes('dockerfile: deploy/s'), 'owner-split overlay must reuse the canonical Phase 1 image definition, not historical deploy/s* paths');
 assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Notification in-process without adding a message backbone');
 assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
 assert(thingsboardSourceReview.includes('## 18. Phase 1 deployment tiers / owner split 实施源码复核') && thingsboardSourceReview.includes('DefaultTbServiceInfoProvider.java') && thingsboardSourceReview.includes('DefaultInMemoryStorageTest.java'), 'deployment topology changes must retain the pinned ThingsBoard source/test review');
@@ -185,13 +216,14 @@ assert(
     && processFailureScenarios.scenarios?.length === 9,
   'process failure drill must cover the staging single points without creating production DR evidence',
 );
-assert(compose.includes('x-phase1-deployment-tiers:') && compose.includes('availabilityContract: ./availability-tier.v1.json'), 'Compose must expose the tier and availability contracts as static metadata');
+assert(compose.includes('x-phase1-deployment-tiers:') && compose.includes('availabilityContract: ./availability-tier.v1.json') && compose.includes('runtimeInventoryContract: ./runtime-inventory.v1.json'), 'Compose must expose tier, availability and runtime inventory contracts as static metadata');
 
 const requiredServices = [
   'nginx',
   'energy-api',
   'identity-service',
   'scheduler',
+  'maintenance',
   'iot-service',
   'telemetry-worker',
   'metric-worker',
@@ -217,6 +249,44 @@ const profileExpectations = {
 };
 for (const service of requiredServices) assert(new RegExp(`^  ${service}:`, 'm').test(compose), `compose is missing required service ${service}`);
 const serviceBlocksEarly = [...compose.matchAll(/^  ([a-z0-9-]+):\n([\s\S]*?)(?=^  [a-z0-9-]+:\n|^networks:|^volumes:)/gm)];
+const composeServicesSection = compose.match(/^services:\n([\s\S]*?)^networks:/m)?.[1] ?? '';
+const composeServiceNames = [...composeServicesSection.matchAll(/^  ([a-z0-9-]+):/gm)].map((match) => match[1]).sort();
+const operatorOneShot = runtimeInventory.classes?.operatorOneShot ?? [];
+const classifiedServiceNames = [
+  ...(runtimeInventory.classes?.defaultPublic ?? []),
+  ...(runtimeInventory.classes?.defaultBusinessDeployables ?? []),
+  ...(runtimeInventory.classes?.defaultSupportingWorkloads ?? []),
+  ...(runtimeInventory.classes?.defaultIdentityInfrastructure ?? []),
+  ...(runtimeInventory.classes?.defaultDataAndRealtimeInfrastructure ?? []),
+  ...(runtimeInventory.classes?.profiledObservabilityInfrastructure ?? []),
+  ...(runtimeInventory.classes?.optionalIntelligence ?? []),
+  ...(runtimeInventory.classes?.requiredStartupOneShot ?? []),
+  ...operatorOneShot.map((entry) => entry.service),
+];
+const duplicateClassifications = classifiedServiceNames.filter((service, index) => classifiedServiceNames.indexOf(service) !== index);
+assert(duplicateClassifications.length === 0, `runtime inventory classifies services more than once: ${[...new Set(duplicateClassifications)].join(', ')}`);
+assert(JSON.stringify([...classifiedServiceNames].sort()) === JSON.stringify(composeServiceNames), `runtime inventory must classify every canonical Compose service exactly once; compose=${composeServiceNames.join(', ')} inventory=${[...classifiedServiceNames].sort().join(', ')}`);
+for (const [service, entrypoint] of Object.entries(canonicalSourceEntrypoints)) {
+  const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
+  assert(block.includes(`SERVICE_PACKAGE: ./${entrypoint}`), `${service} must build from canonical source entrypoint ${entrypoint}`);
+  assert(goWork.includes(`./${entrypoint}`), `go.work must register canonical source entrypoint ${entrypoint}`);
+}
+for (const service of [
+  ...(runtimeInventory.classes?.defaultPublic ?? []),
+  ...(runtimeInventory.classes?.defaultBusinessDeployables ?? []),
+  ...(runtimeInventory.classes?.defaultSupportingWorkloads ?? []),
+  ...(runtimeInventory.classes?.defaultIdentityInfrastructure ?? []),
+  ...(runtimeInventory.classes?.defaultDataAndRealtimeInfrastructure ?? []),
+]) {
+  const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
+  assert(!block.includes('profiles:'), `default runtime service ${service} must not require a Compose profile`);
+}
+for (const entry of operatorOneShot) {
+  const block = serviceBlocksEarly.find(([, name]) => name === entry.service)?.[2] ?? '';
+  assert(block.includes(`profiles: ["${entry.profile}"]`), `${entry.service} must remain an explicit one-shot ${entry.profile} profile action`);
+}
+const startupPreflightBlock = serviceBlocksEarly.find(([, name]) => name === 'phase1-schema-preflight')?.[2] ?? '';
+assert(startupPreflightBlock.includes('restart: "no"') && !startupPreflightBlock.includes('profiles:'), 'phase1-schema-preflight must remain an automatic required one-shot startup gate');
 for (const [service, expectedProfiles] of Object.entries(profileExpectations)) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`profiles: ["${expectedProfiles.join('", "')}"]`), `${service} must be gated to profiles ${expectedProfiles.join(', ')}`);
@@ -247,7 +317,7 @@ assert(identityAdminBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/
 assert(identityMFAKeygenBlock.includes('IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key') && identityMFAKeygenBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity'), 'Phase 1 must provide the explicit MFA key bootstrap tool');
 assert(energyAPIBlock.includes('IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}') && energyAPIBlock.includes('IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper') && energyAPIBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro'), 'energy-api must use the least-privilege IAM admin DSN and a read-only external API Credential pepper');
 assert(iamCredentialKeygenBlock.includes('IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper') && iamCredentialKeygenBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam'), 'Phase 1 must provide the explicit API Credential pepper bootstrap tool');
-for (const service of ['energy-api', 'identity-service', 'scheduler', 'telemetry-worker', 'metric-worker', 'iot-service']) {
+for (const service of ['energy-api', 'identity-service', 'scheduler', 'maintenance', 'telemetry-worker', 'metric-worker', 'iot-service']) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('phase1-schema-preflight:') && block.includes('condition: service_completed_successfully'), `${service} must fail closed on Product/Schema preflight`);
 }
@@ -259,7 +329,7 @@ assert(compose.includes('max-size: ${DOCKER_LOG_MAX_SIZE:-20m}') && compose.incl
 for (const marker of ['POSTGRES_DATA_DIR', 'CLICKHOUSE_DATA_DIR', 'REDIS_DATA_DIR', 'MQTT_DATA_DIR']) {
   assert(compose.includes(marker), `canonical Compose must expose configurable host data path ${marker}`);
 }
-for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], ['telemetry-worker', '19086'], ['metric-worker', '19090'], ['iot-service', '19094']]) {
+for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], ['maintenance', '19093'], ['telemetry-worker', '19086'], ['metric-worker', '19090'], ['iot-service', '19094']]) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`/healthcheck", "http://127.0.0.1:${port}/health/ready`), `${service} must have a Compose readiness healthcheck`);
   assert(block.includes('cpus:') && block.includes('mem_limit:') && block.includes('mem_reservation:'), `${service} must have CPU/memory limits and reservations`);
@@ -268,6 +338,7 @@ assert(runtimeSources.observabilityRuntime.includes('SetDependencies') && runtim
 assert(runtimeSources.gatewayMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres-session"') && runtimeSources.gatewayMain.includes('Check: identity.ReadinessCheck'), 'energy-api readiness must track Identity Redis and Session persistence');
 assert(runtimeSources.identityMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.identityMain.includes('Check: server.Ping'), 'identity-service readiness must track PostgreSQL');
 assert(runtimeSources.schedulerMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.schedulerMain.includes('Check: store.Ping'), 'scheduler readiness must track PostgreSQL');
+assert(runtimeSources.maintenanceMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.maintenanceMain.includes('Check: store.Ping'), 'maintenance supporting worker readiness must track PostgreSQL');
 assert(runtimeSources.telemetryRuntimeMain.includes('observabilityRuntime.SetDependencies'), 'telemetry-worker readiness must track its required stores through live dependencies');
 assert(runtimeSources.metricMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime"') && runtimeSources.metricMain.includes('Check: runtime.Ping'), 'metric-worker readiness must track its required stores');
 assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'iot-service readiness must track live MQTT connection/subscription state');

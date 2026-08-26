@@ -11,11 +11,11 @@ const assert = (condition, message) => {
 const [contract, dataArchitecture, clickhouse, ingest, ingestStore, history, mqttRuntime, context] = await Promise.all([
   json('contracts/ownership/s2-telemetry-ownership.v1.json'),
   json('contracts/data/data-architecture.v2.json'),
-  text('infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql'),
-  text('services/telemetry-runtime-service/internal/telemetry/ingest.go'),
-  text('services/telemetry-runtime-service/internal/telemetry/ingest_store.go'),
-  text('services/telemetry-runtime-service/internal/telemetry/history_postgres.go'),
-  text('services/mqtt-telemetry-adapter/internal/adapter/envelope.go'),
+  text('infra/telemetry/clickhouse/init/001-telemetry-history.sql'),
+  text('modules/telemetry/internal/telemetry/ingest.go'),
+  text('modules/telemetry/internal/telemetry/ingest_store.go'),
+  text('modules/telemetry/internal/telemetry/history_postgres.go'),
+  text('modules/iot/internal/adapter/envelope.go'),
   text('CONTEXT.md'),
 ]);
 

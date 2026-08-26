@@ -7,25 +7,23 @@ const text = async (path) => readFile(resolve(root, path), 'utf8');
 const json = async (path) => JSON.parse(await text(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [catalog, invariants, redaction, trace, securityGo, metricsGo, runtimeMetrics, runtimeMain, gatewayMetrics, gatewayTelemetry, harness, alerts, dashboard, negativeRunner, audit, runbook, workflow, packageJSON] = await Promise.all([
+const [catalog, invariants, redaction, trace, securityGo, metricsGo, runtimeMetrics, runtimeMain, gatewayMetrics, gatewayTelemetry, harness, alerts, dashboard, negativeRunner, audit, runbook] = await Promise.all([
   json('deploy/s2/observability/metric-catalog.v1.json'),
   json('deploy/s2/observability/zero-invariants.v1.json'),
   json('deploy/s2/observability/redaction-policy.v1.json'),
   json('deploy/s2/observability/trace-chain.v1.json'),
   text('libs/observability/s2_security.go'),
   text('libs/observability/metrics.go'),
-  text('services/telemetry-runtime-service/internal/telemetry/metrics.go'),
-  text('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
-  text('services/platform-gateway/internal/gateway/telemetry_metrics.go'),
-  text('services/platform-gateway/internal/gateway/telemetry.go'),
+  text('modules/telemetry/internal/telemetry/metrics.go'),
+  text('cmd/telemetry-worker/main.go'),
+  text('cmd/energy-api/internal/gateway/telemetry_metrics.go'),
+  text('cmd/energy-api/internal/gateway/telemetry.go'),
   text('libs/observability/cmd/s2-ticket-10-harness/main.go'),
-  text('infra/s0-durable/observability/alerts/s2-telemetry.yaml'),
-  text('infra/s0-durable/observability/dashboards/s2-telemetry.json'),
+  text('infra/observability/alerts/s2-telemetry.yaml'),
+  text('infra/observability/dashboards/s2-telemetry.json'),
   text('scripts/run-s2-security-negative.mjs'),
   text('scripts/run-s2-security-observability-audit.mjs'),
   text('docs/operations/s2-security-observability.md'),
-  text('.github/workflows/s2-security-observability.yml'),
-  json('package.json'),
 ]);
 
 assert(catalog.schemaVersion === 1 && catalog.namespace === 'hvac_s2', 'metric catalog version or namespace drifted');
@@ -75,22 +73,16 @@ for (const marker of ['S2SecurityZeroInvariantViolation', 'S2RequestFallbackDete
   assert(alerts.includes(marker), `S2 alert rules are missing ${marker}`);
 }
 assert(dashboard.includes('S2 Telemetry Security and Reliability') && dashboard.includes('hvac_s2_'), 'S2 dashboard is incomplete');
-for (const marker of ['test:security-negative', 's2:live-client:browser', 's2:shadow-routing:harness', 's2:hvac-web:browser', 'security-command-evidence.json']) {
+for (const marker of ['test:security-negative', 's2:live-client:browser', 's2:hvac-web:browser', 'security-command-evidence.json']) {
   assert(negativeRunner.includes(marker), `security-negative runner is missing ${marker}`);
 }
 for (const report of ['security-negative-report.json', 'zero-invariant-report.json', 'metric-cardinality-report.json', 'trace-correlation-report.json', 'log-redaction-report.json', 'alert-rule-validation-report.json', 'observability-outage-report.json']) {
   assert(audit.includes(report), `audit runner does not generate ${report}`);
 }
-for (const marker of ['HMAC', '低基数', 'collector', 'security zero invariant', 'npm run s2:security-observability']) {
+for (const marker of ['HMAC', '低基数', 'collector', 'security zero invariant', 'npm run s2:security-negative', 'npm run s2:observability:harness']) {
   assert(runbook.toLowerCase().includes(marker.toLowerCase()), `Runbook is missing ${marker}`);
-}
-for (const marker of ['npm run s2:security-observability', 'out/s2-security-observability', 'if-no-files-found: error', 'go-version: "1.25.12"', 'prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94', '--entrypoint /bin/promtool', 'check rules /rules.yml']) {
-  assert(workflow.includes(marker), `Ticket 10 workflow is missing ${marker}`);
-}
-for (const script of ['s2:security-observability:check', 's2:security-negative', 's2:observability:harness', 's2:security-observability']) {
-  assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify({ schemaVersion: 1, ticket: 69, status: 'passed', metricFamilies: catalog.families.length, zeroInvariants: invariants.invariants.length, traceServices: trace.services.length }, null, 2)}\n`);
-console.log(`S2 Ticket 10 static assets passed: ${output}`);
+console.log(`S2 security observability static assets passed: ${output}`);

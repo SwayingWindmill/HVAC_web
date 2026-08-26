@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-analytics-history-${process.pid}`;
 const reportPath = resolve(root, process.env.ANALYTICS_HISTORY_REPORT_PATH ?? 'out/analytics-history/clickhouse-integration.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -95,7 +95,7 @@ try {
   await waitForClickHouse();
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/analytics-read-model-projector',
+    '--module=modules/energy',
     'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
   ], {
     env: {
@@ -106,7 +106,7 @@ try {
   });
   report.assertions.deviceHistoryQuery = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/telemetry-query-service',
+    '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', '-v', './internal/history/...',
   ], {
     env: {

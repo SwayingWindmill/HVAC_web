@@ -46,7 +46,7 @@ try {
   await mkdir(configDirectory, { recursive: true });
   await mkdir(clientDirectory, { recursive: true });
   await mkdir(caDirectory, { recursive: true });
-  await copyFile(resolve(root, 'infra/s2-telemetry/realtime/centrifugo.template.json'), configPath);
+  await copyFile(resolve(root, 'infra/telemetry/realtime/centrifugo.template.json'), configPath);
 
   await writeFile(certificateGeneratorPath, `package main
 

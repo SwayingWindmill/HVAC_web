@@ -38,16 +38,16 @@ Metric 也是并行消费者，不是 Energy Interval Fact 的替代品；它继
 
 | 文件 | 事实证据 |
 | --- | --- |
-| [`001-telemetry-history.sql`](../../infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql) | `telemetry_history.observations` 保存 observation identity、source position、sample/receive time、acceptance、quality、Point revision、Counter 语义和 payload digest；accepted scope 必须具备 Tenant/Site/Device/Point。 |
-| [`004-counter-semantics.sql`](../../infra/s2-telemetry/clickhouse/init/004-counter-semantics.sql) | Counter delta 按历史 event-time 计算，不读取 Latest；`ACCEPTED` 与 `OUT_OF_ORDER` 都参与；revision/unit boundary 不产生 delta，并显式区分 invalid decrease、recovery、reset、rollover。 |
-| [`003-telemetry-rollups.sql`](../../infra/s2-telemetry/clickhouse/init/003-telemetry-rollups.sql) | Raw 是 rollup 的 authority，rollup 可重建；非 Counter 有 1 分钟/15 分钟 rollup；没有不带 Site timezone 的 canonical daily rollup。 |
-| [`history_clickhouse.go`](../../services/telemetry-runtime-service/internal/telemetry/history_clickhouse.go) | History 以 observation ID 作为 ClickHouse insert deduplication token；已解析的 `OUT_OF_ORDER` 观察也可落库。 |
-| [`ingest.go`](../../services/telemetry-runtime-service/internal/telemetry/ingest.go) | Acceptance status 与 observation quality 分离；Point binding 快照包含 Point revision、unit、decrease mode 和 rollover modulus。 |
-| [`analytics-read-model-projector/README.md`](../../services/analytics-read-model-projector/README.md) | 当前 Projector 只做 `hvac_meter.energy` 的累计电量区间事实；当前 observation ID 是 fact identity，source offset 被当作 numeric dataset revision，current sampled time 是 data watermark；没有历史修正和显式 rebuild。 |
-| [`analytics-read-model-projector/internal/clickhouse/client.go`](../../services/analytics-read-model-projector/internal/clickhouse/client.go) | 当前候选扫描自己按 Tenant/Site/Point/Sensor/Device/Telemetry Key 分区，筛选 `ACCEPTED`，再 anti-join 已有 fact；没有读取 `counter_deltas`、MeterBinding 或 durable projector checkpoint。 |
-| [`002-analytics-energy-interval.sql`](../../infra/s2-telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 当前 Interval Fact 有源 observation、offset、dataset revision、watermark 和 projected time，但没有 Meter、MeterBinding、binding version、transition type 或 source Point revision/unit snapshot。 |
-| [`telemetry-query-service/README.md`](../../services/telemetry-query-service/README.md) | Query 返回 data/aggregate watermark、dataset revision、partial 和 quality counts；aggregate watermark 当前等于直接 Fact 聚合的 data watermark；缓存刷新时间不是 data watermark。 |
-| [`metric/engine.go`](../../services/metric-engine-service/internal/metric/engine.go) | Metric 是独立的 Binding/Input/Run/Publication/Result 生命周期；结果重算会推进 revision，Redis Latest 只是可重建投影。 |
+| [`001-telemetry-history.sql`](../../infra/telemetry/clickhouse/init/001-telemetry-history.sql) | `telemetry_history.observations` 保存 observation identity、source position、sample/receive time、acceptance、quality、Point revision、Counter 语义和 payload digest；accepted scope 必须具备 Tenant/Site/Device/Point。 |
+| [`004-counter-semantics.sql`](../../infra/telemetry/clickhouse/init/004-counter-semantics.sql) | Counter delta 按历史 event-time 计算，不读取 Latest；`ACCEPTED` 与 `OUT_OF_ORDER` 都参与；revision/unit boundary 不产生 delta，并显式区分 invalid decrease、recovery、reset、rollover。 |
+| [`003-telemetry-rollups.sql`](../../infra/telemetry/clickhouse/init/003-telemetry-rollups.sql) | Raw 是 rollup 的 authority，rollup 可重建；非 Counter 有 1 分钟/15 分钟 rollup；没有不带 Site timezone 的 canonical daily rollup。 |
+| [`history_clickhouse.go`](../../modules/telemetry/internal/telemetry/history_clickhouse.go) | History 以 observation ID 作为 ClickHouse insert deduplication token；已解析的 `OUT_OF_ORDER` 观察也可落库。 |
+| [`ingest.go`](../../modules/telemetry/internal/telemetry/ingest.go) | Acceptance status 与 observation quality 分离；Point binding 快照包含 Point revision、unit、decrease mode 和 rollover modulus。 |
+| [`analytics-read-model-projector/README.md`](../../modules/energy/README.md) | 当前 Projector 只做 `hvac_meter.energy` 的累计电量区间事实；当前 observation ID 是 fact identity，source offset 被当作 numeric dataset revision，current sampled time 是 data watermark；没有历史修正和显式 rebuild。 |
+| [`analytics-read-model-projector/internal/clickhouse/client.go`](../../modules/energy/internal/clickhouse/client.go) | 当前候选扫描自己按 Tenant/Site/Point/Sensor/Device/Telemetry Key 分区，筛选 `ACCEPTED`，再 anti-join 已有 fact；没有读取 `counter_deltas`、MeterBinding 或 durable projector checkpoint。 |
+| [`002-analytics-energy-interval.sql`](../../infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 当前 Interval Fact 有源 observation、offset、dataset revision、watermark 和 projected time，但没有 Meter、MeterBinding、binding version、transition type 或 source Point revision/unit snapshot。 |
+| [`telemetry-query-service/README.md`](../../modules/telemetry/README.md) | Query 返回 data/aggregate watermark、dataset revision、partial 和 quality counts；aggregate watermark 当前等于直接 Fact 聚合的 data watermark；缓存刷新时间不是 data watermark。 |
+| [`metric/engine.go`](../../modules/metric/internal/metric/engine.go) | Metric 是独立的 Binding/Input/Run/Publication/Result 生命周期；结果重算会推进 revision，Redis Latest 只是可重建投影。 |
 
 ## 3. 五层边界与 owner
 

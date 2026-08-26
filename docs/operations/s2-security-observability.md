@@ -78,7 +78,6 @@ Exporter 使用有界异步队列。Collector 不可用、export timeout 或 que
 npm run s2:security-observability:check
 npm run s2:security-negative
 npm run s2:observability:harness
-npm run s2:security-observability
 ```
 
 输出：

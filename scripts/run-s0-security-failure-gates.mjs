@@ -22,10 +22,10 @@ const cases = [
       './libs/identitycontext/...',
       './libs/oidctest/...',
       './libs/ownershipregistry/...',
-      './services/iam-service/...',
-      './services/audit-ledger-service/...',
+      './modules/iam/...',
+      './modules/audit/...',
       './services/outbox-relay/...',
-      './services/platform-gateway/...',
+      './cmd/energy-api/...',
     ],
   },
   {

@@ -47,7 +47,7 @@ In Phase 1 Docker Compose the public issuer is served through nginx under `/iden
 
 `cmd/identity-admin` is an offline administrative command and must connect with the dedicated `identity_admin` database role, not `identity_runtime`. Supply the database URL and user fields through runtime environment variables; do not commit credentials or initial passwords to Git.
 
-Supported operations are `create`, `reset-password`, and `reset-password-random`. The random reset mode generates the replacement credential inside the command and prints it once. After creating a user, reconcile its immutable `issuer + subject` into IAM with `services/iam-service/cmd/identity-reconciler` and an explicitly approved Tenant/Role/Site seed. The IdP never assigns platform authorization.
+Supported operations are `create`, `reset-password`, and `reset-password-random`. The random reset mode generates the replacement credential inside the command and prints it once. After creating a user, reconcile its immutable `issuer + subject` into IAM with `modules/iam/cmd/identity-reconciler` and an explicitly approved Tenant/Role/Site seed. The IdP never assigns platform authorization.
 
 ## Signing-key behavior
 

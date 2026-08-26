@@ -25,7 +25,7 @@
 
 **identity 库未开 RLS 属合理设计，非漏洞**：`identity.users` / `authorization_requests` / `authorization_codes` / `user_mfa` 等表**不含 `tenant_id` 字段**（用户是平台全局身份，通过 capability 访问 site），隔离依赖 `REVOKE ALL ... FROM PUBLIC` + 精确 role 授权（`identity_runtime` / `identity_admin` / `identity_directory_reader`），且仅 identity 服务经 mTLS 访问。
 
-**RLS policy 语义抽查**（`services/alarm-service/migrations/001_s4_alarm_runtime.sql`）：标准模式为
+**RLS policy 语义抽查**（`modules/alarm/migrations/001_s4_alarm_runtime.sql`）：标准模式为
 ```sql
 CREATE POLICY ... USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 ```
@@ -36,7 +36,7 @@ CREATE POLICY ... USING (tenant_id = NULLIF(current_setting('app.tenant_id', tru
 ## 2. capability 鉴权与租户过滤核查
 
 ### 2.1 伪造身份 header 防护（网关边界）
-`services/platform-gateway/internal/gateway/server.go` 在路由入口显式拒绝调用方自带的 `X-Principal` / `X-Tenant-ID` / `X-Site-ID` / `X-Admin` / `X-Delegation-Grant` / 各域 `X-*-Context` / `X-*-Grant` 等 20+ 个身份 header，命中即返回 `FORGED_IDENTITY_HEADER`。**外部调用方无法通过伪造 header 冒充租户或提权。**
+`cmd/energy-api/internal/gateway/server.go` 在路由入口显式拒绝调用方自带的 `X-Principal` / `X-Tenant-ID` / `X-Site-ID` / `X-Admin` / `X-Delegation-Grant` / 各域 `X-*-Context` / `X-*-Grant` 等 20+ 个身份 header，命中即返回 `FORGED_IDENTITY_HEADER`。**外部调用方无法通过伪造 header 冒充租户或提权。**
 
 ### 2.2 租户/站点从授权结果派生，不信任请求参数
 - 每域独立授权函数：`authorizeTelemetry`、`authorizeAnalytics`、`authorizeAnalyticsForPresenter` 等，返回 `authorizedTarget.TenantID / SiteID`。

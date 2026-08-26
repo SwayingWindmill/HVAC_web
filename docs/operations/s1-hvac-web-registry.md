@@ -35,7 +35,7 @@ In mock mode, the existing demo surfaces are loaded from isolated lazy chunks. T
 Run the complete Registry Web capability gate:
 
 ```text
-npm run s1:registry-web
+npm run domain:run -- --domain=registry --layers=contracts,unit,browser
 ```
 
 Individual evidence:

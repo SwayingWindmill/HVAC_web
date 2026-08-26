@@ -97,10 +97,10 @@
 
 | 本地文件 | 当前观察 |
 | --- | --- |
-| [`services/analytics-read-model-projector/internal/energy/projector.go`](../../services/analytics-read-model-projector/internal/energy/projector.go) | 当前只接受 `hvac_meter.energy` 和 `electricity`；从累计电量的 previous/current observations 构造 `energy_interval_facts`，记录 quality/reasons、source offset、observation IDs、watermark 和 numeric dataset revision；负累计值标为 invalid，回退标为 suspect。 |
-| [`services/analytics-read-model-projector/README.md`](../../services/analytics-read-model-projector/README.md) | 已有 `telemetry_history.observations -> analytics.energy_interval_facts` 的投影链，有 current observation anti-join 和 ClickHouse 去重 token；这是一个可复用的事实投影基础。 |
-| [`services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go`](../../services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go) | 当前 analytics projection 以 telemetry-runtime-in-process 方式挂载，默认 poll interval 为 500ms；这说明部署形态和逻辑 owner 目前仍有耦合。 |
-| [`services/telemetry-query-service/README.md`](../../services/telemetry-query-service/README.md)、[`libs/analyticsmodel/energy.go`](../../libs/analyticsmodel/energy.go) | 当前公开能源查询只覆盖 electricity，支持 hour/day/month、quality policy、timezone、watermark、partial、dataset revision 和 quality summary；明确不覆盖 tariff、cost、baseline、comparison 等能源内容。 |
+| [`modules/energy/internal/energy/projector.go`](../../modules/energy/internal/energy/projector.go) | 当前只接受 `hvac_meter.energy` 和 `electricity`；从累计电量的 previous/current observations 构造 `energy_interval_facts`，记录 quality/reasons、source offset、observation IDs、watermark 和 numeric dataset revision；负累计值标为 invalid，回退标为 suspect。 |
+| [`modules/energy/README.md`](../../modules/energy/README.md) | 已有 `telemetry_history.observations -> analytics.energy_interval_facts` 的投影链，有 current observation anti-join 和 ClickHouse 去重 token；这是一个可复用的事实投影基础。 |
+| [`cmd/telemetry-worker/main.go`](../../cmd/telemetry-worker/main.go) | 当前 analytics projection 以 telemetry-runtime-in-process 方式挂载，默认 poll interval 为 500ms；这说明部署形态和逻辑 owner 目前仍有耦合。 |
+| [`modules/telemetry/README.md`](../../modules/telemetry/README.md)、[`libs/analyticsmodel/energy.go`](../../libs/analyticsmodel/energy.go) | 当前公开能源查询只覆盖 electricity，支持 hour/day/month、quality policy、timezone、watermark、partial、dataset revision 和 quality summary；明确不覆盖 tariff、cost、baseline、comparison 等能源内容。 |
 | [`contracts/ownership/data-ownership.v1.json`](../../contracts/ownership/data-ownership.v1.json) | 当前声明 `analytics-read-model-projector` 写入 energy interval fact，`telemetry-query-service` 持有查询契约；这是本地现状声明，不能替代本次参考源码裁决。 |
 | [`contracts/architecture/backend-architecture.v2.json`](../../contracts/architecture/backend-architecture.v2.json) | 当前把 Energy 标记为已对齐，但这次源码核对表明“已有 electricity fact projection”不能证明 MyEMS 级 Energy Content 已完成，应把该状态降为局部实现/待领域裁决。 |
 

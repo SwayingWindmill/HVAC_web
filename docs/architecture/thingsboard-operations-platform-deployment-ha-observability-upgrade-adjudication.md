@@ -79,11 +79,11 @@ Reference: ThingsBoard CE `v4.3.1.1`, commit `c2a52e46c44e308ddee430e7266b8e10ed
 - `deploy/platform/phase1/migrations/{manifest.v1.json,run-phase1-migrations.sh}`；
 - `deploy/platform/phase1/backup`、`recovery` 与 `docs/operations/go-platform-production-rollout.md`；
 - `libs/observability/{runtime,metrics,trace,exporter}.go` 与 Phase 1 Prometheus/OTel/Loki/Tempo/Grafana/Alert 资产；
-- `services/platform-gateway/internal/gateway/operations_agent.go`；
-- `services/telemetry-runtime-service/internal/telemetry/latest_cache.go`；
+- `cmd/energy-api/internal/gateway/operations_agent.go`；
+- `modules/telemetry/internal/telemetry/latest_cache.go`；
 - `services/outbox-relay/internal/relay/relay.go`、`libs/domainoutbox/store.go`；
-- `services/command-dispatcher/pkg/commanddispatcher/{durable,verification}.go`；
-- `services/scheduler-service/internal/scheduler/{store,stats}.go` 及 Metric Worker 作业存储。
+- `modules/command/pkg/commanddispatcher/{durable,verification}.go`；
+- `modules/scheduler/internal/scheduler/{store,stats}.go` 及 Metric Worker 作业存储。
 
 所有本地实现仍按 `UNVERIFIED` 对待；这里的 KEEP 只针对经过本轮源码审查的具体语义，不是对整个模块的背书。
 
@@ -588,5 +588,5 @@ Date: 2026-08-24
 - `deploy/platform/phase1/deployment-tiers.v1.json`；
 - `deploy/platform/phase1/owner-split.compose.yaml`；
 - `scripts/phase1-deployment-tier.mjs` 与 `scripts/phase1-wsl-compose.mjs`；
-- `services/platform-gateway/cmd/platform-gateway/embedded_energy.go`；
+- `cmd/energy-api/embedded_energy.go`；
 - `scripts/test-phase1-deployment-tier.mjs` 与 `scripts/test-phase1-owner-split.mjs`。

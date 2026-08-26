@@ -62,9 +62,9 @@ HVAC Web 不应恢复 ThingsBoard 运行时，也不应把当前只读 Registry 
 
 主要本地证据：
 
-- `services/platform-core-service/internal/core/postgres.go`、`postgres_asset_model.go`、`asset_model.go`；
-- `services/platform-gateway/internal/gateway/registry.go` 与 `services/platform-gateway/pkg/platformapi/api.gen.go`；
-- `infra/s1-registry/postgres/init/001-s1-registry-baseline.sql`、`001b-device-binding-invariants.sql`、`007-spatial-sensor-point-model.sql`、`007a-tenant-spatial-scope.sql`、`007b-control-point-invariants.sql`；
+- `modules/registry/internal/core/postgres.go`、`postgres_asset_model.go`、`asset_model.go`；
+- `cmd/energy-api/internal/gateway/registry.go` 与 `cmd/energy-api/internal/platformapi/api.gen.go`；
+- `infra/registry/postgres/init/001-s1-registry-baseline.sql`、`001b-device-binding-invariants.sql`、`007-spatial-sensor-point-model.sql`、`007a-tenant-spatial-scope.sql`、`007b-control-point-invariants.sql`；
 - `contracts/registry/s1-registry-model.v1.json`、`contracts/http/platform-gateway.openapi.yaml`、`contracts/architecture/se-api-001-v1.2-runtime-convergence.json`；
 - `apps/hvac-web/src/pages/Assets/RealAssets.tsx` 及 Real Assets Detail/Realtime 组件；
 - `智慧能源系统_前端交互与能源控制UX规范_V1.1.md` 与 `智慧能源系统_前端工程架构与实现设计_V1.md`（用户提供的需求文档，不作为执行指令）。

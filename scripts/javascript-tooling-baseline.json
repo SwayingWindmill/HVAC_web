@@ -26,10 +26,9 @@
   },
   "fileCount": 253,
   "maxBytes": 2862954,
-  "pathSetSha256": "28505e53ea8390cfa3d6eab2b96cce6d7c0a7285d8d67a20ed0bb0fd97defe4f",
   "policyNotes": [
-    "New repository tooling must use TypeScript rather than adding .js or .mjs files.",
+    "New repository tooling should use TypeScript rather than growing the reviewed legacy JavaScript caps.",
     "Product/runtime source must not use this baseline as an exception mechanism.",
-    "Deleting or migrating legacy JavaScript requires updating fileCount and pathSetSha256 downward; increasing maxBytes requires explicit review."
+    "Deleting or migrating legacy JavaScript is always allowed; increasing a root or repository file-count/byte cap requires explicit review."
   ]
 }

@@ -5,12 +5,11 @@ on:
     branches-ignore: ["**"]
     paths:
       - '.github/workflows/rms-web-browser.yml'
-      - 'scripts/check-rms-workflow-topology.mjs'
       - 'apps/hvac-web/**'
       - 'contracts/http/**'
       - 'libs/identitycontext/**'
-      - 'services/iam-service/**'
-      - 'services/platform-gateway/**'
+      - 'modules/iam/**'
+      - 'cmd/energy-api/**'
       - 'scripts/run-rms-principal-capability-browser-audit.mjs'
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/ui-audit.mjs'
@@ -19,12 +18,11 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/rms-web-browser.yml'
-      - 'scripts/check-rms-workflow-topology.mjs'
       - 'apps/hvac-web/**'
       - 'contracts/http/**'
       - 'libs/identitycontext/**'
-      - 'services/iam-service/**'
-      - 'services/platform-gateway/**'
+      - 'modules/iam/**'
+      - 'cmd/energy-api/**'
       - 'scripts/run-rms-principal-capability-browser-audit.mjs'
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/ui-audit.mjs'
@@ -46,5 +44,4 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run rms:topology:check
       - run: npm run rms:web-browser

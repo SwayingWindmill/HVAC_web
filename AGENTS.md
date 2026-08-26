@@ -55,3 +55,11 @@
   permissive defaults, or "just in case" branches. Prefer a clear failure over
   masking an invalid state. Every defensive branch must have an identifiable
   failure mode that justifies its existence; otherwise remove it.
+- No gate inflation. Protect each current architectural/product invariant with the
+  smallest authoritative gate that can fail for a meaningful reason. Do not add
+  a new permanent CI gate, package script chain, snapshot gate, or ticket/stage
+  gate when an existing domain/invariant gate can own the check. Temporary
+  certification or migration gates must be removed or folded into the stable
+  domain task matrix after their purpose is complete. Avoid running unrelated
+  domains "just in case"; affected-path classification should select only the
+  capabilities whose contracts can actually change.

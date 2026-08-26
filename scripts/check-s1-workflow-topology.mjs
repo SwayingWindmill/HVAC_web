@@ -14,11 +14,7 @@ const assert = (condition, message) => {
 assert(packageJSON.scripts?.['s1:topology:check'] === 'node scripts/check-s1-workflow-topology.mjs', 'stable s1:topology:check package command is missing or drifted');
 
 const capabilities = [
-  { file: 's1-registry-core.yml', name: 'S1 Registry Core', command: 's1:registry-core' },
   { file: 's1-iam-provider-poc.yml', name: 'S1 IAM Provider POC', command: 's1:iam-provider-poc' },
-  { file: 's1-registry-migration.yml', name: 'S1 Registry Migration', command: 's1:registry-migration' },
-  { file: 's1-registry-routing.yml', name: 'S1 Registry Routing', command: 's1:registry-routing' },
-  { file: 's1-registry-web.yml', name: 'S1 Registry Web', command: 's1:registry-web' },
 ];
 
 for (const file of workflowFiles) {
@@ -44,22 +40,6 @@ for (const capability of capabilities) {
   assert(!workflow.includes('s1-ticket-'), `${capability.file} still contains Ticket workflow topology`);
 }
 
-const coreCommand = packageJSON.scripts?.['s1:registry-core'] ?? '';
-for (const marker of ['contracts:check', 'ownership:check', 's1:registry:check', 's1:sqlc:poc', 'test:identity', 'build:iam', 'build:core', 'test:observability', 'test:security-negative', 'release:evidence-assets', 'npm run lint', 'npm run build']) {
-  assert(coreCommand.includes(marker), `s1:registry-core is missing ${marker}`);
-}
-const migrationCommand = packageJSON.scripts?.['s1:registry-migration'] ?? '';
-for (const marker of ['test:legacy-migration', 'build:legacy-migration', 'mod verify', 'govulncheck@v1.1.4']) {
-  assert(migrationCommand.includes(marker), `s1:registry-migration is missing ${marker}`);
-}
-const routingCommand = packageJSON.scripts?.['s1:registry-routing'] ?? '';
-for (const marker of ['test:registry-routing', 'build:gateway', 'legacy-private-fixture']) {
-  assert(routingCommand.includes(marker), `s1:registry-routing is missing ${marker}`);
-}
-const webCommand = packageJSON.scripts?.['s1:registry-web'] ?? '';
-for (const marker of ['contracts:check', 's1:registry:check', 's1:hvac-web:check', 'npm run lint', 's1:hvac-web:build']) {
-  assert(webCommand.includes(marker), `s1:registry-web is missing ${marker}`);
-}
 
 const registryRunner = await readFile(resolve(root, 'scripts/run-s1-registry-postgres-tests.mjs'), 'utf8');
 assert(registryRunner.includes('out/s1-registry-core/postgres-baseline.json'), 'Registry Core default PostgreSQL evidence path is not stable');

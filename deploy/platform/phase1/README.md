@@ -23,6 +23,12 @@ Only two host-facing ports are part of the canonical topology:
 
 PostgreSQL, ClickHouse, Redis, Grafana, Loki, Tempo, Prometheus and all Go services stay on internal Compose networks. `identity-service` is Identity Infrastructure, not a business deployable; Nginx exposes only its `/identity` OIDC surface through the existing HTTPS boundary. Operational access to monitoring/data services must use a controlled management path such as VPN/SSH tunneling rather than additional public ports.
 
+## Runtime inventory
+
+`runtime-inventory.v1.json` is the machine-readable classification of every service in the canonical Compose. The default business deployables are exactly `energy-api`, `iot-service`, `telemetry-worker` and `metric-worker`. `scheduler` and `maintenance` are default supporting workloads; `identity-service` is Identity Infrastructure. Forecast, Optimization and FDD are optional and run only through the `intelligence` profile. Migration, schema preflight, identity bootstrap/admin/reconciliation and backup containers are one-shot operator actions rather than long-running product services.
+
+Any Compose service added or removed without updating this inventory is deployment drift and must fail `npm run deployment:phase1:check`.
+
 ## Environment contract
 
 Checked-in examples exist for:

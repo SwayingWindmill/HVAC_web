@@ -177,8 +177,8 @@ npm run events:check
 npm run contracts:check
 npm run test:durable-unit
 npm run test:durable-postgres
-npm run build:gateway
-npm run build:audit-ledger
+npm run build:energy-api
+npm run build:audit-owner
 npm run build:outbox-relay
 npm run lint
 npm run build

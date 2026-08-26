@@ -13,13 +13,13 @@ on:
       - 'contracts/telemetry/**'
       - 'deploy/s2/**'
       - 'go.work'
-      - 'infra/s2-telemetry/**'
+      - 'infra/telemetry/**'
       - 'libs/ownershipregistry/**'
       - 'scripts/check-ownership-registries.mjs'
       - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s1-registry-baseline.mjs'
       - 'scripts/check-s2-implementation-plan.mjs'
-      - 'scripts/check-s2-telemetry-baseline.mjs'
+      - 'scripts/check-s2-telemetry-baseline.ts'
       - 'scripts/check-s2-telemetry-ownership.mjs'
       - 'scripts/check-s2-telemetry-public-contract.mjs'
       - 'scripts/check-s2-telemetry-rollout-gates.mjs'
@@ -39,13 +39,13 @@ on:
       - 'contracts/telemetry/**'
       - 'deploy/s2/**'
       - 'go.work'
-      - 'infra/s2-telemetry/**'
+      - 'infra/telemetry/**'
       - 'libs/ownershipregistry/**'
       - 'scripts/check-ownership-registries.mjs'
       - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s1-registry-baseline.mjs'
       - 'scripts/check-s2-implementation-plan.mjs'
-      - 'scripts/check-s2-telemetry-baseline.mjs'
+      - 'scripts/check-s2-telemetry-baseline.ts'
       - 'scripts/check-s2-telemetry-ownership.mjs'
       - 'scripts/check-s2-telemetry-public-contract.mjs'
       - 'scripts/check-s2-telemetry-rollout-gates.mjs'
@@ -76,7 +76,7 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: docker compose -f infra/s2-telemetry/compose.yaml config
+      - run: docker compose -f infra/telemetry/compose.yaml config
       - run: npm run s2:telemetry-baseline
       - uses: actions/upload-artifact@v4
         if: always()

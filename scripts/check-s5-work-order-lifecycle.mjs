@@ -5,22 +5,21 @@ const root = resolve(process.cwd());
 const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const [openapi, routes, data, model, store, postgres, serviceHTTP, gatewayRoute, gatewayMutation, gatewayLifecycle, auth, capabilities, migration, browser, workflow] = await Promise.all([
+const [openapi, routes, data, model, store, postgres, serviceHTTP, gatewayRoute, gatewayMutation, gatewayLifecycle, auth, capabilities, migration, browser] = await Promise.all([
   readJSON('contracts/http/s5-work-order-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('libs/workordermodel/model.go'),
-  readText('services/work-order-service/pkg/workorderservice/store.go'),
-  readText('services/work-order-service/pkg/workorderservice/postgres_mutation.go'),
-  readText('services/work-order-service/pkg/workorderservice/http.go'),
-  readText('services/platform-gateway/internal/gateway/work_order.go'),
-  readText('services/platform-gateway/internal/gateway/work_order_mutation.go'),
-  readText('services/platform-gateway/internal/gateway/work_order_lifecycle.go'),
+  readText('modules/workorder/pkg/workorderservice/store.go'),
+  readText('modules/workorder/pkg/workorderservice/postgres_mutation.go'),
+  readText('modules/workorder/pkg/workorderservice/http.go'),
+  readText('cmd/energy-api/internal/gateway/work_order.go'),
+  readText('cmd/energy-api/internal/gateway/work_order_mutation.go'),
+  readText('cmd/energy-api/internal/gateway/work_order_lifecycle.go'),
   readText('libs/workorderauth/authorization.go'),
   readText('libs/identitycontext/capabilities.go'),
-  readText('services/work-order-service/migrations/003_s5_work_order_lifecycle.sql'),
+  readText('modules/workorder/migrations/003_s5_work_order_lifecycle.sql'),
   readText('scripts/run-s5-work-order-lifecycle-browser-audit.mjs'),
-  readText('.github/workflows/s5-work-order-lifecycle.yml'),
 ]);
 const actions = ['plan', 'start', 'block', 'resume', 'complete', 'cancel', 'reopen'];
 const operations = ['OperationSchedule', 'OperationStart', 'OperationBlock', 'OperationResume', 'OperationComplete', 'OperationCancel', 'OperationReopen'];
@@ -51,6 +50,4 @@ for (const action of actions) assert(auth.includes('Action' + action[0].toUpperC
 assert(capabilities.includes('CapabilitySetVersion = 6') && capabilities.includes('CapabilityWorkOrderLifecycle'), 'capability v6 lifecycle contract is missing');
 assert(migration.includes("'LIFECYCLE'") && migration.includes('completion_version') && migration.includes('GRANT UPDATE (status, scheduled_start, due_at, version, updated_at)') && migration.includes('GRANT INSERT ON work_order_runtime.work_order_completion_evidence') && !migration.includes('GRANT DELETE') && !migration.includes('GRANT ALL'), 'lifecycle SQL authority is incomplete or broad');
 for (const marker of ['legal-lifecycle-graph', 'exact-idempotent-retry', 'cross-action-idempotency-conflict', 'illegal-transition', 'stale-version-conflict', 'missing-completion-evidence', 'authorization-denial-no-data', 'non-selected-session-route-absence', 'cross-site-nondiscovery', 'session-loss-purge', 'unreviewed-collaboration-absence', 'public-gateway-lifecycle-only']) assert(browser.includes(marker), 'browser audit lacks ' + marker);
-assert(workflow.includes('npm run s5:work-order:lifecycle') && workflow.includes('npm run contracts:check'), 'lifecycle workflow omits required gates');
-for (const forbidden of ["- 'package.json'", "- 'package-lock.json'", "- 'go.work'", "- 'go.work.sum'"]) assert(!workflow.includes(forbidden), 'lifecycle workflow watches broad root manifest ' + forbidden);
 console.log('S5 Work Order governed lifecycle assets passed.');

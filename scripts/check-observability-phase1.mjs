@@ -42,14 +42,18 @@ for (const family of catalog.families) {
   }
 }
 
-const sourceText = await collectText('services');
+const [commandSource, moduleSource, serviceSource] = await Promise.all([
+  collectText('cmd'),
+  collectText('modules'),
+  collectText('services'),
+]);
 const edgeSource = await collectText('tools/eg8200-simulator');
 const observabilitySource = await collectText('libs/observability');
 const dashboardFiles = [
-  'infra/s0-durable/observability/dashboards/iot-edge-phase1.json',
-  'infra/s0-durable/observability/dashboards/control-safety-phase1.json',
-  'infra/s0-durable/observability/dashboards/alarm-phase1.json',
-  'infra/s0-durable/observability/dashboards/s2-telemetry.json',
+  'infra/observability/dashboards/iot-edge-phase1.json',
+  'infra/observability/dashboards/control-safety-phase1.json',
+  'infra/observability/dashboards/alarm-phase1.json',
+  'infra/observability/dashboards/s2-telemetry.json',
 ];
 let dashboardText = '';
 for (const path of dashboardFiles) {
@@ -57,9 +61,9 @@ for (const path of dashboardFiles) {
   if (!dashboard.title || !Array.isArray(dashboard.panels) || dashboard.panels.length < 1) throw new Error(`invalid dashboard: ${path}`);
   dashboardText += JSON.stringify(dashboard);
 }
-const alertText = `${await read('infra/s0-durable/observability/alerts/domain-phase1.yaml')}\n${await read('infra/s0-durable/observability/alerts/s2-telemetry.yaml')}`;
+const alertText = `${await read('infra/observability/alerts/domain-phase1.yaml')}\n${await read('infra/observability/alerts/s2-telemetry.yaml')}`;
 const runbook = await read('docs/operations/observability-phase1.md');
-const allImplementationText = `${sourceText}\n${edgeSource}\n${observabilitySource}\n${dashboardText}\n${alertText}`;
+const allImplementationText = `${commandSource}\n${moduleSource}\n${serviceSource}\n${edgeSource}\n${observabilitySource}\n${dashboardText}\n${alertText}`;
 for (const family of catalog.families) {
   if (!allImplementationText.includes(family.name)) throw new Error(`metric catalog family is not referenced by implementation or operations assets: ${family.name}`);
 }

@@ -19,11 +19,11 @@
 
 | 证据 | 观察 | 对语义的约束 |
 | --- | --- | --- |
-| [`004-counter-semantics.sql`](../../infra/s2-telemetry/clickhouse/init/004-counter-semantics.sql) | `counter_deltas` 是 `CREATE VIEW`，实时重算配对。 | 晚到观察 B 插入 A、C 之间后，配对自动变为 (A,B)+(B,C)；已写 Fact(C)（prev=A）的 delta 从此错误。**晚到数据本身就是修正触发器**，不是只有配置变更才需要修正。 |
-| [`002-analytics-energy-interval.sql`](../../infra/s2-telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 普通 `MergeTree` + `non_replicated_deduplication_window=100000`。 | 同主键重复插入被**丢弃而非替换**："改一条事实"不能靠重插同键行；修正行的排序键必须含 revision。 |
-| [`005-metric-result-revisions.sql`](../../infra/s2-telemetry/clickhouse/init/005-metric-result-revisions.sql) | `metric_result_facts`：MergeTree，ORDER BY 尾部 `(revision, result_id)`；writer 有 `GRANT ALTER DELETE`；reader 含 settlement/cube。 | 仓库内已有的同型事实修正机制：新版本=新行，读侧取最新 revision，旧版本保留供 pinning、到期物理清理。Energy 对齐此先例。 |
-| [`009c-metric-model-v2.sql`](../../infra/s1-registry/postgres/init/009c-metric-model-v2.sql) | `metric_calculation_runs` 状态机 `PENDING/RUNNING/PERSISTING/PERSISTED/FAILED` + 单活跃 run 部分唯一索引；runs 由 metric-engine 直写 `core_registry`。 | 状态机语义可复制；但"服务直写 core_registry"已被 #304 §4.4 标记为 ownership 待收敛项，Energy 不得再复制该冲突。 |
-| [`projector.go`](../../services/analytics-read-model-projector/internal/energy/projector.go)、[`client.go`](../../services/analytics-read-model-projector/internal/clickhouse/client.go) | anti-join 仅按 current observation 是否已存在判定跳过。 | 微修正要求把候选判定升级为"无 Fact **或** 最新版 Fact 的 `source_previous_observation_id` ≠ canonical view 的 prev"。 |
+| [`004-counter-semantics.sql`](../../infra/telemetry/clickhouse/init/004-counter-semantics.sql) | `counter_deltas` 是 `CREATE VIEW`，实时重算配对。 | 晚到观察 B 插入 A、C 之间后，配对自动变为 (A,B)+(B,C)；已写 Fact(C)（prev=A）的 delta 从此错误。**晚到数据本身就是修正触发器**，不是只有配置变更才需要修正。 |
+| [`002-analytics-energy-interval.sql`](../../infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 普通 `MergeTree` + `non_replicated_deduplication_window=100000`。 | 同主键重复插入被**丢弃而非替换**："改一条事实"不能靠重插同键行；修正行的排序键必须含 revision。 |
+| [`005-metric-result-revisions.sql`](../../infra/telemetry/clickhouse/init/005-metric-result-revisions.sql) | `metric_result_facts`：MergeTree，ORDER BY 尾部 `(revision, result_id)`；writer 有 `GRANT ALTER DELETE`；reader 含 settlement/cube。 | 仓库内已有的同型事实修正机制：新版本=新行，读侧取最新 revision，旧版本保留供 pinning、到期物理清理。Energy 对齐此先例。 |
+| [`009c-metric-model-v2.sql`](../../infra/registry/postgres/init/009c-metric-model-v2.sql) | `metric_calculation_runs` 状态机 `PENDING/RUNNING/PERSISTING/PERSISTED/FAILED` + 单活跃 run 部分唯一索引；runs 由 metric-engine 直写 `core_registry`。 | 状态机语义可复制；但"服务直写 core_registry"已被 #304 §4.4 标记为 ownership 待收敛项，Energy 不得再复制该冲突。 |
+| [`projector.go`](../../modules/energy/internal/energy/projector.go)、[`client.go`](../../modules/energy/internal/clickhouse/client.go) | anti-join 仅按 current observation 是否已存在判定跳过。 | 微修正要求把候选判定升级为"无 Fact **或** 最新版 Fact 的 `source_previous_observation_id` ≠ canonical view 的 prev"。 |
 
 ### 2.2 上游证据
 

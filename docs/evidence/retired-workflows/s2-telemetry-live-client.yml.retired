@@ -1,0 +1,47 @@
+name: S2 TelemetryLiveClient Browser Recovery
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - ".github/workflows/s2-telemetry-live-client.yml"
+      - "apps/hvac-web/src/platform/telemetry-live/**"
+      - "apps/hvac-web/src/api/generated/s2Telemetry.gen.ts"
+      - "apps/hvac-web/src/api/generated/platformGateway.gen.ts"
+      - "contracts/http/s2-telemetry-public.openapi.json"
+      - "scripts/check-s2-telemetry-live-client.mjs"
+      - "scripts/run-s2-telemetry-live-browser-audit.mjs"
+      - "scripts/fixtures/s2-telemetry-live/**"
+      - "docs/operations/s2-telemetry-live-client.md"
+      - "deploy/s0/security/dependency-audit-baseline.json"
+      - "scripts/check-npm-production-audit.mjs"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run s2:telemetry-live-client
+      - name: Upload Ticket 07 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s2-telemetry-live-client-evidence
+          path: out/s2-telemetry-live-client
+          if-no-files-found: error
+          retention-days: 14

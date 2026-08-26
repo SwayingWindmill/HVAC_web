@@ -42,7 +42,7 @@ const [
   ).then(JSON.parse),
   readFile(
     new URL(
-      "../services/platform-gateway/cmd/platform-gateway/embedded_energy.go",
+      "../cmd/energy-api/embedded_energy.go",
       import.meta.url,
     ),
     "utf8",
@@ -84,16 +84,16 @@ const [
 ]);
 
 const owners = [
-  ["iam-owner", "./services/iam-service/cmd/iam-service"],
-  ["audit-owner", "./services/audit-ledger-service/cmd/audit-ledger-service"],
-  ["core-owner", "./services/platform-core-service/cmd/platform-core-service"],
+  ["iam-owner", "./modules/iam/cmd/iam-owner"],
+  ["audit-owner", "./modules/audit/cmd/audit-owner"],
+  ["core-owner", "./modules/registry/cmd/registry-owner"],
   [
     "telemetry-query-owner",
-    "./services/telemetry-query-service/cmd/telemetry-query-service",
+    "./modules/telemetry/cmd/telemetry-query-owner",
   ],
-  ["command-owner", "./services/command-service/cmd/command-service"],
-  ["alarm-owner", "./services/alarm-service/cmd/alarm-service"],
-  ["work-order-owner", "./services/work-order-service/cmd/work-order-service"],
+  ["command-owner", "./modules/command/cmd/command-owner"],
+  ["alarm-owner", "./modules/alarm/cmd/alarm-owner"],
+  ["work-order-owner", "./modules/workorder/cmd/work-order-owner"],
 ];
 
 test("owner-split overlay runs the existing same-version owner artifacts and keeps only notification embedded", () => {

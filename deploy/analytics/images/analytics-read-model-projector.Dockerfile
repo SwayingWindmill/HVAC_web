@@ -4,8 +4,9 @@ WORKDIR /src
 COPY go.work go.work.sum ./
 COPY libs ./libs
 COPY services ./services
+COPY modules ./modules
 COPY tools ./tools
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/analytics-read-model-projector ./services/analytics-read-model-projector/cmd/analytics-read-model-projector
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/analytics-read-model-projector ./modules/energy/cmd/energy-projector
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /

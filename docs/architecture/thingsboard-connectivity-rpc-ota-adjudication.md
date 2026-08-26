@@ -53,10 +53,10 @@ HVAC Web 不应重新引入 ThingsBoard 运行时，也不应为了“协议数�
 
 主要本地证据：
 
-- `services/mqtt-telemetry-adapter/internal/adapter/runtime.go`, `processor.go`, `envelope.go`, `gateway_messages.go`, `runtime_client.go`；
-- `services/telemetry-runtime-service/internal/telemetry/ingest_store.go`, `source_server.go`, `command_verifier_server.go`；
-- `services/command-service/pkg/commandservice/service.go`, `connector_evidence.go`, `verification.go`；
-- `services/command-dispatcher/pkg/mqttconnector/connector.go`；
+- `modules/iot/internal/adapter/runtime.go`, `processor.go`, `envelope.go`, `gateway_messages.go`, `runtime_client.go`；
+- `modules/telemetry/internal/telemetry/ingest_store.go`, `source_server.go`, `command_verifier_server.go`；
+- `modules/command/pkg/commandservice/service.go`, `connector_evidence.go`, `verification.go`；
+- `modules/command/pkg/mqttconnector/connector.go`；
 - `contracts/ownership/s2-telemetry-ownership.v1.json`, `s3-command-ownership.v1.json`；
 - `docs/architecture/phase1-overall-architecture.md`, `backend-architecture-v2-conformance.md`；
 - `contracts/architecture/edge-control-plane.v1.json` 与 `libs/edgecontrol`。
@@ -428,9 +428,9 @@ OTA 与 Command 共用身份、Tenant/Site Scope、审批、Audit 和 Edge 安�
 | --- | --- |
 | CodeGraph 对 MQTT Adapter、Telemetry Runtime、Command Service/Dispatcher 的源码级调用链审查 | 完成 |
 | 静态搜索 CoAP/LwM2M/SNMP/Sparkplug/OTA/Provisioning 运行时实现 | 无匹配；不得宣称支持 |
-| `go test ./...` in `services/command-service` | 通过 |
-| `go test ./...` in `services/command-dispatcher` | `pkg/commanddispatcher` 通过；`pkg/mqttconnector` 因 `proxy.golang.org` 下载 `paho.golang v0.23.0` 超时而未验证 |
-| `go test ./...` in `services/mqtt-telemetry-adapter` | 因同一 Paho 依赖下载超时而未验证，不判为代码通过或失败 |
+| `go test ./...` in `modules/command` | 通过 |
+| `go test ./modules/command/...`（含 `pkg/commanddispatcher`、`pkg/mqttconnector`） | Command Authority 与 IoT execution packages 已统一由 `modules/command` 验证 |
+| `go test ./...` in `modules/iot` | 因同一 Paho 依赖下载超时而未验证，不判为代码通过或失败 |
 | `go test ./...` in `libs/edgecontrol` | 失败：`TestCyclePhasesFollowProcessControllersWriteOrder` 得到 `phases=7 duration=0s` |
 
 依赖下载超时属于环境阻断，不能作为代码缺陷，也不能算通过。`edgecontrol` 是真实测试失败；在修复前，当前 Edge Control 实现继续标记为“待验证”。

@@ -337,7 +337,7 @@ for (const command of existingCommands) {
   assert(typeof packageJSON.scripts?.[scriptName] === 'string', `required existing command is not wired: ${command}`);
 }
 const futureCommands = [
-  'npm run build:telemetry-runtime',
+  'npm run build:telemetry-worker',
   'npm run build:telemetry-runtime-migrator',
   'npm run s2:security-negative',
   'npm run s2:postgres-integration',

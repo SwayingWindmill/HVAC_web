@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
+  "name": "Phase 1 canonical runtime inventory",
+  "canonicalCompose": "deploy/platform/phase1/compose.yaml",
+  "classes": {
+    "defaultPublic": [
+      "nginx"
+    ],
+    "defaultBusinessDeployables": [
+      "energy-api",
+      "iot-service",
+      "telemetry-worker",
+      "metric-worker"
+    ],
+    "defaultSupportingWorkloads": [
+      "scheduler",
+      "maintenance"
+    ],
+    "defaultIdentityInfrastructure": [
+      "identity-service"
+    ],
+    "defaultDataAndRealtimeInfrastructure": [
+      "postgres",
+      "clickhouse",
+      "redis",
+      "mqtt-broker",
+      "centrifugo"
+    ],
+    "profiledObservabilityInfrastructure": [
+      "otel-collector",
+      "prometheus",
+      "node-exporter",
+      "loki",
+      "tempo",
+      "grafana"
+    ],
+    "optionalIntelligence": [
+      "forecast-service",
+      "optimization-service",
+      "fdd-service"
+    ],
+    "requiredStartupOneShot": [
+      "phase1-schema-preflight"
+    ],
+    "operatorOneShot": [
+      {
+        "service": "phase1-migrator",
+        "profile": "migration"
+      },
+      {
+        "service": "identity-keygen",
+        "profile": "identity-bootstrap"
+      },
+      {
+        "service": "identity-mfa-keygen",
+        "profile": "identity-bootstrap"
+      },
+      {
+        "service": "iam-api-credential-keygen",
+        "profile": "iam-bootstrap"
+      },
+      {
+        "service": "identity-admin",
+        "profile": "identity-bootstrap"
+      },
+      {
+        "service": "identity-reconciler",
+        "profile": "identity-bootstrap"
+      },
+      {
+        "service": "postgres-backup",
+        "profile": "backup"
+      },
+      {
+        "service": "clickhouse-backup",
+        "profile": "backup"
+      }
+    ]
+  },
+  "sourceEntrypoints": {
+    "energy-api": "cmd/energy-api",
+    "iot-service": "cmd/iot-service",
+    "telemetry-worker": "cmd/telemetry-worker",
+    "metric-worker": "cmd/metric-worker",
+    "scheduler": "cmd/scheduler",
+    "maintenance": "cmd/maintenance-worker"
+  },
+  "semantics": {
+    "businessDeployableDefinition": "Long-running product processes that own Phase 1 business request, IoT integration, telemetry processing, or metric execution responsibility.",
+    "supportingWorkloadDefinition": "Long-running application workers that coordinate or execute cross-domain operational jobs without becoming a new business-domain authority.",
+    "maintenanceDecision": "KEEP_AS_SUPPORTING_WORKER",
+    "maintenanceReason": "Maintenance executes credential-expiry scans, dead-work disposition and Tenant retirement with cross-domain operational privileges. Folding it into scheduler would violate the Scheduler coordination-only boundary; folding it into energy-api would widen the online API process privilege set.",
+    "identityDecision": "SEPARATE_INFRASTRUCTURE",
+    "identityReason": "identity-service owns authentication credentials and OIDC only; Tenant/Site/Role/Policy authorization remains inside platform IAM.",
+    "intelligenceDecision": "OPTIONAL_PROFILE",
+    "intelligenceReason": "Forecast, Optimization and FDD do not gate telemetry, control safety or the default Phase 1 runtime and are enabled only through the intelligence profile.",
+    "oneShotDecision": "NOT_LONG_RUNNING_DEPLOYABLES",
+    "oneShotReason": "Migration, bootstrap, administration, schema preflight and backup actions are explicit lifecycle/operations actions rather than continuously running product services."
+  },
+  "invariants": {
+    "allCanonicalComposeServicesMustBeClassified": true,
+    "defaultBusinessDeployablesMustNotUseProfiles": true,
+    "defaultSupportingWorkloadsMustNotUseProfiles": true,
+    "optionalIntelligenceProfile": "intelligence",
+    "historicalStageDeploymentsAreCanonical": false,
+    "canonicalDeploymentRoot": "deploy/platform/phase1"
+  }
+}

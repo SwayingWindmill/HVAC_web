@@ -22,27 +22,23 @@ const [
   coreServer,
   assetTypes,
   assetPostgres,
-  migrationTypes,
-  migrationPostgres,
   gatewayRegistry,
   generatedAPI,
 ] = await Promise.all([
   json('contracts/registry/s1-registry-model.v1.json'),
   json('contracts/http/platform-gateway.openapi.yaml'),
   json('contracts/ownership/route-ownership.v1.json'),
-  text('infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'),
-  text('infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql'),
-  text('infra/s1-registry/postgres/init/009-energy-data-foundation.sql'),
-  text('infra/s1-registry/postgres/init/001a-tenant-foundation.sql'),
-  text('services/platform-core-service/internal/core/types.go'),
-  text('services/platform-core-service/internal/core/postgres.go'),
-  text('services/platform-core-service/internal/core/server.go'),
-  text('services/platform-core-service/internal/core/asset_model.go'),
-  text('services/platform-core-service/internal/core/postgres_asset_model.go'),
-  text('services/legacy-migration-service/internal/migration/types.go'),
-  text('services/legacy-migration-service/internal/migration/postgres.go'),
-  text('services/platform-gateway/internal/gateway/registry.go'),
-  text('services/platform-gateway/pkg/platformapi/api.gen.go'),
+  text('infra/registry/postgres/init/001-s1-registry-baseline.sql'),
+  text('infra/registry/postgres/init/007-spatial-sensor-point-model.sql'),
+  text('infra/registry/postgres/init/009-energy-data-foundation.sql'),
+  text('infra/registry/postgres/init/001a-tenant-foundation.sql'),
+  text('modules/registry/internal/core/types.go'),
+  text('modules/registry/internal/core/postgres.go'),
+  text('modules/registry/internal/core/server.go'),
+  text('modules/registry/internal/core/asset_model.go'),
+  text('modules/registry/internal/core/postgres_asset_model.go'),
+  text('cmd/energy-api/internal/gateway/registry.go'),
+  text('cmd/energy-api/internal/platformapi/api.gen.go'),
 ]);
 
 assert(model.schemaVersion === 2 && model.contractRevision === 2, 'V2 Registry model revision is not active');
@@ -122,12 +118,6 @@ assert(!coreServer.includes('segments[0] == "organizations"'), 'Core Organizatio
 assert(!assetTypes.includes('OwningOrganizationID') && !assetTypes.includes('CalculatedPointInput') && !assetTypes.includes('SensorSubjectBinding'), 'Asset Model still carries retired Organization/Calculated/Sensor-subject concepts');
 assert(assetTypes.includes('PointCode') && assetTypes.includes('PointType'), 'Asset Model Point fields are not V2');
 assert(!assetPostgres.includes('sensor_subject_bindings') && !assetPostgres.includes('calculated_point_inputs'), 'Asset Model queries retired tables');
-
-assert(migrationTypes.includes('TenantID') && migrationTypes.includes('tenantId must be UUIDv7'), 'Legacy migration input does not require TenantID');
-assert(migrationTypes.includes('len(record.TenantID)'), 'migration source identity is not Tenant-scoped');
-assert(!migrationTypes.includes('KindOrganization') && !migrationTypes.includes('OrganizationRef'), 'Legacy migration input still models Organization');
-assert(migrationPostgres.includes('WHERE tenant_id=$1::uuid'), 'migration Tenant isolation marker missing');
-assert(!migrationPostgres.includes('organization_id') && !migrationPostgres.includes('OrganizationID'), 'Legacy migration persistence still depends on Organization');
 
 assert(!gatewayRegistry.includes('legacyRegistryScopes'), 'Gateway still projects Legacy Organization scopes');
 assert(!gatewayRegistry.includes('registryFallbackAllowed'), 'Gateway Registry fallback remains');

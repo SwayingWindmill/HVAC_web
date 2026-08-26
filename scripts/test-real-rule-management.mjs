@@ -60,7 +60,7 @@ test('S21 keeps released revisions immutable and simulation effect-free by const
 });
 
 test('Rule management is capability, CSRF and authoritative Site scoped with no browser fallback', () => {
-  const gateway = fs.readFileSync('services/platform-gateway/internal/gateway/rules.go', 'utf8');
+  const gateway = fs.readFileSync('cmd/energy-api/internal/gateway/rules.go', 'utf8');
   const api = fs.readFileSync('apps/hvac-web/src/api/rules.ts', 'utf8');
   const system = fs.readFileSync('apps/hvac-web/src/real/RealSystemManagement.tsx', 'utf8');
   assert.match(gateway, /CapabilityRuleManage/);

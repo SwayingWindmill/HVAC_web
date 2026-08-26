@@ -1,6 +1,6 @@
 # 泉来禾智慧能源平台
 
-本仓库采用单仓库、多运行时结构。根目录负责编排、共享契约、跨服务验证与发布证据；具体产品代码位于 `apps/`、`services/` 和 `libs/`。
+本仓库采用单仓库、多运行时结构。根目录负责编排、共享契约、跨领域验证与发布证据；产品源码按 `apps/`、`cmd/`、`modules/`、`services/` 和 `libs/` 分层。`cmd/` 表示可执行进程，`modules/` 表示逻辑领域能力，二者不得再与 `services/` 目录名混为同一概念。
 
 ## 系统结构
 
@@ -25,11 +25,13 @@ Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。Applicati
 
 ```text
 apps/hvac-web/        React + Vite Web，包含 Demo 与 Real 两种运行模式
-services/             独立部署的 Go 服务与 TypeScript Operations Agent
-libs/                 窄接口 Go 领域库、授权库和基础设施库
+cmd/                  Phase 1 canonical 长运行进程入口，只做启动与组合
+modules/              逻辑领域 Owner 与领域数据资产，不代表独立部署
+services/             尚待 RC-04 收敛的历史模块，以及明确独立的 workload
+libs/                 窄接口跨领域共享库、授权库和基础设施库
 contracts/            OpenAPI、事件、数据所有权和设备集成契约
-infra/                PostgreSQL、ClickHouse、Centrifugo、ThingsBoard 等本地拓扑
-deploy/               Phase 1 Compose、镜像、后期编排参考、发布门禁和切换配置
+infra/                PostgreSQL、ClickHouse、Centrifugo、MQTT 等基础设施配置
+deploy/               Phase 1 Compose、镜像、历史认证资产、发布门禁和切换配置
 benchmarks/           Operations Agent 确定性与安全基准
 scripts/              构建、测试、审计、契约生成和发布认证入口
 docs/                 ADR、领域设计、运维方案、安全与研究文档
@@ -49,40 +51,45 @@ npm run build:demo
 npm run build:real
 ```
 
-## 服务目录
+## 源码拓扑
 
-### 平台入口与身份
+### Canonical executable：`cmd/`
 
-- `platform-gateway/`：浏览器公共入口、BFF 安全边界和内部路由编排。
-- `iam-service/`：身份、授权、委托和站点访问决策。
-- `platform-core-service/`：站点、设备和 Registry 权威数据。
-- `audit-ledger-service/`：追加式审计账本和事务 Inbox。
-- `outbox-relay/`：事务 Outbox 事件转发。
-- `oidc-test-provider/`：仅测试使用的确定性 OIDC fixture，不进入 Staging/Production 发布图。
-- `legacy-migration-service/`：仅保留一次性 Registry 迁移源码与历史验证，不是运行时服务。
+- `energy-api/`：公共 API/BFF 与 Phase 1 内嵌业务 Owner 的默认运行入口。
+- `iot-service/`：MQTT 上行、命令执行/验证和 Edge Fleet 的默认运行入口。
+- `telemetry-worker/`：Telemetry ingest、Latest/History 与 Energy projection 的默认运行入口。
+- `metric-worker/`：Metric 执行与结果投影入口。
+- `scheduler/`：耐久任务调度协调入口。
+- `maintenance-worker/`：证书、Dead Job、Tenant Retirement 等运维任务执行入口。
 
-### 遥测与分析
+### Logical domain owners：`modules/`
 
-- `telemetry-runtime-service/`：当前遥测、摄取和历史投影运行时。
-- `mqtt-telemetry-adapter/`：MQTT TLS/QoS1 遥测进入 Telemetry Runtime 的 Edge/Cloud 适配边界。
-- `telemetry-query-service/`：历史遥测与能源分析产品查询。
-- `analytics-read-model-projector/`：分析读取模型投影。
-- `telemetry-shadow-comparator/`：仅保留离线迁移验收/历史比较工具，不进入当前生产 serving path。
-- `thingsboard-telemetry-adapter/`：ThingsBoard 遥测适配。
+- `audit/`：Audit 领域、追加式账本、事务 Inbox，以及显式 owner-split 的 `audit-owner`。
+- `alarm/`：Alarm 领域、规则/生命周期、数据库 migrations/testdata，以及显式 owner-split 的 `alarm-owner`。
+- `workorder/`：Work Order 领域、生命周期、数据库 migrations/testdata，以及显式 owner-split 的 `work-order-owner`。
+- `registry/`：Tenant/Site、Space/Asset、Device/Product/Point 与 Registry read/write 边界，以及显式 owner-split 的 `registry-owner`。
+- `iam/`：Principal/Capability/Tenant/Site 授权、Delegation Grant 与 Reconciliation 边界，以及显式 owner-split 的 `iam-owner`。
+- `command/`：Cloud Command Intent、Governance、Approval、Dispatch/Verification Authority、PostgreSQL migrations，以及显式 owner-split 的 `command-owner`。
+- `telemetry/`：Telemetry ingest、Current/Realtime/History、查询适配与生成合同；默认运行于 `cmd/telemetry-worker`，并提供 `telemetry-query-owner` 和 history projector。
+- `metric/`：Metric Version/Binding/Calculation Run/Result/Publication 与 Scheduler Job 执行；默认运行于 `cmd/metric-worker`。
+- `energy/`：Energy Processing、MeterBinding 解析、canonical Counter Delta 到 Energy Fact 的投影与 rebuild/correction；默认由 `cmd/telemetry-worker` 组合执行，并保留 `energy-projector` 作为显式构建入口。
+- `scheduler/`：耐久任务的扫描、Claim 协调和调度统计；默认运行于 `cmd/scheduler`。
+- `maintenance/`：证书到期扫描、Dead Job 处置和 Tenant Retirement 等运维作业；默认运行于 `cmd/maintenance-worker`。
+- `iot/`：MQTT ingress、连接状态、Edge Fleet 同步/OTA 传输侧和 `iot-service` 的协议执行面；默认运行于 `cmd/iot-service`。
 
-### 命令、告警与工单
+`modules/*/cmd/*-owner` 只用于显式 owner-split / 同版本故障域验证；默认 Phase 1 仍由 `energy-api` 内嵌这些 Owner。Domain Module 不等于独立 Deployable。
 
-- `command-service/`：命令意图和治理状态权威服务。
-- `command-dispatcher/`：命令派发与结果验证。
-- `thingsboard-connector-control/`：ThingsBoard 控制连接器。
-- `alarm-service/`：告警读取模型与生命周期。
-- `work-order-service/`：工单领域和持久化运行时。
+### Independently deployable workloads：`services/`
 
-### 智能运维
+`services/` 只保留具有独立生命周期、故障域或部署需求的 workload，不再作为逻辑 Domain 的默认源码目录：
 
-- `operations-agent-service/`：TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、LangGraph 只读运行时、业务记录和 AG-UI 投影。
+- 平台/身份/耐久性：`identity-service/`、`outbox-relay/`。
+- Telemetry/Analytics：`settlement-service/`。
+- Control/Rules/Delivery：`rule-runtime-service/`、`notification-service/`、`outbound-delivery-service/`。
+- Intelligence：`forecast-service/`、`optimization-service/`、`fdd-service/`。
+- 智能运维：`operations-agent-service/`，TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、受控模型调用、业务记录和 AG-UI 投影。
 
-Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时、首个 Web Operations Workspace，以及受控 Finding 合成接口、Fake Provider 和默认关闭的 OpenAI Responses API Adapter。调用来源、配置摘要、输入输出摘要、延迟和有界计量会与 Finding 原子持久化，但不会进入公共投影。外部模型仅在 Provider、精确模型 allowlist、服务端凭据及有界超时/输出配置全部有效时启用；模型仍不能选择工具、扩大 Scope 或提交业务效果。Web Workspace 已支持按 Organization/Site/Investigation 隔离的 opaque 断线游标恢复，并在终态、路由离开、Site 切换或 logout purge 时清理。`npm run operations-agent:safety-certification` 会统一验证授权负向、精确重试、重启、并发和事件流恢复，并生成可离线校验的 Map 5.5 证据；调度器仍是后续工作。
+Operations Agent 通过 `energy-api`/Platform Gateway 边界暴露受保护调查接口；模型不能选择工具、扩大 Scope 或提交业务效果。`npm run operations-agent:safety-certification` 统一验证授权负向、精确重试、重启、并发和事件流恢复。
 
 ## 契约和所有权
 
@@ -121,22 +128,24 @@ npm run domain:run -- --domain=telemetry --layers=contracts,unit
 npm run domain:run -- --domain=command --layers=unit,integration
 ```
 
-支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合执行：`all` 覆盖某个 Gate 的全部 Profile，`browser-linux` 和 `browser-windows` 保持浏览器检查的运行平台边界；新增 Profile 未加入这些集合时矩阵会立即失败。
+支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`alarm`、`workorder`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合执行：`all` 覆盖某个 Gate 的全部 Profile，`browser-linux` 和 `browser-windows` 保持浏览器检查的运行平台边界；新增 Profile 未加入这些集合时矩阵会立即失败。
 
-较长但仍需保留公共名称的能力检查也由同一矩阵维护。目前已迁移 12 个 S2/S3 能力入口，包括 Telemetry Baseline、IAM、Runtime、History、Ingest、Gateway、Realtime，以及 Command Safety、Authority、API、ThingsBoard 和 UX。公共 npm 名称保持不变；可在不执行真实测试的情况下查看展开顺序：
+较长但仍需保留公共名称的能力检查也由同一矩阵维护。阶段性的 Runtime/Gateway Snapshot Gate 已退出 active CI；当前保留的是有真实合同、持久化、传输或业务行为价值的能力入口。可在不执行真实测试的情况下查看展开顺序：
 
 ```bash
-node scripts/run-capability-task.mjs --task=s2:gateway-snapshot --dry-run=true
+node scripts/run-capability-task.mjs --task=s2:telemetry-ingest --dry-run=true
 node scripts/run-capability-task.mjs --task=s3:command-ux --dry-run=true
 ```
 
-`repo:check` 只检查 Git 已跟踪文件，防止日志、本地协调数据和生成产物进入版本库，并校验服务目录与 README 服务清单一致。它还通过 `scripts/package-script-long-chain-baseline.json` 对根脚本执行棘轮治理：超过四个内联命令的旧链条只能原样保留，新增或修改长链必须迁入任务矩阵；已迁移能力入口不得回退为 `&&` 命令链。基线更新命令 `npm run repo:long-chains:update` 仅用于显式审查后的例外调整。`.worktrees/` 当前仅保持 Git 忽略，不纳入该检查的失败规则。
+`repo:check` 检查 Git 已跟踪文件，防止日志、本地协调数据、生成产物以及仓库内 `.worktrees/`、`.clones/` checkout 被纳入版本库，并根据当前工作树中实际包含源码文件的 `cmd/`、`modules/`、`services/` 目录校验 README 源码清单一致。Git ignore 只是防止误提交的安全网：Git worktree、上游参考源码和临时 scratch 必须位于产品仓库根目录之外，避免污染 IDE、代码索引、搜索和 Agent 分析。历史 S0/S1 发布证据的活跃引用已迁到 `docs/evidence/go-data-ai-platform*`，`.scratch` 不再承担权威职责。该检查还通过 `scripts/package-script-long-chain-baseline.json` 对根脚本执行棘轮治理：普通旧长链继续冻结，新增长链必须迁入任务矩阵；明确的认证、发布和切换操作可作为 `explicit-operation` 保留显式入口，已迁移能力入口不得回退为 `&&` 命令链。
 
 ## 依赖所有权
 
 - 根目录 `package.json`：Web、契约生成、仓库编排和跨层验证。
+- `cmd/*/go.mod`：canonical executable 的薄启动模块；RC-04 期间允许临时依赖尚未迁移的实现 module。
+- `modules/*/go.mod`：逻辑领域 Owner 的 Go module 与领域数据资产边界。
+- `services/*/go.mod`：尚待迁移的历史模块或明确独立 workload 的依赖边界。
 - `services/operations-agent-service/package.json`：Operations Agent 独立 Node 依赖。
-- `services/*/go.mod`：各 Go 服务独立依赖。
 - `libs/*/go.mod`：共享领域与安全能力的窄模块依赖。
 - 根目录 `go.work`：仅负责本地 Go workspace 编排。
 

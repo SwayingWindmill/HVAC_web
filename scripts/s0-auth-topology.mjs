@@ -231,7 +231,7 @@ export async function startS0AuthTopology(options = {}) {
   let telemetryFixture;
 
   try {
-    const oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
+    const oidc = spawnService('OIDC fixture', goBinary, ['run', './tools/oidc-test-provider/cmd/oidc-test-provider'], {
       GOCACHE: goCacheDir,
       OIDC_FIXTURE_ADDR: `127.0.0.1:${oidcPort}`,
       OIDC_FIXTURE_ISSUER: oidcURL,
@@ -243,7 +243,7 @@ export async function startS0AuthTopology(options = {}) {
     processes.push(oidc);
     await waitForTLS(oidcPort, 'OIDC fixture', oidc);
 
-    const iam = spawnService('IAM service', goBinary, ['run', './services/iam-service/cmd/iam-service'], {
+    const iam = spawnService('IAM service', goBinary, ['run', './modules/iam/cmd/iam-owner'], {
       GOCACHE: goCacheDir,
       IAM_SERVICE_ADDR: `127.0.0.1:${iamPort}`,
       IAM_TLS_CERT: paths.serverCert,
@@ -277,7 +277,7 @@ export async function startS0AuthTopology(options = {}) {
       });
     }
 
-    const gateway = spawnService('Platform Gateway', goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
+    const gateway = spawnService('Platform Gateway', goBinary, ['run', './cmd/energy-api'], {
       GOCACHE: goCacheDir,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${gatewayPort}`,
       OIDC_ISSUER: oidcURL,

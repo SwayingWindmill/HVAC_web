@@ -18,7 +18,7 @@ function stop(child) {
   }
 }
 
-const gateway = spawn(goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
+const gateway = spawn(goBinary, ['run', './cmd/energy-api'], {
   cwd: root,
   stdio: 'inherit',
   shell: false,

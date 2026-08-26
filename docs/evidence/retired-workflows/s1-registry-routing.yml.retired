@@ -1,0 +1,117 @@
+name: S1 Registry Routing
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - '.github/workflows/s1-registry-routing.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'docs/operations/s1-registry-routing-cutover.md'
+      - 'infra/s0-durable/postgres/init/**'
+      - 'libs/identitycontext/**'
+      - 'libs/ownershipregistry/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/lib/docker-cli.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'tools/legacy-private-fixture/**'
+      - 'go.work'
+      - 'go.work.sum'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s1-registry-routing.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'docs/operations/s1-registry-routing-cutover.md'
+      - 'infra/s0-durable/postgres/init/**'
+      - 'libs/identitycontext/**'
+      - 'libs/ownershipregistry/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/lib/docker-cli.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'tools/legacy-private-fixture/**'
+      - 'go.work'
+      - 'go.work.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s1-registry-routing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-routing
+
+  postgres-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+      S1_REGISTRY_REPORT_PATH: out/s1-registry-routing/postgres-routing.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: docker compose -f infra/s1-registry/compose.yaml config
+      - run: npm run s1:registry:postgres
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s1-registry-routing-postgres-routing
+          path: out/s1-registry-routing/postgres-routing.json
+          if-no-files-found: error
+          retention-days: 14
+
+  durable-route-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: docker compose -f infra/s0-durable/compose.yaml config
+      - run: npm run test:durable-postgres

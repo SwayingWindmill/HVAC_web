@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
+    environment:
+      POSTGRES_DB: hvac_s4
+      POSTGRES_PASSWORD: postgres-local-only
+    ports:
+      - "${S4_POSTGRES_HOST_PORT:-55434}:5432"
+    volumes:
+      - ../../modules/alarm/testdata/postgres/000_roles.sql:/docker-entrypoint-initdb.d/000_roles.sql:ro
+      - ../../modules/alarm/migrations/001_s4_alarm_runtime.sql:/docker-entrypoint-initdb.d/001_s4_alarm_runtime.sql:ro
+      - ../../modules/alarm/migrations/002_s4_alarm_lifecycle.sql:/docker-entrypoint-initdb.d/002_s4_alarm_lifecycle.sql:ro
+      - ../../modules/alarm/migrations/003_s4_tenant_scope.sql:/docker-entrypoint-initdb.d/003_s4_tenant_scope.sql:ro
+      - ../../modules/alarm/migrations/004_s4_event_provenance.sql:/docker-entrypoint-initdb.d/004_s4_event_provenance.sql:ro
+      - ../../modules/alarm/migrations/005_s13_alarm_orthogonal.sql:/docker-entrypoint-initdb.d/005_s13_alarm_orthogonal.sql:ro
+      - ../../modules/alarm/migrations/006_s14_alarm_evaluator.sql:/docker-entrypoint-initdb.d/006_s14_alarm_evaluator.sql:ro
+      - ../../modules/alarm/migrations/007_s16_notification_outbox.sql:/docker-entrypoint-initdb.d/007_s16_notification_outbox.sql:ro
+      - ../../modules/alarm/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s4"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
