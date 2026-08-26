@@ -17,7 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/metric/internal/metric"
+	"github.com/quanlaihe/hvac-web/modules/metric/pkg/metric"
 )
 
 type request struct {

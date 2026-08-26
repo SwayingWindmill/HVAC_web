@@ -15,7 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/scheduler/internal/scheduler"
+	"github.com/quanlaihe/hvac-web/modules/scheduler/pkg/scheduler"
 )
 
 func main() {

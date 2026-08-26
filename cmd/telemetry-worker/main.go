@@ -18,7 +18,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/energy/pkg/analyticsprojector"
-	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/telemetry"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetry"
 )
 
 func main() {

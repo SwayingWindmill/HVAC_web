@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/maintenance/internal/maintenance"
+	"github.com/quanlaihe/hvac-web/modules/maintenance/pkg/maintenance"
 )
 
 func main() {

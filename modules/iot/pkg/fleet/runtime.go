@@ -15,8 +15,8 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/iot/internal/adapter"
-	"github.com/quanlaihe/hvac-web/modules/iot/internal/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/iot/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
 )
 
 const maxReplicationPayloadBytes = 2 << 20

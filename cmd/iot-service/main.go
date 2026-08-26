@@ -15,9 +15,9 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/iot/internal/adapter"
-	"github.com/quanlaihe/hvac-web/modules/iot/internal/connectivity"
-	fleetruntime "github.com/quanlaihe/hvac-web/modules/iot/internal/fleet"
+	"github.com/quanlaihe/hvac-web/modules/iot/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
+	fleetruntime "github.com/quanlaihe/hvac-web/modules/iot/pkg/fleet"
 )
 
 type moduleHealth struct {

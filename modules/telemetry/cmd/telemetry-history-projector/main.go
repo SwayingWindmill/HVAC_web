@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/telemetry"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetry"
 )
 
 func main() {
