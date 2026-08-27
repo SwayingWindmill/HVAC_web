@@ -9,7 +9,6 @@
     ],
     "defaultBusinessDeployables": [
       "energy-api",
-      "iot-service",
       "telemetry-worker",
       "metric-worker"
     ],
@@ -21,11 +20,16 @@
       "identity-service"
     ],
     "defaultDataAndRealtimeInfrastructure": [
+      "centrifugo"
+    ],
+    "localStatefulInfrastructure": [
       "postgres",
       "clickhouse",
-      "redis",
-      "mqtt-broker",
-      "centrifugo"
+      "redis"
+    ],
+    "optionalIntegration": [
+      "iot-service",
+      "mqtt-broker"
     ],
     "profiledObservabilityInfrastructure": [
       "otel-collector",
@@ -87,7 +91,15 @@
     "maintenance": "cmd/maintenance-worker"
   },
   "semantics": {
-    "businessDeployableDefinition": "Long-running product processes that own Phase 1 business request, IoT integration, telemetry processing, or metric execution responsibility.",
+    "businessDeployableDefinition": "Long-running product processes that own Phase 1 business request, telemetry processing, or metric execution responsibility.",
+    "integrationDecision": "OPTIONAL_PROFILE",
+    "integrationReason": "IoT connectivity and MQTT are deployment-specific integration capabilities. Backend/UI production must be able to run without a local MQTT broker or iot-service.",
+    "postgresPlacementDecision": "LOCAL_OR_EXTERNAL",
+    "postgresPlacementReason": "Stage 1 enables the local-postgres profile by default. Stage 2 can omit that profile and point migration, preflight and application DSNs at an external PostgreSQL endpoint without changing application topology.",
+    "clickhousePlacementDecision": "LOCAL_OR_EXTERNAL",
+    "clickhousePlacementReason": "Stage 1 enables the local-clickhouse profile by default. Stage 2 can omit that profile and point the shared ClickHouse HTTP endpoint plus service credentials at an externally provisioned ClickHouse data plane.",
+    "redisPlacementDecision": "LOCAL_OR_EXTERNAL",
+    "redisPlacementReason": "Stage 1 enables the local-redis profile by default. Stage 2 can omit that profile and point OIDC state, realtime recovery, Latest projections, Metric Latest and shared limit counters at an external Redis endpoint without changing application topology.",
     "supportingWorkloadDefinition": "Long-running application workers that coordinate or execute cross-domain operational jobs without becoming a new business-domain authority.",
     "maintenanceDecision": "KEEP_AS_SUPPORTING_WORKER",
     "maintenanceReason": "Maintenance executes credential-expiry scans, dead-work disposition and Tenant retirement with cross-domain operational privileges. Folding it into scheduler would violate the Scheduler coordination-only boundary; folding it into energy-api would widen the online API process privilege set.",
@@ -102,6 +114,10 @@
     "allCanonicalComposeServicesMustBeClassified": true,
     "defaultBusinessDeployablesMustNotUseProfiles": true,
     "defaultSupportingWorkloadsMustNotUseProfiles": true,
+    "localPostgresProfile": "local-postgres",
+    "localClickHouseProfile": "local-clickhouse",
+    "localRedisProfile": "local-redis",
+    "optionalIntegrationProfile": "integration",
     "optionalIntelligenceProfile": "intelligence",
     "historicalStageDeploymentsAreCanonical": false,
     "canonicalDeploymentRoot": "deploy/platform/phase1"

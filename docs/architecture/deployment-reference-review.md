@@ -1,4 +1,4 @@
-# 三参考项目部署源码审查
+# 四参考项目部署源码审查
 
 状态：REVIEWED / SOURCE-ALIGNED  
 审查目标：确定单节点、集群、Backend/UI、Integration、Edge 的部署取舍  
@@ -8,7 +8,8 @@
 
 | 项目 | 固定基线 | 主要部署证据 |
 | --- | --- | --- |
-| ThingsBoard CE | v4.3.1.1 / c2a52e46c44e308ddee430e7266b8e10eddde9c4 | docs/architecture/thingsboard-source-review.md；官方 Docker 与集群部署文档 |
+| ThingsBoard CE | v4.3.1.1 / c2a52e46c44e308ddee430e7266b8e10eddde9c4 | docs/architecture/thingsboard-source-review.md；官方 Docker、Deployment Scenarios 与 Microservices 文档 |
+| GitLab Self-Managed | 2026-08 官方 Reference Architectures | Standalone、Linux package、Cloud Native Hybrid、Cloud Native reference architectures |
 | OpenEMS | 2026.7.0 / 2e2792d | E:/Code/openems/docker-compose.yml；E:/Code/openems/tools/docker/backend/docker-compose.yml；E:/Code/openems/tools/docker/edge/docker-compose.yml；E:/Code/openems/tools/docker/backend-edge/docker-compose.yml |
 | MyEMS | v6.7.0 / be6e6ce | README、database/README.md、myems-api、myems-modbus-tcp、myems-cleaning、myems-normalization、myems-aggregation、myems-admin、myems-web |
 
@@ -43,7 +44,40 @@
 - 不复制通用 IoT transport 的全部角色；
 - 不把 ThingsBoard Cluster 的部署数量当作 HVAC 的目标数量。
 
-## 3. OpenEMS
+## 3. GitLab Self-Managed
+
+### 官方部署事实
+
+GitLab 的 Reference Architectures 把部署复杂度和实际负载/可用性需求绑定，而不是把 HA 当成所有生产环境的默认前置：
+
+- 小规模环境明确允许 standalone / non-HA，并依靠自动备份满足恢复目标；
+- 更大规模或明确 HA 需求才进入多节点 reference architecture；
+- Cloud Native Hybrid 只把适合横向扩展的 stateless workloads 放入 Kubernetes；
+- PostgreSQL、Redis、Object Storage 等 stateful services 可以保持在 VM 或托管服务中；
+- sizing 依据实际 RPS / workload 监控调整，不以“已经有集群 YAML”作为扩容依据。
+
+官方参考：[Reference architectures](https://docs.gitlab.com/administration/reference_architectures/)、[Cloud Native reference architecture](https://docs.gitlab.com/administration/reference_architectures/cloud_native/)
+
+### ADOPT
+
+- 小规模先 standalone + backup/recovery；
+- 将 application scale-out 和 stateful HA 分阶段；
+- Kubernetes 优先承载 stateless workloads，stateful plane 独立管理；
+- 扩容由实际资源/吞吐证据驱动。
+
+### ADAPT
+
+- 本项目在 Single Node 与 Application Scale-out 之间加入 `split-state`；
+- PostgreSQL 优先外置，其次 ClickHouse、Redis，再按需要外置 MQTT/Integration；
+- 当前单机资源档继续使用 `single-lite` / `single-full`，不建立大量尺寸模板。
+
+### REJECT
+
+- 不复制 GitLab 的节点数量和 GitLab 专用组件；
+- 不因为未来可能需要 HA 就提前维护 Kubernetes 集群；
+- 不把所有 stateful component 强行部署到 Kubernetes。
+
+## 4. OpenEMS
 
 ### 源码事实
 
@@ -83,7 +117,7 @@ OpenEMS 源码仓库存在清晰的部署组合：
 - 不复制直接暴露 Apache Felix、WebSocket 管理端口的开发型 Compose；
 - 不把 OpenEMS Java/OSGi runtime 作为 HVAC Backend 依赖。
 
-## 4. MyEMS
+## 5. MyEMS
 
 ### 源码事实
 
@@ -129,20 +163,22 @@ myems-web / myems-admin
 - 不把 MyEMS 的安装脚本和默认密码/默认暴露端口当作生产安全标准；
 - 不把定时汇总模块当作 Edge 实时控制模块。
 
-## 5. 对 HVAC_web 的最终裁决
+## 6. 对 HVAC_web 的最终裁决
 
 | 议题 | 裁决 |
 | --- | --- |
-| 当前生产 | Single Node + Docker Compose |
+| 当前生产 | Stage 1 Single Node Recoverable + Docker Compose |
 | 当前 Backend/UI | 独立于 Edge Host，Integration 可选 |
-| 当前数据 | PostgreSQL/ClickHouse/Redis 保持单节点，但 authority/rebuildability 必须分开 |
-| 当前集群 | 只做文档、契约和准入条件，不做默认部署 |
-| 未来应用集群 | 先扩 stateless Backend/UI 和 leased workers |
-| 未来数据集群 | PostgreSQL、MQTT、ClickHouse、Redis 分别以故障证据准入 |
+| 当前数据 | PostgreSQL/ClickHouse/Redis 单节点；off-server backup；authority/rebuildability 分开 |
+| 下一部署阶段 | Stage 2 Split State：PostgreSQL / ClickHouse / Redis placement 已可独立外置；下一步按真实容量证据进入 Stage 3 Application Scale-out |
+| Runtime Mode | embedded-owners / owner-split 与主机拓扑解耦 |
+| 未来应用扩容 | Stage 3 先扩 stateless Backend/UI 和 leased workers；Integration 按连接/站点分区 |
+| 未来整体 HA | Stage 4 PostgreSQL、MQTT、ClickHouse、Redis 分别以可用性目标和故障证据准入 |
 | 未来 Edge | 单独 Host、单独 Release/Manifest/Recovery 文档 |
-| Kafka/Kubernetes | Future Stage，不是 Phase 1 前置 |
+| Kubernetes/k3s | 只是 Stage 3/4 的可选编排，不是阶段本身，也不是当前前置 |
+| Kafka | 只有现有 PostgreSQL durable backbone 出现实测瓶颈时再评估 |
 
-## 6. 尚未确认的内容
+## 7. 尚未确认的内容
 
 - ThingsBoard CE 固定 tag 的完整生产集群容量数据；
 - OpenEMS 官方生产 HA/升级/备份 runbook；

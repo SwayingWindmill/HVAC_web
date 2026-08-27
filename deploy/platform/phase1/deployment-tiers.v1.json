@@ -3,6 +3,26 @@
   "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
   "name": "Phase 1 deployment tiers",
   "profileDefinitions": {
+    "local-postgres": {
+      "services": ["postgres"],
+      "optional": false,
+      "purpose": "Stage 1 local PostgreSQL implementation. The launcher enables this profile unless PHASE1_POSTGRES_MODE=external."
+    },
+    "local-clickhouse": {
+      "services": ["clickhouse"],
+      "optional": false,
+      "purpose": "Stage 1 local ClickHouse implementation. The launcher enables this profile unless PHASE1_CLICKHOUSE_MODE=external."
+    },
+    "local-redis": {
+      "services": ["redis"],
+      "optional": false,
+      "purpose": "Stage 1 local Redis implementation. The launcher enables this profile unless PHASE1_REDIS_MODE=external."
+    },
+    "integration": {
+      "services": ["iot-service", "mqtt-broker"],
+      "optional": true,
+      "purpose": "Local or hosted MQTT connectivity is optional. Backend/UI and core data services do not require this profile."
+    },
     "intelligence": {
       "services": ["forecast-service", "optimization-service", "fdd-service"],
       "optional": true,
@@ -42,7 +62,7 @@
       "id": "demo",
       "name": "Demo / minimal development",
       "profiles": ["observability-core"],
-      "optionalProfiles": ["intelligence"],
+      "optionalProfiles": ["integration", "intelligence"],
       "productionAllowed": false,
       "availabilityTier": "NONE",
       "maximumCpuLimitOvercommitRatio": 2.15,
@@ -84,7 +104,7 @@
       "id": "single-lite",
       "name": "Single-server lite",
       "profiles": ["observability-logs"],
-      "optionalProfiles": ["intelligence"],
+      "optionalProfiles": ["integration", "intelligence"],
       "productionAllowed": true,
       "availabilityTier": "SINGLE_NODE_RECOVERABLE",
       "maximumCpuLimitOvercommitRatio": 2.25,
@@ -110,7 +130,7 @@
       "id": "single-full",
       "name": "Single-server full",
       "profiles": ["observability-full"],
-      "optionalProfiles": ["intelligence"],
+      "optionalProfiles": ["integration", "intelligence"],
       "productionAllowed": true,
       "availabilityTier": "SINGLE_NODE_RECOVERABLE",
       "maximumCpuLimitOvercommitRatio": 1.25,
@@ -134,6 +154,12 @@
     "mechanism": "docker compose --profile <profile>",
     "environmentVariable": "PHASE1_OBSERVABILITY_PROFILE",
     "environmentVariableControlsCollectorAndGrafanaConfigOnly": true,
+    "postgresPlacementVariable": "PHASE1_POSTGRES_MODE",
+    "localPostgresProfile": "local-postgres",
+    "clickhousePlacementVariable": "PHASE1_CLICKHOUSE_MODE",
+    "localClickHouseProfile": "local-clickhouse",
+    "redisPlacementVariable": "PHASE1_REDIS_MODE",
+    "localRedisProfile": "local-redis",
     "allObservabilityServicesRequireAnExplicitProfile": true
   }
 }

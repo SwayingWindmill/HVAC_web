@@ -27,6 +27,7 @@ test("demo tier renders an explicit core profile inside its certified host budge
     compose,
     tierId: "demo",
     environment: "testing",
+    additionalProfiles: ["local-postgres", "local-clickhouse", "local-redis"],
   });
 
   assert.deepEqual(resolved.profiles, ["observability-core"]);
@@ -51,6 +52,7 @@ test("single-lite is the production default and applies the reviewed resource ov
     compose,
     tierId: runtime.PHASE1_DEPLOYMENT_TIER,
     environment: runtime.HVAC_ENV,
+    additionalProfiles: ["local-postgres", "local-clickhouse", "local-redis"],
   });
 
   assert.deepEqual(resolved.profiles, ["observability-logs"]);

@@ -108,6 +108,7 @@ test("owner-split overlay runs the existing same-version owner artifacts and kee
     compose: baseCompose,
     tierId: "single-full",
     environment: "staging",
+    additionalProfiles: ["local-postgres", "local-clickhouse", "local-redis"],
   });
   const ownerSplitTier = resolveDeploymentTier({
     contract: tiers,
@@ -115,7 +116,7 @@ test("owner-split overlay runs the existing same-version owner artifacts and kee
     tierId: "single-full",
     environment: "staging",
     additionalComposeDocuments: [overlay],
-    additionalProfiles: ["owner-split"],
+    additionalProfiles: ["local-postgres", "local-clickhouse", "local-redis", "owner-split"],
   });
   assert.ok(
     ownerSplitTier.resourceTotals.cpuLimitCores <=
@@ -130,18 +131,15 @@ test("owner-split overlay runs the existing same-version owner artifacts and kee
         environment: "staging",
         runtimeEnvironment: { IAM_OWNER_CPUS: "100" },
         additionalComposeDocuments: [overlay],
-        additionalProfiles: ["owner-split"],
+        additionalProfiles: ["local-postgres", "local-clickhouse", "local-redis", "owner-split"],
       }),
     /exceed certified overcommit budget/,
   );
   assert.match(gatewaySource, /ENERGY_API_EMBEDDED_OWNERS/);
   assert.match(launcher, /--owner-split/);
-  assert.match(launcher, /deploymentTier\.tier\.id !== 'single-full'/);
+  assert.match(launcher, /tierId !== 'single-full'/);
   assert.match(genericLauncher, /--owner-split/);
-  assert.match(
-    genericLauncher,
-    /deploymentTier\.tier\.id !== ["']single-full["']/,
-  );
+  assert.match(genericLauncher, /tierId !== ["']single-full["']/);
   assert.doesNotMatch(overlay, /kafka|zookeeper|redpanda/i);
 });
 

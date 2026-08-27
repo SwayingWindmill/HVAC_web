@@ -147,17 +147,133 @@ Edge Host 不属于 Backend/UI Cluster：
 - Cloud 不直接访问 PLC、BMS、PCS 或现场设备；
 - Edge 的生产部署、升级、签名 manifest、回滚和现场恢复另立部署文档。
 
-## 5. 单节点到集群的演进阶段
+## 5. 部署演进：运行模式和主机拓扑必须分开
 
-| 阶段 | 形态 | 主要变化 | 当前状态 |
-| --- | --- | --- | --- |
-| Stage 0 | Single Node Compose | energy-api 嵌入 owner；单实例数据平面 | CURRENT |
-| Stage 1 | Single Node Owner Split | owner 以独立 module 运行；仍是单机 | IMPLEMENTED / DRILL REQUIRED |
-| Stage 2 | Component Scale-out | Backend/UI 多实例、worker 多 owner、PostgreSQL lease/dedup | DESIGNED / NOT CERTIFIED |
-| Stage 3 | Data-plane Redundancy | PostgreSQL standby、MQTT failover、Redis HA、ClickHouse replica/rebuild | GATED |
-| Stage 4 | Edge Fleet | Edge release、manifest、现场同步、灰度、回滚 | FUTURE |
+ThingsBoard 的一个重要经验是：Monolithic / Microservices 是运行角色拆分方式，Single Node / Cluster 是主机拓扑，两者不是同一条轴。本项目也采用这个划分：
 
-任何阶段不能只凭 Compose 能启动就宣布完成，必须绑定该阶段的 exit evidence。
+~~~text
+Runtime Mode
+  embedded-owners | owner-split
+
+Host Topology
+  single-node | split-state | application-scale-out | stateful-ha
+
+Optional Capability
+  integration | intelligence
+
+Observability Tier
+  core | logs | full
+~~~
+
+`owner-split` 不再等同于“进入集群阶段”。它首先是同一台机器上的进程职责拆分，可用于独立重启、故障隔离和后续水平扩展准备。
+
+### 5.1 Stage 0：Development / Acceptance
+
+- 1 台开发机或测试机；
+- Docker Compose；
+- simulator / Integration 可选；
+- 本地 PostgreSQL / ClickHouse / Redis；
+- 不承载 Production 数据，不声明恢复或 HA 能力。
+
+### 5.2 Stage 1：Single Node Recoverable（当前生产目标）
+
+~~~text
+1 Linux Server
+├─ Nginx / UI
+├─ Energy API + supporting workers
+├─ Identity
+├─ PostgreSQL
+├─ ClickHouse
+├─ Redis / Realtime
+├─ optional Integration: iot-service + MQTT
+└─ selected Observability
+~~~
+
+特征：
+
+- 当前推荐生产形态；
+- `single-lite` 8C/16G 为优先基线，`single-full` 16C/32G 只在完整 traces 或额外负载需要时使用；
+- 默认不要求 Kubernetes、Kafka、Service Mesh；
+- owner 可 embedded，也可在同机切为 owner-split；
+- 数据平面仍有单点，依靠 off-server backup、immutable image、versioned config 和真实 restore drill 恢复；
+- 只允许声明 `SINGLE_NODE_RECOVERABLE`，不声明 HA。
+
+### 5.3 Stage 2：Split State / External Data
+
+这是当前规划里需要补上的中间阶段。先把状态和应用故障域拆开，再考虑横向扩应用。
+
+~~~text
+Application Host
+  Nginx / UI / APIs / workers
+        |
+        v
+Stateful Host or Managed Services
+  PostgreSQL / ClickHouse / Redis
+
+optional Integration Host
+  MQTT / iot-service
+~~~
+
+进入条件可以是：数据库 I/O 已成为主要瓶颈、业务需要独立维护数据库、服务器磁盘容量增长明显，或恢复目标要求应用主机损坏时数据仍然存在。
+
+本阶段仍然可以只有一个 Application 实例和一个 PostgreSQL primary，因此它改善故障域和运维边界，但不自动形成 HA。
+
+推荐迁移顺序：
+
+1. PostgreSQL；
+2. backup/object storage；
+3. ClickHouse；
+4. Redis；
+5. MQTT / Integration（仅实际部署需要时）。
+
+### 5.4 Stage 3：Application Scale-out
+
+~~~text
+Load Balancer
+  ├─ Application Node A
+  └─ Application Node B+
+          |
+          v
+External Stateful Plane
+~~~
+
+只有以下需求出现时才进入：
+
+- Energy API / realtime CPU 或连接数成为瓶颈；
+- 单应用节点维护窗口不可接受；
+- worker backlog 需要增加并发 owner；
+- Integration 连接量需要独立扩展。
+
+实现约束：
+
+- stateless HTTP/BFF 才直接多实例；
+- worker 必须依靠现有 PostgreSQL lease / claim / idempotency；
+- Scheduler / Outbox 不能靠“只启动一个副本”的人工约定保证正确性；
+- iot-service 按站点、连接或明确分区扩展，不做无状态随机复制；
+- UI realtime 断线后仍回到 authoritative snapshot。
+
+如果 Stateful Plane 仍为单 primary，本阶段最多称为 Application redundancy，不称为整体 HA。
+
+### 5.5 Stage 4：Stateful HA / Production Cluster
+
+达到明确可用性目标后才实现：
+
+- PostgreSQL primary/standby 或托管 HA，并具备 fencing；
+- Redis Sentinel / managed HA，且继续保持非 authority 边界；
+- MQTT failover 和 session/reconnect 语义；
+- ClickHouse replica，或有经过验证的重建/恢复方案；
+- 外部 Object Storage / backup；
+- ingress 和 Observability 不再依赖单一应用主机。
+
+Kubernetes 在这里仍然只是编排实现选择，不是架构阶段本身。优先让 stateless application workloads 进入 Kubernetes/k3s；PostgreSQL、Redis、Object Storage 和通常的 ClickHouse 优先使用外部或专门管理的数据平面，避免为了“全上 K8s”增加运维复杂度。
+
+### 5.6 独立演进线：Edge Fleet
+
+Edge Host 不属于 Stage 0 -> Stage 4 的 Cloud 集群升级链。它可以在 Cloud 仍是 Stage 1 时就独立进入现场部署，也可以在 Cloud 已经 Stage 4 后继续扩展。
+
+Edge 发布单独解决：signed manifest、OTA/灰度、断云运行、store-and-forward、readback、现场回滚和安全联锁。
+
+任何阶段不能只凭 Compose、Helm 或 Pod 能启动就宣布完成；但验证只覆盖该阶段真正新增的故障语义，不建立与风险无关的大型门禁矩阵。
 
 ## 6. 部署模块的接口原则
 
@@ -198,12 +314,14 @@ Edge Host 不属于 Backend/UI Cluster：
 - 通过同一份 Compose 和大量隐式变量长期表达所有环境和拓扑；
 - 以“所有容器都 running”替代业务恢复或集群故障演练。
 
-## 8. 本项目需要修改的部署方向
+## 8. 本项目接下来的部署改造顺序
 
-1. 把 Backend/UI Base 从 MQTT/Edge Integration 中抽出来；
-2. 将 Integration 明确为可选 deployment shape；
-3. 将 owner-split 从隐式 overlay 提升为带准入条件的 Stage 1；
-4. 将 Single Node 和 Cluster 的资源、网络、数据恢复和发布契约分别写清楚；
-5. 将 Edge recovery 语义从当前 Backend/UI 最小部署中降为条件性未来能力；
-6. 保留当前单服务器基线，但删除对集群能力已经完成的暗示。
+1. **先收敛当前 Single Node Compose**：`compose.yaml` 只表达 Backend/UI + core data；把 `iot-service + MQTT` 从默认图中抽成可选 Integration overlay/profile。
+2. **保留 owner-split，但把它定义成 Runtime Mode**：继续使用现有 `owner-split.compose.yaml`，不再把它等价为多机部署。
+3. **保持现有 resource tier**：`single-lite` / `single-full` 已经足够，不继续增加更多单机规格档。
+4. **完成 Stage 2 external-data placement 基础**：PostgreSQL、ClickHouse、Redis 均支持独立 `local` / `external` placement；Stage 2 只改变故障域，不宣称 HA，也不增加新的编排系统。
+5. **等实际容量数据出现后再实现 Application Scale-out**：首先验证 Energy API、workers、realtime、iot-service 中哪一类真的需要扩。
+6. **只有明确 HA 目标后才实现 Stateful HA**：每个数据组件独立选型，不用一套“集群模板”覆盖所有状态服务。
+7. **Kubernetes/k3s 不作为当前交付项**：到 Stage 3/4 时再根据节点数量、发布频率、滚动升级和调度需求选择；不提前维护一套与当前生产无关的 Helm/Kustomize 资产。
+8. **Edge 保持独立部署线**：不把 Edge simulator、现场 Gateway 和 Backend/UI Compose 混为一套生产拓扑。
 

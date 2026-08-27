@@ -130,8 +130,7 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	redisDatabase := integerEnv("METRIC_REDIS_DB", 0, 0, 1024)
-	latest, err := metric.NewRedisLatestStore(requiredEnv("METRIC_REDIS_ADDR"), os.Getenv("METRIC_REDIS_PASSWORD"), redisDatabase, 7*24*time.Hour)
+	latest, err := metric.NewRedisLatestStore(requiredEnv("METRIC_REDIS_URL"), 7*24*time.Hour)
 	if err != nil {
 		store.Close()
 		return nil, err

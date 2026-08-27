@@ -31,14 +31,18 @@ func (store *RedisLatestStore) Ping(ctx context.Context) error {
 	return store.client.Ping(ctx).Err()
 }
 
-func NewRedisLatestStore(address, password string, database int, ttl time.Duration) (*RedisLatestStore, error) {
-	if strings.TrimSpace(address) == "" {
-		return nil, errors.New("metric Redis address is required")
+func NewRedisLatestStore(rawURL string, ttl time.Duration) (*RedisLatestStore, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return nil, errors.New("metric Redis URL is required")
 	}
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
-	client := redis.NewClient(&redis.Options{Addr: strings.TrimSpace(address), Password: password, DB: database})
+	options, err := redis.ParseURL(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("parse metric Redis URL: %w", err)
+	}
+	client := redis.NewClient(options)
 	return &RedisLatestStore{client: client, ttl: ttl}, nil
 }
 

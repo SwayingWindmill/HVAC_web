@@ -70,16 +70,16 @@
     {
       "component": "redis",
       "spof": true,
-      "currentProtection": "documented as rebuildable projection; appendonly is disabled",
-      "businessImpact": "Realtime transport, OIDC correlation and the fail-closed Operations limit policy can be affected",
+      "currentProtection": "single volatile Redis; Latest projections are rebuildable, while OIDC correlation, realtime recovery and limit buckets are short-lived coordination state; appendonly is disabled",
+      "businessImpact": "Realtime transport, in-flight OIDC login and fail-closed limit-policy requests can be affected; durable business authority remains outside Redis",
       "recoveryObjectives": { "rpoSeconds": null, "rtoSeconds": 900 },
       "upgradePath": [
-        "First make Redis non-authoritative on every read/write path, including current telemetry reads and LimitPolicy failure modes",
-        "Split non-rebuildable short-TTL state (OIDC correlation) from rebuildable caches",
-        "Then decide between Redis Sentinel, multiple independent Redis instances or removing the shared dependency",
-        "Do not claim HA while a request correctness path still depends on Redis"
+        "Keep durable business authority outside Redis and preserve logical DB/prefix separation between projections and coordination state",
+        "Measure whether OIDC/realtime/limit availability justifies a dedicated redundant Redis plane",
+        "Then choose Redis Sentinel, managed Redis HA or workload-specific separation based on measured failure impact",
+        "Do not claim HA while a request correctness path still depends on a single Redis instance"
       ],
-      "trigger": "Realtime availability requirement exceeds acceptable degradation, after the Redis authority boundary is fixed."
+      "trigger": "OIDC/realtime/limit-policy availability exceeds acceptable single-instance degradation."
     },
     {
       "component": "mqtt-broker",
@@ -181,7 +181,7 @@
         "state": "gated",
         "capabilities": [
           "PostgreSQL standby first",
-          "Redis authority boundary fix before Redis HA",
+          "Redis workload availability evidence before Redis HA",
           "MQTT failover after Edge reconnect proof",
           "ClickHouse rebuild-before-replicate"
         ],

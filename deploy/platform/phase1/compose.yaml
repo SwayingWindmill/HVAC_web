@@ -87,15 +87,18 @@ services:
       AUDIT_URL: https://audit-ledger-service:8446
       AUDIT_SERVER_NAME: audit-ledger-service
       REALTIME_UPSTREAM_URL: ${REALTIME_UPSTREAM_URL:-http://centrifugo:8000}
+      QUERY_HISTORY_CLICKHOUSE_ENDPOINT: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
       LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
+      clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
@@ -129,8 +132,6 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
     expose: ["19095", "19085"]
@@ -208,9 +209,6 @@ services:
       IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks: [data]
 
   identity-reconciler:
@@ -222,9 +220,6 @@ services:
       dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./modules/iam/cmd/identity-reconciler }
     image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks: [data]
 
   scheduler:
@@ -239,8 +234,6 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19092"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/health/ready"]
@@ -265,8 +258,6 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19093"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/health/ready"]
@@ -291,15 +282,17 @@ services:
       TELEMETRY_DIAGNOSTICS_ADDR: :19086
       TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
       ANALYTICS_PROJECTION_ENABLED: "true"
+      TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
     expose: ["8446", "19086"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19086/health/ready"]
@@ -325,15 +318,16 @@ services:
     environment:
       METRIC_DIAGNOSTICS_ADDR: :19090
       METRIC_WORKER_MODE: worker
+      METRIC_CLICKHOUSE_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
     expose: ["19090"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19090/health/ready"]
@@ -357,17 +351,16 @@ services:
     environment:
       FORECAST_HTTP_ADDR: :19092
       FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:-}
-      FORECAST_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      FORECAST_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       FORECAST_CLICKHOUSE_DATABASE: analytics
       FORECAST_CLICKHOUSE_TABLE: forecast_series
       FORECAST_CLICKHOUSE_USERNAME: forecast_service_writer
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
     expose: ["19092"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/healthz"]
@@ -391,15 +384,14 @@ services:
     environment:
       OPTIMIZATION_HTTP_ADDR: :19093
       OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
-      OPTIMIZATION_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      OPTIMIZATION_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
     expose: ["19093"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/healthz"]
@@ -426,8 +418,6 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
@@ -442,6 +432,7 @@ services:
 
   iot-service:
     <<: *go-service
+    profiles: ["integration"]
     build:
       context: ../../..
       dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
@@ -449,8 +440,8 @@ services:
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
-      CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:?CONNECTIVITY_DATABASE_URL is required}
-      CONNECTIVITY_TENANT_ID: ${CONNECTIVITY_TENANT_ID:?CONNECTIVITY_TENANT_ID is required}
+      CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
+      CONNECTIVITY_TENANT_ID: ${CONNECTIVITY_TENANT_ID:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -467,6 +458,7 @@ services:
     mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
 
   postgres:
+    profiles: ["local-postgres"]
     image: postgres:16.4-bookworm
     restart: unless-stopped
     command:
@@ -507,9 +499,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
       PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
@@ -534,9 +528,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
       PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
@@ -551,9 +547,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
     volumes:
@@ -563,6 +561,7 @@ services:
     networks: [data]
 
   clickhouse:
+    profiles: ["local-clickhouse"]
     image: clickhouse/clickhouse-server:26.3.12.3
     restart: unless-stopped
     environment:
@@ -596,6 +595,7 @@ services:
     networks: [data]
 
   redis:
+    profiles: ["local-redis"]
     image: redis:7.4.2-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
@@ -613,6 +613,7 @@ services:
     logging: *default-logging
 
   mqtt-broker:
+    profiles: ["integration"]
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
     ports:
@@ -634,12 +635,15 @@ services:
     command: ["/usr/local/bin/centrifugo", "--config", "/centrifugo/centrifugo.json"]
     env_file:
       - ${PHASE1_ENV_FILE:-./environments/development.runtime.env}
+    environment:
+      CENTRIFUGO_ENGINE_REDIS_ADDRESS: ${CENTRIFUGO_ENGINE_REDIS_ADDRESS:-redis://redis:6379/0}
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
       - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
     depends_on:
       redis:
         condition: service_healthy
+        required: false
       telemetry-worker:
         condition: service_healthy
     expose: ["8000"]
@@ -753,7 +757,7 @@ networks:
   application:
     internal: true
   data:
-    internal: true
+    internal: ${PHASE1_DATA_NETWORK_INTERNAL:-true}
   mqtt:
     internal: true
   observability:

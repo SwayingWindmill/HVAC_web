@@ -16,36 +16,63 @@ const runtimeEnvText = readFileSync(runtimeEnv, 'utf8');
 const runtimeValues = parseRuntimeEnvironment(runtimeEnvText);
 const deploymentTierContract = JSON.parse(readFileSync(path.join(phase1Dir, 'deployment-tiers.v1.json'), 'utf8'));
 const canonicalCompose = readFileSync(path.join(phase1Dir, 'compose.yaml'), 'utf8');
-let deploymentTier = resolveDeploymentTier({
-  contract: deploymentTierContract,
-  compose: canonicalCompose,
-  tierId: process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER,
-  environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
-  runtimeEnvironment: { ...runtimeValues, ...process.env },
-});
 const args = process.argv.slice(2);
 if (args.some((arg, index) =>
   (arg === '--profile' && args[index + 1] === 'intelligence') ||
   arg === '--profile=intelligence')) {
   throw new Error('The intelligence profile requires a separately certified capacity tier');
 }
-const ownerSplitIndex = args.indexOf('--owner-split');
-const ownerSplit = ownerSplitIndex >= 0;
-if (ownerSplit) {
-  args.splice(ownerSplitIndex, 1);
-  if (deploymentTier.tier.id !== 'single-full') {
-    throw new Error('The owner-split topology requires PHASE1_DEPLOYMENT_TIER=single-full');
-  }
-  deploymentTier = resolveDeploymentTier({
-    contract: deploymentTierContract,
-    compose: canonicalCompose,
-    tierId: deploymentTier.tier.id,
-    environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
-    runtimeEnvironment: { ...runtimeValues, ...process.env },
-    additionalComposeDocuments: [readFileSync(path.join(phase1Dir, 'owner-split.compose.yaml'), 'utf8')],
-    additionalProfiles: ['owner-split'],
-  });
+
+function takeFlag(flag) {
+  const index = args.indexOf(flag);
+  if (index < 0) return false;
+  args.splice(index, 1);
+  return true;
 }
+
+const ownerSplit = takeFlag('--owner-split');
+const simulatorAcceptance = takeFlag('--simulator-acceptance');
+const integration = takeFlag('--integration') || simulatorAcceptance;
+const postgresMode = process.env.PHASE1_POSTGRES_MODE || runtimeValues.PHASE1_POSTGRES_MODE || 'local';
+if (postgresMode !== 'local' && postgresMode !== 'external') {
+  throw new Error(`Unknown PHASE1_POSTGRES_MODE: ${postgresMode}`);
+}
+const clickhouseMode = process.env.PHASE1_CLICKHOUSE_MODE || runtimeValues.PHASE1_CLICKHOUSE_MODE || 'local';
+if (clickhouseMode !== 'local' && clickhouseMode !== 'external') {
+  throw new Error(`Unknown PHASE1_CLICKHOUSE_MODE: ${clickhouseMode}`);
+}
+const redisMode = process.env.PHASE1_REDIS_MODE || runtimeValues.PHASE1_REDIS_MODE || 'local';
+if (redisMode !== 'local' && redisMode !== 'external') {
+  throw new Error(`Unknown PHASE1_REDIS_MODE: ${redisMode}`);
+}
+const localPostgres = postgresMode === 'local';
+const localClickHouse = clickhouseMode === 'local';
+const localRedis = redisMode === 'local';
+const externalState = !localPostgres || !localClickHouse || !localRedis;
+const tierId = process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER;
+if (ownerSplit && tierId !== 'single-full') {
+  throw new Error('The owner-split runtime mode requires PHASE1_DEPLOYMENT_TIER=single-full');
+}
+
+const ownerSplitCompose = ownerSplit
+  ? readFileSync(path.join(phase1Dir, 'owner-split.compose.yaml'), 'utf8')
+  : null;
+const runtimeProfiles = [
+  ...(localPostgres ? ['local-postgres'] : []),
+  ...(localClickHouse ? ['local-clickhouse'] : []),
+  ...(localRedis ? ['local-redis'] : []),
+  ...(integration ? ['integration'] : []),
+  ...(ownerSplit ? ['owner-split'] : []),
+];
+const deploymentTier = resolveDeploymentTier({
+  contract: deploymentTierContract,
+  compose: canonicalCompose,
+  tierId,
+  environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
+  runtimeEnvironment: { ...runtimeValues, ...process.env },
+  additionalComposeDocuments: ownerSplitCompose ? [ownerSplitCompose] : [],
+  additionalProfiles: runtimeProfiles,
+});
 
 function rolePassword(role) {
   const escapedRole = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -56,14 +83,18 @@ function rolePassword(role) {
   return match[1];
 }
 
+const postgresHost = process.env.PHASE1_POSTGRES_HOST || runtimeValues.PHASE1_POSTGRES_HOST || 'postgres';
+const postgresPort = process.env.PHASE1_POSTGRES_PORT || runtimeValues.PHASE1_POSTGRES_PORT || '5432';
+const postgresSslMode = process.env.PHASE1_POSTGRES_SSLMODE || runtimeValues.PHASE1_POSTGRES_SSLMODE || 'disable';
+
 function databaseUrl(role, database) {
   const url = new URL('postgres://postgres');
   url.username = role;
   url.password = rolePassword(role);
-  url.hostname = 'postgres';
-  url.port = '5432';
+  url.hostname = postgresHost;
+  url.port = postgresPort;
   url.pathname = `/${database}`;
-  url.searchParams.set('sslmode', 'disable');
+  url.searchParams.set('sslmode', postgresSslMode);
   return url.toString();
 }
 
@@ -71,6 +102,7 @@ const env = {
   ...process.env,
   COMPOSE_PROFILES: '',
   ...deploymentTier.environment,
+  PHASE1_DATA_NETWORK_INTERNAL: externalState ? 'false' : 'true',
   PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
@@ -81,7 +113,6 @@ const env = {
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
 };
 
-const simulatorAcceptanceIndex = args.indexOf('--simulator-acceptance');
 const composeFiles = [
   path.join(phase1Dir, 'compose.yaml'),
   path.join(phase1Dir, 'wsl.override.yaml'),
@@ -89,14 +120,17 @@ const composeFiles = [
 if (ownerSplit) {
   composeFiles.push(path.join(phase1Dir, 'owner-split.compose.yaml'));
 }
-if (simulatorAcceptanceIndex >= 0) {
-  args.splice(simulatorAcceptanceIndex, 1);
+if (simulatorAcceptance) {
   composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
 }
 
 const result = spawnSync('docker', [
   'compose',
-  ...[...deploymentTier.profiles, ...(ownerSplit ? ['owner-split'] : [])].flatMap((profile) => ['--profile', profile]),
+  ...[
+    ...deploymentTier.profiles,
+    ...runtimeProfiles,
+    ...(simulatorAcceptance ? ['simulator-acceptance'] : []),
+  ].flatMap((profile) => ['--profile', profile]),
   '--env-file', runtimeEnv,
   ...composeFiles.flatMap((composeFile) => ['-f', composeFile]),
   ...args,

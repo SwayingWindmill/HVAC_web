@@ -34,7 +34,7 @@ V2.1.2 定义 19 个逻辑领域：
 18. MLOps Metadata
 19. Audit
 
-逻辑领域不等于 Deployable Service，不允许按表拆服务。Phase 1 默认业务物理形态已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`。Application `scheduler` 与 `maintenance` 是 supporting workload：前者只做跨领域 Job Coordination，后者执行证书到期扫描、Dead Work 处置与 Tenant Retirement 等 operational job；它们都不新增业务 Domain/API authority。`identity-service` 是独立 Identity Infrastructure。Forecast / Optimization / FDD 统一作为 `intelligence` profile 下的 selective intelligence services 按需部署，因此 `PHASE1_PHYSICAL_SERVICE_CONVERGENCE=PASS`。完整运行项分类由 `deploy/platform/phase1/runtime-inventory.v1.json` 冻结。
+逻辑领域不等于 Deployable Service，不允许按表拆服务。Phase 1 默认业务物理形态已收敛为 `energy-api + telemetry-worker + metric-worker`。Application `scheduler` 与 `maintenance` 是 supporting workload：前者只做跨领域 Job Coordination，后者执行证书到期扫描、Dead Work 处置与 Tenant Retirement 等 operational job；它们都不新增业务 Domain/API authority。`identity-service` 是独立 Identity Infrastructure。`iot-service + mqtt-broker` 作为 `integration` profile 按部署需要启用；Forecast / Optimization / FDD 统一作为 `intelligence` profile 下的 selective intelligence services 按需部署，因此 `PHASE1_PHYSICAL_SERVICE_CONVERGENCE=PASS`。完整运行项分类由 `deploy/platform/phase1/runtime-inventory.v1.json` 冻结。
 
 ## 3. SE-API-001
 
@@ -106,7 +106,7 @@ stale `PERSISTING` 必须通过 ClickHouse evidence 进行 reconcile。
 
 ## 6. 当前三个 PARTIAL
 
-`PHASE1_PHYSICAL_SERVICE_CONVERGENCE` 已完成：默认业务部署已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`。`energy-api` 合并 Platform Gateway、IAM、Registry Core、Telemetry Query、Audit、Alarm、Work Order、Command，同时保留各逻辑 owner 的 mTLS listener / SPIFFE identity；Session Audit 使用 PostgreSQL Outbox 直投，不依赖 Kafka；`iot-service` 合并 MQTT 上行、Command dispatch/verification；`telemetry-worker` 合并 Telemetry Runtime、history projection、analytics projection；`metric-worker` 只执行由 Application Scheduler 协调产生的 `METRIC_*` durable Job 与 scoped reconcile，不再拥有 Schedule scan authority。独立 `scheduler` 只负责跨领域 Job Coordination；`maintenance` 执行跨领域 operational maintenance job 并保持独立最小权限，两者均为 supporting workload，不计作新的业务 deployable。`identity-service` 继续作为独立 Identity Infrastructure。Forecast / Optimization / FDD 保持 `intelligence` profile 下的 selective intelligence services。机器分类以 `deploy/platform/phase1/runtime-inventory.v1.json` 为准。
+`PHASE1_PHYSICAL_SERVICE_CONVERGENCE` 已完成：默认业务部署已收敛为 `energy-api + telemetry-worker + metric-worker`。`energy-api` 合并 Platform Gateway、IAM、Registry Core、Telemetry Query、Audit、Alarm、Work Order、Command，同时保留各逻辑 owner 的 mTLS listener / SPIFFE identity；Session Audit 使用 PostgreSQL Outbox 直投，不依赖 Kafka；`telemetry-worker` 合并 Telemetry Runtime、history projection、analytics projection；`metric-worker` 只执行由 Application Scheduler 协调产生的 `METRIC_*` durable Job 与 scoped reconcile，不再拥有 Schedule scan authority。独立 `scheduler` 只负责跨领域 Job Coordination；`maintenance` 执行跨领域 operational maintenance job 并保持独立最小权限，两者均为 supporting workload，不计作新的业务 deployable。`identity-service` 继续作为独立 Identity Infrastructure。`iot-service` 合并 MQTT 上行、Command dispatch/verification，并与 `mqtt-broker` 一起作为可选 `integration` profile 启用。Forecast / Optimization / FDD 保持 `intelligence` profile 下的 selective intelligence services。机器分类以 `deploy/platform/phase1/runtime-inventory.v1.json` 为准。
 
 当前仅剩：
 

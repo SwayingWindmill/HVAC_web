@@ -18,11 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -98,7 +99,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeOperations()
-	rateLimiter := limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), defaultLimitPolicy())
+	rateLimiter, closeRateLimiter, err := loadRateLimiter(runContext)
+	if err != nil {
+		logger.Error("gateway_limit_policy_config_invalid", "error_code", "LIMIT_POLICY_CONFIG_INVALID")
+		os.Exit(1)
+	}
+	defer closeRateLimiter()
 	if operationsConfig != nil {
 		operationsConfig.RateLimiter = rateLimiter
 	}
@@ -638,6 +644,31 @@ func sessionEncryptionKey() ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+func loadRateLimiter(ctx context.Context) (*limitpolicy.Limiter, func(), error) {
+	rawURL := strings.TrimSpace(os.Getenv("LIMIT_POLICY_REDIS_URL"))
+	if rawURL == "" {
+		return limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), defaultLimitPolicy()), func() {}, nil
+	}
+
+	options, err := redis.ParseURL(rawURL)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("parse LIMIT_POLICY_REDIS_URL: %w", err)
+	}
+	client := redis.NewClient(options)
+	pingContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err = client.Ping(pingContext).Err()
+	cancel()
+	if err != nil {
+		_ = client.Close()
+		return nil, func() {}, fmt.Errorf("connect limit policy Redis: %w", err)
+	}
+
+	return limitpolicy.NewLimiter(
+		limitpolicy.NewRedisCounter(client, "hvac:limit"),
+		defaultLimitPolicy(),
+	), func() { _ = client.Close() }, nil
 }
 
 // defaultLimitPolicy 提供单机阶段的默认配额。额度从版本化配置发布加载是后续
