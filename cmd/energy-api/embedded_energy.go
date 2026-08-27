@@ -243,7 +243,7 @@ func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 }
 
 func runEmbeddedAuditOutboxRelay(ctx context.Context, outbox *sessionstore.OutboxStore, store *auditserver.Store, telemetry *observability.Runtime, logger *slog.Logger) {
-	owner := envOr("AUDIT_OUTBOX_RELAY_OWNER", "energy-api-audit")
+	owner := replicaWorkerID("AUDIT_OUTBOX_RELAY_OWNER", "energy-api-audit")
 	for ctx.Err() == nil {
 		now := time.Now().UTC()
 		record, err := outbox.ClaimPending(ctx, owner, now, 30*time.Second)

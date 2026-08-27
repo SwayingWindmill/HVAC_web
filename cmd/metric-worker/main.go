@@ -71,7 +71,11 @@ func main() {
 		return
 	}
 
-	workerID := requiredEnv("METRIC_WORKER_ID")
+	workerID := strings.TrimSpace(os.Getenv("METRIC_WORKER_ID"))
+	if workerID == "" {
+		hostname, _ := os.Hostname()
+		workerID = "metric-worker:" + hostname
+	}
 	claimInterval := durationEnv("METRIC_JOB_CLAIM_INTERVAL", 2*time.Second, time.Second, time.Minute)
 	claimBatch := integerEnv("METRIC_JOB_CLAIM_BATCH", 20, 1, 100)
 	leaseDuration := durationEnv("METRIC_JOB_LEASE_DURATION", 60*time.Second, 10*time.Second, 30*time.Minute)

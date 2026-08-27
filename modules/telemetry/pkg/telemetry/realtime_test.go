@@ -196,6 +196,34 @@ func TestRealtimeRelayReusesRevisionAndEmitsEmptyUnselectedDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeRelayLeaseIsolatesReplicas(t *testing.T) {
+	now := time.Date(2026, 7, 24, 16, 0, 0, 0, time.UTC)
+	repository := NewMemoryRealtimeRepository()
+	firstTransport := &RecordingRealtimeTransport{PublishError: errors.New("transport down")}
+	secondTransport := &RecordingRealtimeTransport{}
+	first := newRealtimeTestServiceWithWorker(t, repository, firstTransport, &now, "relay-a")
+	second := newRealtimeTestServiceWithWorker(t, repository, secondTransport, &now, "relay-b")
+	access := realtimeTestAccess()
+	_, err := first.Bootstrap(context.Background(), access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "lease", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	intent := PendingPublication{EventID: "018f2e00-5000-7000-8000-000000000003", DeviceID: realtimeTestDevice1, PreviousRevision: 10, Revision: 11, EvaluatedAt: now, Snapshot: realtimeTestSnapshot(now, 11), ChangedKeys: []string{"temperature"}}
+	repository.AddPending(intent)
+	if _, err := first.RelayOnce(context.Background(), 10); !errors.Is(err, ErrRealtimeUnavailable) {
+		t.Fatalf("first relay error=%v", err)
+	}
+	if published, err := second.RelayOnce(context.Background(), 10); err != nil || published != 0 || len(secondTransport.Publications) != 0 {
+		t.Fatalf("active lease was not isolated: published=%d transport=%d err=%v", published, len(secondTransport.Publications), err)
+	}
+	now = now.Add(31 * time.Second)
+	if published, err := second.RelayOnce(context.Background(), 10); err != nil || published != 1 || len(secondTransport.Publications) != 1 {
+		t.Fatalf("expired lease was not reclaimed: published=%d transport=%d err=%v", published, len(secondTransport.Publications), err)
+	}
+}
+
 func TestEvaluateRecoveryFallsBackOnUncertainty(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -218,6 +246,10 @@ func TestEvaluateRecoveryFallsBackOnUncertainty(t *testing.T) {
 }
 
 func newRealtimeTestService(t *testing.T, repository RealtimeRepository, transport RealtimeTransport, now *time.Time) *RealtimeService {
+	return newRealtimeTestServiceWithWorker(t, repository, transport, now, "realtime-test-worker")
+}
+
+func newRealtimeTestServiceWithWorker(t *testing.T, repository RealtimeRepository, transport RealtimeTransport, now *time.Time, workerID string) *RealtimeService {
 	t.Helper()
 	sequence := 0
 	service, err := NewRealtimeService(RealtimeConfig{
@@ -225,6 +257,8 @@ func newRealtimeTestService(t *testing.T, repository RealtimeRepository, transpo
 		PublicEndpoint:         "wss://realtime.example.test/connection/websocket",
 		CapabilityHMACKey:      []byte("0123456789abcdef0123456789abcdef"),
 		ConnectionTokenHMACKey: []byte("abcdef0123456789abcdef0123456789"),
+		RelayWorkerID:          workerID,
+		RelayLeaseDuration:     30 * time.Second,
 		Now:                    func() time.Time { return *now },
 		NewOpaqueID: func() (string, error) {
 			sequence++

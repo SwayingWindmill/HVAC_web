@@ -113,8 +113,8 @@ type RealtimeRepository interface {
 	SaveRecoveryCursors(context.Context, []RecoveryCursorRecord) error
 	ActiveRecoveryCursor(context.Context, string, string, time.Time) (RecoveryCursorRecord, error)
 	CurrentBusinessRevision(context.Context, string) (int64, error)
-	PendingPublications(context.Context, int, time.Time) ([]PendingPublication, error)
-	MarkPublicationPublished(context.Context, string, time.Time) error
+	ClaimPendingPublications(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error)
+	MarkPublicationPublished(context.Context, string, string, time.Time) error
 	RevokeSubscriptions(context.Context, string, string, time.Time) ([]RealtimeSubscription, error)
 }
 
@@ -129,6 +129,8 @@ type RealtimeConfig struct {
 	PublicEndpoint         string
 	CapabilityHMACKey      []byte
 	ConnectionTokenHMACKey []byte
+	RelayWorkerID          string
+	RelayLeaseDuration     time.Duration
 	SubscriptionTTL        time.Duration
 	ConnectionTokenTTL     time.Duration
 	RecoveryCursorTTL      time.Duration
@@ -142,6 +144,8 @@ type RealtimeService struct {
 	publicEndpoint     string
 	capabilityKey      []byte
 	connectionTokenKey []byte
+	relayWorkerID      string
+	relayLeaseDuration time.Duration
 	subscriptionTTL    time.Duration
 	connectionTokenTTL time.Duration
 	recoveryCursorTTL  time.Duration
@@ -212,6 +216,15 @@ func NewRealtimeService(config RealtimeConfig) (*RealtimeService, error) {
 	if newOpaqueID == nil {
 		newOpaqueID = randomOpaqueID
 	}
+	relayWorkerID := strings.TrimSpace(config.RelayWorkerID)
+	if relayWorkerID == "" {
+		workerToken, err := randomOpaqueID()
+		if err != nil {
+			return nil, fmt.Errorf("generate realtime relay worker id: %w", err)
+		}
+		relayWorkerID = "realtime-relay:" + workerToken
+	}
+	relayLeaseDuration := positiveDuration(config.RelayLeaseDuration, 30*time.Second)
 	subscriptionTTL := positiveDuration(config.SubscriptionTTL, DefaultSubscriptionTTL)
 	connectionTTL := positiveDuration(config.ConnectionTokenTTL, DefaultConnectionTokenTTL)
 	cursorTTL := positiveDuration(config.RecoveryCursorTTL, DefaultRecoveryCursorTTL)
@@ -227,6 +240,8 @@ func NewRealtimeService(config RealtimeConfig) (*RealtimeService, error) {
 		publicEndpoint:     strings.TrimSpace(config.PublicEndpoint),
 		capabilityKey:      append([]byte(nil), config.CapabilityHMACKey...),
 		connectionTokenKey: append([]byte(nil), config.ConnectionTokenHMACKey...),
+		relayWorkerID:      relayWorkerID,
+		relayLeaseDuration: relayLeaseDuration,
 		subscriptionTTL:    subscriptionTTL,
 		connectionTokenTTL: connectionTTL,
 		recoveryCursorTTL:  cursorTTL,
@@ -520,7 +535,7 @@ func (service *RealtimeService) RelayOnce(ctx context.Context, limit int) (int, 
 		limit = 64
 	}
 	now := service.now().UTC()
-	pending, err := service.repository.PendingPublications(ctx, limit, now)
+	pending, err := service.repository.ClaimPendingPublications(ctx, service.relayWorkerID, limit, now, service.relayLeaseDuration)
 	if err != nil {
 		return 0, normalizeRealtimeRepositoryError(err)
 	}
@@ -538,7 +553,7 @@ func (service *RealtimeService) RelayOnce(ctx context.Context, limit int) (int, 
 				return published, ErrRealtimeUnavailable
 			}
 		}
-		if err := service.repository.MarkPublicationPublished(ctx, intent.EventID, now); err != nil {
+		if err := service.repository.MarkPublicationPublished(ctx, intent.EventID, service.relayWorkerID, now); err != nil {
 			return published, normalizeRealtimeRepositoryError(err)
 		}
 		published++

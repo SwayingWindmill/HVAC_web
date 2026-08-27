@@ -316,27 +316,38 @@ WHERE device_id = $1::uuid
 	return revision, nil
 }
 
-func (store *PostgresStore) PendingPublications(ctx context.Context, limit int, now time.Time) ([]PendingPublication, error) {
-	if store == nil || store.pool == nil {
+func (store *PostgresStore) ClaimPendingPublications(ctx context.Context, workerID string, limit int, now time.Time, leaseDuration time.Duration) ([]PendingPublication, error) {
+	if store == nil || store.pool == nil || workerID == "" || leaseDuration <= 0 {
 		return nil, ErrRealtimeUnavailable
 	}
-	rows, err := store.pool.Query(ctx, `
+	if limit <= 0 || limit > 256 {
+		limit = 64
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin telemetry publication claim: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
 SELECT event_id::text, device_id::text, business_revision, payload
 FROM telemetry_runtime.telemetry_publication_outbox
 WHERE delivery_state = 'PENDING' AND available_at <= $1
+  AND (claim_until IS NULL OR claim_until <= $1 OR claim_owner = $2)
 ORDER BY available_at, event_id
-LIMIT $2
-`, now, limit)
+FOR UPDATE SKIP LOCKED
+LIMIT $3
+`, now, workerID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("query pending telemetry publications: %w", err)
+		return nil, fmt.Errorf("claim pending telemetry publications: %w", err)
 	}
-	defer rows.Close()
 	result := make([]PendingPublication, 0, limit)
+	eventIDs := make([]string, 0, limit)
 	for rows.Next() {
 		var eventID, deviceID string
 		var revision int64
 		var payloadJSON []byte
 		if err := rows.Scan(&eventID, &deviceID, &revision, &payloadJSON); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scan pending telemetry publication: %w", err)
 		}
 		var payload struct {
@@ -349,10 +360,12 @@ LIMIT $2
 			ChangedKeys      []string                               `json:"changedKeys"`
 		}
 		if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("decode pending telemetry publication: %w", err)
 		}
 		evaluatedAt, err := time.Parse(time.RFC3339Nano, string(payload.EvaluatedAt))
 		if err != nil || payload.EventID != eventID || payload.DeviceID != deviceID || payload.Revision != revision {
+			rows.Close()
 			return nil, errors.New("pending telemetry publication payload is inconsistent")
 		}
 		if payload.ChangedKeys == nil {
@@ -363,22 +376,39 @@ LIMIT $2
 			Revision: payload.Revision, EvaluatedAt: evaluatedAt.UTC(), Snapshot: payload.Snapshot,
 			ChangedKeys: append([]string(nil), payload.ChangedKeys...),
 		})
+		eventIDs = append(eventIDs, eventID)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("iterate pending telemetry publications: %w", err)
+	}
+	rows.Close()
+	claimUntil := now.Add(leaseDuration)
+	for _, eventID := range eventIDs {
+		if _, err := tx.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_publication_outbox
+SET claim_owner = $2, claim_until = $3
+WHERE event_id = $1::uuid AND delivery_state = 'PENDING'
+`, eventID, workerID, claimUntil); err != nil {
+			return nil, fmt.Errorf("lease telemetry publication: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit telemetry publication claim: %w", err)
 	}
 	return result, nil
 }
 
-func (store *PostgresStore) MarkPublicationPublished(ctx context.Context, eventID string, publishedAt time.Time) error {
+func (store *PostgresStore) MarkPublicationPublished(ctx context.Context, eventID, workerID string, publishedAt time.Time) error {
 	if store == nil || store.pool == nil {
 		return ErrRealtimeUnavailable
 	}
 	command, err := store.pool.Exec(ctx, `
 UPDATE telemetry_runtime.telemetry_publication_outbox
-SET delivery_state = 'PUBLISHED', published_at = $2, attempts = attempts + 1, last_error_code = NULL
-WHERE event_id = $1::uuid AND delivery_state = 'PENDING'
-`, eventID, publishedAt)
+SET delivery_state = 'PUBLISHED', published_at = $3, attempts = attempts + 1, last_error_code = NULL,
+    claim_owner = NULL, claim_until = NULL
+WHERE event_id = $1::uuid AND delivery_state = 'PENDING' AND claim_owner = $2
+`, eventID, workerID, publishedAt)
 	if err != nil {
 		return fmt.Errorf("mark telemetry publication delivered: %w", err)
 	}

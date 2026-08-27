@@ -125,7 +125,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 }
 
 func runAlarmNotificationRelay(ctx context.Context, logger *slog.Logger, relay *alarmservice.NotificationRelay, store *notificationservice.PostgresStore) {
-	workerID := envOr("NOTIFICATION_ALARM_RELAY_WORKER_ID", "notification-alarm-relay-1")
+	workerID := replicaWorkerID("NOTIFICATION_ALARM_RELAY_WORKER_ID", "notification-alarm-relay")
 	for {
 		if ctx.Err() != nil {
 			return
@@ -162,7 +162,7 @@ func runAlarmNotificationRelay(ctx context.Context, logger *slog.Logger, relay *
 }
 
 func runNotificationScheduler(ctx context.Context, logger *slog.Logger, scheduler *notificationservice.Scheduler, store *notificationservice.PostgresStore, deliveryPort *notificationservice.S15DeliveryPort) {
-	workerID := envOr("NOTIFICATION_STAGE_WORKER_ID", "notification-stage-worker-1")
+	workerID := replicaWorkerID("NOTIFICATION_STAGE_WORKER_ID", "notification-stage-worker")
 	for {
 		if ctx.Err() != nil {
 			return
@@ -210,6 +210,14 @@ func runNotificationScheduler(ctx context.Context, logger *slog.Logger, schedule
 			logger.Error("notification_external_handoff_failed", "error_code", "NOTIFICATION_EXTERNAL_HANDOFF_FAILED", "notification_intent_id", claim.IntentID)
 		}
 	}
+}
+
+func replicaWorkerID(name, prefix string) string {
+	if configured := strings.TrimSpace(os.Getenv(name)); configured != "" {
+		return configured
+	}
+	hostname, _ := os.Hostname()
+	return prefix + ":" + hostname
 }
 
 func notificationWait(ctx context.Context, duration time.Duration) bool {

@@ -252,6 +252,19 @@ External Stateful Plane
 - iot-service 按站点、连接或明确分区扩展，不做无状态随机复制；
 - UI realtime 断线后仍回到 authoritative snapshot。
 
+当前代码准入审查：
+
+| 运行角色 | Stage 3 准入 | 当前依据 / 约束 |
+| --- | --- | --- |
+| `energy-api` | REPLICA-TRIAL READY | Session 在 PostgreSQL，OIDC state 与 LimitPolicy 在 Redis；Audit/Notification relay 使用 PostgreSQL claim/lease，默认 worker identity 按 hostname 唯一化。仍需真实双节点 ingress/drain drill 才能声明生产 redundancy。 |
+| `scheduler` | MULTI-INSTANCE READY | due schedule、retry、lease recovery 使用 `FOR UPDATE SKIP LOCKED`；schedule fire 还有 `dedup_key` 唯一约束，不依赖“只运行一个 scheduler”。 |
+| `metric-worker` / `maintenance` | MULTI-INSTANCE READY | durable Job 使用 claim/lease；默认 worker identity 按 hostname 派生，副本之间不共享 lease owner。 |
+| `telemetry-worker` | REPLICA-TRIAL READY | Realtime outbox 已使用既有 `claim_owner / claim_until` + `FOR UPDATE SKIP LOCKED`；ingest LimitPolicy 可使用共享 Redis counter；History projector 已有 lease，Latest/Analytics 写入具备幂等语义。额外副本可能增加 projection 重复读取成本，因此只在 ingest/realtime 或 backlog 有实测压力时扩。 |
+| `iot-service` | PARTITION ONLY | MQTT client / Integration Instance 是连接所有权，不做随机副本；按 Integration、Site 或明确连接分区扩展。 |
+| `identity-service` | NOT FIRST SCALE TARGET | 当前 Stage 3 不因未来可能扩容而增加副本；只有认证吞吐或维护窗口成为实际问题时再做针对性双实例验证。 |
+
+Stage 3 当前仍是 **code-ready / deployment-not-certified**：本轮只消除代码中的单实例正确性假设，不新增 Kubernetes、HAProxy 集群模板或多机 Compose。真正进入 Stage 3 时再加入外部 Load Balancer、节点级 health/drain 和一次双节点故障切换演练。
+
 如果 Stateful Plane 仍为单 primary，本阶段最多称为 Application redundancy，不称为整体 HA。
 
 ### 5.5 Stage 4：Stateful HA / Production Cluster

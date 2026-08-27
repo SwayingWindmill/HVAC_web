@@ -17,8 +17,14 @@ type MemoryRealtimeRepository struct {
 	currentRevisions map[string]int64
 	pending          []PendingPublication
 	published        map[string]time.Time
+	claims           map[string]memoryRealtimeClaim
 	FailSave         error
 	FailRead         error
+}
+
+type memoryRealtimeClaim struct {
+	owner string
+	until time.Time
 }
 
 func NewMemoryRealtimeRepository() *MemoryRealtimeRepository {
@@ -28,6 +34,7 @@ func NewMemoryRealtimeRepository() *MemoryRealtimeRepository {
 		cursors:          map[string]RecoveryCursorRecord{},
 		currentRevisions: map[string]int64{},
 		published:        map[string]time.Time{},
+		claims:           map[string]memoryRealtimeClaim{},
 	}
 }
 
@@ -162,17 +169,24 @@ func (repository *MemoryRealtimeRepository) CurrentBusinessRevision(_ context.Co
 	return revision, nil
 }
 
-func (repository *MemoryRealtimeRepository) PendingPublications(_ context.Context, limit int, now time.Time) ([]PendingPublication, error) {
+func (repository *MemoryRealtimeRepository) ClaimPendingPublications(_ context.Context, workerID string, limit int, now time.Time, leaseDuration time.Duration) ([]PendingPublication, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.FailRead != nil {
 		return nil, repository.FailRead
+	}
+	if workerID == "" || leaseDuration <= 0 {
+		return nil, ErrRealtimeUnavailable
 	}
 	result := make([]PendingPublication, 0, limit)
 	for _, publication := range repository.pending {
 		if _, done := repository.published[publication.EventID]; done || publication.EvaluatedAt.After(now) {
 			continue
 		}
+		if claim, claimed := repository.claims[publication.EventID]; claimed && claim.until.After(now) && claim.owner != workerID {
+			continue
+		}
+		repository.claims[publication.EventID] = memoryRealtimeClaim{owner: workerID, until: now.Add(leaseDuration)}
 		copy := publication
 		copy.ChangedKeys = append([]string(nil), publication.ChangedKeys...)
 		result = append(result, copy)
@@ -183,11 +197,15 @@ func (repository *MemoryRealtimeRepository) PendingPublications(_ context.Contex
 	return result, nil
 }
 
-func (repository *MemoryRealtimeRepository) MarkPublicationPublished(_ context.Context, eventID string, publishedAt time.Time) error {
+func (repository *MemoryRealtimeRepository) MarkPublicationPublished(_ context.Context, eventID, workerID string, publishedAt time.Time) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.FailSave != nil {
 		return repository.FailSave
+	}
+	claim, claimed := repository.claims[eventID]
+	if !claimed || claim.owner != workerID {
+		return ErrPublicationNotFound
 	}
 	found := false
 	for _, pending := range repository.pending {
@@ -200,6 +218,7 @@ func (repository *MemoryRealtimeRepository) MarkPublicationPublished(_ context.C
 		return ErrPublicationNotFound
 	}
 	repository.published[eventID] = publishedAt
+	delete(repository.claims, eventID)
 	return nil
 }
 

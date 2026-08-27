@@ -406,12 +406,12 @@ for (const [name, content] of Object.entries(envs)) {
     assert(content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=') && !content.includes('OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318'), `${name} must not export telemetry when the collector profile is not selected`);
   }
   assert(content.includes('MQTT_BROKER_URL=mqtts://mqtt-broker:8883'), `${name} must use MQTT TLS`);
-  assert(content.includes('TELEMETRY_LATEST_CACHE_REDIS_URL=redis://redis:6379/0'), `${name} must use the canonical Redis service for latest telemetry`);
+  assert(content.includes('TELEMETRY_LATEST_CACHE_REDIS_URL=redis://redis:6379/0') && content.includes('TELEMETRY_LIMIT_POLICY_REDIS_URL=redis://redis:6379/2'), `${name} must keep telemetry projection and shared limit Redis contracts explicit`);
   assert(content.includes('HVAC_WEB_REALTIME_PROTOCOL=centrifugo-v1'), `${name} must use the supported realtime protocol contract`);
   assert(content.includes('/realtime/websocket'), `${name} realtime endpoint must enter through energy-api /realtime`);
   assert(content.includes('SCHEDULER_POSTGRES_DSN=[REDACTED_SECRET]'), `${name} must provide the Scheduler PostgreSQL authority contract`);
   assert(content.includes('SCHEDULER_SCAN_INTERVAL=2s') && content.includes('SCHEDULER_SCAN_BATCH=100'), `${name} must expose bounded Scheduler scan parameters`);
-  assert(content.includes('METRIC_WORKER_ID=metric-worker-1') && content.includes('METRIC_JOB_LEASE_DURATION=60s'), `${name} must configure Metric durable Job claim/lease execution`);
+  assert(content.includes('METRIC_JOB_LEASE_DURATION=60s'), `${name} must configure Metric durable Job lease execution`);
   assert(!content.includes('METRIC_WORKER_BINDINGS_JSON=') && !content.includes('METRIC_WORKER_POLL_INTERVAL='), `${name} must not restore Metric self-scheduling authority`);
   assert(content.includes('[REDACTED_SECRET]'), `${name} example must redact runtime secrets`);
 }

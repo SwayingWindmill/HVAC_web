@@ -284,6 +284,7 @@ services:
       ANALYTICS_PROJECTION_ENABLED: "true"
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

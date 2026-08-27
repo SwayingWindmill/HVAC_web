@@ -19,6 +19,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/energy/pkg/analyticsprojector"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetry"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -144,6 +145,13 @@ func main() {
 		go runRealtimeRelay(realtimeContext, realtimeService, logger)
 	}
 
+	rateLimiter, closeRateLimiter, err := loadTelemetryRateLimiter()
+	if err != nil {
+		logger.Error("telemetry_limit_policy_config_invalid", "error_code", "TELEMETRY_LIMIT_POLICY_CONFIG_INVALID")
+		os.Exit(1)
+	}
+	defer closeRateLimiter()
+
 	server := &http.Server{
 		Addr: envOr("TELEMETRY_SERVICE_ADDR", "127.0.0.1:18446"),
 		Handler: telemetry.NewHandler(telemetry.ServerConfig{
@@ -162,7 +170,7 @@ func main() {
 			CommandVerifierDeviceID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
 			CommandVerifierDeviceIDs:       commaSeparated(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS")),
 			Metrics:                        observabilityRuntime.Metrics,
-			RateLimiter:                    limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), telemetryLimitPolicy()),
+			RateLimiter:                    rateLimiter,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},
@@ -475,12 +483,19 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 		return nil, nil, nil, err
 	}
 	instrumentedTransport := telemetry.InstrumentRealtimeTransport(centrifugo, metrics, time.Now)
+	relayWorkerID := strings.TrimSpace(os.Getenv("TELEMETRY_REALTIME_RELAY_WORKER_ID"))
+	if relayWorkerID == "" {
+		hostname, _ := os.Hostname()
+		relayWorkerID = "telemetry-realtime:" + hostname
+	}
 	service, err := telemetry.NewRealtimeService(telemetry.RealtimeConfig{
 		Repository:             store,
 		Transport:              instrumentedTransport,
 		PublicEndpoint:         requiredEnv("TELEMETRY_REALTIME_ENDPOINT"),
 		CapabilityHMACKey:      []byte(requiredEnv("TELEMETRY_REALTIME_CAPABILITY_HMAC_KEY")),
 		ConnectionTokenHMACKey: []byte(requiredEnv("TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY")),
+		RelayWorkerID:          relayWorkerID,
+		RelayLeaseDuration:     durationEnv("TELEMETRY_REALTIME_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -547,8 +562,22 @@ func loadCertificatePublicKey(path string) (any, error) {
 	return certificate.PublicKey, nil
 }
 
-// telemetryLimitPolicy 提供单机阶段的默认配额。ingest 维度 fail-open：限流后端
-// 不可用时放行，宁可多收遥测也不丢数据。额度从版本化配置发布加载是后续工作。
+// loadTelemetryRateLimiter uses a shared Redis counter when configured so replica rate limits stay consistent.
+// Without Redis, single-node/dev keeps the existing in-memory counter.
+func loadTelemetryRateLimiter() (*limitpolicy.Limiter, func(), error) {
+	rawURL := strings.TrimSpace(os.Getenv("TELEMETRY_LIMIT_POLICY_REDIS_URL"))
+	if rawURL == "" {
+		return limitpolicy.NewLimiter(limitpolicy.NewMemoryCounter(100000), telemetryLimitPolicy()), func() {}, nil
+	}
+	options, err := redis.ParseURL(rawURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	client := redis.NewClient(options)
+	return limitpolicy.NewLimiter(limitpolicy.NewRedisCounter(client, "hvac:telemetry:limit"), telemetryLimitPolicy()), func() { _ = client.Close() }, nil
+}
+
+// telemetryLimitPolicy keeps telemetry ingest fail-open: Redis loss must not drop source observations.
 func telemetryLimitPolicy() *limitpolicy.Policy {
 	return &limitpolicy.Policy{
 		Version: 1,
