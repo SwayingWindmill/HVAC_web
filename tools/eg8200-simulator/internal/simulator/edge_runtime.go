@@ -57,20 +57,12 @@ type EdgeControlCycleResult struct {
 type EdgeControlRuntime struct {
 	mu sync.Mutex
 
-	config       Config
-	plant        *Plant
-	runtime      *edgecontrol.Runtime
-	capabilities *edgecontrol.CapabilityRegistry
-	components   *edgecontrol.ComponentRegistry
-	host         *edgecontrol.DeviceHost
-	intentStore  *edgecontrol.IntentStore
-	writer       *edgecontrol.DeviceOutputWriter
-	cycle        *edgecontrol.Cycle
-	timedata     edgecontrol.TimedataRecorder
+	config      Config
+	host        *edgecontrol.Host
+	intentStore *edgecontrol.IntentStore
 
 	commandByKey     map[string]edgeCommandBinding
 	leaseByAddress   map[string]bool
-	bindingsByDevice map[string]map[edgecontrol.SemanticChannel]string
 	pendingByAddress map[string]pendingEdgeCommand
 }
 
@@ -81,16 +73,7 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	runtime := edgecontrol.NewRuntime()
-	capabilities, err := edgecontrol.NewStandardCapabilityRegistry()
-	if err != nil {
-		return nil, err
-	}
-	components, err := edgecontrol.NewComponentRegistry(runtime, capabilities)
-	if err != nil {
-		return nil, err
-	}
-	host, err := edgecontrol.NewDeviceHost(runtime, components)
+	host, err := edgecontrol.NewHost()
 	if err != nil {
 		return nil, err
 	}
@@ -106,14 +89,7 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 		component := adapter.Component()
 		bindingsByDevice[component.ID] = cloneSemanticBindings(component.ChannelBindings)
 	}
-	intentStore, err := edgecontrol.NewIntentStore(runtime)
-	if err != nil {
-		return nil, err
-	}
-	writer, err := edgecontrol.NewDeviceOutputWriter(host)
-	if err != nil {
-		return nil, err
-	}
+	intentStore := host.IntentStore()
 
 	commandByKey := map[string]edgeCommandBinding{}
 	leaseByAddress := map[string]bool{}
@@ -153,22 +129,16 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	safetyController := &edgePlantSafetyController{
 		id: "plant-safety-interlock", bindings: bindingsByDevice, staleAfterByAddress: staleAfterByAddress, plant: config.Plant,
 	}
-	scheduler, err := edgecontrol.NewScheduler([]edgecontrol.ControllerBinding{
+	if err := host.Start([]edgecontrol.ControllerBinding{
 		{Priority: 0, Controller: safetyController},
 		{Priority: 10, Controller: limitController},
 		{Priority: 100, Controller: intentController},
-	})
-	if err != nil {
-		return nil, err
-	}
-	cycle, err := edgecontrol.NewCycle(runtime, scheduler, writer)
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return &EdgeControlRuntime{
-		config: config, plant: plant, runtime: runtime, capabilities: capabilities, components: components, host: host,
-		intentStore: intentStore, writer: writer, cycle: cycle, commandByKey: commandByKey, leaseByAddress: leaseByAddress,
-		bindingsByDevice: bindingsByDevice, pendingByAddress: map[string]pendingEdgeCommand{},
+		config: config, host: host, intentStore: intentStore, commandByKey: commandByKey,
+		leaseByAddress: leaseByAddress, pendingByAddress: map[string]pendingEdgeCommand{},
 	}, nil
 }
 
@@ -188,7 +158,7 @@ func (runtime *EdgeControlRuntime) Manifest(revision string, at time.Time) (edge
 	if runtime == nil {
 		return edgecontrol.EdgeManifest{}, errors.New("Edge Control Runtime is unavailable")
 	}
-	return runtime.components.Manifest(runtime.config.GatewayID, revision, at)
+	return runtime.host.Manifest(runtime.config.GatewayID, revision, at)
 }
 
 func (runtime *EdgeControlRuntime) AttachTimedata(recorder edgecontrol.TimedataRecorder) error {
@@ -198,10 +168,7 @@ func (runtime *EdgeControlRuntime) AttachTimedata(recorder edgecontrol.TimedataR
 	if recorder == nil {
 		return errors.New("Edge Timedata recorder is required")
 	}
-	runtime.mu.Lock()
-	runtime.timedata = recorder
-	runtime.mu.Unlock()
-	return nil
+	return runtime.host.AttachTimedata(recorder)
 }
 
 func (runtime *EdgeControlRuntime) SubmitCommand(request EdgeCommandIntentRequest) (<-chan EdgeCommandOutcome, error) {
@@ -288,21 +255,15 @@ func (runtime *EdgeControlRuntime) CancelCommand(commandID, code string) bool {
 }
 
 func (runtime *EdgeControlRuntime) RunCycle(ctx context.Context, at time.Time) EdgeControlCycleResult {
-	pollResults := runtime.host.PollOnce(ctx, at)
-	cycleResult := runtime.cycle.RunOnce(ctx, at)
-	telemetrySnapshot := runtime.snapshotFromProcessImage(cycleResult.Image)
-	runtime.mu.Lock()
-	timedata := runtime.timedata
-	runtime.mu.Unlock()
-	timedataRecords := 0
-	var timedataErr error
-	if timedata != nil {
-		timedataRecords, timedataErr = timedata.RecordImage(cycleResult.Image)
+	hostResult, err := runtime.host.RunCycle(ctx, at)
+	if err != nil {
+		return EdgeControlCycleResult{Cycle: edgecontrol.CycleResult{Halted: true, OutputError: err}}
 	}
-	runtime.resolvePending(at, cycleResult)
+	telemetrySnapshot := runtime.snapshotFromProcessImage(hostResult.Cycle.Image)
+	runtime.resolvePending(at, hostResult.Cycle, hostResult.WriteResults)
 	return EdgeControlCycleResult{
-		PollResults: pollResults, Cycle: cycleResult, TelemetrySnapshot: telemetrySnapshot,
-		TimedataRecords: timedataRecords, TimedataError: timedataErr,
+		PollResults: hostResult.PollResults, Cycle: hostResult.Cycle, TelemetrySnapshot: telemetrySnapshot,
+		TimedataRecords: hostResult.TimedataRecords, TimedataError: hostResult.TimedataError,
 	}
 }
 
@@ -349,13 +310,13 @@ func edgeTelemetryValue(value edgecontrol.Value) (any, bool) {
 	}
 }
 
-func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontrol.CycleResult) {
+func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontrol.CycleResult, writeResults []edgecontrol.DeviceWriteResult) {
 	decisionByAddress := make(map[string]edgecontrol.Decision, len(result.Decisions))
 	for _, decision := range result.Decisions {
 		decisionByAddress[decision.Address] = decision
 	}
 	writeByAddress := map[string]edgecontrol.DeviceWriteResult{}
-	for _, writeResult := range runtime.writer.LastResults() {
+	for _, writeResult := range writeResults {
 		writeByAddress[writeResult.Address] = writeResult
 	}
 

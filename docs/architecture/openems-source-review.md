@@ -35,6 +35,7 @@ All modules below existed locally before completing their pinned-source review a
 | Capability Profile Registry | VERIFIED | Nature interfaces + ChannelId/Doc contracts |
 | Edge Component Registry | VERIFIED | OpenemsComponent / ComponentManager lifecycle |
 | Edge Manifest | VERIFIED | EdgeConfig / Component/Channel serialization |
+| Edge Runtime Host | VERIFIED | production Component / Nature composition + CycleWorker lifecycle |
 | Device Driver | VERIFIED | common physical/simulated driver contract + protocol mapping boundary |
 | Protocol Bridge | REVIEWING | Bridge.Modbus task/worker implementation; no real protocol driver exists yet |
 | Remote Intent Lease | VERIFIED | external write timeout / controller API behavior |
@@ -43,6 +44,57 @@ All modules below existed locally before completing their pinned-source review a
 | MQTT Command Edge Adapter | VERIFIED | S11 governed Edge execution evidence + Cloud independent readback; CycleWorker boundary retained |
 
 A state may change to `VERIFIED` only when the reviewed source files, relevant upstream tests, material differences, local justification for every retained conflict, and focused behavior tests are all recorded below.
+
+## Review 011 — Production-neutral Edge runtime Host
+
+Date: 2026-08-28
+
+Local issue: #335
+
+OpenEMS implementation checkpoint: `develop` commit `a7efc1c1eacd05f7a0f8eb43f962564ccf66ead6`
+
+Standing comparison baselines: ThingsBoard CE `v4.3.1.1` / `c2a52e46c44e308ddee430e7266b8e10eddde9c4`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`
+
+### Official source, tests, and documentation reviewed
+
+OpenEMS:
+
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/component/OpenemsComponent.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/component/AbstractOpenemsComponent.java`;
+- `io.openems.edge.common/test/io/openems/edge/common/component/OpenemsComponentTest.java`;
+- `io.openems.edge.common/test/io/openems/edge/common/component/AbstractOpenemsComponentTest.java`;
+- `io.openems.edge.scheduler.fixedorder/src/io/openems/edge/scheduler/fixedorder/SchedulerFixedOrderImpl.java`;
+- official `Edge Architecture` documentation, especially Input-Process-Output, Cycle, Process Image, asynchronous synchronization, and Nature sections.
+
+ThingsBoard:
+
+- `common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java`;
+- `common/transport/mqtt/src/test/java/org/thingsboard/server/transport/mqtt/MqttTransportHandlerTest.java`;
+- official IoT Gateway documentation.
+
+MyEMS:
+
+- `myems-modbus-tcp/main.py`;
+- `myems-modbus-tcp/test.py`;
+- `myems-modbus-tcp/README.md`.
+
+The OpenEMS `develop` checkpoint is unchanged from the parent #331 source checkpoint. The relevant Cycle and production Component behavior has not materially diverged from the pinned `2026.7.0` baseline already reviewed above.
+
+### Source-level findings and decisions
+
+- `ADOPT`: one production runtime host owns Component registration, typed Channels, the stable Process Image, configured Controller schedule, governed writes, Cycle hooks, and Timedata attachment. The host performs device reads before Process Image promotion and actuator writes only in the execute-write phase; a write is observable only through a later independent device read.
+- `ADAPT`: production and simulated devices implement the same Go `DeviceAdapter` plus semantic Capability boundary. OpenEMS Nature/Component behavior is retained without importing OSGi service discovery, ConfigurationAdmin, dynamic target filters, or Java inheritance.
+- `ADAPT`: the Host exposes its owned `IntentStore` before the schedule is fixed so the existing governed `IntentController` can be constructed. The controller schedule is then started exactly once and remains configured-order authoritative.
+- `ADAPT`: MQTT/TLS stays a separate northbound transport using the existing HVAC envelope, durable Edge queue, command path, and IoT/Telemetry ownership. ThingsBoard confirms that MQTT session/transport adaptation is a distinct boundary; it does not justify embedding Cloud transport into the control Cycle.
+- `ADAPT`: MyEMS confirms that field acquisition can be an independently deployable runtime responsibility. Its process-per-data-source polling and database-authored protocol configuration are not used for Cycle causality; the future concrete Modbus Bridge remains #336 scope.
+- `REJECT`: simulator/Plant/Scenario dependencies in the production Host, a simulator fallback when a production adapter or MQTT path fails, OpenEMS Backend WebSocket adoption, generic protocol/plugin factories, and OSGi lifecycle translation.
+
+### Local implementation consequence
+
+`libs/edgecontrol.Host` is now the production-neutral composition root for the existing `Runtime`, standard `CapabilityRegistry`, `ComponentRegistry`, `DeviceHost`, `IntentStore`, `Scheduler`, `Cycle`, `DeviceOutputWriter`, Cycle hooks, and Timedata recorder. The EG8200 simulator registers its Plant-backed adapters into this Host but Plant remains below the adapter seam. Its existing MQTT/TLS publisher consumes the Host-derived Process Image exactly as before; no alternate transport or fallback was added.
+
+Focused behavior evidence is `TestHostRunsProductionAdapterThroughReadControlWriteReadbackCycle`: a `DEVICE_DRIVER` adapter polls into the current stable Process Image, receives an Intent-governed write at execute-write, and exposes that result only on a later independent poll.
 
 ## Review 001 — Channel, Process Image, Cycle, Scheduler
 
