@@ -65,6 +65,27 @@ test("single-lite is the production default and applies the reviewed resource ov
   assert.ok(resolved.resourceTotals.memoryGiB <= 16);
 });
 
+test("single-lite can enable the optional intelligence profile inside its certified capacity envelope", () => {
+  const resolved = resolveDeploymentTier({
+    contract,
+    compose,
+    tierId: "single-lite",
+    environment: "development",
+    additionalProfiles: [
+      "local-postgres",
+      "local-clickhouse",
+      "local-redis",
+      "intelligence",
+    ],
+  });
+
+  assert.ok(resolved.resourceTotals.memoryGiB <= 16);
+  assert.ok(
+    resolved.resourceTotals.cpuLimitCores <=
+      8 * resolved.maximumCpuLimitOvercommitRatio,
+  );
+});
+
 test("a non-production tier cannot be selected for production", () => {
   assert.throws(
     () =>

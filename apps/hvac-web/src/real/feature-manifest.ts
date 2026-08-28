@@ -10,6 +10,14 @@ export const REAL_FEATURE_MANIFEST = [
     requiredCapabilities: ['site.list'],
   },
   {
+    id: 'notifications',
+    label: '通知中心',
+    path: '/notifications',
+    delivery: 'implemented',
+    availability: 'platform',
+    requiredCapabilities: [],
+  },
+  {
     id: 'system',
     label: '系统管理',
     path: '/system',

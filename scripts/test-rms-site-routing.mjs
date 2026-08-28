@@ -43,7 +43,7 @@ const siteA = site(siteAId, 'TOKYO-1', 'Tokyo Plant');
 const siteB = site(siteBId, 'OSAKA-1', 'Osaka Plant');
 
 test('platform routes remain outside Site scope while root is the Site entry', () => {
-  for (const pathname of ['/system', '/alarms']) {
+  for (const pathname of ['/system', '/notifications', '/alarms']) {
     const decision = routing.resolveSiteRouting(pathname, [siteA, siteB]);
     assert.equal(decision.state, 'PLATFORM_ROUTE');
   }
@@ -64,7 +64,7 @@ test('no explicit Site resolves zero, one, and many authorized Site states', () 
 });
 
 test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContext', () => {
-  for (const leaf of ['dashboard', 'assets', 'energy', 'work-orders', 'bigscreen']) {
+  for (const leaf of ['dashboard', 'assets', 'energy', 'operations', 'work-orders', 'bigscreen']) {
     const decision = routing.resolveSiteRouting(`/sites/${siteBId}/${leaf}`, [siteA, siteB], ['site.read']);
     assert.equal(decision.state, 'READY');
     assert.equal(decision.route, leaf);

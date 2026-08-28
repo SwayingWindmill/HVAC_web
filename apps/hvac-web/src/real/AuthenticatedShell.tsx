@@ -1,6 +1,7 @@
 import { FocusHeading } from './FocusHeading';
 import type { ProtectedScopeDraft } from './protected-scope';
 import { RealShellChrome } from './RealShellChrome';
+import { RealNotificationCenter } from './RealNotificationCenter';
 import { RealSystemManagement } from './RealSystemManagement';
 import type { RealNavigationItem, RouteDecision } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
@@ -89,6 +90,7 @@ function NotFoundSurface() {
 function RouteSurface({ decision, snapshot, retry, registerUnsavedDraft }: { decision: RouteDecision; snapshot: ShellSnapshot; retry: () => void; registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void }) {
   switch (decision.state) {
     case 'READY':
+      if (decision.feature.id === 'notifications') return <RealNotificationCenter snapshot={snapshot} />;
       return <SystemSurface snapshot={snapshot} registerUnsavedDraft={registerUnsavedDraft} />;
     case 'FORBIDDEN':
       return <ForbiddenSurface />;

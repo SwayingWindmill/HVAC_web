@@ -48,6 +48,7 @@ import { useSiteDashboardSummary } from '@/api/site-dashboard';
 import {
   getLatestOptimizationRecommendation,
   getSiteLoadForecast,
+  getSitePVForecast,
   listSiteFDDFindings,
   type FDDFinding,
   type PublishedForecast,
@@ -246,10 +247,13 @@ export function RealOptimizePage({ site }: RealProductPageProps) {
 }
 
 export function RealForecastPage({ site }: RealProductPageProps) {
-  const { data: forecast, loading, error } = useIntelligenceResource<PublishedForecast | null>(site.id, getSiteLoadForecast);
+  const [forecastTarget, setForecastTarget] = useState<'load' | 'pv'>('load');
+  const forecastLoader = forecastTarget === 'load' ? getSiteLoadForecast : getSitePVForecast;
+  const { data: forecast, loading, error } = useIntelligenceResource<PublishedForecast | null>(site.id, forecastLoader);
   const points = forecast?.points ?? [];
   const first = points[0];
   const last = points[points.length - 1];
+  const targetLabel = forecastTarget === 'load' ? '站点负荷' : '光伏发电';
   const columns: ColumnsType<PublishedForecast['points'][number]> = [
     { title: '预测时间', dataIndex: 'forecast_for', width: 220, render: (value: string) => new Date(value).toLocaleString() },
     { title: 'Horizon', dataIndex: 'horizon_minutes', width: 120, render: (value: number) => `${value} min` },
@@ -265,14 +269,23 @@ export function RealForecastPage({ site }: RealProductPageProps) {
       <PageScaffold
         title="预测与基线"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><LineChartOutlined />预测与基线</Space></FocusHeading>}
-        extra={<Tag>{boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)}</Tag>}
+        extra={(
+          <Space>
+            <Segmented
+              value={forecastTarget}
+              onChange={(value) => setForecastTarget(value as 'load' | 'pv')}
+              options={[{ label: '站点负荷', value: 'load' }, { label: '光伏发电', value: 'pv' }]}
+            />
+            <Tag>{boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)}</Tag>
+          </Space>
+        )}
       >
         <Alert
           type={error ? 'error' : forecast?.snapshot.quality === 'FALLBACK' ? 'warning' : 'info'}
           showIcon
           icon={<CalendarOutlined />}
-          message={error ? 'Forecast 权威结果读取失败' : forecast?.snapshot.quality === 'FALLBACK' ? '当前结果为 FALLBACK，不是模型预测。' : '预测来自已 PERSISTED Forecast Snapshot。'}
-          description={error ?? (forecast?.snapshot.quality === 'FALLBACK' ? '历史样本不足时只返回最后观测值，且不提供伪造的不确定性区间；UI 必须显式区分。' : '每个点保留 Model/Feature/Input/Topology provenance，并展示模型不确定性区间。')}
+          message={error ? `${targetLabel} Forecast 权威结果读取失败` : forecast?.snapshot.quality === 'FALLBACK' ? `${targetLabel}当前结果为 FALLBACK，不是模型预测。` : `${targetLabel}预测来自已 PERSISTED Forecast Snapshot。`}
+          description={error ?? (forecast?.snapshot.quality === 'FALLBACK' ? '历史样本不足时只返回最后观测值，且不提供伪造的不确定性区间；UI 必须显式区分。' : '负荷与光伏使用各自已发布的 Forecast Snapshot；每个点保留 Model/Feature/Input/Topology provenance，并展示模型不确定性区间。')}
         />
         <OperationsMetrics items={[
           { label: '预测状态', value: loading ? '…' : forecast?.snapshot.quality ?? '—', detail: forecast ? forecast.snapshot.target : '当前无已发布预测', icon: <LineChartOutlined />, tone: 'accent' },
@@ -295,7 +308,7 @@ export function RealForecastPage({ site }: RealProductPageProps) {
           </Card>
         ) : null}
         <Card variant="borderless" title={<OperationsPanelHeading icon={<FundOutlined />} title="预测序列" meta={`${points.length} 条`} />}>
-          <Table<PublishedForecast['points'][number]> rowKey="forecast_id" loading={loading} columns={columns} dataSource={points} pagination={{ pageSize: 24 }} scroll={{ x: 1600 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前 Site 没有已发布 SITE_LOAD Forecast" /> }} />
+          <Table<PublishedForecast['points'][number]> rowKey="forecast_id" loading={loading} columns={columns} dataSource={points} pagination={{ pageSize: 24 }} scroll={{ x: 1600 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`当前 Site 没有已发布${targetLabel} Forecast`} /> }} />
         </Card>
       </PageScaffold>
     </ProductBoundary>
