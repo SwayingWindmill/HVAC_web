@@ -17,6 +17,7 @@ services:
     environment:
       EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
       EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
+      EG8200_ATV630_MODBUS_ADDR: :1502
       EG8200_MQTT_DIAGNOSTICS_ADDR: :19095
     depends_on:
       mqtt-broker:
@@ -28,7 +29,7 @@ services:
       - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
       - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
       - ${EG8200_QUEUE_DIR:-../platform/phase1/runtime/data/eg8200}:/run/hvac/eg8200
-    expose: ["19095"]
+    expose: ["1502", "19095"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19095/health/ready"]
       interval: 5s
