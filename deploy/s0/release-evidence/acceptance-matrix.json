@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "ticket": "08-s0-release-evidence",
-  "sourceSpec": ".scratch/go-data-ai-platform-s0/issues/08-s0-release-evidence.md",
+  "sourceSpec": "docs/evidence/go-data-ai-platform-s0/issues/08-s0-release-evidence.md",
   "criteria": [
     {
       "id": "browser-user-journey",
       "requirement": "A browser opens platform status, authenticates, reads the current principal, logs out and observes authorized audit history through Gateway.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L18-L26",
-        ".scratch/go-data-ai-platform-s0/spec.md#L65-L73"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L18-L26",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L65-L73"
       ],
       "implementation": [
         "contracts/http/platform-gateway.openapi.yaml",
-        "services/platform-gateway",
-        "services/iam-service",
-        "services/audit-ledger-service"
+        "cmd/energy-api",
+        "modules/iam",
+        "modules/audit"
       ],
       "tests": [
         "scripts/run-durable-session-browser-audit.mjs"
@@ -27,12 +27,12 @@
       "id": "go-route-revision-guard",
       "requirement": "The active platform status route remains Go-owned while a higher revision is adopted and a stale revision is rejected.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L74-L78",
-        ".scratch/go-data-ai-platform-s0/spec.md#L95-L100"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L74-L78",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L95-L100"
       ],
       "implementation": [
         "contracts/ownership/route-ownership.v1.json",
-        "services/platform-gateway/internal",
+        "cmd/energy-api/internal",
         "scripts/s0-durable-topology.mjs"
       ],
       "tests": [
@@ -46,7 +46,7 @@
       "id": "clean-environment-gates",
       "requirement": "Contract, identity, tenant, event, audit, observability, security and failure suites pass from clean GitHub-hosted environments.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L86-L101"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L86-L101"
       ],
       "implementation": [
         ".github/workflows/s0-contract-gateway.yml",
@@ -91,7 +91,7 @@
       "id": "staging-rollout-rollback",
       "requirement": "A production-shaped Kubernetes Deployment rolling update and kubectl rollback are executed and recorded.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L77-L84",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L77-L84",
         "docs/operations/s0-delivery.md#L74-L97"
       ],
       "implementation": [
@@ -112,8 +112,8 @@
       "id": "complete-evidence-bundle",
       "requirement": "The bundle contains versions, environment, fixtures, test outputs, traces, dashboards, failure evidence, SBOM, signatures, migration state, rollback results, runbooks and approval state.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L23-L26",
-        ".scratch/go-data-ai-platform-s0/spec.md#L51-L55"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L23-L26",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L51-L55"
       ],
       "implementation": [
         "scripts/build-s0-release-evidence.mjs",
@@ -133,7 +133,7 @@
       "id": "architecture-decision-trace",
       "requirement": "Every Ticket 08 acceptance criterion maps to source decisions, implementation, tests and runtime evidence.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md"
+        "docs/evidence/go-data-ai-platform-s0/spec.md"
       ],
       "implementation": [
         "deploy/s0/release-evidence/acceptance-matrix.json"
@@ -149,7 +149,7 @@
       "id": "known-limitations",
       "requirement": "Known limitations are explicit and do not defer security, tenant, audit or rollback correctness.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L103-L113"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L103-L113"
       ],
       "implementation": [
         "docs/operations/s0-release-evidence.md"
@@ -165,13 +165,13 @@
       "id": "zero-loss-zero-leak-invariants",
       "requirement": "Tested failures prove zero cross-tenant success, credential leakage, duplicate audit effect and lost committed Session events.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L68-L73",
-        ".scratch/go-data-ai-platform-s0/spec.md#L92-L100"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L68-L73",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L92-L100"
       ],
       "implementation": [
         "libs/sessionstore",
         "services/outbox-relay",
-        "services/audit-ledger-service",
+        "modules/audit",
         "libs/observability"
       ],
       "tests": [
@@ -187,8 +187,8 @@
       "id": "s1-s7-reuse-surface",
       "requirement": "S0 public contracts and reusable libraries are documented for S1-S7 consumers.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L38-L55",
-        ".scratch/go-data-ai-platform-s0/spec.md#L119-L119"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L38-L55",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L119-L119"
       ],
       "implementation": [
         "contracts/http/platform-gateway.openapi.yaml",
@@ -211,8 +211,8 @@
       "id": "legacy-retired-from-active-runtime",
       "requirement": "Legacy remains historical evidence only and is absent from active routes, staging workloads, local topology and release images.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L76-L76",
-        ".scratch/go-data-ai-platform-s0/spec.md#L112-L113"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L76-L76",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L112-L113"
       ],
       "implementation": [
         "docs/adr/0005-hvac-backend-non-production-reference.md",
@@ -232,9 +232,9 @@
       "id": "no-business-domain-leakage",
       "requirement": "No Device, Telemetry, Command, Schedule or AI business implementation is introduced into the S0 public platform contract.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/spec.md#L61-L64",
-        ".scratch/go-data-ai-platform-s0/spec.md#L83-L83",
-        ".scratch/go-data-ai-platform-s0/spec.md#L103-L113"
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L61-L64",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L83-L83",
+        "docs/evidence/go-data-ai-platform-s0/spec.md#L103-L113"
       ],
       "implementation": [
         "contracts/http/platform-gateway.openapi.yaml",
@@ -251,11 +251,11 @@
       "id": "tracker-dependency-graph",
       "requirement": "The S0 tracker identifies Ticket 01 as the initial frontier and records every dependency edge through Ticket 08.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/README.md"
+        "docs/evidence/go-data-ai-platform-s0/README.md"
       ],
       "implementation": [
-        ".scratch/go-data-ai-platform-s0/README.md",
-        ".scratch/go-data-ai-platform-s0/issues/08-s0-release-evidence.md"
+        "docs/evidence/go-data-ai-platform-s0/README.md",
+        "docs/evidence/go-data-ai-platform-s0/issues/08-s0-release-evidence.md"
       ],
       "tests": [
         "scripts/check-s0-release-evidence-assets.mjs"
@@ -268,7 +268,7 @@
       "id": "final-s0-declaration",
       "requirement": "Final review declares S0 complete and S1 ready for implementation specification only after every blocking criterion passes.",
       "decisions": [
-        ".scratch/go-data-ai-platform-s0/README.md#L27-L33"
+        "docs/evidence/go-data-ai-platform-s0/README.md#L27-L33"
       ],
       "implementation": [
         "scripts/build-s0-release-evidence.mjs",

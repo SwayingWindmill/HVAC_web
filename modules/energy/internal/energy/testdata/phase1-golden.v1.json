@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "normal increase",
+      "transitionType": "INCREASE",
+      "deltaValueKWh": 2.75,
+      "currentQuality": "GOOD",
+      "currentQualityReasons": [],
+      "expectFact": true,
+      "expectedEnergyKWh": 2.75,
+      "expectedQuality": "VALID",
+      "expectedQualityReasons": []
+    },
+    {
+      "name": "source partial",
+      "transitionType": "INCREASE",
+      "deltaValueKWh": 1.25,
+      "currentQuality": "PARTIAL",
+      "currentQualityReasons": ["SOURCE_LAG_EXCEEDED"],
+      "expectFact": true,
+      "expectedEnergyKWh": 1.25,
+      "expectedQuality": "SUSPECT",
+      "expectedQualityReasons": ["SOURCE_LAG_EXCEEDED"]
+    },
+    {
+      "name": "counter reset uses canonical delta",
+      "transitionType": "RESET",
+      "deltaValueKWh": 4.5,
+      "currentQuality": "GOOD",
+      "currentQualityReasons": [],
+      "expectFact": true,
+      "expectedEnergyKWh": 4.5,
+      "expectedQuality": "VALID",
+      "expectedQualityReasons": []
+    },
+    {
+      "name": "invalid decrease is excluded",
+      "transitionType": "INVALID_DECREASE",
+      "currentQuality": "GOOD",
+      "currentQualityReasons": [],
+      "expectFact": false
+    }
+  ]
+}

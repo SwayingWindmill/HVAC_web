@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
+  "name": "Phase 1 deployment tiers",
+  "profileDefinitions": {
+    "local-postgres": {
+      "services": ["postgres"],
+      "optional": false,
+      "purpose": "Stage 1 local PostgreSQL implementation. The launcher enables this profile unless PHASE1_POSTGRES_MODE=external."
+    },
+    "local-clickhouse": {
+      "services": ["clickhouse", "cube"],
+      "optional": false,
+      "purpose": "Stage 1 local ClickHouse plus Cube semantic-query implementation. The launcher enables this profile unless PHASE1_CLICKHOUSE_MODE=external."
+    },
+    "local-redis": {
+      "services": ["redis"],
+      "optional": false,
+      "purpose": "Stage 1 local Redis implementation. The launcher enables this profile unless PHASE1_REDIS_MODE=external."
+    },
+    "integration": {
+      "services": ["iot-service", "mqtt-broker"],
+      "optional": true,
+      "purpose": "Local or hosted MQTT connectivity is optional. Backend/UI and core data services do not require this profile."
+    },
+    "intelligence": {
+      "services": ["forecast-service", "optimization-service", "fdd-service"],
+      "optional": true,
+      "purpose": "Forecast, optimization and FDD are optional intelligence capabilities. They do not gate telemetry, control or work-order safety."
+    },
+    "observability-core": {
+      "services": ["prometheus", "node-exporter", "grafana"],
+      "signals": ["metrics", "events", "audit"],
+      "purpose": "Metrics, host monitoring, dashboards and alerts. Docker JSON logs remain available on the host with bounded rotation."
+    },
+    "observability-logs": {
+      "services": [
+        "prometheus",
+        "node-exporter",
+        "grafana",
+        "otel-collector",
+        "loki"
+      ],
+      "signals": ["metrics", "logs", "events", "audit"],
+      "purpose": "Adds centralized single-instance Docker log collection. Trace export is disabled at the application layer."
+    },
+    "observability-full": {
+      "services": [
+        "prometheus",
+        "node-exporter",
+        "grafana",
+        "otel-collector",
+        "loki",
+        "tempo"
+      ],
+      "signals": ["metrics", "logs", "traces", "events", "audit"],
+      "purpose": "Full single-instance observability stack including centralized trace query."
+    }
+  },
+  "tiers": [
+    {
+      "id": "demo",
+      "name": "Demo / minimal development",
+      "profiles": ["observability-core"],
+      "optionalProfiles": ["integration", "intelligence"],
+      "productionAllowed": false,
+      "availabilityTier": "NONE",
+      "maximumCpuLimitOvercommitRatio": 2.15,
+      "resourceBudget": {
+        "cpuCores": 4,
+        "memoryGiB": 8,
+        "note": "Observability-core plus core business services only; intelligence services are not enabled."
+      },
+      "resourceOverrides": {
+        "NGINX_CPUS": "0.25",
+        "ENERGY_API_CPUS": "1",
+        "ENERGY_API_MEMORY_LIMIT": "448m",
+        "IDENTITY_SERVICE_CPUS": "0.5",
+        "IDENTITY_SERVICE_MEMORY_LIMIT": "320m",
+        "SCHEDULER_CPUS": "0.25",
+        "MAINTENANCE_CPUS": "0.25",
+        "TELEMETRY_WORKER_CPUS": "1",
+        "TELEMETRY_WORKER_MEMORY_LIMIT": "640m",
+        "METRIC_WORKER_CPUS": "0.5",
+        "IOT_SERVICE_CPUS": "0.75",
+        "POSTGRES_CPUS": "1",
+        "POSTGRES_MEMORY_LIMIT": "768m",
+        "CLICKHOUSE_CPUS": "1.5",
+        "CLICKHOUSE_MEMORY_LIMIT": "1280m",
+        "REDIS_CPUS": "0.25",
+        "MQTT_CPUS": "0.25",
+        "REALTIME_TRANSPORT_CPUS": "0.25",
+        "PROMETHEUS_CPUS": "0.5",
+        "PROMETHEUS_MEMORY_LIMIT": "320m",
+        "NODE_EXPORTER_CPUS": "0.1",
+        "GRAFANA_CPUS": "0.25",
+        "GRAFANA_MEMORY_LIMIT": "192m"
+      },
+      "runtimeOverrides": {
+        "CLICKHOUSE_SERVER_MEMORY_USAGE": "939524096"
+      }
+    },
+    {
+      "id": "single-lite",
+      "name": "Single-server lite",
+      "profiles": ["observability-logs"],
+      "optionalProfiles": ["integration", "intelligence"],
+      "productionAllowed": true,
+      "availabilityTier": "SINGLE_NODE_RECOVERABLE",
+      "maximumCpuLimitOvercommitRatio": 2.25,
+      "resourceBudget": {
+        "cpuCores": 8,
+        "memoryGiB": 16,
+        "note": "Recommended single-site production baseline: centralized metrics and logs, no centralized traces, optional intelligence."
+      },
+      "resourceOverrides": {
+        "CLICKHOUSE_CPUS": "2",
+        "CLICKHOUSE_MEMORY_LIMIT": "2048m",
+        "POSTGRES_MEMORY_LIMIT": "1536m",
+        "PROMETHEUS_MEMORY_LIMIT": "512m",
+        "LOKI_MEMORY_LIMIT": "384m",
+        "GRAFANA_MEMORY_LIMIT": "256m",
+        "OTEL_COLLECTOR_MEMORY_LIMIT": "256m"
+      },
+      "runtimeOverrides": {
+        "CLICKHOUSE_SERVER_MEMORY_USAGE": "1610612736"
+      }
+    },
+    {
+      "id": "single-full",
+      "name": "Single-server full",
+      "profiles": ["observability-full"],
+      "optionalProfiles": ["integration", "intelligence"],
+      "productionAllowed": true,
+      "availabilityTier": "SINGLE_NODE_RECOVERABLE",
+      "maximumCpuLimitOvercommitRatio": 1.25,
+      "resourceBudget": {
+        "cpuCores": 16,
+        "memoryGiB": 32,
+        "note": "Full single-server signals including centralized traces. Still single-node recoverable, not HA."
+      },
+      "resourceOverrides": {
+        "CLICKHOUSE_CPUS": "3",
+        "CLICKHOUSE_MEMORY_LIMIT": "4096m",
+        "POSTGRES_MEMORY_LIMIT": "2048m",
+        "TEMPO_MEMORY_LIMIT": "512m"
+      },
+      "runtimeOverrides": {
+        "CLICKHOUSE_SERVER_MEMORY_USAGE": "3221225472"
+      }
+    }
+  ],
+  "profileSelection": {
+    "mechanism": "docker compose --profile <profile>",
+    "environmentVariable": "PHASE1_OBSERVABILITY_PROFILE",
+    "environmentVariableControlsCollectorAndGrafanaConfigOnly": true,
+    "postgresPlacementVariable": "PHASE1_POSTGRES_MODE",
+    "localPostgresProfile": "local-postgres",
+    "clickhousePlacementVariable": "PHASE1_CLICKHOUSE_MODE",
+    "localClickHouseProfile": "local-clickhouse",
+    "redisPlacementVariable": "PHASE1_REDIS_MODE",
+    "localRedisProfile": "local-redis",
+    "allObservabilityServicesRequireAnExplicitProfile": true
+  }
+}

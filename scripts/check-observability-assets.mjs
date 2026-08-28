@@ -9,11 +9,11 @@ function assert(condition, message) {
 }
 
 const [collector, prometheus, alerts, runbook, dashboardText] = await Promise.all([
-  read('infra/s0-durable/otel-collector-config.yaml'),
-  read('infra/s0-durable/prometheus.yaml'),
-  read('infra/s0-durable/observability/alerts/s0-platform.yaml'),
+  read('infra/observability/otel-collector-config.yaml'),
+  read('infra/observability/prometheus.yaml'),
+  read('infra/observability/alerts/s0-platform.yaml'),
   read('docs/operations/s0-observability.md'),
-  read('infra/s0-durable/observability/dashboards/s0-platform.json'),
+  read('infra/observability/dashboards/s0-platform.json'),
 ]);
 
 for (const marker of ['otlp:', 'memory_limiter:', 'batch:', 'traces:', 'metrics:', 'prometheus:']) {

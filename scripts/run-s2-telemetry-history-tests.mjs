@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-s2-history-${process.pid}`;
 const reportPath = resolve(root, process.env.S2_HISTORY_REPORT_PATH ?? 'out/s2-history/clickhouse-integration.json');
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
@@ -97,7 +97,7 @@ try {
 
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/telemetry-runtime-service',
+    '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce', '-v', './internal/telemetry/...',
   ], {
     env: {

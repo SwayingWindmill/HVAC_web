@@ -15,7 +15,7 @@ on:
       - "services/telemetry-runtime-service/**"
       - "libs/identitycontext/**"
       - "libs/telemetryauth/**"
-      - "infra/s2-telemetry/**"
+      - "infra/telemetry/**"
       - "pocs/s2-centrifugo/**"
       - "pocs/platform-components/versions.lock.json"
       - "scripts/generate-s2-telemetry-contracts.mjs"

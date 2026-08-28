@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "Phase 1 recovery attainment state",
+  "targetsContract": "deploy/platform/phase1/recovery/recovery-targets.v1.json",
+  "state": "TARGET_DEFINED",
+  "productionClaimAllowed": false,
+  "minimumDrillCadenceDays": 90,
+  "lastTimestampedRestoreDrill": null,
+  "expiresAt": null,
+  "evidence": null,
+  "containerOnlyEvidenceSufficient": false,
+  "rules": [
+    "Targets are recovery objectives, not attained guarantees.",
+    "Only a timestamped restore drill using real external backup artifacts and the production recovery host may move state to DRILL_PASSED.",
+    "Production releases must cite this contract instead of claiming RPO/RTO attainment from scripts or templates alone."
+  ]
+}

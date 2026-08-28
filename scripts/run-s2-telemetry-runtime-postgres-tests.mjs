@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-s2-runtime-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S2_RUNTIME_REPORT_PATH ?? 'out/s2-telemetry-runtime-snapshot/telemetry-runtime-postgres.json');
@@ -88,7 +88,7 @@ try {
 
   const testOutput = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
-    '--module=services/telemetry-runtime-service',
+    '--module=modules/telemetry',
     'test', '-count=1', '-run', testPattern, '-v', './internal/telemetry/...',
   ], {
     env: {
@@ -130,14 +130,14 @@ try {
     if (report.assertions.currentTransaction !== '4|4|AVAILABLE|4') {
       throw new Error(`unexpected committed transaction state ${report.assertions.currentTransaction}`);
     }
-    report.assertions.twoOrganizationIsolation = psql(`
-      SELECT (snapshot ->> 'owningOrganizationId') || '|' || evaluation_availability || '|'
+    report.assertions.twoTenantIsolation = psql(`
+      SELECT (snapshot ->> 'tenantId') || '|' || evaluation_availability || '|'
         || (snapshot #>> '{values,0,missingReason}')
       FROM telemetry_runtime.device_observation_snapshots
       WHERE device_id = '018f2e00-3000-7000-8000-000000000003'
     `);
-    if (report.assertions.twoOrganizationIsolation !== '018f2e00-0000-7000-8000-000000000002|UNAVAILABLE|NEVER_OBSERVED') {
-      throw new Error(`unexpected Organization B state ${report.assertions.twoOrganizationIsolation}`);
+    if (report.assertions.twoTenantIsolation !== '018f2d00-0000-7000-8000-000000000002|UNAVAILABLE|NEVER_OBSERVED') {
+      throw new Error(`unexpected Tenant B state ${report.assertions.twoTenantIsolation}`);
     }
   }
   report.assertions.runtimeIdentity = psql(`

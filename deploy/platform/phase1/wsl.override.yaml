@@ -6,6 +6,7 @@ services:
       OIDC_CLIENT_ID: hvac-web-development
       OIDC_REDIRECT_URI: https://localhost:8443/api/v1/auth/callback
       IDENTITY_POLICY_REVISION: registry-read:1
+      QUERY_CUBE_ENDPOINT: http://cube:4000
       COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
@@ -34,6 +35,7 @@ services:
 
   telemetry-worker:
     environment:
+      ANALYTICS_PROJECTION_ENABLED: "false"
       TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
@@ -68,7 +70,7 @@ services:
   clickhouse:
     volumes:
       - phase1_wsl_clickhouse_data:/var/lib/clickhouse
-      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./runtime/backups/clickhouse:/backups
 
   redis:
@@ -77,8 +79,8 @@ services:
 
   mqtt-broker:
     volumes:
-      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ./runtime/mqtt-pki:/mosquitto/certs:ro
       - phase1_wsl_mqtt_data:/mosquitto/data
 

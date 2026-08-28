@@ -1,6 +1,12 @@
 go 1.25.12
 
 use (
+	./cmd/energy-api
+	./cmd/iot-service
+	./cmd/maintenance-worker
+	./cmd/metric-worker
+	./cmd/scheduler
+	./cmd/telemetry-worker
 	./libs/alarmauth
 	./libs/workorderauth
 	./libs/analyticsmodel
@@ -13,6 +19,7 @@ use (
 	./libs/edgefleet
 	./libs/identitycontext
 	./libs/intelligencemodel
+	./libs/limitpolicy
 	./libs/observability
 	./libs/operationsauditevent
 	./libs/oidctest
@@ -21,37 +28,33 @@ use (
 	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
+	./libs/schemagate
 	./libs/telemetryauth
 	./libs/telemetryhistorymodel
 	./libs/testpki
 	./libs/workloadtls
-	./services/analytics-read-model-projector
-	./services/alarm-service
-	./services/audit-ledger-service
-	./services/command-dispatcher
-	./services/command-service
+	./modules/energy
+	./modules/alarm
+	./modules/audit
+	./modules/command
 	./services/forecast-service
 	./services/fdd-service
-	./services/iam-service
+	./modules/iam
 	./services/identity-service
 	./services/optimization-service
 	./services/outbound-delivery-service
 	./services/notification-service
 	./services/rule-runtime-service
-	./services/legacy-migration-service
-	./services/mqtt-telemetry-adapter
-	./services/metric-engine-service
-	./services/maintenance-service
-	./services/scheduler-service
+	./modules/iot
+	./modules/metric
+	./modules/maintenance
+	./modules/scheduler
 	./services/settlement-service
-	./services/oidc-test-provider
+	./tools/oidc-test-provider
 	./services/outbox-relay
-	./services/platform-core-service
-	./services/platform-gateway
-	./services/telemetry-query-service
-	./services/telemetry-runtime-service
-	./services/telemetry-shadow-comparator
-	./services/work-order-service
+	./modules/registry
+	./modules/telemetry
+	./modules/workorder
 	./tools/eg8200-simulator
 	./tools/s0-auth-fixture
 )

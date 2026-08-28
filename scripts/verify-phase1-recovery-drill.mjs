@@ -1,19 +1,26 @@
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
+import { buildDrillPassedAttainment, validateRecoveryAttainment } from './phase1-recovery-attainment.ts';
+
 const root = resolve(import.meta.dirname, '..');
 const targetPath = resolve(root, 'deploy/platform/phase1/recovery/recovery-targets.v1.json');
+const currentAttainmentPath = resolve(root, 'deploy/platform/phase1/recovery/attainment.v1.json');
 const fileArg = process.argv.find((arg) => arg.startsWith('--file='));
 if (!fileArg) {
   throw new Error('usage: node scripts/verify-phase1-recovery-drill.mjs --file=/path/to/drill-record.json');
 }
 
 const recordPath = resolve(process.cwd(), fileArg.slice('--file='.length));
-const [targets, record] = await Promise.all([
+const attainmentOutputArg = process.argv.find((arg) => arg.startsWith('--attainment-output='));
+const [targets, recordBytes, currentAttainment] = await Promise.all([
   JSON.parse(await readFile(targetPath, 'utf8')),
-  JSON.parse(await readFile(recordPath, 'utf8')),
+  readFile(recordPath),
+  JSON.parse(await readFile(currentAttainmentPath, 'utf8')),
 ]);
+const record = JSON.parse(recordBytes.toString('utf8'));
 
 const failures = [];
 const assert = (condition, message) => {
@@ -134,6 +141,18 @@ for (const field of ['backupReference', 'walReference', 'recoveryHostReference',
 if (failures.length > 0) {
   console.error('Phase 1 recovery drill verification failed:\n' + failures.map((failure) => `- ${failure}`).join('\n'));
   process.exit(1);
+}
+
+if (attainmentOutputArg) {
+  const attainment = buildDrillPassedAttainment({
+    current: currentAttainment,
+    record,
+    recordSha256: createHash('sha256').update(recordBytes).digest('hex'),
+  });
+  validateRecoveryAttainment(attainment, { now: new Date(record.businessValidationCompletedAt) });
+  const outputPath = resolve(process.cwd(), attainmentOutputArg.slice('--attainment-output='.length));
+  await writeFile(outputPath, `${JSON.stringify(attainment, null, 2)}\n`, { flag: 'wx' });
+  console.log(`Phase 1 recovery attainment written: ${outputPath}`);
 }
 
 console.log(`Phase 1 recovery drill verified: drillId=${record.drillId}, environment=${record.environment}, scenario=${record.scenario}`);

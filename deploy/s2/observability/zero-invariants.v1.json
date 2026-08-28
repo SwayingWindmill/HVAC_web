@@ -7,7 +7,7 @@
     {"id":"unauthorized-key-delivery","maximum":0,"evidence":["test:security-negative","out/s2-telemetry-live-client/browser-live-client.json"]},
     {"id":"post-revocation-delivery","maximum":0,"evidence":["test:security-negative","out/s2-telemetry-live-client/browser-live-client.json","out/s2-hvac-web-presence/browser-journey.json"]},
     {"id":"cursor-replay-or-scope-expansion","maximum":0,"evidence":["test:security-negative","out/s2-telemetry-live-client/browser-live-client.json"]},
-    {"id":"non-owner-write","maximum":0,"evidence":["test:security-negative","out/s2-shadow-routing/shadow-routing.json"]},
+    {"id":"non-owner-write","maximum":0,"evidence":["test:security-negative"]},
     {"id":"legacy-or-mock-request-fallback","maximum":0,"evidence":["out/s2-hvac-web-presence/network-audit.json"]},
     {"id":"undetected-business-revision-gap","maximum":0,"evidence":["out/s2-telemetry-live-client/browser-live-client.json","out/s2-hvac-web-presence/browser-journey.json"]}
   ]

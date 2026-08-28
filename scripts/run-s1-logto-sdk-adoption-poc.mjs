@@ -48,7 +48,7 @@ function runInherited(label, args) {
 
 const baselineTests = run('existing-gateway-identity-tests', [
   resolve(root, 'scripts/run-go.mjs'),
-  'test', '-count=1', './services/platform-gateway/...',
+  'test', '-count=1', './cmd/energy-api/...',
 ]);
 const baselineBrowser = runInherited('existing-gateway-browser-audit', [
   resolve(root, 'scripts/run-auth-principal-browser-audit.mjs'),

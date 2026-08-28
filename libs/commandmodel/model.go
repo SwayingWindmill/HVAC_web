@@ -111,6 +111,18 @@ func ParameterValue(capability Capability, parameters CommandParameters) (float6
 	return value, ok
 }
 
+func ParametersValid(capability Capability, parameters CommandParameters) bool {
+	profile, ok := CapabilityProfileFor(capability)
+	if !ok {
+		return false
+	}
+	if profile.ParameterKey == "" {
+		return len(parameters) == 0
+	}
+	value, ok := ParameterValue(capability, parameters)
+	return ok && value >= profile.Minimum && value <= profile.Maximum
+}
+
 func ExpectedReportedValue(capability Capability, parameters CommandParameters) (ScalarValue, bool) {
 	switch capability {
 	case CapabilityStart:
@@ -501,4 +513,38 @@ type ConnectorResult struct {
 	EvidenceID    string
 	Acknowledged  bool
 	EdgeExecution *EdgeExecutionEvidence
+}
+
+type DeviceRoute struct {
+	ExternalDeviceID string
+	BindingRevision  uint64
+}
+
+type CorrelationState string
+
+const (
+	CorrelationPrepared  CorrelationState = "PREPARED"
+	CorrelationMayCommit CorrelationState = "MAY_COMMIT"
+	CorrelationReplied   CorrelationState = "REPLIED"
+	CorrelationResolved  CorrelationState = "RESOLVED"
+)
+
+type CommandCorrelation struct {
+	Envelope              DispatchEnvelope
+	IntegrationInstanceID string
+	ExternalDeviceID      string
+	OwnerGeneration       uint64
+	MappingRevision       string
+	BindingRevision       string
+	ProviderEndpoint      string
+	ProviderMethod        string
+	RequestSHA256         string
+	PreparedAt            time.Time
+	State                 CorrelationState
+	ReplySHA256           string
+	ReplyStatus           string
+	ReplyEventTime        time.Time
+	ReplyReasonCode       string
+	EdgeExecution         *EdgeExecutionEvidence
+	RepliedAt             time.Time
 }

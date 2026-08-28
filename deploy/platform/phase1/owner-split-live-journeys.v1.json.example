@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "environment": "staging",
+  "steps": [
+    {
+      "owner": "iam-owner",
+      "method": "GET",
+      "path": "/api/v1/auth/tenant-contexts",
+      "expectedStatuses": [200],
+      "headers": { "Authorization": "[REDACTED_SECRET]" }
+    },
+    {
+      "owner": "audit-owner",
+      "method": "POST",
+      "path": "/api/v1/audit/search",
+      "expectedStatuses": [200],
+      "headers": {
+        "Authorization": "[REDACTED_SECRET]",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"limit\":1}"
+    },
+    {
+      "owner": "core-owner",
+      "method": "GET",
+      "path": "/api/v1/sites",
+      "expectedStatuses": [200],
+      "headers": { "Authorization": "[REDACTED_SECRET]" }
+    },
+    {
+      "owner": "telemetry-query-owner",
+      "method": "POST",
+      "path": "/api/v1/telemetry/device-series:query",
+      "expectedStatuses": [200],
+      "headers": {
+        "Authorization": "[REDACTED_SECRET]",
+        "Content-Type": "application/json"
+      },
+      "body": "[SITE_FIXTURE_QUERY_JSON]"
+    },
+    {
+      "owner": "command-owner",
+      "method": "GET",
+      "path": "/api/v1/commands/[COMMAND_ID]",
+      "expectedStatuses": [200],
+      "headers": { "Authorization": "[REDACTED_SECRET]" }
+    },
+    {
+      "owner": "alarm-owner",
+      "method": "GET",
+      "path": "/api/v1/alarms",
+      "expectedStatuses": [200],
+      "headers": { "Authorization": "[REDACTED_SECRET]" }
+    },
+    {
+      "owner": "work-order-owner",
+      "method": "GET",
+      "path": "/api/v1/sites/[SITE_ID]/work-orders",
+      "expectedStatuses": [200],
+      "headers": { "Authorization": "[REDACTED_SECRET]" }
+    }
+  ]
+}

@@ -4,25 +4,27 @@ This directory implements the Phase 1 deployment-side backup contract from `SE-A
 
 ## PostgreSQL
 
-The canonical Compose service enables continuous WAL archiving to `POSTGRES_WAL_ARCHIVE_DIR`. A base backup is executed with:
+When `PHASE1_POSTGRES_MODE=local`, the canonical Compose PostgreSQL service enables continuous WAL archiving to `POSTGRES_WAL_ARCHIVE_DIR`. A base backup is executed with:
 
 ```bash
-docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm postgres-backup
+docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres --profile backup run --rm postgres-backup
 ```
 
-Production must point both `POSTGRES_WAL_ARCHIVE_DIR` and `POSTGRES_BASE_BACKUP_DIR` at storage that is independent from the PostgreSQL data volume. That storage must be encrypted and access-controlled. A local directory on the same failed disk is not a disaster-recovery backup.
+When PostgreSQL is external, backup ownership follows that external deployment. The same `postgres-backup` container can target the configured external host only when the database permits `pg_basebackup`; managed-provider backup and PITR should otherwise be operated at the provider/data-plane layer rather than emulated on the application host.
+
+For local PostgreSQL, Production must point both `POSTGRES_WAL_ARCHIVE_DIR` and `POSTGRES_BASE_BACKUP_DIR` at storage that is independent from the PostgreSQL data volume. For external PostgreSQL, the equivalent provider/self-managed backup location must be independent from the application host. A local directory on the same failed disk is not a disaster-recovery backup.
 
 The base backup uses `pg_basebackup` with streamed WAL and writes `SHA256SUMS`. Continuous archive + a suitable base backup is the deployment prerequisite for PITR. This repository does not claim an RPO until a timestamped recovery drill measures it.
 
 ## ClickHouse
 
-ClickHouse exposes a single-node native backup disk at `CLICKHOUSE_BACKUP_DIR`. Run:
+When `PHASE1_CLICKHOUSE_MODE=local`, ClickHouse exposes a single-node native backup disk at `CLICKHOUSE_BACKUP_DIR`. Run:
 
 ```bash
-docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm clickhouse-backup
+docker compose -f deploy/platform/phase1/compose.yaml --profile local-clickhouse --profile backup run --rm clickhouse-backup
 ```
 
-Production must place `CLICKHOUSE_BACKUP_DIR` on protected backup storage rather than the ClickHouse data volume.
+Production must place `CLICKHOUSE_BACKUP_DIR` on protected backup storage rather than the ClickHouse data volume. When ClickHouse is external, backup and restore ownership follows that external data plane or managed provider; the application host does not emulate external ClickHouse durability.
 
 ## Scheduling
 

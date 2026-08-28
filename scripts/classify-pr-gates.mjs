@@ -107,6 +107,22 @@ const selectS3 = (file, reason, { integration = false } = {}) => {
   addReason(file, reason);
 };
 
+const selectAlarm = (file, reason, { integration = false, browser = false } = {}) => {
+  add(contractProfiles, ['core']);
+  add(unitProfiles, ['alarm']);
+  if (integration) add(integrationProfiles, ['alarm']);
+  if (browser) add(browserProfiles, ['alarm']);
+  addReason(file, reason);
+};
+
+const selectWorkOrder = (file, reason, { integration = false, browser = false } = {}) => {
+  add(contractProfiles, ['core']);
+  add(unitProfiles, ['workorder']);
+  if (integration) add(integrationProfiles, ['workorder']);
+  if (browser) add(browserProfiles, ['workorder']);
+  addReason(file, reason);
+};
+
 const selectAnalytics = (file, reason, { integration = false } = {}) => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['analytics']);
@@ -136,7 +152,7 @@ for (const file of files) {
     addReason(file, 'dependency lock changed; compile and unit checks run, database and browser gates stay selective');
   });
   match(file === 'go.work' || file === 'go.work.sum', () => {
-    add(unitProfiles, ['s0', 's1', 's2', 's3', 'analytics']);
+    add(unitProfiles, ['s0', 's1', 's2', 's3', 'alarm', 'workorder', 'analytics']);
     addReason(file, 'Go workspace graph changed');
   });
   match(file === 'AGENTS.md' || file === 'README.md' || file === 'LICENSE' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
@@ -170,12 +186,14 @@ for (const file of files) {
       selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
     } else if (file.includes('telemetry') || file.includes('s2-')) selectS2(file, 'telemetry contract changed', { integration: false, browser: true });
     else if (file.includes('command') || file.includes('s3-')) selectS3(file, 'command contract changed');
+    else if (file.includes('alarm') || file.includes('s4-')) selectAlarm(file, 'Alarm contract changed');
+    else if (file.includes('work-order') || file.includes('workorder') || file.includes('s5-')) selectWorkOrder(file, 'Work Order contract changed');
     else selectBroad(file, 'shared contract changed');
   });
 
-  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('services/audit-ledger-service/') || file.startsWith('services/outbox-relay/') || file.startsWith('services/platform-core-service/'), () => selectS0(file, 'S0 identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
-  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('services/legacy-migration-service/') || file.startsWith('tools/legacy-private-fixture/') || file.startsWith('deploy/s1/') || file.startsWith('infra/s1-'), () => selectS1(file, 'S1 registry capability changed', { integration: true, browser: file.includes('hvac-web') }));
-  match(file.startsWith('libs/telemetryauth/') || file.startsWith('services/telemetry-runtime-service/') || file.startsWith('services/telemetry-shadow-comparator/') || file.startsWith('deploy/s2/') || file.startsWith('infra/s2-telemetry/'), () => {
+  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('services/outbox-relay/') || file.startsWith('modules/registry/'), () => selectS0(file, 'S0 identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
+  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('tools/legacy-private-fixture/') || file.startsWith('deploy/s1/') || file.startsWith('infra/s1-'), () => selectS1(file, 'S1 registry capability changed', { integration: true, browser: file.includes('hvac-web') }));
+  match(file.startsWith('libs/telemetryauth/') || file.startsWith('modules/iot/') || file.startsWith('modules/telemetry/internal/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('deploy/s2/') || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
     const integration = lower.includes('realtime') || lower.includes('centrifugo') || lower.includes('005-s2-realtime')
       ? 's2-realtime'
@@ -186,11 +204,13 @@ for (const file of files) {
           : 's2-baseline';
     selectS2(file, 'S2 telemetry capability changed', { integration, browser: lower.includes('live') || lower.includes('hvac-web') });
   });
-  match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('services/command-service/') || file.startsWith('services/command-dispatcher/') || file.startsWith('services/thingsboard-connector-control/') || file.startsWith('deploy/s3/'), () => selectS3(file, 'S3 command capability changed', { integration: true }));
-  match(file.startsWith('libs/analyticsmodel/') || file.startsWith('services/telemetry-query-service/') || file.startsWith('services/analytics-read-model-projector/') || file.startsWith('deploy/analytics/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
+  match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('services/thingsboard-connector-control/') || file.startsWith('deploy/s3/') || file.startsWith('infra/command/'), () => selectS3(file, 'S3 command capability changed', { integration: true }));
+  match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('deploy/s4/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
+  match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('deploy/s5/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
+  match(file.startsWith('libs/analyticsmodel/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/telemetry/cmd/telemetry-query-owner/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('deploy/analytics/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('benchmarks/operations-agent/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 
-  match(file.startsWith('services/iam-service/') || file.startsWith('services/platform-gateway/'), () => {
+  match(file.startsWith('modules/iam/') || file.startsWith('cmd/energy-api/'), () => {
     selectS0(file, 'shared IAM or Gateway boundary changed', { browser: true });
     selectS1(file, 'shared IAM or Gateway boundary changed', { browser: true });
     selectS2(file, 'shared IAM or Gateway boundary changed', { integration: 's2-baseline', browser: true });
@@ -198,13 +218,16 @@ for (const file of files) {
     add(browserProfiles, ['rms']);
   });
   match(
-    file.startsWith('services/platform-gateway/internal/gateway/operations_agent'),
+    file.startsWith('cmd/energy-api/internal/gateway/operations_agent'),
     () => selectOperationsAgent(file, 'Operations Gateway boundary changed', { integration: false }),
   );
 
   match(file.startsWith('pocs/platform-components/'), () => {
     add(unitProfiles, ['pocs']);
     addReason(file, 'platform component POC changed');
+  });
+  match(file.startsWith('pocs/telemetry-shadow-comparator/') || file.startsWith('tools/legacy-registry-migrator/'), () => {
+    addReason(file, 'retired migration or cutover evidence changed');
   });
 
   match(file.startsWith('scripts/'), () => {
@@ -236,6 +259,8 @@ for (const file of files) {
       selectS2(file, 'S2 automation changed', { integration, browser: lower.includes('browser') || lower.includes('live-client') || lower.includes('hvac-web') });
     });
     scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectS3(file, 'S3 automation changed', { integration: lower.includes('postgres') || lower.includes('thingsboard') }));
+    scriptMatch(lower.includes('s4-') || lower.includes('alarm'), () => selectAlarm(file, 'Alarm automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
+    scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent') || lower.includes('operations-workspace') || lower.includes('operations-reconnect'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
     scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));

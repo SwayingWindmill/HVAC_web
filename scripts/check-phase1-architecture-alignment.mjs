@@ -10,14 +10,20 @@ const matrixPath = 'deploy/platform/phase1/alignment-matrix.v1.json';
 const overallPath = 'docs/architecture/phase1-overall-architecture.md';
 const operationsPath = 'docs/operations/phase1-deployment-alignment.md';
 const edgeControlPlanePath = 'contracts/architecture/edge-control-plane.v1.json';
+const deploymentTiersPath = 'deploy/platform/phase1/deployment-tiers.v1.json';
+const availabilityTierPath = 'deploy/platform/phase1/availability-tier.v1.json';
+const recoveryAttainmentPath = 'deploy/platform/phase1/recovery/attainment.v1.json';
 const authorityId = 'SE-ARCH-DEPLOY-001 V1.0 CURRENT';
 
-const [baseline, matrix, overall, operations, edgeControlPlane] = await Promise.all([
+const [baseline, matrix, overall, operations, edgeControlPlane, deploymentTiers, availabilityTier, recoveryAttainment] = await Promise.all([
   readJSON(baselinePath),
   readJSON(matrixPath),
   readText(overallPath),
   readText(operationsPath),
   readJSON(edgeControlPlanePath),
+  readJSON(deploymentTiersPath),
+  readJSON(availabilityTierPath),
+  readJSON(recoveryAttainmentPath),
 ]);
 
 const failures = [];
@@ -31,6 +37,13 @@ assert(baseline.deploymentModel?.host === 'single-linux-server', 'Phase 1 deploy
 assert(baseline.deploymentModel?.orchestration === 'docker-compose', 'Phase 1 canonical orchestrator must be Docker Compose');
 assert(baseline.deploymentModel?.kubernetesRequired === false, 'Kubernetes must not be a Phase 1 requirement');
 assert(baseline.deploymentModel?.singleServerRequired === true && baseline.deploymentModel?.fewServersAllowed === false, 'Phase 1 must remain a single-server baseline');
+assert(baseline.deploymentTiers?.contract === deploymentTiersPath && baseline.deploymentTiers?.profileSelectionRequired === true, 'baseline must pin the deployment tier contract');
+assert(baseline.availabilityTier?.contract === availabilityTierPath && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false, 'baseline must pin SINGLE_NODE_RECOVERABLE as the availability tier');
+assert(baseline.observability?.profiles?.['observability-core']?.length === 3 && baseline.observability?.profiles?.['observability-logs']?.length === 5 && baseline.observability?.profiles?.['observability-full']?.length === 6, 'baseline must freeze the three observability profiles');
+assert(baseline.recovery?.attainmentContract === recoveryAttainmentPath, 'baseline must pin the recovery attainment contract');
+assert(deploymentTiers.tiers?.map((tier) => tier.id).join(',') === 'demo,single-lite,single-full', 'deployment tiers must remain demo/single-lite/single-full');
+assert(availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE' && availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'availability tier must pin the reviewed ThingsBoard upgrade reference');
+assert(recoveryAttainment.state === 'TARGET_DEFINED' && recoveryAttainment.productionClaimAllowed === false, 'recovery attainment must remain unclaimed until a real drill passes');
 
 const expectedEnvironments = ['development', 'testing', 'staging', 'production'];
 assert(JSON.stringify(baseline.environments) === JSON.stringify(expectedEnvironments), 'Phase 1 environments must be Development/Testing/Staging/Production in order');
@@ -95,6 +108,9 @@ assert(byId.get('POSTGRES-HA-001')?.status === 'DEFER', 'PostgreSQL HA must be e
 assert(byId.get('KAFKA-001')?.status === 'REMOVE', 'Kafka/Redpanda must stay out of the canonical Phase 1 deployment');
 assert(byId.get('DOC-CONSISTENCY-001')?.status === 'KEEP', 'document-scope consistency must remain a canonical architecture control');
 assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional until the deployment needs it');
+for (const id of ['DEPLOY-TIER-001', 'OBS-PROFILE-001', 'AVAILABILITY-001', 'RECOVERY-ATTESTATION-001']) {
+  assert(byId.get(id)?.status === 'KEEP', `${id} must remain a canonical deployment contract`);
+}
 assert(byId.get('SCHEDULER-001')?.status === 'KEEP', 'unified Scheduler Coordination must remain implemented through the durable Job contract');
 assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the recovery evidence mechanism must remain implemented');
 assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'MISSING', 'HVAC Edge Control Plane must remain an explicit gap until Process Image/Cycle/Controller/Scheduler are implemented');

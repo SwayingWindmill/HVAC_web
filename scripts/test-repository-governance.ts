@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -12,16 +11,19 @@ import {
   findWorkflowViolations,
 } from './check-repository-governance.ts';
 
-test('tracked artifact checks reject transient content but defer local worktrees', () => {
+test('tracked artifact checks reject transient content and repository-local checkout roots', () => {
   assert.deepEqual(findTrackedArtifactViolations([
-    'services/platform-gateway/server.log',
+    'cmd/energy-api/server.log',
     'out/generated-report.json',
-    '.worktrees/deferred-checkout/source.go',
+    '.worktrees/local-checkout/source.go',
+    '.clones/openems/source.java',
     '.scratch/go-data-ai-platform/spec.md',
-    'services/platform-gateway/main.go',
+    'cmd/energy-api/main.go',
   ]), [
-    'services/platform-gateway/server.log: transient file type is tracked',
+    'cmd/energy-api/server.log: transient file type is tracked',
     'out/generated-report.json: generated, local coordination, or archived runtime content is tracked',
+    '.worktrees/local-checkout/source.go: generated, local coordination, or archived runtime content is tracked',
+    '.clones/openems/source.java: generated, local coordination, or archived runtime content is tracked',
   ]);
 });
 
@@ -30,9 +32,6 @@ test('JavaScript tooling governance ratchets legacy paths and rejects product/ru
     { path: 'scripts/legacy.mjs', bytes: 10 },
     { path: 'services/operations-agent-service/test/runtime.test.mjs', bytes: 20 },
   ];
-  const pathSetSha256 = createHash('sha256')
-    .update(`${files.map(({ path }) => path).sort().join('\n')}\n`)
-    .digest('hex');
   const baseline = {
     schemaVersion: 1,
     policy: 'legacy-js-ratchet',
@@ -43,7 +42,6 @@ test('JavaScript tooling governance ratchets legacy paths and rejects product/ru
     },
     fileCount: 2,
     maxBytes: 30,
-    pathSetSha256,
   };
 
   assert.deepEqual(findJavascriptToolingViolations({ files, baseline }), []);
@@ -54,7 +52,8 @@ test('JavaScript tooling governance ratchets legacy paths and rejects product/ru
   ];
   const productViolations = findJavascriptToolingViolations({ files: productJavaScript, baseline });
   assert.ok(productViolations.some((violation) => violation.includes('outside reviewed legacy tooling roots')));
-  assert.ok(productViolations.some((violation) => violation.includes('JavaScript path set changed')));
+  assert.ok(productViolations.some((violation) => violation.includes('JavaScript file count grew')));
+  assert.deepEqual(findJavascriptToolingViolations({ files: files.slice(0, 1), baseline }), []);
 
   const growthViolations = findJavascriptToolingViolations({
     files: files.map((file) => file.path === 'scripts/legacy.mjs' ? { ...file, bytes: 11 } : file),
@@ -79,8 +78,10 @@ test('Linguist exclusions cover ancillary tooling without touching product/runti
 
 test('documentation checks cover service catalog, runtime modes, and React major version', () => {
   assert.deepEqual(findDocumentationViolations({
-    serviceNames: ['alarm-service', 'platform-gateway'],
-    rootReadme: '`alarm-service/`\nnpm run dev:demo',
+    serviceNames: ['platform-gateway'],
+    moduleNames: ['alarm'],
+    commandNames: ['energy-api'],
+    rootReadme: '`alarm/`\n`energy-api/`\nnpm run dev:demo',
     appReadme: 'Vite + React 18',
     reactVersion: '19.2.7',
   }), [
@@ -130,6 +131,22 @@ test('package script governance ratchets long chains and capability delegates', 
     baseline,
     capabilityTasks,
   }).some((violation) => violation.includes('long-chain script `legacy` changed')));
+
+  const explicitOperationBaseline = {
+    ...baseline,
+    scripts: {
+      ...baseline.scripts,
+      legacy: {
+        mode: 'explicit-operation',
+        reason: 'Explicit release operation.',
+      },
+    },
+  };
+  assert.deepEqual(findPackageScriptViolations({
+    scripts: modifiedLongChain,
+    baseline: explicitOperationBaseline,
+    capabilityTasks,
+  }), []);
 
   const revertedCapability = {
     ...scripts,

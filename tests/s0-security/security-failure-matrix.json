@@ -44,17 +44,17 @@
     {
       "id": "cross-organization-zero-success",
       "requirement": "Cross-Organization session revocation and audit access reveal no existence and never succeed; route diagnostics are not exposed by the public contract",
-      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go", "scripts/run-durable-session-browser-audit.mjs", "contracts/http/platform-gateway.openapi.yaml"]
+      "evidence": ["cmd/energy-api/internal/gateway/auth_integration_test.go", "scripts/run-durable-session-browser-audit.mjs", "contracts/http/platform-gateway.openapi.yaml"]
     },
     {
       "id": "identity-negative-paths",
       "requirement": "Forged headers, invalid mTLS identities, invalid delegation and invalid OIDC paths fail closed",
-      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go", "services/iam-service/internal/iam/server_test.go", "services/audit-ledger-service/internal/audit/server_test.go"]
+      "evidence": ["cmd/energy-api/internal/gateway/auth_integration_test.go", "modules/iam/internal/iam/server_test.go", "modules/audit/internal/audit/server_test.go"]
     },
     {
       "id": "csrf-origin-revocation",
       "requirement": "CSRF, Origin and revoked Session cases are rejected through Gateway",
-      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go"]
+      "evidence": ["cmd/energy-api/internal/gateway/auth_integration_test.go"]
     },
     {
       "id": "private-network-boundary",
@@ -74,7 +74,7 @@
     {
       "id": "delivery-idempotency",
       "requirement": "Restart and duplicate delivery converge to one audit effect without losing committed Session events",
-      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "services/audit-ledger-service/internal/audit/postgres_integration_test.go"]
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "modules/audit/internal/audit/postgres_integration_test.go"]
     },
     {
       "id": "forced-process-restart",
@@ -89,12 +89,12 @@
     {
       "id": "secret-absence",
       "requirement": "Seeded secrets are absent from repository, images, logs, traces, metrics, events and diagnostic database fields",
-      "evidence": [".github/workflows/s0-supply-chain.yml", "scripts/run-durable-session-browser-audit.mjs", "services/platform-gateway/internal/gateway/server_test.go"]
+      "evidence": [".github/workflows/s0-supply-chain.yml", "scripts/run-durable-session-browser-audit.mjs", "cmd/energy-api/internal/gateway/server_test.go"]
     },
     {
       "id": "safe-public-errors",
       "requirement": "Public errors contain no stack trace, internal address or cross-tenant detail",
-      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "services/platform-gateway/internal/gateway/server_test.go"]
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "cmd/energy-api/internal/gateway/server_test.go"]
     },
     {
       "id": "route-policy-fail-closed",

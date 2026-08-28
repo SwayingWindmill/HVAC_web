@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "PHASE1_OWNER_SPLIT_RELEASE",
+  "productVersion": "0.1.0",
+  "productReleaseRevision": 1,
+  "sourceRevision": "[GIT_COMMIT]",
+  "images": {
+    "ENERGY_API_IMAGE": "registry.example.com/hvac/energy-api@sha256:[SIGNED_DIGEST]",
+    "IAM_SERVICE_IMAGE": "registry.example.com/hvac/iam-service@sha256:[SIGNED_DIGEST]",
+    "AUDIT_SERVICE_IMAGE": "registry.example.com/hvac/audit-ledger-service@sha256:[SIGNED_DIGEST]",
+    "CORE_SERVICE_IMAGE": "registry.example.com/hvac/platform-core-service@sha256:[SIGNED_DIGEST]",
+    "TELEMETRY_QUERY_SERVICE_IMAGE": "registry.example.com/hvac/telemetry-query-service@sha256:[SIGNED_DIGEST]",
+    "COMMAND_SERVICE_IMAGE": "registry.example.com/hvac/command-service@sha256:[SIGNED_DIGEST]",
+    "ALARM_SERVICE_IMAGE": "registry.example.com/hvac/alarm-service@sha256:[SIGNED_DIGEST]",
+    "WORK_ORDER_SERVICE_IMAGE": "registry.example.com/hvac/work-order-service@sha256:[SIGNED_DIGEST]"
+  }
+}

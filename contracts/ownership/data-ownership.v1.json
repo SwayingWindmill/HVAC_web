@@ -487,6 +487,13 @@
       "sourceOwner": "telemetry-history-projector"
     },
     {
+      "kind": "projection",
+      "name": "analytics-energy-rebuild-run",
+      "writer": "analytics-read-model-projector",
+      "revision": 1,
+      "sourceOwner": "analytics-read-model-projector"
+    },
+    {
       "kind": "query-contract",
       "name": "analytics-energy-series-v1",
       "writer": "telemetry-query-service",
@@ -507,7 +514,7 @@
       "writer": "telemetry-query-service",
       "revision": 1,
       "runtime": "cube-core",
-      "source": "analytics.energy_interval_facts"
+      "source": "analytics.energy_interval_facts_visible"
     },
     {
       "kind": "projection",

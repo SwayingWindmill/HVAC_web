@@ -7,7 +7,7 @@ on:
       - ".github/workflows/s2-telemetry-history.yml"
       - "contracts/telemetry/**"
       - "deploy/s2/**"
-      - "infra/s2-telemetry/**"
+      - "infra/telemetry/**"
       - "services/telemetry-runtime-service/**"
       - "scripts/check-s2-telemetry-history.mjs"
       - "scripts/run-s2-telemetry-history-tests.mjs"

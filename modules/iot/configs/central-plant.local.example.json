@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "integrationInstanceId": "018f3e00-0000-7000-8000-000000000101",
+  "mqtt": {
+    "clientId": "mqtt-telemetry-adapter",
+    "topicFilters": [
+      "energy/v1/+/+/+/telemetry",
+      "energy/v1/+/+/+/state",
+      "energy/v1/+/+/+/event",
+      "energy/v1/+/+/+/heartbeat"
+    ],
+    "caFile": "/run/secrets/ca.pem",
+    "certFile": "/run/secrets/mqtt-adapter-cert.pem",
+    "keyFile": "/run/secrets/mqtt-adapter-key.pem",
+    "serverName": "localhost",
+    "keepAliveSeconds": 30,
+    "sessionExpirySeconds": 86400,
+    "connectTimeoutSeconds": 10
+  },
+  "telemetryRuntime": {
+    "baseUrl": "https://localhost:18446",
+    "caFile": "/run/secrets/ca.pem",
+    "certFile": "/run/secrets/mqtt-adapter-cert.pem",
+    "keyFile": "/run/secrets/mqtt-adapter-key.pem",
+    "serverName": "localhost"
+  },
+  "processingQueueCapacity": 1024
+}

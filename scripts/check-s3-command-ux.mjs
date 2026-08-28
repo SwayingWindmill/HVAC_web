@@ -31,10 +31,10 @@ const [
   read('apps/hvac-web/src/auth/permissions.ts'),
   read('apps/hvac-web/src/App.tsx'),
   read('apps/hvac-web/src/store/ui.ts'),
-  read('services/platform-gateway/internal/gateway/command.go'),
-  read('services/platform-gateway/internal/gateway/command_test.go'),
-  read('services/command-service/pkg/commandservice/http.go'),
-  read('services/command-service/pkg/commandservice/http_test.go'),
+  read('cmd/energy-api/internal/gateway/command.go'),
+  read('cmd/energy-api/internal/gateway/command_test.go'),
+  read('modules/command/pkg/commandservice/http.go'),
+  read('modules/command/pkg/commandservice/http_test.go'),
 ]);
 
 const failures = [];

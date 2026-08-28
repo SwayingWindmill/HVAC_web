@@ -516,6 +516,10 @@
       "revision": 1,
       "writer": "analytics-read-model-projector"
     },
+    "projection:analytics-energy-rebuild-run": {
+      "revision": 1,
+      "writer": "analytics-read-model-projector"
+    },
     "query-contract:analytics-energy-series-v1": {
       "revision": 1,
       "writer": "telemetry-query-service"

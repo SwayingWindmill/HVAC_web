@@ -12,7 +12,8 @@ import tls from 'node:tls';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
+const durabilityComposePath = resolve(root, 'infra/durability/compose.yaml');
+const observabilityComposePath = resolve(root, 'infra/observability/compose.yaml');
 const projectName = process.env.S0_DURABLE_COMPOSE_PROJECT ?? `hvac-s0-durable-${process.pid}-${randomBytes(3).toString('hex')}`;
 const postgresContainer = `${projectName}-postgres-1`;
 const redpandaContainer = `${projectName}-redpanda-1`;
@@ -36,7 +37,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args, options = {}) {
-  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], options);
+  return runDockerCompose(run, ['-p', projectName, '-f', durabilityComposePath, '-f', observabilityComposePath, ...args], options);
 }
 
 function docker(args, options = {}) {
@@ -296,7 +297,7 @@ export async function startS0DurableTopology(options = {}) {
   };
 
   const startAudit = async () => {
-    services.audit = spawnService('Audit Ledger', goBinary, ['run', './services/audit-ledger-service/cmd/audit-ledger-service'], {
+    services.audit = spawnService('Audit Ledger', goBinary, ['run', './modules/audit/cmd/audit-owner'], {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       AUDIT_SERVICE_ADDR: `127.0.0.1:${auditPort}`,
@@ -360,7 +361,7 @@ export async function startS0DurableTopology(options = {}) {
     const routeRegistry = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
     await writeFile(paths.routeRegistry, `${JSON.stringify(routeRegistry, null, 2)}\n`);
 
-    services.oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
+    services.oidc = spawnService('OIDC fixture', goBinary, ['run', './tools/oidc-test-provider/cmd/oidc-test-provider'], {
       GOCACHE: goCacheDir,
       OIDC_FIXTURE_ADDR: `127.0.0.1:${oidcPort}`,
       OIDC_FIXTURE_DIAGNOSTICS_ADDR: `127.0.0.1:${oidcDiagnosticsPort}`,
@@ -372,7 +373,7 @@ export async function startS0DurableTopology(options = {}) {
     });
     await waitForTLS(oidcPort, 'OIDC fixture', services.oidc);
 
-    services.iam = spawnService('IAM service', goBinary, ['run', './services/iam-service/cmd/iam-service'], {
+    services.iam = spawnService('IAM service', goBinary, ['run', './modules/iam/cmd/iam-owner'], {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       IAM_SERVICE_ADDR: `127.0.0.1:${iamPort}`,
@@ -389,7 +390,7 @@ export async function startS0DurableTopology(options = {}) {
     await startAudit();
     await startRelay();
 
-    services.gateway = spawnService('Platform Gateway', goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
+    services.gateway = spawnService('Platform Gateway', goBinary, ['run', './cmd/energy-api'], {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${gatewayPort}`,

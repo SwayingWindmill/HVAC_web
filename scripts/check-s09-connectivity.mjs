@@ -9,13 +9,13 @@ function assert(condition, message) {
 }
 
 const migration = read('infra/connectivity/postgres/init/001-s09-connectivity.sql');
-const store = read('services/mqtt-telemetry-adapter/internal/connectivity/store.go');
-const processor = read('services/mqtt-telemetry-adapter/internal/adapter/processor.go');
-const connector = read('services/command-dispatcher/pkg/mqttconnector/connector.go');
-const config = read('services/mqtt-telemetry-adapter/internal/adapter/config.go');
-const exampleConfig = read('services/mqtt-telemetry-adapter/configs/central-plant.local.example.json');
+const store = read('modules/iot/internal/connectivity/store.go');
+const processor = read('modules/iot/internal/adapter/processor.go');
+const connector = read('modules/command/pkg/mqttconnector/connector.go');
+const config = read('modules/iot/internal/adapter/config.go');
+const exampleConfig = read('modules/iot/configs/central-plant.local.example.json');
 const simulator = read('scripts/phase1-central-plant-simulator.mjs');
-const standaloneCommandPath = 'services/command-dispatcher/cmd/command-dispatcher/main.go';
+const canonicalIoTCommandRuntimePath = 'cmd/iot-service/command_runtime.go';
 
 for (const table of [
   'transport_profiles',
@@ -62,6 +62,6 @@ assert(!exampleConfig.includes('gatewayScopes'), 'static Gateway scope authority
 assert(!exampleConfig.includes('brokerUrl') && config.includes('BrokerURL') && config.includes('json:"-"'), 'Broker origin must come only from the durable TransportProfile');
 assert(simulator.includes('buildConnectivitySeed()'), 'local simulator must seed Connectivity owner state');
 assert(simulator.includes('certificate.fingerprint256') && !simulator.includes('privateKey:'), 'local Connectivity seed must use certificate fingerprint/SecretRef, not private key material');
-assert(!existsSync(standaloneCommandPath), 'obsolete standalone command transport executable must be removed');
+assert(existsSync(canonicalIoTCommandRuntimePath), 'canonical iot-service command runtime wiring is missing');
 
 console.log('S09 Connectivity/session/credential architecture check passed.');

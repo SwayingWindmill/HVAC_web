@@ -7,11 +7,11 @@ const internalContractPath = 'contracts/http/operations-agent-internal.openapi.y
 const toolAuthorizationContractPath = 'contracts/http/operations-tool-authorization-internal.openapi.yaml';
 const ownershipPath = 'contracts/ownership/route-ownership.v1.json';
 const serviceHandlerPath = 'services/operations-agent-service/src/transport-http/internal/operations-agent-http.ts';
-const gatewayPath = 'services/platform-gateway/internal/gateway/operations_agent.go';
-const iamPath = 'services/iam-service/internal/iam/server.go';
+const gatewayPath = 'cmd/energy-api/internal/gateway/operations_agent.go';
+const iamPath = 'modules/iam/internal/iam/server.go';
 const registryAuthPath = 'libs/registryauth/registry.go';
-const corePath = 'services/platform-core-service/internal/core/server.go';
-const queryPath = 'services/telemetry-query-service/internal/query/server.go';
+const corePath = 'modules/registry/internal/core/server.go';
+const queryPath = 'modules/telemetry/internal/query/server.go';
 
 const [
   publicContract,

@@ -1,0 +1,48 @@
+name: S2 Shadow Comparison and Cohort Routing
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - ".github/workflows/s2-shadow-routing.yml"
+      - "contracts/ownership/route-ownership.v1.json"
+      - "deploy/s2/shadow-routing-revisions.v1.json"
+      - "deploy/s2/shadow-comparator-policy.v1.json"
+      - "deploy/s2/fixtures/shadow-comparison-pass.json"
+      - "libs/ownershipregistry/**"
+      - "services/telemetry-shadow-comparator/**"
+      - "scripts/check-ownership-registries.mjs"
+      - "scripts/check-s2-shadow-routing.mjs"
+      - "docs/operations/s2-shadow-routing.md"
+      - "go.work"
+      - "go.work.sum"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run s2:shadow-routing
+      - name: Upload Ticket 08 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s2-shadow-routing-evidence
+          path: out/s2-shadow-routing
+          if-no-files-found: error
+          retention-days: 14

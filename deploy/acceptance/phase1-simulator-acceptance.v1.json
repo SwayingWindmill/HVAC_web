@@ -55,7 +55,7 @@
     },
     {
       "id": "GATE-ENERGY-GOLDEN",
-      "command": "node scripts/run-go.mjs test -count=1 ./services/analytics-read-model-projector/internal/energy/...",
+      "command": "node scripts/run-go.mjs test -count=1 ./modules/energy/internal/energy/...",
       "category": "metric"
     },
     {
@@ -69,7 +69,7 @@
     },
     {
       "id": "GATE-ALARM",
-      "command": "npm run s4:alarm-service",
+      "command": "npm run domain:run -- --domain=alarm --layers=unit",
       "category": "alarm"
     },
     {
@@ -204,16 +204,16 @@
     {
       "id": "REQ-METRIC-001",
       "class": "SOFTWARE_REQUIRED",
-      "title": "累计电量 Golden Dataset",
+      "title": "累计电量 Canonical Golden Dataset",
       "gateIds": ["GATE-ENERGY-GOLDEN"],
-      "acceptance": "正常差值、Source SUSPECT、负累计值、Counter Reset 都与人工期望一致"
+      "acceptance": "正常增量、Source PARTIAL、canonical RESET 与 INVALID_DECREASE 排除均与冻结 Golden Dataset 一致"
     },
     {
       "id": "REQ-METRIC-002",
       "class": "SOFTWARE_REQUIRED",
-      "title": "Counter Reset 不产生负能耗",
+      "title": "Counter Decrease 不伪造零能耗 Fact",
       "gateIds": ["GATE-ENERGY-GOLDEN", "GATE-ANALYTICS-HISTORY"],
-      "acceptance": "Reset/Rollback 输出 0 kWh + SUSPECT + METER_RESET_OR_ROLLBACK"
+      "acceptance": "RESET 只消费 canonical non-negative delta；INVALID_DECREASE 不生成 Fact，也不得写 0 kWh 伪造事实"
     },
     {
       "id": "REQ-METRIC-003",

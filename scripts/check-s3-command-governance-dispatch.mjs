@@ -12,13 +12,13 @@ const [plan, ownership, dataOwnership, routes, model, grant, governance, approva
   readJSON('contracts/ownership/route-ownership.v1.json'),
   read('libs/commandmodel/model.go'),
   read('libs/commandauth/grant.go'),
-  read('services/command-service/pkg/commandservice/governance.go'),
-  read('services/command-service/pkg/commandservice/postgres_approval.go'),
-  read('services/command-service/pkg/commandservice/postgres_dispatch.go'),
-  read('services/command-dispatcher/pkg/commanddispatcher/durable.go'),
-  read('services/command-service/migrations/001_s3_command_runtime.sql'),
-  read('services/command-service/pkg/commandservice/postgres_governance_integration_test.go'),
-  read('services/command-service/pkg/commandservice/postgres_dispatch_integration_test.go'),
+  read('modules/command/pkg/commandservice/governance.go'),
+  read('modules/command/pkg/commandservice/postgres_approval.go'),
+  read('modules/command/pkg/commandservice/postgres_dispatch.go'),
+  read('modules/command/pkg/commanddispatcher/durable.go'),
+  read('modules/command/migrations/001_s3_command_runtime.sql'),
+  read('modules/command/pkg/commandservice/postgres_governance_integration_test.go'),
+  read('modules/command/pkg/commandservice/postgres_dispatch_integration_test.go'),
 ]);
 
 const errors = [];

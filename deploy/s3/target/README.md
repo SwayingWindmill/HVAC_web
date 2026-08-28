@@ -44,28 +44,21 @@ Use the repository generic Go image and bind every image to a digest:
 ```bash
 # Command Service
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE_PACKAGE=./services/command-service/cmd/command-service \
+  --build-arg SERVICE_PACKAGE=./modules/command/cmd/command-owner \
   -t <registry>/command-service:<new-sha> .
 
-# Dispatcher
+# IoT Service (command dispatch + reported-state verification)
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-dispatcher \
-  -t <registry>/command-dispatcher:<new-sha> .
-
-# Verifier; the command is part of the command-dispatcher Go module
-docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-verifier \
-  -t <registry>/command-verifier:<new-sha> .
+  --build-arg SERVICE_PACKAGE=./cmd/iot-service \
+  -t <registry>/iot-service:<new-sha> .
 
 docker build -f deploy/s3/images/command-migrator.Dockerfile \
   -t <registry>/command-migrator:<new-sha> .
 ```
 
-Local Docker builds are verification-only. Formal target images must be published by `.github/workflows/s3-command-certification.yml` from an `s3-v*` tag or explicit workflow dispatch. The workflow builds with BuildKit SBOM and maximum provenance, scans for embedded secrets, signs and verifies each digest with Cosign OIDC, then publishes the `s3-target-image-manifest` artifact.
+This target package is historical S3 certification material, not current Phase1 deployment authority. The former `s3-command-certification` workflow was retired after Command runtime convergence into `energy-api` and `iot-service`; its preserved workflow is under `docs/evidence/retired-workflows/` for audit history only.
 
-For an `s3-v*` tag, the aggregate job also creates a GitHub prerelease for that exact tag and attaches `image-manifest.json`. The release notes explicitly state that the candidate release does not claim formal S3-09 certification. This public, immutable release asset is the preferred operator download when the Actions artifact endpoint requires an authenticated browser session.
-
-Resolve and record each pushed image digest from that aggregated manifest. Do not render mutable tags such as `latest`, local image IDs or unverified registry references.
+Current deployable images must come from the canonical Phase1 build/release path. Do not recreate the retired four-image Command Service / Dispatcher / Verifier topology or treat an old `s3-target-image-manifest` as current runtime authority.
 
 ## Render the target package
 

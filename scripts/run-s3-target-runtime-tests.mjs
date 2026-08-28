@@ -16,19 +16,18 @@ const environment = {
 const modules = [
   './libs/commandmodel/...',
   './libs/workloadtls/...',
-  './services/command-service/...',
-  './services/command-dispatcher/...',
+  './modules/command/...',
+  './cmd/iot-service/...',
   './services/thingsboard-connector-control/...',
-  './services/telemetry-runtime-service/...',
+  './modules/telemetry/...',
 ];
 const commands = [
   [process.execPath, ['scripts/check-s3-target-runtime.mjs']],
   [process.execPath, ['scripts/run-go.mjs', 'test', ...modules]],
   [process.execPath, ['scripts/run-go.mjs', 'vet', ...modules]],
-  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-service', './services/command-service/cmd/command-service']],
-  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-dispatcher', './services/command-dispatcher/cmd/command-dispatcher']],
-  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-verifier', './services/command-dispatcher/cmd/command-verifier']],
-  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/telemetry-runtime-service', './services/telemetry-runtime-service/cmd/telemetry-runtime-service']],
+  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-owner', './modules/command/cmd/command-owner']],
+  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/iot-service', './cmd/iot-service']],
+  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/telemetry-worker', './cmd/telemetry-worker']],
 ];
 
 for (const [command, args] of commands) {

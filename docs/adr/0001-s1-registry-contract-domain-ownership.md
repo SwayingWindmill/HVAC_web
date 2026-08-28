@@ -111,7 +111,7 @@ Changing public IDs, Equipment/Device identity, cursor claims, ownership writers
 | Opaque Cursor binding | S1 Public HTTP contract | model cursor claims and generated clients | HMAC tamper and cross-Scope tests |
 | IAM/Core Schema ownership | S1 PostgreSQL ownership | Data Ownership Registry and bootstrap roles | ownership checker and schema-owner SQL |
 | Route ownership and fallback | S1 Legacy migration | Route Ownership Registry revision 2 | ownership checker |
-| DDL, RLS and indexes | S1 PostgreSQL ownership and RLS | `infra/s1-registry/postgres/init` | real PostgreSQL integration test |
+| DDL, RLS and indexes | S1 PostgreSQL ownership and RLS | `infra/registry/postgres/init` | real PostgreSQL integration test |
 | Two-Organization fixtures | S1 Testing Decisions | deterministic fixture SQL | owner/delegated/no-access RLS counts |
 | Legacy mapping states | S1 Legacy mapping | model + DDL + fixtures | static check and Quarantine SQL assertion |
 | sqlc versus pgx POC | S1 reuse assessment | `pocs/s1-sqlc` | deterministic generation and compile test |

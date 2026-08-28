@@ -3,9 +3,10 @@ FROM golang:1.25.12-bookworm AS build
 WORKDIR /src
 COPY go.work go.work.sum ./
 COPY libs ./libs
+COPY modules ./modules
 COPY services ./services
 COPY tools ./tools
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/telemetry-history-projector ./services/telemetry-runtime-service/cmd/telemetry-history-projector
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/telemetry-history-projector ./modules/telemetry/cmd/telemetry-history-projector
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /

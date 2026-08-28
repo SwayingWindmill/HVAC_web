@@ -89,7 +89,7 @@ Before advancing a phase, require:
 - `npm run ownership:check`
 - `npm run s1:registry:check`
 - `npm run test:registry-routing`
-- `npm run build:gateway`
+- `npm run build:energy-api`
 - Ticket 05 PostgreSQL routing evidence
 - zero unexplained shadow mismatches for the approved observation window
 

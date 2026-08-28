@@ -58,12 +58,12 @@ HVAC Web 不应恢复 ThingsBoard 运行时，也不应照搬它的通用 Entity
 
 主要本地证据：
 
-- `services/mqtt-telemetry-adapter/internal/adapter/processor.go`；
-- `services/telemetry-runtime-service/internal/telemetry/ingest_store.go`、`ingest.go`、`latest_cache.go`、`server.go`、`history.go`、`history_clickhouse.go`、`realtime.go`、`realtime_postgres.go`；
-- `services/telemetry-query-service/internal/history/client.go`；
-- `services/metric-engine-service/internal/metric/engine.go`、`postgres.go`、`clickhouse.go`、`jobs.go`、`scheduler.go`；
-- `infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql`、`003-telemetry-rollups.sql`、`004-counter-semantics.sql`、`005-metric-result-revisions.sql`；
-- `infra/s1-registry/postgres/init/009c-metric-model-v2.sql`、`009d-data-governance-v2.sql`、`009g-object-storage-governance-v2.sql`、`009l-scheduler-job-v1.sql`；
+- `modules/iot/internal/adapter/processor.go`；
+- `modules/telemetry/internal/telemetry/ingest_store.go`、`ingest.go`、`latest_cache.go`、`server.go`、`history.go`、`history_clickhouse.go`、`realtime.go`、`realtime_postgres.go`；
+- `modules/telemetry/internal/history/client.go`；
+- `modules/metric/internal/metric/engine.go`、`postgres.go`、`clickhouse.go`、`jobs.go`、`scheduler.go`；
+- `infra/telemetry/clickhouse/init/001-telemetry-history.sql`、`003-telemetry-rollups.sql`、`004-counter-semantics.sql`、`005-metric-result-revisions.sql`；
+- `infra/registry/postgres/init/009c-metric-model-v2.sql`、`009d-data-governance-v2.sql`、`009g-object-storage-governance-v2.sql`、`009l-scheduler-job-v1.sql`；
 - `contracts/ownership/s2-telemetry-ownership.v1.json` 与 `docs/architecture/data-architecture-v2-conformance.md`。
 
 ## 3. 参考项目功能与它解决的问题
@@ -513,5 +513,5 @@ PostgreSQL 已有版本化 Lifecycle Policy、Legal Hold、Deletion Request、Ar
 | 本地 ClickHouse Raw/Rollup/Metric DDL 审查 | 完成 |
 | 生命周期执行器搜索 | 仅发现 DDL 与测试；未发现运行时 Executor |
 | `go test` 首次执行 | Sandbox 无权访问 Windows Go Build Cache |
-| 提权后 `go test ./services/telemetry-runtime-service/... ./services/telemetry-query-service/... ./services/metric-engine-service/...` | 未通过：`go-redis/v9` 下载网络失败；Telemetry Query 测试还因 `ActingOrganizationID` 已删除而编译失败；`internal/cube` 通过 |
+| 提权后 重组前 Telemetry Runtime/Query 双模块测试（现已收敛为 `./modules/telemetry/...`） | 未通过：`go-redis/v9` 下载网络失败；Telemetry Query 测试还因 `ActingOrganizationID` 已删除而编译失败；`internal/cube` 通过 |
 | 运行时产品代码修改 | 无；本票只新增裁决文档 |

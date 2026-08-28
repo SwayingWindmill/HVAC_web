@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, X509Certificate } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
@@ -12,11 +12,12 @@ import {
   centralPlantDevices,
   centralPlantIdentity,
   localUUID,
+  sqlLiteral,
 } from './central-plant-local-contract.mjs';
 import { centralPlantLogtoAccountProfile, provisionCentralPlantLogto } from './central-plant-logto.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildCentralPlantSpatialIdentities, buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
-import { buildCentralPlantControlPoints, buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } from './central-plant-spatial-model.mjs';
+import { buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } from './central-plant-spatial-model.mjs';
 
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
@@ -33,6 +34,7 @@ const databasePasswords = Object.freeze({
   s1Iam: joined(['s1', 'iam', 'runtime', 'local', 'only']),
   s1Core: joined(['s1', 'core', 'service', 'local', 'only']),
   s1Grant: joined(['s2', 'iam', 'grant', 'runtime', 'local', 'only']),
+  connectivity: joined(['connectivity', 'runtime', 'local', 'only']),
   s2Runtime: joined(['s2', 'telemetry', 'runtime', 'local', 'only']),
   s2History: joined(['s2', 'telemetry', 'history', 'local', 'only']),
   logto: joined(['central', 'plant', 'logto', 'local', 'only']),
@@ -143,6 +145,20 @@ async function waitForContainer(command, label) {
 
 function dockerExec(container, args, options = {}) {
   return run('docker', ['exec', container, ...args], options);
+}
+
+function configureLocalDatabaseRoleCredentials(s1Container, s2Container) {
+  const roleCredentials = [
+    [s1Container, 'hvac_s1', 's1_iam_runtime', databasePasswords.s1Iam],
+    [s1Container, 'hvac_s1', 's1_core_service', databasePasswords.s1Core],
+    [s1Container, 'hvac_s1', 's2_iam_grant_runtime', databasePasswords.s1Grant],
+    [s1Container, 'hvac_s1', 'connectivity_runtime', databasePasswords.connectivity],
+    [s2Container, 'hvac_s2', 's2_telemetry_service', databasePasswords.s2Runtime],
+    [s2Container, 'hvac_s2', 's2_telemetry_history_service', databasePasswords.s2History],
+  ];
+  for (const [container, database, role, password] of roleCredentials) {
+    dockerExec(container, ['psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-c', `ALTER ROLE ${role} WITH PASSWORD ${sqlLiteral(password)};`], { capture: true });
+  }
 }
 
 async function writePrivate(path, content) {
@@ -341,26 +357,41 @@ export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints =
     const previous = readings[index];
     const ordinal = index + 1;
     return Object.freeze({
-      fact_id: localUUID(0x700000000000 + ordinal),
+      fact_id: localUUID(0x710000000000 + ordinal),
       tenant_id: centralPlantIdentity.tenantId,
       site_id: centralPlantIdentity.siteId,
+      meter_id: localUUID(0x720000000000),
+      meter_binding_id: localUUID(0x720000000001),
+      topology_version_id: localUUID(0x720000000002),
+      binding_version: 1,
+      energy_type_id: localUUID(0x720000000003),
+      meter_role: 'PRIMARY',
+      direction: 'IMPORT',
       device_id: meter.platformDeviceId,
       point_id: pointID,
       sensor_id: sensorID,
       telemetry_key: 'hvac_meter.energy',
       energy_type: 'electricity',
+      point_revision: 1,
+      unit: 'kWh',
+      counter_decrease_mode: 'RESET_TO_ZERO',
+      counter_rollover_modulus: null,
       period_start: new Date(previous.timestamp).toISOString(),
       period_end: new Date(reading.timestamp).toISOString(),
       energy_kwh: Number((reading.energyKwh - previous.energyKwh).toFixed(6)),
+      transition_type: 'INCREASE',
       quality: 'VALID',
       quality_reasons: [],
-      observation_count: 2,
       source_previous_observation_id: localUUID(0x710000000000 + index),
       source_current_observation_id: localUUID(0x710000000000 + ordinal),
+      source_event_id: localUUID(0x730000000000 + ordinal),
+      source_partition: 'central-plant-bootstrap',
       source_offset: reading.timestamp,
       dataset_revision: reading.timestamp,
       data_watermark: new Date(reading.timestamp).toISOString(),
       projected_at: end.toISOString(),
+      fact_revision: 0,
+      rebuild_run_id: null,
     });
   });
   return Object.freeze({
@@ -425,14 +456,14 @@ async function installDatabaseSeed(container, localPath, remotePath, database) {
 function buildGoBinaries(paths, goCache, quiet) {
   const builds = [
     [paths.pkiGeneratorBinary, './tools/s0-auth-fixture/cmd/generate-central-plant-pki'],
-    [paths.iamBinary, './services/iam-service/cmd/iam-service'],
-    [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
-    [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
-    [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
-    [paths.queryBinary, './services/telemetry-query-service/cmd/telemetry-query-service'],
-    [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
+    [paths.iamBinary, './modules/iam/cmd/iam-owner'],
+    [paths.coreBinary, './modules/registry/cmd/registry-owner'],
+    [paths.telemetryBinary, './cmd/telemetry-worker'],
+    [paths.historyProjectorBinary, './modules/telemetry/cmd/telemetry-history-projector'],
+    [paths.queryBinary, './modules/telemetry/cmd/telemetry-query-owner'],
+    [paths.gatewayBinary, './cmd/energy-api'],
     [paths.publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher'],
-    [paths.mqttAdapterBinary, './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter'],
+    [paths.mqttAdapterBinary, './cmd/iot-service'],
   ];
   for (const [output, source] of builds) {
     run(goBinary, ['build', '-trimpath', '-buildvcs=false', '-o', output, source], {
@@ -446,7 +477,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
     'mqtt', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'logtoAdmin', 'logtoCore', 'logtoAdminCore',
-    'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
+    'realtimeRedis', 'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
     'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
     'analyticsProjectorDiagnostics',
@@ -505,6 +536,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     mqttAdapterConfig: join(configDirectory, 'mqtt-adapter.json'),
     mqttGatewayConfig: join(configDirectory, 'mqtt-gateway.json'),
     mqttQueueDirectory: join(stateDirectory, 'mqtt-queue'),
+    fleetReleasePublicKey: join(pkiDirectory, 'edge-fleet-release-public-key.hex'),
     centrifugoConfig: join(configDirectory, 'centrifugo.json'),
     s1Seed: join(configDirectory, 's1-seed.sql'),
     s2Seed: join(configDirectory, 's2-seed.sql'),
@@ -517,11 +549,11 @@ export async function startCentralPlantLocalTopology(options = {}) {
   let logtoProxy;
   let logtoAdminProxy;
 
-  const s1Compose = resolve(root, 'infra/s1-registry/compose.yaml');
-  const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
+  const s1Compose = resolve(root, 'infra/registry/compose.yaml');
+  const s2Compose = resolve(root, 'infra/telemetry/compose.yaml');
   const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
   const logtoCompose = resolve(root, 'infra/central-plant-local/logto.compose.yaml');
-  const mqttCompose = resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml');
+  const mqttCompose = resolve(root, 'infra/telemetry/mqtt/compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
   const s2Environment = {
@@ -549,6 +581,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     CUBEJS_API_SECRET: runtimeValues.cube,
   };
   const realtimeEnvironment = {
+    CENTRAL_PLANT_REDIS_PORT: String(ports.realtimeRedis),
     CENTRAL_PLANT_CENTRIFUGO_PORT: String(ports.centrifugo),
     CENTRAL_PLANT_CENTRIFUGO_CONFIG: paths.centrifugoConfig,
     CENTRAL_PLANT_CENTRIFUGO_API_KEY: runtimeValues.api,
@@ -678,9 +711,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
     const s1Container = composeContainer(projects.s1, 'postgres');
     const s2Container = composeContainer(projects.s2, 'postgres');
     const clickHouseContainer = composeContainer(projects.s2, 'clickhouse');
-    await waitForContainer(() => dockerExec(s1Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s1'], { capture: true }), 'S1 PostgreSQL');
-    await waitForContainer(() => dockerExec(s2Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s2'], { capture: true }), 'S2 PostgreSQL');
+    await waitForContainer(() => dockerExec(s1Container, ['psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-c', `DO $migration$ BEGIN IF to_regclass('connectivity.edge_nodes') IS NULL OR NOT pg_has_role('s1_core_service', 's1_core_writer', 'MEMBER') THEN RAISE EXCEPTION 'S1 migrations incomplete'; END IF; END $migration$;`], { capture: true }), 'S1 PostgreSQL migrations');
+    await waitForContainer(() => dockerExec(s2Container, ['psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-c', `DO $migration$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='telemetry_runtime' AND table_name='telemetry_subscriptions' AND column_name='policy_revision_ref') THEN RAISE EXCEPTION 'S2 migrations incomplete'; END IF; END $migration$;`], { capture: true }), 'S2 PostgreSQL migrations');
     await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
+    configureLocalDatabaseRoleCredentials(s1Container, s2Container);
     compose(projects.cube, cubeCompose, ['up', '-d', 'cube'], cubeEnvironment);
     await waitForHTTP(cubeURL, 'Cube Core', { attempts: 600, interval: 500 });
 
@@ -693,11 +727,14 @@ export async function startCentralPlantLocalTopology(options = {}) {
     });
     const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(pointContract);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
+    const registryPointCount = simulatorConfig.points.length;
     await writeFile(paths.s1Seed, buildS1SeedSQL({
       oidcIssuer: logto.issuer,
       principalSubject: logto.subject,
       pointKeysByDevice,
-      spatialPoints: [...simulatorConfig.points, ...buildCentralPlantControlPoints()],
+      spatialPoints: simulatorConfig.points,
+      mqttBrokerURL,
+      gatewayExternalId: simulatorConfig.gatewayId,
     }), 'utf8');
     await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points }), 'utf8');
     await installDatabaseSeed(s1Container, paths.s1Seed, '/tmp/central-plant-s1.sql', 'hvac_s1');
@@ -707,12 +744,16 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await mkdir(paths.mqttQueueDirectory, { recursive: true });
 
     const mqttAdapterConfig = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       integrationInstanceId: centralPlantIdentity.integrationInstanceId,
       mqtt: {
-        brokerUrl: mqttBrokerURL,
         clientId: 'mqtt-telemetry-adapter',
-        topicFilter: 'energy/v1/+/+/+/telemetry',
+        topicFilters: [
+          'energy/v1/+/+/+/telemetry',
+          'energy/v1/+/+/+/state',
+          'energy/v1/+/+/+/event',
+          'energy/v1/+/+/+/heartbeat',
+        ],
         caFile: paths.ca,
         certFile: paths.mqttAdapterCert,
         keyFile: paths.mqttAdapterKey,
@@ -728,15 +769,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
         keyFile: paths.mqttAdapterKey,
         serverName: 'localhost',
       },
-      gatewayScopes: [{
-        gatewayId: simulatorConfig.gatewayId,
-        tenantId: centralPlantIdentity.tenantId,
-        siteId: centralPlantIdentity.siteId,
-      }],
       processingQueueCapacity: 1024,
     };
     const mqttGatewayConfig = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       tenantId: centralPlantIdentity.tenantId,
       siteId: centralPlantIdentity.siteId,
       brokerUrl: mqttBrokerURL,
@@ -747,8 +783,14 @@ export async function startCentralPlantLocalTopology(options = {}) {
       serverName: 'localhost',
       queueDirectory: paths.mqttQueueDirectory,
       maximumQueueBytes: 536870912,
+      credentialRevision: 1,
+      fleetReleaseKeyId: 'central-plant-local-ed25519-v1',
+      fleetReleasePublicKeyFile: paths.fleetReleasePublicKey,
       deviceExternalIdByDeviceId: Object.fromEntries(centralPlantDevices.map((device) => [device.name, device.platformDeviceId])),
     };
+    const { publicKey: fleetReleasePublicKey } = generateKeyPairSync('ed25519');
+    const fleetReleasePublicJWK = fleetReleasePublicKey.export({ format: 'jwk' });
+    await writePrivate(paths.fleetReleasePublicKey, `${Buffer.from(fleetReleasePublicJWK.x, 'base64url').toString('hex')}\n`);
     await writeFile(paths.mqttAdapterConfig, `${JSON.stringify(mqttAdapterConfig, null, 2)}\n`, 'utf8');
     await writeFile(paths.mqttGatewayConfig, `${JSON.stringify(mqttGatewayConfig, null, 2)}\n`, 'utf8');
 
@@ -814,6 +856,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       iam: databaseURL('s1_iam_runtime', databasePasswords.s1Iam, ports.s1Postgres, 'hvac_s1'),
       core: databaseURL('s1_core_service', databasePasswords.s1Core, ports.s1Postgres, 'hvac_s1'),
       grant: databaseURL('s2_iam_grant_runtime', databasePasswords.s1Grant, ports.s1Postgres, 'hvac_s1'),
+      connectivity: databaseURL('connectivity_runtime', databasePasswords.connectivity, ports.s1Postgres, 'hvac_s1'),
       telemetry: databaseURL('s2_telemetry_service', databasePasswords.s2Runtime, ports.s2Postgres, 'hvac_s2'),
       history: databaseURL('s2_telemetry_history_service', databasePasswords.s2History, ports.s2Postgres, 'hvac_s2'),
     };
@@ -945,6 +988,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       OIDC_CLIENT_ID: logto.clientId,
       OIDC_REDIRECT_URI: `${webURL}/api/v1/auth/callback`,
       OIDC_DEFAULT_TENANT_ID: centralPlantIdentity.tenantId,
+      OIDC_STATE_REDIS_URL: `redis://127.0.0.1:${ports.realtimeRedis}/1`,
       OIDC_SERVER_CA: paths.ca,
       OIDC_SERVER_NAME: 'localhost',
       PLATFORM_PUBLIC_ORIGIN: webURL,
@@ -999,7 +1043,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
     services.mqttAdapter = spawnService('MQTT Telemetry Adapter', paths.mqttAdapterBinary, [
       '-config', paths.mqttAdapterConfig,
       '-diagnostics-addr', `127.0.0.1:${ports.adapterDiagnostics}`,
-    ], {}, quiet);
+    ], {
+      CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
+      CONNECTIVITY_DATABASE_URL: databases.connectivity,
+    }, quiet);
     await waitForHTTP(`http://127.0.0.1:${ports.adapterDiagnostics}/health/ready`, 'MQTT Telemetry Adapter', {
       child: services.mqttAdapter,
       attempts: 600,
@@ -1039,6 +1086,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       siteId: centralPlantIdentity.siteId,
       deviceCount: centralPlantDevices.length,
       pointCount,
+      registryPointCount,
       energyHistory: {
         readingCount: energyHistory.readings.length,
         from: energyHistory.from,

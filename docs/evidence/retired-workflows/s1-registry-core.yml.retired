@@ -1,0 +1,109 @@
+name: S1 Registry Core
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - '.github/workflows/s1-registry-core.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'contracts/registry/**'
+      - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
+      - 'infra/s1-registry/**'
+      - 'libs/registryauth/**'
+      - 'pocs/s1-sqlc/**'
+      - 'services/iam-service/**'
+      - 'services/platform-core-service/**'
+      - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
+      - 'scripts/lib/docker-cli.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s1-sqlc-poc.mjs'
+      - 'go.work'
+      - 'go.work.sum'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s1-registry-core.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'contracts/registry/**'
+      - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
+      - 'infra/s1-registry/**'
+      - 'libs/registryauth/**'
+      - 'pocs/s1-sqlc/**'
+      - 'services/iam-service/**'
+      - 'services/platform-core-service/**'
+      - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
+      - 'scripts/lib/docker-cli.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s1-sqlc-poc.mjs'
+      - 'go.work'
+      - 'go.work.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s1-registry-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-core
+
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+      S1_REGISTRY_REPORT_PATH: out/s1-registry-core/postgres-baseline.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: docker compose -f infra/s1-registry/compose.yaml config
+      - run: npm run s1:registry:postgres
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s1-registry-core-postgres-evidence
+          path: out/s1-registry-core/postgres-baseline.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,184 @@
+x-owner-service: &owner-service
+  profiles: ["owner-split"]
+  restart: unless-stopped
+  env_file:
+    - ${PHASE1_ENV_FILE:?PHASE1_ENV_FILE is required}
+  depends_on:
+    phase1-schema-preflight:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+  volumes:
+    - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+    - ${INTERNAL_SECRETS_DIR:-./runtime/secrets}:/run/hvac/secrets:ro
+    - ${PHASE1_CONFIG_DIR:-./runtime/config}:/run/hvac/config:ro
+  networks: [application, data]
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options:
+      max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+      max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
+services:
+  energy-api:
+    environment:
+      ENERGY_API_EMBEDDED_OWNERS: notification
+      IAM_URL: https://iam-owner:8444
+      CORE_URL: https://core-owner:18445
+      TELEMETRY_QUERY_URL: https://telemetry-query-owner:18447
+      AUDIT_URL: https://audit-owner:8446
+      COMMAND_SERVICE_URL: https://command-owner:8447
+      ALARM_SERVICE_URL: https://alarm-owner:8448
+      WORK_ORDER_SERVICE_URL: https://work-order-owner:8449
+    depends_on:
+      iam-owner: { condition: service_healthy }
+      audit-owner: { condition: service_healthy }
+      core-owner: { condition: service_healthy }
+      telemetry-query-owner: { condition: service_healthy }
+      command-owner: { condition: service_healthy }
+      alarm-owner: { condition: service_healthy }
+      work-order-owner: { condition: service_started }
+
+  iam-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/iam-owner }
+    image: ${IAM_SERVICE_IMAGE:-hvac/iam-service:0.1.0-dev}
+    environment:
+      IAM_SERVICE_ADDR: :8444
+      IAM_DIAGNOSTICS_ADDR: :19083
+    expose: ["8444", "19083"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19083/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${IAM_OWNER_CPUS:-0.20}
+    mem_limit: ${IAM_OWNER_MEMORY_LIMIT:-384m}
+
+  audit-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args:
+        {
+          SERVICE_PACKAGE: ./modules/audit/cmd/audit-owner,
+        }
+    image: ${AUDIT_SERVICE_IMAGE:-hvac/audit-ledger-service:0.1.0-dev}
+    environment:
+      AUDIT_SERVICE_ADDR: :8446
+      AUDIT_DIAGNOSTICS_ADDR: :19082
+    expose: ["8446", "19082"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19082/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${AUDIT_OWNER_CPUS:-0.20}
+    mem_limit: ${AUDIT_OWNER_MEMORY_LIMIT:-384m}
+
+  core-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args:
+        {
+          SERVICE_PACKAGE: ./modules/registry/cmd/registry-owner,
+        }
+    image: ${CORE_SERVICE_IMAGE:-hvac/platform-core-service:0.1.0-dev}
+    environment:
+      CORE_SERVICE_ADDR: :18445
+      CORE_DIAGNOSTICS_ADDR: :19084
+      CORE_IAM_ENDPOINT: https://iam-owner:8444
+      CORE_IAM_SERVER_NAME: iam-service
+    expose: ["18445", "19084"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19084/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${CORE_OWNER_CPUS:-0.20}
+    mem_limit: ${CORE_OWNER_MEMORY_LIMIT:-384m}
+
+  telemetry-query-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args:
+        {
+          SERVICE_PACKAGE: ./modules/telemetry/cmd/telemetry-query-owner,
+        }
+    image: ${TELEMETRY_QUERY_SERVICE_IMAGE:-hvac/telemetry-query-service:0.1.0-dev}
+    environment:
+      QUERY_SERVICE_ADDR: :18447
+      QUERY_DIAGNOSTICS_ADDR: :19088
+    expose: ["18447", "19088"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19088/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${TELEMETRY_QUERY_OWNER_CPUS:-0.20}
+    mem_limit: ${TELEMETRY_QUERY_OWNER_MEMORY_LIMIT:-384m}
+
+  command-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/command/cmd/command-owner }
+    image: ${COMMAND_SERVICE_IMAGE:-hvac/command-service:0.1.0-dev}
+    environment:
+      COMMAND_SERVICE_ADDR: :8447
+      COMMAND_DIAGNOSTICS_ADDR: :19087
+    expose: ["8447", "19087"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19087/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${COMMAND_OWNER_CPUS:-0.20}
+    mem_limit: ${COMMAND_OWNER_MEMORY_LIMIT:-384m}
+
+  alarm-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/alarm/cmd/alarm-owner }
+    image: ${ALARM_SERVICE_IMAGE:-hvac/alarm-service:0.1.0-dev}
+    environment:
+      ALARM_SERVICE_ADDR: :8448
+      ALARM_DIAGNOSTICS_ADDR: :19088
+    expose: ["8448", "19088"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19088/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    cpus: ${ALARM_OWNER_CPUS:-0.20}
+    mem_limit: ${ALARM_OWNER_MEMORY_LIMIT:-384m}
+
+  work-order-owner:
+    <<: *owner-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args:
+        {
+          SERVICE_PACKAGE: ./modules/workorder/cmd/work-order-owner,
+        }
+    image: ${WORK_ORDER_SERVICE_IMAGE:-hvac/work-order-service:0.1.0-dev}
+    environment:
+      WORK_ORDER_SERVICE_ADDR: :8449
+    expose: ["8449"]
+    cpus: ${WORK_ORDER_OWNER_CPUS:-0.20}
+    mem_limit: ${WORK_ORDER_OWNER_MEMORY_LIMIT:-384m}

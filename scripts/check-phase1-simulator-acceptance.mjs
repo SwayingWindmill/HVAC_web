@@ -65,7 +65,7 @@ assert(matrix.requirements.some((item) => item.id === 'REQ-REC-001'), 'Backup/De
 assert(matrix.requirements.some((item) => item.id === 'REQ-METRIC-001'), 'Energy Golden Dataset requirement is missing');
 assert(matrix.requirements.some((item) => item.id === 'REQ-HW-001' && item.class === 'DEFERRED_HARDWARE'), 'Real meter must not be silently treated as tested');
 assert(matrix.requirements.some((item) => item.id === 'REQ-FORMAL-001' && item.class === 'DEFERRED_FORMAL'), 'Formal endurance must not be claimed by preflight');
-await access(resolve(root, 'services/analytics-read-model-projector/internal/energy/testdata/phase1-golden.v1.json'));
+await access(resolve(root, 'modules/energy/internal/energy/testdata/phase1-golden.v1.json'));
 await access(resolve(root, 'scripts/run-phase1-postgres-restore-test.mjs'));
 await access(resolve(root, 'docs/operations/phase1-simulator-acceptance.md'));
 

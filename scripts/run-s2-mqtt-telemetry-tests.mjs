@@ -13,7 +13,7 @@ const pkiDir = join(outputDir, 'pki');
 const queueDir = join(outputDir, 'gateway-queue');
 const binDir = join(outputDir, 'bin');
 const reportPath = join(outputDir, 'integration.json');
-const composePath = resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml');
+const composePath = resolve(root, 'infra/telemetry/mqtt/compose.yaml');
 const projectName = `hvac-s2-mqtt-${process.pid}`;
 const tenantId = '018f3d00-0000-7000-8000-000000000001';
 const siteId = '018f3e00-1000-7000-8000-000000000001';
@@ -135,7 +135,7 @@ try {
   const adapterBinary = join(binDir, 'mqtt-telemetry-adapter');
   const publisherBinary = join(binDir, 'eg8200-mqtt-publisher');
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', pkiGenerator, './tools/s0-auth-fixture/cmd/generate-central-plant-pki']);
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', adapterBinary, './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter']);
+  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', adapterBinary, './cmd/iot-service']);
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher']);
   run(pkiGenerator, [pkiDir]);
 

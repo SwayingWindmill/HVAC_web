@@ -10,12 +10,12 @@ function assert(condition, message) {
 
 const model = read('libs/commandmodel/model.go');
 const edgeMQTT = read('tools/eg8200-simulator/internal/simulator/mqtt_command.go');
-const connector = read('services/command-dispatcher/pkg/mqttconnector/connector.go');
-const verifier = read('services/command-dispatcher/pkg/commanddispatcher/verification.go');
-const service = read('services/command-service/pkg/commandservice/service.go');
-const postgresVerification = read('services/command-service/pkg/commandservice/postgres_verification.go');
+const connector = read('modules/command/pkg/mqttconnector/connector.go');
+const verifier = read('modules/command/pkg/commanddispatcher/verification.go');
+const service = read('modules/command/pkg/commandservice/service.go');
+const postgresVerification = read('modules/command/pkg/commandservice/postgres_verification.go');
 const connectivityMigration = read('infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql');
-const commandMigration = read('services/command-service/migrations/005_s11_edge_execution_evidence.sql');
+const commandMigration = read('modules/command/migrations/005_s11_edge_execution_evidence.sql');
 
 assert(model.includes('ConnectorExecutionRejected'), 'S11 requires an explicit proven-no-execution connector phase');
 assert(connector.includes('const commandSchemaVersion = "2.0"') && edgeMQTT.includes('const mqttCommandSchemaVersion = "2.0"'), 'breaking S11 MQTT command evidence contract must use schemaVersion 2.0 on both ends');

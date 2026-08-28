@@ -62,10 +62,10 @@
 主要本地证据：
 
 - `libs/alarmmodel/model.go`, `rule.go` 及其测试；
-- `services/alarm-service/pkg/alarmservice/{http,store,postgres}.go` 与 migrations 001–005；
-- `services/platform-gateway/internal/gateway/alarm.go`、IAM Alarm 授权与 `contracts/http/s4-alarm-public.openapi.json`；
+- `modules/alarm/pkg/alarmservice/{http,store,postgres}.go` 与 migrations 001–005；
+- `cmd/energy-api/internal/gateway/alarm.go`、IAM Alarm 授权与 `contracts/http/s4-alarm-public.openapi.json`；
 - `apps/hvac-web/src/api/alarms.ts`, `RealAlarms.tsx`, `LocalAlarmLifecycle.tsx`, `real-alarms-projection.ts`；
-- `infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql`；
+- `infra/registry/postgres/init/009j-operations-support-domains-v2.sql`；
 - `docs/operations/real-product-roadmap.md` 与 `docs/operations/s4-alarm-read-promotion.md`；
 - 用户提供的《智慧能源系统_前端交互与能源控制UX规范_V1.1》和《智慧能源系统_前端工程架构与实现设计_V1》；
 - D09 的 `docs/architecture/thingsboard-ai-analytics-integrations-adjudication.md`。
@@ -622,7 +622,7 @@ Alarm ACK/Clear/Policy change
 | 命令 | 结果 | 解释 |
 | --- | --- | --- |
 | `npm run s4:alarm:check` | `PASS` | 当前 Alarm Contract/Route 基线检查通过：3 条 Public Route、10 条 Runtime Contract-only Route |
-| Alarm Model/Service `go test ./...` | `PASS` | `libs/alarmmodel` 与 `services/alarm-service` 单元/HTTP/Store 测试通过 |
+| Alarm Model/Service `go test ./...` | `PASS` | `libs/alarmmodel` 与 `modules/alarm` 单元/HTTP/Store 测试通过 |
 | Alarm Model/Service `go vet ./...` | `PASS` | 两个模块静态检查通过 |
 | `npm run ownership:check` | `PASS` | 当前 Ownership Registry 自身一致：53 Routes、72 Resources |
 | `npm run rms:real:graph` | `PASS` | 88 个 Real 可达模块通过，无 Demo 依赖回流 |

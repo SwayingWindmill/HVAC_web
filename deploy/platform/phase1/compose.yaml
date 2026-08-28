@@ -17,6 +17,13 @@ x-go-service: &go-service
     - /tmp
   logging: *default-logging
 
+x-phase1-deployment-tiers:
+  schemaVersion: 1
+  contract: ./deployment-tiers.v1.json
+  availabilityContract: ./availability-tier.v1.json
+  runtimeInventoryContract: ./runtime-inventory.v1.json
+  note: Observability services are profile-gated. Select one observability profile and optionally the intelligence profile. Runtime classes are authoritative in runtime-inventory.v1.json.
+
 services:
   nginx:
     build:
@@ -47,11 +54,11 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/platform-gateway/cmd/platform-gateway }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/energy-api }
     image: ${ENERGY_API_IMAGE:-hvac/energy-api:0.1.0-dev}
     environment:
-      ENERGY_API_IN_PROCESS_ENABLED: "true"
+      ENERGY_API_EMBEDDED_OWNERS: all
       PLATFORM_GATEWAY_ADDR: :8080
       PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: :19080
       IAM_SERVICE_ADDR: :8444
@@ -80,21 +87,19 @@ services:
       AUDIT_URL: https://audit-ledger-service:8446
       AUDIT_SERVER_NAME: audit-ledger-service
       REALTIME_UPSTREAM_URL: ${REALTIME_UPSTREAM_URL:-http://centrifugo:8000}
+      QUERY_HISTORY_CLICKHOUSE_ENDPOINT: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      QUERY_CUBE_ENDPOINT: ${QUERY_CUBE_ENDPOINT:-http://cube:4000}
       PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
       LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
+      clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
-      forecast-service:
-        condition: service_healthy
-      fdd-service:
-        condition: service_healthy
-      optimization-service:
-        condition: service_healthy
+        required: false
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
@@ -117,7 +122,7 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-service }
     image: ${IDENTITY_SERVICE_IMAGE:-hvac/identity-service:0.1.0-dev}
     environment:
@@ -128,8 +133,6 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
     expose: ["19095", "19085"]
@@ -150,7 +153,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/signing-keygen }
     image: ${IDENTITY_KEYGEN_IMAGE:-hvac/identity-keygen:0.1.0-dev}
     environment:
@@ -164,7 +167,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/mfa-keygen }
     image: ${IDENTITY_MFA_KEYGEN_IMAGE:-hvac/identity-mfa-keygen:0.1.0-dev}
     environment:
@@ -178,8 +181,8 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/api-credential-keygen }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/api-credential-keygen }
     image: ${IAM_API_CREDENTIAL_KEYGEN_IMAGE:-hvac/iam-api-credential-keygen:0.1.0-dev}
     environment:
       IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper
@@ -192,7 +195,7 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-admin }
     image: ${IDENTITY_ADMIN_IMAGE:-hvac/identity-admin:0.1.0-dev}
     environment:
@@ -207,9 +210,6 @@ services:
       IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks: [data]
 
   identity-reconciler:
@@ -218,28 +218,23 @@ services:
     restart: "no"
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/identity-reconciler }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iam/cmd/identity-reconciler }
     image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks: [data]
 
   scheduler:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/scheduler-service/cmd/scheduler-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/scheduler }
     image: ${SCHEDULER_IMAGE:-hvac/scheduler:0.1.0-dev}
     environment:
       SCHEDULER_DIAGNOSTICS_ADDR: :19092
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19092"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/health/ready"]
@@ -256,16 +251,14 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/maintenance-service/cmd/maintenance-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/maintenance-worker }
     image: ${MAINTENANCE_IMAGE:-hvac/maintenance:0.1.0-dev}
     environment:
       MAINTENANCE_DIAGNOSTICS_ADDR: :19093
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19093"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/health/ready"]
@@ -282,23 +275,26 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-runtime-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/telemetry-worker }
     image: ${TELEMETRY_WORKER_IMAGE:-hvac/telemetry-worker:0.1.0-dev}
     environment:
       TELEMETRY_SERVICE_ADDR: :8446
       TELEMETRY_DIAGNOSTICS_ADDR: :19086
       TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
       ANALYTICS_PROJECTION_ENABLED: "true"
+      TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
     expose: ["8446", "19086"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19086/health/ready"]
@@ -318,21 +314,23 @@ services:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/metric-engine-service/cmd/metric-engine-service }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/metric-worker }
     image: ${METRIC_WORKER_IMAGE:-hvac/metric-worker:0.1.0-dev}
     environment:
       METRIC_DIAGNOSTICS_ADDR: :19090
       METRIC_WORKER_MODE: worker
+      METRIC_CLICKHOUSE_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      METRIC_CLICKHOUSE_USER: ${METRIC_CLICKHOUSE_USER:-metric_engine_runtime}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
     expose: ["19090"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19090/health/ready"]
@@ -346,26 +344,26 @@ services:
     mem_reservation: ${METRIC_WORKER_MEMORY_RESERVATION:-192m}
 
   forecast-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/forecast-service/cmd/forecast-service }
     image: ${FORECAST_SERVICE_IMAGE:-hvac/forecast-service:0.1.0-dev}
     environment:
       FORECAST_HTTP_ADDR: :19092
-      FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:?FORECAST_POSTGRES_DSN is required}
-      FORECAST_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:-}
+      FORECAST_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       FORECAST_CLICKHOUSE_DATABASE: analytics
       FORECAST_CLICKHOUSE_TABLE: forecast_series
       FORECAST_CLICKHOUSE_USERNAME: forecast_service_writer
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
     expose: ["19092"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/healthz"]
@@ -379,24 +377,24 @@ services:
     mem_reservation: ${FORECAST_SERVICE_MEMORY_RESERVATION:-128m}
 
   optimization-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/optimization-service/cmd/optimization-service }
     image: ${OPTIMIZATION_SERVICE_IMAGE:-hvac/optimization-service:0.1.0-dev}
     environment:
       OPTIMIZATION_HTTP_ADDR: :19093
-      OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:?OPTIMIZATION_POSTGRES_DSN is required}
-      OPTIMIZATION_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
+      OPTIMIZATION_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
+        required: false
     expose: ["19093"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/healthz"]
@@ -410,20 +408,19 @@ services:
     mem_reservation: ${OPTIMIZATION_SERVICE_MEMORY_RESERVATION:-128m}
 
   fdd-service:
+    profiles: ["intelligence"]
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/fdd-service/cmd/fdd-service }
     image: ${FDD_SERVICE_IMAGE:-hvac/fdd-service:0.1.0-dev}
     environment:
       FDD_HTTP_ADDR: :19094
-      FDD_DATABASE_URL: ${FDD_DATABASE_URL:?FDD_DATABASE_URL is required}
+      FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
@@ -438,15 +435,16 @@ services:
 
   iot-service:
     <<: *go-service
+    profiles: ["integration"]
     build:
       context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter }
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./cmd/iot-service }
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
-      CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:?CONNECTIVITY_DATABASE_URL is required}
-      CONNECTIVITY_TENANT_ID: ${CONNECTIVITY_TENANT_ID:?CONNECTIVITY_TENANT_ID is required}
+      CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
+      CONNECTIVITY_TENANT_ID: ${CONNECTIVITY_TENANT_ID:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -463,6 +461,7 @@ services:
     mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
 
   postgres:
+    profiles: ["local-postgres"]
     image: postgres:16.4-bookworm
     restart: unless-stopped
     command:
@@ -503,9 +502,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
       PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
@@ -530,9 +531,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
       PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
@@ -547,9 +550,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PHASE1_POSTGRES_HOST:-postgres}
+      PGPORT: ${PHASE1_POSTGRES_PORT:-5432}
+      PGSSLMODE: ${PHASE1_POSTGRES_SSLMODE:-disable}
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
     volumes:
@@ -559,13 +564,17 @@ services:
     networks: [data]
 
   clickhouse:
+    profiles: ["local-clickhouse"]
     image: clickhouse/clickhouse-server:26.3.12.3
     restart: unless-stopped
+    environment:
+      CLICKHOUSE_SERVER_MEMORY_USAGE: ${CLICKHOUSE_SERVER_MEMORY_USAGE:-3221225472}
     volumes:
       - ${CLICKHOUSE_DATA_DIR:-./runtime/data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
-      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
+      - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 5s
@@ -575,6 +584,37 @@ services:
     cpus: ${CLICKHOUSE_CPUS:-3.00}
     mem_limit: ${CLICKHOUSE_MEMORY_LIMIT:-4096m}
     mem_reservation: ${CLICKHOUSE_MEMORY_RESERVATION:-1024m}
+    logging: *default-logging
+
+  cube:
+    profiles: ["local-clickhouse"]
+    image: cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192bc14d78bd18241299c94b9d2ca20e5
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CUBEJS_DB_TYPE: clickhouse
+      CUBEJS_DB_HOST: clickhouse
+      CUBEJS_DB_PORT: 8123
+      CUBEJS_DB_NAME: analytics
+      CUBEJS_DB_USER: cube_analytics_reader
+      CUBEJS_DB_PASS: ""
+      CUBEJS_DB_CLICKHOUSE_READONLY: "true"
+      CUBEJS_DB_CLICKHOUSE_COMPRESSION: "true"
+      CUBEJS_CACHE_AND_QUEUE_DRIVER: memory
+      CUBEJS_DB_MAX_POOL: ${CUBEJS_DB_MAX_POOL:-4}
+      CUBEJS_CONCURRENCY: ${CUBEJS_CONCURRENCY:-4}
+      CUBEJS_API_SECRET: ${QUERY_CUBE_API_SECRET:?QUERY_CUBE_API_SECRET is required}
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_TELEMETRY: "false"
+    volumes:
+      - ../../../semantic/cube:/cube/conf:ro
+    expose: ["4000"]
+    networks: [data]
+    cpus: ${CUBE_CPUS:-0.75}
+    mem_limit: ${CUBE_MEMORY_LIMIT:-768m}
+    mem_reservation: ${CUBE_MEMORY_RESERVATION:-256m}
     logging: *default-logging
 
   clickhouse-backup:
@@ -589,6 +629,7 @@ services:
     networks: [data]
 
   redis:
+    profiles: ["local-redis"]
     image: redis:7.4.2-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
@@ -606,13 +647,14 @@ services:
     logging: *default-logging
 
   mqtt-broker:
+    profiles: ["integration"]
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
     ports:
       - "${MQTT_TLS_PORT:-8883}:8883"
     volumes:
-      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-./runtime/mqtt-pki}:/mosquitto/config/pki:ro
       - ${MQTT_DATA_DIR:-./runtime/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
@@ -627,12 +669,15 @@ services:
     command: ["/usr/local/bin/centrifugo", "--config", "/centrifugo/centrifugo.json"]
     env_file:
       - ${PHASE1_ENV_FILE:-./environments/development.runtime.env}
+    environment:
+      CENTRIFUGO_ENGINE_REDIS_ADDRESS: ${CENTRIFUGO_ENGINE_REDIS_ADDRESS:-redis://redis:6379/0}
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
       - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
     depends_on:
       redis:
         condition: service_healthy
+        required: false
       telemetry-worker:
         condition: service_healthy
     expose: ["8000"]
@@ -643,11 +688,12 @@ services:
     logging: *default-logging
 
   otel-collector:
+    profiles: ["observability-logs", "observability-full"]
     image: otel/opentelemetry-collector-contrib:0.111.0
     restart: unless-stopped
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    command: ["--config=/etc/otelcol-contrib/configs/${PHASE1_OBSERVABILITY_CONFIG:-logs}.yaml"]
     volumes:
-      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./observability/otel-collector:/etc/otelcol-contrib/configs:ro
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
     expose: ["4317", "4318", "9464", "13133"]
     networks: [application, observability]
@@ -657,12 +703,13 @@ services:
     logging: *default-logging
 
   prometheus:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
-      - ../../../infra/s0-durable/observability/alerts:/etc/prometheus/alerts:ro
+      - ../../../infra/observability/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     expose: ["9090"]
     networks: [application, observability]
@@ -672,6 +719,7 @@ services:
     logging: *default-logging
 
   node-exporter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/node-exporter:v1.8.2
     restart: unless-stopped
     command:
@@ -690,6 +738,7 @@ services:
     logging: *default-logging
 
   loki:
+    profiles: ["observability-logs", "observability-full"]
     image: ${LOKI_IMAGE:-grafana/loki:3.2.1}
     restart: unless-stopped
     command: ["-config.file=/etc/loki/local-config.yaml"]
@@ -704,6 +753,7 @@ services:
     logging: *default-logging
 
   tempo:
+    profiles: ["observability-full"]
     image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
@@ -718,6 +768,7 @@ services:
     logging: *default-logging
 
   grafana:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
     image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
     restart: unless-stopped
     environment:
@@ -727,7 +778,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../../../infra/s0-durable/observability/dashboards:/var/lib/grafana/dashboards:ro
+      - ../../../infra/observability/dashboards:/var/lib/grafana/dashboards:ro
     expose: ["3000"]
     networks: [observability]
     cpus: ${GRAFANA_CPUS:-0.50}
@@ -740,7 +791,7 @@ networks:
   application:
     internal: true
   data:
-    internal: true
+    internal: ${PHASE1_DATA_NETWORK_INTERNAL:-true}
   mqtt:
     internal: true
   observability:

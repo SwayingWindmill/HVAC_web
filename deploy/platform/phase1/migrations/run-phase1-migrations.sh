@@ -64,6 +64,11 @@ for database in "${databases[@]}"; do
   ensure_tracking_tables "${database}"
 done
 
+psql --no-psqlrc --set=ON_ERROR_STOP=1 --dbname=hvac_identity <<'SQL'
+GRANT USAGE ON SCHEMA phase1_deployment TO identity_runtime;
+GRANT SELECT ON phase1_deployment.product_schema TO identity_runtime;
+SQL
+
 while IFS='|' read -r database relative_path; do
   [[ -n "${database}" && -n "${relative_path}" ]] || continue
   case "${relative_path}" in

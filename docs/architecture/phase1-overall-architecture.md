@@ -104,6 +104,12 @@ scheduler
 └─ expired Lease recovery
    # PostgreSQL 是 Schedule / Job / Attempt 权威；Scheduler 不执行业务公式或设备控制
 
+maintenance-worker
+├─ credential expiry scan
+├─ dead-work disposition
+└─ Tenant retirement coordination execution
+   # 这是跨领域 operational worker，不是新的业务 Domain；不并入 Scheduler 或在线 energy-api 进程
+
 metric-worker
 ├─ Claim METRIC_* Job via FOR UPDATE SKIP LOCKED
 ├─ Lease / Attempt / Timeout / cooperative cancel
@@ -112,7 +118,7 @@ metric-worker
    # 不再拥有 Schedule scan / next_fire_at authority
 ```
 
-因此 Phase 1 的主要长期运行 Go 进程为 `energy-api + scheduler + iot-service + telemetry-worker + metric-worker`。其中 `scheduler` 是 Application Coordination 进程，不是新的万能业务微服务；Domain Worker 继续拥有具体业务执行。数据库备份等基础设施任务不进入 Application Scheduler。不再单独部署 `platform-gateway`、`iam-service`、`platform-core-service`、`telemetry-query-service`、`audit-ledger-service`、`alarm-service`、`work-order-service`、`command-service`、`mqtt-telemetry-adapter`、`command-dispatcher`、`command-verifier`、`telemetry-history-projector`、`analytics-read-model-projector`；原 `telemetry-runtime-service` 仅保留逻辑 DNS alias。Forecast / Optimization 仍按 V2.1.2 的 selective intelligence services 定位按需部署，不要求成为默认常驻基础进程。Phase 1 不引入 Kubernetes、Service Mesh 或 Kafka 作为必需依赖。
+因此 Phase 1 的默认业务 deployable 固定为 `energy-api + telemetry-worker + metric-worker`。长期运行的 supporting workload 另有 `scheduler + maintenance`：`scheduler` 只负责 Application Job Coordination，`maintenance` 执行证书到期扫描、Dead Work 处置和 Tenant Retirement 等跨领域 operational job，两者都不形成新的业务 Domain/API authority。`identity-service` 是独立 Identity Infrastructure，也不计入默认业务 deployable。`iot-service + mqtt-broker` 统一归入可选 `integration` profile：只有部署本地 MQTT/现场接入链路时才启用。数据库迁移、Schema Preflight、Identity Bootstrap/Admin/Reconcile、PostgreSQL/ClickHouse Backup 都是 one-shot operator action，不计入长期运行拓扑。不再单独部署 `platform-gateway`、`iam-service`、`platform-core-service`、`telemetry-query-service`、`audit-ledger-service`、`alarm-service`、`work-order-service`、`command-service`、`mqtt-telemetry-adapter`、`command-dispatcher`、`command-verifier`、`telemetry-history-projector`、`analytics-read-model-projector`；原 `telemetry-runtime-service` 仅保留逻辑 DNS alias。Forecast / Optimization / FDD 统一归入可选 `intelligence` profile，不要求成为默认常驻基础进程。完整分类由 `deploy/platform/phase1/runtime-inventory.v1.json` 作为机器合同约束。Phase 1 不引入 Kubernetes、Service Mesh 或 Kafka 作为必需依赖。
 
 `iot-service` 是 Cloud 侧 IoT 集成进程，不等于新的 HVAC Edge Control Plane。生产 Edge 运行时位于现场 Gateway；Development 可以把 Simulator/Edge Runtime 与 Cloud Compose 放在同一台开发机，但不能据此改变生产职责边界。
 
@@ -301,6 +307,8 @@ CoolingTowerClusterController
 
 ## 7. Phase 1 部署边界
 
+Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。
+
 Phase 1 canonical Cloud deployment：
 
 ```text
@@ -315,7 +323,7 @@ Docker Compose
 
 以下能力不作为 Phase 1 Cloud 前置：
 
-- Kubernetes
+- Kubernetes 不作为 Phase 1 前置
 - Service Mesh
 - Auto Scaling
 - PostgreSQL Replica HA
@@ -347,6 +355,8 @@ Production
 Whole Server 的 4 小时目标只有在 Cold Standby/可及时替换硬件、External Backup、Versioned Config 和 Recovery Runbook 同时成立时才可声明。单服务器不承诺 Zero Downtime、Automatic Failover、Database RPO=0 或 99.99% Availability。
 
 目标定义不等于达标证明。RTO 从故障被确认影响服务开始，到 Business Service Restored + 关键业务验证通过结束；Container Running 不是 RTO End。真实生产达标必须通过 timestamped Restore Drill 记录 Actual RPO/RTO。
+
+Phase 1 可用性档位固定为 `SINGLE_NODE_RECOVERABLE`，机器契约位于 `deploy/platform/phase1/availability-tier.v1.json`。观测栈按 `observability-core` / `observability-logs` / `observability-full` 三档 profile 选择，Forecast / Optimization / FDD 通过 `intelligence` profile 按需启用；资源档位位于 `deploy/platform/phase1/deployment-tiers.v1.json`。
 
 ## 10. 验收来源
 

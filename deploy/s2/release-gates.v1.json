@@ -55,6 +55,9 @@
     "windowDays": 30,
     "snapshotHttp": {
       "availabilityPercent": 99.9,
+      "availabilityScope": "snapshot-http-conditional-on-required-infrastructure",
+      "appliesToAvailabilityTiers": ["COMPONENT_REDUNDANT", "HA"],
+      "wholePlatformClaimAllowed": false,
       "singleP95Milliseconds": 250,
       "singleP99Milliseconds": 750,
       "batchP95Milliseconds": 1000,
@@ -500,7 +503,7 @@
     "npm run build"
   ],
   "requiredFutureCommands": [
-    "npm run build:telemetry-runtime",
+    "npm run build:telemetry-worker",
     "npm run build:telemetry-runtime-migrator",
     "npm run s2:security-negative",
     "npm run s2:postgres-integration",

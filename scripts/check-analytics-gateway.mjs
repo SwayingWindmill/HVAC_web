@@ -12,7 +12,7 @@ const [publicContract, routeRegistryText, ownershipLockText, postgresFixture] = 
   read('contracts/http/analytics-energy-public.openapi.yaml'),
   read('contracts/ownership/route-ownership.v1.json'),
   read('contracts/ownership/ownership.v1.lock.json'),
-  read('infra/s1-registry/postgres/init/002-s1-registry-fixtures.sql'),
+  read('infra/registry/postgres/init/002-s1-registry-fixtures.sql'),
 ]);
 
 const routeRegistry = JSON.parse(routeRegistryText);

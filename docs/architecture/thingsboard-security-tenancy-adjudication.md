@@ -71,13 +71,13 @@ HVAC Web 不应恢复 ThingsBoard 运行时依赖，也不应复制其固定三�
 
 主要本地证据：
 
-- `services/platform-gateway/internal/gateway/identity.go`, `login_state_store.go`, `audit.go`, `registry.go`；
+- `cmd/energy-api/internal/gateway/identity.go`, `login_state_store.go`, `audit.go`, `registry.go`；
 - `services/identity-service/internal/identity/server.go`, `store.go`, `password.go`；
-- `services/iam-service/internal/iam/authorization.go`, `postgres_authorization.go`, `reconciliation.go`；
+- `modules/iam/internal/iam/authorization.go`, `postgres_authorization.go`, `reconciliation.go`；
 - `libs/sessionstore/store.go`, `postgres.go`；
-- `services/audit-ledger-service/internal/audit/server.go`；
+- `modules/audit/internal/audit/server.go`；
 - `infra/identity/postgres/init/001-identity-baseline.sql`；
-- `infra/s1-registry/postgres/init/001-s1-registry-baseline.sql`, `001a-tenant-foundation.sql`, `003-iam-runtime-identity-resolution.sql`, `004-iam-reconciliation.sql`；
+- `infra/registry/postgres/init/001-s1-registry-baseline.sql`, `001a-tenant-foundation.sql`, `003-iam-runtime-identity-resolution.sql`, `004-iam-reconciliation.sql`；
 - `docs/operations/hvac-web-real-mode-shell-spec.md`、两份用户提供的前端/UX 规范。
 
 ## 3. 它解决的问题与 Domain 模型
@@ -380,7 +380,7 @@ ThingsBoard Tenant 删除会先删除部分核心记录，再把大量实体清�
 | `git diff --check -- docs/architecture/thingsboard-security-tenancy-adjudication.md` | 通过 |
 | `go test ./services/identity-service/internal/identity` | 通过 |
 | `go test ./libs/sessionstore` | 通过 |
-| `go test ./services/iam-service/internal/iam` | 失败：测试仍引用旧 `OrganizationID`、`ActingOrganizationID`、`OrganizationMembership` |
-| `go test ./services/audit-ledger-service/internal/audit` | 失败：测试仍引用旧 `OrganizationID`、`ActingOrganizationID` |
+| `go test ./modules/iam/internal/iam` | 失败：测试仍引用旧 `OrganizationID`、`ActingOrganizationID`、`OrganizationMembership` |
+| `go test ./modules/audit/internal/audit` | 失败：测试仍引用旧 `OrganizationID`、`ActingOrganizationID` |
 
 失败发生在测试编译阶段，证明当前 Tenant 迁移尚未完成；它不是 ThingsBoard 参考实现的缺陷，也不是本轮新增文档造成的回归。在修复前，不得宣称 IAM/Audit 的当前 Tenant 化实现已通过回归验证。

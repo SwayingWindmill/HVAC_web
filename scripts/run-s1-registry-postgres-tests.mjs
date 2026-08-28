@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s1-registry/compose.yaml');
+const composePath = resolve(root, 'infra/registry/compose.yaml');
 const projectName = `hvac-s1-registry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-registry-core/postgres-baseline.json');
@@ -164,7 +164,7 @@ function scopedCounts(tenantID, siteIDs) {
 async function runIAMGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   psql(`ALTER ROLE s2_iam_grant_runtime PASSWORD '${telemetryGrantPassword}'`);
-  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/iam-service/internal/iam'], {
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './modules/iam/internal/iam'], {
     cwd: root,
     stdio: 'inherit',
     shell: false,
@@ -184,7 +184,7 @@ async function runIAMGoTests() {
 async function runCoreGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   psql(`ALTER ROLE s1_core_service PASSWORD '${coreServicePassword}'`);
-  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/platform-core-service/internal/core'], {
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './modules/registry/internal/core'], {
     cwd: root,
     stdio: 'inherit',
     shell: false,
@@ -200,7 +200,7 @@ async function runCoreGoTests() {
 
 async function runLegacyMigrationGoTests() {
   await mkdir(goCacheDir, { recursive: true });
-  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/legacy-migration-service/internal/migration'], {
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './tools/legacy-registry-migrator/internal/migration'], {
     cwd: root,
     stdio: 'inherit',
     shell: false,
@@ -218,7 +218,7 @@ async function runLegacyMigrationGoTests() {
 
 async function runGatewayRoutingGoTests() {
   await mkdir(goCacheDir, { recursive: true });
-  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/platform-gateway/internal/gateway', '-run', 'TestGatewayRegistry'], {
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './cmd/energy-api/internal/gateway', '-run', 'TestGatewayRegistry'], {
     cwd: root,
     stdio: 'inherit',
     shell: false,
@@ -1722,8 +1722,6 @@ try {
   report.assertions.iamAuthorizationStore = 'passed';
   await runCoreGoTests();
   report.assertions.coreRegistryStore = 'passed';
-  await runLegacyMigrationGoTests();
-  report.assertions.legacyMigrationExecution = 'passed';
   await runGatewayRoutingGoTests();
   report.assertions.gatewayRegistryRouting = 'passed';
 

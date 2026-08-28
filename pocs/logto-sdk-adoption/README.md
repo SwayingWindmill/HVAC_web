@@ -26,7 +26,7 @@ The comparison exercises public protocol boundaries rather than SDK internals:
 - organization-context claim verification;
 - dependency vulnerability scanning.
 
-The existing implementation baseline is the complete `services/platform-gateway` Go test suite, including browser-shaped OIDC/BFF tests.
+The existing implementation baseline is the complete `cmd/energy-api` Go test suite, including browser-shaped OIDC/BFF tests.
 
 ## Run
 

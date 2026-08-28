@@ -13,10 +13,10 @@ const [plan, ownership, openapi, routeRegistry, dataRegistry, migration, service
   readJSON('contracts/http/s3-command-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
-  readText('services/command-service/migrations/001_s3_command_runtime.sql'),
-  readText('services/command-service/pkg/commandservice/service.go'),
-  readText('services/command-dispatcher/pkg/mqttconnector/connector.go'),
-  readText('services/command-dispatcher/pkg/commanddispatcher/dispatcher.go'),
+  readText('modules/command/migrations/001_s3_command_runtime.sql'),
+  readText('modules/command/pkg/commandservice/service.go'),
+  readText('modules/command/pkg/mqttconnector/connector.go'),
+  readText('modules/command/pkg/commanddispatcher/dispatcher.go'),
   readText('docs/adr/0006-s3-command-intent-attempt-safety.md'),
 ]);
 

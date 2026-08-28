@@ -117,8 +117,8 @@ The local fixture supports success, admin login, JWKS rotation and deterministic
 ```bash
 npm run contracts:check
 npm run test:identity
-npm run build:gateway
-npm run build:iam
+npm run build:energy-api
+npm run build:iam-owner
 npm run build:oidc-fixture
 npm run lint
 npm run build

@@ -8,6 +8,8 @@ services:
       interval: 1s
       timeout: 2s
       retries: 30
+    ports:
+      - "127.0.0.1:${CENTRAL_PLANT_REDIS_PORT}:6379"
     networks: [central-plant]
 
   centrifugo:

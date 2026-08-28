@@ -7,7 +7,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const reconcilePath = process.env.PHASE1_IDENTITY_RECONCILE_FILE
   || path.join(repoRoot, 'deploy', 'platform', 'phase1', 'runtime', 'identity-reconcile.json');
 const issuer = process.env.PHASE1_LOCAL_IDENTITY_ISSUER || 'https://localhost:8443/identity';
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-postgres-1';
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-local-postgres-1';
 
 const reconcile = JSON.parse(readFileSync(reconcilePath, 'utf8'));
 const subject = reconcile.userId;
@@ -20,78 +20,34 @@ if (!subject || !tenantId || !siteId) {
 const sql = String.raw`
 BEGIN;
 
-UPDATE iam.role_bindings rb
-SET role_key = 'platform-admin',
-    actions = ARRAY[
-      'registry.read',
-      'telemetry.batch.read',
-      'telemetry.history.read',
-      'telemetry.recovery.checkpoint',
-      'telemetry.recovery.use',
-      'telemetry.resubscribe',
-      'telemetry.snapshot.read',
-      'telemetry.subscribe'
-    ]::text[],
+INSERT INTO iam.site_bindings(
+  id, tenant_id, site_id, principal_id, actions, effect,
+  valid_from, valid_to, revision, created_at, updated_at
+)
+SELECT
+  '01a006a0-0030-7000-8000-000000000001'::uuid,
+  :'tenant_id'::uuid,
+  :'site_id'::uuid,
+  p.id,
+  ARRAY['analytics.energy-series.read']::text[],
+  'ALLOW', now(), NULL, 1, now(), now()
+FROM iam.principals p
+WHERE p.external_issuer = :'admin_issuer'
+  AND p.external_subject = :'admin_subject'
+ON CONFLICT (tenant_id, site_id, principal_id) DO UPDATE
+SET actions = (
+      SELECT array_agg(action ORDER BY action)
+      FROM (
+        SELECT DISTINCT unnest(iam.site_bindings.actions || EXCLUDED.actions) AS action
+      ) merged
+    ),
     effect = 'ALLOW',
     valid_to = NULL,
-    revision = rb.revision + 1,
+    revision = iam.site_bindings.revision + 1,
     updated_at = now()
-FROM iam.principals p
-WHERE rb.principal_id = p.id
-  AND p.external_issuer = :'admin_issuer'
-  AND p.external_subject = :'admin_subject'
-  AND rb.tenant_id = :'tenant_id'::uuid
-  AND (
-    rb.role_key IS DISTINCT FROM 'platform-admin'
-    OR rb.actions IS DISTINCT FROM ARRAY[
-      'registry.read',
-      'telemetry.batch.read',
-      'telemetry.history.read',
-      'telemetry.recovery.checkpoint',
-      'telemetry.recovery.use',
-      'telemetry.resubscribe',
-      'telemetry.snapshot.read',
-      'telemetry.subscribe'
-    ]::text[]
-    OR rb.effect IS DISTINCT FROM 'ALLOW'
-    OR rb.valid_to IS NOT NULL
-  );
-
-UPDATE iam.site_bindings sb
-SET actions = ARRAY[
-      'site.read',
-      'telemetry.batch.read',
-      'telemetry.history.read',
-      'telemetry.recovery.checkpoint',
-      'telemetry.recovery.use',
-      'telemetry.resubscribe',
-      'telemetry.snapshot.read',
-      'telemetry.subscribe'
-    ]::text[],
-    effect = 'ALLOW',
-    valid_to = NULL,
-    revision = sb.revision + 1,
-    updated_at = now()
-FROM iam.principals p
-WHERE sb.principal_id = p.id
-  AND p.external_issuer = :'admin_issuer'
-  AND p.external_subject = :'admin_subject'
-  AND sb.tenant_id = :'tenant_id'::uuid
-  AND sb.site_id = :'site_id'::uuid
-  AND (
-    sb.actions IS DISTINCT FROM ARRAY[
-      'site.read',
-      'telemetry.batch.read',
-      'telemetry.history.read',
-      'telemetry.recovery.checkpoint',
-      'telemetry.recovery.use',
-      'telemetry.resubscribe',
-      'telemetry.snapshot.read',
-      'telemetry.subscribe'
-    ]::text[]
-    OR sb.effect IS DISTINCT FROM 'ALLOW'
-    OR sb.valid_to IS NOT NULL
-  );
+WHERE NOT EXCLUDED.actions <@ iam.site_bindings.actions
+   OR iam.site_bindings.effect IS DISTINCT FROM 'ALLOW'
+   OR iam.site_bindings.valid_to IS NOT NULL;
 
 INSERT INTO iam.telemetry_scope_bindings(
   id, tenant_id, principal_id, site_id, device_id, actions, effect, status,

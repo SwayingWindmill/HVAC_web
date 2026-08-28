@@ -1,0 +1,65 @@
+name: RMS Web Build
+
+on:
+  pull_request:
+    branches-ignore: ["**"]
+    paths:
+      - '.github/workflows/rms-web-build.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/**'
+      - 'docs/adr/0007-hvac-web-real-mode-data-authority.md'
+      - 'docs/operations/hvac-web-real-mode-shell-implementation-plan.md'
+      - 'docs/operations/hvac-web-real-mode-shell-spec.md'
+      - 'scripts/check-rms-real-build-graph.mjs'
+      - 'scripts/check-rms-real-bundle.mjs'
+      - 'scripts/rms-real-build-audit-lib.mjs'
+      - 'scripts/test-rms-real-build-audit.mjs'
+      - 'scripts/test-rms-real-runtime-config.mjs'
+      - 'scripts/test-rms-vite-config.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rms-web-build.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/**'
+      - 'docs/adr/0007-hvac-web-real-mode-data-authority.md'
+      - 'docs/operations/hvac-web-real-mode-shell-implementation-plan.md'
+      - 'docs/operations/hvac-web-real-mode-shell-spec.md'
+      - 'scripts/check-rms-real-build-graph.mjs'
+      - 'scripts/check-rms-real-bundle.mjs'
+      - 'scripts/rms-real-build-audit-lib.mjs'
+      - 'scripts/test-rms-real-build-audit.mjs'
+      - 'scripts/test-rms-real-runtime-config.mjs'
+      - 'scripts/test-rms-vite-config.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rms-web-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      HVAC_WEB_BUILD_ID: rms-web-build-${{ github.sha }}
+      HVAC_WEB_GATEWAY_BASE_PATH: /api/v1
+      HVAC_WEB_REALTIME_PROTOCOL: centrifugo-v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run rms:topology:check
+      - run: npm run rms:web-build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rms-web-build-audits
+          path: out/rms-web-build/*.json
+          if-no-files-found: error
+          retention-days: 14

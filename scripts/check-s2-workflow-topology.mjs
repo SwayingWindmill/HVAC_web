@@ -16,14 +16,8 @@ const assert = (condition, message) => {
 const capabilities = [
   ['s2-telemetry-baseline.yml', 's2:telemetry-baseline', 'out/s2-telemetry-baseline'],
   ['s2-iam-authorization.yml', 's2:iam-authorization', 'out/s2-iam-authorization'],
-  ['s2-telemetry-runtime-snapshot.yml', 's2:telemetry-runtime-snapshot', 'out/s2-telemetry-runtime-snapshot'],
   ['s2-telemetry-ingest.yml', 's2:telemetry-ingest', 'out/s2-telemetry-ingest'],
-  ['s2-gateway-snapshot.yml', 's2:gateway-snapshot', 'out/s2-gateway-snapshot'],
   ['s2-realtime-backend.yml', 's2:realtime-backend', 'out/s2-realtime-backend'],
-  ['s2-telemetry-live-client.yml', 's2:telemetry-live-client', 'out/s2-telemetry-live-client'],
-  ['s2-shadow-routing.yml', 's2:shadow-routing', 'out/s2-shadow-routing'],
-  ['s2-hvac-web-presence.yml', 's2:hvac-web-presence', 'out/s2-hvac-web-presence'],
-  ['s2-security-observability.yml', 's2:security-observability', 'out/s2-security-observability'],
   ['s2-telemetry-release.yml', 's2:telemetry-release', 'out/s2-telemetry-release'],
   ['s2-telemetry-cutover.yml', 's2:telemetry-cutover', 'out/s2-completion-evidence'],
 ];
@@ -90,10 +84,8 @@ for (const [file, command, evidenceDirectory] of capabilities) {
 }
 
 const releaseWorkflow = await readFile(resolve(workflowsRoot, 's2-telemetry-release.yml'), 'utf8');
-assert(
-  releaseWorkflow.includes('npm run s2:security-observability'),
-  'S2 release certification does not use the stable security and observability command',
-);
+assert(releaseWorkflow.includes('npm run s2:security-negative'), 'S2 release certification omits security-negative verification');
+assert(releaseWorkflow.includes('npm run s2:observability:harness'), 'S2 release certification omits observability harness verification');
 
 for (const relativePath of (await Promise.all(governedRoots.map(collectGovernedFiles))).flat()) {
   const source = await readFile(resolve(root, relativePath), 'utf8');

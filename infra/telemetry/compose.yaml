@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
+    environment:
+      POSTGRES_DB: hvac_s2
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-local-only
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${S2_POSTGRES_HOST_PORT:-56432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s2"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    networks: [s2]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c
+    environment:
+      CLICKHOUSE_DB: telemetry_history
+      CLICKHOUSE_USER: telemetry_history
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "127.0.0.1:${S2_CLICKHOUSE_HTTP_HOST_PORT:-58123}:8123"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user telemetry_history --query 'SELECT 1'"]
+      interval: 1s
+      timeout: 3s
+      retries: 90
+    networks: [s2]
+
+  latest-redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${S2_LATEST_REDIS_HOST_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    networks: [s2]
+    labels:
+      hvac.data-authority: "false"
+      hvac.cache-scope: "telemetry-latest-rebuildable"
+
+  analytics-read-model-projector:
+    build:
+      context: ../..
+      dockerfile: deploy/analytics/images/analytics-read-model-projector.Dockerfile
+    environment:
+      ANALYTICS_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      ANALYTICS_CLICKHOUSE_READER_USERNAME: analytics_projector_reader
+      ANALYTICS_CLICKHOUSE_WRITER_USERNAME: analytics_projector_writer
+      ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR: :19089
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT:-59089}:19089"
+    networks: [s2]
+
+networks:
+  s2: {}
+
+volumes:
+  clickhouse-data: {}

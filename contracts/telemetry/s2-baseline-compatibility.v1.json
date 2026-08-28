@@ -151,7 +151,7 @@
     "tables": {
       "registry_device_bindings": [
         "device_id",
-        "owning_organization_id",
+        "tenant_id",
         "site_id",
         "integration_instance_id",
         "external_entity_type",
@@ -165,9 +165,8 @@
       ],
       "iam_scope_projections": [
         "projection_id",
+        "tenant_id",
         "principal_id",
-        "acting_organization_id",
-        "owning_organization_id",
         "site_id",
         "device_id",
         "telemetry_key",
@@ -276,7 +275,7 @@
         "subscription_id",
         "client_subscription_id",
         "principal_id",
-        "acting_organization_id",
+        "tenant_id",
         "device_id",
         "keys",
         "scope_sha256",

@@ -1,0 +1,38 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ../observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${S0_OTEL_GRPC_HOST_PORT:-4317}:4317"
+      - "${S0_OTEL_HTTP_HOST_PORT:-4318}:4318"
+      - "${S0_OTEL_METRICS_HOST_PORT:-9464}:9464"
+      - "${S0_OTEL_HEALTH_HOST_PORT:-13133}:13133"
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "components"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [s0]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ../observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts:/etc/prometheus/alerts:ro
+    ports:
+      - "${S0_PROMETHEUS_HOST_PORT:-19090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      otel-collector:
+        condition: service_started
+    networks: [s0]
+
+networks:
+  s0:
+    driver: bridge

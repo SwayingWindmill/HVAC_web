@@ -113,7 +113,7 @@ try {
   await mkdir(profileDir, { recursive: true });
   await mkdir(goCacheDir, { recursive: true });
 
-  gatewayProcess = spawn(goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
+  gatewayProcess = spawn(goBinary, ['run', './cmd/energy-api'], {
     cwd: root,
     stdio: 'inherit',
     shell: false,

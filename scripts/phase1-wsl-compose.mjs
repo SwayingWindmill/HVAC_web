@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { centralPlantIdentity } from './central-plant-local-contract.mjs';
+import { parseRuntimeEnvironment, resolveDeploymentTier } from './phase1-deployment-tier.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const phase1Dir = path.join(repoRoot, 'deploy', 'platform', 'phase1');
@@ -11,6 +12,74 @@ const runtimeEnv = process.env.PHASE1_ENV_FILE || path.join(phase1Dir, 'environm
 const roleCredentials = process.env.PHASE1_DB_ROLE_CREDENTIALS_SQL || path.join(phase1Dir, 'runtime', 'db-role-credentials', 'roles.sql');
 
 const roleCredentialSql = readFileSync(roleCredentials, 'utf8');
+const runtimeEnvText = readFileSync(runtimeEnv, 'utf8');
+const runtimeValues = parseRuntimeEnvironment(runtimeEnvText);
+const deploymentTierContract = JSON.parse(readFileSync(path.join(phase1Dir, 'deployment-tiers.v1.json'), 'utf8'));
+const canonicalCompose = readFileSync(path.join(phase1Dir, 'compose.yaml'), 'utf8');
+const args = process.argv.slice(2);
+if (args.some((arg, index) =>
+  (arg === '--profile' && args[index + 1] === 'intelligence') ||
+  arg === '--profile=intelligence')) {
+  throw new Error('The intelligence profile requires a separately certified capacity tier');
+}
+
+function takeFlag(flag) {
+  const index = args.indexOf(flag);
+  if (index < 0) return false;
+  args.splice(index, 1);
+  return true;
+}
+
+const ownerSplit = takeFlag('--owner-split');
+const simulatorAcceptance = takeFlag('--simulator-acceptance');
+const sourceDeploy = takeFlag('--source-deploy');
+const integration = takeFlag('--integration') || simulatorAcceptance;
+const sourceRevision = sourceDeploy
+  ? spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim()
+  : '';
+if (sourceDeploy && !sourceRevision) {
+  throw new Error('Source deploy requires a Git revision');
+}
+const postgresMode = process.env.PHASE1_POSTGRES_MODE || runtimeValues.PHASE1_POSTGRES_MODE || 'local';
+if (postgresMode !== 'local' && postgresMode !== 'external') {
+  throw new Error(`Unknown PHASE1_POSTGRES_MODE: ${postgresMode}`);
+}
+const clickhouseMode = process.env.PHASE1_CLICKHOUSE_MODE || runtimeValues.PHASE1_CLICKHOUSE_MODE || 'local';
+if (clickhouseMode !== 'local' && clickhouseMode !== 'external') {
+  throw new Error(`Unknown PHASE1_CLICKHOUSE_MODE: ${clickhouseMode}`);
+}
+const redisMode = process.env.PHASE1_REDIS_MODE || runtimeValues.PHASE1_REDIS_MODE || 'local';
+if (redisMode !== 'local' && redisMode !== 'external') {
+  throw new Error(`Unknown PHASE1_REDIS_MODE: ${redisMode}`);
+}
+const localPostgres = postgresMode === 'local';
+const localClickHouse = clickhouseMode === 'local';
+const localRedis = redisMode === 'local';
+const externalState = !localPostgres || !localClickHouse || !localRedis;
+const tierId = process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER;
+if (ownerSplit && tierId !== 'single-full') {
+  throw new Error('The owner-split runtime mode requires PHASE1_DEPLOYMENT_TIER=single-full');
+}
+
+const ownerSplitCompose = ownerSplit
+  ? readFileSync(path.join(phase1Dir, 'owner-split.compose.yaml'), 'utf8')
+  : null;
+const runtimeProfiles = [
+  ...(localPostgres ? ['local-postgres'] : []),
+  ...(localClickHouse ? ['local-clickhouse'] : []),
+  ...(localRedis ? ['local-redis'] : []),
+  ...(integration ? ['integration'] : []),
+  ...(ownerSplit ? ['owner-split'] : []),
+];
+const deploymentTier = resolveDeploymentTier({
+  contract: deploymentTierContract,
+  compose: canonicalCompose,
+  tierId,
+  environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
+  runtimeEnvironment: { ...runtimeValues, ...process.env },
+  additionalComposeDocuments: ownerSplitCompose ? [ownerSplitCompose] : [],
+  additionalProfiles: runtimeProfiles,
+});
 
 function rolePassword(role) {
   const escapedRole = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,20 +90,29 @@ function rolePassword(role) {
   return match[1];
 }
 
+const postgresHost = process.env.PHASE1_POSTGRES_HOST || runtimeValues.PHASE1_POSTGRES_HOST || 'postgres';
+const postgresPort = process.env.PHASE1_POSTGRES_PORT || runtimeValues.PHASE1_POSTGRES_PORT || '5432';
+const postgresSslMode = process.env.PHASE1_POSTGRES_SSLMODE || runtimeValues.PHASE1_POSTGRES_SSLMODE || 'disable';
+
 function databaseUrl(role, database) {
   const url = new URL('postgres://postgres');
   url.username = role;
   url.password = rolePassword(role);
-  url.hostname = 'postgres';
-  url.port = '5432';
+  url.hostname = postgresHost;
+  url.port = postgresPort;
   url.pathname = `/${database}`;
-  url.searchParams.set('sslmode', 'disable');
+  url.searchParams.set('sslmode', postgresSslMode);
   return url.toString();
 }
 
 const env = {
   ...process.env,
+  COMPOSE_PROFILES: '',
+  ...deploymentTier.environment,
+  PHASE1_DATA_NETWORK_INTERNAL: externalState ? 'false' : 'true',
+  PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
+  ...(sourceDeploy ? { HVAC_WEB_BUILD_ID: sourceRevision } : {}),
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
   IDENTITY_ADMIN_DATABASE_URL: databaseUrl('identity_admin', 'hvac_identity'),
   IDENTITY_DIRECTORY_DATABASE_URL: databaseUrl('identity_directory_reader', 'hvac_identity'),
@@ -43,29 +121,67 @@ const env = {
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
 };
 
-const args = process.argv.slice(2);
-const simulatorAcceptanceIndex = args.indexOf('--simulator-acceptance');
 const composeFiles = [
   path.join(phase1Dir, 'compose.yaml'),
   path.join(phase1Dir, 'wsl.override.yaml'),
 ];
-if (simulatorAcceptanceIndex >= 0) {
-  args.splice(simulatorAcceptanceIndex, 1);
+if (ownerSplit) {
+  composeFiles.push(path.join(phase1Dir, 'owner-split.compose.yaml'));
+}
+if (simulatorAcceptance) {
   composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
 }
 
-const result = spawnSync('docker', [
+const composeBaseArgs = [
   'compose',
+  '--project-name', 'hvac-phase1-local',
+  ...[
+    ...deploymentTier.profiles,
+    ...runtimeProfiles,
+    ...(simulatorAcceptance ? ['simulator-acceptance'] : []),
+  ].flatMap((profile) => ['--profile', profile]),
   '--env-file', runtimeEnv,
   ...composeFiles.flatMap((composeFile) => ['-f', composeFile]),
-  ...args,
-], {
-  cwd: repoRoot,
-  env,
-  stdio: 'inherit',
-});
+];
 
-if (result.error) {
-  throw result.error;
+function runCompose(commandArgs) {
+  const result = spawnSync('docker', [...composeBaseArgs, ...commandArgs], {
+    cwd: repoRoot,
+    env,
+    stdio: 'inherit',
+  });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
 }
-process.exit(result.status ?? 1);
+
+const runtimeServices = [
+  'nginx',
+  'energy-api',
+  'identity-service',
+  'telemetry-worker',
+  'metric-worker',
+  'scheduler',
+  'maintenance',
+  ...(integration ? ['iot-service'] : []),
+];
+
+if (sourceDeploy) {
+  const upIndex = args.indexOf('up');
+  if (upIndex < 0) {
+    throw new Error('--source-deploy is only valid with docker compose up');
+  }
+  const buildArgs = [
+    ['GO_BUILD_IMAGE', process.env.PHASE1_GO_BUILD_IMAGE],
+    ['GO_RUNTIME_IMAGE', process.env.PHASE1_GO_RUNTIME_IMAGE],
+    ['GO_PROXY', process.env.PHASE1_GO_PROXY],
+    ['WEB_BUILD_IMAGE', process.env.PHASE1_WEB_BUILD_IMAGE],
+    ['NGINX_RUNTIME_IMAGE', process.env.PHASE1_NGINX_RUNTIME_IMAGE],
+    ['NPM_REGISTRY', process.env.PHASE1_NPM_REGISTRY],
+  ].flatMap(([name, value]) => value ? ['--build-arg', `${name}=${value}`] : []);
+  const buildStatus = runCompose(['build', ...buildArgs, ...runtimeServices]);
+  if (buildStatus !== 0) process.exit(buildStatus);
+
+  process.exit(runCompose(args));
+}
+
+process.exit(runCompose(args));

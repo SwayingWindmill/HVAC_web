@@ -12,7 +12,7 @@ const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
 const toolingLockPath = resolve(root, 'contracts/http/tooling.lock.json');
 const goTemplatePath = resolve(root, 'contracts/http/templates/platformapi.go.tmpl');
 const tsTemplatePath = resolve(root, 'contracts/http/templates/platformGateway.ts.tmpl');
-const goOutputPath = resolve(root, 'services/platform-gateway/pkg/platformapi/api.gen.go');
+const goOutputPath = resolve(root, 'cmd/energy-api/internal/platformapi/api.gen.go');
 const tsOutputPath = resolve(root, 'apps/hvac-web/src/api/generated/platformGateway.gen.ts');
 const checkOnly = process.argv.includes('--check');
 const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
@@ -65,7 +65,7 @@ invariant(exactMembers(toolingLock.templates, [
   'contracts/http/templates/platformGateway.ts.tmpl',
 ]), 'tooling lock templates are invalid');
 invariant(exactMembers(toolingLock.outputs, [
-  'services/platform-gateway/pkg/platformapi/api.gen.go',
+  'cmd/energy-api/internal/platformapi/api.gen.go',
   'apps/hvac-web/src/api/generated/platformGateway.gen.ts',
 ]), 'tooling lock outputs are invalid');
 invariant(spec.openapi === '3.1.0', 'OpenAPI version must be 3.1.0');

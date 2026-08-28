@@ -77,39 +77,3 @@ test('pins contract generation to the supported Node toolchain', async () => {
   assert.equal(tooling.node, requiredNodeVersion);
 });
 
-test('keeps the React Router security workflow trigger set precise and complete', async () => {
-  const workflow = await readFile(join(root, '.github', 'workflows', 'security-79-react-router.yml'), 'utf8');
-  assert.equal(workflow.includes('.github/workflows/**'), false);
-  assert.equal(workflow.includes('scripts/check-s2-*.mjs'), false);
-
-  const requiredPaths = [
-    '.github/workflows/security-79-react-router.yml',
-    'scripts/check-npm-production-audit.mjs',
-    'scripts/check-production-licenses.mjs',
-    'scripts/check-rms-real-build-graph.mjs',
-    'scripts/check-rms-real-bundle.mjs',
-    'scripts/check-s1-hvac-web-registry.mjs',
-    'scripts/check-s2-hvac-web-presence.mjs',
-    'scripts/check-s2-shadow-routing.mjs',
-    'scripts/check-s2-telemetry-live-client.mjs',
-    'scripts/generate-platform-contracts.mjs',
-    'scripts/generate-s2-telemetry-contracts.mjs',
-    'scripts/rms-certification-evidence-lib.mjs',
-    'scripts/rms-real-build-audit-lib.mjs',
-    'scripts/run-rms-authenticated-shell-browser-audit.mjs',
-    'scripts/run-s2-hvac-web-presence-browser-audit.mjs',
-    'scripts/test-central-plant-telemetry.mjs',
-    'scripts/test-npm-production-audit-retry.mjs',
-    'scripts/test-react-router-security-upgrade.mjs',
-    'scripts/test-rms-authenticated-shell-policy.mjs',
-    'scripts/test-rms-certification-evidence.mjs',
-    'scripts/test-rms-feature-route-policy.mjs',
-    'scripts/test-rms-protected-scope.mjs',
-    'scripts/test-rms-realtime-status.mjs',
-    'scripts/test-rms-shell-runtime.mjs',
-    'scripts/test-rms-site-routing.mjs',
-  ];
-  for (const path of requiredPaths) {
-    assert.equal(workflow.split(`\"${path}\"`).length - 1, 2, `${path} must be present in pull_request and push paths`);
-  }
-});

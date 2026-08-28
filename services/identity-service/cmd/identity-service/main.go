@@ -29,6 +29,7 @@ func main() {
 		DatabaseURL:           os.Getenv("IDENTITY_DATABASE_URL"),
 		SigningKeyFile:        os.Getenv("IDENTITY_SIGNING_KEY_FILE"),
 		MFAEncryptionKeyFile:  os.Getenv("IDENTITY_MFA_ENCRYPTION_KEY_FILE"),
+		SchemaVersion:         envOr("PHASE1_PRODUCT_VERSION", "0.1.0"),
 	})
 	cancel()
 	if err != nil {
@@ -43,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer server.Close()
-	telemetry.SetReadinessCheck(server.Ping)
+	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: server.Ping})
 
 	httpServer := &http.Server{
 		Addr: envOr("IDENTITY_ADDR", ":19095"), Handler: server.Handler(),

@@ -1,0 +1,245 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
+
+const root = resolve(process.cwd());
+const readText = (path) => readFile(resolve(root, path), 'utf8');
+const readJSON = async (path) => JSON.parse(await readText(path));
+
+function assert(condition, message) {
+  if (!condition) throw new Error(`Invalid S2 Ticket 03 Telemetry Runtime Snapshot: ${message}`);
+}
+
+function includesAll(source, markers, label) {
+  for (const marker of markers) assert(source.includes(marker), `${label} is missing ${marker}`);
+}
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
+
+const [
+  evaluatorGo,
+  storeGo,
+  authorizationGo,
+  serverGo,
+  mainGo,
+  evaluatorTests,
+  authorizationTests,
+  serverTests,
+  postgresTests,
+  runtimeSQL,
+  fixtureSQL,
+  packageJSON,
+  dataRegistry,
+  ownershipLock,
+  routeRegistry,
+  workflow,
+] = await Promise.all([
+  readText('modules/telemetry/internal/telemetry/evaluator.go'),
+  readText('modules/telemetry/internal/telemetry/store.go'),
+  readText('modules/telemetry/internal/telemetry/authorization.go'),
+  readText('modules/telemetry/internal/telemetry/server.go'),
+  readText('cmd/telemetry-worker/main.go'),
+  readText('modules/telemetry/internal/telemetry/evaluator_test.go'),
+  readText('modules/telemetry/internal/telemetry/authorization_test.go'),
+  readText('modules/telemetry/internal/telemetry/server_test.go'),
+  readText('modules/telemetry/internal/telemetry/postgres_integration_test.go'),
+  readText('infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql'),
+  readText('infra/s2-telemetry/postgres/init/004-s2-telemetry-fixtures.sql'),
+  readJSON('package.json'),
+  readJSON('contracts/ownership/data-ownership.v1.json'),
+  readJSON('contracts/ownership/ownership.v1.lock.json'),
+  readJSON('contracts/ownership/route-ownership.v1.json'),
+  readText('.github/workflows/s2-telemetry-runtime-snapshot.yml'),
+]);
+
+includesAll(evaluatorGo, [
+  'type DeviceFacts struct',
+  'type CanonicalEvaluation struct',
+  'func EvaluateCanonical',
+  'func ProjectSnapshot',
+  'DevicePresenceStateUnknown',
+  'DevicePresenceStateOffline',
+  'EXPLICIT_DISCONNECT',
+  'AcceptedSignalTypes',
+  'EvaluationAvailabilityUnavailable',
+  'TelemetryFreshnessStale',
+  'TelemetryQualityInvalid',
+  'TelemetryQualityStale',
+  'contractTelemetryValue',
+  'canonicalQualityReasons',
+  'LastKnownPresence',
+  'func stateDigest',
+], 'Presence/Freshness evaluator');
+includesAll(storeGo, [
+  'pgx.Serializable',
+  'SET LOCAL ROLE s2_telemetry_runtime',
+  'FOR UPDATE',
+  'state_sha256',
+  'candidateRevision = previousRevision + 1',
+  'persistCurrentState',
+  'insertOutboxIntent',
+  'subscription_id',
+  "'hvac.telemetry.device-snapshot.v1'",
+  'telemetry runtime database identity must be s2_telemetry_service',
+], 'PostgreSQL Snapshot transaction');
+includesAll(authorizationGo, [
+  'telemetryauth.VerifyGrant',
+  'ScopeDigest',
+  '/internal/v1/telemetry/grants:consume',
+  'ErrGrantRejected',
+  'ErrAuthorizationUnavailable',
+  'ensureJSONEOF(decoder)',
+], 'IAM grant adapter');
+includesAll(serverGo, [
+  'InternalDeviceSnapshotPrefix',
+  'InternalBatchSnapshotPath',
+  'verifiedPeerSPIFFE',
+  'hasForgedIdentityHeader',
+  'TELEMETRY_FORGED_IDENTITY_HEADER',
+  'TELEMETRY_WORKLOAD_IDENTITY_INVALID',
+  'TELEMETRY_AUTHORIZATION_UNAVAILABLE',
+  'problemTraceID',
+  'traceIDPattern',
+  'RESOURCE_NOT_FOUND',
+  'BatchObservationFailure',
+], 'internal Snapshot HTTP seam');
+assert(!serverGo.includes('/api/v1/'), 'Telemetry Runtime handler must not activate public S2 routes');
+const batchHandler = serverGo.slice(serverGo.indexOf('func (h *handler) handleBatch'));
+assert(batchHandler.indexOf('if !h.authorize') < batchHandler.indexOf('commit, err := h.store.EvaluateAndRead'), 'batch authorization must be all-or-nothing before item reads');
+includesAll(mainGo, [
+  'TELEMETRY_DATABASE_URL',
+  'TELEMETRY_IAM_ENDPOINT',
+  'TELEMETRY_ALLOWED_GATEWAY_SPIFFE',
+  'tls.RequireAndVerifyClientCert',
+  'tls.VersionTLS13',
+  'OpenPostgresStore',
+  'NewHTTPGrantAuthorizer',
+  'DisableCompression: true',
+], 'Telemetry Runtime service entrypoint');
+
+includesAll(evaluatorTests, [
+  'TestEvaluateCanonicalPresenceFreshnessAndQuality',
+  'offline requires continuous coverage',
+  'coverage interruption is unavailable not offline',
+  'ONLY_REJECTED_CANDIDATES',
+  'TestEvaluateCanonicalDigestIgnoresRefreshTimeButIncludesPolicyChange',
+  'TestProjectSnapshotPreservesExactRequestedKeyOrderAndPresenceOnly',
+  'TestEvaluatePresencePreservesLastKnownAndRequiresNamedDisconnect',
+], 'evaluator conformance tests');
+includesAll(authorizationTests, [
+  'TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption',
+  'wrong presenter',
+  'altered scope',
+  'TestHTTPGrantAuthorizerFailsClosedWhenIAMOrAcceptanceIsInvalid',
+  'acceptance has trailing JSON',
+], 'grant conformance tests');
+includesAll(serverTests, [
+  'TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection',
+  'TestInternalSnapshotRejectsForgedIdentityAndWrongWorkload',
+  'TestInternalBatchPreservesOrderAndReturnsTypedNotFound',
+  'TestInternalSnapshotFailsClosedForGrantAndStoreDependencies',
+  'TestProblemDetailsAlwaysUseContractTraceID',
+], 'internal API tests');
+includesAll(postgresTests, [
+  'TestPostgresSnapshotTransactionRevisionAndRollback',
+  'duplicate outbox event unexpectedly committed',
+  'TestPostgresSnapshotTwoOrganizationIsolationAndRuntimeRole',
+  'runtime login read without activation',
+], 'PostgreSQL integration tests');
+
+includesAll(runtimeSQL, [
+  'ADD COLUMN IF NOT EXISTS presence_applicability',
+  'ADD COLUMN IF NOT EXISTS accepted_signal_types',
+  'presence_policies_accepted_signal_types_check',
+  'ADD COLUMN IF NOT EXISTS state_sha256',
+  'CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_signals',
+  'CREATE TABLE IF NOT EXISTS telemetry_runtime.observation_coverage',
+  'ALTER TABLE telemetry_runtime.presence_signals FORCE ROW LEVEL SECURITY',
+  'ALTER TABLE telemetry_runtime.observation_coverage FORCE ROW LEVEL SECURITY',
+  'CREATE POLICY presence_signals_runtime_all',
+  'CREATE POLICY observation_coverage_runtime_all',
+], 'runtime Snapshot migration');
+for (const forbidden of ['DROP TABLE', 'DROP COLUMN', 'ALTER COLUMN TYPE', 'TRUNCATE']) {
+  assert(!runtimeSQL.toUpperCase().includes(forbidden), `runtime migration is not expand-only: ${forbidden}`);
+}
+includesAll(fixtureSQL, [
+  'telemetry_runtime.presence_signals',
+  'telemetry_runtime.observation_coverage',
+  "'OBSERVATION_COVERAGE_GAP'",
+  'state_sha256',
+], 'deterministic Snapshot fixtures');
+
+assert(dataRegistry.registryRevision >= 8 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
+const resources = new Map((dataRegistry.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
+for (const name of ['presence-signal', 'observation-coverage', 'device-presence', 'device-observation-snapshot']) {
+  assert(resources.get(`projection:${name}`)?.writer === 'telemetry-runtime-service', `${name} writer drifted`);
+}
+assert(resources.get('outbox:telemetry-publication-outbox')?.writer === 'telemetry-runtime-service', 'Snapshot outbox writer drifted');
+const publicRoutes = (routeRegistry.routes ?? []).filter((route) => route.owner === 'telemetry-runtime-service');
+assert(publicRoutes.length === 4, 'public S2 route count drifted');
+for (const route of publicRoutes) {
+  assert(route.publicIngress === 'platform-gateway', `${route.method} ${route.path} bypasses Gateway`);
+  assert(route.activationStatus === 'primary' && route.rollout?.mode === 'all' && route.migrationPhase === 'R7-primary-100', `${route.method} ${route.path} is not on the current S2 primary phase`);
+  assert(route.readOnlyFallback === false && route.readFallbackOwner === undefined, `${route.method} ${route.path} gained request fallback`);
+}
+
+const expectedScripts = {
+  'build:telemetry-worker': 'node scripts/run-go.mjs build -o out/telemetry-worker ./cmd/telemetry-worker',
+  's2:runtime:check': 'node scripts/check-s2-telemetry-runtime-snapshot.mjs',
+  's2:runtime:postgres': 'node scripts/run-s2-telemetry-runtime-postgres-tests.mjs',
+};
+for (const [name, command] of Object.entries(expectedScripts)) {
+  assert(packageJSON.scripts?.[name] === command, `${name} is not wired`);
+}
+assert(packageJSON.scripts?.['test:identity']?.includes('./modules/telemetry/...'), 'global identity tests omit Telemetry Runtime');
+assert(packageJSON.scripts?.['test:security-negative']?.includes('./modules/telemetry/...'), 'global security-negative tests omit Telemetry Runtime');
+const ticketCommands = aggregateCommandLabels('s2:telemetry-runtime-snapshot');
+assert(ticketCommands.length > 0, 's2:telemetry-runtime-snapshot is missing');
+for (const command of [
+  'npm run s2:runtime:check',
+  'test ./modules/telemetry/...',
+  'vet ./modules/telemetry/...',
+  'npm run build:telemetry-worker',
+  'npm run ownership:check',
+  'npm run s2:baseline:check',
+  'npm run s2:iam:check',
+  'npm run s2:contracts:check',
+  'npm run contracts:check',
+  'npm run release:evidence-assets',
+  'npm run lint',
+  'npm run build',
+  'npm run s2:runtime:postgres',
+]) {
+  assert(ticketCommands.some((label) => label.includes(command)), `s2:telemetry-runtime-snapshot omits ${command}`);
+}
+includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:telemetry-runtime-snapshot', 's2-telemetry-runtime-snapshot-evidence'], 'Ticket 03 workflow');
+
+const ticket03CoreSources = `${evaluatorGo}\n${authorizationGo}`.toLowerCase();
+for (const forbidden of ['thingsboard', 'centrifugo', 'legacy-hvac-backend', 'mock fallback', 'redis']) {
+  assert(!ticket03CoreSources.includes(forbidden), `Ticket 03 core crossed an out-of-scope boundary: ${forbidden}`);
+}
+const laterRuntimeSources = `${storeGo}\n${serverGo}\n${mainGo}`.toLowerCase();
+for (const forbidden of ['legacy-hvac-backend', 'mock fallback']) {
+  assert(!laterRuntimeSources.includes(forbidden), `Telemetry Runtime introduced a request-level fallback boundary: ${forbidden}`);
+}
+const realtimeTicketActive = packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-realtime-backend.mjs';
+if (laterRuntimeSources.includes('centrifugo') || laterRuntimeSources.includes('redis')) {
+  assert(realtimeTicketActive, 'Telemetry transport code is present without the Ticket 06 realtime boundary gate');
+  assert(aggregateCommandLabels('s2:realtime-backend').some((label) => label.includes('npm run s2:realtime:check')), 'Ticket 06 command omits its realtime boundary gate');
+}
+
+console.log('S2 Ticket 03 Telemetry Runtime Snapshot passed: authoritative semantics, atomic revision/outbox, exact internal reads and zero public traffic.');

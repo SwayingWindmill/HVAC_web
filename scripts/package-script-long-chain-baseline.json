@@ -3,84 +3,16 @@
   "maximumInlineCommands": 4,
   "scripts": {
     "real-assets:certify": {
-      "sha256": "b2652f0b6c4d52663ee1ee4f904743222836a80a62adc070bfa5d2353bea52d0",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "rms:web-auth": {
-      "sha256": "93f9e83298e7210dedd485c85dc0ce0576c2d6cdf2a123e49cf50cdeb8e769c1",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "rms:web-build": {
-      "sha256": "8dc53343f4021a0c38a979267ab83e6346f9236334a90f2c759bbd843b03e4b6",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "rms:web-routing": {
-      "sha256": "0e9398a8a9eb0fe5b1bd0f4842e66487ddd22b062b8b71475847375c8a43448c",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s1:registry-core": {
-      "sha256": "e37af49f429c1c388bedde63bc419fa2066f025b9f46cdfaa030bf2e357cfbc5",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s1:registry-migration": {
-      "sha256": "375caf8be0343ce6935226a6df760acfccc653eb26a1c15a4010f23c5d203570",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s1:registry-routing": {
-      "sha256": "8e559962c38e4bf216dad22315d4a7621227f7b03969151c4b4f97523b9b5023",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s1:registry-web": {
-      "sha256": "4b21ae0847ee508b5844b6ec57b25037267483d7f2b342b674b7d8fadf695e1e",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s2:hvac-web-presence": {
-      "sha256": "e3efcb3215c573458c5cec28e3db49aeb17c1b70ece42a7c92294dbb71fbf614",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s2:security-observability": {
-      "sha256": "b41c0dc0ddb7f69996153df15c1ce85d66ec951d407a7962c89ff0ef26e9a4e5",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s2:shadow-routing": {
-      "sha256": "1e54c8d74c31496ca0b014fa0742732c7754a5d10bcfe5df0937fd29751d1b99",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
+      "mode": "explicit-operation",
+      "reason": "Explicit certification operation; keep orchestration visible at the package entry point."
     },
     "s2:telemetry-cutover": {
-      "sha256": "17ced357358cbb2b0fb6778917bec9d59c2d5b9ce475b53c24268df2157b36eb",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s2:telemetry-live-client": {
-      "sha256": "68b0891c8bea06a9da0b16f169105706c6a7181bdf5c2a67fbd0dc720a4a65ee",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
+      "mode": "explicit-operation",
+      "reason": "Explicit cutover operation; keep orchestration visible at the package entry point."
     },
     "s2:telemetry-release": {
-      "sha256": "607ac9ec81b3249cee816d9c765acb8570774210851cfce003e4f5be778be989",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s3:certification:pr": {
-      "sha256": "eae7a396d1cd8b420b60431d89074f57eb1cc3e85918241419e8c6f5bcbfc4bf",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s3:local:check": {
-      "sha256": "463be3aff4f3c09edd70436f40ecc0bc89fac7e6629114739c6966e72848583d",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s4:alarm-service": {
-      "sha256": "1097d2ad4b2f0c03ba2ff493e60d5df883a9688b284bfedd8b3a8facee259ef2",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s5:work-order": {
-      "sha256": "dcd4284892012742166713af22e5019f8d1b836032ddce09666608c89444f363",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "s5:work-order:read-canary": {
-      "sha256": "41d75b67586334c7521aa801226ad46670ac04f9011ec8160bb828a76a7379ce",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
-    },
-    "security:ticket-79": {
-      "sha256": "484000afc1272ef916b8513aa123a6ed3f839b86aec7870d608e121bc424bd07",
-      "reason": "Legacy inline orchestration; migrate to capabilityTaskMatrix before changing."
+      "mode": "explicit-operation",
+      "reason": "Explicit release operation; keep orchestration visible at the package entry point."
     }
   }
 }

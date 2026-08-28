@@ -83,10 +83,11 @@ func TestLoggerRedactsCredentialFields(t *testing.T) {
 
 func TestReadinessTracksRequiredDependencyFailureAndRecovery(t *testing.T) {
 	dependencyReady := false
-	runtime := NewRuntime(RuntimeConfig{
-		Service: "scheduler",
-		QueueSize: 1,
-		ReadinessCheck: func(context.Context) error {
+	runtime := NewRuntime(RuntimeConfig{Service: "scheduler", QueueSize: 1})
+	runtime.SetDependencies(Dependency{
+		Name:     "postgres",
+		Required: true,
+		Check: func(context.Context) error {
 			if !dependencyReady {
 				return errors.New("database unavailable")
 			}
@@ -107,6 +108,46 @@ func TestReadinessTracksRequiredDependencyFailureAndRecovery(t *testing.T) {
 	handler.ServeHTTP(recovered, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if recovered.Code != http.StatusOK {
 		t.Fatalf("dependency recovery status = %d", recovered.Code)
+	}
+}
+
+func TestReadinessStaysServingWhenOptionalDependencyFails(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "telemetry-runtime", QueueSize: 1})
+	runtime.SetDependencies(
+		Dependency{Name: "postgres", Required: true, Check: func(context.Context) error { return nil }},
+		Dependency{Name: "redis-latest-cache", Required: false, Check: func(context.Context) error { return errors.New("connection refused") }},
+	)
+	runtime.MarkReady()
+	handler := runtime.DiagnosticsHandler()
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("optional dependency failure status = %d", response.Code)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"status":"degraded"`) || !strings.Contains(body, `"name":"redis-latest-cache"`) || !strings.Contains(body, `"status":"down"`) {
+		t.Fatalf("degraded response missing dependency detail: %s", body)
+	}
+}
+
+func TestReadinessRequiredDependencyFailureNamesTheDependency(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1})
+	runtime.SetDependencies(
+		Dependency{Name: "postgres-session", Required: true, Check: func(context.Context) error { return errors.New("database unavailable") }},
+		Dependency{Name: "redis", Required: false, Check: func(context.Context) error { return nil }},
+	)
+	runtime.MarkReady()
+	handler := runtime.DiagnosticsHandler()
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("required dependency failure status = %d", response.Code)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"name":"postgres-session"`) || !strings.Contains(body, `"error":"database unavailable"`) {
+		t.Fatalf("not-ready response missing failing dependency: %s", body)
 	}
 }
 

@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { createPostgresComposeHarness, expectEqual, type PostgresAuthorityReport } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s5-work-order/compose.yaml');
+const composePath = resolve(root, 'infra/workorder/compose.yaml');
 const projectName = `hvac-s5-work-order-${process.pid}`;
 const reportPath = resolve(root, process.env.S5_WORK_ORDER_REPORT_PATH ?? 'out/s5-work-order-authority/postgres-authority.json');
 const { postgresHostPort, run, compose, psql, pause } = await createPostgresComposeHarness({
@@ -134,7 +134,7 @@ try {
     S5_WORK_ORDER_MUTATION_TEST_DATABASE_URL: `postgres://s5_work_order_mutation_service:local-mutation-fixture-only@127.0.0.1:${postgresHostPort}/hvac_s5?sslmode=disable`,
     S5_WORK_ORDER_ADMIN_DATABASE_URL: `postgres://postgres:local-fixture-only@127.0.0.1:${postgresHostPort}/hvac_s5?sslmode=disable`,
   };
-  run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './services/work-order-service/...'], { env: testEnvironment, stdio: 'inherit' });
+  run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './modules/workorder/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
 
   expectEqual(psql("SELECT count(*)::text FROM work_order_runtime.work_order_current"), '4', 'fixture row preservation');

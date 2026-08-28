@@ -41,12 +41,25 @@ export function buildCentralPlantSpatialIdentities(spatialPoints = []) {
   return { spaceIdByKey, assetIdByKey, sensorIdByKey, pointIdByRef, nextID };
 }
 
-export function buildS1SeedSQL({ oidcIssuer, principalSubject = 'fixture-user', pointKeysByDevice, spatialPoints = [] }) {
-  const { tenantId, siteId, principalId } = centralPlantIdentity;
+export function buildS1SeedSQL({
+  oidcIssuer,
+  principalSubject = 'fixture-user',
+  pointKeysByDevice,
+  spatialPoints = [],
+  mqttBrokerURL,
+  gatewayExternalId,
+  mqttGatewayCertificateFingerprint,
+}) {
+  const { tenantId, siteId, principalId, integrationInstanceId } = centralPlantIdentity;
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]`;
   const analytics = `ARRAY[${analyticsActions.map(sqlLiteral).join(',')}]`;
   const { spaceIdByKey, assetIdByKey, sensorIdByKey, pointIdByRef, nextID } = buildCentralPlantSpatialIdentities(spatialPoints);
   const platformDeviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
+  const transportProfileId = nextID();
+  const credentialRefId = nextID();
+  const sessionId = nextID();
+  const connectivityDeviceBindingRows = centralPlantDevices.map((device) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(integrationInstanceId)},${sqlLiteral(device.platformDeviceId)},${sqlLiteral(device.platformDeviceId)},'ACTIVE','2000-01-01T00:00:00Z',NULL,1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
+  const gatewayChildBindingRows = centralPlantDevices.map((device) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(integrationInstanceId)},${sqlLiteral(gatewayExternalId)},${sqlLiteral(device.platformDeviceId)},${sqlLiteral(device.platformDeviceId)},'ACTIVE','2000-01-01T00:00:00Z',NULL,1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
 
   const spaceRows = centralPlantSpaces.map((space) => `(${sqlLiteral(spaceIdByKey.get(space.id))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${space.parentId ? sqlLiteral(spaceIdByKey.get(space.parentId)) : 'NULL'},${sqlLiteral(space.code)},${sqlLiteral(space.name)},${sqlLiteral(space.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const assetRows = centralPlantAssets.map((asset) => `(${sqlLiteral(assetIdByKey.get(asset.id))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(asset.code)},${sqlLiteral(asset.name)},${sqlLiteral(asset.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
@@ -67,11 +80,12 @@ export function buildS1SeedSQL({ oidcIssuer, principalSubject = 'fixture-user', 
 
   const pointRows = spatialPoints.map((point) => {
     const platformDevice = platformDeviceByName.get(point.deviceId);
+    const counterDecreaseMode = point.pointType === 'COUNTER' ? 'RESET_TO_ZERO' : null;
     const metadata = {
       ...(point.sourceMetadata ?? {}),
       ...(point.sourceProtocol ? { protocol: point.sourceProtocol, address: point.sourceAddress } : {}),
     };
-    return `(${sqlLiteral(pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(platformDevice.platformDeviceId)},${point.sensorId ? sqlLiteral(sensorIdByKey.get(point.sensorId)) : 'NULL'},${sqlLiteral(point.pointCode)},${sqlLiteral(point.sourceKey)},${sqlLiteral(point.name)},${sqlLiteral(point.pointType)},${sqlLiteral(point.valueType)},${point.unit ? sqlLiteral(point.unit) : 'NULL'},${point.writable ? 'true' : 'false'},${durationMilliseconds(point.sampleInterval)},${durationMilliseconds(point.publishInterval)},${durationMilliseconds(point.staleAfter)},${sqlJSON(metadata)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`;
+    return `(${sqlLiteral(pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(platformDevice.platformDeviceId)},${point.sensorId ? sqlLiteral(sensorIdByKey.get(point.sensorId)) : 'NULL'},${sqlLiteral(point.pointCode)},${sqlLiteral(point.sourceKey)},${sqlLiteral(point.name)},${sqlLiteral(point.pointType)},${sqlLiteral(point.valueType)},${point.unit ? sqlLiteral(point.unit) : 'NULL'},${point.writable ? 'true' : 'false'},${durationMilliseconds(point.sampleInterval)},${durationMilliseconds(point.publishInterval)},${durationMilliseconds(point.staleAfter)},${counterDecreaseMode ? sqlLiteral(counterDecreaseMode) : 'NULL'},NULL,${sqlJSON(metadata)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`;
   }).join(',\n  ');
   const pointSubjectRows = spatialPoints.map((point) => {
     const subjectType = canonicalSubjectType(point.subjectType);
@@ -79,6 +93,16 @@ export function buildS1SeedSQL({ oidcIssuer, principalSubject = 'fixture-user', 
     const assetID = subjectType === 'ASSET' ? sqlLiteral(assetIdByKey.get(point.subjectId)) : 'NULL';
     return `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},${sqlLiteral(subjectType)},${spaceID},${assetID},${sqlLiteral(point.pointType === 'COMMAND' ? 'CONTROLS' : 'DESCRIBES')},'ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`;
   }).join(',\n  ');
+
+  const registryRoleTemplateID = nextID();
+  const telemetryRoleTemplateID = nextID();
+  const roleTemplateRows = [
+    `(${sqlLiteral(registryRoleTemplateID)},${sqlLiteral(tenantId)},'registry-reader','Registry reader',ARRAY['registry.read'],'ACTIVE',1,clock_timestamp(),clock_timestamp())`,
+    `(${sqlLiteral(telemetryRoleTemplateID)},${sqlLiteral(tenantId)},'telemetry-reader','Telemetry reader',${actions},'ACTIVE',1,clock_timestamp(),clock_timestamp())`,
+  ].join(',\n  ');
+  const roleBindingRows = [registryRoleTemplateID, telemetryRoleTemplateID]
+    .map((roleTemplateID) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(principalId)},${sqlLiteral(roleTemplateID)},'ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`)
+    .join(',\n  ');
 
   const scopeRows = centralPlantDevices.map((device) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(principalId)},${sqlLiteral(siteId)},${sqlLiteral(device.platformDeviceId)},${actions},'ALLOW','ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const keyRows = centralPlantDevices.flatMap((device) => (pointKeysByDevice.get(device.platformDeviceId) ?? []).map((key) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(principalId)},${sqlLiteral(device.platformDeviceId)},${sqlLiteral(key)},${actions},'ALLOW','ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`)).join(',\n  ');
@@ -99,6 +123,22 @@ ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUD
 INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at) VALUES
   ${deviceRows}
 ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUDED.display_name, device_type=EXCLUDED.device_type, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO connectivity.transport_profiles (id, tenant_id, protocol, broker_origin, topic_namespace, status, revision, created_at, updated_at)
+VALUES (${sqlLiteral(transportProfileId)},${sqlLiteral(tenantId)},'MQTT',${sqlLiteral(mqttBrokerURL)},'energy/v1','ACTIVE',1,clock_timestamp(),clock_timestamp())
+ON CONFLICT (tenant_id, id) DO UPDATE SET broker_origin=EXCLUDED.broker_origin, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO connectivity.integration_instances (id, tenant_id, site_id, transport_profile_id, gateway_external_id, status, revision, created_at, updated_at)
+VALUES (${sqlLiteral(integrationInstanceId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(transportProfileId)},${sqlLiteral(gatewayExternalId)},'ACTIVE',1,clock_timestamp(),clock_timestamp())
+ON CONFLICT (tenant_id, id) DO UPDATE SET transport_profile_id=EXCLUDED.transport_profile_id, gateway_external_id=EXCLUDED.gateway_external_id, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO connectivity.credential_refs (id, tenant_id, integration_instance_id, credential_kind, secret_ref, certificate_fingerprint_sha256, status, valid_from, valid_until, revision, created_at, updated_at)
+VALUES (${sqlLiteral(credentialRefId)},${sqlLiteral(tenantId)},${sqlLiteral(integrationInstanceId)},'MTLS_CERTIFICATE','local-central-plant-eg8200',${sqlLiteral(mqttGatewayCertificateFingerprint)},'ACTIVE','2000-01-01T00:00:00Z','2100-01-01T00:00:00Z',1,clock_timestamp(),clock_timestamp())
+ON CONFLICT (tenant_id, id) DO UPDATE SET certificate_fingerprint_sha256=EXCLUDED.certificate_fingerprint_sha256, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO connectivity.sessions (id, tenant_id, site_id, integration_instance_id, credential_ref_id, credential_revision, gateway_external_id, status, opened_at, expires_at, revision, updated_at)
+VALUES (${sqlLiteral(sessionId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(integrationInstanceId)},${sqlLiteral(credentialRefId)},1,${sqlLiteral(gatewayExternalId)},'ACTIVE','2000-01-01T00:00:00Z','2100-01-01T00:00:00Z',1,clock_timestamp())
+ON CONFLICT (tenant_id, id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, status='ACTIVE', expires_at=EXCLUDED.expires_at, updated_at=clock_timestamp();
+INSERT INTO connectivity.device_bindings (id, tenant_id, site_id, integration_instance_id, device_id, external_device_id, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+  ${connectivityDeviceBindingRows} ON CONFLICT DO NOTHING;
+INSERT INTO connectivity.gateway_child_bindings (id, tenant_id, site_id, integration_instance_id, gateway_external_id, child_device_id, child_external_id, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+  ${gatewayChildBindingRows} ON CONFLICT DO NOTHING;
 INSERT INTO core_registry.asset_space_bindings (id, tenant_id, site_id, asset_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
   ${assetSpaceRows} ON CONFLICT DO NOTHING;
 INSERT INTO core_registry.device_space_bindings (id, tenant_id, site_id, device_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
@@ -112,9 +152,9 @@ INSERT INTO core_registry.sensor_device_bindings (id, tenant_id, site_id, sensor
   ${sensorDeviceRows} ON CONFLICT DO NOTHING;
 INSERT INTO core_registry.sensor_space_bindings (id, tenant_id, site_id, sensor_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
   ${sensorSpaceRows} ON CONFLICT DO NOTHING;
-INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at) VALUES
+INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, counter_decrease_mode, counter_rollover_modulus, source_metadata, status, revision, created_at, updated_at) VALUES
   ${pointRows}
-ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, source_metadata=EXCLUDED.source_metadata, status='ACTIVE', updated_at=clock_timestamp();
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
   ${pointSubjectRows} ON CONFLICT DO NOTHING;
 INSERT INTO iam.principals (id, external_issuer, external_subject, display_name, email, status, revision, created_at, updated_at)
@@ -122,9 +162,14 @@ VALUES (${sqlLiteral(principalId)}, ${sqlLiteral(oidcIssuer)}, ${sqlLiteral(prin
 ON CONFLICT (id) DO UPDATE SET external_issuer=EXCLUDED.external_issuer, external_subject=EXCLUDED.external_subject, status='ACTIVE', updated_at=clock_timestamp();
 INSERT INTO iam.tenant_memberships (id, tenant_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES (${sqlLiteral(nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(principalId)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
-INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at) VALUES
-  (${sqlLiteral(nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(principalId)}, 'registry-reader', ARRAY['registry.read'], 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()),
-  (${sqlLiteral(nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(principalId)}, 'telemetry-reader', ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_templates (id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at) VALUES
+  ${roleTemplateRows}
+ON CONFLICT (tenant_id, role_key) DO UPDATE SET display_name=EXCLUDED.display_name, capabilities=EXCLUDED.capabilities, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+  ${roleBindingRows} ON CONFLICT DO NOTHING;
+INSERT INTO iam.authorization_revisions (tenant_id, revision, updated_at)
+VALUES (${sqlLiteral(tenantId)}, 1, clock_timestamp())
+ON CONFLICT (tenant_id) DO UPDATE SET updated_at=clock_timestamp();
 INSERT INTO iam.site_bindings (id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
 VALUES (${sqlLiteral(nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(principalId)}, ${analytics}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
 INSERT INTO iam.policies (id, tenant_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
@@ -148,9 +193,10 @@ export function buildS2SeedSQL({ pointsByDevice, spatialPoints = [] }) {
     if (!platformDevice) throw new Error(`S2 Point projection references unknown Device ${point.deviceId}`);
     const pointID = pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`);
     const sensorID = point.sensorId ? sensorIdByKey.get(point.sensorId) : null;
+    const counterDecreaseMode = point.pointType === 'COUNTER' ? 'RESET_TO_ZERO' : null;
     if (!pointID) throw new Error(`S2 Point projection identity is missing for ${point.deviceId}/${point.telemetryKey}`);
     if (point.sensorId && !sensorID) throw new Error(`S2 Point projection references unknown Sensor ${point.sensorId}`);
-    return `(${sqlLiteral(localUUID(0x600000000000 + index + 1))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(pointID)},${sensorID ? sqlLiteral(sensorID) : 'NULL'},${sqlLiteral(platformDevice.platformDeviceId)},${sqlLiteral(point.telemetryKey)},${sqlLiteral(point.pointType)},${sqlLiteral(point.valueType)},${point.unit ? sqlLiteral(point.unit) : 'NULL'},'ACTIVE',1,1,'2000-01-01T00:00:00Z',NULL,clock_timestamp())`;
+    return `(${sqlLiteral(localUUID(0x600000000000 + index + 1))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(pointID)},${sensorID ? sqlLiteral(sensorID) : 'NULL'},${sqlLiteral(platformDevice.platformDeviceId)},${sqlLiteral(point.telemetryKey)},${sqlLiteral(point.pointType)},${sqlLiteral(point.valueType)},${point.unit ? sqlLiteral(point.unit) : 'NULL'},${counterDecreaseMode ? sqlLiteral(counterDecreaseMode) : 'NULL'},NULL,'ACTIVE',1,1,'2000-01-01T00:00:00Z',NULL,clock_timestamp())`;
   }).join(',\n  ');
   const presenceRows = centralPlantDevices.map((device) => {
     const maxSourceLagSeconds = device.name === 'METER-HVAC-TOTAL' ? 7 * 24 * 60 * 60 : 120;
@@ -163,8 +209,8 @@ SET LOCAL ROLE s2_telemetry_migrator;
 DELETE FROM telemetry_runtime.telemetry_publication_outbox;
 INSERT INTO telemetry_runtime.registry_device_bindings (tenant_id, device_id, site_id, integration_instance_id, external_entity_type, external_id, binding_status, binding_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
   ${bindingRows} ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, external_id=EXCLUDED.external_id, binding_status='ACTIVE', updated_at=clock_timestamp();
-${pointBindingRows ? `INSERT INTO telemetry_runtime.registry_point_bindings (projection_id, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, point_type, value_type, unit, binding_status, point_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
-  ${pointBindingRows} ON CONFLICT (projection_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, point_id=EXCLUDED.point_id, sensor_id=EXCLUDED.sensor_id, device_id=EXCLUDED.device_id, telemetry_key=EXCLUDED.telemetry_key, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, binding_status='ACTIVE', point_revision=EXCLUDED.point_revision, source_registry_revision=EXCLUDED.source_registry_revision, valid_from=EXCLUDED.valid_from, valid_to=NULL, updated_at=clock_timestamp();` : ''}
+${pointBindingRows ? `INSERT INTO telemetry_runtime.registry_point_bindings (projection_id, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus, binding_status, point_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
+  ${pointBindingRows} ON CONFLICT (projection_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, point_id=EXCLUDED.point_id, sensor_id=EXCLUDED.sensor_id, device_id=EXCLUDED.device_id, telemetry_key=EXCLUDED.telemetry_key, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, binding_status='ACTIVE', point_revision=EXCLUDED.point_revision, source_registry_revision=EXCLUDED.source_registry_revision, valid_from=EXCLUDED.valid_from, valid_to=NULL, updated_at=clock_timestamp();` : ''}
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
   ${presenceRows} ON CONFLICT (device_id) DO UPDATE SET policy_revision=EXCLUDED.policy_revision, max_future_clock_skew_seconds=EXCLUDED.max_future_clock_skew_seconds, max_source_lag_seconds=EXCLUDED.max_source_lag_seconds, updated_at=clock_timestamp();
 INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, updated_at) VALUES

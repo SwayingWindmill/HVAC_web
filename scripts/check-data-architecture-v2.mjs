@@ -100,7 +100,7 @@ invariant(Array.isArray(baseline.currentBlockers) && baseline.currentBlockers.le
 
 const gateStatus = Object.fromEntries(baseline.productionGate.map((gate) => [gate.id, gate.status]));
 
-const registryPointSQL = await readFile(resolve(root, 'infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql'), 'utf8');
+const registryPointSQL = await readFile(resolve(root, 'infra/registry/postgres/init/007-spatial-sensor-point-model.sql'), 'utf8');
 invariant(registryPointSQL.includes("point_code text NOT NULL CHECK (point_code ~ '^[a-z][a-z0-9_]{0,127}$')"), 'Registry Point Code must enforce V2 lower_snake_case');
 invariant(registryPointSQL.includes("point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND')"), 'Registry Point types do not match V2');
 invariant(registryPointSQL.includes("source_key text NOT NULL CHECK (source_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$')"), 'vendor/source key must remain separate from canonical Point Code');
@@ -109,13 +109,13 @@ invariant(!registryPointSQL.includes('sensor_subject_bindings'), 'Physical Senso
 invariant(registryPointSQL.includes('sensor_id uuid'), 'optional Physical Sensor attribution is missing from Point');
 invariant(gateStatus.POINT_STANDARD === 'PASS', 'POINT_STANDARD must be PASS when canonical Point SQL evidence is present');
 
-const energyFoundationSQL = await readFile(resolve(root, 'infra/s1-registry/postgres/init/009-energy-data-foundation.sql'), 'utf8');
+const energyFoundationSQL = await readFile(resolve(root, 'infra/registry/postgres/init/009-energy-data-foundation.sql'), 'utf8');
 invariant(energyFoundationSQL.includes("('m3', 'cubic metre', 'VOLUME', 'm3'"), 'Unit Registry must contain canonical m3');
 invariant(energyFoundationSQL.includes("('m3/h', 'cubic metre per hour', 'FLOW', 'm3/h'"), 'Unit Registry must contain canonical m3/h');
 invariant(!energyFoundationSQL.includes("('m³'") && !energyFoundationSQL.includes("('m³/h'"), 'legacy Unicode cubic metre unit codes must not remain canonical');
 invariant(energyFoundationSQL.includes("'IMPORT','EXPORT','GENERATE','CONSUME','CHARGE','DISCHARGE'"), 'Energy Direction inventory drifted');
 
-const topologyMeteringSQL = await readFile(resolve(root, 'infra/s1-registry/postgres/init/009a-energy-topology-metering-v2.sql'), 'utf8');
+const topologyMeteringSQL = await readFile(resolve(root, 'infra/registry/postgres/init/009a-energy-topology-metering-v2.sql'), 'utf8');
 invariant(topologyMeteringSQL.includes('validate_energy_edge_direction_semantics'), 'Energy Edge direction sign validator is missing');
 invariant(topologyMeteringSQL.includes("from_type = 'GRID'") && topologyMeteringSQL.includes("NEW.direction <> 'IMPORT'"), 'Grid import sign rule is missing');
 invariant(topologyMeteringSQL.includes("to_type = 'GRID'") && topologyMeteringSQL.includes("NEW.direction <> 'EXPORT'"), 'Grid export sign rule is missing');
@@ -123,11 +123,11 @@ invariant(topologyMeteringSQL.includes("from_type = 'ESS'") && topologyMeteringS
 invariant(topologyMeteringSQL.includes("to_type = 'ESS'") && topologyMeteringSQL.includes("NEW.direction <> 'CHARGE'"), 'ESS charge sign rule is missing');
 invariant(gateStatus.UNIT_DIRECTION_STANDARD === 'PASS', 'UNIT_DIRECTION_STANDARD must be PASS when Unit/Direction SQL evidence is present');
 
-const telemetryIngest = await readFile(resolve(root, 'services/telemetry-runtime-service/internal/telemetry/ingest.go'), 'utf8');
+const telemetryIngest = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/ingest.go'), 'utf8');
 invariant(telemetryIngest.includes('QualityPartial') && telemetryIngest.includes('QualityInvalid'), 'Telemetry runtime V2 quality model is incomplete');
 invariant(!telemetryIngest.includes('QualitySuspect') && !telemetryIngest.includes('QualityRejected'), 'legacy principal quality values remain in runtime');
 
-const historyPostgres = await readFile(resolve(root, 'services/telemetry-runtime-service/internal/telemetry/history_postgres.go'), 'utf8');
+const historyPostgres = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/history_postgres.go'), 'utf8');
 invariant(historyPostgres.includes('decision.Status == ObservationOutOfOrder && decision.PointID != ""'), 'mapped out-of-order facts are not preserved in history');
 
 const telemetryOwnership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
@@ -143,22 +143,22 @@ invariant(telemetryOwnership.storageAuthorities?.postgresLatestProjection?.imple
 invariant(telemetryOwnership.storageAuthorities?.postgresLatestProjection?.publicRead === false, 'PostgreSQL latest projection must not be public read authority');
 invariant(telemetryOwnership.storageAuthorities?.mqtt?.authority === 'transport-only', 'MQTT must remain transport-only');
 
-const latestCacheCode = await readFile(resolve(root, 'services/telemetry-runtime-service/internal/telemetry/latest_cache.go'), 'utf8');
+const latestCacheCode = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/latest_cache.go'), 'utf8');
 invariant(latestCacheCode.includes('redisLatestCAS') && latestCacheCode.includes('PutIfNewer'), 'Redis Latest revision CAS implementation is missing');
 invariant(latestCacheCode.includes('RebuildLatestCache') && latestCacheCode.includes('LatestCacheRebuildSource'), 'Redis Latest rebuild implementation is missing');
-const latestCachePostgres = await readFile(resolve(root, 'services/telemetry-runtime-service/internal/telemetry/latest_cache_postgres.go'), 'utf8');
+const latestCachePostgres = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/latest_cache_postgres.go'), 'utf8');
 invariant(latestCachePostgres.includes('device_observation_snapshots') && latestCachePostgres.includes('latest_cache_state = \'PENDING\''), 'Redis Latest rebuild/outbox persistence evidence is missing');
-const latestCacheMigration = await readFile(resolve(root, 'infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql'), 'utf8');
+const latestCacheMigration = await readFile(resolve(root, 'infra/telemetry/postgres/init/004d-s2-redis-latest.sql'), 'utf8');
 invariant(latestCacheMigration.includes("'NOT_APPLICABLE', 'PENDING', 'MATERIALIZED'"), 'Redis Latest outbox state model is incomplete');
 invariant(latestCacheMigration.includes('subscription_id IS NULL') && latestCacheMigration.includes('latest_cache_materialized_at'), 'Redis Latest canonical snapshot materialization boundary is missing');
-const telemetryServer = await readFile(resolve(root, 'services/telemetry-runtime-service/internal/telemetry/server.go'), 'utf8');
+const telemetryServer = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/server.go'), 'utf8');
 invariant(telemetryServer.includes('readLatestSnapshot') && telemetryServer.includes('LatestCache'), 'Current Snapshot read path is not Redis Latest-aware');
-const telemetryMain = await readFile(resolve(root, 'services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'), 'utf8');
+const telemetryMain = await readFile(resolve(root, 'cmd/telemetry-worker/main.go'), 'utf8');
 invariant(telemetryMain.includes('TELEMETRY_LATEST_CACHE_ENABLED') && telemetryMain.includes('RebuildLatestCache') && telemetryMain.includes('runLatestCacheRelay'), 'Redis Latest production startup/relay path is incomplete');
 invariant(gateStatus.REDIS_LATEST === 'PASS', 'REDIS_LATEST must be PASS when Redis CAS, rebuild, materialization and read-path evidence are present');
 invariant(gateStatus.SOT_BOUNDARIES === 'PASS', 'SOT_BOUNDARIES must be PASS when PostgreSQL/ClickHouse/Redis/MQTT ownership is V2-aligned');
 
-const objectStorageGovernance = await readFile(resolve(root, 'infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql'), 'utf8');
+const objectStorageGovernance = await readFile(resolve(root, 'infra/registry/postgres/init/009g-object-storage-governance-v2.sql'), 'utf8');
 invariant(objectStorageGovernance.includes('CREATE TABLE IF NOT EXISTS core_registry.object_storage_buckets'), 'Object Storage bucket purpose registry is missing');
 invariant(objectStorageGovernance.includes("purpose IN ('BACKUP','ARCHIVE','COLD_DATA','EVIDENCE','DATASET','MODEL_ARTIFACT','REPORT','OTA')"), 'Object Storage purpose inventory drifted');
 invariant(objectStorageGovernance.includes('CREATE TABLE IF NOT EXISTS core_registry.archive_manifests'), 'Archive Manifest ledger is missing');

@@ -8,7 +8,7 @@ GitHub language statistics must describe product/runtime source rather than repo
 
 ## Source boundaries
 
-- Product/runtime source lives under `apps/`, `libs/`, `services/`, `infra/`, and the governed contracts/deployment trees. New JavaScript or JSX source is not allowed there; use TypeScript/TSX for web/Node code and the existing owner language for backend/runtime code.
+- Product/runtime source lives under `apps/`, `cmd/`, `modules/`, `libs/`, intentionally independent `services/`, `infra/`, and the governed contracts/deployment trees. New JavaScript or JSX source is not allowed there; use TypeScript/TSX for web/Node code and the existing owner language for backend/runtime code.
 - Repository tooling lives primarily under `scripts/`. New tooling must be TypeScript. Existing `.js`/`.mjs` files are a legacy surface that may shrink or be migrated, but must not silently grow.
 - `benchmarks/`, `pocs/`, and `services/operations-agent-service/test/` are ancillary verification/research surfaces. They remain subject to the JavaScript ratchet while being excluded from GitHub Linguist product-language statistics.
 - `.scratch/` is not a runtime/tooling ownership boundary. Tracked executable JavaScript is not allowed there; the Phase 1 governance change removes the remaining tracked scratch capture script.
@@ -36,6 +36,15 @@ The initial #288 ratchet was 256 JavaScript files / 2,890,378 bytes, including 2
 - `.agents/**`
 
 This changes repository language presentation only. It does not weaken testing, ownership, code review, or the JavaScript ratchet.
+
+## Verification minimalism
+
+- One current invariant has one authoritative gate. Do not keep parallel stage/ticket/snapshot gates that prove the same thing.
+- Domain tests protect domain behavior; architecture gates protect architecture contracts; deployment gates protect deployable topology. Do not duplicate the same assertion across all three layers.
+- PR classification should select affected capabilities only. Do not run unrelated domains as a precaution.
+- Temporary migration/certification gates are deleted or folded into the stable domain task matrix when the migration/certification purpose ends.
+- Test count, script count, and gate count are costs, not quality metrics. Prefer deleting redundant checks over adding another umbrella chain.
+- No defensive validation is added merely because a refactor changes paths. Trusted owner contracts, schemas, database constraints, and typed module interfaces remain the source of truth.
 
 ## Refactoring direction
 

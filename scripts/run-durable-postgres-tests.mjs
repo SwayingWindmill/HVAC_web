@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
+const composePath = resolve(root, 'infra/durability/compose.yaml');
 const projectName = `hvac-s0-pg-test-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
@@ -75,7 +75,7 @@ async function runGoTests() {
     'test', '-count=1', '-v',
     './libs/ownershipregistry/...',
     './libs/sessionstore/...',
-    './services/audit-ledger-service/internal/audit',
+    './modules/audit/internal/audit',
   ], {
     cwd: root,
     stdio: 'inherit',

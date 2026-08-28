@@ -10,8 +10,6 @@ const scripts = [
   'test:security-negative',
   's2:live-client:check',
   's2:live-client:browser',
-  's2:shadow-routing:check',
-  's2:shadow-routing:harness',
   's2:hvac-web:check',
   's2:hvac-web:browser',
 ];

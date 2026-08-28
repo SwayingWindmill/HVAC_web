@@ -34,8 +34,20 @@
   reference implementation behavior wins and the local code must be refactored to
   match it. Preserve project-specific differences only when that justification is
   explicit and reviewed. Do not copy upstream source verbatim unless license and
-  provenance have been explicitly reviewed. For the current Edge Control Plane
-  reference, this rule applies to OpenEMS.
+  provenance have been explicitly reviewed.
+- Standing energy-platform comparison rule: ThingsBoard, OpenEMS, and MyEMS are
+  mandatory reference candidates for product, Web, backend, deployment, identity,
+  authorization, telemetry, alarms, assets/Registry, reporting, integration, and
+  energy-management features that overlap their real capabilities. Before making
+  a material implementation or refactor decision in one of those areas, inspect
+  the relevant official source, tests, and documentation from the applicable
+  projects and compare their actual behavior with this repository. Do not assume
+  the current HVAC_web implementation is preferable merely because it already
+  exists. Keep it only when the source review shows it is simpler, safer, more
+  maintainable, or required by explicit HVAC/domain constraints; otherwise adapt
+  the stronger established design. Record the concrete upstream files reviewed
+  and the resulting ADOPT/ADAPT/REJECT decision instead of relying on reputation,
+  README-level descriptions, or architectural intuition.
 - No meaningless tests. Add or retain a test only when it protects a concrete
   current product contract, safety invariant, data invariant, authorization
   boundary, externally observable behavior, or a previously observed realistic
@@ -55,3 +67,11 @@
   permissive defaults, or "just in case" branches. Prefer a clear failure over
   masking an invalid state. Every defensive branch must have an identifiable
   failure mode that justifies its existence; otherwise remove it.
+- No gate inflation. Protect each current architectural/product invariant with the
+  smallest authoritative gate that can fail for a meaningful reason. Do not add
+  a new permanent CI gate, package script chain, snapshot gate, or ticket/stage
+  gate when an existing domain/invariant gate can own the check. Temporary
+  certification or migration gates must be removed or folded into the stable
+  domain task matrix after their purpose is complete. Avoid running unrelated
+  domains "just in case"; affected-path classification should select only the
+  capabilities whose contracts can actually change.

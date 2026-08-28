@@ -67,17 +67,21 @@ for (const [label, config] of [['local', localConfig], ['staging', stagingConfig
 const devTopology = await read('scripts/dev-s0-durable.mjs');
 includesAll(devTopology, ['validate-s0-delivery-config.mjs', 'startS0DurableTopology', 'captureTelemetry: false', "process.once('SIGTERM'", 'OpenTelemetry Collector'], 'local delivery command');
 
-const durableCompose = await read('infra/s0-durable/compose.yaml');
-includesAll(durableCompose, ['S0_POSTGRES_HOST_PORT', 'S0_REDPANDA_HOST_PORT', 'S0_OTEL_GRPC_HOST_PORT', 'S0_PROMETHEUS_HOST_PORT'], 'durable Compose dynamic ports');
+const [durabilityCompose, observabilityCompose] = await Promise.all([
+  read('infra/durability/compose.yaml'),
+  read('infra/observability/compose.yaml'),
+]);
+includesAll(durabilityCompose, ['S0_POSTGRES_HOST_PORT', 'S0_REDPANDA_HOST_PORT'], 'durability Compose dynamic ports');
+includesAll(observabilityCompose, ['S0_OTEL_GRPC_HOST_PORT', 'S0_PROMETHEUS_HOST_PORT'], 'observability Compose dynamic ports');
 const durableTopology = await read('scripts/s0-durable-topology.mjs');
 includesAll(durableTopology, ['findAvailablePort', 'composeOptions', 'postgresHostPort', 'redpandaHostPort'], 'durable topology port isolation');
 
 const runtime = await read('libs/observability/runtime.go');
 includesAll(runtime, ['/health/startup', '/health/live', '/health/ready', 'StatusServiceUnavailable', 'MarkReady', 'MarkNotReady'], 'observability probes');
 const serviceMains = [
-  'services/platform-gateway/cmd/platform-gateway/main.go',
-  'services/iam-service/cmd/iam-service/main.go',
-  'services/audit-ledger-service/cmd/audit-ledger-service/main.go',
+  'cmd/energy-api/main.go',
+  'modules/iam/cmd/iam-owner/main.go',
+  'modules/audit/cmd/audit-owner/main.go',
   'services/outbox-relay/cmd/outbox-relay/main.go',
 ];
 for (const path of serviceMains) {
@@ -93,9 +97,9 @@ includesAll(migratorImage, ['001-s0-durable.sql', 'USER postgres', 'ON_ERROR_STO
 const dockerIgnore = await read('.dockerignore');
 includesAll(dockerIgnore, ['.git', '**/node_modules', '**/.venv', '**/.env', 'agents', 'hvac-backend', 'dist', 'out'], 'Docker build context exclusions');
 
-const bootstrapSQL = await read('infra/s0-durable/postgres/init/000-bootstrap-identities.sql');
+const bootstrapSQL = await read('infra/durability/postgres/init/000-bootstrap-identities.sql');
 includesAll(bootstrapSQL, ['CREATE ROLE s0_migrator', 'gateway_runtime', 'gateway_relay_runtime', 'audit_consumer_runtime', 'audit_query_runtime', 'AUTHORIZATION s0_migrator'], 'database identity bootstrap');
-const migrationSQL = await read('infra/s0-durable/postgres/init/001-s0-durable.sql');
+const migrationSQL = await read('infra/durability/postgres/init/001-s0-durable.sql');
 includesAll(migrationSQL, ['SET LOCAL ROLE s0_migrator', "traceparent text NOT NULL DEFAULT ''"], 'database migration');
 assert((migrationSQL.match(/traceparent text NOT NULL DEFAULT ''/g) || []).length === 3, 'all rollback-window traceparent columns require a default');
 const serviceAccounts = await read('deploy/s0/staging/serviceaccounts.yaml');

@@ -162,7 +162,7 @@ assert(!Object.keys(schemas.ObservationSnapshotTarget.properties).includes('site
 assert(exactKeys(schemas.DeviceObservationSnapshot?.properties, [
   'schemaVersion',
   'deviceId',
-  'owningOrganizationId',
+  'tenantId',
   'siteId',
   'businessRevision',
   'evaluatedAt',
