@@ -8,6 +8,7 @@ import (
 
 const (
 	waterHeatCapacityKWPerM3HDeltaC = 1.163
+	pumpNominalFrequencyHz          = 50.0
 	pumpSpeedTimeConstant           = 20 * time.Second
 	coolingTowerFanTimeConstant     = 30 * time.Second
 	coolingTowerWaterTimeConstant   = 2 * time.Minute
@@ -75,6 +76,7 @@ type pumpState struct {
 	flowM3H             float64
 	powerKW             float64
 	faultCode           string
+	stuckHigh           bool
 }
 
 type coolingTowerState struct {
@@ -174,6 +176,12 @@ func (plant *Plant) Snapshot() Snapshot {
 	return plant.snapshotLocked()
 }
 
+func (plant *Plant) SetCHWPStuckHighDisturbance(active bool) {
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	plant.chilledWaterPump.stuckHigh = active
+}
+
 func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time.Duration) {
 	if state.faultCode != "" {
 		state.running = false
@@ -186,11 +194,14 @@ func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time
 	targetFrequencyHz := 0.0
 	if state.runRequested {
 		targetFrequencyHz = state.frequencySetpointHz
+		if state.stuckHigh {
+			targetFrequencyHz = pumpNominalFrequencyHz
+		}
 	}
 	state.frequencyHz = approach(state.frequencyHz, targetFrequencyHz, elapsed, pumpSpeedTimeConstant)
 	state.running = state.frequencyHz > 0.5
 
-	speedFraction := clamp(state.frequencyHz/50, 0, 1)
+	speedFraction := clamp(state.frequencyHz/pumpNominalFrequencyHz, 0, 1)
 	state.flowM3H = config.RatedFlowM3H * speedFraction
 	state.powerKW = config.RatedPowerKW * math.Pow(speedFraction, 3)
 }
@@ -345,7 +356,7 @@ func pumpTelemetry(state pumpState) DeviceTelemetry {
 	return DeviceTelemetry{
 		"runState":    runState(state.running, state.faultCode),
 		"frequencyHz": round(state.frequencyHz, 3),
-		"speedPct":    round(100*state.frequencyHz/50, 3),
+		"speedPct":    round(100*state.frequencyHz/pumpNominalFrequencyHz, 3),
 		"flowRateM3h": round(state.flowM3H, 3),
 		"powerKw":     round(state.powerKW, 3),
 		"faultCode":   state.faultCode,
