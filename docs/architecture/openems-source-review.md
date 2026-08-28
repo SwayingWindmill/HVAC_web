@@ -630,3 +630,50 @@ The next source reviews are performed before their implementation slices:
 
 1. Single/Cluster Controller patterns;
 2. EnergyScheduler V2 time-slot/mode optimization.
+
+## Review 014 — ATV630 real-TCP conformance and immutable Registry release
+
+Date: 2026-08-29
+
+Local issue: #339
+
+OpenEMS pinned baseline: release `2026.7.0`, commit `2e2792d`. The current `develop` Modbus TCP Bridge/Cycle source was re-checked for this ticket and retains the same before-Process-Image read synchronization and execute-write causality used by the pinned baseline.
+
+Standing secondary baselines: ThingsBoard IoT Gateway `3.8.3` / `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official source, tests, and documentation re-checked
+
+OpenEMS:
+
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/BridgeModbusTcpImpl.java`;
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/api/AbstractModbusBridge.java` and the Modbus task/worker implementation;
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java` and current Cycle implementation;
+- the reacting simulator plus `ModbusSlave`/Modbus slave simulator sources already reviewed for #333/#338;
+- the vendor Modbus component declaration pattern already reviewed for #337.
+
+ThingsBoard IoT Gateway:
+
+- `tests/integration/data/modbus/modbus_server.py` at `3.8.3`, which starts a real TCP slave/process image for gateway integration tests;
+- the pinned Modbus connector integration surface already reviewed for #336/#338.
+
+MyEMS:
+
+- `myems-modbus-tcp/test.py` at `v6.7.0`, which first establishes real TCP reachability and then performs Modbus TCP master reads;
+- the pinned Modbus acquisition implementation already reviewed for #336/#337.
+
+### ADOPT / ADAPT / REJECT
+
+- **ADOPT**: protocol conformance is proven at the production causality boundary: production `ModbusTCPBridge` performs the real socket transactions, production `ATV630DeviceAdapter` owns the Schneider mapping and semantic conversion, and production `Host` polls before Process Image/controller evaluation and executes governed writes only in the write phase. A physical result is accepted only through a later independent poll.
+- **ADOPT**: the same production Bridge and ATV630 adapter run unchanged against the Virtual ATV630 endpoint. The conformance tracer advances START through ETA-confirmed `6 -> 7 -> 15` Cycles, writes LFR through governed `SET_FREQUENCY`, observes later RFR/CHWP flow, exercises governed STOP and RESET_FAULT, and derives active fault state through ETA plus LFT.
+- **ADOPT**: a disconnected Virtual endpoint fails with the same authoritative ETA/RFR FC3/address context. No alternate profile, address alias, dual-register probe, or simulator fallback is attempted.
+- **ADOPT**: after protocol conformance, the exact #337 release-candidate parameter set is published through the existing tenant-scoped Registry `ReleaseTemplate` owner as a `DEVICE` TemplateRevision with status `RELEASED`. The persisted payload is compared with the candidate, and the existing database immutability trigger rejects an in-place update.
+- **ADAPT**: OpenEMS event-driven `BEFORE_PROCESS_IMAGE` / `EXECUTE_WRITE` Bridge participation is represented by HVAC's synchronous `Host.RunCycle` read -> Process Image -> Controllers -> write sequence rather than importing OSGi events/workers.
+- **ADAPT**: ThingsBoard's static process image and MyEMS TCP reachability utilities are useful integration evidence only. HVAC keeps the reacting `Plant` as physical truth and Registry as mapping/release authority instead of adopting either project's generic connector/configuration ownership.
+- **ADAPT**: Registry `RELEASED` records that this immutable protocol contract passed production-Bridge/adapter Virtual-device conformance. The release payload explicitly keeps `hardwareCertified=false`; real ATV630 Vendor Template Certification remains a separate later hardware evidence gate.
+- **REJECT**: a second ATV630-specific Registry lifecycle, a new permanent conformance gate/table, release by seed SQL/direct database bypass, mutation of a released revision, profile/register fallback, address aliases, dual probing, or a claim of real-hardware certification.
+
+### Local evidence
+
+- `tools/eg8200-simulator/internal/simulator/atv630_conformance_test.go`: real localhost TCP production Bridge + production ATV630 DeviceAdapter + production Host + Virtual ATV630 + reacting CHWP read/write/readback tracer, including disconnect/no-fallback evidence.
+- `modules/registry/internal/core/atv630_release_integration_test.go`: existing Registry owner releases the exact candidate with `EAV64327 v03` and `EAV64332 v4.6 (2026-05-01)` references, reads it back from PostgreSQL, preserves `hardwareCertified=false`, and proves the released revision immutable.
+- `node scripts/run-s1-registry-postgres-tests.mjs`: existing real PostgreSQL Registry harness passes with the ATV630 release case; no production tenant is pre-seeded or bypassed.
