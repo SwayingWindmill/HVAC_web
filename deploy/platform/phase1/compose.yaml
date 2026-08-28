@@ -392,6 +392,8 @@ services:
       OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
       OPTIMIZATION_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
+      OPTIMIZATION_CLICKHOUSE_READER_USERNAME: optimization_service_reader
+      OPTIMIZATION_CLICKHOUSE_READER_PASSWORD: ${OPTIMIZATION_CLICKHOUSE_READER_PASSWORD:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

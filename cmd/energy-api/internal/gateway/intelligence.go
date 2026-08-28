@@ -346,14 +346,16 @@ func (h *handler) createOptimizationRun(writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_REQUEST_INVALID", "Optimization request invalid", "The Optimization request is too large or unreadable.", false, nil)
 		return
 	}
-	var body map[string]any
+	var body struct {
+		SiteID string `json:"siteId"`
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
 	if decoder.Decode(&body) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_REQUEST_INVALID", "Optimization request invalid", "The Optimization request body is invalid.", false, nil)
 		return
 	}
-	siteID, _ := body["siteId"].(string)
+	siteID := body.SiteID
 	if !isLowerUUIDv7(siteID) {
 		writeProblem(writer, request, http.StatusUnprocessableEntity, "OPTIMIZATION_SCOPE_INVALID", "Optimization scope invalid", "A valid Site is required.", false, nil)
 		return
@@ -366,16 +368,12 @@ func (h *handler) createOptimizationRun(writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
-	body["tenantId"] = session.TenantID
-	body["siteId"] = siteID
-	body["subjectType"] = "SITE"
-	body["subjectId"] = siteID
 	upstreamBody, err := json.Marshal(body)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_REQUEST_INVALID", "Optimization request invalid", "The Optimization request could not be encoded.", false, nil)
 		return
 	}
-	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.optimizationBaseURL+"/v1/optimize", upstreamBody, nil)
+	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.optimizationBaseURL+"/v1/optimize", upstreamBody, map[string]string{"X-Tenant-ID": session.TenantID})
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 

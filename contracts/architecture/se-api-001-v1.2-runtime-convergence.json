@@ -208,10 +208,10 @@
         "SE-AI-002 API section explicitly labels POST /api/v1/optimization/runs as a recommendation rather than an exact machine contract."
       ],
       "runtimeEvidence": [
-        "optimization-service currently exposes internal POST /v1/optimize with a solver input snapshot Request and returns a Plan synchronously with 201; it does not create the public asynchronous OptimizationRun resource."
+        "optimization-service internal POST /v1/optimize now accepts only Site scope, resolves authoritative Policy/Topology/Forecast/Tariff/Metric/Telemetry owners, creates a SEALED input snapshot plus Optimization Run, and returns server-created run/input identities asynchronously with 202."
       ],
       "blockingGaps": [
-        "The public CreateOptimizationRunRequest is not frozen: the current internal Request contains server/internal snapshot, checksum, policy, topology, forecast and resource state fields.",
+        "The public CreateOptimizationRunRequest is not frozen beyond the current minimal Site-scope preparation request; the server-owned snapshot/checksum/policy/topology/forecast/current-state fields are deliberately not caller inputs.",
         "Idempotency requirement, 202 accepted payload, resource Location/ID semantics and domain validation/error mapping are not frozen."
       ]
     },
@@ -225,7 +225,7 @@
         "SE-AI-002 contains multiple domain/storage projections (run_id vs id; started/finished fields vs created_at/objective_value/solve_time_ms), so an exact public Run projection is not implied."
       ],
       "runtimeEvidence": [
-        "optimization-service has no GET Run handler or public durable OptimizationRun read resource; its current HTTP surface is only internal POST /v1/optimize plus health."
+        "optimization-service has internal GET handlers for published recommendations by run identity, but it still does not expose a durable full OptimizationRun status resource for CREATED/VALIDATING/SOLVING/FAILED states."
       ],
       "blockingGaps": [
         "The exact OptimizationRun public resource, state timestamps, result/error fields and output/Dispatch Plan references are not frozen.",

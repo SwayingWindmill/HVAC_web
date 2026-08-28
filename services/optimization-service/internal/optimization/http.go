@@ -8,13 +8,16 @@ import (
 	"strings"
 )
 
-type HTTPHandler struct{ service *Service }
+type HTTPHandler struct {
+	service  *Service
+	preparer *Preparer
+}
 
-func NewHTTPHandler(service *Service) (*HTTPHandler, error) {
-	if service == nil {
-		return nil, errors.New("optimization service is required")
+func NewHTTPHandler(service *Service, preparer *Preparer) (*HTTPHandler, error) {
+	if service == nil || preparer == nil {
+		return nil, errors.New("optimization service and input preparer are required")
 	}
-	return &HTTPHandler{service: service}, nil
+	return &HTTPHandler{service: service, preparer: preparer}, nil
 }
 
 func (handler *HTTPHandler) Routes() http.Handler {
@@ -85,11 +88,11 @@ func (handler *HTTPHandler) handleGetRecommendation(writer http.ResponseWriter, 
 }
 
 func (handler *HTTPHandler) handleOptimize(writer http.ResponseWriter, request *http.Request) {
-	reader := http.MaxBytesReader(writer, request.Body, 128*1024)
+	reader := http.MaxBytesReader(writer, request.Body, 64*1024)
 	defer reader.Close()
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
-	var input Request
+	var input PreparationRequest
 	if err := decoder.Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
@@ -98,14 +101,21 @@ func (handler *HTTPHandler) handleOptimize(writer http.ResponseWriter, request *
 		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	recommendation, err := handler.service.Optimize(request.Context(), input)
+	input.TenantID = request.Header.Get("X-Tenant-ID")
+	input.SubjectType = "SITE"
+	input.SubjectID = input.SiteID
+	prepared, err := handler.preparer.Prepare(request.Context(), input)
+	if errors.Is(err, ErrPreparationUnavailable) {
+		writeJSONError(writer, http.StatusServiceUnavailable, "optimization_input_unavailable")
+		return
+	}
 	if err != nil {
 		writeJSONError(writer, http.StatusUnprocessableEntity, "optimization_rejected")
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(writer).Encode(recommendation)
+	writer.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(writer).Encode(prepared)
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {
