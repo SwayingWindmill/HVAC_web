@@ -433,8 +433,8 @@ func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, s
 INSERT INTO telemetry_runtime.telemetry_publication_outbox (
   event_id, device_id, business_revision, subscription_id, event_family,
   payload, payload_sha256, delivery_state, available_at, attempts,
-  last_error_code, published_at, created_at
-) VALUES ($1::uuid, $2::uuid, $3, NULL, 'hvac.telemetry.device-snapshot.v1', $4::jsonb, $5, 'PENDING', $6, 0, NULL, NULL, $6)
+  last_error_code, published_at, alarm_delivery_state, alarm_available_at, created_at
+) VALUES ($1::uuid, $2::uuid, $3, NULL, 'hvac.telemetry.device-snapshot.v1', $4::jsonb, $5, 'PENDING', $6, 0, NULL, NULL, 'PENDING', $6, $6)
 `, eventID, string(snapshot.DeviceId), int64(snapshot.BusinessRevision), encoded, hex.EncodeToString(digest[:]), createdAt)
 	if err != nil {
 		return fmt.Errorf("persist telemetry outbox intent: %w", err)

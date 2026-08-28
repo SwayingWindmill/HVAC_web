@@ -37,6 +37,7 @@ services:
     environment:
       ANALYTICS_PROJECTION_ENABLED: "false"
       TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
+      TELEMETRY_ALARM_CA: /run/hvac/pki/alarm-service/ca.crt
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
 

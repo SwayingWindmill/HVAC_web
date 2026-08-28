@@ -87,7 +87,8 @@
         "infra/telemetry/postgres/init/004b-s2-point-identity.sql",
         "infra/telemetry/postgres/init/004c-s2-counter-semantics.sql",
         "infra/telemetry/postgres/init/004d-s2-redis-latest.sql",
-        "infra/telemetry/postgres/init/005-s2-realtime-backend.sql"
+        "infra/telemetry/postgres/init/005-s2-realtime-backend.sql",
+        "infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql"
       ]
     },
     {
@@ -109,7 +110,8 @@
         "modules/alarm/migrations/004_s4_event_provenance.sql",
         "modules/alarm/migrations/005_s13_alarm_orthogonal.sql",
         "modules/alarm/migrations/006_s14_alarm_evaluator.sql",
-        "modules/alarm/migrations/007_s16_notification_outbox.sql"
+        "modules/alarm/migrations/007_s16_notification_outbox.sql",
+        "modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql"
       ]
     },
     {
