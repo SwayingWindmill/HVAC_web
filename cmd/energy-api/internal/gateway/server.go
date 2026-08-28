@@ -839,6 +839,17 @@ type statusRecorder struct {
 	wroteHeader bool
 }
 
+func (recorder *statusRecorder) Flush() {
+	flusher, ok := recorder.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	if !recorder.wroteHeader {
+		recorder.WriteHeader(http.StatusOK)
+	}
+	flusher.Flush()
+}
+
 func (recorder *statusRecorder) WriteHeader(status int) {
 	if recorder.wroteHeader {
 		return

@@ -6,6 +6,7 @@ services:
       OIDC_CLIENT_ID: hvac-web-development
       OIDC_REDIRECT_URI: https://localhost:8443/api/v1/auth/callback
       IDENTITY_POLICY_REVISION: registry-read:1
+      QUERY_CUBE_ENDPOINT: http://cube:4000
       COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro

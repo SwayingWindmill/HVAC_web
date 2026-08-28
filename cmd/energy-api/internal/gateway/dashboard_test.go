@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -87,6 +88,19 @@ func TestWriteDashboardSummaryEvent(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard SSE body missing %q: %s", want, body)
 		}
+	}
+}
+
+func TestStatusRecorderPreservesStreaming(t *testing.T) {
+	response := httptest.NewRecorder()
+	recorder := &statusRecorder{ResponseWriter: response, status: http.StatusOK}
+	flusher, ok := any(recorder).(http.Flusher)
+	if !ok {
+		t.Fatal("gateway response recorder does not preserve http.Flusher")
+	}
+	flusher.Flush()
+	if !response.Flushed || recorder.status != http.StatusOK || !recorder.wroteHeader {
+		t.Fatalf("stream flush was not preserved: flushed=%t status=%d wroteHeader=%t", response.Flushed, recorder.status, recorder.wroteHeader)
 	}
 }
 

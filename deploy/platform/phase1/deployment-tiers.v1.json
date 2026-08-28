@@ -9,9 +9,9 @@
       "purpose": "Stage 1 local PostgreSQL implementation. The launcher enables this profile unless PHASE1_POSTGRES_MODE=external."
     },
     "local-clickhouse": {
-      "services": ["clickhouse"],
+      "services": ["clickhouse", "cube"],
       "optional": false,
-      "purpose": "Stage 1 local ClickHouse implementation. The launcher enables this profile unless PHASE1_CLICKHOUSE_MODE=external."
+      "purpose": "Stage 1 local ClickHouse plus Cube semantic-query implementation. The launcher enables this profile unless PHASE1_CLICKHOUSE_MODE=external."
     },
     "local-redis": {
       "services": ["redis"],

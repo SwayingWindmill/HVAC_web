@@ -27,6 +27,9 @@
       "clickhouse",
       "redis"
     ],
+    "localSemanticInfrastructure": [
+      "cube"
+    ],
     "optionalIntegration": [
       "iot-service",
       "mqtt-broker"

@@ -88,6 +88,7 @@ services:
       AUDIT_SERVER_NAME: audit-ledger-service
       REALTIME_UPSTREAM_URL: ${REALTIME_UPSTREAM_URL:-http://centrifugo:8000}
       QUERY_HISTORY_CLICKHOUSE_ENDPOINT: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      QUERY_CUBE_ENDPOINT: ${QUERY_CUBE_ENDPOINT:-http://cube:4000}
       PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
       LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
@@ -583,6 +584,37 @@ services:
     cpus: ${CLICKHOUSE_CPUS:-3.00}
     mem_limit: ${CLICKHOUSE_MEMORY_LIMIT:-4096m}
     mem_reservation: ${CLICKHOUSE_MEMORY_RESERVATION:-1024m}
+    logging: *default-logging
+
+  cube:
+    profiles: ["local-clickhouse"]
+    image: cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192bc14d78bd18241299c94b9d2ca20e5
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CUBEJS_DB_TYPE: clickhouse
+      CUBEJS_DB_HOST: clickhouse
+      CUBEJS_DB_PORT: 8123
+      CUBEJS_DB_NAME: analytics
+      CUBEJS_DB_USER: cube_analytics_reader
+      CUBEJS_DB_PASS: ""
+      CUBEJS_DB_CLICKHOUSE_READONLY: "true"
+      CUBEJS_DB_CLICKHOUSE_COMPRESSION: "true"
+      CUBEJS_CACHE_AND_QUEUE_DRIVER: memory
+      CUBEJS_DB_MAX_POOL: ${CUBEJS_DB_MAX_POOL:-4}
+      CUBEJS_CONCURRENCY: ${CUBEJS_CONCURRENCY:-4}
+      CUBEJS_API_SECRET: ${QUERY_CUBE_API_SECRET:?QUERY_CUBE_API_SECRET is required}
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_TELEMETRY: "false"
+    volumes:
+      - ../../../semantic/cube:/cube/conf:ro
+    expose: ["4000"]
+    networks: [data]
+    cpus: ${CUBE_CPUS:-0.75}
+    mem_limit: ${CUBE_MEMORY_LIMIT:-768m}
+    mem_reservation: ${CUBE_MEMORY_RESERVATION:-256m}
     logging: *default-logging
 
   clickhouse-backup:

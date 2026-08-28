@@ -168,7 +168,7 @@ for (const tierId of ['demo', 'single-lite', 'single-full']) {
     assert(false, error.message);
   }
 }
-assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['iot-service', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes');
+assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse', 'cube']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['iot-service', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes');
 assert(runtimeInventory.schemaVersion === 1 && runtimeInventory.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT' && runtimeInventory.canonicalCompose === paths.compose, 'runtime inventory identity must be versioned and point to the canonical Compose');
 assert(JSON.stringify(runtimeInventory.classes?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'telemetry-worker', 'metric-worker']), 'runtime inventory must freeze the three default business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'runtime inventory must freeze scheduler and maintenance as supporting workloads');
@@ -233,6 +233,7 @@ const requiredServices = [
   'metric-worker',
   'postgres',
   'clickhouse',
+  'cube',
   'redis',
   'mqtt-broker',
   'centrifugo',
@@ -246,6 +247,7 @@ const requiredServices = [
 const profileExpectations = {
   postgres: ['local-postgres'],
   clickhouse: ['local-clickhouse'],
+  cube: ['local-clickhouse'],
   redis: ['local-redis'],
   'iot-service': ['integration'],
   'mqtt-broker': ['integration'],
@@ -268,6 +270,7 @@ const classifiedServiceNames = [
   ...(runtimeInventory.classes?.defaultIdentityInfrastructure ?? []),
   ...(runtimeInventory.classes?.defaultDataAndRealtimeInfrastructure ?? []),
   ...(runtimeInventory.classes?.localStatefulInfrastructure ?? []),
+  ...(runtimeInventory.classes?.localSemanticInfrastructure ?? []),
   ...(runtimeInventory.classes?.optionalIntegration ?? []),
   ...(runtimeInventory.classes?.profiledObservabilityInfrastructure ?? []),
   ...(runtimeInventory.classes?.optionalIntelligence ?? []),
