@@ -151,6 +151,62 @@ Implementation dependency review:
 
 Focused behavior evidence: `TestModbusTCPBridgeRunsProductionAdapterThroughRealTCPCycle`, `TestModbusTCPBridgeDoesNotFabricateDeviceValuesOnReadFailure`, `TestModbusTCPBridgeWriteFailureHaltsGovernedCycle`, and `TestModbusTCPBridgeRetriesBoundedlyAndSurfacesTransactionContext`.
 
+## Review 013 — Schneider ATV630 release candidate and production DeviceAdapter
+
+Date: 2026-08-28
+
+Local issue: #337
+
+OpenEMS implementation checkpoint: `develop` commit `df53f1670ed9b1a782c6c215082a375d5dd4b55e`.
+
+Standing comparison baselines: ThingsBoard IoT Gateway `3.8.3` / `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official vendor/source/test/documentation reviewed
+
+Schneider Electric ATV600/ATV630:
+
+- Embedded Ethernet Manual `EAV64327`, version 03;
+- Communication Parameters `EAV64332`, version 4.6, dated 2026-05-01;
+- Schneider ATV630/ATV600 support material for Embedded Modbus/CiA402 command and frequency control, including CMD `8501`, LFR `8502`, ETA `3201`, RFR `3202`, the `6 -> 7 -> 15` start sequence, stop command `7`, and CiA402 fault-reset bit 7 behavior;
+- Schneider's ATV630/ATV650 Modbus TCP implementation guidance showing that each CiA402 START transition waits for the corresponding later ETA state before the next CMD value is sent;
+- Schneider communication/fault support material confirming LFT `7121` is Last Fault Occurred and must be gated by ETA fault bit 3 when representing a current fault;
+- Schneider ATV600 communication parameter semantics confirming the default CMI bit 9 mode uses signed 16-bit LFR/RFR with `0.1 Hz` resolution rather than an auto-detected standardized reference mode.
+
+OpenEMS:
+
+- `io.openems.edge.heat.mypv/src/io/openems/edge/heat/mypv/HeatMyPvImpl.java` at the checkpoint above;
+- `io.openems.edge.heat.mypv/test/io/openems/edge/heat/mypv/HeatMyPvImplTest.java`;
+- the Modbus Bridge/task sources already reviewed in Review 012.
+
+The current real vendor component declares concrete `FC3ReadRegistersTask` and `FC6WriteRegisterTask` instances with raw element/address mapping in `defineModbusProtocol()`. Its focused test inspects those task types and addresses. The vendor component depends on a Bridge rather than owning a TCP loop. This remains materially consistent with the device/bridge separation adopted by HVAC.
+
+ThingsBoard IoT Gateway:
+
+- `tests/integration/data/modbus/modbus_rpc.json` at `3.8.3`, together with the connector implementation/integration tests already reviewed in Review 012. Per-device mapping carries function code, address, raw type and byte/word order below the platform/business boundary.
+
+MyEMS:
+
+- `myems-modbus-tcp/README.md` at `v6.7.0`, together with the acquisition source/test reviewed in Review 012. Point acquisition mapping carries slave id, function code, offset, register count and raw format independently from central energy semantics.
+
+### Source-level findings and decisions
+
+- `ADOPT`: the ATV630 release candidate is exactly the five Schneider parameters required by #331/#337: ETA `3201`, RFR `3202`, LFT `7121`, CMD `8501`, LFR `8502`. No optional power/current/torque/PID/thermal registers are imported.
+- `ADOPT`: all five are one-register Modbus holding-register values. ETA/CMD are 16-bit bit words, RFR/LFR are signed 16-bit frequency values, and LFT is a 16-bit enumeration. RFR/LFR use the pinned default `0.1 Hz` scale. One-register Modbus values use big-endian byte order; word order is not applicable.
+- `ADOPT`: ETA/RFR/LFT are read through FC3. CMD/LFR retain their vendor read/write mapping semantics and production control writes use FC6 single-register writes.
+- `ADOPT`: CiA402/DriveCom command translation is driver-owned. START advances one state transition per Cycle: after the latest ETA poll it writes CMD `6` from Switch-on disabled, `7` from Ready to switch on, and `15` from Switched on/Operation enabled; the next transition is not sent until a later ETA poll confirms drive progress. STOP writes CMD `7`; RESET_FAULT raises CMD bit 7 then clears it (`128`, `0`); SET_FREQUENCY converts the governed semantic Hz value to signed LFR units. Controllers never manipulate CMD bits or register addresses.
+- `ADOPT`: semantic run state is derived from ETA, with operation-enabled bit 2 represented as `RUNNING` and active-fault bit 3 represented as `FAULT`. RFR becomes the semantic frequency. LFT is read/exposed as current `faultCode` only while ETA bit 3 indicates an active fault, so retained Last Fault history cannot masquerade as current state.
+- `ADAPT`: OpenEMS represents vendor mapping with Java `ModbusProtocol`, task/element classes and Nature Channels. HVAC keeps the same ownership boundary in one Go `ATV630DeviceAdapter` and a narrow `ModbusRegisterTransport` consumer interface implemented by the #336 Bridge; semantic capability/Channel types remain the existing `VARIABLE_SPEED_PUMP` contract.
+- `ADAPT`: ThingsBoard/MyEMS demonstrate configurable raw mapping vocabularies, but the first ATV630 candidate is explicit code/data rather than a generic plugin/config parser. #339 owns promoting this exact candidate into an immutable Registry `RELEASED` template only after real-TCP conformance.
+- `REJECT`: I/O Profile support or auto-detection, CMI bit 9 standardized-frequency auto-detection, register aliases, dual-register probing, old/new mapping fallback, simulator-only address variants, controller-owned command words, OSGi/service discovery and real-hardware certification claims.
+
+### Local implementation consequence
+
+`libs/edgecontrol.ATV630ProtocolReleaseCandidate()` returns a fresh candidate descriptor pinned to the two Schneider references and the five raw mappings above. `ATV630DeviceAdapter` is a production `DEVICE_DRIVER` implementing the existing `VARIABLE_SPEED_PUMP` semantic Channel contract. It accepts canonical Point identities and a raw-register transport, so the same adapter can be used unchanged by #338/#339 against the Virtual ATV630 endpoint and later against hardware through `ModbusTCPBridge`.
+
+This ticket deliberately does not create a Registry `RELEASED` revision. #339 explicitly requires real-TCP Bridge/DeviceAdapter/Virtual-slave conformance before immutable Registry release; hardware Vendor Template Certification remains a later, separate evidence state.
+
+Focused behavior evidence: `TestATV630ProtocolReleaseCandidatePinsSchneiderMinimalMap`, `TestATV630AdapterProjectsRawDriveStateIntoVariableSpeedPumpChannels`, `TestATV630AdapterAdvancesStartOnlyAfterDriveComETAProgression`, and `TestATV630AdapterTranslatesGovernedSemanticCommandsIntoDriveComWrites`.
+
 ## Review 001 — Channel, Process Image, Cycle, Scheduler
 
 Date: 2026-08-17
