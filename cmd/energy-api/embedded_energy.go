@@ -636,16 +636,23 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	telemetryEvaluationHandler, err := alarmservice.NewTelemetryEvaluationHandler(store)
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
-			embeddedWriteProblem(writer, http.StatusForbidden, "ALARM_GATEWAY_WORKLOAD_FORBIDDEN")
-			return
-		}
-		handler.ServeHTTP(writer, request)
+	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
+		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
+		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
 	})
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
 	server := &http.Server{
 		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router,
 		TLSConfig: &tls.Config{

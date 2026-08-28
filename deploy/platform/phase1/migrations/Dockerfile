@@ -68,6 +68,7 @@ COPY infra/telemetry/postgres/init/004b-s2-point-identity.sql /opt/hvac/repo/inf
 COPY infra/telemetry/postgres/init/004c-s2-counter-semantics.sql /opt/hvac/repo/infra/telemetry/postgres/init/004c-s2-counter-semantics.sql
 COPY infra/telemetry/postgres/init/004d-s2-redis-latest.sql /opt/hvac/repo/infra/telemetry/postgres/init/004d-s2-redis-latest.sql
 COPY infra/telemetry/postgres/init/005-s2-realtime-backend.sql /opt/hvac/repo/infra/telemetry/postgres/init/005-s2-realtime-backend.sql
+COPY infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
@@ -81,6 +82,7 @@ COPY modules/alarm/migrations/004_s4_event_provenance.sql /opt/hvac/repo/modules
 COPY modules/alarm/migrations/005_s13_alarm_orthogonal.sql /opt/hvac/repo/modules/alarm/migrations/005_s13_alarm_orthogonal.sql
 COPY modules/alarm/migrations/006_s14_alarm_evaluator.sql /opt/hvac/repo/modules/alarm/migrations/006_s14_alarm_evaluator.sql
 COPY modules/alarm/migrations/007_s16_notification_outbox.sql /opt/hvac/repo/modules/alarm/migrations/007_s16_notification_outbox.sql
+COPY modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql /opt/hvac/repo/modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

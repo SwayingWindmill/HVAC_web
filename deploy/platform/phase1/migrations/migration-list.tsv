@@ -57,6 +57,7 @@ hvac_s2|infra/telemetry/postgres/init/004b-s2-point-identity.sql
 hvac_s2|infra/telemetry/postgres/init/004c-s2-counter-semantics.sql
 hvac_s2|infra/telemetry/postgres/init/004d-s2-redis-latest.sql
 hvac_s2|infra/telemetry/postgres/init/005-s2-realtime-backend.sql
+hvac_s2|infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql
@@ -69,6 +70,7 @@ hvac_s4|modules/alarm/migrations/004_s4_event_provenance.sql
 hvac_s4|modules/alarm/migrations/005_s13_alarm_orthogonal.sql
 hvac_s4|modules/alarm/migrations/006_s14_alarm_evaluator.sql
 hvac_s4|modules/alarm/migrations/007_s16_notification_outbox.sql
+hvac_s4|modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql

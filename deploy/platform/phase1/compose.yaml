@@ -286,6 +286,9 @@ services:
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
+      TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
+      TELEMETRY_ALARM_EVALUATION_URL: https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry
+      TELEMETRY_ALARM_SERVER_NAME: alarm-service
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

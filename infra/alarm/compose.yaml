@@ -15,6 +15,7 @@ services:
       - ../../modules/alarm/migrations/005_s13_alarm_orthogonal.sql:/docker-entrypoint-initdb.d/005_s13_alarm_orthogonal.sql:ro
       - ../../modules/alarm/migrations/006_s14_alarm_evaluator.sql:/docker-entrypoint-initdb.d/006_s14_alarm_evaluator.sql:ro
       - ../../modules/alarm/migrations/007_s16_notification_outbox.sql:/docker-entrypoint-initdb.d/007_s16_notification_outbox.sql:ro
+      - ../../modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql:/docker-entrypoint-initdb.d/008_s26_telemetry_evaluation_input.sql:ro
       - ../../modules/alarm/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s4"]

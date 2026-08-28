@@ -61,8 +61,8 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'alarm_runtime' AND c.relkind = 'r'
-      AND c.relname IN ('alarm_current', 'alarm_idempotency', 'events', 'alarm_timeline', 'alarm_policy_revision', 'alarm_policy_assignment', 'alarm_evaluation_state', 'alarm_evaluation_event')
-  `), '8|8|8', 'runtime authority table/RLS baseline');
+      AND c.relname IN ('alarm_current', 'alarm_idempotency', 'events', 'alarm_timeline', 'alarm_policy_revision', 'alarm_policy_assignment', 'alarm_evaluation_state', 'alarm_evaluation_event', 'telemetry_evaluation_input')
+  `), '9|9|9', 'runtime authority table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -157,7 +157,7 @@ try {
   report.assertions.goIntegrationTests = true;
   expectEqual(psql("SELECT condition || '|' || version::text || '|' || (acknowledged_at IS NOT NULL)::text || '|' || coalesce(assignee_id, '') || '|' || coalesce(suppression::text, '') || '|' || current_severity || '|' || peak_severity FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'ACTIVE|5|true|principal:postgres-operator-2||MAJOR|MAJOR', 'durable orthogonal projection');
   expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_timeline WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), '5', 'durable immutable timeline');
-  expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_idempotency"), '4', 'durable idempotency record');
+  expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_idempotency WHERE tenant_id = '0190f000-0000-7000-8000-000000000001'"), '5', 'durable idempotency record');
   expectEqual(psql("SELECT alarm_type || '|' || event_id::text || '|' || point_id::text FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'SUPPLY_TEMPERATURE_DRIFT|01910000-3000-7000-8000-000000000001|01910000-4000-7000-8000-000000000001', 'Event provenance survives Alarm lifecycle mutations');
   report.assertions.durableProjectionAndIdempotency = true;
 

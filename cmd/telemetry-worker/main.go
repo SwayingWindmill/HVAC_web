@@ -145,6 +145,16 @@ func main() {
 		go runRealtimeRelay(realtimeContext, realtimeService, logger)
 	}
 
+	alarmRelay, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
+	if err != nil {
+		logger.Error("telemetry_alarm_evaluation_configuration_invalid", "error_code", "TELEMETRY_ALARM_EVALUATION_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	if alarmCancel != nil {
+		defer alarmCancel()
+		go runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
+	}
+
 	rateLimiter, closeRateLimiter, err := loadTelemetryRateLimiter()
 	if err != nil {
 		logger.Error("telemetry_limit_policy_config_invalid", "error_code", "TELEMETRY_LIMIT_POLICY_CONFIG_INVALID")
@@ -529,6 +539,81 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 			}
 			if published > 0 {
 				logger.Info("telemetry_realtime_relay_batch_published", "publication_count", published)
+			}
+		}
+	}
+}
+
+func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Certificate) (*telemetry.AlarmEvaluationRelay, context.Context, context.CancelFunc, error) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_EVALUATION_ENABLED")), "true") {
+		return nil, context.Background(), nil, nil
+	}
+	alarmCAs, err := loadCertPool(requiredEnv("TELEMETRY_ALARM_CA"))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13, RootCAs: alarmCAs, Certificates: []tls.Certificate{certificate},
+				ServerName: strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_SERVER_NAME")),
+			},
+			DisableCompression: true,
+			ForceAttemptHTTP2:  false,
+		},
+	}
+	transport, err := telemetry.NewHTTPAlarmEvaluationTransport(telemetry.HTTPAlarmEvaluationTransportConfig{
+		Endpoint: requiredEnv("TELEMETRY_ALARM_EVALUATION_URL"), HTTPClient: client,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	workerID := strings.TrimSpace(os.Getenv("TELEMETRY_ALARM_RELAY_WORKER_ID"))
+	if workerID == "" {
+		hostname, _ := os.Hostname()
+		workerID = "telemetry-alarm:" + hostname
+	}
+	relay, err := telemetry.NewAlarmEvaluationRelay(telemetry.AlarmEvaluationRelayConfig{
+		Repository: store, Transport: transport, WorkerID: workerID,
+		LeaseDuration: durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
+		RetryDelay:    durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	relayContext, relayCancel := context.WithCancel(context.Background())
+	return relay, relayContext, relayCancel, nil
+}
+
+func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluationRelay, logger *slog.Logger) {
+	if relay == nil {
+		return
+	}
+	pollInterval := durationEnv("TELEMETRY_ALARM_RELAY_POLL_INTERVAL", 100*time.Millisecond, 25*time.Millisecond, time.Minute)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	lastFailureLog := time.Time{}
+	logger.Info("telemetry_alarm_evaluation_relay_started", "poll_interval", pollInterval.String())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			relayContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+			delivered, err := relay.RelayOnce(relayContext, 64)
+			cancel()
+			if err != nil {
+				if time.Since(lastFailureLog) >= time.Second {
+					logger.Warn("telemetry_alarm_evaluation_relay_failed", "error_code", "TELEMETRY_ALARM_EVALUATION_RELAY_FAILED")
+					lastFailureLog = time.Now()
+				}
+				continue
+			}
+			if delivered > 0 {
+				logger.Info("telemetry_alarm_evaluation_batch_delivered", "publication_count", delivered)
 			}
 		}
 	}
