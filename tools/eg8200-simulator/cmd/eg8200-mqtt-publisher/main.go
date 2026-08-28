@@ -25,6 +25,7 @@ func main() {
 	})
 	plantConfigPath := flag.String("plant-config", strings.TrimSpace(os.Getenv("EG8200_SIMULATOR_CONFIG")), "path to the EG8200 simulator JSON config")
 	mqttConfigPath := flag.String("mqtt-config", strings.TrimSpace(os.Getenv("EG8200_MQTT_CONFIG")), "path to the EG8200 MQTT transport JSON config")
+	atv630ModbusAddress := flag.String("atv630-modbus-addr", envOr("EG8200_ATV630_MODBUS_ADDR", ":1502"), "Virtual ATV630 Modbus/TCP listen address")
 	diagnosticsAddress := flag.String("diagnostics-addr", envOr("EG8200_MQTT_DIAGNOSTICS_ADDR", ":19095"), "Edge MQTT diagnostics listen address")
 	flag.Parse()
 	if strings.TrimSpace(*plantConfigPath) == "" || strings.TrimSpace(*mqttConfigPath) == "" {
@@ -58,6 +59,16 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, time.Now().UTC())
+	atv630Server, err := simulator.NewVirtualATV630Server(*atv630ModbusAddress, plant)
+	if err != nil {
+		logger.Error("eg8200_atv630_modbus_invalid", "error", err.Error())
+		os.Exit(1)
+	}
+	if err := atv630Server.Start(); err != nil {
+		logger.Error("eg8200_atv630_modbus_start_failed", "error", err.Error())
+		os.Exit(1)
+	}
+	logger.Info("eg8200_atv630_modbus_started", "address", *atv630ModbusAddress, "unit_id", 1)
 	edgeRuntime, err := simulator.NewEdgeControlRuntime(plantConfig, plant)
 	if err != nil {
 		logger.Error("eg8200_edge_runtime_init_failed", "component", "edge_control_runtime")
@@ -173,6 +184,7 @@ func main() {
 		case <-ctx.Done():
 			shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			_ = publisher.Disconnect(shutdownContext)
+			_ = atv630Server.Stop()
 			_ = diagnostics.Shutdown(shutdownContext)
 			_ = telemetry.Shutdown(shutdownContext)
 			shutdownCancel()
