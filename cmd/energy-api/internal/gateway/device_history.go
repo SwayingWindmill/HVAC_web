@@ -50,7 +50,7 @@ func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.R
 		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope."))
 		return
 	}
-	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAction, canonical.ScopeDigest)
+	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAction, canonical.CursorScopeDigest, h.identity.config.ExecutingWorkloadSPIFFE)
 	if failure != nil {
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
@@ -94,7 +94,7 @@ func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, reques
 		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History aggregate resource scope."))
 		return
 	}
-	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, canonical.ScopeDigest)
+	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, canonical.ScopeDigest, h.identity.config.ExecutingWorkloadSPIFFE)
 	if failure != nil {
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
@@ -180,8 +180,8 @@ func telemetryHistoryKeys(keys []s2telemetryapi.TelemetryKey) []string {
 
 type historyScopeDigest func() (string, error)
 
-func (h *handler) signHistoryQueryGrant(caller telemetryCaller, authorization telemetryAuthorization, tenantID, action string, scopeDigest historyScopeDigest) (string, *telemetryFailure) {
-	if h.identity == nil || h.analytics == nil || strings.TrimSpace(h.analytics.queryAudience) == "" || authorization.principalID == "" || authorization.policyRevision == "" {
+func (h *handler) signHistoryQueryGrant(caller telemetryCaller, authorization telemetryAuthorization, tenantID, action string, scopeDigest historyScopeDigest, presenterSPIFFE string) (string, *telemetryFailure) {
+	if h.identity == nil || h.analytics == nil || strings.TrimSpace(h.analytics.queryAudience) == "" || strings.TrimSpace(presenterSPIFFE) == "" || authorization.principalID == "" || authorization.policyRevision == "" {
 		failure := historyUnavailable("Device History query authorization is not configured.")
 		return "", &failure
 	}
@@ -202,7 +202,7 @@ func (h *handler) signHistoryQueryGrant(caller telemetryCaller, authorization te
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
 		PrincipalID: authorization.principalID, DisplayName: caller.principal.DisplayName, Email: caller.principal.Email,
-		Roles: append([]string(nil), caller.principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Roles: append([]string(nil), caller.principal.Roles...), ExecutingService: presenterSPIFFE,
 		Audience: h.analytics.queryAudience, TenantID: tenantID,
 		Actions: []string{action}, Scopes: []string{scope}, PolicyRevision: authorization.policyRevision, SessionID: caller.contextID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),

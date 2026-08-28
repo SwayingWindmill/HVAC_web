@@ -16,6 +16,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
 
 const (
@@ -23,11 +25,14 @@ const (
 	defaultIntelligenceTimeout      = 8 * time.Second
 	maximumIntelligenceRequestBytes = int64(256 << 10)
 	maximumIntelligenceResponse     = int64(8 << 20)
+	fddSupplyTemperatureKey         = "btu_meter.supply_water_temperature"
+	fddReturnTemperatureKey         = "btu_meter.return_water_temperature"
 )
 
 type IntelligenceConfig struct {
 	ForecastBaseURL     string
 	FDDBaseURL          string
+	FDDWorkloadSPIFFE   string
 	OptimizationBaseURL string
 	HTTPClient          *http.Client
 	Timeout             time.Duration
@@ -36,6 +41,7 @@ type IntelligenceConfig struct {
 type intelligenceController struct {
 	forecastBaseURL     string
 	fddBaseURL          string
+	fddWorkloadSPIFFE   string
 	optimizationBaseURL string
 	httpClient          *http.Client
 	timeout             time.Duration
@@ -50,6 +56,28 @@ type publicIntelligenceRoute struct {
 	publicPath string
 }
 
+type fddLowDeltaTEvaluationRequest struct {
+	AssetID                   string    `json:"assetId"`
+	DeviceID                  string    `json:"deviceId"`
+	EvaluationFrom            time.Time `json:"evaluationFrom"`
+	EvaluationTo              time.Time `json:"evaluationTo"`
+	RuleRevisionID            string    `json:"ruleRevisionId"`
+	ModelDeploymentRevisionID string    `json:"modelDeploymentRevisionId,omitempty"`
+	MinimumDeltaTC            float64   `json:"minimumDeltaTC"`
+}
+
+type fddLowDeltaTEvaluationUpstream struct {
+	TenantID                  string    `json:"tenantId"`
+	SiteID                    string    `json:"siteId"`
+	AssetID                   string    `json:"assetId"`
+	DeviceID                  string    `json:"deviceId"`
+	EvaluationFrom            time.Time `json:"evaluationFrom"`
+	EvaluationTo              time.Time `json:"evaluationTo"`
+	RuleRevisionID            string    `json:"ruleRevisionId"`
+	ModelDeploymentRevisionID string    `json:"modelDeploymentRevisionId,omitempty"`
+	MinimumDeltaTC            float64   `json:"minimumDeltaTC"`
+}
+
 func newIntelligenceController(config *IntelligenceConfig) *intelligenceController {
 	if config == nil {
 		return nil
@@ -57,6 +85,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 	resolved := *config
 	resolved.ForecastBaseURL = strings.TrimRight(strings.TrimSpace(resolved.ForecastBaseURL), "/")
 	resolved.FDDBaseURL = strings.TrimRight(strings.TrimSpace(resolved.FDDBaseURL), "/")
+	resolved.FDDWorkloadSPIFFE = strings.TrimSpace(resolved.FDDWorkloadSPIFFE)
 	resolved.OptimizationBaseURL = strings.TrimRight(strings.TrimSpace(resolved.OptimizationBaseURL), "/")
 	if resolved.HTTPClient == nil {
 		resolved.HTTPClient = &http.Client{}
@@ -65,7 +94,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 		resolved.Timeout = defaultIntelligenceTimeout
 	}
 	return &intelligenceController{
-		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
+		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, fddWorkloadSPIFFE: resolved.FDDWorkloadSPIFFE, optimizationBaseURL: resolved.OptimizationBaseURL,
 		httpClient: resolved.HTTPClient, timeout: resolved.Timeout,
 	}
 }
@@ -79,6 +108,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/findings", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/fdd/findings"}, method == http.MethodGet
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd-evaluate", method: http.MethodPost, publicPath: "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t"}, method == http.MethodPost
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-latest", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/recommendations/latest"}, method == http.MethodGet
@@ -107,6 +139,10 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 		return
 	}
 	if route.owner == ownershipregistry.OwnerFDD {
+		if route.target == "fdd-evaluate" {
+			h.serveFDDEvaluation(writer, request, session, route)
+			return
+		}
 		h.serveFDDFindings(writer, request, session, route)
 		return
 	}
@@ -196,6 +232,90 @@ func (h *handler) serveFDDFindings(writer http.ResponseWriter, request *http.Req
 	}
 	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.fddBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
 	h.writeIntelligenceResult(writer, request, raw, status, err)
+}
+
+func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" || h.intelligence.fddWorkloadSPIFFE == "" {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "FDD_EVALUATION_UNAVAILABLE", "FDD evaluation unavailable", "The production FDD evaluation path is not configured.", true, nil)
+		return
+	}
+	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
+	if !ok {
+		return
+	}
+	if _, allowed := allowedSites[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request is too large or unreadable.", false, nil)
+		return
+	}
+	var input fddLowDeltaTEvaluationRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request body is invalid.", false, nil)
+		return
+	}
+	selection := telemetryhistorymodel.DeviceHistoryRequest{
+		DeviceID: input.DeviceID,
+		Keys:     []string{fddSupplyTemperatureKey, fddReturnTemperatureKey},
+		From:     input.EvaluationFrom,
+		To:       input.EvaluationTo,
+		PageSize: telemetryhistorymodel.MaximumHistoryPageSize,
+	}
+	if err := selection.Validate(); err != nil {
+		writeProblem(writer, request, http.StatusUnprocessableEntity, "FDD_EVALUATION_SCOPE_INVALID", "FDD evaluation scope invalid", "The FDD evaluation history selection is invalid.", false, nil)
+		return
+	}
+	caller := telemetryCaller{
+		principal: session.Principal,
+		tenantID:  session.TenantID,
+		contextID: session.ID,
+		expiresAt: session.ExpiresAt,
+	}
+	authorization, failure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionHistoryRead, []telemetryauth.Target{{DeviceID: selection.DeviceID, Keys: selection.Keys}})
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	if len(authorization.targets) != 1 {
+		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope for FDD evaluation."))
+		return
+	}
+	authorizedTarget := authorization.targets[0]
+	canonical, err := selection.Complete(authorizedTarget.TenantID, authorizedTarget.SiteID)
+	if err != nil || canonical.TenantID != session.TenantID || canonical.SiteID != route.siteID {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD evaluation scope was not found.", false, nil)
+		return
+	}
+	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAction, canonical.CursorScopeDigest, h.intelligence.fddWorkloadSPIFFE)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	upstreamBody, err := json.Marshal(fddLowDeltaTEvaluationUpstream{
+		TenantID:                  session.TenantID,
+		SiteID:                    route.siteID,
+		AssetID:                   input.AssetID,
+		DeviceID:                  input.DeviceID,
+		EvaluationFrom:            input.EvaluationFrom,
+		EvaluationTo:              input.EvaluationTo,
+		RuleRevisionID:            input.RuleRevisionID,
+		ModelDeploymentRevisionID: input.ModelDeploymentRevisionID,
+		MinimumDeltaTC:            input.MinimumDeltaTC,
+	})
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request could not be encoded.", false, nil)
+		return
+	}
+	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.fddBaseURL+"/v1/fdd/evaluate/low-delta-t", upstreamBody, map[string]string{
+		"X-Tenant-ID":        session.TenantID,
+		"X-Delegation-Grant": grant,
+	})
+	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
 func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {

@@ -35,7 +35,7 @@ func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, 
 		writeFDDError(writer, http.StatusBadRequest, "fdd_request_invalid")
 		return
 	}
-	result, err := handler.service.EvaluateLowDeltaT(request.Context(), input)
+	result, err := handler.service.EvaluateLowDeltaT(request.Context(), input, request.Header.Get("X-Delegation-Grant"))
 	if err != nil {
 		writeFDDError(writer, http.StatusUnprocessableEntity, "fdd_evaluation_rejected")
 		return

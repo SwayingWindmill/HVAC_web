@@ -1528,6 +1528,36 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t": {
+      "post": {
+        "operationId": "evaluateSiteFddLowDeltaTV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "fdd-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["assetId", "deviceId", "evaluationFrom", "evaluationTo", "ruleRevisionId", "minimumDeltaTC"],
+                "properties": {
+                  "assetId": { "$ref": "#/components/schemas/UUIDv7" },
+                  "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+                  "evaluationFrom": { "type": "string", "format": "date-time" },
+                  "evaluationTo": { "type": "string", "format": "date-time" },
+                  "ruleRevisionId": { "type": "string", "minLength": 1 },
+                  "modelDeploymentRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
+                  "minimumDeltaTC": { "type": "number", "exclusiveMinimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/optimization/recommendations/latest": {
       "get": {
         "operationId": "getLatestSiteOptimizationRecommendationV212",

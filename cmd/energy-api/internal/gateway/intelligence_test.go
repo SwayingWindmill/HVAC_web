@@ -20,6 +20,7 @@ func TestPublicIntelligenceRoutesHaveSingleDomainOwners(t *testing.T) {
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/forecast/load", ownershipregistry.OwnerForecast, siteID, ""},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/forecast/pv", ownershipregistry.OwnerForecast, siteID, ""},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/fdd/findings", ownershipregistry.OwnerFDD, siteID, ""},
+		{http.MethodPost, "/api/v1/sites/" + siteID + "/fdd/evaluate/low-delta-t", ownershipregistry.OwnerFDD, siteID, ""},
 		{http.MethodPost, "/api/v1/optimization/runs", ownershipregistry.OwnerOptimization, "", ""},
 		{http.MethodGet, "/api/v1/optimization/runs/" + runID, ownershipregistry.OwnerOptimization, "", runID},
 	} {
@@ -40,6 +41,9 @@ func TestIntelligenceRoutesRejectWrongMethods(t *testing.T) {
 		if _, ok := matchPublicIntelligenceRoute(http.MethodPost, path); ok {
 			t.Fatalf("POST unexpectedly matched read-only Intelligence route %s", path)
 		}
+	}
+	if _, ok := matchPublicIntelligenceRoute(http.MethodGet, "/api/v1/sites/"+siteID+"/fdd/evaluate/low-delta-t"); ok {
+		t.Fatal("GET unexpectedly matched FDD evaluation route")
 	}
 	if _, ok := matchPublicIntelligenceRoute(http.MethodGet, publicOptimizationRunsPath); ok {
 		t.Fatal("GET unexpectedly matched Optimization create route")

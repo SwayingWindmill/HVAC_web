@@ -219,7 +219,7 @@ func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_QUERY_INVALID", "The Device History query exceeds the supported product boundary.", false)
 		return
 	}
-	scope, err := canonical.ScopeDigest()
+	scope, err := canonical.CursorScopeDigest()
 	if err != nil {
 		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_QUERY_INVALID", "The Device History query exceeds the supported product boundary.", false)
 		return

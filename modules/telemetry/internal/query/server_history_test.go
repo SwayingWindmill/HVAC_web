@@ -21,9 +21,10 @@ import (
 
 func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesTypedObservation(t *testing.T) {
 	now := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
+	cursor := "page-two-cursor"
 	query := telemetryhistorymodel.DeviceHistoryQuery{
 		TenantID: testTenantID, SiteID: testSiteID, DeviceID: "018f1e00-4000-7000-8000-000000000001",
-		Keys: []string{"zone.mode"}, From: now.Add(-time.Hour), To: now, PageSize: 100,
+		Keys: []string{"zone.mode"}, From: now.Add(-time.Hour), To: now, PageSize: 100, Cursor: &cursor,
 	}
 	watermark := now.Add(-time.Minute)
 	historyEngine := &historyEngineStub{response: telemetryhistorymodel.DeviceHistoryResponse{
@@ -40,7 +41,7 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesTypedObservation(t *tes
 	}}
 	signer := newHistorySigner(t)
 	handler := NewHandler(ServerConfig{Engine: &engineStub{response: analyticsmodel.EnergySeriesResponse{}}, HistoryEngine: historyEngine, DelegationPublicKey: signer.Public(), AllowedPresenterSPIFFE: testPresenter, Audience: testAudience, Now: func() time.Time { return now }})
-	grant := signHistoryGrant(t, signer, now, query.TenantID, telemetryhistorymodel.DeviceHistoryAction, query.ScopeDigest)
+	grant := signHistoryGrant(t, signer, now, query.TenantID, telemetryhistorymodel.DeviceHistoryAction, query.CursorScopeDigest)
 
 	payload, _ := json.Marshal(query)
 	request := historyRequest(DeviceHistoryPath, payload, grant)
@@ -49,12 +50,25 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesTypedObservation(t *tes
 	if recorder.Code != http.StatusOK || historyEngine.calls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, historyEngine.calls, recorder.Body.String())
 	}
+	if historyEngine.query.Cursor == nil || *historyEngine.query.Cursor != cursor {
+		t.Fatalf("history cursor=%v", historyEngine.query.Cursor)
+	}
 	var response telemetryhistorymodel.DeviceHistoryResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
 	if len(response.Observations) != 1 || response.Observations[0].Acceptance != telemetryhistorymodel.AcceptanceOutOfOrder || response.Observations[0].PointRevision != 7 || response.Metadata.ProjectionWatermark == nil {
 		t.Fatalf("response=%#v", response)
+	}
+
+	tampered := query
+	tampered.Keys = []string{"zone.other"}
+	payload, _ = json.Marshal(tampered)
+	tamperedRequest := historyRequest(DeviceHistoryPath, payload, grant)
+	tamperedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(tamperedRecorder, tamperedRequest)
+	if tamperedRecorder.Code != http.StatusForbidden || historyEngine.calls != 1 {
+		t.Fatalf("tampered status=%d calls=%d body=%s", tamperedRecorder.Code, historyEngine.calls, tamperedRecorder.Body.String())
 	}
 }
 
