@@ -191,6 +191,7 @@
     "s2:ingest:postgres": "node scripts/run-s2-telemetry-ingest-postgres-tests.mjs",
     "s2:history:check": "node scripts/check-s2-telemetry-history.mjs",
     "s2:history:integration": "node scripts/run-s2-telemetry-history-tests.mjs",
+    "historical-replay:integration": "node scripts/run-historical-replay-integration.mjs",
     "s2:history": "node scripts/run-capability-task.mjs --task=s2:history",
     "s2:telemetry-ingest": "node scripts/run-capability-task.mjs --task=s2:telemetry-ingest",
     "s2:realtime:check": "node scripts/check-s2-realtime-backend.mjs",

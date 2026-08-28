@@ -116,6 +116,29 @@ func TestEvaluateObservationValidationAndQuality(t *testing.T) {
 	}
 }
 
+func TestEvaluateHistoricalObservationPreservesCurrentTruth(t *testing.T) {
+	now := time.Date(2026, 8, 28, 15, 30, 0, 0, time.UTC)
+	candidate := validObservationCandidate(now)
+	candidate.SourcePath = SourcePathHistoryReplay
+	candidate.SampledAt = now.Add(-30 * 24 * time.Hour)
+	facts := validObservationFacts()
+	latest := now.Add(-time.Minute)
+	facts.LatestSampledAt = &latest
+
+	decision := EvaluateHistoricalObservation(candidate, facts, now)
+	assertObservationDecision(t, decision, ObservationAccepted, QualityGood, nil, true, false)
+	if decision.DeviceID != deviceA || decision.EmitPresenceSignal || decision.ReevaluateSnapshot {
+		t.Fatalf("historical replay mutated Current semantics: %#v", decision)
+	}
+
+	candidate.SampledAt = now.Add(31 * time.Second)
+	decision = EvaluateHistoricalObservation(candidate, facts, now)
+	assertObservationDecision(t, decision, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonClockAhead}, true, false)
+	if decision.EmitPresenceSignal || decision.ReevaluateSnapshot {
+		t.Fatalf("rejected historical replay mutated Current semantics: %#v", decision)
+	}
+}
+
 func TestEvaluateObservationAcceptsGoodCandidate(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
 	decision := EvaluateObservation(validObservationCandidate(now), validObservationFacts(), now)

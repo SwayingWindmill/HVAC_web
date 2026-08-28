@@ -119,6 +119,117 @@ WHERE event_id = $1::uuid
 	}
 }
 
+func TestPostgresHistoricalReplayProjectsClickHouseWithoutCurrentMutation(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
+	clickHouseURL := os.Getenv("S2_CLICKHOUSE_HTTP_URL")
+	if historyURL == "" || clickHouseURL == "" {
+		t.Skip("S2 ClickHouse history integration environment is not configured")
+	}
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetIngestState(t, admin)
+	const partition = "tb-history-replay-integration"
+	for _, statement := range []string{
+		`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`,
+		`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`,
+		`DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`,
+		`DELETE FROM telemetry_runtime.source_positions WHERE source_partition = $1`,
+	} {
+		if _, err := admin.Exec(ctx, statement, partition); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	baselineAt := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	if _, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: deviceA}, baselineAt); err != nil {
+		t.Fatal(err)
+	}
+
+	var latestValue, snapshotSHA string
+	var latestRevision, snapshotRevision, presenceSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text, business_revision FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid AND telemetry_key='zone.temperature'`, deviceA).Scan(&latestValue, &latestRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT business_revision, snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id=$1::uuid`, deviceA).Scan(&snapshotRevision, &snapshotSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id=$1::uuid`, deviceA).Scan(&presenceSignals); err != nil {
+		t.Fatal(err)
+	}
+
+	receivedAt := baselineAt.Add(time.Minute)
+	replay := ingestCandidate(
+		"018f2e00-9300-7000-8000-000000000002", integrationA, partition, 1, SourcePathHistoryReplay,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`21.5`), "NUMBER", "Cel",
+		time.Date(2026, 7, 23, 0, 10, 0, 0, time.UTC), receivedAt,
+	)
+	receipt, err := store.AcceptHistoricalObservation(ctx, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != ObservationAccepted || receipt.Quality != QualityGood || receipt.BusinessRevision != 0 || receipt.StateChanged {
+		t.Fatalf("Historical Replay receipt=%#v", receipt)
+	}
+
+	repository, err := OpenHistoryPostgresRepository(ctx, historyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: clickHouseURL, Database: "telemetry_history", Table: "observations",
+		Username: os.Getenv("S2_CLICKHOUSE_USERNAME"), Password: os.Getenv("S2_CLICKHOUSE_PASSWORD"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repository, Sink: sink, BatchSize: 16,
+		LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 4,
+		Now: func() time.Time { return receivedAt.Add(time.Second) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
+		t.Fatalf("Historical Replay projection=%d err=%v", projected, err)
+	}
+	query := fmt.Sprintf(`
+SELECT count(), any(value_number), any(acceptance_status), any(quality), any(source_path)
+FROM telemetry_history.observations
+WHERE source_event_id = toUUID('%s')
+FORMAT TSVRaw
+`, replay.Position.EventID)
+	if actual := clickHouseQuery(t, clickHouseURL, query); actual != "1\t21.5\tACCEPTED\tGOOD\tHISTORY_REPLAY" {
+		t.Fatalf("Historical Replay ClickHouse observation=%q", actual)
+	}
+
+	var afterLatestValue, afterSnapshotSHA string
+	var afterLatestRevision, afterSnapshotRevision, afterPresenceSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text, business_revision FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid AND telemetry_key='zone.temperature'`, deviceA).Scan(&afterLatestValue, &afterLatestRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT business_revision, snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id=$1::uuid`, deviceA).Scan(&afterSnapshotRevision, &afterSnapshotSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id=$1::uuid`, deviceA).Scan(&afterPresenceSignals); err != nil {
+		t.Fatal(err)
+	}
+	if afterLatestValue != latestValue || afterLatestRevision != latestRevision || afterSnapshotRevision != snapshotRevision || afterSnapshotSHA != snapshotSHA || afterPresenceSignals != presenceSignals {
+		t.Fatalf("Historical Replay mutated Current: latest=%s/%d -> %s/%d snapshot=%d/%s -> %d/%s presence=%d -> %d", latestValue, latestRevision, afterLatestValue, afterLatestRevision, snapshotRevision, snapshotSHA, afterSnapshotRevision, afterSnapshotSHA, presenceSignals, afterPresenceSignals)
+	}
+}
+
 func assertClickHouseObservation(t *testing.T, baseURL, sourceEventID, expected string) {
 	t.Helper()
 	query := fmt.Sprintf(`

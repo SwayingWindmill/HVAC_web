@@ -58,6 +58,34 @@ export EG8200_SIMULATOR_CONFIG="$PWD/tools/eg8200-simulator/configs/central-plan
 go run ./tools/eg8200-simulator/cmd/eg8200-simulator
 ```
 
+## Historical Replay
+
+Historical Replay is an explicit operator/development path and is not part of the live MQTT loop or the production compose topology. The runner reuses the canonical Plant/Scenario, Point metadata, and the existing MQTT Device external-ID mapping, then submits observations sequentially to the Telemetry-owned history-only admission route.
+
+The Telemetry Runtime must explicitly trust the replay workload SPIFFE identity for the selected integration in `TELEMETRY_SOURCE_BINDINGS_JSON`, and `TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE` must name that same dedicated workload (default `spiffe://hvac.local/historical-replay-runner`). Do not reuse the MQTT adapter identity. A replay also requires a stable UUIDv7 `dataset-id`, historical start instant, and finite duration:
+
+```bash
+go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
+  -plant-config ./tools/eg8200-simulator/configs/central-plant.local.json \
+  -mqtt-config ./tools/eg8200-simulator/configs/central-plant.mqtt.local.example.json \
+  -telemetry-url https://127.0.0.1:18446 \
+  -integration-id 01900000-0000-7000-8000-000000000001 \
+  -dataset-id 01900000-0000-7000-8000-000000000002 \
+  -from 2026-07-01T00:00:00Z \
+  -duration 24h \
+  -tls-cert /path/to/replay/tls.crt \
+  -tls-key /path/to/replay/tls.key \
+  -server-ca /path/to/ca.crt
+```
+
+Telemetry Runtime owns `HISTORY_REPLAY` provenance, receipt time, source partition, source event identity, binding resolution, validation, idempotency, and History outbox publication. Replay observations can become authoritative History facts but cannot update Latest, Presence, Device Snapshot, or Business Revision. Re-running the same dataset produces the same per-Device offset sequence, so retry/restart is idempotent at the Telemetry owner boundary.
+
+The focused database/History acceptance is:
+
+```bash
+npm run historical-replay:integration
+```
+
 Diagnostics default to port `19092`:
 
 ```text
