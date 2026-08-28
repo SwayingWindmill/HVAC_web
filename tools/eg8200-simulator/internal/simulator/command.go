@@ -26,16 +26,12 @@ func (plant *Plant) SetFault(deviceID, faultCode string) bool {
 	switch deviceID {
 	case plant.config.Chiller.ID:
 		plant.chiller.faultCode = strings.TrimSpace(faultCode)
-		plant.chiller.revision++
 	case plant.config.ChilledWaterPump.ID:
 		plant.chilledWaterPump.faultCode = strings.TrimSpace(faultCode)
-		plant.chilledWaterPump.revision++
 	case plant.config.CoolingWaterPump.ID:
 		plant.coolingWaterPump.faultCode = strings.TrimSpace(faultCode)
-		plant.coolingWaterPump.revision++
 	case plant.config.CoolingTower.ID:
 		plant.coolingTower.faultCode = strings.TrimSpace(faultCode)
-		plant.coolingTower.revision++
 	default:
 		return false
 	}
@@ -46,57 +42,52 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 	switch method {
 	case "start":
 		if len(params) != 0 {
-			return invalidParameters(plant.chiller.revision)
+			return invalidParameters()
 		}
 		if plant.chiller.faultCode != "" {
-			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: plant.chiller.revision}
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
 		if !plant.chilledWaterPump.running || plant.chilledWaterPump.faultCode != "" ||
 			!plant.coolingWaterPump.running || plant.coolingWaterPump.faultCode != "" ||
 			!plant.coolingTower.running || plant.coolingTower.faultCode != "" {
-			return CommandResult{Success: false, Code: "INTERLOCK_OPEN", BusinessRevision: plant.chiller.revision}
+			return CommandResult{Success: false, Code: "INTERLOCK_OPEN"}
 		}
 		plant.chiller.running = true
-		plant.chiller.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
-			return invalidParameters(plant.chiller.revision)
+			return invalidParameters()
 		}
 		plant.chiller.running = false
-		plant.chiller.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setChilledWaterTemperatureSetpoint":
 		value, ok := singleCommandParam(params, "setpointC")
 		if !ok {
-			return invalidParameters(plant.chiller.revision)
+			return invalidParameters()
 		}
 		if value < 5 || value > 12 {
-			return CommandResult{Success: false, Code: "SETPOINT_OUT_OF_RANGE", BusinessRevision: plant.chiller.revision}
+			return CommandResult{Success: false, Code: "SETPOINT_OUT_OF_RANGE"}
 		}
 		plant.chiller.setpointC = value
-		plant.chiller.revision++
-		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value, BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "setLoadLimit":
 		value, ok := singleCommandParam(params, "loadLimitPct")
 		if !ok {
-			return invalidParameters(plant.chiller.revision)
+			return invalidParameters()
 		}
 		if value < 20 || value > 100 {
-			return CommandResult{Success: false, Code: "LOAD_LIMIT_OUT_OF_RANGE", BusinessRevision: plant.chiller.revision}
+			return CommandResult{Success: false, Code: "LOAD_LIMIT_OUT_OF_RANGE"}
 		}
 		plant.chiller.loadLimitPct = value
-		plant.chiller.revision++
-		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value, BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "resetFault":
 		if len(params) != 0 {
-			return invalidParameters(plant.chiller.revision)
+			return invalidParameters()
 		}
 		plant.chiller.faultCode = ""
-		plant.chiller.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	default:
-		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED", BusinessRevision: plant.chiller.revision}
+		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED"}
 	}
 }
 
@@ -104,41 +95,37 @@ func applyPumpCommand(state *pumpState, method string, params map[string]float64
 	switch method {
 	case "start":
 		if len(params) != 0 {
-			return invalidParameters(state.revision)
+			return invalidParameters()
 		}
 		if state.faultCode != "" {
-			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: state.revision}
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
 		state.running = true
-		state.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: state.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
-			return invalidParameters(state.revision)
+			return invalidParameters()
 		}
 		state.running = false
-		state.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: state.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setFrequency":
 		value, ok := singleCommandParam(params, "frequencyHz")
 		if !ok {
-			return invalidParameters(state.revision)
+			return invalidParameters()
 		}
 		if value < 20 || value > 50 {
-			return CommandResult{Success: false, Code: "FREQUENCY_OUT_OF_RANGE", BusinessRevision: state.revision}
+			return CommandResult{Success: false, Code: "FREQUENCY_OUT_OF_RANGE"}
 		}
 		state.frequencyHz = value
-		state.revision++
-		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value, BusinessRevision: state.revision}
+		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "resetFault":
 		if len(params) != 0 {
-			return invalidParameters(state.revision)
+			return invalidParameters()
 		}
 		state.faultCode = ""
-		state.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: state.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	default:
-		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED", BusinessRevision: state.revision}
+		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED"}
 	}
 }
 
@@ -146,41 +133,37 @@ func (plant *Plant) applyCoolingTowerCommand(method string, params map[string]fl
 	switch method {
 	case "start":
 		if len(params) != 0 {
-			return invalidParameters(plant.coolingTower.revision)
+			return invalidParameters()
 		}
 		if plant.coolingTower.faultCode != "" {
-			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: plant.coolingTower.revision}
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
 		plant.coolingTower.running = true
-		plant.coolingTower.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.coolingTower.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
-			return invalidParameters(plant.coolingTower.revision)
+			return invalidParameters()
 		}
 		plant.coolingTower.running = false
-		plant.coolingTower.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.coolingTower.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setFanSpeed":
 		value, ok := singleCommandParam(params, "fanSpeedPct")
 		if !ok {
-			return invalidParameters(plant.coolingTower.revision)
+			return invalidParameters()
 		}
 		if value < 20 || value > 100 {
-			return CommandResult{Success: false, Code: "FAN_SPEED_OUT_OF_RANGE", BusinessRevision: plant.coolingTower.revision}
+			return CommandResult{Success: false, Code: "FAN_SPEED_OUT_OF_RANGE"}
 		}
 		plant.coolingTower.fanSpeedPct = value
-		plant.coolingTower.revision++
-		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value, BusinessRevision: plant.coolingTower.revision}
+		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "resetFault":
 		if len(params) != 0 {
-			return invalidParameters(plant.coolingTower.revision)
+			return invalidParameters()
 		}
 		plant.coolingTower.faultCode = ""
-		plant.coolingTower.revision++
-		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.coolingTower.revision}
+		return CommandResult{Success: true, Code: "APPLIED"}
 	default:
-		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED", BusinessRevision: plant.coolingTower.revision}
+		return CommandResult{Success: false, Code: "COMMAND_UNSUPPORTED"}
 	}
 }
 
@@ -192,6 +175,6 @@ func singleCommandParam(params map[string]float64, key string) (float64, bool) {
 	return value, ok
 }
 
-func invalidParameters(revision uint64) CommandResult {
-	return CommandResult{Success: false, Code: "INVALID_PARAMETERS", BusinessRevision: revision}
+func invalidParameters() CommandResult {
+	return CommandResult{Success: false, Code: "INVALID_PARAMETERS"}
 }

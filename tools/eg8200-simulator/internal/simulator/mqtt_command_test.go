@@ -48,7 +48,7 @@ func evaluateMQTTCommandWithEdgeCycle(t *testing.T, handler *edgeCommandHandler,
 func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	plant := NewPlant(config.Plant, now)
+	plant := NewPlant(config.Plant, config.Scenario, now)
 	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	plant := NewPlant(config.Plant, now)
+	plant := NewPlant(config.Plant, config.Scenario, now)
 	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)

@@ -79,6 +79,7 @@ func testConfig() Config {
 		SchemaVersion:   ConfigSchemaVersion,
 		GatewayID:       "EG8200-VIRTUAL-001",
 		PublishInterval: "5s",
+		Scenario:        testStaticScenario(),
 		Plant:           plant,
 		Spaces:          spaces,
 		Assets:          assets,

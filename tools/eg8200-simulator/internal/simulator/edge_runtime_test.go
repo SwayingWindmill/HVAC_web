@@ -28,7 +28,7 @@ func runEdgeCommand(t *testing.T, runtime *EdgeControlRuntime, at time.Time, com
 func TestEdgeControlRuntimeArbitratesAndExecutesSimulatorDriver(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	at := time.Unix(3000, 0).UTC()
-	plant := NewPlant(config.Plant, at)
+	plant := NewPlant(config.Plant, config.Scenario, at)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestEdgeControlRuntimeArbitratesAndExecutesSimulatorDriver(t *testing.T) {
 func TestEdgeTelemetryPublishesProcessImageBeforeCurrentCycleWrite(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	at := time.Unix(3500, 0).UTC()
-	plant := NewPlant(config.Plant, at)
+	plant := NewPlant(config.Plant, config.Scenario, at)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestEdgeTelemetryPublishesProcessImageBeforeCurrentCycleWrite(t *testing.T)
 func TestNumericRemoteIntentPersistsUntilLeaseExpiry(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	at := time.Unix(3750, 0).UTC()
-	plant := NewPlant(config.Plant, at)
+	plant := NewPlant(config.Plant, config.Scenario, at)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestNumericRemoteIntentPersistsUntilLeaseExpiry(t *testing.T) {
 func TestEdgeControlRuntimeExpiresCommandBeforeExecution(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	at := time.Unix(4000, 0).UTC()
-	plant := NewPlant(config.Plant, at)
+	plant := NewPlant(config.Plant, config.Scenario, at)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestEdgeControlRuntimeExpiresCommandBeforeExecution(t *testing.T) {
 func TestEdgeSafetyRejectsStartWhenInterlockEvidenceIsStale(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	at := time.Unix(4500, 0).UTC()
-	plant := NewPlant(config.Plant, at)
+	plant := NewPlant(config.Plant, config.Scenario, at)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)

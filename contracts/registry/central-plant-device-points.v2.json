@@ -16,7 +16,6 @@
         { "sourceKey": "coolingCapacityKw", "telemetryKey": "chiller.cooling_capacity", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "powerKw", "telemetryKey": "chiller.power", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "cop", "telemetryKey": "chiller.cop", "valueType": "NUMBER" },
-        { "sourceKey": "businessRevision", "telemetryKey": "chiller.business_revision", "valueType": "NUMBER" },
         { "sourceKey": "faultCode", "telemetryKey": "chiller.fault_code", "valueType": "STRING" }
       ]
     },
@@ -28,7 +27,6 @@
         { "sourceKey": "speedPct", "telemetryKey": "chwp.speed", "valueType": "NUMBER", "unit": "%" },
         { "sourceKey": "flowRateM3h", "telemetryKey": "chwp.flow_rate", "valueType": "NUMBER", "unit": "m3/h" },
         { "sourceKey": "powerKw", "telemetryKey": "chwp.power", "valueType": "NUMBER", "unit": "kW" },
-        { "sourceKey": "businessRevision", "telemetryKey": "chwp.business_revision", "valueType": "NUMBER" },
         { "sourceKey": "faultCode", "telemetryKey": "chwp.fault_code", "valueType": "STRING" }
       ]
     },
@@ -40,7 +38,6 @@
         { "sourceKey": "speedPct", "telemetryKey": "cwp.speed", "valueType": "NUMBER", "unit": "%" },
         { "sourceKey": "flowRateM3h", "telemetryKey": "cwp.flow_rate", "valueType": "NUMBER", "unit": "m3/h" },
         { "sourceKey": "powerKw", "telemetryKey": "cwp.power", "valueType": "NUMBER", "unit": "kW" },
-        { "sourceKey": "businessRevision", "telemetryKey": "cwp.business_revision", "valueType": "NUMBER" },
         { "sourceKey": "faultCode", "telemetryKey": "cwp.fault_code", "valueType": "STRING" }
       ]
     },
@@ -54,7 +51,6 @@
         { "sourceKey": "ambientWetBulbTemperatureC", "telemetryKey": "cooling_tower.ambient_wet_bulb_temperature", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "approachTemperatureC", "telemetryKey": "cooling_tower.approach_temperature", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "powerKw", "telemetryKey": "cooling_tower.power", "valueType": "NUMBER", "unit": "kW" },
-        { "sourceKey": "businessRevision", "telemetryKey": "cooling_tower.business_revision", "valueType": "NUMBER" },
         { "sourceKey": "faultCode", "telemetryKey": "cooling_tower.fault_code", "valueType": "STRING" }
       ]
     },
