@@ -766,6 +766,7 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 			AllowedPresenterSPIFFE: envOr("QUERY_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AdditionalAllowedPresenterSPIFFEs: []string{
 				envOr("QUERY_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+				envOr("QUERY_FDD_SERVICE_SPIFFE", "spiffe://hvac.local/fdd-service"),
 			},
 			Audience: envOr("QUERY_AUDIENCE", "telemetry-query-service"), Logger: logger, Observability: telemetry,
 		}),
