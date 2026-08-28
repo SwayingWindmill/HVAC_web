@@ -8,6 +8,8 @@ import { runDockerCompose } from './lib/docker-cli.mjs';
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-analytics-history-${process.pid}`;
+const registryComposePath = resolve(root, 'infra/registry/compose.yaml');
+const registryProjectName = `hvac-forecast-history-registry-${process.pid}`;
 const reportPath = resolve(root, process.env.ANALYTICS_HISTORY_REPORT_PATH ?? 'out/analytics-history/clickhouse-integration.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 async function findAvailablePort() {
@@ -21,11 +23,14 @@ async function findAvailablePort() {
 }
 
 const clickHouseHostPort = await findAvailablePort();
+const postgresHostPort = await findAvailablePort();
 const composeEnvironment = {
   ...process.env,
   S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
+  S1_POSTGRES_HOST_PORT: String(postgresHostPort),
 };
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
+const forecastPostgresDSN = `postgres://forecast_runtime:forecast-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -48,8 +53,16 @@ function compose(args) {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
+function registryCompose(args) {
+  return runDockerCompose(run, ['-p', registryProjectName, '-f', registryComposePath, ...args], { env: composeEnvironment });
+}
+
 function container(service) {
   return compose(['ps', '-q', service]);
+}
+
+function registryContainer(service) {
+  return registryCompose(['ps', '-q', service]);
 }
 
 function clickHouse(sql) {
@@ -58,6 +71,10 @@ function clickHouse(sql) {
 
 function clickHouseMustFail(sql, user) {
   return runExpectFailure('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', user, '--query', sql]);
+}
+
+function psql(sql) {
+  return run('docker', ['exec', registryContainer('postgres'), 'psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 }
 
 async function waitForClickHouse() {
@@ -80,6 +97,126 @@ async function waitForClickHouse() {
   throw new Error(`analytics ClickHouse model did not initialize\n${logs}`);
 }
 
+async function waitForPostgres() {
+  let stableChecks = 0;
+  for (let attempt = 0; attempt < 360; attempt += 1) {
+    try {
+      const state = psql("SELECT (to_regclass('core_registry.forecast_jobs') IS NOT NULL)::text || '|' || (to_regclass('core_registry.job_instances') IS NOT NULL)::text");
+      if (state === 'true|true') {
+        stableChecks += 1;
+        if (stableChecks >= 3) return;
+      } else stableChecks = 0;
+    } catch {
+      stableChecks = 0;
+    }
+    await pause(250);
+  }
+  let logs = '';
+  try { logs = registryCompose(['logs', '--no-color', 'postgres']); } catch (error) { logs = String(error); }
+  throw new Error(`forecast Registry PostgreSQL model did not initialize\n${logs}`);
+}
+
+function seedForecastPreparationFixture() {
+  psql(`
+    INSERT INTO core_registry.energy_topology_versions (
+      id, tenant_id, site_id, version, status, effective_from, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2300-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 1, 'VALIDATING', '2026-08-01T00:00:00Z', 1, now(), now()
+    );
+    INSERT INTO core_registry.energy_nodes (
+      id, tenant_id, site_id, topology_version_id, node_type, name, status, revision, created_at, updated_at
+    ) VALUES
+      ('01990000-2310-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001', 'GRID', 'Forecast Grid', 'ACTIVE', 1, now(), now()),
+      ('01990000-2310-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001', 'LOAD', 'Forecast Site Load', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.energy_edges (
+      id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id,
+      energy_type_id, direction, enabled, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2320-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      '01990000-2310-7000-8000-000000000001', '01990000-2310-7000-8000-000000000002',
+      '01990000-0000-7000-8000-000000000001', 'IMPORT', true, 1, now(), now()
+    );
+    UPDATE core_registry.energy_topology_versions
+    SET status='ACTIVE', released_at=now(), revision=revision+1, updated_at=now()+interval '1 second'
+    WHERE id='01990000-2300-7000-8000-000000000001';
+
+    INSERT INTO core_registry.forecast_feature_sets (
+      id, tenant_id, feature_set_code, target, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2400-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      'authoritative_site_load', 'SITE_LOAD', 'ACTIVE', 1, now(), now()
+    );
+    INSERT INTO core_registry.forecast_feature_set_versions (
+      id, tenant_id, feature_set_id, version, feature_schema, fallback_schema, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2410-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '01990000-2400-7000-8000-000000000001', 1,
+      '{"targetMetricVersionId":"01990000-2510-7000-8000-000000000001","features":["load_history"]}'::jsonb,
+      NULL, 'RELEASED', 1, now(), now()
+    );
+    INSERT INTO core_registry.forecast_dataset_snapshots (
+      id, tenant_id, site_id, target, subject_type, subject_id, train_from, train_to,
+      feature_set_version_id, topology_version_id, metric_version_refs, weather_source,
+      data_quality_summary, manifest_uri, manifest_checksum, created_at
+    ) VALUES (
+      '01990000-2420-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 'SITE_LOAD', 'SITE', '018f1e00-1000-7000-8000-000000000001',
+      '2026-08-01T00:00:00Z', '2026-08-28T00:00:00Z', '01990000-2410-7000-8000-000000000001',
+      '01990000-2300-7000-8000-000000000001', '["01990000-2510-7000-8000-000000000001"]'::jsonb,
+      NULL, '{"goodRatio":1}'::jsonb, 's3://forecast-authoritative-history/manifest.json', repeat('a',64), now()
+    );
+    INSERT INTO core_registry.forecast_models (
+      id, tenant_id, model_code, target, subject_type, horizon_minutes, granularity, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2430-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      'authoritative_site_load_1h', 'SITE_LOAD', 'SITE', 60, '15MIN', 'ACTIVE', 1, now(), now()
+    );
+    INSERT INTO core_registry.forecast_training_runs (
+      id, tenant_id, site_id, model_id, dataset_snapshot_id, feature_set_version_id, topology_version_id,
+      algorithm, hyperparameters, code_version, evaluation, status, started_at, finished_at, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2440-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2430-7000-8000-000000000001',
+      '01990000-2420-7000-8000-000000000001', '01990000-2410-7000-8000-000000000001',
+      '01990000-2300-7000-8000-000000000001', 'BASELINE', '{"method":"LINEAR_TREND"}'::jsonb,
+      'forecast-authoritative-history-tracer', NULL, 'PENDING', NULL, NULL, 1, now(), now()
+    );
+    UPDATE core_registry.forecast_training_runs
+    SET status='RUNNING', started_at=now(), revision=revision+1, updated_at=now()+interval '1 second'
+    WHERE id='01990000-2440-7000-8000-000000000001';
+    UPDATE core_registry.forecast_training_runs
+    SET status='SUCCEEDED', evaluation='{"tracer":true}'::jsonb, finished_at=now(), revision=revision+1, updated_at=now()+interval '2 seconds'
+    WHERE id='01990000-2440-7000-8000-000000000001';
+    INSERT INTO core_registry.forecast_model_versions (
+      id, tenant_id, site_id, model_id, model_version, training_run_id, dataset_snapshot_id,
+      feature_set_version_id, topology_version_id, artifact_uri, artifact_checksum, evaluation, compatibility,
+      status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2450-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2430-7000-8000-000000000001', 1,
+      '01990000-2440-7000-8000-000000000001', '01990000-2420-7000-8000-000000000001',
+      '01990000-2410-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      's3://forecast-authoritative-history/model.bin', repeat('b',64), '{"tracer":true}'::jsonb, '{"runtime":"go"}'::jsonb,
+      'CANDIDATE', 1, now(), now()
+    );
+    UPDATE core_registry.forecast_model_versions
+    SET status='VALIDATED', revision=revision+1, updated_at=now()+interval '1 second'
+    WHERE id='01990000-2450-7000-8000-000000000001';
+    INSERT INTO core_registry.forecast_deployments (
+      id, tenant_id, site_id, target, subject_type, subject_id, model_version_id, model_id,
+      feature_set_version_id, topology_version_id, status, effective_from, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2460-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 'SITE_LOAD', 'SITE', '018f1e00-1000-7000-8000-000000000001',
+      '01990000-2450-7000-8000-000000000001', '01990000-2430-7000-8000-000000000001',
+      '01990000-2410-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      'ACTIVE', '2026-08-01T00:00:00Z', 1, now(), now()
+    );
+  `);
+}
+
 const report = {
   schemaVersion: 1,
   capability: 'analytics-energy-interval-read-model',
@@ -91,8 +228,12 @@ const report = {
 
 try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+  try { registryCompose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', 'clickhouse']);
+  registryCompose(['up', '-d', 'postgres']);
   await waitForClickHouse();
+  await waitForPostgres();
+  seedForecastPreparationFixture();
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/energy',
@@ -219,6 +360,41 @@ try {
   report.assertions.metricResultRevisionTwoPayload = clickHouse(`SELECT toString(revision) || '|' || toString(value_number) || '|' || quality || '|' || toString(completeness) || '|' || toString(metric_version) || '|' || toString(binding_version) FROM analytics.metric_result_facts WHERE metric_code = 'daily_energy' AND subject_id = toUUID('01990000-5000-7000-8000-000000000001') AND period_start = toDateTime64('2026-08-10 16:00:00', 3, 'UTC') ORDER BY revision DESC LIMIT 1 FORMAT TSVRaw`);
   if (report.assertions.metricResultRevisionTwoPayload !== '2|1012|GOOD|1|1|1') throw new Error(`Metric revision 2 payload is incorrect: ${report.assertions.metricResultRevisionTwoPayload}`);
 
+  clickHouse(`INSERT INTO analytics.metric_result_facts (
+    result_id, tenant_id, site_id, subject_type, subject_id,
+    metric_id, metric_version_id, metric_code, metric_version,
+    metric_binding_id, binding_version, period_start, period_end, calculated_at,
+    granularity, value_type, value_json, value_number, value_string, value_boolean,
+    unit, quality, completeness, calculation_run_id, revision, provenance
+  ) VALUES
+    (toUUID('01990000-2530-7000-8000-000000000001'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2500-7000-8000-000000000001'), toUUID('01990000-2510-7000-8000-000000000001'), 'site_load_authoritative', 1,
+     toUUID('01990000-2520-7000-8000-000000000001'), 1, toDateTime64('2026-08-28 10:45:00', 3, 'UTC'), toDateTime64('2026-08-28 11:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:00:10', 3, 'UTC'),
+     '15MIN', 'NUMBER', '760', 760, NULL, NULL, 'kW', 'GOOD', 1.0, toUUID('01990000-2540-7000-8000-000000000001'), 1, '{"source":"metric-owner"}'),
+    (toUUID('01990000-2530-7000-8000-000000000002'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2500-7000-8000-000000000001'), toUUID('01990000-2510-7000-8000-000000000001'), 'site_load_authoritative', 1,
+     toUUID('01990000-2520-7000-8000-000000000001'), 1, toDateTime64('2026-08-28 11:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:15:00', 3, 'UTC'), toDateTime64('2026-08-28 11:15:10', 3, 'UTC'),
+     '15MIN', 'NUMBER', '780', 780, NULL, NULL, 'kW', 'GOOD', 1.0, toUUID('01990000-2540-7000-8000-000000000002'), 1, '{"source":"metric-owner"}'),
+    (toUUID('01990000-2530-7000-8000-000000000003'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2500-7000-8000-000000000001'), toUUID('01990000-2510-7000-8000-000000000001'), 'site_load_authoritative', 1,
+     toUUID('01990000-2520-7000-8000-000000000001'), 1, toDateTime64('2026-08-28 11:15:00', 3, 'UTC'), toDateTime64('2026-08-28 11:30:00', 3, 'UTC'), toDateTime64('2026-08-28 11:30:10', 3, 'UTC'),
+     '15MIN', 'NUMBER', '800', 800, NULL, NULL, 'kW', 'GOOD', 1.0, toUUID('01990000-2540-7000-8000-000000000003'), 1, '{"source":"metric-owner"}'),
+    (toUUID('01990000-2530-7000-8000-000000000004'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2500-7000-8000-000000000001'), toUUID('01990000-2510-7000-8000-000000000001'), 'site_load_authoritative', 1,
+     toUUID('01990000-2520-7000-8000-000000000001'), 1, toDateTime64('2026-08-28 11:30:00', 3, 'UTC'), toDateTime64('2026-08-28 11:45:00', 3, 'UTC'), toDateTime64('2026-08-28 11:45:10', 3, 'UTC'),
+     '15MIN', 'NUMBER', '820', 820, NULL, NULL, 'kW', 'GOOD', 1.0, toUUID('01990000-2540-7000-8000-000000000004'), 1, '{"source":"metric-owner"}')`);
+  report.assertions.forecastAuthoritativeHistoryTracer = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/forecast-service',
+    'test', '-count=1', '-run', 'TestAuthoritativeHistoryPreparesAndPublishesServerOwnedForecast', '-v', './internal/forecast/...',
+  ], {
+    env: {
+      ...process.env,
+      FORECAST_CLICKHOUSE_TEST_URL: clickHouseURL,
+      FORECAST_POSTGRES_TEST_DSN: forecastPostgresDSN,
+    },
+  });
+
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
     toString(count()) || '|' || toString(min(horizon_minutes)) || '|' || toString(max(horizon_minutes)) || '|'
@@ -261,4 +437,5 @@ try {
   throw error;
 } finally {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+  try { registryCompose(['down', '--volumes', '--remove-orphans']); } catch {}
 }
