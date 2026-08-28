@@ -8,14 +8,15 @@ import (
 )
 
 type HTTPHandler struct {
-	service *Service
+	service  *Service
+	preparer *Preparer
 }
 
-func NewHTTPHandler(service *Service) (*HTTPHandler, error) {
-	if service == nil {
-		return nil, errors.New("forecast service is required")
+func NewHTTPHandler(service *Service, preparer *Preparer) (*HTTPHandler, error) {
+	if service == nil || preparer == nil {
+		return nil, errors.New("forecast service and input preparer are required")
 	}
-	return &HTTPHandler{service: service}, nil
+	return &HTTPHandler{service: service, preparer: preparer}, nil
 }
 
 func (handler *HTTPHandler) Routes() http.Handler {
@@ -59,7 +60,7 @@ func (handler *HTTPHandler) handleForecast(writer http.ResponseWriter, request *
 	defer reader.Close()
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
-	var input Request
+	var input PreparationRequest
 	if err := decoder.Decode(&input); err != nil {
 		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
@@ -68,22 +69,19 @@ func (handler *HTTPHandler) handleForecast(writer http.ResponseWriter, request *
 		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	points, err := handler.service.Forecast(request.Context(), input)
+	input.TenantID = request.Header.Get("X-Tenant-ID")
+	prepared, err := handler.preparer.Prepare(request.Context(), input)
+	if errors.Is(err, ErrPreparationUnavailable) {
+		writeJSONError(writer, http.StatusServiceUnavailable, "forecast_input_unavailable")
+		return
+	}
 	if err != nil {
 		writeJSONError(writer, http.StatusUnprocessableEntity, "forecast_rejected")
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusCreated)
-	quality := ""
-	if len(points) > 0 {
-		quality = points[0].Quality
-	}
-	_ = json.NewEncoder(writer).Encode(struct {
-		Quality string  `json:"quality"`
-		Count   int     `json:"count"`
-		Points  []Point `json:"points"`
-	}{Quality: quality, Count: len(points), Points: points})
+	writer.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(writer).Encode(prepared)
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

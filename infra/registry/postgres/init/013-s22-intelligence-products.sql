@@ -354,8 +354,34 @@ CREATE POLICY fdd_findings_runtime_scope ON core_registry.fdd_findings FOR ALL T
 CREATE POLICY ai_deployment_revisions_fdd_scope ON core_registry.ai_deployment_revisions FOR SELECT TO fdd_runtime
   USING (tenant_id = core_registry.current_tenant_id());
 
+-- Forecast owns preparation and execution. Callers identify the requested subject/target;
+-- the runtime resolves released lineage, freezes the input snapshot, creates the Forecast
+-- Job, and later publishes the immutable result snapshot.
+CREATE POLICY forecast_models_forecast_worker_scope ON core_registry.forecast_models FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id());
+CREATE POLICY forecast_model_versions_forecast_worker_scope ON core_registry.forecast_model_versions FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_feature_set_versions_forecast_worker_scope ON core_registry.forecast_feature_set_versions FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id());
+CREATE POLICY forecast_dataset_snapshots_forecast_worker_scope ON core_registry.forecast_dataset_snapshots FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_deployments_forecast_worker_scope ON core_registry.forecast_deployments FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_input_snapshots_forecast_worker_scope ON core_registry.forecast_input_snapshots FOR SELECT TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_input_snapshots_forecast_worker_insert_scope ON core_registry.forecast_input_snapshots FOR INSERT TO forecast_runtime
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_jobs_forecast_worker_domain_scope ON core_registry.forecast_jobs FOR ALL TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_snapshots_forecast_worker_domain_scope ON core_registry.forecast_snapshots FOR ALL TO forecast_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+
 CREATE POLICY job_instances_forecast_worker_scope ON core_registry.job_instances FOR SELECT TO forecast_runtime
   USING (job_type = 'FORECAST_RUN');
+CREATE POLICY job_instances_forecast_worker_insert_scope ON core_registry.job_instances FOR INSERT TO forecast_runtime
+  WITH CHECK (job_type = 'FORECAST_RUN');
 CREATE POLICY job_instances_forecast_worker_update_scope ON core_registry.job_instances FOR UPDATE TO forecast_runtime
   USING (job_type = 'FORECAST_RUN') WITH CHECK (job_type = 'FORECAST_RUN');
 CREATE POLICY job_attempts_forecast_worker_scope ON core_registry.job_attempts FOR ALL TO forecast_runtime
@@ -378,10 +404,17 @@ GRANT SELECT ON core_registry.ai_model_definitions, core_registry.ai_data_egress
 GRANT SELECT ON core_registry.ai_model_definitions, core_registry.ai_data_egress_policies,
   core_registry.ai_deployment_revisions, core_registry.ai_deployment_bindings TO forecast_runtime, optimization_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.ai_invocations TO forecast_runtime, optimization_runtime;
+GRANT SELECT ON core_registry.forecast_models, core_registry.forecast_model_versions,
+  core_registry.forecast_feature_set_versions, core_registry.forecast_dataset_snapshots,
+  core_registry.forecast_deployments, core_registry.forecast_input_snapshots TO forecast_runtime;
+GRANT INSERT ON core_registry.forecast_input_snapshots TO forecast_runtime;
+GRANT SELECT, INSERT, UPDATE ON core_registry.forecast_jobs TO forecast_runtime;
+GRANT SELECT, INSERT ON core_registry.forecast_snapshots TO forecast_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.optimization_recommendations TO optimization_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.fdd_findings TO fdd_runtime;
 GRANT SELECT ON core_registry.ai_deployment_revisions TO fdd_runtime;
-GRANT SELECT, UPDATE ON core_registry.job_instances TO forecast_runtime, optimization_runtime;
+GRANT SELECT, INSERT, UPDATE ON core_registry.job_instances TO forecast_runtime;
+GRANT SELECT, UPDATE ON core_registry.job_instances TO optimization_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.job_attempts TO forecast_runtime, optimization_runtime;
 
 -- Runtime execution no longer writes the obsolete ESS DispatchPlan surface.

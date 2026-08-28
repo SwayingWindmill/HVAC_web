@@ -322,3 +322,184 @@ func uuidv7(now time.Time) (string, error) {
 	h := hex.EncodeToString(bytes)
 	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
 }
+
+func (store *PostgresStore) ResolvePreparation(ctx context.Context, request PreparationRequest, at time.Time) (PreparationDefinition, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return PreparationDefinition{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = forecastScope(ctx, tx, request.TenantID, request.SiteID); err != nil {
+		return PreparationDefinition{}, err
+	}
+	var definition PreparationDefinition
+	var metricRefs, featureSchema []byte
+	err = tx.QueryRow(ctx, `SELECT
+ d.id::text,d.model_id::text,d.model_version_id::text,mv.model_version,
+ d.feature_set_version_id::text,fsv.version,d.topology_version_id::text,
+ m.horizon_minutes,m.granularity,ds.metric_version_refs,fsv.feature_schema
+FROM core_registry.forecast_deployments d
+JOIN core_registry.forecast_model_versions mv
+  ON mv.tenant_id=d.tenant_id AND mv.site_id=d.site_id AND mv.id=d.model_version_id
+JOIN core_registry.forecast_models m
+  ON m.tenant_id=mv.tenant_id AND m.id=mv.model_id
+JOIN core_registry.forecast_feature_set_versions fsv
+  ON fsv.tenant_id=d.tenant_id AND fsv.id=d.feature_set_version_id
+JOIN core_registry.forecast_dataset_snapshots ds
+  ON ds.tenant_id=mv.tenant_id AND ds.site_id=mv.site_id AND ds.id=mv.dataset_snapshot_id
+WHERE d.tenant_id=$1::uuid AND d.site_id=$2::uuid
+  AND d.target=$3 AND d.subject_type=$4 AND d.subject_id=$5::uuid
+  AND d.status='ACTIVE' AND d.effective_from <= $6
+  AND (d.effective_to IS NULL OR d.effective_to > $6)
+LIMIT 1`, request.TenantID, request.SiteID, request.Target, request.SubjectType, request.SubjectID, at.UTC()).Scan(
+		&definition.DeploymentID, &definition.ModelID, &definition.ModelVersionID, &definition.ModelVersion,
+		&definition.FeatureSetVersionID, &definition.FeatureSetVersion, &definition.TopologyVersionID,
+		&definition.HorizonMinutes, &definition.Granularity, &metricRefs, &featureSchema,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PreparationDefinition{}, fmt.Errorf("%w: no active Forecast deployment for requested scope", ErrPreparationUnavailable)
+	}
+	if err != nil {
+		return PreparationDefinition{}, err
+	}
+	if err = json.Unmarshal(metricRefs, &definition.MetricVersionRefs); err != nil {
+		return PreparationDefinition{}, fmt.Errorf("decode Forecast dataset metric_version_refs: %w", err)
+	}
+	definition.FeatureSchema = append(json.RawMessage(nil), featureSchema...)
+	if err = tx.Commit(ctx); err != nil {
+		return PreparationDefinition{}, err
+	}
+	return definition, nil
+}
+
+func (store *PostgresStore) CreatePreparedForecast(ctx context.Context, input PreparedInput, at time.Time) (PreparedForecast, error) {
+	inputSnapshotID, err := uuidv7(at)
+	if err != nil {
+		return PreparedForecast{}, err
+	}
+	forecastJobID, err := uuidv7(at)
+	if err != nil {
+		return PreparedForecast{}, err
+	}
+	forecastSnapshotID, err := uuidv7(at)
+	if err != nil {
+		return PreparedForecast{}, err
+	}
+	metricRefs, err := json.Marshal(input.MetricVersionRefs)
+	if err != nil {
+		return PreparedForecast{}, fmt.Errorf("encode Forecast input metric provenance: %w", err)
+	}
+	featureValues, err := json.Marshal(input.FeatureValues)
+	if err != nil {
+		return PreparedForecast{}, fmt.Errorf("encode Forecast frozen feature values: %w", err)
+	}
+	schedulerPayload, err := json.Marshal(SchedulerForecastReference{ForecastJobID: forecastJobID, ForecastSnapshotID: forecastSnapshotID})
+	if err != nil {
+		return PreparedForecast{}, fmt.Errorf("encode Forecast scheduler reference: %w", err)
+	}
+
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return PreparedForecast{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = forecastScope(ctx, tx, input.TenantID, input.SiteID); err != nil {
+		return PreparedForecast{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO core_registry.forecast_input_snapshots(
+ id,tenant_id,site_id,deployment_id,model_version_id,feature_set_version_id,topology_version_id,
+ latest_data_time,weather_issue_time,metric_version_refs,feature_values,input_checksum,captured_at)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8,$9,$10::jsonb,$11::jsonb,$12,$13)`,
+		inputSnapshotID, input.TenantID, input.SiteID, input.DeploymentID, input.ModelVersionID, input.FeatureSetVersionID, input.TopologyVersionID,
+		input.LatestDataTime.UTC(), input.WeatherIssueTime, metricRefs, featureValues, input.InputChecksum, at.UTC()); err != nil {
+		return PreparedForecast{}, fmt.Errorf("insert Forecast input snapshot: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO core_registry.forecast_jobs(
+ id,tenant_id,site_id,deployment_id,model_version_id,input_snapshot_id,target,subject_type,subject_id,
+ forecast_origin,horizon_minutes,granularity,trigger_type,status,revision,created_at,updated_at)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7,$8,$9::uuid,$10,$11,$12,'ON_DEMAND','PENDING',1,$13,$13)`,
+		forecastJobID, input.TenantID, input.SiteID, input.DeploymentID, input.ModelVersionID, inputSnapshotID,
+		input.Target, input.SubjectType, input.SubjectID, input.ForecastOrigin.UTC(), input.HorizonMinutes, input.Granularity, at.UTC()); err != nil {
+		return PreparedForecast{}, fmt.Errorf("insert Forecast job: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO core_registry.job_instances(
+ job_id,trigger_type,job_type,tenant_id,site_id,subject_type,subject_id,scheduled_for,priority,dedup_key,payload,state,max_attempts,timeout_seconds,created_at,updated_at)
+VALUES($1::uuid,'MANUAL','FORECAST_RUN',$2::uuid,$3::uuid,$4,$5,$6,50,$7,$8::jsonb,'READY',3,120,$6,$6)`,
+		forecastJobID, input.TenantID, input.SiteID, input.SubjectType, input.SubjectID, at.UTC(), "forecast:"+forecastJobID, schedulerPayload); err != nil {
+		return PreparedForecast{}, fmt.Errorf("insert Forecast scheduler job: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return PreparedForecast{}, err
+	}
+	return PreparedForecast{ForecastJobID: forecastJobID, InputSnapshotID: inputSnapshotID, ForecastSnapshotID: forecastSnapshotID, Status: "PENDING"}, nil
+}
+
+func (store *PostgresStore) LoadForecastRequest(ctx context.Context, tenantID, siteID string, reference SchedulerForecastReference) (Request, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return Request{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = forecastScope(ctx, tx, tenantID, siteID); err != nil {
+		return Request{}, err
+	}
+	var request Request
+	var snapshot PreparedInput
+	var metricRefs, featureValues []byte
+	var checksum string
+	err = tx.QueryRow(ctx, `SELECT
+ j.deployment_id::text,d.model_id::text,j.model_version_id::text,mv.model_version,
+ mv.feature_set_version_id::text,fsv.version,mv.topology_version_id::text,j.input_snapshot_id::text,
+ j.subject_type,j.subject_id::text,j.target,j.forecast_origin,j.horizon_minutes,j.granularity,
+ i.latest_data_time,i.weather_issue_time,i.metric_version_refs,i.feature_values,i.input_checksum
+FROM core_registry.forecast_jobs j
+JOIN core_registry.forecast_deployments d
+  ON d.tenant_id=j.tenant_id AND d.site_id=j.site_id AND d.id=j.deployment_id
+JOIN core_registry.forecast_model_versions mv
+  ON mv.tenant_id=j.tenant_id AND mv.site_id=j.site_id AND mv.id=j.model_version_id
+JOIN core_registry.forecast_feature_set_versions fsv
+  ON fsv.tenant_id=mv.tenant_id AND fsv.id=mv.feature_set_version_id
+JOIN core_registry.forecast_input_snapshots i
+  ON i.tenant_id=j.tenant_id AND i.site_id=j.site_id AND i.id=j.input_snapshot_id
+WHERE j.tenant_id=$1::uuid AND j.site_id=$2::uuid AND j.id=$3::uuid`, tenantID, siteID, reference.ForecastJobID).Scan(
+		&request.DeploymentID, &request.ModelID, &request.ModelVersionID, &request.ModelVersion,
+		&request.FeatureSetVersionID, &request.FeatureSetVersion, &request.TopologyVersionID, &request.InputSnapshotID,
+		&request.SubjectType, &request.SubjectID, &request.Target, &request.ForecastOrigin, &request.HorizonMinutes, &request.Granularity,
+		&snapshot.LatestDataTime, &snapshot.WeatherIssueTime, &metricRefs, &featureValues, &checksum,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Request{}, errors.New("server-created Forecast job was not found")
+	}
+	if err != nil {
+		return Request{}, err
+	}
+	if err = json.Unmarshal(metricRefs, &snapshot.MetricVersionRefs); err != nil {
+		return Request{}, fmt.Errorf("decode frozen Forecast metric provenance: %w", err)
+	}
+	if err = json.Unmarshal(featureValues, &snapshot.FeatureValues); err != nil {
+		return Request{}, fmt.Errorf("decode frozen Forecast feature values: %w", err)
+	}
+	request.TenantID, request.SiteID = tenantID, siteID
+	request.ForecastJobID, request.ForecastSnapshotID = reference.ForecastJobID, reference.ForecastSnapshotID
+	snapshot.TenantID, snapshot.SiteID, snapshot.SubjectType, snapshot.SubjectID, snapshot.Target = tenantID, siteID, request.SubjectType, request.SubjectID, request.Target
+	snapshot.DeploymentID, snapshot.ModelID, snapshot.ModelVersionID, snapshot.ModelVersion = request.DeploymentID, request.ModelID, request.ModelVersionID, request.ModelVersion
+	snapshot.FeatureSetVersionID, snapshot.FeatureSetVersion, snapshot.TopologyVersionID = request.FeatureSetVersionID, request.FeatureSetVersion, request.TopologyVersionID
+	recomputed, checksumErr := checksumPreparedInput(snapshot)
+	if checksumErr != nil {
+		return Request{}, checksumErr
+	}
+	if recomputed != checksum {
+		return Request{}, errors.New("frozen Forecast input checksum does not match persisted provenance")
+	}
+	request.Observations, request.Unit, err = executionInput(snapshot.FeatureValues)
+	if err != nil {
+		return Request{}, fmt.Errorf("load frozen Forecast execution input: %w", err)
+	}
+	if err = request.Validate(); err != nil {
+		return Request{}, fmt.Errorf("validate frozen Forecast execution request: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Request{}, err
+	}
+	return request, nil
+}

@@ -41,7 +41,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := forecast.NewHTTPHandler(service)
+	history, err := forecast.NewClickHouseHistoryReader(forecast.HistoryConfig{
+		BaseURL: clickHouseURL, Username: envOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
+		Password: os.Getenv("FORECAST_CLICKHOUSE_READER_PASSWORD"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	preparer, err := forecast.NewPreparer(publication, history, time.Now)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := forecast.NewHTTPHandler(service, preparer)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -134,13 +145,18 @@ func executeForecastJob(ctx context.Context, store *forecast.PostgresStore, serv
 	if !started {
 		return
 	}
-	request, validationErr := forecast.ValidateForecastSchedulerJob(job)
+	reference, validationErr := forecast.ValidateForecastSchedulerJob(job)
 	if validationErr != nil {
 		_ = store.FailForecastJob(context.Background(), job, "FORECAST_JOB_INVALID", validationErr, false, time.Now().UTC())
 		return
 	}
 	jobCtx, cancelJob := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
 	defer cancelJob()
+	request, loadErr := store.LoadForecastRequest(jobCtx, job.TenantID, job.SiteID, reference)
+	if loadErr != nil {
+		_ = store.FailForecastJob(context.Background(), job, "FORECAST_INPUT_LOAD_FAILED", loadErr, true, time.Now().UTC())
+		return
+	}
 	leaseStop := make(chan struct{})
 	leaseDone := make(chan struct{})
 	go func() {

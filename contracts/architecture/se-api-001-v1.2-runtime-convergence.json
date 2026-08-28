@@ -174,11 +174,11 @@
         "SE-AI-001 Forecast API sections are explicitly recommendation/example material and propose GET /api/v1/forecasts and GET /api/v1/sites/{siteId}/forecasts/day-ahead rather than this exact route."
       ],
       "runtimeEvidence": [
-        "forecast-service currently exposes internal POST /v1/forecast for inference and returns internal Point records; it has no public Load Forecast GET projection."
+        "forecast-service internal POST /v1/forecast now prepares a server-owned immutable input snapshot/job from authoritative Forecast lineage and history; execution/publication remains internal and this route is not the public Load Forecast GET projection."
       ],
       "blockingGaps": [
         "Exact query parameters, public series/value item schema, time horizon selection and fallback representation for this URI are not frozen.",
-        "The internal inference Request includes deployment/model/input-snapshot fields and cannot be exposed as the public read contract."
+        "The internal preparation request identifies only subject/target and returns server-owned job/snapshot identities; it is not the public read resource contract."
       ]
     },
     {
@@ -191,7 +191,7 @@
         "SE-AI-001 public API sections remain recommendation/example material and do not freeze this exact PV route's query or envelope."
       ],
       "runtimeEvidence": [
-        "forecast-service internal POST /v1/forecast accepts PV_GENERATION but no public PV Forecast GET projection exists."
+        "forecast-service internal POST /v1/forecast can prepare a server-owned PV_GENERATION input snapshot/job, but no public PV Forecast GET projection exists."
       ],
       "blockingGaps": [
         "Exact query parameters, public series/value item schema, time horizon selection and fallback representation for this URI are not frozen.",
