@@ -345,6 +345,34 @@ CREATE POLICY ai_deployment_bindings_optimization_scope ON core_registry.ai_depl
 CREATE POLICY ai_invocations_optimization_scope ON core_registry.ai_invocations FOR ALL TO optimization_runtime
   USING (tenant_id = core_registry.current_tenant_id() AND (site_id IS NULL OR core_registry.is_authorized_site(site_id)))
   WITH CHECK (tenant_id = core_registry.current_tenant_id() AND (site_id IS NULL OR core_registry.is_authorized_site(site_id)));
+CREATE POLICY optimization_policies_optimization_worker_scope ON core_registry.optimization_policies FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id());
+CREATE POLICY optimization_policy_versions_optimization_worker_scope ON core_registry.optimization_policy_versions FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id());
+CREATE POLICY energy_topology_versions_optimization_worker_scope ON core_registry.energy_topology_versions FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_jobs_optimization_worker_scope ON core_registry.forecast_jobs FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_snapshots_optimization_worker_scope ON core_registry.forecast_snapshots FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY forecast_input_snapshots_optimization_worker_scope ON core_registry.forecast_input_snapshots FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY settlement_boundaries_optimization_worker_scope ON core_registry.settlement_boundaries FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY tariff_assignments_optimization_worker_scope ON core_registry.tariff_assignments FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY tariff_versions_optimization_worker_scope ON core_registry.tariff_versions FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY optimization_input_snapshots_optimization_worker_select_scope ON core_registry.optimization_input_snapshots FOR SELECT TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY optimization_input_snapshots_optimization_worker_insert_scope ON core_registry.optimization_input_snapshots FOR INSERT TO optimization_runtime
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY optimization_input_snapshots_optimization_worker_update_scope ON core_registry.optimization_input_snapshots FOR UPDATE TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY optimization_runs_optimization_worker_scope ON core_registry.optimization_runs FOR ALL TO optimization_runtime
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
+  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 CREATE POLICY optimization_recommendations_runtime_scope ON core_registry.optimization_recommendations FOR ALL TO optimization_runtime
   USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
   WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
@@ -389,6 +417,8 @@ CREATE POLICY job_attempts_forecast_worker_scope ON core_registry.job_attempts F
   WITH CHECK (EXISTS (SELECT 1 FROM core_registry.job_instances j WHERE j.job_id = job_attempts.job_id AND j.job_type = 'FORECAST_RUN'));
 CREATE POLICY job_instances_optimization_worker_scope ON core_registry.job_instances FOR SELECT TO optimization_runtime
   USING (job_type = 'OPTIMIZATION_RUN');
+CREATE POLICY job_instances_optimization_worker_insert_scope ON core_registry.job_instances FOR INSERT TO optimization_runtime
+  WITH CHECK (job_type = 'OPTIMIZATION_RUN');
 CREATE POLICY job_instances_optimization_worker_update_scope ON core_registry.job_instances FOR UPDATE TO optimization_runtime
   USING (job_type = 'OPTIMIZATION_RUN') WITH CHECK (job_type = 'OPTIMIZATION_RUN');
 CREATE POLICY job_attempts_optimization_worker_scope ON core_registry.job_attempts FOR ALL TO optimization_runtime
@@ -403,6 +433,11 @@ GRANT SELECT ON core_registry.ai_model_definitions, core_registry.ai_data_egress
   core_registry.fdd_findings, core_registry.optimization_recommendations TO s1_core_runtime;
 GRANT SELECT ON core_registry.ai_model_definitions, core_registry.ai_data_egress_policies,
   core_registry.ai_deployment_revisions, core_registry.ai_deployment_bindings TO forecast_runtime, optimization_runtime;
+GRANT SELECT ON core_registry.optimization_policies, core_registry.optimization_policy_versions, core_registry.energy_topology_versions,
+  core_registry.forecast_jobs, core_registry.forecast_snapshots, core_registry.forecast_input_snapshots,
+  core_registry.settlement_boundaries, core_registry.tariff_assignments, core_registry.tariff_versions TO optimization_runtime;
+GRANT SELECT, INSERT, UPDATE ON core_registry.optimization_input_snapshots TO optimization_runtime;
+GRANT SELECT, INSERT, UPDATE ON core_registry.optimization_runs TO optimization_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.ai_invocations TO forecast_runtime, optimization_runtime;
 GRANT SELECT ON core_registry.forecast_models, core_registry.forecast_model_versions,
   core_registry.forecast_feature_set_versions, core_registry.forecast_dataset_snapshots,
@@ -414,7 +449,7 @@ GRANT SELECT, INSERT, UPDATE ON core_registry.optimization_recommendations TO op
 GRANT SELECT, INSERT, UPDATE ON core_registry.fdd_findings TO fdd_runtime;
 GRANT SELECT ON core_registry.ai_deployment_revisions TO fdd_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.job_instances TO forecast_runtime;
-GRANT SELECT, UPDATE ON core_registry.job_instances TO optimization_runtime;
+GRANT SELECT, INSERT, UPDATE ON core_registry.job_instances TO optimization_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.job_attempts TO forecast_runtime, optimization_runtime;
 
 -- Runtime execution no longer writes the obsolete ESS DispatchPlan surface.

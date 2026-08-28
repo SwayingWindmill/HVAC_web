@@ -31,6 +31,7 @@ const composeEnvironment = {
 };
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
 const forecastPostgresDSN = `postgres://forecast_runtime:forecast-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
+const optimizationPostgresDSN = `postgres://optimization_runtime:optimization-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -217,6 +218,215 @@ function seedForecastPreparationFixture() {
   `);
 }
 
+function seedOptimizationPreparationFixture() {
+  psql(`
+    UPDATE core_registry.forecast_deployments
+    SET status='RETIRED', effective_to='2026-08-28T12:00:00Z', revision=revision+1, updated_at=now()
+    WHERE id='01990000-2460-7000-8000-000000000001';
+
+    INSERT INTO core_registry.forecast_models (
+      id, tenant_id, model_code, target, subject_type, horizon_minutes, granularity, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2600-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      'authoritative_site_load_day_ahead', 'SITE_LOAD', 'SITE', 1440, '15MIN', 'ACTIVE', 1,
+      '2026-08-28T11:50:00Z', '2026-08-28T11:50:00Z'
+    );
+    INSERT INTO core_registry.forecast_training_runs (
+      id, tenant_id, site_id, model_id, dataset_snapshot_id, feature_set_version_id, topology_version_id,
+      algorithm, hyperparameters, code_version, evaluation, status, started_at, finished_at, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2610-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2600-7000-8000-000000000001',
+      '01990000-2420-7000-8000-000000000001', '01990000-2410-7000-8000-000000000001',
+      '01990000-2300-7000-8000-000000000001', 'BASELINE', '{"method":"LINEAR_TREND"}'::jsonb,
+      'optimization-authoritative-input-tracer', NULL, 'PENDING', NULL, NULL, 1,
+      '2026-08-28T11:51:00Z', '2026-08-28T11:51:00Z'
+    );
+    UPDATE core_registry.forecast_training_runs
+    SET status='RUNNING', started_at='2026-08-28T11:52:00Z', revision=revision+1, updated_at='2026-08-28T11:52:00Z'
+    WHERE id='01990000-2610-7000-8000-000000000001';
+    UPDATE core_registry.forecast_training_runs
+    SET status='SUCCEEDED', evaluation='{"tracer":true}'::jsonb, finished_at='2026-08-28T11:53:00Z', revision=revision+1, updated_at='2026-08-28T11:53:00Z'
+    WHERE id='01990000-2610-7000-8000-000000000001';
+    INSERT INTO core_registry.forecast_model_versions (
+      id, tenant_id, site_id, model_id, model_version, training_run_id, dataset_snapshot_id,
+      feature_set_version_id, topology_version_id, artifact_uri, artifact_checksum, evaluation, compatibility,
+      status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2620-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2600-7000-8000-000000000001', 1,
+      '01990000-2610-7000-8000-000000000001', '01990000-2420-7000-8000-000000000001',
+      '01990000-2410-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      's3://optimization-authoritative-input/day-ahead-model.bin', repeat('c',64), '{"tracer":true}'::jsonb, '{"runtime":"go"}'::jsonb,
+      'CANDIDATE', 1, '2026-08-28T11:54:00Z', '2026-08-28T11:54:00Z'
+    );
+    UPDATE core_registry.forecast_model_versions
+    SET status='VALIDATED', revision=revision+1, updated_at='2026-08-28T11:55:00Z'
+    WHERE id='01990000-2620-7000-8000-000000000001';
+    INSERT INTO core_registry.forecast_deployments (
+      id, tenant_id, site_id, target, subject_type, subject_id, model_version_id, model_id,
+      feature_set_version_id, topology_version_id, status, effective_from, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2630-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 'SITE_LOAD', 'SITE', '018f1e00-1000-7000-8000-000000000001',
+      '01990000-2620-7000-8000-000000000001', '01990000-2600-7000-8000-000000000001',
+      '01990000-2410-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      'ACTIVE', '2026-08-28T12:00:00Z', 1, '2026-08-28T11:56:00Z', '2026-08-28T11:56:00Z'
+    );
+    INSERT INTO core_registry.forecast_input_snapshots (
+      id, tenant_id, site_id, deployment_id, model_version_id, feature_set_version_id, topology_version_id,
+      latest_data_time, weather_issue_time, metric_version_refs, feature_values, input_checksum, captured_at
+    ) VALUES (
+      '01990000-2640-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2630-7000-8000-000000000001',
+      '01990000-2620-7000-8000-000000000001', '01990000-2410-7000-8000-000000000001',
+      '01990000-2300-7000-8000-000000000001', '2026-08-28T11:45:00Z', NULL,
+      '["01990000-2510-7000-8000-000000000001"]'::jsonb, '{"schemaVersion":1,"targetMetricVersionId":"01990000-2510-7000-8000-000000000001"}'::jsonb,
+      repeat('d',64), '2026-08-28T12:00:00Z'
+    );
+    INSERT INTO core_registry.forecast_jobs (
+      id, tenant_id, site_id, deployment_id, model_version_id, input_snapshot_id, target, subject_type, subject_id,
+      forecast_origin, horizon_minutes, granularity, trigger_type, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2650-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2630-7000-8000-000000000001',
+      '01990000-2620-7000-8000-000000000001', '01990000-2640-7000-8000-000000000001',
+      'SITE_LOAD', 'SITE', '018f1e00-1000-7000-8000-000000000001', '2026-08-28T12:00:00Z', 1440, '15MIN',
+      'ON_DEMAND', 'PENDING', 1, '2026-08-28T12:00:00Z', '2026-08-28T12:00:00Z'
+    );
+    UPDATE core_registry.forecast_jobs
+    SET status='RUNNING', started_at='2026-08-28T12:00:01Z', revision=revision+1, updated_at='2026-08-28T12:00:01Z'
+    WHERE id='01990000-2650-7000-8000-000000000001';
+    UPDATE core_registry.forecast_jobs
+    SET status='PERSISTING', revision=revision+1, updated_at='2026-08-28T12:00:02Z'
+    WHERE id='01990000-2650-7000-8000-000000000001';
+    UPDATE core_registry.forecast_jobs
+    SET status='PERSISTED', completed_at='2026-08-28T12:00:03Z', revision=revision+1, updated_at='2026-08-28T12:00:03Z'
+    WHERE id='01990000-2650-7000-8000-000000000001';
+    INSERT INTO core_registry.forecast_snapshots (
+      id, tenant_id, site_id, forecast_job_id, deployment_id, model_version_id, input_snapshot_id,
+      forecast_origin, window_start, window_end, result_count, result_checksum, quality_summary, created_at
+    ) VALUES (
+      '01990000-2660-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2650-7000-8000-000000000001',
+      '01990000-2630-7000-8000-000000000001', '01990000-2620-7000-8000-000000000001',
+      '01990000-2640-7000-8000-000000000001', '2026-08-28T12:00:00Z', '2026-08-28T12:15:00Z',
+      '2026-08-29T12:00:00Z', 96, repeat('e',64), '{"quality":"VALID","source":"forecast-owner"}'::jsonb,
+      '2026-08-28T12:00:04Z'
+    );
+
+    INSERT INTO core_registry.optimization_policies (
+      id, tenant_id, policy_code, subject_type, resource_type, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2700-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      'authoritative_hvac_cost', 'SITE', 'HVAC', 'ACTIVE', 1, '2026-08-28T11:40:00Z', '2026-08-28T11:40:00Z'
+    );
+    INSERT INTO core_registry.optimization_policy_versions (
+      id, tenant_id, policy_id, version, objective, weights, constraints, dispatch_mode, fallback_policy, risk_level,
+      horizon, horizon_minutes, granularity, effective_from, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2710-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '01990000-2700-7000-8000-000000000001', 1, 'COST', '{"cost":1}'::jsonb,
+      '{"comfort":{"zoneTempMinC":21,"zoneTempMaxC":25},"safety":{"supplyTempMinC":6,"supplyTempMaxC":10,"maxSupplyTempStepC":1},"inputMapping":{"supplyTemperatureKey":"btu_meter.supply_water_temperature","zoneTemperatureKey":"zone.temperature"},"maintenanceConstraints":{"outOfService":[]},"manualLocks":{"resources":[]},"responseModel":{"dailyEnergyDeltaKWhPerSupplyTempC":-180,"zoneTempDeltaCPerSupplyTempC":0.4,"energyUncertaintyP90KWh":60,"zoneTempUncertaintyP90C":0.2}}'::jsonb,
+      'SHADOW', 'RULE_STRATEGY', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-08-28T00:00:00Z', 'RELEASED', 1,
+      '2026-08-28T11:40:00Z', '2026-08-28T11:40:00Z'
+    );
+
+    INSERT INTO core_registry.settlement_boundaries (
+      id, tenant_id, site_id, topology_version_id, boundary_code, display_name, boundary_type, energy_type_id,
+      direction, definition_mode, node_id, effective_from, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2720-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2300-7000-8000-000000000001',
+      'optimization_grid_import', 'Optimization Grid Import', 'GRID_CONNECTION', '01990000-0000-7000-8000-000000000001',
+      'IMPORT', 'NODE', '01990000-2310-7000-8000-000000000001', '2026-08-28T00:00:00Z', 'DRAFT', 1,
+      '2026-08-28T11:41:00Z', '2026-08-28T11:41:00Z'
+    );
+    UPDATE core_registry.settlement_boundaries
+    SET status='ACTIVE', revision=revision+1, updated_at='2026-08-28T11:42:00Z'
+    WHERE id='01990000-2720-7000-8000-000000000001';
+    INSERT INTO core_registry.tariffs (
+      id, tenant_id, site_id, tariff_code, display_name, energy_type_id, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2730-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 'optimization_import_tariff', 'Optimization Import Tariff',
+      '01990000-0000-7000-8000-000000000001', 'ACTIVE', 1, '2026-08-28T11:43:00Z', '2026-08-28T11:43:00Z'
+    );
+    INSERT INTO core_registry.tariff_versions (
+      id, tenant_id, site_id, tariff_id, version, effective_from, timezone, currency, billing_cycle,
+      status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2740-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2730-7000-8000-000000000001', 1,
+      '2026-08-28T00:00:00Z', 'Asia/Shanghai', 'CNY', 'CALENDAR_MONTH', 'RELEASED', 1,
+      '2026-08-28T11:44:00Z', '2026-08-28T11:44:00Z'
+    );
+    INSERT INTO core_registry.tariff_assignments (
+      id, tenant_id, site_id, boundary_id, tariff_id, effective_from, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2750-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', '01990000-2720-7000-8000-000000000001',
+      '01990000-2730-7000-8000-000000000001', '2026-08-28T00:00:00Z', 'RELEASED', 1,
+      '2026-08-28T11:45:00Z', '2026-08-28T11:45:00Z'
+    );
+
+    INSERT INTO core_registry.ai_model_definitions (
+      id, tenant_id, name, provider, model_id, capabilities, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2760-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      'Optimization Authoritative Tracer', 'LOCAL', 'hvac-recommendation-v1', ARRAY['optimization'], 'ACTIVE', 1,
+      '2026-08-28T11:46:00Z', '2026-08-28T11:46:00Z'
+    );
+    INSERT INTO core_registry.ai_deployment_revisions (
+      id, tenant_id, model_definition_id, use_case, revision, output_schema_version, enabled, created_at
+    ) VALUES (
+      '01990000-2770-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '01990000-2760-7000-8000-000000000001', 'OPTIMIZATION', 1, 'optimization-recommendation-v1', true,
+      '2026-08-28T11:47:00Z'
+    );
+    INSERT INTO core_registry.ai_deployment_bindings (
+      id, tenant_id, site_id, use_case, deployment_revision_id, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-2780-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001',
+      '018f1e00-1000-7000-8000-000000000001', 'OPTIMIZATION', '01990000-2770-7000-8000-000000000001',
+      'ACTIVE', 1, '2026-08-28T11:48:00Z', '2026-08-28T11:48:00Z'
+    );
+  `);
+
+  clickHouse(`INSERT INTO analytics.metric_result_facts (
+    result_id, tenant_id, site_id, subject_type, subject_id,
+    metric_id, metric_version_id, metric_code, metric_version,
+    metric_binding_id, binding_version, period_start, period_end, calculated_at,
+    granularity, value_type, value_json, value_number, value_string, value_boolean,
+    unit, quality, completeness, calculation_run_id, revision, provenance
+  ) VALUES
+    (toUUID('01990000-2840-7000-8000-000000000001'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2800-7000-8000-000000000001'), toUUID('01990000-2810-7000-8000-000000000001'), 'daily_energy', 1,
+     toUUID('01990000-2820-7000-8000-000000000001'), 1, toDateTime64('2026-08-27 12:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:10', 3, 'UTC'),
+     'DAY', 'NUMBER', '2400', 2400, NULL, NULL, 'kWh', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-000000000001'), 2, '{"source":"metric-owner"}'),
+    (toUUID('01990000-2840-7000-8000-000000000002'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2800-7000-8000-000000000002'), toUUID('01990000-2810-7000-8000-000000000002'), 'energy_cost', 1,
+     toUUID('01990000-2820-7000-8000-000000000002'), 1, toDateTime64('2026-08-27 12:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:20', 3, 'UTC'),
+     'DAY', 'NUMBER', '360', 360, NULL, NULL, 'CNY', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-000000000002'), 1, '{"source":"metric-owner"}')`);
+
+  clickHouse(`INSERT INTO telemetry_history.observations (
+    observation_id, tenant_id, site_id, device_id, point_id,
+    integration_instance_id, source_event_id, source_partition, source_offset, source_path,
+    telemetry_key, point_type, point_revision, value_type, unit, value_number, sampled_at, received_at,
+    acceptance_status, quality, quality_reasons, payload_sha256
+  ) VALUES
+    (toUUID('01990000-2940-7000-8000-000000000001'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2900-7000-8000-000000000001'), toUUID('01990000-2910-7000-8000-000000000001'),
+     toUUID('01990000-2920-7000-8000-000000000001'), toUUID('01990000-2930-7000-8000-000000000001'), 'optimization-owner', 1, 'PUSH',
+     'btu_meter.supply_water_temperature', 'TELEMETRY', 3, 'NUMBER', 'Cel', 7,
+     toDateTime64('2026-08-28 11:59:40', 3, 'UTC'), toDateTime64('2026-08-28 11:59:41', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('7',64)),
+    (toUUID('01990000-2940-7000-8000-000000000002'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2900-7000-8000-000000000002'), toUUID('01990000-2910-7000-8000-000000000002'),
+     toUUID('01990000-2920-7000-8000-000000000002'), toUUID('01990000-2930-7000-8000-000000000002'), 'optimization-owner', 2, 'PUSH',
+     'zone.temperature', 'TELEMETRY', 4, 'NUMBER', 'Cel', 23,
+     toDateTime64('2026-08-28 11:59:45', 3, 'UTC'), toDateTime64('2026-08-28 11:59:46', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('8',64))`);
+}
+
 const report = {
   schemaVersion: 1,
   capability: 'analytics-energy-interval-read-model',
@@ -392,6 +602,19 @@ try {
       ...process.env,
       FORECAST_CLICKHOUSE_TEST_URL: clickHouseURL,
       FORECAST_POSTGRES_TEST_DSN: forecastPostgresDSN,
+    },
+  });
+
+  seedOptimizationPreparationFixture();
+  report.assertions.optimizationAuthoritativeInputTracer = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/optimization-service',
+    'test', '-count=1', '-run', 'TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation', '-v', './internal/optimization/...',
+  ], {
+    env: {
+      ...process.env,
+      OPTIMIZATION_CLICKHOUSE_TEST_URL: clickHouseURL,
+      OPTIMIZATION_POSTGRES_TEST_DSN: optimizationPostgresDSN,
     },
   });
 
