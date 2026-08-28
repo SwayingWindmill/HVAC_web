@@ -8,7 +8,7 @@ import (
 func TestEdgeMQTTCommandRestartDoesNotReplayMayExecuteRecord(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	plant := NewPlant(config.Plant, now)
+	plant := NewPlant(config.Plant, config.Scenario, now)
 	runtime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)

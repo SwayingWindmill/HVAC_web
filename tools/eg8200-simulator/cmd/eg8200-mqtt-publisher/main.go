@@ -57,7 +57,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	plant := simulator.NewPlant(plantConfig.Plant, time.Now().UTC())
+	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, time.Now().UTC())
 	edgeRuntime, err := simulator.NewEdgeControlRuntime(plantConfig, plant)
 	if err != nil {
 		logger.Error("eg8200_edge_runtime_init_failed", "component", "edge_control_runtime")

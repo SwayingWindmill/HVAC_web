@@ -42,7 +42,6 @@ test('chiller profile requests the exact central-plant energy keys', () => {
     'chiller.entering_chilled_water_temperature',
     'chiller.chilled_water_temperature_setpoint',
     'chiller.entering_cooling_water_temperature',
-    'chiller.business_revision',
     'chiller.fault_code',
   ]);
 });

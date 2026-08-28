@@ -11,7 +11,7 @@ A deterministic virtual edge gateway for validating the HVAC platform before a p
 - `METER-HVAC-TOTAL`: aggregate HVAC power meter
 - `BTU-METER-01`: chilled-water thermal energy meter
 
-The model includes chiller COP, cooling capacity, auxiliary power, accumulated electrical energy, accumulated cooling energy, pump affinity laws, cooling-tower approach temperature, command revisions, and basic plant interlocks.
+The model includes chiller COP, cooling capacity, auxiliary power, accumulated electrical energy, accumulated cooling energy, pump affinity laws, cooling-tower approach temperature, and basic plant interlocks.
 
 ## Supported commands
 
@@ -25,7 +25,7 @@ The model includes chiller COP, cooling capacity, auxiliary power, accumulated e
 | Cooling tower | `start`, `stop`, `resetFault` | none | — |
 | Cooling tower | `setFanSpeed` | `fanSpeedPct` | 20–100% |
 
-Each RPC reply contains `success`, a stable result `code`, the applied value when relevant, and `businessRevision`. Invalid commands do not mutate the reported state.
+Each simulator command result contains `success`, a stable result `code`, and the applied value when relevant. Invalid commands do not mutate reported equipment state. Telemetry Business Revision is owned by the platform telemetry runtime, not by the simulator.
 
 ## ThingsBoard preparation
 
@@ -95,7 +95,7 @@ The simulator publishes one timestamped ThingsBoard telemetry payload per device
 go test ./tools/eg8200-simulator/...
 ```
 
-The current unit tests cover strict config parsing, energy balance, pump affinity behavior, command validation and revisioning, plant interlocks, telemetry payloads, RPC polling, RPC replies, and bounded provider errors.
+The current unit tests cover strict config and Scenario parsing, stepwise Scenario progression, energy balance, pump affinity behavior, command validation, plant interlocks, telemetry payloads, and simulator authority boundaries.
 
 ## Scope boundary
 
