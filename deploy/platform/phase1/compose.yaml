@@ -320,6 +320,7 @@ services:
       METRIC_DIAGNOSTICS_ADDR: :19090
       METRIC_WORKER_MODE: worker
       METRIC_CLICKHOUSE_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      METRIC_CLICKHOUSE_USER: ${METRIC_CLICKHOUSE_USER:-metric_engine_runtime}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

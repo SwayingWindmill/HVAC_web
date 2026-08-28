@@ -367,14 +367,14 @@ func (fixture *commandGatewayFixture) registryDecisionResponse(t *testing.T, req
 	decision := registryauth.Decision{
 		Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID},
-		Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
+		Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
 		ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
 	}
 	claims := registryauth.GrantClaims{
 		Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "platform-core-service",
 		PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID},
-		Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
+		Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
 		DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 	}

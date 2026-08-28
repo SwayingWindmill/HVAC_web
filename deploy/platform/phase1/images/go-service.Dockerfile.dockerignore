@@ -1,0 +1,15 @@
+*
+!go.work
+!go.work.sum
+!cmd/
+!cmd/**
+!libs/
+!libs/**
+!modules/
+!modules/**
+!services/
+!services/**
+!tools/
+!tools/**
+!contracts/
+!contracts/**

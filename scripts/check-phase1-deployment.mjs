@@ -482,7 +482,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 74, `production migration allowlist must contain exactly 74 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.length === 75, `production migration allowlist must contain exactly 75 migrations, got ${manifestEntries.length}`);
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
@@ -508,7 +508,7 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 74-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(phase1Readme.includes('exact 75-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 assert(phase1Readme.includes('Deployment tiers and observability profiles') && phase1Readme.includes('observability-core') && phase1Readme.includes('observability-logs') && phase1Readme.includes('observability-full') && phase1Readme.includes('intelligence'), 'Phase 1 README must document tier profiles');
 assert(phase1Readme.includes('Availability and recovery evidence') && phase1Readme.includes('SINGLE_NODE_RECOVERABLE'), 'Phase 1 README must document the availability tier');
 

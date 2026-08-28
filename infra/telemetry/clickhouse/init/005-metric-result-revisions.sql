@@ -44,6 +44,7 @@ SETTINGS index_granularity = 8192;
 
 CREATE USER IF NOT EXISTS metric_engine_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS metric_engine_writer IDENTIFIED WITH no_password;
+CREATE USER IF NOT EXISTS metric_engine_runtime IDENTIFIED WITH no_password;
 
 GRANT SELECT ON telemetry_history.observations TO metric_engine_reader;
 GRANT SELECT ON telemetry_history.counter_deltas TO metric_engine_reader;
@@ -51,5 +52,11 @@ GRANT SELECT ON analytics.energy_interval_facts TO metric_engine_reader;
 GRANT SELECT ON analytics.metric_result_facts TO metric_engine_reader;
 GRANT INSERT ON analytics.metric_result_facts TO metric_engine_writer;
 GRANT ALTER DELETE ON analytics.metric_result_facts TO metric_engine_writer;
+GRANT SELECT ON telemetry_history.observations TO metric_engine_runtime;
+GRANT SELECT ON telemetry_history.counter_deltas TO metric_engine_runtime;
+GRANT SELECT ON analytics.energy_interval_facts TO metric_engine_runtime;
+GRANT SELECT ON analytics.metric_result_facts TO metric_engine_runtime;
+GRANT INSERT ON analytics.metric_result_facts TO metric_engine_runtime;
+GRANT ALTER DELETE ON analytics.metric_result_facts TO metric_engine_runtime;
 GRANT SELECT ON analytics.metric_result_facts TO cube_analytics_reader;
 GRANT SELECT ON analytics.metric_result_facts TO settlement_reader;

@@ -163,7 +163,37 @@ myems-web / myems-admin
 - 不把 MyEMS 的安装脚本和默认密码/默认暴露端口当作生产安全标准；
 - 不把定时汇总模块当作 Edge 实时控制模块。
 
-## 6. 对 HVAC_web 的最终裁决
+## 6. Backend/UI 发布单元补充裁决
+
+这次本机部署暴露了一个独立于拓扑的问题：旧 Web bundle 仍要求 `capabilitySetVersion=7`，而当前 Gateway/contract 已是 `11`。三套能源/IoT 参考源码都支持 UI 独立部署，但没有把“任意旧 UI + 任意新 Backend”当作正常发布方式：ThingsBoard 根 Maven reactor 直接包含 `ui-ngx`，认证态由当前 JWT 和用户加载流程共同建立；OpenEMS release workflow 从同一 checkout 构建 Backend JAR 与 UI artifact，并在一个 Release 中发布；MyEMS Web README 要求先生成 production build，再将该静态产物部署到代理 `/api` 的 Web Server。
+
+官方源码参考：[ThingsBoard root reactor](https://github.com/thingsboard/thingsboard/blob/master/pom.xml)、[ThingsBoard AuthService](https://github.com/thingsboard/thingsboard/blob/master/ui-ngx/src/app/core/auth/auth.service.ts)、[OpenEMS release workflow](https://github.com/OpenEMS/openems/blob/develop/.github/workflows/release.yml)、[OpenEMS UI modes](https://github.com/OpenEMS/openems/blob/develop/ui/README.md)、[MyEMS Web deployment](https://github.com/MyEMS/myems/blob/master/myems-web/README.md)
+
+因此本项目裁决为：
+
+- 保持 Web 对 Principal/Session contract 的严格校验，不接受旧 capability contract 的兼容 fallback；
+- 本地 WSL 源码部署使用 `--source-deploy`，从同一 checkout 重建 Web 与第一方 runtime；
+- Web build identity 使用当前 Git revision；
+- `index.html` / SPA fallback 使用 `no-cache`，hash asset 使用 immutable 长缓存，避免入口缓存把旧 bundle 留在新 Backend 前面；
+- Staging/Production 仍使用已审批的 immutable image digest，不在目标主机临时源码构建。
+
+## 7. Registry 授权 revision authority 源码复核
+
+这次真实登录验收还暴露了 `GET /api/v1/sites` 的独立 `REGISTRY_UNAVAILABLE`：Gateway 的父 delegation 使用本地静态 `IDENTITY_POLICY_REVISION=registry-read:1`，而 PostgreSQL IAM 根据当前 Registry policy 与 Tenant authorization revision 生成 `registry-read:1/iam:1`。旧 Gateway 把这两个不同层次的 revision 强制要求相等，因此在 IAM 已允许并签发 Registry grant 后、请求进入 Core 前错误返回 503。
+
+本次按源码而不是既有本地实现做复核，固定以下上游版本与文件：
+
+- ThingsBoard `c8e780baa70b3b6a01754d5c578c36f3814a780d`：[`ui-ngx/src/app/core/auth/auth.service.ts`](https://github.com/thingsboard/thingsboard/blob/c8e780baa70b3b6a01754d5c578c36f3814a780d/ui-ngx/src/app/core/auth/auth.service.ts)；认证态由当前 token 校验和服务端用户加载共同建立，不把客户端静态配置当成当前授权事实。
+- OpenEMS `a7efc1c1eacd05f7a0f8eb43f962564ccf66ead6`：[`RestHandler.java`](https://github.com/OpenEMS/openems/blob/a7efc1c1eacd05f7a0f8eb43f962564ccf66ead6/io.openems.edge.controller.api.rest/src/io/openems/edge/controller/api/rest/RestHandler.java)；请求先通过服务端 `UserService` 得到当前 User，再把该身份交给后续资源处理。
+- MyEMS `51972b1bb807e47c86feca443b53a560d985adcc`：[`database/README.md`](https://github.com/MyEMS/myems/blob/51972b1bb807e47c86feca443b53a560d985adcc/database/README.md)；用户、Privilege、Session 与 API key 都由服务端用户数据库持有，当前权限事实不由 Web 端复制维护。
+
+本项目对这一问题的裁决为：
+
+- **ADOPT**：当前授权事实由真正拥有该授权域的服务端 owner 决定；Registry 的当前 policy revision 以 IAM decision / IAM-signed Registry grant 为准。
+- **ADAPT**：Gateway 继续严格校验 Tenant、Subject、Principal、Action、allow reason、Site scope 以及 grant 的结构边界；Core 继续验 IAM 签名，并通过 IAM grant-status 检查当前 policy revision 和 revocation。
+- **REJECT**：不再要求 IAM Registry decision 的动态 revision 与 Gateway 父 delegation 的静态 revision 字符串相等，也不通过增加 fallback 或兼容分支掩盖 revision ownership 混淆。
+
+## 8. 对 HVAC_web 的最终裁决
 
 | 议题 | 裁决 |
 | --- | --- |
@@ -178,7 +208,7 @@ myems-web / myems-admin
 | Kubernetes/k3s | 只是 Stage 3/4 的可选编排，不是阶段本身，也不是当前前置 |
 | Kafka | 只有现有 PostgreSQL durable backbone 出现实测瓶颈时再评估 |
 
-## 7. 尚未确认的内容
+## 9. 尚未确认的内容
 
 - ThingsBoard CE 固定 tag 的完整生产集群容量数据；
 - OpenEMS 官方生产 HA/升级/备份 runbook；

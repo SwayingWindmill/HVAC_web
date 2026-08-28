@@ -321,7 +321,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	if !decision.Decision.Allowed {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusForbidden, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false}
 	}
-	if decision.Decision.TenantID != session.TenantID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || decision.Decision.PolicyRevision != h.identity.config.PolicyRevision || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
+	if decision.Decision.TenantID != session.TenantID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || strings.TrimSpace(decision.Decision.PolicyRevision) == "" || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned a Registry decision outside the authenticated boundary.", true}
 	}
 	if !structurallyValidRegistryGrant(decision.DelegationGrant) {

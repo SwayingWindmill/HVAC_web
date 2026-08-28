@@ -29,7 +29,8 @@
         "infra/durability/postgres/init/003-operations-audit-ledger.sql",
         "infra/durability/postgres/init/004-audit-postgres-outbox.sql",
         "infra/durability/postgres/init/005-s0-session-assurance.sql",
-        "infra/durability/postgres/init/006-s04-audit-search.sql"
+        "infra/durability/postgres/init/006-s04-audit-search.sql",
+        "infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql"
       ]
     },
     {

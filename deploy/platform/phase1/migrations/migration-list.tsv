@@ -9,6 +9,7 @@ hvac_s0|infra/durability/postgres/init/003-operations-audit-ledger.sql
 hvac_s0|infra/durability/postgres/init/004-audit-postgres-outbox.sql
 hvac_s0|infra/durability/postgres/init/005-s0-session-assurance.sql
 hvac_s0|infra/durability/postgres/init/006-s04-audit-search.sql
+hvac_s0|infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql
 hvac_s1|infra/registry/postgres/init/001-s1-registry-baseline.sql
 hvac_s1|infra/registry/postgres/init/001a-tenant-foundation.sql
 hvac_s1|infra/registry/postgres/init/001b-device-binding-invariants.sql

@@ -85,13 +85,15 @@ For the local WSL deployment, use the tracked `wsl.override.yaml` together with 
 
 ```bash
 npm run deployment:phase1:wsl -- config --quiet
-npm run deployment:phase1:wsl -- up -d
+
+# Local source deployment: rebuild the current checkout's Web + first-party runtime images, then start them.
+npm run deployment:phase1:wsl -- --source-deploy up -d
 
 # Add local MQTT + iot-service only when this deployment needs Integration.
-npm run deployment:phase1:wsl -- --integration up -d
+npm run deployment:phase1:wsl -- --source-deploy --integration up -d
 ```
 
-`PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed. `--simulator-acceptance` implies `--integration` because the simulator depends on the local MQTT/iot-service path.
+Use `--source-deploy` for the local WSL product deployment so the Web bundle and first-party runtime binaries come from the same Git revision. It sets the Web build identity to the current revision before building. `PHASE1_GO_BUILD_IMAGE`, `PHASE1_GO_RUNTIME_IMAGE`, `PHASE1_GO_PROXY`, `PHASE1_WEB_BUILD_IMAGE`, `PHASE1_NGINX_RUNTIME_IMAGE`, and `PHASE1_NPM_REGISTRY` may override build sources for the local network without changing the checked-in production defaults. `PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed. `--simulator-acceptance` implies `--integration` because the simulator depends on the local MQTT/iot-service path.
 
 ## Startup prerequisites
 
@@ -119,7 +121,7 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
 
 The PostgreSQL deployment, whether local or external, creates the authentication database boundary `hvac_identity` plus the existing domain database boundaries `hvac_s0` through `hvac_s5`. Credential hashes and IdP authorization requests/codes stay in `hvac_identity`; Gateway OIDC correlation state is a one-time Redis entry with a 10-minute TTL so login can survive Gateway process restart or multi-instance routing. The browser-facing issuer stays on the public HTTPS origin while Gateway server-to-server discovery, token exchange and JWKS retrieval use `OIDC_BACKCHANNEL_BASE_URL` to reach `identity-service` directly on the internal application network. IAM authorization facts remain in `hvac_s1`. BFF Sessions default to an 8-hour absolute lifetime (`SESSION_ABSOLUTE_TTL=8h`) and a 60-minute user-idle timeout (`SESSION_IDLE_TTL=60m`); only explicit browser user activity refreshes the idle timestamp, so background telemetry traffic cannot keep an unattended session alive.
 
-The production-safe Phase 1 migration runner is implemented under `migrations/`. It uses an exact 74-file allowlist, executes the reviewed canonical migration SQL bytes without runtime rewriting, keeps environment fixture and credential material outside the production sources, records migration state and source hashes in each database, and fails closed on drift or incomplete recovery state. Normal service startup first runs the one-shot Product/Schema preflight, which requires the exact product version and migration-manifest digest; there is no production skip switch.
+The production-safe Phase 1 migration runner is implemented under `migrations/`. It uses an exact 75-file allowlist, executes the reviewed canonical migration SQL bytes without runtime rewriting, keeps environment fixture and credential material outside the production sources, records migration state and source hashes in each database, and fails closed on drift or incomplete recovery state. Normal service startup first runs the one-shot Product/Schema preflight, which requires the exact product version and migration-manifest digest; there is no production skip switch.
 
 `limit-policy.v1.json` is the versioned Phase 1 high-risk LimitPolicy. The first enforced class is Operations Agent request usage: the Gateway reserves the per-Session window atomically in Redis and fails closed if that quota authority is unavailable. The policy is mounted read-only and is referenced by `product-release.v1.json`; it is not a generic runtime policy editor.
 
@@ -141,9 +143,10 @@ Identity bootstrap is an explicit operator action after database migration. It i
 
 1. Run the `identity-keygen` service from the `identity-bootstrap` profile once to create the non-versioned PKCS#8 RSA signing key under `IDENTITY_RUNTIME_DIR`. Existing key files are not overwritten.
 2. Run `identity-admin` with `IDENTITY_ADMIN_DATABASE_URL` bound to the dedicated `identity_admin` database role. `create` provisions a credential-bearing identity; `reset-password` and `reset-password-random` are explicit offline recovery operations.
-3. Run `identity-reconciler` with a reviewed input document to project that identity's immutable `issuer + subject` into IAM together with explicit Tenant membership and approved Role/Site facts.
-4. For the local WSL administrator account, run `npm run deployment:phase1:local-admin` after reconciliation. This idempotent local-only step uses `s1_iam_migrator` to apply the reviewed `platform-admin` Registry, Telemetry, Alarm and Work Order grants for the Tenant/Site declared in the Git-ignored reconciliation input. It does not grant authorization in the IdP.
-5. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
+3. For a fresh local WSL deployment, run `npm run deployment:phase1:local-foundation` once. It idempotently creates only the reviewed local Tenant/Site plus the Registry, Telemetry, Alarm and Work Order base policies required by the IAM resolvers; it does not create simulated equipment.
+4. Run `identity-reconciler` with a reviewed input document to project that identity's immutable `issuer + subject` into IAM together with explicit Tenant membership and approved Role/Site facts.
+5. For the local WSL administrator account, run `npm run deployment:phase1:local-admin` after reconciliation. This idempotent local-only step uses `s1_iam_migrator` only for the additional Telemetry scope, Alarm and Work Order permissions that are not represented by the reconciliation document. It does not grant authorization in the IdP.
+6. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
 
 `identity_runtime` cannot insert users. The separate `identity_admin` role exists so credential administration does not expand the long-running IdP runtime privilege set. Signing private keys, bootstrap credentials and reconciliation input containing deployment-specific authorization facts remain outside Git.
 

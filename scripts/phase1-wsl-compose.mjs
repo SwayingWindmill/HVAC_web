@@ -32,7 +32,14 @@ function takeFlag(flag) {
 
 const ownerSplit = takeFlag('--owner-split');
 const simulatorAcceptance = takeFlag('--simulator-acceptance');
+const sourceDeploy = takeFlag('--source-deploy');
 const integration = takeFlag('--integration') || simulatorAcceptance;
+const sourceRevision = sourceDeploy
+  ? spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim()
+  : '';
+if (sourceDeploy && !sourceRevision) {
+  throw new Error('Source deploy requires a Git revision');
+}
 const postgresMode = process.env.PHASE1_POSTGRES_MODE || runtimeValues.PHASE1_POSTGRES_MODE || 'local';
 if (postgresMode !== 'local' && postgresMode !== 'external') {
   throw new Error(`Unknown PHASE1_POSTGRES_MODE: ${postgresMode}`);
@@ -105,6 +112,7 @@ const env = {
   PHASE1_DATA_NETWORK_INTERNAL: externalState ? 'false' : 'true',
   PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
+  ...(sourceDeploy ? { HVAC_WEB_BUILD_ID: sourceRevision } : {}),
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
   IDENTITY_ADMIN_DATABASE_URL: databaseUrl('identity_admin', 'hvac_identity'),
   IDENTITY_DIRECTORY_DATABASE_URL: databaseUrl('identity_directory_reader', 'hvac_identity'),
@@ -124,8 +132,9 @@ if (simulatorAcceptance) {
   composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
 }
 
-const result = spawnSync('docker', [
+const composeBaseArgs = [
   'compose',
+  '--project-name', 'hvac-phase1-local',
   ...[
     ...deploymentTier.profiles,
     ...runtimeProfiles,
@@ -133,14 +142,46 @@ const result = spawnSync('docker', [
   ].flatMap((profile) => ['--profile', profile]),
   '--env-file', runtimeEnv,
   ...composeFiles.flatMap((composeFile) => ['-f', composeFile]),
-  ...args,
-], {
-  cwd: repoRoot,
-  env,
-  stdio: 'inherit',
-});
+];
 
-if (result.error) {
-  throw result.error;
+function runCompose(commandArgs) {
+  const result = spawnSync('docker', [...composeBaseArgs, ...commandArgs], {
+    cwd: repoRoot,
+    env,
+    stdio: 'inherit',
+  });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
 }
-process.exit(result.status ?? 1);
+
+const runtimeServices = [
+  'nginx',
+  'energy-api',
+  'identity-service',
+  'telemetry-worker',
+  'metric-worker',
+  'scheduler',
+  'maintenance',
+  ...(integration ? ['iot-service'] : []),
+];
+
+if (sourceDeploy) {
+  const upIndex = args.indexOf('up');
+  if (upIndex < 0) {
+    throw new Error('--source-deploy is only valid with docker compose up');
+  }
+  const buildArgs = [
+    ['GO_BUILD_IMAGE', process.env.PHASE1_GO_BUILD_IMAGE],
+    ['GO_RUNTIME_IMAGE', process.env.PHASE1_GO_RUNTIME_IMAGE],
+    ['GO_PROXY', process.env.PHASE1_GO_PROXY],
+    ['WEB_BUILD_IMAGE', process.env.PHASE1_WEB_BUILD_IMAGE],
+    ['NGINX_RUNTIME_IMAGE', process.env.PHASE1_NGINX_RUNTIME_IMAGE],
+    ['NPM_REGISTRY', process.env.PHASE1_NPM_REGISTRY],
+  ].flatMap(([name, value]) => value ? ['--build-arg', `${name}=${value}`] : []);
+  const buildStatus = runCompose(['build', ...buildArgs, ...runtimeServices]);
+  if (buildStatus !== 0) process.exit(buildStatus);
+
+  process.exit(runCompose(args));
+}
+
+process.exit(runCompose(args));

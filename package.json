@@ -29,6 +29,7 @@
     "deployment:phase1:compose": "node --experimental-strip-types scripts/phase1-compose.ts",
     "deployment:phase1:owner-split:drill": "node --experimental-strip-types scripts/run-phase1-owner-split-drill.ts",
     "deployment:phase1:wsl": "node scripts/phase1-wsl-compose.mjs",
+    "deployment:phase1:local-foundation": "node scripts/phase1-bootstrap-local-foundation.mjs",
     "deployment:phase1:local-admin": "node scripts/phase1-grant-local-admin.mjs",
     "deployment:phase1:simulator": "node scripts/phase1-central-plant-simulator.mjs",
     "deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs",

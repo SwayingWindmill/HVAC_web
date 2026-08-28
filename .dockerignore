@@ -15,7 +15,9 @@
 **/out
 **/*.log
 agents
-apps
+apps/*
+!apps/hvac-web
+!apps/hvac-web/**
 hvac-backend
 references
 runtimes
@@ -23,3 +25,4 @@ node_modules
 dist
 out
 coverage
+deploy/platform/phase1/runtime
