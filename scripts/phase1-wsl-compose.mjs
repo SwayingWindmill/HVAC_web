@@ -20,7 +20,7 @@ const args = process.argv.slice(2);
 if (args.some((arg, index) =>
   (arg === '--profile' && args[index + 1] === 'intelligence') ||
   arg === '--profile=intelligence')) {
-  throw new Error('The intelligence profile requires a separately certified capacity tier');
+  throw new Error('Use --intelligence so the selected deployment tier is capacity-validated before Compose starts the intelligence services');
 }
 
 function takeFlag(flag) {
@@ -34,6 +34,7 @@ const ownerSplit = takeFlag('--owner-split');
 const simulatorAcceptance = takeFlag('--simulator-acceptance');
 const sourceDeploy = takeFlag('--source-deploy');
 const integration = takeFlag('--integration') || simulatorAcceptance;
+const intelligence = takeFlag('--intelligence');
 const sourceRevision = sourceDeploy
   ? spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim()
   : '';
@@ -69,6 +70,7 @@ const runtimeProfiles = [
   ...(localClickHouse ? ['local-clickhouse'] : []),
   ...(localRedis ? ['local-redis'] : []),
   ...(integration ? ['integration'] : []),
+  ...(intelligence ? ['intelligence'] : []),
   ...(ownerSplit ? ['owner-split'] : []),
 ];
 const deploymentTier = resolveDeploymentTier({
@@ -119,6 +121,11 @@ const env = {
   IAM_RECONCILER_DATABASE_URL: databaseUrl('s1_iam_reconciler', 'hvac_s1'),
   CONNECTIVITY_DATABASE_URL: databaseUrl('connectivity_runtime', 'hvac_s1'),
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
+  ...(intelligence ? {
+    FORECAST_POSTGRES_DSN: databaseUrl('forecast_runtime', 'hvac_s1'),
+    OPTIMIZATION_POSTGRES_DSN: databaseUrl('optimization_runtime', 'hvac_s1'),
+    FDD_DATABASE_URL: databaseUrl('fdd_runtime', 'hvac_s1'),
+  } : {}),
 };
 
 const composeFiles = [
@@ -163,6 +170,7 @@ const runtimeServices = [
   'scheduler',
   'maintenance',
   ...(integration ? ['iot-service'] : []),
+  ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service'] : []),
 ];
 
 if (sourceDeploy) {

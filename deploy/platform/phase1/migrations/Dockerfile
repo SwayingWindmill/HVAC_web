@@ -41,6 +41,7 @@ COPY infra/registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/inf
 COPY infra/registry/postgres/init/009e-forecast-model-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009e-forecast-model-v2.sql
 COPY infra/registry/postgres/init/009f-optimization-model-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009f-optimization-model-v2.sql
 COPY infra/registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009g-object-storage-governance-v2.sql
+COPY infra/registry/postgres/init/009h-data-execution-runtimes.sql /opt/hvac/repo/infra/registry/postgres/init/009h-data-execution-runtimes.sql
 COPY infra/registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009i-backend-integration-v2.sql
 COPY infra/registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/registry/postgres/init/009l-scheduler-job-v1.sql
 COPY infra/registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/registry/postgres/init/009-s04-tenant-iam-admin.sql

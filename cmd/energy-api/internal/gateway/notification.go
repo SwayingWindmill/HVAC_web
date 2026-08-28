@@ -169,6 +169,9 @@ func dispatchNotificationRoute(h *handler, writer http.ResponseWriter, request *
 		writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "Notification Service returned an invalid Inbox projection.", true, nil)
 		return
 	}
+	if items == nil {
+		items = []notificationservice.InboxItem{}
+	}
 	for _, item := range items {
 		if item.TenantID != session.TenantID || item.PrincipalID != session.Principal.Subject || !alarmmodel.IsUUIDv7(item.InboxItemID) {
 			writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "Notification Service returned an Inbox item outside the authenticated principal scope.", true, nil)

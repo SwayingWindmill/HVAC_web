@@ -31,6 +31,7 @@ hvac_s1|infra/registry/postgres/init/009d-data-governance-v2.sql
 hvac_s1|infra/registry/postgres/init/009e-forecast-model-v2.sql
 hvac_s1|infra/registry/postgres/init/009f-optimization-model-v2.sql
 hvac_s1|infra/registry/postgres/init/009g-object-storage-governance-v2.sql
+hvac_s1|infra/registry/postgres/init/009h-data-execution-runtimes.sql
 hvac_s1|infra/registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s1|infra/registry/postgres/init/009l-scheduler-job-v1.sql
 hvac_s1|infra/registry/postgres/init/009-s04-tenant-iam-admin.sql

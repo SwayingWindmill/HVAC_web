@@ -244,7 +244,7 @@ func (store *PostgresStore) LatestRecommendation(ctx context.Context, tenantID, 
 	var runID string
 	err = tx.QueryRow(ctx, `SELECT id::text FROM core_registry.optimization_runs
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='PUBLISHED'
-ORDER BY completed_at DESC NULLS LAST,updated_at DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
+ORDER BY finished_at DESC NULLS LAST,updated_at DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
 	}

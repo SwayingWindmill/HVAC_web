@@ -3,6 +3,7 @@ import {
   AlertOutlined,
   ApartmentOutlined,
   ApiOutlined,
+  BellOutlined,
   ControlOutlined,
   DashboardOutlined,
   DesktopOutlined,
@@ -49,6 +50,7 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'site-cost': <DollarOutlined />,
   'site-settlement': <DollarOutlined />,
   'site-bigscreen': <DesktopOutlined />,
+  notifications: <BellOutlined />,
   system: <SettingOutlined />,
   alarms: <AlertOutlined />,
   'work-orders': <ControlOutlined />,
@@ -95,9 +97,9 @@ function navigationItem(item: RealNavigationItem): HvacMenuDataItem {
 
 function buildRealMenuItems(navigation: RealNavigationItem[]): HvacMenuDataItem[] {
   const systemItems = navigation
-    .filter((item) => item.id === 'system')
+    .filter((item) => item.id === 'notifications' || item.id === 'system')
     .map(navigationItem);
-  const productItems = navigation.filter((item) => item.id !== 'system');
+  const productItems = navigation.filter((item) => item.id !== 'notifications' && item.id !== 'system');
   const dashboardItems = productItems
     .filter((item) => item.id === 'site-dashboard' || item.id === 'site-entry')
     .map(navigationItem);
