@@ -37,7 +37,7 @@ All modules below existed locally before completing their pinned-source review a
 | Edge Manifest | VERIFIED | EdgeConfig / Component/Channel serialization |
 | Edge Runtime Host | VERIFIED | production Component / Nature composition + CycleWorker lifecycle |
 | Device Driver | VERIFIED | common physical/simulated driver contract + protocol mapping boundary |
-| Protocol Bridge | REVIEWING | Bridge.Modbus task/worker implementation; no real protocol driver exists yet |
+| Protocol Bridge | VERIFIED | #336 production Modbus/TCP Bridge + real TCP integration tracer |
 | Remote Intent Lease | VERIFIED | external write timeout / controller API behavior |
 | Edge Timedata | VERIFIED | local latest/history/query authority; Cloud resend worker remains separate |
 | Simulator Driver | VERIFIED | Simulator/DataSource acting/reacting implementations |
@@ -95,6 +95,61 @@ The OpenEMS `develop` checkpoint is unchanged from the parent #331 source checkp
 `libs/edgecontrol.Host` is now the production-neutral composition root for the existing `Runtime`, standard `CapabilityRegistry`, `ComponentRegistry`, `DeviceHost`, `IntentStore`, `Scheduler`, `Cycle`, `DeviceOutputWriter`, Cycle hooks, and Timedata recorder. The EG8200 simulator registers its Plant-backed adapters into this Host but Plant remains below the adapter seam. Its existing MQTT/TLS publisher consumes the Host-derived Process Image exactly as before; no alternate transport or fallback was added.
 
 Focused behavior evidence is `TestHostRunsProductionAdapterThroughReadControlWriteReadbackCycle`: a `DEVICE_DRIVER` adapter polls into the current stable Process Image, receives an Intent-governed write at execute-write, and exposes that result only on a later independent poll.
+
+## Review 012 — Production Modbus/TCP Bridge
+
+Date: 2026-08-28
+
+Local issue: #336
+
+OpenEMS implementation checkpoint: `develop` commit `1a1dd4d2568f8050f99512f44ea62713ba55e505` (re-checked after the #331/#335 checkpoint).
+
+Standing comparison baselines: ThingsBoard IoT Gateway `3.8.3` / release commit `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official source, tests, and documentation reviewed
+
+OpenEMS:
+
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/BridgeModbusTcpImpl.java`;
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/api/AbstractModbusBridge.java` and its task/worker package;
+- `io.openems.edge.bridge.modbus/test/io/openems/edge/bridge/modbus/BridgeModbusTcpImplTest.java`;
+- `io.openems.edge.meter.siemens/src/io/openems/edge/meter/siemens/pac2200/MeterSiemensPac2200Impl.java` and its test;
+- `io.openems.edge.bridge.modbus/readme.adoc` plus the official `Implementing a device` documentation.
+
+The current upstream `BridgeModbusTcpImplTest` is still annotated `@Disabled`; it is design evidence for the intended real-TCP integration shape, not evidence that OpenEMS currently runs this test in CI.
+
+ThingsBoard IoT Gateway:
+
+- `thingsboard_gateway/connectors/modbus/modbus_connector.py` at `3.8.3`;
+- `tests/integration/connectors/modbus/test_modbus_connector.py` plus the black-box Modbus tests/configs at the same release;
+- official IoT Gateway Modbus connector documentation.
+
+MyEMS:
+
+- `myems-modbus-tcp/main.py`;
+- `myems-modbus-tcp/test.py`;
+- `myems-modbus-tcp/README.md` and deployment documentation.
+
+Implementation dependency review:
+
+- `github.com/simonvetter/modbus` `v1.6.4` (MIT): existing Go Modbus TCP client/server implementation with request timeout, raw register reads/writes and a real TCP server usable by integration tests. HVAC wraps only Modbus/TCP FC3/FC4/FC6/FC16 rather than reimplementing MBAP framing or importing its other transport modes.
+
+### Source-level findings and decisions
+
+- `ADOPT`: one Bridge owns the reusable Modbus/TCP master connection, serializes shared transactions, applies a bounded request timeout/retry count, reconnects after transaction failure and exposes raw failures with endpoint/unit/function/address/task context.
+- `ADOPT`: vendor DeviceAdapters own unit ID, function code, register addresses, register values, scaling and semantic Channel conversion. The Bridge never maps registers directly to HVAC business semantics.
+- `ADAPT`: OpenEMS synchronizes Bridge workers through OSGi Cycle events. HVAC already has the production `DeviceAdapter` causality seam: adapter `Poll` runs before Process Image promotion and adapter `Apply` is called only by `DeviceOutputWriter` in `EXECUTE_WRITE`. Modbus tasks therefore execute through those existing boundaries instead of introducing EventAdmin or a second scheduler.
+- `ADAPT`: the first concrete Bridge serializes every task and retries/reconnects boundedly. OpenEMS HIGH/LOW fair scheduling and defective-component backoff remain valid future shared-bus techniques, but implementing a priority scheduler before #337 introduces a second production device/cadence would violate #331's no-speculative-framework rule; they are not compatibility fallbacks and are not required for this one-device Bridge slice.
+- `ADOPT`: protocol integration evidence uses a real localhost TCP endpoint. The tracer proves FC3 read before the stable Process Image, governed FC6 write in `EXECUTE_WRITE`, and later independent readback; a separate failure tracer proves no device value is fabricated after a failed transaction.
+- `ADAPT`: ThingsBoard's connector confirms that field-protocol connection ownership, timeout handling and read/write RPC transport belong below the Cloud/business boundary. Its backward-compatibility adapter and generic connector/plugin surface are not imported.
+- `ADAPT`: MyEMS confirms a separately deployable Modbus acquisition responsibility and validates real TCP reachability before register reads. Its process-per-data-source/database-configured polling model is not copied into the deterministic Edge Cycle.
+- `REJECT`: OSGi service discovery/EventAdmin, generic multi-protocol factories, simulator fallback, fabricated register values, direct Controller socket access and any ATV630 register/template semantics (owned by #337).
+
+### Local implementation consequence
+
+`libs/edgecontrol.ModbusTCPBridge` is a concrete Modbus/TCP-only transport owner. `ModbusReadTask`/`ModbusWriteTask` carry raw protocol intent from a DeviceAdapter; `Read`/`Write` reuse one serialized connection, bound each request, retry only up to the configured count and reconnect after failure. The production-style test adapter demonstrates that the existing Host controls Cycle placement without a second lifecycle framework.
+
+Focused behavior evidence: `TestModbusTCPBridgeRunsProductionAdapterThroughRealTCPCycle`, `TestModbusTCPBridgeDoesNotFabricateDeviceValuesOnReadFailure`, `TestModbusTCPBridgeWriteFailureHaltsGovernedCycle`, and `TestModbusTCPBridgeRetriesBoundedlyAndSurfacesTransactionContext`.
 
 ## Review 001 — Channel, Process Image, Cycle, Scheduler
 
