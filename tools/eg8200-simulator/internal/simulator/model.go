@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+const (
+	waterHeatCapacityKWPerM3HDeltaC = 1.163
+	pumpSpeedTimeConstant           = 20 * time.Second
+	coolingTowerFanTimeConstant     = 30 * time.Second
+	coolingTowerWaterTimeConstant   = 2 * time.Minute
+	chillerCapacityTimeConstant     = 90 * time.Second
+	chilledWaterTimeConstant        = 3 * time.Minute
+)
+
 type DeviceTelemetry map[string]any
 
 type Snapshot struct {
@@ -43,6 +52,7 @@ type Plant struct {
 }
 
 type chillerState struct {
+	runRequested          bool
 	running               bool
 	setpointC             float64
 	loadLimitPct          float64
@@ -58,47 +68,65 @@ type chillerState struct {
 }
 
 type pumpState struct {
-	running     bool
-	frequencyHz float64
-	flowM3H     float64
-	powerKW     float64
-	faultCode   string
+	runRequested        bool
+	running             bool
+	frequencySetpointHz float64
+	frequencyHz         float64
+	flowM3H             float64
+	powerKW             float64
+	faultCode           string
 }
 
 type coolingTowerState struct {
-	running        bool
-	fanSpeedPct    float64
-	enteringWaterC float64
-	leavingWaterC  float64
-	powerKW        float64
-	faultCode      string
+	runRequested        bool
+	running             bool
+	fanSpeedSetpointPct float64
+	fanSpeedPct         float64
+	enteringWaterC      float64
+	leavingWaterC       float64
+	powerKW             float64
+	faultCode           string
 }
 
 func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
+	inputs := scenario.InputsAt(0)
+	initialTowerLeavingC := inputs.AmbientWetBulbC + 4
+	initialTowerEnteringC := initialTowerLeavingC + 4
 	return &Plant{
 		config:         config,
 		scenario:       scenario,
-		inputs:         scenario.InputsAt(0),
+		inputs:         inputs,
 		now:            now.UTC(),
 		totalEnergyKWh: config.InitialEnergyKWh,
 		chiller: chillerState{
+			runRequested:          config.Chiller.InitiallyRunning,
 			running:               config.Chiller.InitiallyRunning,
 			setpointC:             config.Chiller.InitialSetpointC,
 			loadLimitPct:          config.Chiller.InitialLoadLimitPct,
 			leavingChilledWaterC:  config.Chiller.InitialSetpointC + 1,
 			enteringChilledWaterC: config.Chiller.InitialSetpointC + 6,
+			leavingCoolingWaterC:  initialTowerEnteringC,
+			enteringCoolingWaterC: initialTowerLeavingC,
 		},
 		chilledWaterPump: pumpState{
-			running:     config.ChilledWaterPump.InitiallyRunning,
-			frequencyHz: config.ChilledWaterPump.InitialFrequencyHz,
+			runRequested:        config.ChilledWaterPump.InitiallyRunning,
+			running:             config.ChilledWaterPump.InitiallyRunning,
+			frequencySetpointHz: config.ChilledWaterPump.InitialFrequencyHz,
+			frequencyHz:         config.ChilledWaterPump.InitialFrequencyHz,
 		},
 		coolingWaterPump: pumpState{
-			running:     config.CoolingWaterPump.InitiallyRunning,
-			frequencyHz: config.CoolingWaterPump.InitialFrequencyHz,
+			runRequested:        config.CoolingWaterPump.InitiallyRunning,
+			running:             config.CoolingWaterPump.InitiallyRunning,
+			frequencySetpointHz: config.CoolingWaterPump.InitialFrequencyHz,
+			frequencyHz:         config.CoolingWaterPump.InitialFrequencyHz,
 		},
 		coolingTower: coolingTowerState{
-			running:     config.CoolingTower.InitiallyRunning,
-			fanSpeedPct: config.CoolingTower.InitialFanSpeedPct,
+			runRequested:        config.CoolingTower.InitiallyRunning,
+			running:             config.CoolingTower.InitiallyRunning,
+			fanSpeedSetpointPct: config.CoolingTower.InitialFanSpeedPct,
+			fanSpeedPct:         config.CoolingTower.InitialFanSpeedPct,
+			enteringWaterC:      initialTowerEnteringC,
+			leavingWaterC:       initialTowerLeavingC,
 		},
 	}
 }
@@ -130,9 +158,9 @@ func (plant *Plant) Tick(elapsed time.Duration) Snapshot {
 
 func (plant *Plant) advanceLocked(elapsed time.Duration) {
 	plant.now = plant.now.Add(elapsed)
-	plant.updatePump(&plant.chilledWaterPump, plant.config.ChilledWaterPump)
-	plant.updatePump(&plant.coolingWaterPump, plant.config.CoolingWaterPump)
-	plant.updateCoolingTower()
+	plant.updatePump(&plant.chilledWaterPump, plant.config.ChilledWaterPump, elapsed)
+	plant.updatePump(&plant.coolingWaterPump, plant.config.CoolingWaterPump, elapsed)
+	plant.updateCoolingTower(elapsed)
 	plant.updateChiller(elapsed)
 
 	totalPowerKW := plant.chiller.powerKW + plant.chilledWaterPump.powerKW + plant.coolingWaterPump.powerKW + plant.coolingTower.powerKW
@@ -146,58 +174,88 @@ func (plant *Plant) Snapshot() Snapshot {
 	return plant.snapshotLocked()
 }
 
-func (plant *Plant) updatePump(state *pumpState, config PumpConfig) {
-	if !state.running || state.faultCode != "" {
+func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time.Duration) {
+	if state.faultCode != "" {
+		state.running = false
+		state.frequencyHz = 0
 		state.flowM3H = 0
 		state.powerKW = 0
 		return
 	}
+
+	targetFrequencyHz := 0.0
+	if state.runRequested {
+		targetFrequencyHz = state.frequencySetpointHz
+	}
+	state.frequencyHz = approach(state.frequencyHz, targetFrequencyHz, elapsed, pumpSpeedTimeConstant)
+	state.running = state.frequencyHz > 0.5
+
 	speedFraction := clamp(state.frequencyHz/50, 0, 1)
 	state.flowM3H = config.RatedFlowM3H * speedFraction
 	state.powerKW = config.RatedPowerKW * math.Pow(speedFraction, 3)
 }
 
-func (plant *Plant) updateCoolingTower() {
+func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
 	state := &plant.coolingTower
-	if !state.running || state.faultCode != "" {
+	if state.faultCode != "" {
+		state.running = false
+		state.fanSpeedPct = 0
 		state.powerKW = 0
-		state.enteringWaterC = plant.inputs.AmbientWetBulbC + 10
-		state.leavingWaterC = state.enteringWaterC
+		state.enteringWaterC = approach(state.enteringWaterC, state.leavingWaterC, elapsed, coolingTowerWaterTimeConstant)
 		return
 	}
+
+	targetFanSpeedPct := 0.0
+	if state.runRequested {
+		targetFanSpeedPct = state.fanSpeedSetpointPct
+	}
+	state.fanSpeedPct = approach(state.fanSpeedPct, targetFanSpeedPct, elapsed, coolingTowerFanTimeConstant)
+	state.running = state.fanSpeedPct > 0.5
+
 	speedFraction := clamp(state.fanSpeedPct/100, 0, 1)
-	loadRatio := plant.inputs.CoolingLoadKW / plant.config.Chiller.RatedCoolingCapacityKW
 	state.powerKW = plant.config.CoolingTower.RatedFanPowerKW * math.Pow(speedFraction, 3)
-	state.enteringWaterC = plant.inputs.AmbientWetBulbC + 10 + 2*loadRatio
 	approachC := 2.5 + (1-speedFraction)*6
-	state.leavingWaterC = plant.inputs.AmbientWetBulbC + approachC
+	leavingTargetC := plant.inputs.AmbientWetBulbC + approachC
+	enteringTargetC := leavingTargetC
+	if plant.coolingWaterPump.flowM3H > 0 {
+		heatRejectionKW := plant.chiller.coolingCapacityKW + plant.chiller.powerKW
+		enteringTargetC += heatRejectionKW / (waterHeatCapacityKWPerM3HDeltaC * plant.coolingWaterPump.flowM3H)
+	}
+	state.leavingWaterC = approach(state.leavingWaterC, leavingTargetC, elapsed, coolingTowerWaterTimeConstant)
+	state.enteringWaterC = approach(state.enteringWaterC, enteringTargetC, elapsed, coolingTowerWaterTimeConstant)
 }
 
 func (plant *Plant) updateChiller(elapsed time.Duration) {
 	state := &plant.chiller
 	chilledWaterFlowFraction := clamp(plant.chilledWaterPump.flowM3H/plant.config.ChilledWaterPump.RatedFlowM3H, 0, 1)
 	coolingWaterFlowFraction := clamp(plant.coolingWaterPump.flowM3H/plant.config.CoolingWaterPump.RatedFlowM3H, 0, 1)
-	flowFraction := math.Min(chilledWaterFlowFraction, coolingWaterFlowFraction)
-	available := state.running && state.faultCode == "" && flowFraction >= 0.35 && plant.coolingTower.running && plant.coolingTower.faultCode == ""
-	if !available {
-		state.loadPct = 0
-		state.coolingCapacityKW = 0
-		state.powerKW = 0
-		state.cop = 0
-		state.leavingCoolingWaterC = plant.coolingTower.enteringWaterC
-		state.enteringCoolingWaterC = plant.coolingTower.leavingWaterC
-		state.leavingChilledWaterC = approach(state.leavingChilledWaterC, state.enteringChilledWaterC, elapsed, 12*time.Minute)
-		return
+	flowReady := math.Min(chilledWaterFlowFraction, coolingWaterFlowFraction) >= 0.35
+	equipmentFault := state.faultCode != "" || plant.chilledWaterPump.faultCode != "" || plant.coolingWaterPump.faultCode != "" || plant.coolingTower.faultCode != ""
+	available := state.runRequested && !equipmentFault && flowReady && plant.coolingTower.running
+
+	targetCapacityKW := 0.0
+	if available {
+		limitCapacityKW := plant.config.Chiller.RatedCoolingCapacityKW * state.loadLimitPct / 100
+		targetCapacityKW = math.Min(plant.inputs.CoolingLoadKW, limitCapacityKW)
 	}
-	requestedCapacityKW := plant.inputs.CoolingLoadKW
-	limitCapacityKW := plant.config.Chiller.RatedCoolingCapacityKW * state.loadLimitPct / 100
-	state.coolingCapacityKW = math.Min(requestedCapacityKW, limitCapacityKW) * flowFraction
+	if equipmentFault {
+		state.coolingCapacityKW = 0
+	} else {
+		state.coolingCapacityKW = approach(state.coolingCapacityKW, targetCapacityKW, elapsed, chillerCapacityTimeConstant)
+	}
+	state.running = available || state.coolingCapacityKW > 1
 	state.loadPct = 100 * state.coolingCapacityKW / plant.config.Chiller.RatedCoolingCapacityKW
-	loadRatio := requestedCapacityKW / plant.config.Chiller.RatedCoolingCapacityKW
-	state.enteringChilledWaterC = state.setpointC + 4 + 2*loadRatio
-	state.leavingChilledWaterC = approach(state.leavingChilledWaterC, state.setpointC, elapsed, 4*time.Minute)
+
 	state.enteringCoolingWaterC = plant.coolingTower.leavingWaterC
 	state.leavingCoolingWaterC = plant.coolingTower.enteringWaterC
+	plant.updateChilledWaterTemperatures(elapsed)
+
+	if state.coolingCapacityKW <= 0 {
+		state.loadPct = 0
+		state.powerKW = 0
+		state.cop = 0
+		return
+	}
 
 	lowLoadPenalty := 0.0
 	if state.loadPct < 35 {
@@ -212,6 +270,21 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 		7.5,
 	)
 	state.powerKW = state.coolingCapacityKW / state.cop
+}
+
+func (plant *Plant) updateChilledWaterTemperatures(elapsed time.Duration) {
+	state := &plant.chiller
+	flowM3H := plant.chilledWaterPump.flowM3H
+	if flowM3H <= 0 {
+		state.leavingChilledWaterC = approach(state.leavingChilledWaterC, state.enteringChilledWaterC, elapsed, 12*time.Minute)
+		return
+	}
+
+	waterCapacityKWPerC := waterHeatCapacityKWPerM3HDeltaC * flowM3H
+	unmetLoadKW := math.Max(plant.inputs.CoolingLoadKW-state.coolingCapacityKW, 0)
+	supplyTargetC := state.setpointC + unmetLoadKW/waterCapacityKWPerC
+	state.leavingChilledWaterC = approach(state.leavingChilledWaterC, supplyTargetC, elapsed, chilledWaterTimeConstant)
+	state.enteringChilledWaterC = state.leavingChilledWaterC + state.coolingCapacityKW/waterCapacityKWPerC
 }
 
 func (plant *Plant) snapshotLocked() Snapshot {

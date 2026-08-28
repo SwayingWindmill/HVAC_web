@@ -47,18 +47,18 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 		if plant.chiller.faultCode != "" {
 			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
-		if !plant.chilledWaterPump.running || plant.chilledWaterPump.faultCode != "" ||
-			!plant.coolingWaterPump.running || plant.coolingWaterPump.faultCode != "" ||
-			!plant.coolingTower.running || plant.coolingTower.faultCode != "" {
+		if !plant.chilledWaterPump.runRequested || !plant.chilledWaterPump.running || plant.chilledWaterPump.faultCode != "" ||
+			!plant.coolingWaterPump.runRequested || !plant.coolingWaterPump.running || plant.coolingWaterPump.faultCode != "" ||
+			!plant.coolingTower.runRequested || !plant.coolingTower.running || plant.coolingTower.faultCode != "" {
 			return CommandResult{Success: false, Code: "INTERLOCK_OPEN"}
 		}
-		plant.chiller.running = true
+		plant.chiller.runRequested = true
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
 			return invalidParameters()
 		}
-		plant.chiller.running = false
+		plant.chiller.runRequested = false
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setChilledWaterTemperatureSetpoint":
 		value, ok := singleCommandParam(params, "setpointC")
@@ -100,13 +100,13 @@ func applyPumpCommand(state *pumpState, method string, params map[string]float64
 		if state.faultCode != "" {
 			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
-		state.running = true
+		state.runRequested = true
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
 			return invalidParameters()
 		}
-		state.running = false
+		state.runRequested = false
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setFrequency":
 		value, ok := singleCommandParam(params, "frequencyHz")
@@ -116,7 +116,7 @@ func applyPumpCommand(state *pumpState, method string, params map[string]float64
 		if value < 20 || value > 50 {
 			return CommandResult{Success: false, Code: "FREQUENCY_OUT_OF_RANGE"}
 		}
-		state.frequencyHz = value
+		state.frequencySetpointHz = value
 		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "resetFault":
 		if len(params) != 0 {
@@ -138,13 +138,13 @@ func (plant *Plant) applyCoolingTowerCommand(method string, params map[string]fl
 		if plant.coolingTower.faultCode != "" {
 			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
 		}
-		plant.coolingTower.running = true
+		plant.coolingTower.runRequested = true
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "stop":
 		if len(params) != 0 {
 			return invalidParameters()
 		}
-		plant.coolingTower.running = false
+		plant.coolingTower.runRequested = false
 		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setFanSpeed":
 		value, ok := singleCommandParam(params, "fanSpeedPct")
@@ -154,7 +154,7 @@ func (plant *Plant) applyCoolingTowerCommand(method string, params map[string]fl
 		if value < 20 || value > 100 {
 			return CommandResult{Success: false, Code: "FAN_SPEED_OUT_OF_RANGE"}
 		}
-		plant.coolingTower.fanSpeedPct = value
+		plant.coolingTower.fanSpeedSetpointPct = value
 		return CommandResult{Success: true, Code: "APPLIED", AppliedValue: value}
 	case "resetFault":
 		if len(params) != 0 {

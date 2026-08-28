@@ -11,7 +11,7 @@ A deterministic virtual edge gateway for validating the HVAC platform before a p
 - `METER-HVAC-TOTAL`: aggregate HVAC power meter
 - `BTU-METER-01`: chilled-water thermal energy meter
 
-The model includes chiller COP, cooling capacity, auxiliary power, accumulated electrical energy, accumulated cooling energy, pump affinity laws, cooling-tower approach temperature, and basic plant interlocks.
+The model includes chiller COP, cooling capacity, auxiliary power, accumulated electrical energy, accumulated cooling energy, pump affinity laws, cooling-tower approach temperature, and basic plant interlocks. Chilled-water telemetry is kept on one water-side energy balance (`Q ≈ 1.163 × flow(m³/h) × ΔT(°C)`). Pump frequency, cooling-tower fan speed, chiller capacity, and water temperatures evolve over elapsed plant time; a successful command applies a target, while actual device readback changes on later plant ticks.
 
 ## Supported commands
 

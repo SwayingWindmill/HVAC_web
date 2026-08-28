@@ -150,10 +150,15 @@ func TestScenarioInputsDrivePlantPhysics(t *testing.T) {
 	plant := NewPlant(testPlantConfig(), scenario, time.Unix(0, 0).UTC())
 	before := plant.Tick(time.Minute).Devices["CHILLER-01"]["coolingCapacityKw"].(float64)
 	after := plant.Tick(time.Minute + time.Second)
-	if before != 420 || after.Devices["CHILLER-01"]["coolingCapacityKw"] != 900.0 {
-		t.Fatalf("plant did not consume stepwise coolingLoadKw: before=%v after=%v", before, after.Devices["CHILLER-01"]["coolingCapacityKw"])
+	afterCapacity := after.Devices["CHILLER-01"]["coolingCapacityKw"].(float64)
+	if before <= 0 || before >= 420 || afterCapacity <= before || afterCapacity >= 900 {
+		t.Fatalf("plant did not consume stepwise coolingLoadKw through physical dynamics: before=%v after=%v", before, afterCapacity)
 	}
 	if got := after.Devices["WEATHER-STATION-01"]["ambientDryBulbTemperatureC"]; got != 36.0 {
 		t.Fatalf("plant did not consume scenario ambient inputs: %v", got)
+	}
+	settled := plant.Tick(10 * time.Minute).Devices["CHILLER-01"]["coolingCapacityKw"].(float64)
+	if settled < 890 || settled > 900 {
+		t.Fatalf("plant did not settle near final scenario cooling load: %v", settled)
 	}
 }

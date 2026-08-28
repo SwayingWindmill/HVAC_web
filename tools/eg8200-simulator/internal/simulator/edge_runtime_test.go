@@ -55,8 +55,12 @@ func TestEdgeControlRuntimeArbitratesAndExecutesSimulatorDriver(t *testing.T) {
 	if startChiller.Accepted || startChiller.Code != "INTERLOCK_OPEN" {
 		t.Fatalf("chiller START bypassed local plant interlock: %#v", startChiller)
 	}
-	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["runState"]; got != "STOPPED" {
-		t.Fatalf("interlocked chiller unexpectedly started: %v", got)
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["runState"]; got != "RUNNING" {
+		t.Fatalf("chiller physical state changed before time advanced: %v", got)
+	}
+	settled := plant.Tick(5 * time.Minute)
+	if got := settled.Devices[config.Plant.Chiller.ID]["runState"]; got != "STOPPED" {
+		t.Fatalf("stopped chiller did not physically coast down: %v", got)
 	}
 }
 
@@ -86,12 +90,14 @@ func TestEdgeTelemetryPublishesProcessImageBeforeCurrentCycleWrite(t *testing.T)
 	if got := cycle.TelemetrySnapshot.Devices[deviceID]["frequencyHz"]; got != before {
 		t.Fatalf("current Cycle telemetry leaked post-write device state: got=%v want=%v", got, before)
 	}
-	if got := plant.Snapshot().Devices[deviceID]["frequencyHz"]; got != target {
-		t.Fatalf("device write was not applied after Process Image: got=%v want=%v", got, target)
+	if got := plant.Snapshot().Devices[deviceID]["frequencyHz"]; got != before {
+		t.Fatalf("device actual readback changed before physical time advanced: got=%v want=%v", got, before)
 	}
+	plant.Tick(time.Second)
 	next := runtime.RunCycle(context.Background(), at.Add(2*time.Second))
-	if got := next.TelemetrySnapshot.Devices[deviceID]["frequencyHz"]; got != target {
-		t.Fatalf("next Cycle did not observe prior write: got=%v want=%v", got, target)
+	nextFrequency := next.TelemetrySnapshot.Devices[deviceID]["frequencyHz"].(float64)
+	if !(nextFrequency < before && nextFrequency > target) {
+		t.Fatalf("next Cycle did not observe physical response toward prior write: got=%v target=%v", nextFrequency, target)
 	}
 }
 
@@ -117,22 +123,25 @@ func TestNumericRemoteIntentPersistsUntilLeaseExpiry(t *testing.T) {
 		t.Fatalf("leased command initial write failed: %#v", outcome)
 	}
 
-	// Simulate a lower-level/local drift while the remote lease is still active.
+	// Simulate a lower-level/local target drift while the remote lease is still active.
 	if result := plant.ApplyCommand(Command{DeviceID: deviceID, Method: "setFrequency", Params: map[string]float64{"frequencyHz": 45}}); !result.Success {
 		t.Fatalf("failed to perturb simulated equipment: %#v", result)
 	}
+	drifted := plant.Tick(20 * time.Second).Devices[deviceID]["frequencyHz"].(float64)
 	runtime.RunCycle(context.Background(), at.Add(2*time.Second))
-	if got := plant.Snapshot().Devices[deviceID]["frequencyHz"]; got != target {
-		t.Fatalf("active remote lease was not rewritten each Cycle: got=%v want=%v", got, target)
+	reasserted := plant.Tick(20 * time.Second).Devices[deviceID]["frequencyHz"].(float64)
+	if reasserted <= drifted || reasserted >= target {
+		t.Fatalf("active remote lease did not restore the physical target: drifted=%v reasserted=%v target=%v", drifted, reasserted, target)
 	}
 
-	// Once expired the Edge Intent must stop participating; a local value remains.
+	// Once expired the Edge Intent must stop participating; a local target remains.
 	if result := plant.ApplyCommand(Command{DeviceID: deviceID, Method: "setFrequency", Params: map[string]float64{"frequencyHz": 45}}); !result.Success {
 		t.Fatalf("failed to perturb simulated equipment after lease: %#v", result)
 	}
 	runtime.RunCycle(context.Background(), at.Add(4*time.Second))
-	if got := plant.Snapshot().Devices[deviceID]["frequencyHz"]; got != 45.0 {
-		t.Fatalf("expired remote lease remained sticky: got=%v", got)
+	settled := plant.Tick(2 * time.Minute).Devices[deviceID]["frequencyHz"].(float64)
+	if settled < 44.9 || settled > 45.1 {
+		t.Fatalf("expired remote lease remained sticky: got=%v", settled)
 	}
 }
 

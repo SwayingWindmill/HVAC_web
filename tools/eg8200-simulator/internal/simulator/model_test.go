@@ -25,6 +25,18 @@ func testStaticScenario() Scenario {
 	return Scenario{SchemaVersion: ScenarioSchemaVersion, Mode: ScenarioModeStatic, Inputs: &inputs}
 }
 
+func assertWaterSideEnergyBalance(t *testing.T, snapshot Snapshot, config PlantConfig) {
+	t.Helper()
+	btu := snapshot.Devices[config.BTUMeterID]
+	flowM3H := btu["flowRateM3h"].(float64)
+	deltaTC := btu["temperatureDifferenceC"].(float64)
+	capacityKW := btu["instantCoolingCapacityKw"].(float64)
+	capacityFromWaterSideKW := 1.163 * flowM3H * deltaTC
+	if math.Abs(capacityFromWaterSideKW-capacityKW) > math.Max(capacityKW*0.01, 0.5) {
+		t.Fatalf("water-side energy balance diverged: flow %.3f m3/h deltaT %.3f C implies %.3f kW, reported %.3f kW", flowM3H, deltaTC, capacityFromWaterSideKW, capacityKW)
+	}
+}
+
 func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
 	plant := NewPlant(testPlantConfig(), testStaticScenario(), time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
 	snapshot := plant.Tick(time.Minute)
@@ -43,6 +55,119 @@ func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
 	}
 	if btuMeter["instantCoolingCapacityKw"] != chiller["coolingCapacityKw"] {
 		t.Fatalf("BTU meter and chiller capacity diverged: %#v %#v", btuMeter, chiller)
+	}
+}
+
+func TestPlantCoolingLoadIsAbsoluteDemandAcrossChillerRatings(t *testing.T) {
+	scenario := testStaticScenario()
+	scenario.Inputs.CoolingLoadKW = 600
+
+	baseConfig := testPlantConfig()
+	largerConfig := testPlantConfig()
+	largerConfig.Chiller.RatedCoolingCapacityKW = 1800
+
+	base := NewPlant(baseConfig, scenario, time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+	larger := NewPlant(largerConfig, scenario, time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+	baseCapacity := base.Tick(30 * time.Minute).Devices[baseConfig.Chiller.ID]["coolingCapacityKw"].(float64)
+	largerCapacity := larger.Tick(30 * time.Minute).Devices[largerConfig.Chiller.ID]["coolingCapacityKw"].(float64)
+
+	if math.Abs(baseCapacity-600) > 5 || math.Abs(largerCapacity-600) > 5 {
+		t.Fatalf("coolingLoadKw must remain absolute demand: base %.3f kW larger %.3f kW", baseCapacity, largerCapacity)
+	}
+}
+
+func TestPlantChilledWaterTelemetryObeysEnergyBalance(t *testing.T) {
+	config := testPlantConfig()
+	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+	assertWaterSideEnergyBalance(t, plant.Tick(30*time.Minute), config)
+}
+
+func TestActuatorCommandsChangePhysicalReadbackOverTime(t *testing.T) {
+	config := testPlantConfig()
+	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+	plant.Tick(10 * time.Minute)
+	before := plant.Snapshot()
+
+	pumpResult := plant.ApplyCommand(Command{DeviceID: config.ChilledWaterPump.ID, Method: "setFrequency", Params: map[string]float64{"frequencyHz": 30}})
+	towerResult := plant.ApplyCommand(Command{DeviceID: config.CoolingTower.ID, Method: "setFanSpeed", Params: map[string]float64{"fanSpeedPct": 40}})
+	if !pumpResult.Success || !towerResult.Success {
+		t.Fatalf("actuator command failed: pump %#v tower %#v", pumpResult, towerResult)
+	}
+
+	immediate := plant.Snapshot()
+	if got, want := immediate.Devices[config.ChilledWaterPump.ID]["frequencyHz"], before.Devices[config.ChilledWaterPump.ID]["frequencyHz"]; got != want {
+		t.Fatalf("pump actual frequency changed before physical time advanced: got %v want %v", got, want)
+	}
+	if got, want := immediate.Devices[config.CoolingTower.ID]["fanSpeedPct"], before.Devices[config.CoolingTower.ID]["fanSpeedPct"]; got != want {
+		t.Fatalf("tower actual fan speed changed before physical time advanced: got %v want %v", got, want)
+	}
+
+	mid := plant.Tick(5 * time.Second)
+	midPump := mid.Devices[config.ChilledWaterPump.ID]["frequencyHz"].(float64)
+	midFan := mid.Devices[config.CoolingTower.ID]["fanSpeedPct"].(float64)
+	if !(midPump > 30 && midPump < 50) || !(midFan > 40 && midFan < 80) {
+		t.Fatalf("actuators did not ramp toward targets: pump %.3f Hz fan %.3f%%", midPump, midFan)
+	}
+
+	settled := plant.Tick(3 * time.Minute)
+	if got := settled.Devices[config.ChilledWaterPump.ID]["frequencyHz"].(float64); math.Abs(got-30) > 0.5 {
+		t.Fatalf("pump did not settle near commanded frequency: %.3f", got)
+	}
+	if got := settled.Devices[config.CoolingTower.ID]["fanSpeedPct"].(float64); math.Abs(got-40) > 0.5 {
+		t.Fatalf("tower did not settle near commanded fan speed: %.3f", got)
+	}
+}
+
+func TestPlantLoadStepProducesDynamicResponseAndRecovery(t *testing.T) {
+	config := testPlantConfig()
+	scenario := Scenario{
+		SchemaVersion: ScenarioSchemaVersion,
+		Mode:          ScenarioModeScenario,
+		Steps: []ScenarioStep{
+			{Offset: 0, Inputs: ScenarioInputs{AmbientDryBulbC: 32, AmbientWetBulbC: 25, CoolingLoadKW: 420}},
+			{Offset: 10 * time.Minute, Inputs: ScenarioInputs{AmbientDryBulbC: 35, AmbientWetBulbC: 27, CoolingLoadKW: 900}},
+			{Offset: 20 * time.Minute, Inputs: ScenarioInputs{AmbientDryBulbC: 32, AmbientWetBulbC: 25, CoolingLoadKW: 420}},
+		},
+	}
+	plant := NewPlant(config, scenario, time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+
+	low := plant.Tick(10 * time.Minute)
+	assertWaterSideEnergyBalance(t, low, config)
+	lowCapacity := low.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	lowPower := low.Devices[config.Chiller.ID]["powerKw"].(float64)
+	lowReturn := low.Devices[config.BTUMeterID]["returnWaterTemperatureC"].(float64)
+
+	rising := plant.Tick(10 * time.Second)
+	assertWaterSideEnergyBalance(t, rising, config)
+	risingCapacity := rising.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	risingPower := rising.Devices[config.Chiller.ID]["powerKw"].(float64)
+	risingReturn := rising.Devices[config.BTUMeterID]["returnWaterTemperatureC"].(float64)
+	if risingCapacity <= lowCapacity || risingCapacity >= 890 || risingPower <= lowPower || risingReturn <= lowReturn {
+		t.Fatalf("load step must produce a time response instead of an instantaneous jump: capacity %.3f -> %.3f, power %.3f -> %.3f, return %.3f -> %.3f", lowCapacity, risingCapacity, lowPower, risingPower, lowReturn, risingReturn)
+	}
+
+	high := plant.Tick(9*time.Minute + 50*time.Second)
+	assertWaterSideEnergyBalance(t, high, config)
+	highCapacity := high.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	highPower := high.Devices[config.Chiller.ID]["powerKw"].(float64)
+	highReturn := high.Devices[config.BTUMeterID]["returnWaterTemperatureC"].(float64)
+	if highCapacity < 850 || highPower <= risingPower || highReturn <= risingReturn {
+		t.Fatalf("plant did not reach higher-load state: capacity %.3f -> %.3f, power %.3f -> %.3f, return %.3f -> %.3f", risingCapacity, highCapacity, risingPower, highPower, risingReturn, highReturn)
+	}
+
+	falling := plant.Tick(10 * time.Second)
+	assertWaterSideEnergyBalance(t, falling, config)
+	fallingCapacity := falling.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	if fallingCapacity >= highCapacity || fallingCapacity <= 430 {
+		t.Fatalf("load recovery must also be dynamic: high %.3f falling %.3f", highCapacity, fallingCapacity)
+	}
+
+	recovered := plant.Tick(10 * time.Minute)
+	assertWaterSideEnergyBalance(t, recovered, config)
+	recoveredCapacity := recovered.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	recoveredReturn := recovered.Devices[config.BTUMeterID]["returnWaterTemperatureC"].(float64)
+	if math.Abs(recoveredCapacity-420) > 10 || recoveredReturn >= highReturn {
+		t.Fatalf("plant did not recover toward normal load: capacity %.3f return %.3f (high return %.3f)", recoveredCapacity, recoveredReturn, highReturn)
 	}
 }
 
@@ -68,7 +193,7 @@ func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("frequency command failed: %#v", result)
 	}
-	plant.Tick(time.Second)
+	plant.Tick(2 * time.Minute)
 	reducedPower := plant.Snapshot().Devices["CHWP-01"]["powerKw"].(float64)
 	wantRatio := math.Pow(0.8, 3)
 	if math.Abs(reducedPower/fullPower-wantRatio) > 0.002 {
