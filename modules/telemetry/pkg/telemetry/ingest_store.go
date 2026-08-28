@@ -37,7 +37,27 @@ type ObservationAcceptor interface {
 	AcceptObservation(context.Context, ObservationCandidate) (ObservationReceipt, error)
 }
 
+type HistoricalObservationAcceptor interface {
+	AcceptHistoricalObservation(context.Context, ObservationCandidate) (ObservationReceipt, error)
+}
+
+type observationEvaluator func(ObservationCandidate, ObservationFacts, time.Time) ObservationDecision
+
 func (store *PostgresStore) AcceptObservation(ctx context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
+	if candidate.SourcePath == SourcePathHistoryReplay {
+		return ObservationReceipt{}, errors.New("HISTORY_REPLAY requires the dedicated historical observation method")
+	}
+	return store.acceptObservation(ctx, candidate, EvaluateObservation)
+}
+
+func (store *PostgresStore) AcceptHistoricalObservation(ctx context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
+	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" {
+		return ObservationReceipt{}, errors.New("historical observation must use server-owned HISTORY_REPLAY Device provenance")
+	}
+	return store.acceptObservation(ctx, candidate, EvaluateHistoricalObservation)
+}
+
+func (store *PostgresStore) acceptObservation(ctx context.Context, candidate ObservationCandidate, evaluate observationEvaluator) (ObservationReceipt, error) {
 	if store == nil || store.pool == nil {
 		return ObservationReceipt{}, errors.New("telemetry runtime store is closed")
 	}
@@ -47,7 +67,7 @@ func (store *PostgresStore) AcceptObservation(ctx context.Context, candidate Obs
 	candidate.SampledAt = candidate.SampledAt.UTC()
 	candidate.ReceivedAt = candidate.ReceivedAt.UTC()
 	for attempt := 0; attempt < 3; attempt++ {
-		receipt, err := store.acceptObservationOnce(ctx, candidate)
+		receipt, err := store.acceptObservationOnce(ctx, candidate, evaluate)
 		if err == nil || !retryableTelemetryTransaction(err) {
 			return receipt, err
 		}
@@ -55,7 +75,7 @@ func (store *PostgresStore) AcceptObservation(ctx context.Context, candidate Obs
 	return ObservationReceipt{}, errors.New("telemetry observation transaction retry budget exhausted")
 }
 
-func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
+func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate ObservationCandidate, evaluate observationEvaluator) (ObservationReceipt, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return ObservationReceipt{}, fmt.Errorf("begin telemetry observation transaction: %w", err)
@@ -75,7 +95,7 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 	if err != nil {
 		return ObservationReceipt{}, err
 	}
-	decision := EvaluateObservation(candidate, facts, candidate.ReceivedAt)
+	decision := evaluate(candidate, facts, candidate.ReceivedAt)
 	payloadSHA, err := observationPayloadSHA(candidate)
 	if err != nil {
 		return ObservationReceipt{}, err
