@@ -32,8 +32,9 @@ function takeFlag(flag) {
 
 const ownerSplit = takeFlag('--owner-split');
 const simulatorAcceptance = takeFlag('--simulator-acceptance');
+const atv630ProtocolAcceptance = takeFlag('--atv630-protocol-acceptance');
 const sourceDeploy = takeFlag('--source-deploy');
-const integration = takeFlag('--integration') || simulatorAcceptance;
+const integration = takeFlag('--integration') || simulatorAcceptance || atv630ProtocolAcceptance;
 const intelligence = takeFlag('--intelligence');
 const sourceRevision = sourceDeploy
   ? spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).stdout.trim()
@@ -121,6 +122,16 @@ const env = {
   IAM_RECONCILER_DATABASE_URL: databaseUrl('s1_iam_reconciler', 'hvac_s1'),
   CONNECTIVITY_DATABASE_URL: databaseUrl('connectivity_runtime', 'hvac_s1'),
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
+  ...(atv630ProtocolAcceptance ? {
+    ATV630_SOURCE_ROOT: repoRoot,
+    ATV630_PLANT_CONFIG_PATH: path.join(repoRoot, 'tools', 'eg8200-simulator', 'configs', 'central-plant.local.json'),
+    ATV630_REGISTRY_DATABASE_URL: databaseUrl('s1_core_service', 'hvac_s1'),
+    ATV630_TEMPLATE_TENANT_ID: centralPlantIdentity.tenantId,
+    ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: centralPlantIdentity.principalId,
+    PHASE1_RUNTIME_CONFIG_DIR: process.env.PHASE1_RUNTIME_CONFIG_DIR || path.join(phase1Dir, 'runtime', 'config'),
+    INTERNAL_PKI_DIR: process.env.INTERNAL_PKI_DIR || path.join(phase1Dir, 'runtime', 'internal-pki'),
+    ATV630_EDGE_QUEUE_DIR: process.env.ATV630_EDGE_QUEUE_DIR || path.join(phase1Dir, 'runtime', 'data', 'atv630-edge'),
+  } : {}),
   ...(intelligence ? {
     FORECAST_POSTGRES_DSN: databaseUrl('forecast_runtime', 'hvac_s1'),
     OPTIMIZATION_POSTGRES_DSN: databaseUrl('optimization_runtime', 'hvac_s1'),
@@ -135,7 +146,7 @@ const composeFiles = [
 if (ownerSplit) {
   composeFiles.push(path.join(phase1Dir, 'owner-split.compose.yaml'));
 }
-if (simulatorAcceptance) {
+if (simulatorAcceptance || atv630ProtocolAcceptance) {
   composeFiles.push(path.join(repoRoot, 'deploy', 'acceptance', 'phase1-simulator.compose.yaml'));
 }
 
@@ -146,6 +157,7 @@ const composeBaseArgs = [
     ...deploymentTier.profiles,
     ...runtimeProfiles,
     ...(simulatorAcceptance ? ['simulator-acceptance'] : []),
+    ...(atv630ProtocolAcceptance ? ['atv630-protocol-acceptance'] : []),
   ].flatMap((profile) => ['--profile', profile]),
   '--env-file', runtimeEnv,
   ...composeFiles.flatMap((composeFile) => ['-f', composeFile]),
