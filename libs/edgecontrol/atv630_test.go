@@ -87,15 +87,27 @@ func TestATV630AdapterAdvancesStartOnlyAfterDriveComETAProgression(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(results) != 1 || !results[0].Success {
-			t.Fatalf("unexpected START result at ETA=%#04x: %#v", step.eta, results)
+		if len(results) != 1 || !results[0].Success || results[0].Code != "IN_PROGRESS" {
+			t.Fatalf("unexpected in-progress START result at ETA=%#04x: %#v", step.eta, results)
 		}
 		if got := transport.writes[len(transport.writes)-1]; got != step.want {
 			t.Fatalf("unexpected START write at ETA=%#04x: got=%#v want=%#v", step.eta, got, step.want)
 		}
 	}
+
+	transport.reads[3201] = []uint16{0x0237, 0}
+	if _, err := adapter.Poll(t.Context(), at.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := adapter.Apply(t.Context(), ProcessImage{}, []Decision{decision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed) != 1 || !completed[0].Success || completed[0].Code != "APPLIED" {
+		t.Fatalf("START did not complete after operation-enabled ETA: %#v", completed)
+	}
 	if want := []recordedModbusWrite{{8501, 6}, {8501, 7}, {8501, 15}}; !reflect.DeepEqual(transport.writes, want) {
-		t.Fatalf("ATV630 START advanced without ETA-confirmed cycles: got=%#v want=%#v", transport.writes, want)
+		t.Fatalf("ATV630 START advanced without ETA-confirmed cycles or rewrote operation enabled: got=%#v want=%#v", transport.writes, want)
 	}
 }
 

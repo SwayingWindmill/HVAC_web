@@ -40,3 +40,129 @@ services:
     cpus: ${EG8200_SIMULATOR_CPUS:-0.50}
     mem_limit: ${EG8200_SIMULATOR_MEMORY_LIMIT:-256m}
     mem_reservation: ${EG8200_SIMULATOR_MEMORY_RESERVATION:-64m}
+
+  virtual-atv630:
+    profiles: ["atv630-protocol-acceptance"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    build:
+      context: ${ATV630_SOURCE_ROOT:-../..}
+      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-virtual-atv630 }
+    image: ${VIRTUAL_ATV630_IMAGE:-hvac/virtual-atv630:0.1.0-dev}
+    environment:
+      EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
+      EG8200_ATV630_MODBUS_ADDR: :1502
+      EG8200_ATV630_DIAGNOSTICS_ADDR: :19096
+    volumes:
+      - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
+    expose: ["1502", "19096"]
+    ports:
+      - "127.0.0.1:${ATV630_VIRTUAL_DIAGNOSTICS_PORT:-19096}:19096"
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19096/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    networks: [mqtt]
+    cpus: ${VIRTUAL_ATV630_CPUS:-0.25}
+    mem_limit: ${VIRTUAL_ATV630_MEMORY_LIMIT:-128m}
+    mem_reservation: ${VIRTUAL_ATV630_MEMORY_RESERVATION:-32m}
+
+  atv630-template-release:
+    profiles: ["atv630-protocol-acceptance"]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    build:
+      context: ${ATV630_SOURCE_ROOT:-../..}
+      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/registry/cmd/atv630-template-release }
+    image: ${ATV630_TEMPLATE_RELEASE_IMAGE:-hvac/atv630-template-release:0.1.0-dev}
+    environment:
+      S1_CORE_DATABASE_URL: ${ATV630_REGISTRY_DATABASE_URL:?ATV630_REGISTRY_DATABASE_URL is required}
+      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:?ATV630_TEMPLATE_TENANT_ID is required}
+      ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: ${ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID:?ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID is required}
+      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
+    volumes:
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
+  atv630-connectivity-session:
+    profiles: ["atv630-protocol-acceptance"]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    build:
+      context: ${ATV630_SOURCE_ROOT:-../..}
+      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iot/cmd/atv630-connectivity-session }
+    image: ${ATV630_CONNECTIVITY_SESSION_IMAGE:-hvac/atv630-connectivity-session:0.1.0-dev}
+    environment:
+      ATV630_CONNECTIVITY_DATABASE_URL: ${ATV630_CONNECTIVITY_DATABASE_URL:?ATV630_CONNECTIVITY_DATABASE_URL is required}
+      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:?ATV630_TEMPLATE_TENANT_ID is required}
+      ATV630_INTEGRATION_INSTANCE_ID: ${ATV630_INTEGRATION_INSTANCE_ID:?ATV630_INTEGRATION_INSTANCE_ID is required}
+      ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: ${ATV630_CONNECTIVITY_CREDENTIAL_REF_ID:?ATV630_CONNECTIVITY_CREDENTIAL_REF_ID is required}
+      ATV630_GATEWAY_EXTERNAL_ID: ${ATV630_GATEWAY_EXTERNAL_ID:?ATV630_GATEWAY_EXTERNAL_ID is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
+  atv630-edge:
+    profiles: ["atv630-protocol-acceptance"]
+    restart: unless-stopped
+    env_file:
+      - ${PHASE1_ENV_FILE:-../platform/phase1/environments/development.runtime.env}
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    build:
+      context: ${ATV630_SOURCE_ROOT:-../..}
+      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-atv630-edge }
+    image: ${ATV630_EDGE_IMAGE:-hvac/atv630-edge:0.1.0-dev}
+    environment:
+      EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
+      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
+      ATV630_MODBUS_ENDPOINT: virtual-atv630:1502
+      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
+      ATV630_EDGE_DIAGNOSTICS_ADDR: :19097
+    depends_on:
+      atv630-template-release:
+        condition: service_completed_successfully
+      atv630-connectivity-session:
+        condition: service_completed_successfully
+      virtual-atv630:
+        condition: service_healthy
+      mqtt-broker:
+        condition: service_started
+      iot-service:
+        condition: service_healthy
+    volumes:
+      - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
+      - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
+      - ${ATV630_EDGE_QUEUE_DIR:-../platform/phase1/runtime/data/atv630-edge}:/run/hvac/eg8200
+    ports:
+      - "127.0.0.1:${ATV630_EDGE_DIAGNOSTICS_PORT:-19097}:19097"
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19097/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    networks: [mqtt]
+    cpus: ${ATV630_EDGE_CPUS:-0.50}
+    mem_limit: ${ATV630_EDGE_MEMORY_LIMIT:-256m}
+    mem_reservation: ${ATV630_EDGE_MEMORY_RESERVATION:-64m}

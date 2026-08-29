@@ -62,6 +62,7 @@ type EdgeControlRuntime struct {
 	intentStore *edgecontrol.IntentStore
 
 	commandByKey     map[string]edgeCommandBinding
+	addressByPointID map[string]string
 	leaseByAddress   map[string]bool
 	pendingByAddress map[string]pendingEdgeCommand
 }
@@ -73,21 +74,55 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	host, err := edgecontrol.NewHost()
-	if err != nil {
-		return nil, err
-	}
 	adapters, err := newSimulatedDeviceAdapters(config, plant)
 	if err != nil {
 		return nil, err
 	}
+	return newEdgeControlRuntime(config, adapters, true)
+}
+
+// NewATV630EdgeControlRuntime composes the production Edge Host with the
+// production ATV630 DeviceAdapter. It deliberately has no Plant dependency;
+// all device state crosses the supplied Modbus transport boundary.
+func NewATV630EdgeControlRuntime(config Config, transport edgecontrol.ModbusRegisterTransport, unitID uint8) (*EdgeControlRuntime, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	edgeConfig, pointIDs, err := atv630EdgeConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := edgecontrol.NewATV630DeviceAdapter(edgecontrol.ATV630DeviceAdapterConfig{
+		ComponentID: config.Plant.ChilledWaterPump.ID,
+		Alias:       "CHWP-01 ATV630",
+		UnitID:      unitID,
+		Transport:   transport,
+		PointIDs:    pointIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newEdgeControlRuntime(edgeConfig, []edgecontrol.DeviceAdapter{adapter}, false)
+}
+
+func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, includePlantSafety bool) (*EdgeControlRuntime, error) {
+	host, err := edgecontrol.NewHost()
+	if err != nil {
+		return nil, err
+	}
 	bindingsByDevice := make(map[string]map[edgecontrol.SemanticChannel]string, len(adapters))
+	addressByPointID := map[string]string{}
 	for _, adapter := range adapters {
 		if err := host.RegisterAdapter(adapter); err != nil {
 			return nil, err
 		}
 		component := adapter.Component()
 		bindingsByDevice[component.ID] = cloneSemanticBindings(component.ChannelBindings)
+		for _, channel := range adapter.Channels() {
+			if channel.PointID != "" {
+				addressByPointID[channel.PointID] = channel.Address()
+			}
+		}
 	}
 	intentStore := host.IntentStore()
 
@@ -96,8 +131,12 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 	staleAfterByAddress := make(map[string]time.Duration, len(config.Points))
 	limits := make([]edgeNumericLimit, 0)
 	for _, point := range config.Points {
+		address := point.DeviceID + "/" + point.PointCode
+		if mapped, ok := addressByPointID[point.PointID]; ok {
+			address = mapped
+		}
 		staleAfter, _ := time.ParseDuration(point.StaleAfter) // config.Validate already owns interval validation.
-		staleAfterByAddress[point.DeviceID+"/"+point.PointCode] = staleAfter
+		staleAfterByAddress[address] = staleAfter
 		if point.PointType != "COMMAND" {
 			continue
 		}
@@ -105,7 +144,6 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 		if strings.TrimSpace(capability) == "" {
 			return nil, fmt.Errorf("COMMAND point %s has no capability", point.PointCode)
 		}
-		address := point.DeviceID + "/" + point.PointCode
 		key := commandBindingKey(point.DeviceID, capability)
 		if _, duplicate := commandByKey[key]; duplicate {
 			return nil, fmt.Errorf("device %s exposes duplicate command capability %s", point.DeviceID, capability)
@@ -126,19 +164,56 @@ func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, er
 		return nil, err
 	}
 	limitController := &edgeLimitController{id: "capability-limits", limits: limits}
-	safetyController := &edgePlantSafetyController{
-		id: "plant-safety-interlock", bindings: bindingsByDevice, staleAfterByAddress: staleAfterByAddress, plant: config.Plant,
-	}
-	if err := host.Start([]edgecontrol.ControllerBinding{
-		{Priority: 0, Controller: safetyController},
+	controllers := []edgecontrol.ControllerBinding{
 		{Priority: 10, Controller: limitController},
 		{Priority: 100, Controller: intentController},
-	}); err != nil {
+	}
+	if includePlantSafety {
+		safetyController := &edgePlantSafetyController{
+			id: "plant-safety-interlock", bindings: bindingsByDevice, staleAfterByAddress: staleAfterByAddress, plant: config.Plant,
+		}
+		controllers = append([]edgecontrol.ControllerBinding{{Priority: 0, Controller: safetyController}}, controllers...)
+	}
+	if err := host.Start(controllers); err != nil {
 		return nil, err
 	}
 	return &EdgeControlRuntime{
-		config: config, host: host, intentStore: intentStore, commandByKey: commandByKey,
+		config: config, host: host, intentStore: intentStore, commandByKey: commandByKey, addressByPointID: addressByPointID,
 		leaseByAddress: leaseByAddress, pendingByAddress: map[string]pendingEdgeCommand{},
+	}, nil
+}
+
+func ATV630EdgeConfig(config Config) (Config, error) {
+	edgeConfig, _, err := atv630EdgeConfig(config)
+	return edgeConfig, err
+}
+
+func atv630EdgeConfig(config Config) (Config, edgecontrol.ATV630PointIDs, error) {
+	deviceID := config.Plant.ChilledWaterPump.ID
+	wanted := map[string]struct{}{
+		"run_state": {}, "fault_code": {}, "frequency": {},
+		"start": {}, "stop": {}, "reset_fault": {}, "set_frequency": {},
+	}
+	points := make([]PointConfig, 0, len(wanted))
+	pointIDByCode := make(map[string]string, len(wanted))
+	for _, point := range config.Points {
+		if point.DeviceID != deviceID {
+			continue
+		}
+		if _, ok := wanted[point.PointCode]; !ok {
+			continue
+		}
+		points = append(points, point)
+		pointIDByCode[point.PointCode] = point.PointID
+	}
+	if len(points) != len(wanted) {
+		return Config{}, edgecontrol.ATV630PointIDs{}, errors.New("ATV630 Edge config requires CHWP run_state, fault_code, frequency and four command points")
+	}
+	config.Points = points
+	return config, edgecontrol.ATV630PointIDs{
+		RunState: pointIDByCode["run_state"], FaultCode: pointIDByCode["fault_code"], Frequency: pointIDByCode["frequency"],
+		StartCommand: pointIDByCode["start"], StopCommand: pointIDByCode["stop"], ResetFaultCommand: pointIDByCode["reset_fault"],
+		FrequencySetpoint: pointIDByCode["set_frequency"],
 	}, nil
 }
 
@@ -273,7 +348,11 @@ func (runtime *EdgeControlRuntime) snapshotFromProcessImage(image edgecontrol.Pr
 		if point.PointType == "COMMAND" {
 			continue
 		}
-		channel, ok := image.Get(point.DeviceID + "/" + point.PointCode)
+		address := point.DeviceID + "/" + point.PointCode
+		if mapped, ok := runtime.addressByPointID[point.PointID]; ok {
+			address = mapped
+		}
+		channel, ok := image.Get(address)
 		if !ok || !channel.HasValue {
 			continue
 		}
@@ -360,6 +439,9 @@ func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontr
 				outcome.Code = "DEVICE_WRITE_FAILED"
 			}
 			runtime.finishPendingLocked(pending, outcome, true)
+			continue
+		}
+		if writeResult.Success && writeResult.Code == "IN_PROGRESS" {
 			continue
 		}
 		outcome.Accepted = writeResult.Success

@@ -256,6 +256,7 @@ func (adapter *ATV630DeviceAdapter) Apply(ctx context.Context, _ ProcessImage, d
 	results := make([]DeviceWriteResult, 0, len(decisions))
 	for _, decision := range decisions {
 		var err error
+		resultCode := "APPLIED"
 		switch decision.Address {
 		case adapter.channels[2].Address():
 			if !decision.Effective.Boolean {
@@ -263,9 +264,13 @@ func (adapter *ATV630DeviceAdapter) Apply(ctx context.Context, _ ProcessImage, d
 				continue
 			}
 			var command uint16
-			command, err = adapter.nextStartCommand()
-			if err == nil {
+			var writeCommand, complete bool
+			command, writeCommand, complete, err = adapter.nextStartCommand()
+			if err == nil && writeCommand {
 				err = adapter.writeCMDSequence(ctx, "START", command)
+			}
+			if err == nil && !complete {
+				resultCode = "IN_PROGRESS"
 			}
 		case adapter.channels[3].Address():
 			if !decision.Effective.Boolean {
@@ -293,25 +298,27 @@ func (adapter *ATV630DeviceAdapter) Apply(ctx context.Context, _ ProcessImage, d
 			return results, err
 		}
 		value := *decision.Effective
-		results = append(results, DeviceWriteResult{Address: decision.Address, Success: true, Code: "APPLIED", AppliedValue: &value})
+		results = append(results, DeviceWriteResult{Address: decision.Address, Success: true, Code: resultCode, AppliedValue: &value})
 	}
 	return results, nil
 }
 
-func (adapter *ATV630DeviceAdapter) nextStartCommand() (uint16, error) {
+func (adapter *ATV630DeviceAdapter) nextStartCommand() (command uint16, writeCommand, complete bool, err error) {
 	adapter.mu.Lock()
 	eta := adapter.lastETA
 	adapter.mu.Unlock()
 
 	switch {
 	case eta&atv630StateMaskSwitchOnDisabled == atv630StateSwitchOnDisabled:
-		return atv630CMDShutdown, nil
+		return atv630CMDShutdown, true, false, nil
 	case eta&atv630StateMaskDriveCom == atv630StateReadyToSwitchOn:
-		return atv630CMDSwitchOn, nil
-	case eta&atv630StateMaskDriveCom == atv630StateSwitchedOn, eta&atv630StateMaskDriveCom == atv630StateOperationEnabled:
-		return atv630CMDEnableOperation, nil
+		return atv630CMDSwitchOn, true, false, nil
+	case eta&atv630StateMaskDriveCom == atv630StateSwitchedOn:
+		return atv630CMDEnableOperation, true, false, nil
+	case eta&atv630StateMaskDriveCom == atv630StateOperationEnabled:
+		return 0, false, true, nil
 	default:
-		return 0, fmt.Errorf("ATV630 START cannot advance from ETA=0x%04X", eta)
+		return 0, false, false, fmt.Errorf("ATV630 START cannot advance from ETA=0x%04X", eta)
 	}
 }
 
