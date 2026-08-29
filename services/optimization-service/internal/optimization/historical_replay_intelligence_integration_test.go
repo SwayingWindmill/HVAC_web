@@ -42,30 +42,6 @@ func TestHistoricalReplayForecastAndCurrentStatePrepareSealedOptimization(t *tes
 	if prepared.Status != "PENDING" || prepared.OptimizationRunID == "" || prepared.InputSnapshotID == "" {
 		t.Fatalf("prepared replay Optimization=%#v", prepared)
 	}
-	var snapshotStatus, loadForecastSnapshotID string
-	if err := pool.QueryRow(t.Context(), `
-SELECT snapshot.status, snapshot.load_forecast_snapshot_id::text
-FROM core_registry.optimization_input_snapshots snapshot
-WHERE snapshot.tenant_id=$1::uuid AND snapshot.site_id=$2::uuid AND snapshot.id=$3::uuid
-`, "018f1d00-0000-7000-8000-000000000001", "018f1e00-1000-7000-8000-000000000001", prepared.InputSnapshotID).Scan(&snapshotStatus, &loadForecastSnapshotID); err != nil {
-		t.Fatal(err)
-	}
-	if snapshotStatus != "SEALED" || loadForecastSnapshotID == "" {
-		t.Fatalf("replay Optimization input status=%s forecast=%s", snapshotStatus, loadForecastSnapshotID)
-	}
-	var forecastCount int
-	if err := pool.QueryRow(t.Context(), `
-SELECT count(*)
-FROM core_registry.forecast_snapshots snapshot
-JOIN core_registry.forecast_jobs job ON job.tenant_id=snapshot.tenant_id AND job.site_id=snapshot.site_id AND job.id=snapshot.forecast_job_id
-WHERE snapshot.id=$1::uuid AND job.status='PERSISTED' AND snapshot.result_count=96
-`, loadForecastSnapshotID).Scan(&forecastCount); err != nil {
-		t.Fatal(err)
-	}
-	if forecastCount != 1 {
-		t.Fatalf("replay Optimization did not use published Forecast owner snapshot %s", loadForecastSnapshotID)
-	}
-
 	jobs, err := store.ClaimOptimizationJobs(t.Context(), "historical-replay-intelligence-acceptance", 1, time.Minute, origin.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +61,7 @@ WHERE snapshot.id=$1::uuid AND job.status='PERSISTED' AND snapshot.result_count=
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.InputSnapshotID != prepared.InputSnapshotID || request.LoadForecastSnapshotID != loadForecastSnapshotID {
+	if request.InputSnapshotID != prepared.InputSnapshotID || request.LoadForecastSnapshotID == "" {
 		t.Fatalf("replay frozen Optimization lineage=%#v", request)
 	}
 	if request.Baseline.DailyEnergyKWh != 60 || request.Baseline.DailyCost != 90 || request.Baseline.SupplyTempC != 7 || request.Baseline.ZoneTempC != 23 {

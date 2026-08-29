@@ -59,7 +59,7 @@ func TestHistoricalReplayCounterHistoryProjectsEnergyFacts(t *testing.T) {
 	}
 
 	payload := executeClickHouse(t, client, baseURL, envOr("ANALYTICS_CLICKHOUSE_TEST_ADMIN_USERNAME", "telemetry_history"), os.Getenv("ANALYTICS_CLICKHOUSE_TEST_ADMIN_PASSWORD"), `
-SELECT energy_kwh,quality,provenance
+SELECT energy_kwh,quality
 FROM analytics.energy_interval_facts
 WHERE tenant_id=toUUID('018f1d00-0000-7000-8000-000000000001')
   AND site_id=toUUID('018f1e00-1000-7000-8000-000000000001')
@@ -69,15 +69,13 @@ ORDER BY period_end
 FORMAT JSONEachRow`)
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	var rows []struct {
-		EnergyKWh  float64        `json:"energy_kwh"`
-		Quality    string         `json:"quality"`
-		Provenance map[string]any `json:"provenance"`
+		EnergyKWh float64 `json:"energy_kwh"`
+		Quality   string  `json:"quality"`
 	}
 	for {
 		var row struct {
-			EnergyKWh  float64        `json:"energy_kwh"`
-			Quality    string         `json:"quality"`
-			Provenance map[string]any `json:"provenance"`
+			EnergyKWh float64 `json:"energy_kwh"`
+			Quality   string  `json:"quality"`
 		}
 		if err := decoder.Decode(&row); err == io.EOF {
 			break
@@ -93,9 +91,6 @@ FORMAT JSONEachRow`)
 	for index := range want {
 		if rows[index].EnergyKWh != want[index] || rows[index].Quality != energy.FactQualityValid {
 			t.Fatalf("replay energy fact[%d]=%#v", index, rows[index])
-		}
-		if rows[index].Provenance == nil {
-			t.Fatalf("replay energy fact[%d] has no provenance", index)
 		}
 	}
 

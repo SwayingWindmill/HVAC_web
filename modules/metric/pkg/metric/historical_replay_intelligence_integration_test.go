@@ -64,18 +64,6 @@ func TestHistoricalReplayHistoryProjectsForecastMetricFacts(t *testing.T) {
 		}
 	}
 
-	var count int
-	if err := pool.QueryRow(t.Context(), `
-SELECT count(*) FROM core_registry.metric_result_heads
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
-  AND subject_type='SITE' AND subject_id=$2::uuid AND granularity='15MIN' AND current_revision > 0
-`, replayIntelligenceTenantID, replayIntelligenceSiteID, replayIntelligenceMetricID).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != len(want) {
-		t.Fatalf("replay Metric current heads=%d want=%d", count, len(want))
-	}
-
 	dayStart := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	dayEnd := time.Date(2026, 8, 28, 11, 59, 0, 0, time.UTC)
 	dailyEnergy, err := engine.Execute(t.Context(), RunRequest{

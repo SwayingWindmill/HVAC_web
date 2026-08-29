@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -29,7 +30,12 @@ func TestHistoricalReplayIntelligenceAcceptancePublishesEventTimeHistory(t *test
 		t.Skip("Historical Replay intelligence acceptance environment is not configured")
 	}
 	ctx := t.Context()
-	admin, err := pgxpool.New(ctx, adminURL)
+	adminConfig, err := pgxpool.ParseConfig(adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgxpool.NewWithConfig(ctx, adminConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +222,7 @@ DELETE FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid
 DELETE FROM telemetry_runtime.source_observations WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.source_positions WHERE integration_instance_id=$2::uuid;
 DELETE FROM telemetry_runtime.freshness_policies WHERE device_id=$1::uuid;
+DELETE FROM telemetry_runtime.presence_policies WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.registry_point_bindings WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.registry_device_bindings WHERE device_id=$1::uuid;
 INSERT INTO telemetry_runtime.registry_device_bindings (
@@ -230,11 +237,15 @@ INSERT INTO telemetry_runtime.registry_point_bindings (
   ('01990000-3482-7000-8000-000000000002',$3::uuid,$4::uuid,$7::uuid,NULL,$1::uuid,'grid.import_energy_total','COUNTER','NUMBER','kWh','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z','RESET_TO_ZERO',NULL),
   ('01990000-3482-7000-8000-000000000003',$3::uuid,$4::uuid,'01990000-3481-7000-8000-000000000003',NULL,$1::uuid,'btu_meter.supply_water_temperature','TELEMETRY','NUMBER','Cel','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z',NULL,NULL),
   ('01990000-3482-7000-8000-000000000004',$3::uuid,$4::uuid,'01990000-3481-7000-8000-000000000004',NULL,$1::uuid,'zone.temperature','TELEMETRY','NUMBER','Cel','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z',NULL,NULL);
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id,policy_revision,online_within_seconds,offline_after_seconds,coverage_required,
+  accepted_signal_types,max_future_clock_skew_seconds,max_source_lag_seconds,updated_at
+) VALUES ($1::uuid,1,60,180,true,ARRAY['SOURCE_ACTIVITY']::text[],30,600,'2026-08-28T00:00:00Z');
 INSERT INTO telemetry_runtime.freshness_policies (
   device_id,telemetry_key,policy_revision,fresh_within_seconds,configured,expected_sample_interval_seconds,value_type,expected_unit,minimum_number,maximum_number,updated_at
 ) VALUES
-  ($1::uuid,'site.load_kw',1,300,true,900,'NUMBER','kW',0,100000,'2026-08-28T00:00:00Z'),
-  ($1::uuid,'grid.import_energy_total',1,300,true,900,'NUMBER','kWh',0,NULL,'2026-08-28T00:00:00Z'),
+  ($1::uuid,'site.load_kw',1,900,true,900,'NUMBER','kW',0,100000,'2026-08-28T00:00:00Z'),
+  ($1::uuid,'grid.import_energy_total',1,900,true,900,'NUMBER','kWh',0,NULL,'2026-08-28T00:00:00Z'),
   ($1::uuid,'btu_meter.supply_water_temperature',1,300,true,60,'NUMBER','Cel',0,30,'2026-08-28T00:00:00Z'),
   ($1::uuid,'zone.temperature',1,300,true,60,'NUMBER','Cel',-20,60,'2026-08-28T00:00:00Z');
 `, intelligenceDeviceID, intelligenceIntegrationID, intelligenceTenantID, intelligenceSiteID, intelligenceExternalID, intelligenceLoadPointID, intelligenceEnergyPointID); err != nil {

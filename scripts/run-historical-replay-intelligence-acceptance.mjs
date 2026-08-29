@@ -112,6 +112,14 @@ function seedRegistry() {
       ('01990000-3483-7000-8000-000000000006','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','01990000-3483-7000-8000-000000000005','01990000-3483-7000-8000-000000000004',1,1,'SITE','018f1e00-1000-7000-8000-000000000001','DAY','{"points":{"grid_import_energy_total":"01990000-3481-7000-8000-000000000002"},"counter":{"decreaseMode":"RESET"}}','2026-08-01T00:00:00Z','RELEASED',1,now(),now()),
       ('01990000-3483-7000-8000-000000000009','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','01990000-3483-7000-8000-000000000008','01990000-3483-7000-8000-000000000007',1,1,'SITE','018f1e00-1000-7000-8000-000000000001','DAY','{"expression":"daily_energy * 1.5"}','2026-08-01T00:00:00Z','RELEASED',1,now(),now());
 
+    INSERT INTO core_registry.job_instances(job_id,trigger_type,job_type,tenant_id,site_id,scheduled_for,dedup_key,payload,state,max_attempts,timeout_seconds,created_at,updated_at) VALUES
+      ('01990000-3484-7000-8000-000000000001','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T10:15:00Z','issue-348-metric-1','{}','READY',3,60,now(),now()),
+      ('01990000-3484-7000-8000-000000000002','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T10:30:00Z','issue-348-metric-2','{}','READY',3,60,now(),now()),
+      ('01990000-3484-7000-8000-000000000003','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T10:45:00Z','issue-348-metric-3','{}','READY',3,60,now(),now()),
+      ('01990000-3484-7000-8000-000000000004','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T11:00:00Z','issue-348-metric-4','{}','READY',3,60,now(),now()),
+      ('01990000-3484-7000-8000-000000000005','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T11:59:00Z','issue-348-daily-energy','{}','READY',3,60,now(),now()),
+      ('01990000-3484-7000-8000-000000000006','BACKFILL','METRIC_BACKFILL','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','2026-08-28T11:59:00Z','issue-348-energy-cost','{}','READY',3,60,now(),now());
+
     INSERT INTO core_registry.energy_topology_versions(id,tenant_id,site_id,version,status,effective_from,revision,created_at,updated_at)
     VALUES ('01990000-2300-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001',1,'VALIDATING','2026-08-01T00:00:00Z',1,now(),now());
     INSERT INTO core_registry.energy_nodes(id,tenant_id,site_id,topology_version_id,node_type,name,status,revision,created_at,updated_at) VALUES
@@ -185,7 +193,7 @@ try {
   await waitForServices();
   seedRegistry();
 
-  report.assertions.plantScenario = runIsolated('tools/eg8200-simulator', 'TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests', {});
+  report.assertions.plantScenario = run('go', ['test', '-count=1', '-run', '^TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests', '-v', './cmd/eg8200-history-replay'], { cwd: resolve(root, 'tools/eg8200-simulator'), env: process.env });
   report.assertions.telemetry = runIsolated('modules/telemetry', 'TestHistoricalReplayIntelligenceAcceptancePublishesEventTimeHistory', {
     S2_TELEMETRY_TEST_DATABASE_URL: telemetryRuntimeURL,
     S2_TELEMETRY_ADMIN_DATABASE_URL: telemetryAdminURL,
@@ -213,9 +221,9 @@ try {
 
   report.assertions.eventTime = clickHouse(`SELECT toString(count()) || '|' || toString(countIf(source_path='HISTORY_REPLAY')) || '|' || toString(countIf(source_offset=9 AND sampled_at=toDateTime64('2026-08-28 10:25:00',3,'UTC'))) || '|' || toString(countIf(source_offset=7 AND sampled_at=toDateTime64('2026-08-28 10:50:00',3,'UTC'))) FROM telemetry_history.observations WHERE device_id=toUUID('018f1e00-4000-7000-8000-000000000001') AND telemetry_key='site.load_kw'`);
   if (report.assertions.eventTime !== '5|5|1|1') throw new Error(`unexpected event-time evidence ${report.assertions.eventTime}`);
-  report.assertions.energyFacts = clickHouse(`SELECT arrayStringConcat(arrayMap(x -> toString(x), groupArray(energy_kwh ORDER BY period_end)), ',') FROM analytics.energy_interval_facts WHERE device_id=toUUID('018f1e00-4000-7000-8000-000000000001') AND point_id=toUUID('01990000-3481-7000-8000-000000000002')`);
+  report.assertions.energyFacts = clickHouse(`SELECT arrayStringConcat(groupArray(toString(energy_kwh)), ',') FROM (SELECT energy_kwh FROM analytics.energy_interval_facts WHERE device_id=toUUID('018f1e00-4000-7000-8000-000000000001') AND point_id=toUUID('01990000-3481-7000-8000-000000000002') ORDER BY period_end)`);
   if (report.assertions.energyFacts !== '10,15,15,20') throw new Error(`unexpected energy facts ${report.assertions.energyFacts}`);
-  report.assertions.metricFacts = clickHouse(`SELECT arrayStringConcat(arrayMap(x -> toString(x), groupArray(value_number ORDER BY period_end)), ',') FROM analytics.metric_result_facts WHERE metric_version_id=toUUID('01990000-3483-7000-8000-000000000002')`);
+  report.assertions.metricFacts = clickHouse(`SELECT arrayStringConcat(groupArray(toString(value_number)), ',') FROM (SELECT value_number FROM analytics.metric_result_facts WHERE metric_version_id=toUUID('01990000-3483-7000-8000-000000000002') ORDER BY period_end)`);
   if (report.assertions.metricFacts !== '760,790,800,820') throw new Error(`unexpected metric facts ${report.assertions.metricFacts}`);
   report.assertions.forecastPoints = clickHouse(`SELECT toString(count()) || '|' || toString(countIf(quality='VALID')) FROM analytics.forecast_series WHERE tenant_id=toUUID('018f1d00-0000-7000-8000-000000000001') AND site_id=toUUID('018f1e00-1000-7000-8000-000000000001')`);
   if (report.assertions.forecastPoints !== '96|96') throw new Error(`unexpected Forecast owner evidence ${report.assertions.forecastPoints}`);
