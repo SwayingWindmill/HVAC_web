@@ -16,6 +16,7 @@ import {
   type AlarmSeverity,
   type ScopedAlarmRequestOptions,
 } from '@/api/alarms';
+import { listWorkOrders } from '@/api/work-orders';
 import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
 import { FocusHeading } from './FocusHeading';
 import { siteRoute } from './site-routing';
@@ -120,6 +121,7 @@ function AlarmWorkbench({
   const [severity, setSeverity] = useState<AlarmSeverity | ''>('');
   const [selectedAlarmId, setSelectedAlarmId] = useState(() => alarmFromLocation(location.search));
   const canReadDetail = principal.authorization.capabilities.includes('alarm.read');
+  const canListWorkOrders = principal.authorization.capabilities.includes('work-order.list');
 
   const purgeAlarmState = useCallback(async () => {
     await queryClient.cancelQueries({ queryKey: queryPrefix });
@@ -167,6 +169,12 @@ function AlarmWorkbench({
     queryKey: [...queryPrefix, 'detail', selectedAlarmId],
     queryFn: ({ signal }) => getScopedAlarm(selectedAlarmId, buildOptions(principal, site, signal)),
     enabled: selectedAlarmId.length > 0 && canReadDetail,
+    staleTime: 15_000,
+  });
+  const associatedWorkOrdersQuery = useQuery({
+    queryKey: [...queryPrefix, 'work-orders', detailQuery.data?.alarmId ?? ''],
+    queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ALARM', sourceRef: detailQuery.data!.alarmId, limit: 20 }, { siteId: site.id, signal }),
+    enabled: Boolean(detailQuery.data) && canListWorkOrders,
     staleTime: 15_000,
   });
 
@@ -306,6 +314,7 @@ function AlarmWorkbench({
                 </div>
                 <dl className="real-alarms__facts" aria-label="Alarm authoritative projection">
                   <div><dt>Alarm ID</dt><dd><code>{detail.alarmId}</code></dd></div>
+                  <div><dt>关联工单</dt><dd>{!canListWorkOrders ? '无 work-order.list 能力' : associatedWorkOrdersQuery.isPending ? '读取中…' : associatedWorkOrdersQuery.isError ? '关联读取不可用' : associatedWorkOrdersQuery.data?.items.length ? <Space wrap>{associatedWorkOrdersQuery.data.items.map((workOrder) => <Button key={workOrder.workOrderId} type="link" href={`${siteRoute(site, 'work-orders')}?workOrder=${encodeURIComponent(workOrder.workOrderId)}`}>{workOrder.title}</Button>)}</Space> : '未关联'}</dd></div>
                   <div><dt>Site ID</dt><dd><code>{detail.siteId}</code></dd></div>
                   <div><dt>Device ID</dt><dd>{detail.deviceId ? <code>{detail.deviceId}</code> : '不适用'}</dd></div>
                   <div><dt>Alarm Type</dt><dd><code>{detail.alarmType}</code></dd></div>

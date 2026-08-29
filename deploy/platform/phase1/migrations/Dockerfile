@@ -88,6 +88,7 @@ COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/h
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
 COPY modules/workorder/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/modules/workorder/migrations/004_s5_tenant_scope.sql
 COPY modules/workorder/migrations/005_s19_alarm_links.sql /opt/hvac/repo/modules/workorder/migrations/005_s19_alarm_links.sql
+COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/repo/modules/workorder/migrations/006_s26_equipment_source_domain.sql
 
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh

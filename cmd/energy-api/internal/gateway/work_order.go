@@ -120,6 +120,8 @@ func (a *directWorkOrderAdapter) ExecuteRead(ctx context.Context, publicRequest 
 		if assigneeID := query.Get("assigneeId"); assigneeID != "" {
 			filter.AssigneeID = assigneeID
 		}
+		filter.SourceDomain = workordermodel.SourceDomain(query.Get("sourceDomain"))
+		filter.SourceRef = query.Get("sourceRef")
 		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
 		if err != nil {
 			if errors.Is(err, workorderservice.ErrInvalidFilter) {
@@ -691,7 +693,7 @@ func validatePublicWorkOrderQuery(route publicWorkOrderRoute, query url.Values) 
 			return 0, false
 		}
 		switch key {
-		case "status", "priority", "assigneeId", "cursor", "limit":
+		case "status", "priority", "assigneeId", "sourceDomain", "sourceRef", "cursor", "limit":
 		default:
 			return 0, false
 		}
@@ -724,6 +726,25 @@ func validatePublicWorkOrderQuery(route publicWorkOrderRoute, query url.Values) 
 	if raw := query.Get("assigneeId"); raw != "" && (strings.TrimSpace(raw) != raw || len(raw) > 256) {
 		return 0, false
 	}
+	sourceDomain := workordermodel.SourceDomain(query.Get("sourceDomain"))
+	sourceRef := query.Get("sourceRef")
+	if sourceDomain == "" || sourceRef == "" {
+		if sourceDomain != "" || sourceRef != "" {
+			return 0, false
+		}
+	} else {
+		switch sourceDomain {
+		case workordermodel.SourceManual, workordermodel.SourceAlarm, workordermodel.SourceAsset, workordermodel.SourceEquipment, workordermodel.SourceInvestigation, workordermodel.SourceExternal:
+		default:
+			return 0, false
+		}
+		if strings.TrimSpace(sourceRef) != sourceRef || len(sourceRef) > 512 {
+			return 0, false
+		}
+		if sourceDomain != workordermodel.SourceManual && sourceDomain != workordermodel.SourceExternal && !workordermodel.IsUUIDv7(sourceRef) {
+			return 0, false
+		}
+	}
 	return limit, true
 }
 
@@ -735,6 +756,15 @@ func workOrderMatchesPublicQuery(workOrder workordermodel.WorkOrder, query url.V
 		return false
 	}
 	if assigneeID := query.Get("assigneeId"); assigneeID != "" && (workOrder.AssigneeID == nil || *workOrder.AssigneeID != assigneeID) {
+		return false
+	}
+	if sourceDomain := workordermodel.SourceDomain(query.Get("sourceDomain")); sourceDomain != "" {
+		sourceRef := query.Get("sourceRef")
+		for _, reference := range workOrder.SourceReferences {
+			if reference.Domain == sourceDomain && reference.ResourceID == sourceRef {
+				return true
+			}
+		}
 		return false
 	}
 	return true

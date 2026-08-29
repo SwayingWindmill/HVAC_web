@@ -21,9 +21,15 @@ const (
 	historyPageSize      = telemetryhistorymodel.MaximumHistoryPageSize
 )
 
+type FindingFilter struct {
+	AlarmID     string
+	WorkOrderID string
+	Limit       int
+}
+
 type Store interface {
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
-	ListFindings(context.Context, string, string, int) ([]intelligencemodel.FDDFinding, error)
+	ListFindings(context.Context, string, string, FindingFilter) ([]intelligencemodel.FDDFinding, error)
 	LinkFinding(context.Context, string, string, string, string, string, time.Time) (intelligencemodel.FDDFinding, error)
 }
 
@@ -173,11 +179,17 @@ func temperatureEvidence(observation telemetryhistorymodel.DeviceHistoryObservat
 	return evidenceValue{observationID: observation.ObservationID, value: value}, nil
 }
 
-func (service *Service) ListFindings(ctx context.Context, tenantID, siteID string, limit int) ([]intelligencemodel.FDDFinding, error) {
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || limit <= 0 || limit > 200 {
+func (service *Service) ListFindings(ctx context.Context, tenantID, siteID string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || filter.Limit <= 0 || filter.Limit > 200 {
 		return nil, errors.New("FDD list scope or limit is invalid")
 	}
-	return service.store.ListFindings(ctx, tenantID, siteID, limit)
+	if filter.AlarmID != "" && !uuidPattern.MatchString(filter.AlarmID) {
+		return nil, errors.New("FDD Alarm filter must be a UUID")
+	}
+	if filter.WorkOrderID != "" && !uuidPattern.MatchString(filter.WorkOrderID) {
+		return nil, errors.New("FDD Work Order filter must be a UUID")
+	}
+	return service.store.ListFindings(ctx, tenantID, siteID, filter)
 }
 
 func (service *Service) LinkFinding(ctx context.Context, tenantID, siteID, findingID, alarmID, workOrderID string) (intelligencemodel.FDDFinding, error) {

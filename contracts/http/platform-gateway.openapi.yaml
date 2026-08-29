@@ -1524,7 +1524,12 @@
         "operationId": "listSiteFddFindingsV212",
         "x-architecture-status": "ACTIVE",
         "x-owner": "fdd-service",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200 } },
+          { "name": "alarmId", "in": "query", "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "workOrderId", "in": "query", "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
@@ -1550,6 +1555,34 @@
                   "ruleRevisionId": { "type": "string", "minLength": 1 },
                   "modelDeploymentRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
                   "minimumDeltaTC": { "type": "number", "exclusiveMinimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links": {
+      "patch": {
+        "operationId": "linkSiteFddFindingV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "fdd-service",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "findingId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["alarmId", "workOrderId"],
+                "properties": {
+                  "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+                  "workOrderId": { "$ref": "#/components/schemas/UUIDv7" }
                 }
               }
             }

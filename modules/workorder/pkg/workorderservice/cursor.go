@@ -24,6 +24,8 @@ type cursorPayload struct {
 	Status         workordermodel.Status   `json:"status,omitempty"`
 	Priority       workordermodel.Priority `json:"priority,omitempty"`
 	AssigneeID     string                  `json:"assigneeId,omitempty"`
+	SourceDomain   workordermodel.SourceDomain `json:"sourceDomain,omitempty"`
+	SourceRef      string                  `json:"sourceRef,omitempty"`
 	UpdatedAt      string                  `json:"updatedAt"`
 	WorkOrderID    string                  `json:"workOrderId"`
 }
@@ -46,6 +48,7 @@ func (codec *cursorCodec) Encode(tenantID, siteID string, filter Filter, updated
 	payload := cursorPayload{
 		Version: cursorVersion, TenantID: tenantID, SiteID: siteID,
 		Status: filter.Status, Priority: filter.Priority, AssigneeID: filter.AssigneeID,
+		SourceDomain: filter.SourceDomain, SourceRef: filter.SourceRef,
 		UpdatedAt: updatedAt.UTC().Format(time.RFC3339Nano), WorkOrderID: workOrderID,
 	}
 	encoded, err := json.Marshal(payload)
@@ -80,6 +83,7 @@ func (codec *cursorCodec) Decode(token, tenantID, siteID string, filter Filter) 
 	if decoder.Decode(&payload) != nil || decoder.Decode(&struct{}{}) != io.EOF || payload.Version != cursorVersion ||
 		payload.TenantID != tenantID || payload.SiteID != siteID ||
 		payload.Status != filter.Status || payload.Priority != filter.Priority || payload.AssigneeID != filter.AssigneeID ||
+		payload.SourceDomain != filter.SourceDomain || payload.SourceRef != filter.SourceRef ||
 		!workordermodel.IsUUIDv7(payload.WorkOrderID) {
 		return cursorPosition{}, ErrInvalidCursor
 	}
