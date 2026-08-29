@@ -40,7 +40,8 @@ Rechecked the previously pinned Modbus TCP acquisition boundary at commit `be6e6
 3. Canonical Registry Point codes are not renamed to vendor channel names. DeviceAdapter channels are bound to canonical Points through stable `PointID -> Channel address` binding.
 4. A single governed START Intent remains active while the ATV630 adapter returns `IN_PROGRESS` through ETA-confirmed CiA402 transitions `6 -> 7 -> 15`; it completes only after later ETA reports operation-enabled.
 5. The acceptance Registry bootstrap uses the existing `ReleaseTemplate` owner and writes only the returned immutable TemplateRevision identity into runtime config. The released payload is the exact #337 `ATV630ProtocolReleaseCandidate()` with Schneider references `EAV64327 v03` and `EAV64332 v4.6 (2026-05-01)`, and it explicitly does not claim hardware certification.
-6. The production Phase 1 compose remains unchanged. All Virtual-device deployment wiring is confined to the explicit `atv630-protocol-acceptance` profile and an acceptance-only workspace Dockerfile.
+6. The acceptance Connectivity bootstrap uses the existing `connectivity.Store.OpenSession` owner to open a fresh UUIDv7 Gateway session against the already-active CredentialRef. An expired session therefore remains a visible fail-closed identity error; the Edge runtime does not bypass or renew authorization itself.
+7. The production Phase 1 compose remains unchanged. All Virtual-device deployment wiring is confined to the explicit `atv630-protocol-acceptance` profile and an acceptance-only workspace Dockerfile.
 
 ## WSL deployment evidence
 
@@ -53,7 +54,8 @@ Observed on 2026-08-29 in Docker Desktop WSL acceptance:
 - `STOP` returned `APPLIED`; later readback reported `runState=STOPPED` with physical coast-down (`31.9 Hz`).
 - One `START` command returned final `APPLIED` after the ETA-confirmed multi-cycle sequence; later readback reported `runState=RUNNING`.
 - Injected fault `16` in the Virtual process was later read through production Modbus as `runState=FAULT`, `faultCode=16`, `frequencyHz=0`; `RESET_FAULT` returned `APPLIED` and later readback cleared current fault.
-- With CHWP stuck-high enabled while STOPPED, independent later RFR increased from `12.4 Hz` to `33.5 Hz`; the disturbance remained a Plant physical effect and the protocol endpoint stayed generic.
+- With CHWP stuck-high enabled while STOPPED, independent later RFR increased from `12.4 Hz` to `33.5 Hz`; the disturbance remained a Plant physical effect and the protocol endpoint stayed generic. After identity recovery was established, the same STOPPED + stuck-high path produced production Modbus readback `13.0 Hz` and S2 accepted telemetry `frequency=9.6`, proving subsequent MQTT/Telemetry publication of the physical disturbance.
+- The pre-existing Gateway session had expired at `2026-08-29 07:23:54Z`; IoT therefore quarantined the Edge MQTT publications as a permanent identity failure. The acceptance Connectivity owner job created fresh UUIDv7 session `01a04d1c-0896-721e-829f-a66960ed5d95`, active through `2026-08-30 10:41:17Z`; subsequent IoT batches were processed with accepted points and S2 `latest_accepted_telemetry` contained CHWP `fault_code`, `frequency`, and `run_state`.
 - Stopping the Virtual ATV630 container left the Edge process running but changed diagnostics to `modbusReady=false` while `mqttReady=true`; no alternate adapter/register/profile appeared. Restarting the Virtual endpoint restored `modbusReady=true` automatically.
 
 ## Release/certification boundary

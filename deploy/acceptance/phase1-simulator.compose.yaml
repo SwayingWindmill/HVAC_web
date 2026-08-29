@@ -10,7 +10,7 @@ services:
     tmpfs:
       - /tmp
     build:
-      context: ${ATV630_SOURCE_ROOT:-../..}
+      context: ../..
       dockerfile: deploy/s0/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-mqtt-publisher }
     image: ${EG8200_SIMULATOR_IMAGE:-hvac/eg8200-simulator:0.1.0-dev}
@@ -25,7 +25,7 @@ services:
       iot-service:
         condition: service_healthy
     volumes:
-      - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
+      - ../../tools/eg8200-simulator/configs/central-plant.local.json:/run/hvac/config/plant.json:ro
       - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
       - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
       - ${EG8200_QUEUE_DIR:-../platform/phase1/runtime/data/eg8200}:/run/hvac/eg8200
@@ -96,6 +96,27 @@ services:
         condition: service_healthy
     networks: [data]
 
+  atv630-connectivity-session:
+    profiles: ["atv630-protocol-acceptance"]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    build:
+      context: ${ATV630_SOURCE_ROOT:-../..}
+      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./modules/iot/cmd/atv630-connectivity-session }
+    image: ${ATV630_CONNECTIVITY_SESSION_IMAGE:-hvac/atv630-connectivity-session:0.1.0-dev}
+    environment:
+      ATV630_CONNECTIVITY_DATABASE_URL: ${ATV630_CONNECTIVITY_DATABASE_URL:?ATV630_CONNECTIVITY_DATABASE_URL is required}
+      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:?ATV630_TEMPLATE_TENANT_ID is required}
+      ATV630_INTEGRATION_INSTANCE_ID: ${ATV630_INTEGRATION_INSTANCE_ID:?ATV630_INTEGRATION_INSTANCE_ID is required}
+      ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: ${ATV630_CONNECTIVITY_CREDENTIAL_REF_ID:?ATV630_CONNECTIVITY_CREDENTIAL_REF_ID is required}
+      ATV630_GATEWAY_EXTERNAL_ID: ${ATV630_GATEWAY_EXTERNAL_ID:?ATV630_GATEWAY_EXTERNAL_ID is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
   atv630-edge:
     profiles: ["atv630-protocol-acceptance"]
     restart: unless-stopped
@@ -119,6 +140,8 @@ services:
       ATV630_EDGE_DIAGNOSTICS_ADDR: :19097
     depends_on:
       atv630-template-release:
+        condition: service_completed_successfully
+      atv630-connectivity-session:
         condition: service_completed_successfully
       virtual-atv630:
         condition: service_healthy
