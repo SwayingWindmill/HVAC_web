@@ -43,6 +43,24 @@
             }
           },
           {
+            "name": "sourceDomain",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/WorkOrderSourceDomain"
+            },
+            "description": "Must be paired with sourceRef to query Work Orders by an authoritative source association."
+          },
+          {
+            "name": "sourceRef",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "description": "Must be paired with sourceDomain. Authoritative domains use their canonical resource identity."
+          },
+          {
             "name": "cursor",
             "in": "query",
             "schema": {

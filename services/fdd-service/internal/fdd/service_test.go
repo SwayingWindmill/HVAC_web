@@ -49,8 +49,21 @@ func (store *memoryStore) InsertFinding(_ context.Context, finding intelligencem
 	return nil
 }
 
-func (store *memoryStore) ListFindings(context.Context, string, string, int) ([]intelligencemodel.FDDFinding, error) {
-	return append([]intelligencemodel.FDDFinding(nil), store.findings...), nil
+func (store *memoryStore) ListFindings(_ context.Context, _, _ string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
+	findings := make([]intelligencemodel.FDDFinding, 0, min(filter.Limit, len(store.findings)))
+	for _, finding := range store.findings {
+		if filter.AlarmID != "" && finding.AlarmID != filter.AlarmID {
+			continue
+		}
+		if filter.WorkOrderID != "" && finding.WorkOrderID != filter.WorkOrderID {
+			continue
+		}
+		findings = append(findings, finding)
+		if len(findings) == filter.Limit {
+			break
+		}
+	}
+	return findings, nil
 }
 
 func (store *memoryStore) LinkFinding(_ context.Context, _, _, findingID, alarmID, workOrderID string, _ time.Time) (intelligencemodel.FDDFinding, error) {
@@ -235,12 +248,21 @@ func TestFDDLinkingIsExplicitAndSeparateFromDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	linked, err := service.LinkFinding(t.Context(), request.TenantID, request.SiteID, result.Finding.ID,
-		"01990000-7000-7000-8000-000000000001", "01990000-8000-7000-8000-000000000001")
+	alarmID := "01990000-7000-7000-8000-000000000001"
+	workOrderID := "01990000-8000-7000-8000-000000000001"
+	linked, err := service.LinkFinding(t.Context(), request.TenantID, request.SiteID, result.Finding.ID, alarmID, workOrderID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if linked.AlarmID == "" || linked.WorkOrderID == "" {
 		t.Fatalf("linked=%#v", linked)
+	}
+	byAlarm, err := service.ListFindings(t.Context(), request.TenantID, request.SiteID, FindingFilter{AlarmID: alarmID, Limit: 20})
+	if err != nil || len(byAlarm) != 1 || byAlarm[0].ID != linked.ID {
+		t.Fatalf("Alarm reverse association=%#v err=%v", byAlarm, err)
+	}
+	byWorkOrder, err := service.ListFindings(t.Context(), request.TenantID, request.SiteID, FindingFilter{WorkOrderID: workOrderID, Limit: 20})
+	if err != nil || len(byWorkOrder) != 1 || byWorkOrder[0].ID != linked.ID {
+		t.Fatalf("Work Order reverse association=%#v err=%v", byWorkOrder, err)
 	}
 }

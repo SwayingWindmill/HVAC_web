@@ -75,6 +75,7 @@ export type WorkOrder = z.infer<typeof workOrderSchema>;
 export type WorkOrderPriority = z.infer<typeof workOrderPrioritySchema>;
 export type WorkOrderStatus = z.infer<typeof workOrderStatusSchema>;
 export type WorkOrderOperation = z.infer<typeof workOrderOperationSchema>;
+export type WorkOrderSourceDomain = z.infer<typeof workOrderSourceDomainSchema>;
 export type WorkOrderSourceReference = z.infer<typeof sourceReferenceSchema>;
 export type WorkOrderEvidenceReference = z.infer<typeof evidenceReferenceSchema>;
 export type WorkOrderList = z.infer<typeof workOrderListSchema>;
@@ -90,6 +91,8 @@ export type WorkOrderListFilter = {
   status?: WorkOrderStatus;
   priority?: WorkOrderPriority;
   assigneeId?: string;
+  sourceDomain?: WorkOrderSourceDomain;
+  sourceRef?: string;
   cursor?: string;
   limit?: number;
 };
@@ -151,6 +154,8 @@ export function listWorkOrders(filter: WorkOrderListFilter, options: WorkOrderRe
   if (filter.status) query.set('status', filter.status);
   if (filter.priority) query.set('priority', filter.priority);
   if (filter.assigneeId) query.set('assigneeId', filter.assigneeId);
+  if (filter.sourceDomain) query.set('sourceDomain', filter.sourceDomain);
+  if (filter.sourceRef) query.set('sourceRef', filter.sourceRef);
   if (filter.cursor) query.set('cursor', filter.cursor);
   query.set('limit', String(filter.limit ?? 50));
   return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders?${query.toString()}`, workOrderListSchema, {

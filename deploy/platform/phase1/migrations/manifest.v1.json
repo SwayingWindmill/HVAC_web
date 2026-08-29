@@ -121,7 +121,8 @@
         "modules/workorder/migrations/002_s5_work_order_create_assignment.sql",
         "modules/workorder/migrations/003_s5_work_order_lifecycle.sql",
         "modules/workorder/migrations/004_s5_tenant_scope.sql",
-        "modules/workorder/migrations/005_s19_alarm_links.sql"
+        "modules/workorder/migrations/005_s19_alarm_links.sql",
+        "modules/workorder/migrations/006_s26_equipment_source_domain.sql"
       ]
     }
   ],

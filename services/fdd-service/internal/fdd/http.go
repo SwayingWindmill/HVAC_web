@@ -46,16 +46,29 @@ func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, 
 }
 
 func (handler *HTTPHandler) handleListFindings(writer http.ResponseWriter, request *http.Request) {
-	limit := 50
-	if raw := request.URL.Query().Get("limit"); raw != "" {
+	query := request.URL.Query()
+	for key, values := range query {
+		if len(values) != 1 {
+			writeFDDError(writer, http.StatusBadRequest, "fdd_filter_invalid")
+			return
+		}
+		switch key {
+		case "limit", "alarmId", "workOrderId":
+		default:
+			writeFDDError(writer, http.StatusBadRequest, "fdd_filter_invalid")
+			return
+		}
+	}
+	filter := FindingFilter{AlarmID: query.Get("alarmId"), WorkOrderID: query.Get("workOrderId"), Limit: 50}
+	if raw := query.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 || parsed > 200 {
 			writeFDDError(writer, http.StatusBadRequest, "fdd_limit_invalid")
 			return
 		}
-		limit = parsed
+		filter.Limit = parsed
 	}
-	findings, err := handler.service.ListFindings(request.Context(), request.Header.Get("X-Tenant-ID"), request.PathValue("siteId"), limit)
+	findings, err := handler.service.ListFindings(request.Context(), request.Header.Get("X-Tenant-ID"), request.PathValue("siteId"), filter)
 	if err != nil {
 		writeFDDError(writer, http.StatusBadGateway, "fdd_unavailable")
 		return

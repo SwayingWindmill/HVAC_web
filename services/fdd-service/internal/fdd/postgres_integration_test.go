@@ -62,7 +62,7 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 		}
 	})
 
-	findings, err := service.ListFindings(t.Context(), tenantID, siteID, 200)
+	findings, err := service.ListFindings(t.Context(), tenantID, siteID, FindingFilter{Limit: 200})
 	if err != nil {
 		t.Fatal(err)
 	}

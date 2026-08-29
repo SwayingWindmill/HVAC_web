@@ -1160,6 +1160,18 @@
       "allowedScopeDimensions": ["tenant", "site", "principal"]
     },
     {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links",
+      "owner": "fdd-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/optimization/recommendations/latest",
       "owner": "optimization-service",

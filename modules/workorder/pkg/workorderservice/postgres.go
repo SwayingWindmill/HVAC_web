@@ -88,7 +88,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 		return workordermodel.ListResponse{}, ErrUnavailable
 	}
 	filter = normalizeFilter(filter)
-	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 {
+	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 || !validSourceFilter(filter) {
 		return workordermodel.ListResponse{}, ErrInvalidFilter
 	}
 	tx, err := store.beginReadTransaction(ctx, organizationID)
@@ -118,10 +118,16 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 		  AND ($3 = '' OR status = $3)
 		  AND ($4 = '' OR priority = $4)
 		  AND ($5 = '' OR assignee_id = $5)
-		  AND ($6::timestamptz IS NULL OR updated_at < $6 OR (updated_at = $6 AND work_order_id > $7::uuid))
+		  AND ($6 = '' OR EXISTS (
+		    SELECT 1 FROM work_order_runtime.work_order_source_reference source
+		    WHERE source.tenant_id = $1 AND source.site_id = $2
+		      AND source.work_order_id = work_order_current.work_order_id
+		      AND source.source_domain = $6 AND source.source_resource_id = $7
+		  ))
+		  AND ($8::timestamptz IS NULL OR updated_at < $8 OR (updated_at = $8 AND work_order_id > $9::uuid))
 		ORDER BY updated_at DESC, work_order_id ASC
-		LIMIT $8
-	`, organizationID, siteID, string(filter.Status), string(filter.Priority), filter.AssigneeID, cursorTime, cursorID, filter.Limit+1)
+		LIMIT $10
+	`, organizationID, siteID, string(filter.Status), string(filter.Priority), filter.AssigneeID, string(filter.SourceDomain), filter.SourceRef, cursorTime, cursorID, filter.Limit+1)
 	if err != nil {
 		return workordermodel.ListResponse{}, fmt.Errorf("list Work Orders: %w", err)
 	}

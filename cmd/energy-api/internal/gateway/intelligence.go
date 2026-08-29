@@ -18,6 +18,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
+
+
 )
 
 const (
@@ -50,10 +54,16 @@ type intelligenceController struct {
 type publicIntelligenceRoute struct {
 	owner      string
 	siteID     string
+	findingID  string
 	runID      string
 	target     string
 	method     string
 	publicPath string
+}
+
+type fddLinkRequest struct {
+	AlarmID     string `json:"alarmId"`
+	WorkOrderID string `json:"workOrderId"`
 }
 
 type fddLowDeltaTEvaluationRequest struct {
@@ -112,6 +122,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd-evaluate", method: http.MethodPost, publicPath: "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t"}, method == http.MethodPost
 	}
+	if siteID, findingID, ok := matchFDDLinkPath(path); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, findingID: findingID, target: "fdd-link", method: http.MethodPatch, publicPath: "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links"}, method == http.MethodPatch
+	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-latest", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/recommendations/latest"}, method == http.MethodGet
 	}
@@ -124,13 +137,33 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	return publicIntelligenceRoute{}, false
 }
 
+func matchFDDLinkPath(path string) (string, string, bool) {
+	remainder, ok := strings.CutPrefix(path, "/api/v1/sites/")
+	if !ok || strings.HasSuffix(remainder, "/") {
+		return "", "", false
+	}
+	segments := strings.Split(remainder, "/")
+	if len(segments) != 5 || segments[1] != "fdd" || segments[2] != "findings" || segments[4] != "links" {
+		return "", "", false
+	}
+	siteID, err := url.PathUnescape(segments[0])
+	if err != nil || !isLowerUUIDv7(siteID) {
+		return "", "", false
+	}
+	findingID, err := url.PathUnescape(segments[3])
+	if err != nil || !isLowerUUIDv7(findingID) {
+		return "", "", false
+	}
+	return siteID, findingID, true
+}
+
 func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicIntelligenceRoute) {
 	decision := routeDecisionFromContext(request.Context())
 	if decision.SelectedOwner != route.owner || h.intelligence == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "INTELLIGENCE_UNAVAILABLE", "Intelligence unavailable", "The Intelligence route is not active for this Session.", true, nil)
 		return
 	}
-	session, ok := h.intelligenceSession(writer, request, route.method == http.MethodPost)
+	session, ok := h.intelligenceSession(writer, request, route.method != http.MethodGet)
 	if !ok {
 		return
 	}
@@ -141,6 +174,10 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 	if route.owner == ownershipregistry.OwnerFDD {
 		if route.target == "fdd-evaluate" {
 			h.serveFDDEvaluation(writer, request, session, route)
+			return
+		}
+		if route.target == "fdd-link" {
+			h.serveFDDLink(writer, request, session, route)
 			return
 		}
 		h.serveFDDFindings(writer, request, session, route)
@@ -232,6 +269,116 @@ func (h *handler) serveFDDFindings(writer http.ResponseWriter, request *http.Req
 	}
 	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.fddBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
 	h.writeIntelligenceResult(writer, request, raw, status, err)
+}
+
+func (h *handler) serveFDDLink(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) || !isLowerUUIDv7(route.findingID) || h.intelligence.fddBaseURL == "" {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD finding was not found.", false, nil)
+		return
+	}
+	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
+	if !ok {
+		return
+	}
+	if _, allowed := allowedSites[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD finding was not found.", false, nil)
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "FDD_LINK_REQUEST_INVALID", "FDD link request invalid", "The FDD link request is too large or unreadable.", false, nil)
+		return
+	}
+	var input fddLinkRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureIntelligenceJSONEOF(decoder) != nil || input.AlarmID == "" || input.WorkOrderID == "" {
+		writeProblem(writer, request, http.StatusBadRequest, "FDD_LINK_REQUEST_INVALID", "FDD link request invalid", "The FDD link request must identify both the Alarm and its Work Order.", false, nil)
+		return
+	}
+	if !isLowerUUIDv7(input.AlarmID) || !isLowerUUIDv7(input.WorkOrderID) {
+		writeProblem(writer, request, http.StatusUnprocessableEntity, "FDD_LINK_SOURCE_INVALID", "FDD link source invalid", "The Alarm and Work Order sources must be valid identities.", false, nil)
+		return
+	}
+	scope, failure := h.resolveAlarmScope(request, session, input.AlarmID)
+	if failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm source was not found.", false, nil)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "FDD_LINK_SOURCE_UNAVAILABLE", "FDD link source unavailable", "The Alarm owner could not resolve the source.", true, nil)
+		return
+	}
+	if scope.TenantID != session.TenantID || scope.SiteID != route.siteID {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm source was not found.", false, nil)
+		return
+	}
+	if failure := h.validateFDDWorkOrder(request, session, route.siteID, input.WorkOrderID, input.AlarmID); failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Work Order source was not found for this Alarm.", false, nil)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "FDD_LINK_SOURCE_UNAVAILABLE", "FDD link source unavailable", "The Work Order owner could not resolve the source.", true, nil)
+		return
+	}
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/fdd/findings/" + url.PathEscape(route.findingID) + "/links"
+	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPatch, h.intelligence.fddBaseURL+internalPath, raw, map[string]string{"X-Tenant-ID": session.TenantID})
+	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
+}
+
+func (h *handler) validateFDDWorkOrder(request *http.Request, session bffSession, siteID, workOrderID, alarmID string) *workOrderFailure {
+	if h.workOrder == nil || h.workOrder.operations == nil {
+		failure := workOrderUnavailable("The Work Order read service is not configured.")
+		return &failure
+	}
+	route := publicWorkOrderRoute{
+		kind: publicWorkOrderDetail, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}",
+		siteID: siteID, workOrderID: workOrderID, action: workorderauth.ActionRead,
+	}
+	decision, failure := h.authorizeWorkOrder(request, session, route, nil, nil)
+	if failure != nil {
+		return failure
+	}
+	site, err := h.resolveAuthoritativeSiteForDomain(request, session, siteID)
+	if err != nil || site.TenantID != session.TenantID {
+		unavailable := workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved.")
+		return &unavailable
+	}
+	readContext, failure := h.signWorkOrderReadContext(session, route, decision, site.TenantID)
+	if failure != nil {
+		return failure
+	}
+	body, status, failure := h.executeWorkOrderRead(request, route, readContext)
+	if failure != nil {
+		return failure
+	}
+	if status == http.StatusNotFound || status == http.StatusForbidden {
+		denied := workOrderDenied()
+		return &denied
+	}
+	if status != http.StatusOK {
+		unavailable := workOrderUnavailable("Work Order Service could not resolve the requested source.")
+		return &unavailable
+	}
+	var workOrder workordermodel.WorkOrder
+	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.TenantID != session.TenantID || workOrder.SiteID != siteID || workOrder.WorkOrderID != workOrderID {
+		unavailable := workOrderUnavailable("Work Order Service returned an invalid source projection.")
+		return &unavailable
+	}
+	if workOrderOriginatesFromAlarm(workOrder, alarmID) {
+		return nil
+	}
+	denied := workOrderDenied()
+	return &denied
+}
+
+func workOrderOriginatesFromAlarm(workOrder workordermodel.WorkOrder, alarmID string) bool {
+	for _, reference := range workOrder.SourceReferences {
+		if reference.Domain == workordermodel.SourceAlarm && reference.Relationship == workordermodel.RelationshipOrigin && reference.ResourceID == alarmID {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
