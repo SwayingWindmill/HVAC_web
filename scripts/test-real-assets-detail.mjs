@@ -5,6 +5,7 @@ import {
   isRealAssetsDetailHistoryState,
   parseRealAssetsDetailPath,
   realAssetsAssetPath,
+  realAssetsDevicePath,
   realAssetsListPath,
   resolveRealAssetsDetail,
   writeRealAssetsClipboard,
@@ -13,25 +14,36 @@ import {
 const siteId = '01900000-0001-7000-8000-000000000001';
 const assetId = '01900000-0011-7000-8000-000000000011';
 const otherAssetId = '01900000-0012-7000-8000-000000000012';
+const deviceId = '01900000-0013-7000-8000-000000000013';
+const otherDeviceId = '01900000-0014-7000-8000-000000000014';
 
-const visibleRow = {
-  asset: { id: assetId },
-};
+const visibleAssetRow = { asset: { id: assetId } };
+const visibleDeviceRow = { device: { id: deviceId } };
 
-test('detail paths are stable and parse list, detail and outside states', () => {
+test('detail paths are typed for Asset and Device and reject the obsolete untyped route', () => {
   assert.equal(realAssetsListPath(siteId), `/sites/${siteId}/assets`);
-  assert.equal(realAssetsAssetPath(siteId, assetId), `/sites/${siteId}/assets/${assetId}`);
+  assert.equal(realAssetsAssetPath(siteId, assetId), `/sites/${siteId}/assets/asset/${assetId}`);
+  assert.equal(realAssetsDevicePath(siteId, deviceId), `/sites/${siteId}/assets/device/${deviceId}`);
   assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets`, siteId), { state: 'list' });
-  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/${assetId}`, siteId), { state: 'detail', assetId });
-  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/${assetId}/extra`, siteId), { state: 'outside' });
+  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/asset/${assetId}`, siteId), {
+    state: 'detail', target: { kind: 'asset', id: assetId },
+  });
+  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/device/${deviceId}`, siteId), {
+    state: 'detail', target: { kind: 'device', id: deviceId },
+  });
+  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/${assetId}`, siteId), { state: 'outside' });
+  assert.deepEqual(parseRealAssetsDetailPath(`/sites/${siteId}/assets/device/${deviceId}/extra`, siteId), { state: 'outside' });
   assert.throws(() => realAssetsAssetPath(siteId, 'not-asset'), /Asset UUIDv7/);
+  assert.throws(() => realAssetsDevicePath(siteId, 'not-device'), /Device UUIDv7/);
 });
 
-test('invalid, unknown and unauthorized Asset selectors share one not-visible result', () => {
-  assert.deepEqual(resolveRealAssetsDetail([visibleRow], null), { state: 'closed' });
-  assert.equal(resolveRealAssetsDetail([visibleRow], assetId).state, 'visible');
-  assert.deepEqual(resolveRealAssetsDetail([visibleRow], 'not-asset'), { state: 'not-visible' });
-  assert.deepEqual(resolveRealAssetsDetail([visibleRow], otherAssetId), { state: 'not-visible' });
+test('invalid, unknown and unauthorized typed selectors share one not-visible result', () => {
+  assert.deepEqual(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], null), { state: 'closed' });
+  assert.equal(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], { kind: 'asset', id: assetId }).state, 'visible');
+  assert.equal(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], { kind: 'device', id: deviceId }).state, 'visible');
+  assert.deepEqual(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], { kind: 'asset', id: 'not-asset' }), { state: 'not-visible' });
+  assert.deepEqual(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], { kind: 'asset', id: otherAssetId }), { state: 'not-visible' });
+  assert.deepEqual(resolveRealAssetsDetail([visibleAssetRow], [visibleDeviceRow], { kind: 'device', id: otherDeviceId }), { state: 'not-visible' });
 });
 
 test('history marker is scoped to the exact Site and Asset', () => {

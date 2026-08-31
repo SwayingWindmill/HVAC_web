@@ -4,6 +4,8 @@ import type { RealAssetsDeviceRow } from './model.ts';
 import {
   createRealAssetsRealtimeScope,
   createRealAssetsRealtimeTarget,
+  listRealAssetsRealtimeKeys,
+  realAssetsRealtimeSubscriptionEligibility,
   type RealAssetsRealtimeScope,
   type RealAssetsRealtimeState,
   validateRealAssetsRealtimeState,
@@ -18,6 +20,7 @@ export type RealAssetsRealtimePhase =
   | 'closed'
   | 'not-authorized'
   | 'not-configured'
+  | 'scope-too-large'
   | 'opening'
   | 'active'
   | 'error'
@@ -53,8 +56,11 @@ function errorValue(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function createScope(row: RealAssetsDeviceRow | null, protectedGeneration: number): RealAssetsRealtimeScope | null {
-  if (!row || row.profile.state !== 'configured') return null;
+function createScope(
+  row: RealAssetsDeviceRow | null,
+  protectedGeneration: number,
+): RealAssetsRealtimeScope | null {
+  if (!row || realAssetsRealtimeSubscriptionEligibility(row).state !== 'eligible') return null;
   return createRealAssetsRealtimeScope(row, protectedGeneration);
 }
 
@@ -71,9 +77,14 @@ export function useRealAssetsDeviceRealtime({
   const [retryEpoch, setRetryEpoch] = useState(0);
   const [snapshot, setSnapshot] = useState<RealtimeSnapshot>(CLOSED);
   const sessionRef = useRef<RealAssetsTelemetryLiveSession | null>(null);
+  const registryKeySignature = row ? listRealAssetsRealtimeKeys(row).join('|') : '';
+  const eligibility = useMemo(
+    () => row ? realAssetsRealtimeSubscriptionEligibility(row) : null,
+    [registryKeySignature, row?.device.id],
+  );
   const scope = useMemo(
     () => createScope(row, protectedGeneration),
-    [protectedGeneration, row?.device.id, row?.device.tenantId, row?.device.siteId, row?.device.deviceType],
+    [protectedGeneration, registryKeySignature, row?.device.id, row?.device.tenantId, row?.device.siteId],
   );
   const keySignature = scope?.keys.join('|') ?? '';
 
@@ -97,6 +108,11 @@ export function useRealAssetsDeviceRealtime({
     if (!allowed) {
       sessionRef.current = null;
       setSnapshot({ phase: 'not-authorized', state: null, error: null });
+      return undefined;
+    }
+    if (eligibility?.state === 'too-many-points') {
+      sessionRef.current = null;
+      setSnapshot({ phase: 'scope-too-large', state: null, error: null });
       return undefined;
     }
     if (!scope || keySignature.length === 0) {
@@ -219,6 +235,7 @@ export function useRealAssetsDeviceRealtime({
   }, [
     allowed,
     authorizationEpoch,
+    eligibility?.state,
     keySignature,
     onRevoked,
     protectedGeneration,

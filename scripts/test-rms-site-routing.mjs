@@ -112,17 +112,22 @@ test('an authorized Site without site.read remains generically forbidden', () =>
 });
 
 
-test('Assets accepts one opaque Asset selector while other extra segments remain not found', () => {
+test('Assets accepts typed Asset and Device selectors while obsolete untyped routes remain not found', () => {
   const assetId = '01900000-0011-7000-8000-000000000011';
-  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + assetId, [siteA], ['site.read']);
-  assert.equal(detail.state, 'READY');
-  assert.equal(detail.route, 'assets');
-  assert.equal(detail.assetId, assetId);
+  const deviceId = '01900000-0012-7000-8000-000000000012';
+  const assetDetail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/asset/' + assetId, [siteA], ['site.read']);
+  assert.equal(assetDetail.state, 'READY');
+  assert.equal(assetDetail.route, 'assets');
+  assert.equal(assetDetail.assetsDetail.kind, 'asset');
+  assert.equal(assetDetail.assetsDetail.id, assetId);
 
-  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-an-asset', [siteA], ['site.read']);
-  assert.equal(invalid.state, 'READY');
-  assert.equal(invalid.assetId, 'not-an-asset');
+  const deviceDetail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/device/' + deviceId, [siteA], ['site.read']);
+  assert.equal(deviceDetail.state, 'READY');
+  assert.equal(deviceDetail.route, 'assets');
+  assert.equal(deviceDetail.assetsDetail.kind, 'device');
+  assert.equal(deviceDetail.assetsDetail.id, deviceId);
 
-  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + assetId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + assetId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/device/' + deviceId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
   assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + assetId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
 });

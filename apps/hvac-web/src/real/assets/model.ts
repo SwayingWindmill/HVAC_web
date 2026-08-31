@@ -7,51 +7,24 @@ import type {
   SiteAssetModel,
   TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
-import type { DeviceObservationSnapshot, ProblemDetails, TelemetryKeyState, TelemetryQuality } from '../../api/generated/s2Telemetry.gen.ts';
 import {
-  formatTelemetryDisplayValue,
   formatTelemetryUnit,
   getDeviceTelemetryProfile,
   telemetryPointDefinition,
 } from '../../domain/centralPlantTelemetry.ts';
 import {
-  listPointDefinitions,
   resolveRealAssetsProfile,
   type RealAssetsProfileResolution,
 } from './catalog.ts';
+import {
+  projectRealAssetsDeviceOperationalState,
+  type RealAssetsAttentionReason,
+  type RealAssetsDeviceOperationalProjection,
+  type RealAssetsPointView,
+  type RealAssetsSnapshotResult,
+} from './operational-projection.ts';
 
-export type RealAssetsOperatingState = 'UNKNOWN' | 'OFFLINE' | 'ATTENTION' | 'NORMAL';
-
-export type RealAssetsAttentionReason =
-  | 'CURRENT_STATE_UNAVAILABLE'
-  | 'CURRENT_STATE_NOT_VISIBLE'
-  | 'POINT_CATALOG_CONTRACT_DRIFT'
-  | 'POINT_CATALOG_UNCONFIGURED'
-  | 'PRESENCE_UNKNOWN'
-  | 'PRESENCE_OFFLINE'
-  | 'TELEMETRY_STALE'
-  | 'TELEMETRY_QUALITY_DEGRADED'
-  | 'CRITICAL_POINT_MISSING'
-  | 'TELEMETRY_INCOMPLETE';
-
-export type RealAssetsSnapshotResult =
-  | { readonly status: 'ok'; readonly snapshot: DeviceObservationSnapshot }
-  | { readonly status: 'error'; readonly problem: ProblemDetails };
-
-export interface RealAssetsPointView {
-  readonly key: string;
-  readonly label: string;
-  readonly state: 'PRESENT' | 'MISSING';
-  readonly displayValue: string;
-  readonly unit: string | null;
-  readonly freshness: 'FRESH' | 'STALE' | 'MISSING';
-  readonly quality: TelemetryQuality | null;
-  readonly qualityReasons: readonly string[];
-  readonly sampledAt: string | null;
-  readonly receivedAt: string | null;
-  readonly policyRevision: number | null;
-  readonly missingReason?: 'NEVER_OBSERVED' | 'ONLY_REJECTED_CANDIDATES' | 'POLICY_NOT_CONFIGURED';
-}
+export type { RealAssetsAttentionReason, RealAssetsPointView, RealAssetsSnapshotResult } from './operational-projection.ts';
 
 export type RealAssetsBindingState =
   | { readonly state: 'bound'; readonly relationship: AssetRelationship; readonly asset: Asset }
@@ -70,10 +43,9 @@ export interface RealAssetsDeviceRow {
   readonly binding: RealAssetsBindingState;
   readonly space: RealAssetsSpaceState;
   readonly registeredPointCount: number;
+  readonly telemetryPoints: readonly TelemetryPoint[];
   readonly snapshotResult?: RealAssetsSnapshotResult;
-  readonly operatingState: RealAssetsOperatingState;
-  readonly attentionReasons: readonly RealAssetsAttentionReason[];
-  readonly points: readonly RealAssetsPointView[];
+  readonly operational: RealAssetsDeviceOperationalProjection;
 }
 
 export interface RealAssetsAssetRow {
@@ -83,8 +55,11 @@ export interface RealAssetsAssetRow {
   readonly sensors: readonly Sensor[];
   readonly points: readonly RealAssetsTelemetryPointRow[];
   readonly controlPoints: readonly RealAssetsTelemetryPointRow[];
-  readonly operatingState: RealAssetsOperatingState;
   readonly attentionReasons: readonly RealAssetsAttentionReason[];
+  readonly needsAttention: boolean;
+  readonly offlineDeviceCount: number;
+  readonly connectionUnknownDeviceCount: number;
+  readonly dataIssueDeviceCount: number;
 }
 
 export interface BuildRealAssetsRowsInput {
@@ -93,7 +68,7 @@ export interface BuildRealAssetsRowsInput {
   readonly now?: Date;
 }
 
-export type RealAssetsHierarchyKind = 'site' | 'space' | 'asset' | 'device' | 'sensor' | 'point' | 'virtual-sensor';
+export type RealAssetsHierarchyKind = 'site' | 'space' | 'asset' | 'device';
 
 export interface RealAssetsHierarchyNode {
   readonly key: string;
@@ -101,7 +76,6 @@ export interface RealAssetsHierarchyNode {
   readonly label: string;
   readonly meta: string;
   readonly deviceIds: readonly string[];
-  readonly pointIds: readonly string[];
   readonly children: readonly RealAssetsHierarchyNode[];
 }
 
@@ -317,98 +291,6 @@ export function resolveAssetSpace(
   return { state: 'bound', relationship, space };
 }
 
-interface PointDisplayDefinition {
-  readonly key: string;
-  readonly label: string;
-  readonly defaultUnit?: string;
-  readonly precision?: number;
-}
-
-function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState | undefined): RealAssetsPointView {
-  if (!state || state.state === 'MISSING') {
-    return {
-      key: definition.key,
-      label: definition.label,
-      state: 'MISSING',
-      displayValue: state?.missingReason === 'ONLY_REJECTED_CANDIDATES' ? '当前值不可用' : '未观测',
-      unit: null,
-      freshness: 'MISSING',
-      quality: null,
-      qualityReasons: [],
-      sampledAt: null,
-      receivedAt: null,
-      policyRevision: state?.policyRevision ?? null,
-      missingReason: state?.missingReason,
-    };
-  }
-  return {
-    key: definition.key,
-    label: definition.label,
-    state: 'PRESENT',
-    displayValue: formatTelemetryDisplayValue(state.value, definition.precision ?? 3),
-    unit: formatTelemetryUnit(state.unit ?? definition.defaultUnit),
-    freshness: state.freshness,
-    quality: state.quality,
-    qualityReasons: [...state.qualityReasons],
-    sampledAt: state.sampledAt,
-    receivedAt: state.receivedAt,
-    policyRevision: state.policyRevision,
-  };
-}
-
-export function projectRealAssetsOperatingState(
-  snapshotResult: RealAssetsSnapshotResult | undefined,
-  profile: RealAssetsProfileResolution,
-): { readonly state: RealAssetsOperatingState; readonly reasons: readonly RealAssetsAttentionReason[]; readonly points: readonly RealAssetsPointView[] } {
-  if (!snapshotResult) {
-    return { state: 'UNKNOWN', reasons: ['CURRENT_STATE_UNAVAILABLE'], points: [] };
-  }
-  if (snapshotResult.status === 'error') {
-    const reason: RealAssetsAttentionReason = snapshotResult.problem.code === 'TELEMETRY_KEY_INVALID'
-      ? 'POINT_CATALOG_CONTRACT_DRIFT'
-      : snapshotResult.problem.code === 'RESOURCE_NOT_FOUND'
-        ? 'CURRENT_STATE_NOT_VISIBLE'
-        : 'CURRENT_STATE_UNAVAILABLE';
-    return { state: 'UNKNOWN', reasons: [reason], points: [] };
-  }
-  const snapshot = snapshotResult.snapshot;
-  const definitions = listPointDefinitions(profile);
-  const valueByKey = new Map(snapshot.values.map((value) => [value.key, value]));
-  const points = definitions.map((definition) => pointView(definition, valueByKey.get(definition.key)));
-  if (snapshot.evaluationAvailability !== 'AVAILABLE') {
-    return { state: 'UNKNOWN', reasons: ['CURRENT_STATE_UNAVAILABLE'], points };
-  }
-  if (snapshot.presence.applicability !== 'APPLICABLE'
-    || snapshot.presence.currentState === null
-    || snapshot.presence.currentState === 'UNKNOWN') {
-    return { state: 'UNKNOWN', reasons: ['PRESENCE_UNKNOWN'], points };
-  }
-  if (snapshot.presence.currentState === 'OFFLINE') {
-    return { state: 'OFFLINE', reasons: ['PRESENCE_OFFLINE'], points };
-  }
-  if (profile.state === 'unconfigured') {
-    return { state: 'UNKNOWN', reasons: ['POINT_CATALOG_UNCONFIGURED'], points };
-  }
-
-  const reasons = new Set<RealAssetsAttentionReason>();
-  for (const definition of definitions) {
-    if (!definition.critical) continue;
-    const value = valueByKey.get(definition.key);
-    if (!value || value.state === 'MISSING') {
-      reasons.add('CRITICAL_POINT_MISSING');
-      continue;
-    }
-    if (value.freshness === 'STALE') reasons.add('TELEMETRY_STALE');
-    if (value.quality !== 'GOOD') reasons.add('TELEMETRY_QUALITY_DEGRADED');
-  }
-  if (snapshot.telemetryReadiness === 'DEGRADED' || snapshot.telemetryReadiness === 'INCOMPLETE') {
-    reasons.add('TELEMETRY_INCOMPLETE');
-  }
-  return reasons.size > 0
-    ? { state: 'ATTENTION', reasons: [...reasons], points }
-    : { state: 'NORMAL', reasons: [], points };
-}
-
 export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssetsDeviceRow[] {
   const now = input.now ?? new Date();
   const assetById = new Map(input.assetModel.assets.map((item) => [item.id, item]));
@@ -420,7 +302,8 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
   const rows = input.assetModel.devices.map((device): RealAssetsDeviceRow => {
     const profile = resolveRealAssetsProfile(device.deviceType);
     const snapshotResult = input.snapshots?.get(device.id);
-    const projection = projectRealAssetsOperatingState(snapshotResult, profile);
+    const telemetryPoints = input.assetModel.telemetryPoints.filter((point) => point.reportingDeviceId === device.id);
+    const operational = projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult, profile });
     const binding = resolveDeviceBinding(device, input.assetModel.relationships, assetById, now);
     return {
       device,
@@ -428,10 +311,9 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
       binding,
       space: resolveDeviceSpace(device, binding, input.assetModel.relationships, spaceById, now),
       registeredPointCount: pointCountByDevice.get(device.id) ?? 0,
+      telemetryPoints,
       snapshotResult,
-      operatingState: projection.state,
-      attentionReasons: projection.reasons,
-      points: projection.points,
+      operational,
     };
   });
   return rows.sort((left, right) => {
@@ -491,14 +373,11 @@ export function buildRealAssetsAssetRows(input: BuildRealAssetsAssetRowsInput): 
         && row.point.writable
         && relationship?.role === 'CONTROLS';
     });
-    const attentionReasons = [...new Set(devices.flatMap((row) => row.attentionReasons))];
-    const operatingState: RealAssetsOperatingState = devices.length === 0
-      ? 'UNKNOWN'
-      : devices.every((row) => row.operatingState === 'NORMAL')
-        ? 'NORMAL'
-        : devices.every((row) => row.operatingState === 'OFFLINE')
-          ? 'OFFLINE'
-          : 'ATTENTION';
+    const attentionReasons = [...new Set(devices.flatMap((row) => row.operational.attentionReasons))];
+    const offlineDeviceCount = devices.filter((row) => row.operational.connection.state === 'OFFLINE').length;
+    const connectionUnknownDeviceCount = devices.filter((row) => row.operational.connection.state === 'UNKNOWN').length;
+    const dataIssueDeviceCount = devices.filter((row) => row.operational.attentionReasons
+      .some((reason) => reason !== 'PRESENCE_OFFLINE')).length;
     return {
       asset,
       space: resolveAssetSpace(asset, input.assetModel.relationships, spaceById, now),
@@ -506,8 +385,11 @@ export function buildRealAssetsAssetRows(input: BuildRealAssetsAssetRowsInput): 
       sensors,
       points,
       controlPoints,
-      operatingState,
       attentionReasons,
+      needsAttention: devices.some((row) => row.operational.needsAttention),
+      offlineDeviceCount,
+      connectionUnknownDeviceCount,
+      dataIssueDeviceCount,
     };
   }).sort((left, right) => {
     const leftSpace = left.space.state === 'bound' ? left.space.space : undefined;
@@ -526,9 +408,7 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
   const rows = input.assetModel.telemetryPoints.map((point): RealAssetsTelemetryPointRow => {
     const deviceRow = deviceRowById.get(point.reportingDeviceId);
     if (!deviceRow) throw new Error(`Telemetry Point ${point.id} has no visible Device Endpoint row`);
-    const definition = telemetryPointDefinition(point.pointCode);
-    const snapshot = deviceRow.snapshotResult?.status === 'ok' ? deviceRow.snapshotResult.snapshot : null;
-    const currentState = snapshot?.values.find((value) => value.key === point.pointCode);
+    const current = deviceRow.operational.points.find((value) => value.pointId === point.id) ?? null;
     return {
       point,
       device: deviceRow.device,
@@ -536,12 +416,7 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
       binding: deviceRow.binding,
       space: deviceRow.space,
       label: realAssetsTelemetryPointLabel(point),
-      current: snapshot ? pointView({
-        key: point.pointCode,
-        label: realAssetsTelemetryPointLabel(point),
-        defaultUnit: point.unit ?? definition.defaultUnit,
-        precision: definition.precision,
-      }, currentState) : null,
+      current,
     };
   });
   return rows.sort((left, right) => (
@@ -580,7 +455,6 @@ function hierarchyNode(
   meta: string,
   deviceIds: readonly string[],
   children: readonly RealAssetsHierarchyNode[] = [],
-  pointIds: readonly string[] = [],
 ): RealAssetsHierarchyNode {
   return {
     key: `${kind}:${id}`,
@@ -588,7 +462,6 @@ function hierarchyNode(
     label,
     meta,
     deviceIds: [...new Set(deviceIds)],
-    pointIds: [...new Set([...pointIds, ...children.flatMap((child) => child.pointIds)])],
     children,
   };
 }
@@ -606,89 +479,26 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
     item.id,
     oneCurrentTargetId(model.relationships, 'DEVICE', item.id, 'SPACE', now),
   ]));
-  const sensorDevice = new Map(model.sensors.map((item) => [
-    item.id,
-    oneCurrentTargetId(model.relationships, 'SENSOR', item.id, 'DEVICE', now),
-  ]));
-  const pointsBySensor = new Map<string, TelemetryPoint[]>();
-  const directPointsByDevice = new Map<string, TelemetryPoint[]>();
-  for (const point of model.telemetryPoints) {
-    if (point.sensorId) {
-      const items = pointsBySensor.get(point.sensorId) ?? [];
-      items.push(point);
-      pointsBySensor.set(point.sensorId, items);
-    } else {
-      const items = directPointsByDevice.get(point.reportingDeviceId) ?? [];
-      items.push(point);
-      directPointsByDevice.set(point.reportingDeviceId, items);
-    }
-  }
-
-  const deviceNode = (device: Device, parentKey: string): RealAssetsHierarchyNode => {
-    const branchKey = `${parentKey}:${device.id}`;
-    const sensors = model.sensors
-      .filter((sensor) => sensorDevice.get(sensor.id) === device.id)
-      .sort(compareRegistryIdentity)
-      .map((sensor) => hierarchyNode(
-        'sensor',
-        `${branchKey}:${sensor.id}`,
-        sensor.displayName,
-        `传感器 · ${realAssetsSensorTypeLabel(sensor.sensorType)}`,
-        [device.id],
-        (pointsBySensor.get(sensor.id) ?? []).sort(compareRegistryIdentity).map((point) => hierarchyNode(
-          'point',
-          `${branchKey}:${sensor.id}:${point.id}`,
-          realAssetsTelemetryPointLabel(point),
-          realAssetsTelemetryPointMeta(point),
-          [device.id],
-          [],
-          [point.id],
-        )),
-      ));
-    const directPoints = (directPointsByDevice.get(device.id) ?? []).sort(compareRegistryIdentity);
-    const children = directPoints.length > 0
-      ? [...sensors, hierarchyNode(
-        'virtual-sensor',
-        branchKey,
-        '设备直连点位',
-        '设备直连标准 Point',
-        [device.id],
-        directPoints.map((point) => hierarchyNode(
-          'point',
-          `${branchKey}:direct:${point.id}`,
-          realAssetsTelemetryPointLabel(point),
-          realAssetsTelemetryPointMeta(point),
-          [device.id],
-          [],
-          [point.id],
-        )),
-      )]
-      : sensors;
-    return hierarchyNode(
-      'device',
-      branchKey,
-      '通讯端点',
-      `${device.displayName} · ${realAssetsDeviceTypeLabel(device.deviceType)}`,
-      [device.id],
-      children,
-    );
-  };
+  const deviceNode = (device: Device, parentKey: string): RealAssetsHierarchyNode => hierarchyNode(
+    'device',
+    `${parentKey}:${device.id}`,
+    device.displayName,
+    `${realAssetsDeviceTypeLabel(device.deviceType)} · ${device.code}`,
+    [device.id],
+  );
 
   const assetNode = (asset: Asset): RealAssetsHierarchyNode => {
     const boundDevices = model.devices
       .filter((device) => deviceAsset.get(device.id)?.includes(asset.id))
       .sort(compareRegistryIdentity);
     const endpointNodes = boundDevices.map((device) => deviceNode(device, `asset:${asset.id}`));
-    const collapseSingleEndpoint = boundDevices.length === 1
-      && deviceAsset.get(boundDevices[0].id)?.length === 1;
-    const children = collapseSingleEndpoint ? endpointNodes[0].children : endpointNodes;
     return hierarchyNode(
       'asset',
       asset.id,
-      realAssetsAssetTypeLabel(asset.assetType),
-      `设备 · ${asset.code || asset.displayName}`,
+      asset.displayName,
+      `${realAssetsAssetTypeLabel(asset.assetType)} · ${asset.code}`,
       endpointNodes.flatMap((node) => node.deviceIds),
-      children,
+      endpointNodes,
     );
   };
 
@@ -740,6 +550,3 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
   return hierarchyNode('site', model.siteId, siteLabel, '站点资产', model.devices.map((device) => device.id), children);
 }
 
-export function isRealAssetsAttentionState(state: RealAssetsOperatingState): boolean {
-  return state !== 'NORMAL';
-}

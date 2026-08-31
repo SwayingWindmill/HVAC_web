@@ -520,7 +520,7 @@ try {
   timings.searchMs = Date.now() - started;
   assert(timings.searchMs < 1500, `search interaction exceeded the certification bound: ${timings.searchMs}ms`);
   await setInput(cdpClient, '[data-testid="real-assets-search"]', 'NO-SUCH-CERTIFICATION-DEVICE');
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '0' && document.body.innerText.includes('当前筛选条件没有匹配的 Device')`, 'empty search state');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '0' && document.body.innerText.includes('当前筛选条件没有匹配的通讯端点')`, 'empty search state');
   await setInput(cdpClient, '[data-testid="real-assets-search"]', '');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '200'`, 'search reset');
 
@@ -530,9 +530,7 @@ try {
   assert(assetFiltered === 10, `Asset hierarchy count drifted: ${assetFiltered}`);
   await click(cdpClient, '[data-testid="real-assets-hierarchy-unbound"]');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '5'`, 'unbound hierarchy filter');
-  await click(cdpClient, '[data-testid="real-assets-hierarchy-ambiguous"]');
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '5'`, 'ambiguous hierarchy filter');
-  await click(cdpClient, '[data-testid="real-assets-hierarchy-all"]');
+  await click(cdpClient, '[data-testid="real-assets-hierarchy-site"]');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '200'`, 'hierarchy reset');
   assertions.push('search-hierarchy-empty-states');
 
@@ -544,11 +542,20 @@ try {
   assert(!staticRequestsBeforeDetail.some((url) => url.includes('DeviceHistoryTrends') || url.includes('echarts')), 'history/ECharts modules loaded before opening a Device detail');
   await pressKey(cdpClient, 'Enter', 'Enter', 13);
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible' && document.activeElement === document.querySelector('#real-assets-detail-title')`, 'keyboard Device detail open');
-  await waitForCondition(cdpClient, `['READY','PARTIAL'].includes(document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state'))`, 'initial 1h history');
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'`, 'exact Device realtime bootstrap');
+  await waitForCondition(cdpClient, `globalThis.__REAL_ASSETS_CERTIFICATION__.state().realtime.activeSubscriptions === 1`, 'exact Device realtime subscription');
   const openedState = await evaluate(cdpClient, `globalThis.__REAL_ASSETS_CERTIFICATION__.state()`);
   assert(openedState.realtime.activeSubscriptions === 1 && openedState.realtime.maximumActive === 1, `realtime subscription budget drifted: ${JSON.stringify(openedState.realtime)}`);
   assert(openedState.realtime.openedTargets.at(-1).length === 1 && openedState.realtime.openedTargets.at(-1)[0].deviceId === '01940000-0020-7002-8000-000000000002', 'realtime scope was not the exact selected Device');
+  await click(cdpClient, '[data-testid="real-assets-detail-tab-current"]');
+  const currentDetailText = await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-current-points"]')?.innerText ?? ''`, 'Device current data tab');
+  assert(chillerKeys.every((key) => currentDetailText.includes(key)) && currentDetailText.includes('Freshness') && currentDetailText.includes('Quality'), 'Device current data omitted Registry Point identity, freshness or quality');
+  await click(cdpClient, '[data-testid="real-assets-detail-tab-configuration"]');
+  const configurationText = await waitForCondition(cdpClient, `(() => { const text = document.querySelector('[data-testid="real-assets-device-detail"]')?.innerText ?? ''; return text.includes('Registry revision') ? text : ''; })()`, 'Device configuration tab');
+  assert(configurationText.includes('Device ID') && configurationText.includes('Registry revision') && configurationText.includes('采样') && configurationText.includes('发布') && configurationText.includes('Stale'), 'Device configuration omitted Registry identity/revision or Point acquisition metadata');
+  await click(cdpClient, '[data-testid="real-assets-detail-tab-connection"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'`, 'exact Device realtime bootstrap');
+  await click(cdpClient, '[data-testid="real-assets-detail-tab-trends"]');
+  await waitForCondition(cdpClient, `['READY','PARTIAL'].includes(document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state'))`, 'initial 1h history');
   assertions.push('keyboard-detail-focus-and-exact-subscription');
 
   for (const range of ['6h', '24h']) {
@@ -588,7 +595,7 @@ try {
   await click(cdpClient, '[data-testid="real-assets-detail-copy-id"]');
   await click(cdpClient, '[data-testid="real-assets-detail-copy-link"]');
   const copied = await evaluate(cdpClient, `globalThis.__REAL_ASSETS_CERTIFICATION__.state().clipboardValues`);
-  assert(copied.includes('01940000-0020-7002-8000-000000000002') && copied.some((value) => value.includes('/assets/01940000-0020-7002-8000-000000000002')), 'copy Device ID/deep link did not use the selected Device');
+  assert(copied.includes('01940000-0020-7002-8000-000000000002') && copied.some((value) => value.includes('/assets/device/01940000-0020-7002-8000-000000000002')), 'copy Device ID/deep link did not use the selected Device');
 
   await evaluate(cdpClient, 'history.back()');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-detail-state') === 'closed' && document.activeElement?.textContent?.includes('CERT-DEVICE-002')`, 'back navigation and trigger focus restoration');
@@ -601,7 +608,7 @@ try {
   assertions.push('history-back-forward-copy-escape-focus');
 
   const invalidDeviceId = certificationId(0x20, 999, '01940000');
-  await cdpClient.send('Page.navigate', { url: `${webURL}/sites/${siteAId}/assets/${invalidDeviceId}` });
+  await cdpClient.send('Page.navigate', { url: `${webURL}/sites/${siteAId}/assets/device/${invalidDeviceId}` });
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'not-visible'`, 'non-enumerating Device detail');
   const nonEnumerationText = await evaluate(cdpClient, `document.querySelector('[data-testid="real-assets-device-detail"]')?.innerText ?? ''`);
   assert(nonEnumerationText.includes('未知、格式无效、其他 Site 或未授权 Device 使用同一非枚举状态'), 'non-enumeration copy drifted');

@@ -7,10 +7,11 @@ import {
   createRealAssetsRealtimeTarget,
   describeRealAssetsRealtimeState,
   listRealAssetsRealtimeKeys,
+  realAssetsRealtimeSubscriptionEligibility,
   projectRealAssetsRealtimeRow,
   validateRealAssetsRealtimeState,
 } from '../apps/hvac-web/src/real/assets/realtime.ts';
-import { projectRealAssetsOperatingState } from '../apps/hvac-web/src/real/assets/model.ts';
+import { projectRealAssetsDeviceOperationalState } from '../apps/hvac-web/src/real/assets/operational-projection.ts';
 
 const tenantId = '01900000-0001-7000-8000-000000000001';
 const siteId = '01900000-0002-7000-8000-000000000002';
@@ -18,28 +19,20 @@ const deviceId = '01900000-0011-7000-8000-000000000011';
 const otherDeviceId = '01900000-0012-7000-8000-000000000012';
 
 function values(revision, power = 0) {
+  const timing = {
+    sampledAt: `2026-07-31T04:0${revision}:00.000Z`,
+    receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
+    freshness: 'FRESH',
+    policyRevision: revision,
+  };
   return [
-    {
-      key: 'chiller_run_state', state: 'PRESENT', value: 'RUNNING', valueType: 'STRING', unit: null,
-      sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
-      freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
-    },
-    {
-      key: 'chiller_power', state: 'PRESENT', value: power, valueType: 'NUMBER', unit: 'kW',
-      sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
-      freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
-    },
+    { key: 'chiller_cooling_capacity', state: 'PRESENT', value: 520, valueType: 'NUMBER', unit: 'kW', quality: 'GOOD', qualityReasons: [], ...timing },
     {
       key: 'chiller_cop', state: 'PRESENT', value: 4.8, valueType: 'NUMBER', unit: null,
-      sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
-      freshness: 'FRESH', quality: revision > 2 ? 'PARTIAL' : 'GOOD',
-      qualityReasons: revision > 2 ? ['SOURCE_LAG_EXCEEDED'] : [], policyRevision: revision,
+      quality: revision > 2 ? 'PARTIAL' : 'GOOD', qualityReasons: revision > 2 ? ['SOURCE_LAG_EXCEEDED'] : [], ...timing,
     },
-    {
-      key: 'chiller_cooling_capacity', state: 'PRESENT', value: 520, valueType: 'NUMBER', unit: 'kW',
-      sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
-      freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
-    },
+    { key: 'chiller_power', state: 'PRESENT', value: power, valueType: 'NUMBER', unit: 'kW', quality: 'GOOD', qualityReasons: [], ...timing },
+    { key: 'chiller_run_state', state: 'PRESENT', value: 'RUNNING', valueType: 'STRING', unit: null, quality: 'GOOD', qualityReasons: [], ...timing },
   ];
 }
 
@@ -64,21 +57,48 @@ function snapshot(revision, overrides = {}) {
   };
 }
 
-function row(revision = 2) {
-  const profile = resolveRealAssetsProfile('CHILLER');
-  const snapshotResult = { status: 'ok', snapshot: snapshot(revision) };
-  const projection = projectRealAssetsOperatingState(snapshotResult, profile);
+function registryPoint(pointCode, index) {
   return {
-    device: {
-      id: deviceId, tenantId: tenantId, siteId, code: 'CH-01', displayName: 'Chiller 01',
-      deviceType: 'CHILLER', status: 'ACTIVE', revision: 5,
-    },
+    id: `01900000-0013-7000-8000-00000000001${index}`,
+    tenantId,
+    siteId,
+    reportingDeviceId: deviceId,
+    sensorId: null,
+    pointCode,
+    sourceKey: pointCode,
+    displayName: pointCode,
+    pointType: 'TELEMETRY',
+    valueType: 'NUMBER',
+    unit: null,
+    writable: false,
+    sampleIntervalMs: 1000,
+    publishIntervalMs: 1000,
+    staleAfterMs: 5000,
+    sourceMetadata: {},
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-31T00:00:00.000Z',
+    updatedAt: '2026-07-31T00:00:00.000Z',
+  };
+}
+
+function row(revision = 2, deviceType = 'CHILLER') {
+  const profile = resolveRealAssetsProfile(deviceType);
+  const device = {
+    id: deviceId, tenantId: tenantId, siteId, code: 'CH-01', displayName: 'Chiller 01',
+    deviceType, status: 'ACTIVE', revision: 5,
+  };
+  const telemetryPoints = values(revision).map((value, index) => registryPoint(value.key, index));
+  const snapshotResult = { status: 'ok', snapshot: snapshot(revision) };
+  return {
+    device,
     profile,
     binding: { state: 'unbound' },
+    space: { state: 'unbound' },
+    registeredPointCount: telemetryPoints.length,
+    telemetryPoints,
     snapshotResult,
-    operatingState: projection.state,
-    attentionReasons: projection.reasons,
-    points: projection.points,
+    operational: projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult, profile }),
   };
 }
 
@@ -98,10 +118,10 @@ function liveState(status, revision = 3, overrides = {}) {
   return { ...base, ...overrides };
 }
 
-test('realtime scope selects only versioned critical detail keys and one exact Device target', () => {
+test('realtime scope follows active Registry Points rather than frontend profile configuration', () => {
   const visible = row();
   assert.deepEqual(listRealAssetsRealtimeKeys(visible), [
-    'chiller_run_state', 'chiller_power', 'chiller_cop', 'chiller_cooling_capacity',
+    'chiller_cooling_capacity', 'chiller_cop', 'chiller_power', 'chiller_run_state',
   ]);
   const scope = createRealAssetsRealtimeScope(visible, 7);
   assert.equal(scope.clientSubscriptionId, `real-assets-detail:7:${deviceId}`);
@@ -110,7 +130,26 @@ test('realtime scope selects only versioned critical detail keys and one exact D
     deviceId,
     keys: [...scope.keys],
   });
-  assert.deepEqual(listRealAssetsRealtimeKeys({ profile: resolveRealAssetsProfile('UNKNOWN_DEVICE') }), []);
+  const unprofiled = row(2, 'VENDOR_SPECIAL_CONTROLLER');
+  assert.equal(unprofiled.profile.state, 'unconfigured');
+  assert.deepEqual(listRealAssetsRealtimeKeys(unprofiled), [...scope.keys]);
+});
+
+test('realtime scope reports the public key limit before the hook can throw during render', () => {
+  const visible = row();
+  const crowded = {
+    ...visible,
+    telemetryPoints: Array.from({ length: 65 }, (_, index) => ({
+      ...visible.telemetryPoints[index % visible.telemetryPoints.length],
+      id: `crowded-point-${index}`,
+      pointCode: `vendor.point_${String(index).padStart(2, '0')}`,
+    })),
+  };
+  assert.deepEqual(realAssetsRealtimeSubscriptionEligibility(crowded), {
+    state: 'too-many-points',
+    pointCount: 65,
+    limit: 64,
+  });
 });
 
 test('realtime state validation rejects Tenant, Site, Device and exact-key drift', () => {
@@ -129,9 +168,10 @@ test('newer realtime Snapshot reprojects detail while valid zero and degraded qu
   assert.equal(projection.source, 'realtime');
   assert.equal(projection.realtimeRevision, 3);
   assert.equal(projection.row.snapshotResult.snapshot.businessRevision, 3);
-  assert.equal(projection.row.points.find((point) => point.key === 'chiller_cop').quality, 'PARTIAL');
+  assert.equal(projection.row.operational.points.find((point) => point.key === 'chiller_cop').quality, 'PARTIAL');
+  assert.equal(projection.row.operational.telemetry.quality, 'DEGRADED');
   const zeroProjection = projectRealAssetsRealtimeRow(row(1), liveState('live', 2));
-  assert.equal(zeroProjection.row.points.find((point) => point.key === 'chiller_power').displayValue, '0');
+  assert.equal(zeroProjection.row.operational.points.find((point) => point.key === 'chiller_power').displayValue, '0');
 });
 
 test('older realtime Snapshot never overwrites a newer current-query baseline', () => {
@@ -146,7 +186,9 @@ test('revocation suppresses previously authorized detail Snapshot', () => {
   assert.equal(projection.source, 'none');
   assert.equal(projection.suppressedByRevocation, true);
   assert.equal(projection.row.snapshotResult, undefined);
-  assert.equal(projection.row.operatingState, 'UNKNOWN');
+  assert.equal(projection.row.operational.connection.state, 'UNAVAILABLE');
+  assert.equal(projection.row.operational.telemetry.freshness, 'UNAVAILABLE');
+  assert.ok(projection.row.operational.points.every((point) => point.state === 'UNAVAILABLE'));
 });
 
 test('bounded publisher renders at most once per frame while publishing the latest fully-applied state', () => {

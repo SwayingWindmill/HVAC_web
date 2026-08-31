@@ -1024,9 +1024,10 @@ try {
     catalogRevision: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-catalog-revision'),
     registryPolicyRevision: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-registry-policy-revision'),
     telemetryPolicyRevision: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-telemetry-policy-revision'),
-    rowState: document.querySelector('.real-assets__table tbody tr')?.getAttribute('data-operating-state'),
+    connectionState: document.querySelector('.real-assets__table tbody tr')?.getAttribute('data-connection-state'),
+    telemetryReadiness: document.querySelector('.real-assets__table tbody tr')?.getAttribute('data-telemetry-readiness'),
     assetText: document.querySelector('.real-assets__table tbody tr')?.textContent ?? '',
-    powerZero: Array.from(document.querySelectorAll('.real-assets__points li')).some((item) => item.textContent?.includes('主机功率') && item.textContent?.includes('0 kW')),
+    powerZero: (document.querySelector('.real-assets__table tbody tr')?.textContent ?? '').includes('0 kW'),
   })`);
   assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.tenant, 'validated SiteContext was not rendered from Registry route data');
   assert(explicitSite.dashboard === `/sites/${siteBId}/dashboard`, 'Dashboard navigation escaped validated Site scope');
@@ -1043,13 +1044,13 @@ try {
   assert(explicitSite.businessState === 'READY' && explicitSite.catalogRevision === 'real-assets-critical-points:v1', 'Assets route omitted the operating-list readiness or catalog revision');
   assert(explicitSite.registryPolicyRevision === routePolicyRevision, `Assets route discarded Registry route-policy revision evidence: actual=${explicitSite.registryPolicyRevision} expected=${routePolicyRevision}`);
   assert(explicitSite.telemetryPolicyRevision === routePolicyRevision, `Assets route discarded Telemetry route-policy revision evidence: actual=${explicitSite.telemetryPolicyRevision} expected=${routePolicyRevision}`);
-  assert(explicitSite.rowState === 'ATTENTION' && explicitSite.assetText.includes('Osaka Chiller 01'), 'Assets route omitted the bound Asset attention row');
+  assert(explicitSite.connectionState === 'ONLINE' && explicitSite.telemetryReadiness === 'DEGRADED' && explicitSite.assetText.includes('Osaka Chiller 01'), 'Assets route collapsed independent connection/data evidence');
   assert(explicitSite.powerZero, 'Assets route did not preserve the valid zero-power observation');
   const snapshotQueriesBeforeDetailRefresh = fixture.state.assetSnapshotQueries.length;
   await clickTestId(cdpClient, 'real-assets-open-device');
   await waitForCondition(
     cdpClient,
-    `location.pathname === '/sites/${siteBId}/assets/${osakaDeviceId}'
+    `location.pathname === '/sites/${siteBId}/assets/device/${osakaDeviceId}'
       && document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
       && document.activeElement?.id === 'real-assets-detail-title'`,
     'Assets Device detail opened from the operating row',
@@ -1064,7 +1065,7 @@ try {
       horizontalOverflow: drawer ? drawer.scrollWidth > drawer.clientWidth + 1 : true,
     };
   })()`);
-  assert(deviceDetail.pathname === `/sites/${siteBId}/assets/${osakaDeviceId}` && deviceDetail.state === 'visible', 'Device detail did not bind the URL to the visible Device');
+  assert(deviceDetail.pathname === `/sites/${siteBId}/assets/device/${osakaDeviceId}` && deviceDetail.state === 'visible', 'Device detail did not bind the typed URL to the visible Device');
   assert(deviceDetail.focusedHeading && !deviceDetail.horizontalOverflow, 'Device detail focus or desktop Drawer overflow was invalid');
   assert(deviceDetail.text.includes('Osaka Chiller Controller 01')
     && deviceDetail.text.includes('Osaka Chiller 01')
@@ -1075,6 +1076,7 @@ try {
     && deviceDetail.text.includes('12')
     && deviceDetail.text.includes(routePolicyRevision), 'Device detail omitted authoritative identity, hierarchy, zero value, quality or revision evidence');
 
+  await clickTestId(cdpClient, 'real-assets-detail-tab-trends');
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
@@ -1177,12 +1179,18 @@ try {
     `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Site 列表的 Current batch 暂不可用')
       && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')
       && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('rms-device-history-revision-1')
-      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('chiller.run_state')
-      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('RUNNING')
-      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('520 kW')
       && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
       && !document.querySelector('[data-testid="real-assets-detail-refresh"]')?.disabled`,
     'current Snapshot failure with independent history',
+  );
+  await clickTestId(cdpClient, 'real-assets-detail-tab-current');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-current-points"]')?.textContent?.includes('chiller.run_state')
+      && document.querySelector('[data-testid="real-assets-current-points"]')?.textContent?.includes('当前值不可用')
+      && !document.querySelector('[data-testid="real-assets-current-points"]')?.textContent?.includes('RUNNING')
+      && !document.querySelector('[data-testid="real-assets-current-points"]')?.textContent?.includes('520 kW')`,
+    'Current failure preserves Point identity without stale value substitution',
   );
   assert(fixture.state.assetSnapshotQueries.length > snapshotQueriesBeforeCurrentFailure, 'current-state refresh did not issue a new bounded Snapshot request');
   assert(fixture.state.assetHistoryQueries.length === historyQueriesBeforeCurrentFailure, 'current-state failure retriggered short history');
@@ -1198,6 +1206,7 @@ try {
   fixture.state.assetSnapshotMode = 'ok';
   const snapshotQueriesBeforeCurrentRecovery = fixture.state.assetSnapshotQueries.length;
   await clickTestId(cdpClient, 'real-assets-detail-refresh');
+  await clickTestId(cdpClient, 'real-assets-detail-tab-overview');
   await waitForCondition(
     cdpClient,
     `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')
@@ -1219,7 +1228,7 @@ try {
   await evaluate(cdpClient, 'history.forward()');
   await waitForCondition(
     cdpClient,
-    `location.pathname === '/sites/${siteBId}/assets/${osakaDeviceId}'
+    `location.pathname === '/sites/${siteBId}/assets/device/${osakaDeviceId}'
       && document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
       && document.activeElement?.id === 'real-assets-detail-title'`,
     'Device detail browser Forward restored the Drawer',
@@ -1233,14 +1242,14 @@ try {
     'Device detail Close restored the source row',
   );
 
-  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/${osakaDeviceId}`);
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/device/${osakaDeviceId}`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
       && document.activeElement?.id === 'real-assets-detail-title'`,
     'direct Device detail URL',
   );
-  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/not-a-device`);
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/device/not-a-device`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'not-visible'
@@ -1251,9 +1260,9 @@ try {
     pathname: location.pathname,
     text: document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent ?? '',
   })`);
-  assert(invisibleDeviceDetail.pathname === `/sites/${siteBId}/assets/not-a-device`, 'invalid Device selector did not remain URL-addressable');
-  assert(invisibleDeviceDetail.text.includes('设备不可见')
-    && invisibleDeviceDetail.text.includes('不会确认对象是否存在')
+  assert(invisibleDeviceDetail.pathname === `/sites/${siteBId}/assets/device/not-a-device`, 'invalid typed Device selector did not remain URL-addressable');
+  assert(invisibleDeviceDetail.text.includes('Device 不可见或不存在')
+    && invisibleDeviceDetail.text.includes('同一非枚举状态')
     && !invisibleDeviceDetail.text.includes('not-a-device')
     && !invisibleDeviceDetail.text.includes(osakaDeviceId)
     && !invisibleDeviceDetail.text.includes('Osaka Chiller'), 'Device not-visible state enumerated protected identity');
@@ -1570,12 +1579,17 @@ try {
   assert(mobileChooser.choiceHeights.every((height) => height >= 40), 'mobile Site chooser targets were too small');
   assert(mobileChooser.headerRight <= mobileChooser.viewport + 1 && mobileChooser.realtimeRight <= mobileChooser.viewport + 1, 'mobile trusted header exceeded the viewport');
 
-  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/${osakaDeviceId}`);
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/device/${osakaDeviceId}`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
-      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
       && document.activeElement?.id === 'real-assets-detail-title'`,
+    'mobile Device detail',
+  );
+  await clickTestId(cdpClient, 'real-assets-detail-tab-trends');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'`,
     'mobile Device detail and history',
   );
   const mobileDeviceDetail = await evaluate(cdpClient, `(() => {

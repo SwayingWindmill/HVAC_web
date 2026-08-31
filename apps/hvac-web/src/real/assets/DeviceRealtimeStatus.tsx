@@ -37,8 +37,12 @@ export function DeviceRealtimeStatus({
     detail = '当前 Principal 缺少 telemetry.subscribe；权威 Current Snapshot 仍可独立展示。';
     degraded = true;
   } else if (realtime.phase === 'not-configured') {
-    label = '实时点位目录未配置';
-    detail = '此 Device type 没有版本化关键点位 profile，因此不会猜测 keys 或建立宽泛订阅。';
+    label = '没有可实时订阅的 Registry Point';
+    detail = '该 Device 当前没有 ACTIVE 且非 COMMAND 的 Registry Point，因此不会建立空订阅或猜测 keys。';
+    degraded = true;
+  } else if (realtime.phase === 'scope-too-large') {
+    label = '实时订阅范围超过公共接口上限';
+    detail = '该 Device 的 ACTIVE 非 COMMAND Registry Point 超过 64 个；Current Snapshot 仍可完整展示，但不会把实时接口拆成多个隐藏订阅来改变公共语义。';
     degraded = true;
   } else if (realtime.phase === 'opening') {
     label = '正在建立精确实时订阅';

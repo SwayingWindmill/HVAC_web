@@ -2,6 +2,10 @@ import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 
 export type EnergyRoutePeriod = 'year' | 'month' | 'week' | 'day';
 
+export type AssetsDetailTarget =
+  | { readonly kind: 'asset'; readonly id: string }
+  | { readonly kind: 'device'; readonly id: string };
+
 export type SiteRouteLeaf =
   | 'dashboard'
   | 'assets'
@@ -34,7 +38,7 @@ export type SiteRoutingDecision =
     state: 'READY';
     route: SiteRouteLeaf;
     context: SiteContext;
-    assetId?: string;
+    assetsDetail?: AssetsDetailTarget;
     energyPeriod?: EnergyRoutePeriod;
   }
   | { state: 'FORBIDDEN' }
@@ -125,8 +129,14 @@ export function resolveSiteRouting(
     return { state: 'SITE_ROUTE_NOT_FOUND', context };
   }
 
-  if (leaf === 'assets' && segments.length === 4) {
-    return { state: 'READY', route: leaf, context, assetId: segments[3] };
+  if (leaf === 'assets') {
+    if (segments.length === 3) return { state: 'READY', route: leaf, context };
+    const kind = segments[3];
+    const id = segments[4];
+    if (segments.length === 5 && id && (kind === 'asset' || kind === 'device')) {
+      return { state: 'READY', route: leaf, context, assetsDetail: { kind, id } };
+    }
+    return { state: 'SITE_ROUTE_NOT_FOUND', context };
   }
 
   if (leaf === 'energy') {

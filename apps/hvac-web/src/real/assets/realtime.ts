@@ -1,9 +1,9 @@
 import type { DeviceObservationSnapshot } from '../../api/generated/s2Telemetry.gen.ts';
+import type { RealAssetsDeviceRow } from './model.ts';
 import {
-  projectRealAssetsOperatingState,
-  type RealAssetsDeviceRow,
+  projectRealAssetsDeviceOperationalState,
   type RealAssetsSnapshotResult,
-} from './model.ts';
+} from './operational-projection.ts';
 
 export interface RealAssetsRealtimeTarget {
   readonly clientSubscriptionId: string;
@@ -61,12 +61,29 @@ function cloneSnapshot(snapshot: DeviceObservationSnapshot): DeviceObservationSn
   return JSON.parse(JSON.stringify(snapshot)) as DeviceObservationSnapshot;
 }
 
-export function listRealAssetsRealtimeKeys(row: Pick<RealAssetsDeviceRow, 'profile'>): readonly string[] {
-  return row.profile.state === 'configured'
-    ? row.profile.profile.points
-      .filter((definition) => definition.critical && definition.showInDetail)
-      .map((definition) => definition.key)
-    : [];
+export const REAL_ASSETS_REALTIME_KEY_LIMIT = 64;
+
+export type RealAssetsRealtimeSubscriptionEligibility =
+  | { readonly state: 'eligible'; readonly pointCount: number }
+  | { readonly state: 'no-points'; readonly pointCount: 0 }
+  | { readonly state: 'too-many-points'; readonly pointCount: number; readonly limit: typeof REAL_ASSETS_REALTIME_KEY_LIMIT };
+
+export function listRealAssetsRealtimeKeys(row: Pick<RealAssetsDeviceRow, 'telemetryPoints'>): readonly string[] {
+  return row.telemetryPoints
+    .filter((point) => point.status === 'ACTIVE' && point.pointType !== 'COMMAND')
+    .map((point) => point.pointCode)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function realAssetsRealtimeSubscriptionEligibility(
+  row: Pick<RealAssetsDeviceRow, 'telemetryPoints'>,
+): RealAssetsRealtimeSubscriptionEligibility {
+  const pointCount = listRealAssetsRealtimeKeys(row).length;
+  if (pointCount === 0) return { state: 'no-points', pointCount: 0 };
+  if (pointCount > REAL_ASSETS_REALTIME_KEY_LIMIT) {
+    return { state: 'too-many-points', pointCount, limit: REAL_ASSETS_REALTIME_KEY_LIMIT };
+  }
+  return { state: 'eligible', pointCount };
 }
 
 export function realAssetsRealtimeSubscriptionId(protectedGeneration: number, deviceId: string): string {
@@ -81,8 +98,8 @@ export function createRealAssetsRealtimeScope(
   protectedGeneration: number,
 ): RealAssetsRealtimeScope {
   const keys = listRealAssetsRealtimeKeys(row);
-  if (keys.length === 0) throw new Error('Realtime subscription requires a configured critical-point profile');
-  if (keys.length > 64) throw new Error('Realtime subscription exceeds the 64-key public limit');
+  if (keys.length === 0) throw new Error('Realtime subscription requires at least one active non-command Registry Point');
+  if (keys.length > REAL_ASSETS_REALTIME_KEY_LIMIT) throw new Error(`Realtime subscription exceeds the ${REAL_ASSETS_REALTIME_KEY_LIMIT}-key public limit`);
   return Object.freeze({
     protectedGeneration,
     clientSubscriptionId: realAssetsRealtimeSubscriptionId(protectedGeneration, row.device.id),
@@ -130,13 +147,15 @@ function withSnapshotResult(
   row: RealAssetsDeviceRow,
   snapshotResult: RealAssetsSnapshotResult | undefined,
 ): RealAssetsDeviceRow {
-  const projection = projectRealAssetsOperatingState(snapshotResult, row.profile);
   return {
     ...row,
     snapshotResult,
-    operatingState: projection.state,
-    attentionReasons: projection.reasons,
-    points: projection.points,
+    operational: projectRealAssetsDeviceOperationalState({
+      device: row.device,
+      telemetryPoints: row.telemetryPoints,
+      snapshotResult,
+      profile: row.profile,
+    }),
   };
 }
 

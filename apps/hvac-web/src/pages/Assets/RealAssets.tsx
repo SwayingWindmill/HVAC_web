@@ -88,9 +88,6 @@ const hierarchyIcon = (kind: RealAssetsHierarchyNode['kind']) => {
     case 'space': return <ClusterOutlined style={{ color: STATUS.info }} />;
     case 'asset': return <BlockOutlined style={{ color: STATUS.warn }} />;
     case 'device': return <TabletOutlined style={{ color: STATUS.info }} />;
-    case 'sensor':
-    case 'virtual-sensor': return <ApiOutlined style={{ color: STATUS.info }} />;
-    case 'point': return <DatabaseOutlined />;
   }
 };
 

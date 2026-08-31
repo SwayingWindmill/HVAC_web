@@ -380,6 +380,7 @@ export function AssetDetailDrawer({
   return (
     <Drawer
       width={760}
+      rootClassName="ops-detail-drawer"
       open={Boolean(row)}
       onClose={onClose}
       destroyOnHidden
@@ -394,7 +395,11 @@ export function AssetDetailDrawer({
             <Descriptions.Item label="编码">{row.asset.code}</Descriptions.Item>
             <Descriptions.Item label="类型">{row.asset.assetType}</Descriptions.Item>
             <Descriptions.Item label="区域">{row.space.state === 'bound' ? row.space.space.displayName : '未绑定'}</Descriptions.Item>
-            <Descriptions.Item label="状态"><Tag>{row.operatingState}</Tag></Descriptions.Item>
+            <Descriptions.Item label="Device 运行摘要">
+              {row.devices.length === 0
+                ? '未绑定 Device'
+                : `${row.offlineDeviceCount} 离线 · ${row.dataIssueDeviceCount} 数据异常 · ${row.connectionUnknownDeviceCount} 连接未知`}
+            </Descriptions.Item>
           </Descriptions>
 
           <DeviceRealtimeStatus realtime={realtime} projection={realtimeProjection} site={site} />
@@ -439,7 +444,15 @@ export function AssetDetailDrawer({
             columns={[
               { title: '端点', render: (_, item) => item.device.displayName },
               { title: '角色', render: (_, item) => item.binding.state === 'bound' ? item.binding.relationship.role : item.binding.state },
-              { title: '通讯状态', render: (_, item) => <Tag>{item.operatingState}</Tag> },
+              {
+                title: '连接 / 数据',
+                render: (_, item) => (
+                  <Space size={4} wrap>
+                    <Tag>{item.operational.connection.state}</Tag>
+                    <Tag>{item.operational.telemetry.readiness}</Tag>
+                  </Space>
+                ),
+              },
               { title: 'Device ID', render: (_, item) => <Typography.Text copyable>{item.device.id}</Typography.Text> },
             ]}
           />
