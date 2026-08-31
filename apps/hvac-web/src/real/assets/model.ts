@@ -13,6 +13,7 @@ import {
   telemetryPointDefinition,
 } from '../../domain/centralPlantTelemetry.ts';
 import {
+  listPointDefinitions,
   resolveRealAssetsProfile,
   type RealAssetsProfileResolution,
 } from './catalog.ts';
@@ -46,6 +47,7 @@ export interface RealAssetsDeviceRow {
   readonly telemetryPoints: readonly TelemetryPoint[];
   readonly snapshotResult?: RealAssetsSnapshotResult;
   readonly operational: RealAssetsDeviceOperationalProjection;
+  readonly representativePoints: readonly RealAssetsPointView[];
 }
 
 export interface RealAssetsAssetRow {
@@ -291,6 +293,24 @@ export function resolveAssetSpace(
   return { state: 'bound', relationship, space };
 }
 
+export function selectRealAssetsRepresentativePoints(
+  telemetryPoints: readonly TelemetryPoint[],
+  profile: RealAssetsProfileResolution,
+  points: readonly RealAssetsPointView[],
+): readonly RealAssetsPointView[] {
+  const registeredKeys = new Set(telemetryPoints.map((point) => point.pointCode));
+  const preferred = listPointDefinitions(profile)
+    .filter((definition) => registeredKeys.has(definition.key))
+    .map((definition) => definition.key);
+  const generic = telemetryPoints
+    .filter((point) => point.status === 'ACTIVE' && point.pointType !== 'COMMAND' && !preferred.includes(point.pointCode))
+    .map((point) => point.pointCode);
+  return [...preferred, ...generic]
+    .slice(0, 3)
+    .map((key) => points.find((point) => point.key === key))
+    .filter((point): point is RealAssetsPointView => Boolean(point));
+}
+
 export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssetsDeviceRow[] {
   const now = input.now ?? new Date();
   const assetById = new Map(input.assetModel.assets.map((item) => [item.id, item]));
@@ -303,7 +323,7 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
     const profile = resolveRealAssetsProfile(device.deviceType);
     const snapshotResult = input.snapshots?.get(device.id);
     const telemetryPoints = input.assetModel.telemetryPoints.filter((point) => point.reportingDeviceId === device.id);
-    const operational = projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult, profile });
+    const operational = projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult });
     const binding = resolveDeviceBinding(device, input.assetModel.relationships, assetById, now);
     return {
       device,
@@ -314,6 +334,7 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
       telemetryPoints,
       snapshotResult,
       operational,
+      representativePoints: selectRealAssetsRepresentativePoints(telemetryPoints, profile, operational.points),
     };
   });
   return rows.sort((left, right) => {

@@ -538,8 +538,8 @@ export function RealAssetsWorkspace({
         width: 230,
         render: (_, row) => (
           <Space direction="vertical" size={2}>
-            {row.operational.representativePoints.length > 0
-              ? row.operational.representativePoints.map((point) => (
+            {row.representativePoints.length > 0
+              ? row.representativePoints.map((point) => (
                 <div key={point.pointId}>
                   <Typography.Text>{point.label} {point.displayValue}{point.unit ? ` ${point.unit}` : ''}</Typography.Text>
                   <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{pointEvidence(point, site.timezone)}</Typography.Text>

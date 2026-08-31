@@ -1,5 +1,5 @@
 import type { DeviceObservationSnapshot } from '../../api/generated/s2Telemetry.gen.ts';
-import type { RealAssetsDeviceRow } from './model.ts';
+import { selectRealAssetsRepresentativePoints, type RealAssetsDeviceRow } from './model.ts';
 import {
   projectRealAssetsDeviceOperationalState,
   type RealAssetsSnapshotResult,
@@ -147,15 +147,16 @@ function withSnapshotResult(
   row: RealAssetsDeviceRow,
   snapshotResult: RealAssetsSnapshotResult | undefined,
 ): RealAssetsDeviceRow {
+  const operational = projectRealAssetsDeviceOperationalState({
+    device: row.device,
+    telemetryPoints: row.telemetryPoints,
+    snapshotResult,
+  });
   return {
     ...row,
     snapshotResult,
-    operational: projectRealAssetsDeviceOperationalState({
-      device: row.device,
-      telemetryPoints: row.telemetryPoints,
-      snapshotResult,
-      profile: row.profile,
-    }),
+    operational,
+    representativePoints: selectRealAssetsRepresentativePoints(row.telemetryPoints, row.profile, operational.points),
   };
 }
 

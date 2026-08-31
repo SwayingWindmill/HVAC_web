@@ -15,11 +15,6 @@ import {
   formatTelemetryUnit,
   telemetryPointDefinition,
 } from '../../domain/centralPlantTelemetry.ts';
-import {
-  listPointDefinitions,
-  type RealAssetsPointDefinition,
-  type RealAssetsProfileResolution,
-} from './catalog.ts';
 
 export type RealAssetsSnapshotResult =
   | { readonly status: 'ok'; readonly snapshot: DeviceObservationSnapshot }
@@ -83,7 +78,6 @@ export interface RealAssetsDeviceOperationalProjection {
   readonly telemetry: RealAssetsTelemetryProjection;
   readonly registryLifecycle: Device['status'];
   readonly points: readonly RealAssetsPointView[];
-  readonly representativePoints: readonly RealAssetsPointView[];
   readonly attentionReasons: readonly RealAssetsAttentionReason[];
   readonly needsAttention: boolean;
 }
@@ -92,7 +86,6 @@ export interface ProjectRealAssetsDeviceOperationalStateInput {
   readonly device: Device;
   readonly telemetryPoints: readonly TelemetryPoint[];
   readonly snapshotResult?: RealAssetsSnapshotResult;
-  readonly profile: RealAssetsProfileResolution;
 }
 
 interface PointDisplayDefinition {
@@ -102,18 +95,13 @@ interface PointDisplayDefinition {
   readonly precision?: number;
 }
 
-function presentationDefinition(
-  point: TelemetryPoint,
-  profile: RealAssetsProfileResolution,
-): PointDisplayDefinition {
-  const profileDefinition = listPointDefinitions(profile).find((definition) => definition.key === point.pointCode);
+function presentationDefinition(point: TelemetryPoint): PointDisplayDefinition {
   const domainDefinition = telemetryPointDefinition(point.pointCode);
   return {
     point,
-    label: profileDefinition?.label
-      ?? (domainDefinition.label === point.pointCode ? point.displayName : domainDefinition.label),
-    defaultUnit: profileDefinition?.defaultUnit ?? point.unit ?? domainDefinition.defaultUnit,
-    precision: profileDefinition?.precision ?? domainDefinition.precision,
+    label: domainDefinition.label === point.pointCode ? point.displayName : domainDefinition.label,
+    defaultUnit: point.unit ?? domainDefinition.defaultUnit,
+    precision: domainDefinition.precision,
   };
 }
 
@@ -208,20 +196,6 @@ function aggregateQuality(points: readonly RealAssetsPointView[]): 'GOOD' | 'DEG
   return present.some((point) => point.quality !== 'GOOD') ? 'DEGRADED' : 'GOOD';
 }
 
-function representativePointKeys(
-  telemetryPoints: readonly TelemetryPoint[],
-  profile: RealAssetsProfileResolution,
-): readonly string[] {
-  const registeredKeys = new Set(telemetryPoints.map((point) => point.pointCode));
-  const preferred = listPointDefinitions(profile)
-    .filter((definition: RealAssetsPointDefinition) => definition.showInList && registeredKeys.has(definition.key))
-    .map((definition) => definition.key);
-  const generic = telemetryPoints
-    .filter((point) => point.status === 'ACTIVE' && point.pointType !== 'COMMAND' && !preferred.includes(point.pointCode))
-    .map((point) => point.pointCode);
-  return [...preferred, ...generic].slice(0, 3);
-}
-
 function ownerFailureReason(problem: ProblemDetails): RealAssetsAttentionReason {
   if (problem.code === 'RESOURCE_NOT_FOUND') return 'CURRENT_STATE_NOT_VISIBLE';
   if (problem.code === 'TELEMETRY_KEY_INVALID') return 'POINT_CATALOG_CONTRACT_DRIFT';
@@ -231,10 +205,9 @@ function ownerFailureReason(problem: ProblemDetails): RealAssetsAttentionReason 
 function unavailableProjection(
   device: Device,
   telemetryPoints: readonly TelemetryPoint[],
-  profile: RealAssetsProfileResolution,
   reason: RealAssetsAttentionReason,
 ): RealAssetsDeviceOperationalProjection {
-  const points = telemetryPoints.map((point) => unavailablePointView(presentationDefinition(point, profile)));
+  const points = telemetryPoints.map((point) => unavailablePointView(presentationDefinition(point)));
   return {
     connection: {
       applicability: 'UNAVAILABLE',
@@ -256,7 +229,6 @@ function unavailableProjection(
     },
     registryLifecycle: device.status,
     points,
-    representativePoints: points.filter((point) => representativePointKeys(telemetryPoints, profile).includes(point.key)),
     attentionReasons: [reason],
     needsAttention: true,
   };
@@ -265,27 +237,23 @@ function unavailableProjection(
 export function projectRealAssetsDeviceOperationalState(
   input: ProjectRealAssetsDeviceOperationalStateInput,
 ): RealAssetsDeviceOperationalProjection {
-  const { device, telemetryPoints, snapshotResult, profile } = input;
+  const { device, telemetryPoints, snapshotResult } = input;
   if (!snapshotResult) {
-    return unavailableProjection(device, telemetryPoints, profile, 'CURRENT_STATE_UNAVAILABLE');
+    return unavailableProjection(device, telemetryPoints, 'CURRENT_STATE_UNAVAILABLE');
   }
   if (snapshotResult.status === 'error') {
-    return unavailableProjection(device, telemetryPoints, profile, ownerFailureReason(snapshotResult.problem));
+    return unavailableProjection(device, telemetryPoints, ownerFailureReason(snapshotResult.problem));
   }
 
   const snapshot = snapshotResult.snapshot;
   const valueByKey = new Map(snapshot.values.map((value) => [value.key, value]));
   const points = telemetryPoints.map((point) => pointView(
-    presentationDefinition(point, profile),
+    presentationDefinition(point),
     valueByKey.get(point.pointCode),
   ));
-  const representativeKeys = representativePointKeys(telemetryPoints, profile);
-  const representativePoints = representativeKeys
-    .map((key) => points.find((point) => point.key === key))
-    .filter((point): point is RealAssetsPointView => Boolean(point));
 
   if (snapshot.evaluationAvailability === 'UNAVAILABLE') {
-    return unavailableProjection(device, telemetryPoints, profile, 'CURRENT_STATE_UNAVAILABLE');
+    return unavailableProjection(device, telemetryPoints, 'CURRENT_STATE_UNAVAILABLE');
   }
 
   const connection = connectionFromSnapshot(snapshot);
@@ -325,7 +293,6 @@ export function projectRealAssetsDeviceOperationalState(
     },
     registryLifecycle: device.status,
     points,
-    representativePoints,
     attentionReasons: [...attentionReasons],
     needsAttention: attentionReasons.size > 0,
   };

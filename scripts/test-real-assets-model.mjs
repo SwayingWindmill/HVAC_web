@@ -203,14 +203,13 @@ function snapshot(values, overrides = {}) {
   };
 }
 
-test('Device operational projection keeps unknown Presence independent from healthy generic telemetry', () => {
+test('Device operational projection requires no presentation Profile for healthy generic telemetry', () => {
   const point = {
     ...telemetryPoint('01900000-0007-7000-8000-000000000001', deviceId, null),
     pointCode: 'vendor.temperature',
     sourceKey: 'vendor.temperature',
     displayName: 'Supply Temperature',
   };
-  const profile = resolveRealAssetsProfile('vendor-special-controller');
   const projection = projectRealAssetsDeviceOperationalState({
     device: device({ deviceType: 'vendor-special-controller' }),
     telemetryPoints: [point],
@@ -220,7 +219,6 @@ test('Device operational projection keeps unknown Presence independent from heal
         presence: { ...snapshot([]).presence, currentState: 'UNKNOWN' },
       }),
     },
-    profile,
   });
 
   assert.equal(projection.connection.state, 'UNKNOWN');
@@ -253,7 +251,6 @@ test('Device operational projection preserves not-applicable Presence and teleme
         displayState: null,
       }),
     },
-    profile: chillerProfile,
   });
 
   assert.equal(projection.connection.applicability, 'NOT_APPLICABLE');
@@ -277,7 +274,6 @@ test('Device operational projection never presents a value as current when evalu
         availabilityReasons: ['SOURCE_UNAVAILABLE'],
       }),
     },
-    profile: resolveRealAssetsProfile('GENERIC'),
   });
 
   assert.equal(projection.connection.state, 'UNAVAILABLE');
@@ -321,7 +317,6 @@ test('operational projection preserves zero and keeps connection independent fro
     device: device(),
     telemetryPoints: chillerPoints,
     snapshotResult: { status: 'ok', snapshot: snapshot(goodValues) },
-    profile: chillerProfile,
   });
   assert.equal(healthy.connection.state, 'ONLINE');
   assert.equal(healthy.telemetry.freshness, 'FRESH');
@@ -336,7 +331,6 @@ test('operational projection preserves zero and keeps connection independent fro
       status: 'ok',
       snapshot: snapshot(staleValues, { telemetryReadiness: 'DEGRADED', displayState: 'STALE' }),
     },
-    profile: chillerProfile,
   });
   assert.equal(stale.connection.state, 'ONLINE');
   assert.equal(stale.telemetry.freshness, 'STALE');
@@ -353,7 +347,6 @@ test('operational projection preserves zero and keeps connection independent fro
         displayState: 'OFFLINE',
       }),
     },
-    profile: chillerProfile,
   });
   assert.equal(offline.connection.state, 'OFFLINE');
   assert.ok(offline.attentionReasons.includes('PRESENCE_OFFLINE'));
@@ -377,7 +370,6 @@ test('missing and degraded-quality Points remain independent attention evidence'
       status: 'ok',
       snapshot: snapshot(values, { telemetryReadiness: 'INCOMPLETE', displayState: 'UNKNOWN' }),
     },
-    profile: chillerProfile,
   });
   assert.equal(projection.telemetry.readiness, 'INCOMPLETE');
   assert.ok(projection.attentionReasons.includes('TELEMETRY_MISSING'));
@@ -398,7 +390,7 @@ test('owner read failures map to unavailable Point evidence without inventing De
   });
   const notVisible = projectRealAssetsDeviceOperationalState({
     device: device(), telemetryPoints: chillerPoints,
-    snapshotResult: { status: 'error', problem: problem('RESOURCE_NOT_FOUND') }, profile: chillerProfile,
+    snapshotResult: { status: 'error', problem: problem('RESOURCE_NOT_FOUND') },
   });
   assert.equal(notVisible.connection.state, 'UNAVAILABLE');
   assert.deepEqual(notVisible.attentionReasons, ['CURRENT_STATE_NOT_VISIBLE']);
@@ -406,7 +398,7 @@ test('owner read failures map to unavailable Point evidence without inventing De
 
   const contractDrift = projectRealAssetsDeviceOperationalState({
     device: device(), telemetryPoints: chillerPoints,
-    snapshotResult: { status: 'error', problem: problem('TELEMETRY_KEY_INVALID') }, profile: chillerProfile,
+    snapshotResult: { status: 'error', problem: problem('TELEMETRY_KEY_INVALID') },
   });
   assert.deepEqual(contractDrift.attentionReasons, ['POINT_CATALOG_CONTRACT_DRIFT']);
 });

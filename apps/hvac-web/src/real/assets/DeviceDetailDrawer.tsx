@@ -236,9 +236,9 @@ export function DeviceDetailDrawer({
                     {row.snapshotResult?.status === 'error' ? (
                       <Alert type="warning" showIcon message="Current Snapshot 不可用" description={row.snapshotResult.problem.detail} />
                     ) : null}
-                    {row.operational.representativePoints.length > 0 ? (
+                    {row.representativePoints.length > 0 ? (
                       <Space wrap>
-                        {row.operational.representativePoints.map((point) => (
+                        {row.representativePoints.map((point) => (
                           <Tag key={point.pointId} color={point.freshness === 'STALE' || point.quality !== 'GOOD' ? 'warning' : undefined}>
                             {point.label} · {point.displayValue}{point.unit ? ` ${point.unit}` : ''} · {point.freshness === 'STALE' ? '陈旧' : point.freshness}{point.quality ? ` · ${point.quality}` : ''}
                           </Tag>

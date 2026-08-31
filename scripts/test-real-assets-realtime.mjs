@@ -11,6 +11,7 @@ import {
   projectRealAssetsRealtimeRow,
   validateRealAssetsRealtimeState,
 } from '../apps/hvac-web/src/real/assets/realtime.ts';
+import { selectRealAssetsRepresentativePoints } from '../apps/hvac-web/src/real/assets/model.ts';
 import { projectRealAssetsDeviceOperationalState } from '../apps/hvac-web/src/real/assets/operational-projection.ts';
 
 const tenantId = '01900000-0001-7000-8000-000000000001';
@@ -90,6 +91,7 @@ function row(revision = 2, deviceType = 'CHILLER') {
   };
   const telemetryPoints = values(revision).map((value, index) => registryPoint(value.key, index));
   const snapshotResult = { status: 'ok', snapshot: snapshot(revision) };
+  const operational = projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult });
   return {
     device,
     profile,
@@ -98,7 +100,8 @@ function row(revision = 2, deviceType = 'CHILLER') {
     registeredPointCount: telemetryPoints.length,
     telemetryPoints,
     snapshotResult,
-    operational: projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult, profile }),
+    operational,
+    representativePoints: selectRealAssetsRepresentativePoints(telemetryPoints, profile, operational.points),
   };
 }
 
