@@ -616,6 +616,37 @@ try {
   assertions.push('unknown-cross-site-device-non-enumeration');
 
   await cdpClient.send('Page.navigate', { url: `${webURL}/sites/${siteAId}/assets` });
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-total-device-count') === '200'`, 'Site A reload before Asset detail');
+  const assetId = await evaluate(cdpClient, `document.querySelector('[data-testid="real-assets-hierarchy-asset"][data-asset-id]')?.getAttribute('data-asset-id') ?? ''`);
+  assert(assetId, 'certification hierarchy did not expose a typed Asset id');
+  const realtimeBeforeAssetDetail = await evaluate(cdpClient, `globalThis.__REAL_ASSETS_CERTIFICATION__.state().realtime`);
+  await cdpClient.send('Page.navigate', { url: `${webURL}/sites/${siteAId}/assets/asset/${assetId}` });
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.getAttribute('data-detail-state') === 'visible' && document.activeElement === document.querySelector('#real-assets-asset-detail-title')`, 'typed Asset detail');
+  const assetOverview = await evaluate(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText ?? ''`);
+  assert(assetOverview.includes('Asset ID') && assetOverview.includes('Registry') && assetOverview.includes('控制能力'), 'Asset overview omitted identity, Registry or control capability summary');
+  await click(cdpClient, '[data-testid="real-assets-asset-tab-operations"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('离线 Device') && document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('数据异常 Device')`, 'Asset operations tab');
+  await click(cdpClient, '[data-testid="real-assets-asset-tab-devices"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('Device ID')`, 'Asset Devices tab');
+  await click(cdpClient, '[data-testid="real-assets-asset-tab-components"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('Sensors') && document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('Points')`, 'Asset Components tab');
+  await click(cdpClient, '[data-testid="real-assets-asset-tab-controls"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.innerText?.includes('该 Asset 没有登记可控功能') || Boolean(document.querySelector('[data-testid="asset-control-capability"]'))`, 'Asset Controls tab');
+  const realtimeAfterAssetDetail = await evaluate(cdpClient, `globalThis.__REAL_ASSETS_CERTIFICATION__.state().realtime`);
+  assert(realtimeAfterAssetDetail.activeSubscriptions === 0 && realtimeAfterAssetDetail.openCount === realtimeBeforeAssetDetail.openCount, 'Asset detail opened a Device realtime subscription');
+  assertions.push('typed-asset-detail-owned-tabs-no-device-realtime');
+  await evaluate(cdpClient, 'history.back()');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-detail-state') === 'closed'`, 'Asset detail back navigation');
+  await click(cdpClient, '[data-testid="real-assets-mode-assets"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-ledger-mode') === 'asset'`, 'Asset list mode');
+  await focus(cdpClient, '[data-testid="real-assets-open-asset"]');
+  await pressKey(cdpClient, 'Enter', 'Enter', 13);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-asset-detail"]')?.getAttribute('data-detail-state') === 'visible' && document.activeElement === document.querySelector('#real-assets-asset-detail-title')`, 'keyboard Asset detail open');
+  await pressKey(cdpClient, 'Escape', 'Escape', 27);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-detail-state') === 'closed' && document.activeElement?.matches('[data-testid="real-assets-open-asset"]')`, 'Asset detail trigger focus restoration');
+  assertions.push('asset-keyboard-open-close-focus');
+  await click(cdpClient, '[data-testid="real-assets-mode-devices"]');
+
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-total-device-count') === '200'`, 'Site A reload before late-response purge');
   fixture.state.currentDelayMs = 700;
   await click(cdpClient, '.real-assets__header > button');

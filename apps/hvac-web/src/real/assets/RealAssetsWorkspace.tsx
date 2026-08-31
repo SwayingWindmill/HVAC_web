@@ -257,7 +257,9 @@ export function RealAssetsWorkspace({
   const [selectedDetail, setSelectedDetail] = useState<AssetsDetailTarget | null>(() => requestedDetail ?? null);
   const selectedDetailRef = useRef<AssetsDetailTarget | null>(selectedDetail);
   const previousDetailRef = useRef<AssetsDetailTarget | null>(selectedDetail);
+  const returnFocusAssetIdRef = useRef<string | null>(null);
   const returnFocusDeviceIdRef = useRef<string | null>(null);
+  const assetTriggerRefs = useRef(new Map<string, HTMLElement>());
   const deviceTriggerRefs = useRef(new Map<string, HTMLElement>());
   const tenantId = site.tenantId;
   const sessionCapability = principal.session.csrfToken;
@@ -305,6 +307,7 @@ export function RealAssetsWorkspace({
       setHierarchySelection(`site:${site.id}`);
       selectedDetailRef.current = null;
       previousDetailRef.current = null;
+      returnFocusAssetIdRef.current = null;
       returnFocusDeviceIdRef.current = null;
       setSelectedDetail(null);
     },
@@ -440,6 +443,7 @@ export function RealAssetsWorkspace({
     return row.devices.some((device) => selectedDeviceIds?.has(device.device.id));
   }), [currentPending, currentUnavailable, assetRows, listMode, search, selectedDeviceIds, selectedAssetTreeId, selectedHierarchy]);
 
+  const selectedAssetId = selectedDetail?.kind === 'asset' ? selectedDetail.id : null;
   const selectedDeviceId = selectedDetail?.kind === 'device' ? selectedDetail.id : null;
   const counts = useMemo(() => ({
     total: rows.length,
@@ -591,6 +595,11 @@ export function RealAssetsWorkspace({
   const deviceDetailRow = detailResolution.state === 'visible' && detailResolution.kind === 'device'
     ? detailResolution.row
     : null;
+  const assetDetailState: 'closed' | 'visible' | 'not-visible' = selectedDetail?.kind !== 'asset'
+    ? 'closed'
+    : assetDetailRow
+      ? 'visible'
+      : 'not-visible';
   const deviceDetailState: 'closed' | 'visible' | 'not-visible' = selectedDetail?.kind !== 'device'
     ? 'closed'
     : deviceDetailRow
@@ -600,20 +609,25 @@ export function RealAssetsWorkspace({
   useEffect(() => {
     const previousDetail = previousDetailRef.current;
     previousDetailRef.current = selectedDetail;
-    if (selectedDetail !== null || previousDetail?.kind !== 'device') return;
-    const deviceId = returnFocusDeviceIdRef.current ?? previousDetail.id;
+    if (selectedDetail !== null || !previousDetail) return;
+    const targetId = previousDetail.kind === 'asset'
+      ? returnFocusAssetIdRef.current ?? previousDetail.id
+      : returnFocusDeviceIdRef.current ?? previousDetail.id;
     window.requestAnimationFrame(() => {
-      const trigger = deviceTriggerRefs.current.get(deviceId);
+      const trigger = previousDetail.kind === 'asset'
+        ? assetTriggerRefs.current.get(targetId)
+        : deviceTriggerRefs.current.get(targetId);
       if (trigger) {
         trigger.focus({ preventScroll: true });
         return;
       }
       document.getElementById('real-assets-title')?.focus({ preventScroll: true });
     });
-  }, [filteredRows, selectedDetail]);
+  }, [filteredAssetRows, filteredRows, selectedDetail]);
 
   const openAssetDetail = (assetId: string) => {
     const detail: AssetsDetailTarget = { kind: 'asset', id: assetId };
+    returnFocusAssetIdRef.current = assetId;
     navigate(realAssetsAssetPath(site.id, assetId));
     selectedDetailRef.current = detail;
     setSelectedDetail(detail);
@@ -641,7 +655,17 @@ export function RealAssetsWorkspace({
       fixed: 'left',
       width: 250,
       render: (_, row) => (
-        <Button type="link" onClick={() => openAssetDetail(row.asset.id)}>
+        <Button
+          type="link"
+          data-testid="real-assets-open-asset"
+          aria-haspopup="dialog"
+          aria-expanded={selectedAssetId === row.asset.id}
+          ref={(node) => {
+            if (node) assetTriggerRefs.current.set(row.asset.id, node);
+            else assetTriggerRefs.current.delete(row.asset.id);
+          }}
+          onClick={() => openAssetDetail(row.asset.id)}
+        >
           <Space direction="vertical" size={0} align="start">
             <Typography.Text strong>{row.asset.displayName}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.asset.code} · {row.asset.assetType}</Typography.Text>
@@ -829,16 +853,6 @@ export function RealAssetsWorkspace({
           部分 Device Snapshot 不可用；成功 Device 保留权威状态，失败项独立标记，不使用历史值或零填充。
         </div>
       ) : null}
-      {selectedDetail?.kind === 'asset' && detailResolution.state === 'not-visible' ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="Asset 不可见或不存在"
-          description="未知、格式无效、其他 Site 或未授权 Asset 使用同一非枚举状态；系统不会说明具体原因。"
-          data-testid="real-assets-asset-detail-not-visible"
-        />
-      ) : null}
-
       {hierarchyRoot ? (
         <Row gutter={[16, 16]} className="real-assets__workspace">
           <Col xs={24} lg={7} xl={6}>
@@ -879,8 +893,8 @@ export function RealAssetsWorkspace({
                       value={ledgerMode}
                       onChange={setLedgerMode}
                       options={[
-                        { label: `设备 ${rows.length}`, value: 'devices' },
-                        { label: `资产 ${assetRows.length}`, value: 'asset' },
+                        { label: <span data-testid="real-assets-mode-devices">设备 {rows.length}</span>, value: 'devices' },
+                        { label: <span data-testid="real-assets-mode-assets">资产 {assetRows.length}</span>, value: 'asset' },
                       ]}
                     />
                     <Input
@@ -978,14 +992,8 @@ export function RealAssetsWorkspace({
       <AssetDetailDrawer
         site={site}
         principal={principal}
+        detailState={assetDetailState}
         row={assetDetailRow}
-        telemetryClient={telemetryRuntime.client}
-        protectedGeneration={protectedGeneration}
-        protectedRequestToken={protectedRequestToken}
-        registerProtectedResource={registerProtectedResource}
-        telemetryRuntime={telemetryRuntime}
-        publishRealtimeStatus={publishRealtimeStatus}
-        routePolicyRevision={telemetryPolicyRevision}
         refreshing={registry.isFetching || current.isFetching}
         onClose={closeDetail}
         onRefresh={() => {

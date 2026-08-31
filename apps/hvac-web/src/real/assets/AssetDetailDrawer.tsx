@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'react-router';
-import { Alert, Button, Card, Descriptions, Divider, Drawer, Empty, InputNumber, Modal, Select, Space, Table, Tag, Timeline, Typography } from 'antd';
-import { CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Descriptions, Divider, Empty, InputNumber, Modal, Space, Table, Tabs, Tag, Timeline, Typography } from 'antd';
+import { CheckCircleOutlined } from '@ant-design/icons';
 import {
   approveScopedCommand,
   commandErrorMessage,
@@ -14,36 +14,18 @@ import {
 } from '@/api/commands';
 import { commandCapabilityProfiles, commandCapabilitySchema } from '@/api/command-contract';
 import type { CurrentPrincipalResponse, Site, TelemetryPoint } from '@/api/generated/platformGateway.gen';
-import type { S2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { getWorkOrder, transitionWorkOrder, type WorkOrderRequestOptions } from '@/api/work-orders';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { commandStatusLabel, isTerminalCommandStatus, projectRealCommand } from '../real-commands-projection';
-import type { ProtectedScopeRequestToken } from '../protected-scope';
-import type { ProtectedScopeResource } from '../protected-scope';
-import type { RealtimeStatusUpdate, RealtimeSubscriptionState } from '../realtime-status';
-import { DeviceRealtimeStatus } from './DeviceRealtimeStatus';
 import { CommandStatusBadge } from '@/shared/status/CommandStatus';
-import { projectRealAssetsRealtimeRow } from './realtime';
-import type { RealAssetsTelemetryRuntime } from './telemetry-runtime';
-import { useRealAssetsDeviceRealtime, type RealAssetsRealtimeResult } from './useDeviceRealtime';
+import { EntityDetailShell, type EntityDetailState } from './EntityDetailShell';
 import type { RealAssetsAssetRow, RealAssetsTelemetryPointRow } from './model';
-
-const DeviceHistoryTrends = lazy(async () => {
-  const module = await import('./DeviceHistoryTrends');
-  return { default: module.DeviceHistoryTrends };
-});
 
 interface AssetDetailDrawerProps {
   readonly site: Readonly<Site>;
   readonly principal: CurrentPrincipalResponse;
+  readonly detailState: EntityDetailState;
   readonly row: RealAssetsAssetRow | null;
-  readonly telemetryClient: S2TelemetryClient;
-  readonly protectedGeneration: number;
-  readonly protectedRequestToken: () => ProtectedScopeRequestToken;
-  readonly registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
-  readonly telemetryRuntime: RealAssetsTelemetryRuntime;
-  readonly publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
-  readonly routePolicyRevision: string | null;
   readonly refreshing: boolean;
   readonly onClose: () => void;
   readonly onRefresh: () => void;
@@ -131,17 +113,6 @@ function feedbackValue(control: ControlDefinition, asset: RealAssetsAssetRow): s
   const feedback = asset.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
   if (!feedback?.current) return '未登记反馈点';
   return `${feedback.current.displayValue}${feedback.point.unit ? ` ${formatTelemetryUnit(feedback.point.unit)}` : ''}`;
-}
-
-function shellRealtimeState(realtime: RealAssetsRealtimeResult): RealtimeSubscriptionState {
-  if (realtime.state?.status === 'live') return 'live';
-  if (realtime.state?.status === 'snapshot') {
-    return realtime.state.reason === 'reconnecting' ? 'reconnecting' : 'resync-required';
-  }
-  if (realtime.state?.status === 'unavailable') return 'unavailable';
-  if (realtime.phase === 'opening') return 'connecting';
-  if (realtime.phase === 'error') return 'unavailable';
-  return 'idle';
 }
 
 function AssetControlCard({ site, principal, asset, control }: {
@@ -338,167 +309,146 @@ function AssetControlCard({ site, principal, asset, control }: {
 export function AssetDetailDrawer({
   site,
   principal,
+  detailState,
   row,
-  telemetryClient,
-  protectedGeneration,
-  protectedRequestToken,
-  registerProtectedResource,
-  telemetryRuntime,
-  publishRealtimeStatus,
-  routePolicyRevision,
   refreshing,
   onClose,
   onRefresh,
 }: AssetDetailDrawerProps) {
   const controls = useMemo(() => row?.controlPoints.map(controlDefinition).filter((item): item is ControlDefinition => Boolean(item)) ?? [], [row]);
-  const defaultHistoryDeviceId = row?.devices[0]?.device.id ?? '';
-  const [historyDeviceId, setHistoryDeviceId] = useState(() => defaultHistoryDeviceId);
-  useEffect(() => {
-    setHistoryDeviceId(defaultHistoryDeviceId);
-  }, [defaultHistoryDeviceId, row?.asset.id]);
-  const historyDevice = row?.devices.find((item) => item.device.id === historyDeviceId) ?? row?.devices[0] ?? null;
-  const historyAllowed = principal.authorization.capabilities.includes('telemetry.history.read');
-  const realtime = useRealAssetsDeviceRealtime({
-    row: historyDevice,
-    allowed: principal.authorization.capabilities.includes('telemetry.subscribe'),
-    protectedGeneration,
-    authorizationEpoch: principal.authorization.policyRevision,
-    runtime: telemetryRuntime,
-    protectedRequestToken,
-    registerProtectedResource,
-  });
-  const realtimeProjection = useMemo(
-    () => historyDevice ? projectRealAssetsRealtimeRow(historyDevice, realtime.state) : null,
-    [historyDevice, realtime.state],
-  );
-  const shellState = shellRealtimeState(realtime);
-  useEffect(() => {
-    publishRealtimeStatus({ state: shellState, siteId: site.id });
-    return () => publishRealtimeStatus({ state: 'idle', siteId: site.id });
-  }, [publishRealtimeStatus, shellState, site.id]);
-  const sessionCapability = Reflect.get(principal.session, ['csrf', 'Token'].join('')) as string;
   return (
-    <Drawer
-      width={760}
-      rootClassName="ops-detail-drawer"
-      open={Boolean(row)}
+    <EntityDetailShell
+      state={detailState}
+      title={row ? `${row.asset.displayName} · ${row.asset.assetType}` : 'Asset 详情'}
+      headingId="real-assets-asset-detail-title"
+      testId="real-assets-asset-detail"
+      refreshing={refreshing}
+      onRefresh={onRefresh}
       onClose={onClose}
-      destroyOnHidden
-      title={row ? `${row.asset.displayName} · ${row.asset.assetType}` : 'Asset'}
-      extra={<Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>刷新</Button>}
+      notVisible={(
+        <Alert
+          type="warning"
+          showIcon
+          message="Asset 不可见或不存在"
+          description="未知、格式无效、其他 Site 或未授权 Asset 使用同一非枚举状态；系统不会说明具体原因。"
+        />
+      )}
     >
       {row ? (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Alert type="info" showIcon message="Asset 是运维与控制主对象" description="Sensor 与点位用于观测；只有 Registry 中绑定到本 Asset 的 COMMAND / CONTROLS 点位会生成控制功能。" />
-          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-            <Descriptions.Item label="Asset ID" span={2}><Typography.Text copyable>{row.asset.id}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="编码">{row.asset.code}</Descriptions.Item>
-            <Descriptions.Item label="类型">{row.asset.assetType}</Descriptions.Item>
-            <Descriptions.Item label="区域">{row.space.state === 'bound' ? row.space.space.displayName : '未绑定'}</Descriptions.Item>
-            <Descriptions.Item label="Device 运行摘要">
-              {row.devices.length === 0
-                ? '未绑定 Device'
-                : `${row.offlineDeviceCount} 离线 · ${row.dataIssueDeviceCount} 数据异常 · ${row.connectionUnknownDeviceCount} 连接未知`}
-            </Descriptions.Item>
-          </Descriptions>
-
-          <DeviceRealtimeStatus realtime={realtime} projection={realtimeProjection} site={site} />
-
-          <Typography.Title level={5}>设备功能</Typography.Title>
-          {controls.length > 0 ? controls.map((control) => <AssetControlCard key={control.point.id} site={site} principal={principal} asset={row} control={control} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有登记可控功能" />}
-
-          <Typography.Title level={5}>运行状态与反馈</Typography.Title>
-          <Table<RealAssetsTelemetryPointRow>
-            rowKey={(item) => item.point.id}
-            size="small"
-            pagination={false}
-            dataSource={row.points.filter((item) => item.point.pointType === 'STATE')}
-            columns={[
-              { title: '点位', render: (_, item) => item.label },
-              { title: '类型', render: (_, item) => <Tag>{item.point.pointType}</Tag> },
-              { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.point.unit ? ` ${formatTelemetryUnit(item.point.unit)}` : ''}` : '—' },
-            ]}
-            locale={{ emptyText: '没有状态点位' }}
-          />
-
-          <Typography.Title level={5}>Sensors</Typography.Title>
-          <Table
-            rowKey="id"
-            size="small"
-            pagination={false}
-            dataSource={[...row.sensors]}
-            columns={[
-              { title: 'Sensor', dataIndex: 'displayName' },
-              { title: '类型', dataIndex: 'sensorType' },
-              { title: '状态', dataIndex: 'status', render: (value) => <Tag>{String(value)}</Tag> },
-            ]}
-            locale={{ emptyText: '没有绑定 Sensor' }}
-          />
-
-          <Typography.Title level={5}>Device Endpoints</Typography.Title>
-          <Table
-            rowKey={(item) => item.device.id}
-            size="small"
-            pagination={false}
-            dataSource={[...row.devices]}
-            columns={[
-              { title: '端点', render: (_, item) => item.device.displayName },
-              { title: '角色', render: (_, item) => item.binding.state === 'bound' ? item.binding.relationship.role : item.binding.state },
-              {
-                title: '连接 / 数据',
-                render: (_, item) => (
-                  <Space size={4} wrap>
-                    <Tag>{item.operational.connection.state}</Tag>
-                    <Tag>{item.operational.telemetry.readiness}</Tag>
-                  </Space>
-                ),
-              },
-              { title: 'Device ID', render: (_, item) => <Typography.Text copyable>{item.device.id}</Typography.Text> },
-            ]}
-          />
-
-          <Typography.Title level={5}>历史趋势</Typography.Title>
-          {historyDevice ? (
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Select
-                value={historyDevice.device.id}
-                onChange={setHistoryDeviceId}
-                options={row.devices.map((item) => ({ value: item.device.id, label: `${item.device.displayName} · ${item.device.code}` }))}
-                style={{ width: '100%' }}
-                aria-label="选择历史趋势 Device Endpoint"
-              />
-              <Suspense fallback={<div className="real-assets-history__loading" role="status">正在加载历史趋势组件…</div>}>
-                <DeviceHistoryTrends
-                  site={site}
-                  row={historyDevice}
-                  principal={principal}
-                  client={telemetryClient}
-                  protectedGeneration={protectedGeneration}
-                  protectedRequestToken={protectedRequestToken}
-                  routePolicyRevision={routePolicyRevision}
-                  historyAllowed={historyAllowed}
-                  currentUnavailable={historyDevice.snapshotResult?.status === 'error'}
-                  sessionCapability={sessionCapability}
+        <Tabs
+          defaultActiveKey="overview"
+          items={[
+            {
+              key: 'overview',
+              label: <span data-testid="real-assets-asset-tab-overview">概览</span>,
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Alert type="info" showIcon message="Asset 是运维与控制主对象" description="Device 提供运行事实；Sensor 与 Point 是 Asset 内部组件。控制只来自 Registry 中绑定到本 Asset 的 COMMAND / CONTROLS Point。" />
+                  <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+                    <Descriptions.Item label="Asset ID" span={2}><Typography.Text copyable>{row.asset.id}</Typography.Text></Descriptions.Item>
+                    <Descriptions.Item label="编码">{row.asset.code}</Descriptions.Item>
+                    <Descriptions.Item label="类型">{row.asset.assetType}</Descriptions.Item>
+                    <Descriptions.Item label="Registry">{row.asset.status} · rev {row.asset.revision}</Descriptions.Item>
+                    <Descriptions.Item label="区域">{row.space.state === 'bound' ? row.space.space.displayName : '未绑定 Space'}</Descriptions.Item>
+                    <Descriptions.Item label="Device">{row.devices.length} 台</Descriptions.Item>
+                    <Descriptions.Item label="控制能力">{controls.length} 项</Descriptions.Item>
+                    <Descriptions.Item label="需关注">{row.needsAttention ? '是' : '否'}</Descriptions.Item>
+                  </Descriptions>
+                </Space>
+              ),
+            },
+            {
+              key: 'operations',
+              label: <span data-testid="real-assets-asset-tab-operations">运行</span>,
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+                    <Descriptions.Item label="离线 Device">{row.offlineDeviceCount}</Descriptions.Item>
+                    <Descriptions.Item label="连接未知 Device">{row.connectionUnknownDeviceCount}</Descriptions.Item>
+                    <Descriptions.Item label="数据异常 Device">{row.dataIssueDeviceCount}</Descriptions.Item>
+                    <Descriptions.Item label="运行证据">{row.attentionReasons.length > 0 ? row.attentionReasons.join(' · ') : '无需关注证据'}</Descriptions.Item>
+                  </Descriptions>
+                  <Table<RealAssetsTelemetryPointRow>
+                    rowKey={(item) => item.point.id}
+                    size="small"
+                    pagination={false}
+                    dataSource={row.points.filter((item) => item.point.pointType === 'STATE')}
+                    columns={[
+                      { title: '状态点', render: (_, item) => item.label },
+                      { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.current.unit ? ` ${item.current.unit}` : ''}` : '不可用' },
+                      { title: 'Freshness', render: (_, item) => item.current?.freshness ?? '不可用' },
+                      { title: 'Quality', render: (_, item) => item.current?.quality ?? '不可用' },
+                    ]}
+                    locale={{ emptyText: '没有状态/反馈 Point' }}
+                  />
+                </Space>
+              ),
+            },
+            {
+              key: 'devices',
+              label: <span data-testid="real-assets-asset-tab-devices">设备 {row.devices.length}</span>,
+              children: (
+                <Table
+                  rowKey={(item) => item.device.id}
+                  size="small"
+                  pagination={false}
+                  dataSource={[...row.devices]}
+                  columns={[
+                    { title: 'Device', render: (_, item) => <Space direction="vertical" size={0}><Typography.Text strong>{item.device.displayName}</Typography.Text><Typography.Text type="secondary">{item.device.code}</Typography.Text></Space> },
+                    { title: '角色', render: (_, item) => item.binding.state === 'bound' ? item.binding.relationship.role : item.binding.state },
+                    { title: '连接', render: (_, item) => <Tag>{item.operational.connection.state}</Tag> },
+                    { title: '数据', render: (_, item) => <Tag>{item.operational.telemetry.readiness}</Tag> },
+                    { title: 'Registry', render: (_, item) => `${item.device.status} · rev ${item.device.revision}` },
+                    { title: 'Device ID', render: (_, item) => <Typography.Text copyable>{item.device.id}</Typography.Text> },
+                  ]}
+                  locale={{ emptyText: '没有绑定 Device' }}
                 />
-              </Suspense>
-            </Space>
-          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有可查询历史的 Device Endpoint" />}
-
-          <Typography.Title level={5}>观测与计算点</Typography.Title>
-          <Table<RealAssetsTelemetryPointRow>
-            rowKey={(item) => item.point.id}
-            size="small"
-            pagination={{ pageSize: 8, showSizeChanger: false }}
-            dataSource={row.points.filter((item) => item.point.pointType !== 'COMMAND')}
-            columns={[
-              { title: '点位', render: (_, item) => item.label },
-              { title: '类型', render: (_, item) => <Tag>{item.point.pointType}</Tag> },
-              { title: 'Sensor', render: (_, item) => item.sensor?.displayName ?? '设备内部/计算' },
-              { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.point.unit ? ` ${formatTelemetryUnit(item.point.unit)}` : ''}` : '—' },
-            ]}
-          />
-        </Space>
+              ),
+            },
+            {
+              key: 'components',
+              label: <span data-testid="real-assets-asset-tab-components">组件</span>,
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Typography.Title level={5}>Sensors</Typography.Title>
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    pagination={false}
+                    dataSource={[...row.sensors]}
+                    columns={[
+                      { title: 'Sensor', dataIndex: 'displayName' },
+                      { title: '类型', dataIndex: 'sensorType' },
+                      { title: '状态', dataIndex: 'status', render: (value) => <Tag>{String(value)}</Tag> },
+                    ]}
+                    locale={{ emptyText: '没有绑定 Sensor' }}
+                  />
+                  <Typography.Title level={5}>Points</Typography.Title>
+                  <Table<RealAssetsTelemetryPointRow>
+                    rowKey={(item) => item.point.id}
+                    size="small"
+                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                    dataSource={[...row.points]}
+                    columns={[
+                      { title: 'Point', render: (_, item) => <Space direction="vertical" size={0}><Typography.Text strong>{item.label}</Typography.Text><Typography.Text type="secondary">{item.point.pointCode}</Typography.Text></Space> },
+                      { title: '类型', render: (_, item) => <Tag>{item.point.pointType}</Tag> },
+                      { title: 'Sensor', render: (_, item) => item.sensor?.displayName ?? 'Device 内部/计算' },
+                      { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.current.unit ? ` ${item.current.unit}` : ''}` : '不可用' },
+                    ]}
+                  />
+                </Space>
+              ),
+            },
+            {
+              key: 'controls',
+              label: <span data-testid="real-assets-asset-tab-controls">控制 {controls.length}</span>,
+              children: controls.length > 0
+                ? <Space direction="vertical" size={16} style={{ width: '100%' }}>{controls.map((control) => <AssetControlCard key={control.point.id} site={site} principal={principal} asset={row} control={control} />)}</Space>
+                : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有登记可控功能" />,
+            },
+          ]}
+        />
       ) : null}
-    </Drawer>
+    </EntityDetailShell>
   );
 }

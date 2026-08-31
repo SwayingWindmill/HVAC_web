@@ -1,11 +1,11 @@
-import { lazy, Suspense, useEffect, useMemo, useRef } from 'react';
-import { Alert, Button, Descriptions, Drawer, Empty, Space, Table, Tabs, Tag, Typography } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { lazy, Suspense, useEffect, useMemo } from 'react';
+import { Alert, Button, Descriptions, Empty, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { CurrentPrincipalResponse, Site, TelemetryPoint } from '@/api/generated/platformGateway.gen';
 import type { S2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import type { RealtimeStatusUpdate, RealtimeSubscriptionState } from '../realtime-status';
 import { DeviceRealtimeStatus } from './DeviceRealtimeStatus';
+import { EntityDetailShell } from './EntityDetailShell';
 import { realAssetsDevicePath, writeRealAssetsClipboard } from './detail';
 import type { RealAssetsDeviceRow } from './model';
 import type { RealAssetsPointView } from './operational-projection';
@@ -169,12 +169,6 @@ export function DeviceDetailDrawer({
 
   const historyAllowed = principal.authorization.capabilities.includes('telemetry.history.read');
   const sessionCapability = principal.session.csrfToken;
-  const titleRef = useRef<HTMLHeadingElement | null>(null);
-  useEffect(() => {
-    if (detailState === 'closed') return;
-    const handle = window.requestAnimationFrame(() => titleRef.current?.focus({ preventScroll: true }));
-    return () => window.cancelAnimationFrame(handle);
-  }, [detailState, row?.device.id]);
   const copyDeviceId = () => {
     if (!row) return;
     void writeRealAssetsClipboard(navigator.clipboard?.writeText?.bind(navigator.clipboard), row.device.id);
@@ -186,36 +180,32 @@ export function DeviceDetailDrawer({
   };
 
   return (
-    <Drawer
-      width={760}
-      rootClassName="ops-detail-drawer"
-      open={detailState !== 'closed'}
+    <EntityDetailShell
+      state={detailState}
+      title={row ? `${row.device.displayName} · ${row.device.code}` : 'Device 详情'}
+      headingId="real-assets-detail-title"
+      testId="real-assets-device-detail"
+      refreshTestId="real-assets-detail-refresh"
+      closeTestId="real-assets-detail-close"
+      refreshing={refreshing}
+      onRefresh={onRefresh}
       onClose={onClose}
-      destroyOnHidden
-      title={(
-        <Typography.Title id="real-assets-detail-title" ref={titleRef} tabIndex={-1} level={4} style={{ margin: 0 }}>
-          {row ? `${row.device.displayName} · ${row.device.code}` : 'Device 详情'}
-        </Typography.Title>
-      )}
-      footer={(
-        <Space wrap style={{ width: '100%', justifyContent: 'flex-end' }}>
+      footerActions={(
+        <>
           <Button data-testid="real-assets-detail-copy-id" disabled={!row} onClick={copyDeviceId}>复制 ID</Button>
           <Button data-testid="real-assets-detail-copy-link" disabled={!row} onClick={copyDeviceLink}>复制链接</Button>
-          <Button data-testid="real-assets-detail-refresh" icon={<ReloadOutlined />} loading={refreshing} disabled={!row} onClick={onRefresh}>刷新</Button>
-          <Button data-testid="real-assets-detail-close" onClick={onClose}>关闭</Button>
-        </Space>
+        </>
       )}
-      data-testid="real-assets-device-detail"
-      data-detail-state={detailState}
-    >
-      {detailState === 'not-visible' ? (
+      notVisible={(
         <Alert
           type="warning"
           showIcon
           message="Device 不可见或不存在"
           description="未知、格式无效、其他 Site 或未授权 Device 使用同一非枚举状态；系统不会说明具体原因，也不会建立实时订阅。"
         />
-      ) : row ? (
+      )}
+    >
+      {row ? (
         <Tabs
           defaultActiveKey="overview"
           items={[
@@ -319,6 +309,6 @@ export function DeviceDetailDrawer({
           ]}
         />
       ) : null}
-    </Drawer>
+    </EntityDetailShell>
   );
 }
