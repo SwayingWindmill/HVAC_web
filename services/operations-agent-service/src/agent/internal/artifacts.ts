@@ -30,6 +30,12 @@ export interface AgentEvidenceRef {
 export const INVESTIGATION_COMPLETE_TOOL_NAME = 'investigation.complete' as const;
 export const INVESTIGATION_REQUEST_INPUT_TOOL_NAME = 'investigation.request_input' as const;
 
+const MAX_FINDING_SUMMARY_LENGTH = 2_000;
+const MAX_FINDING_EVIDENCE_REFS = 32;
+const MAX_FINDING_LIST_ITEMS = 16;
+const MAX_FINDING_LIST_ITEM_LENGTH = 512;
+const MAX_EVIDENCE_REF_FIELD_LENGTH = 256;
+
 export type AgentTerminalToolName =
   | typeof INVESTIGATION_COMPLETE_TOOL_NAME
   | typeof INVESTIGATION_REQUEST_INPUT_TOOL_NAME;
@@ -138,9 +144,34 @@ const nonEmptyString = (value: unknown, label: string): string => {
   return value;
 };
 
-const stringList = (value: unknown, label: string): readonly string[] => {
-  if (!Array.isArray(value)) return invalidTerminalArtifact(`${label} must be an array.`);
-  return Object.freeze(value.map((item, index) => nonEmptyString(item, `${label}[${index}]`)));
+const boundedString = (value: unknown, label: string, maxLength: number): string => {
+  const result = nonEmptyString(value, label);
+  if (result.length > maxLength) {
+    return invalidTerminalArtifact(`${label} exceeds the accepted length.`);
+  }
+  return result;
+};
+
+const stringList = (
+  value: unknown,
+  label: string,
+  maxItems: number,
+  maxItemLength: number,
+): readonly string[] => {
+  if (!Array.isArray(value) || value.length > maxItems) {
+    return invalidTerminalArtifact(`${label} must be a bounded array.`);
+  }
+  return Object.freeze(value.map((item, index) => (
+    boundedString(item, `${label}[${index}]`, maxItemLength)
+  )));
+};
+
+const physicalExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)\s+(?:(?:have|has)\s+)?(?:changed|set|started|stopped|turned|commanded|executed|applied|adjusted|overrode|reset)\b/iu;
+
+const assertNoPhysicalExecutionClaim = (summary: string): void => {
+  if (physicalExecutionClaim.test(summary)) {
+    invalidTerminalArtifact('investigation.complete cannot claim physical execution by the Agent.');
+  }
 };
 
 const parseEvidenceRef = (value: unknown): AgentEvidenceRef => {
@@ -153,14 +184,30 @@ const parseEvidenceRef = (value: unknown): AgentEvidenceRef => {
 
   const reference = {
     owner: owner as AgentOwner,
-    resourceType: nonEmptyString(record.resourceType, 'evidenceRefs resourceType'),
-    resourceId: nonEmptyString(record.resourceId, 'evidenceRefs resourceId'),
-    toolExecutionId: nonEmptyString(record.toolExecutionId, 'evidenceRefs toolExecutionId'),
+    resourceType: boundedString(
+      record.resourceType,
+      'evidenceRefs resourceType',
+      MAX_EVIDENCE_REF_FIELD_LENGTH,
+    ),
+    resourceId: boundedString(
+      record.resourceId,
+      'evidenceRefs resourceId',
+      MAX_EVIDENCE_REF_FIELD_LENGTH,
+    ),
+    toolExecutionId: boundedString(
+      record.toolExecutionId,
+      'evidenceRefs toolExecutionId',
+      MAX_EVIDENCE_REF_FIELD_LENGTH,
+    ),
   };
   if (!('revision' in record)) return Object.freeze(reference);
   return Object.freeze({
     ...reference,
-    revision: nonEmptyString(record.revision, 'evidenceRefs revision'),
+    revision: boundedString(
+      record.revision,
+      'evidenceRefs revision',
+      MAX_EVIDENCE_REF_FIELD_LENGTH,
+    ),
   });
 };
 
@@ -171,21 +218,41 @@ export const parseInvestigationComplete = (value: unknown): InvestigationComplet
   if (record.outcome !== 'SUPPORTED_FINDING' && record.outcome !== 'UNABLE_TO_CONCLUDE') {
     return invalidTerminalArtifact('investigation.complete outcome is invalid.');
   }
-  if (!Array.isArray(record.evidenceRefs)) {
-    return invalidTerminalArtifact('investigation.complete evidenceRefs must be an array.');
+  if (!Array.isArray(record.evidenceRefs) || record.evidenceRefs.length > MAX_FINDING_EVIDENCE_REFS) {
+    return invalidTerminalArtifact('investigation.complete evidenceRefs must be a bounded array.');
   }
 
   const evidenceRefs = Object.freeze(record.evidenceRefs.map(parseEvidenceRef));
   if (record.outcome === 'SUPPORTED_FINDING' && evidenceRefs.length === 0) {
     return invalidTerminalArtifact('SUPPORTED_FINDING requires at least one evidence reference.');
   }
+  const summary = boundedString(
+    record.summary,
+    'investigation.complete summary',
+    MAX_FINDING_SUMMARY_LENGTH,
+  );
+  const limitations = stringList(
+    record.limitations,
+    'investigation.complete limitations',
+    MAX_FINDING_LIST_ITEMS,
+    MAX_FINDING_LIST_ITEM_LENGTH,
+  );
+  const recommendedNext = stringList(
+    record.recommendedNext,
+    'investigation.complete recommendedNext',
+    MAX_FINDING_LIST_ITEMS,
+    MAX_FINDING_LIST_ITEM_LENGTH,
+  );
+  for (const narrative of [summary, ...limitations, ...recommendedNext]) {
+    assertNoPhysicalExecutionClaim(narrative);
+  }
 
   return Object.freeze({
     outcome: record.outcome,
-    summary: nonEmptyString(record.summary, 'investigation.complete summary'),
+    summary,
     evidenceRefs,
-    limitations: stringList(record.limitations, 'investigation.complete limitations'),
-    recommendedNext: stringList(record.recommendedNext, 'investigation.complete recommendedNext'),
+    limitations,
+    recommendedNext,
   });
 };
 

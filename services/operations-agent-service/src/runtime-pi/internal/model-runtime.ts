@@ -10,6 +10,7 @@ import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 
 import type { AgentEngine, AgentModelRef } from '../../agent/index.js';
 import { createPiAgentEngine } from './pi-runtime.js';
+import { OPERATIONS_INVESTIGATION_SYSTEM_POLICY } from './system-policy.js';
 
 export const AGENT_MODEL_PROVIDER_ENV = 'AGENT_MODEL_PROVIDER' as const;
 export const AGENT_MODEL_ID_ENV = 'AGENT_MODEL_ID' as const;
@@ -75,7 +76,6 @@ export interface PiAgentRuntime {
 
 export interface ProductionPiAgentRuntimeOptions {
   readonly environment: PiModelEnvironment;
-  readonly systemPrompt: string;
 }
 
 interface ParsedModelConfiguration {
@@ -89,7 +89,6 @@ interface ParsedModelConfiguration {
 interface ComposePiAgentRuntimeOptions {
   readonly models: Models;
   readonly model: Model<any>;
-  readonly systemPrompt: string;
   readonly thinkingLevel: ModelThinkingLevel;
   readonly timeoutMs: number;
   readonly maxOutputTokens: number;
@@ -230,7 +229,6 @@ const createPolicyStreamFn = (
 export const composePiAgentRuntime = ({
   models,
   model,
-  systemPrompt,
   thinkingLevel,
   timeoutMs,
   maxOutputTokens,
@@ -242,7 +240,7 @@ export const composePiAgentRuntime = ({
     engine: createPiAgentEngine({
       model,
       streamFn: createPolicyStreamFn(models, policy),
-      systemPrompt,
+      systemPrompt: OPERATIONS_INVESTIGATION_SYSTEM_POLICY,
       thinkingLevel,
     }),
     modelRef,
@@ -265,7 +263,6 @@ const createConfiguredModels = (environment: PiModelEnvironment) => {
 
 export const createProductionPiAgentRuntimeFromEnvironment = async ({
   environment,
-  systemPrompt,
 }: ProductionPiAgentRuntimeOptions): Promise<PiAgentRuntime> => {
   const configuration = parseConfiguration(environment);
   const models = createConfiguredModels(environment);
@@ -288,7 +285,6 @@ export const createProductionPiAgentRuntimeFromEnvironment = async ({
   return composePiAgentRuntime({
     models,
     model,
-    systemPrompt,
     thinkingLevel,
     timeoutMs,
     maxOutputTokens,

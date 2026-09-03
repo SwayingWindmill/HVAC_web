@@ -17,7 +17,7 @@ import {
 export type ScriptedPiPart =
   | Readonly<{ type: 'text'; text: string }>
   | Readonly<{ type: 'thinking'; text: string }>
-  | Readonly<{ type: 'tool-call'; name: string; arguments: Record<string, unknown> }>;
+  | Readonly<{ type: 'tool-call'; name: string; arguments: Record<string, unknown>; id?: string }>;
 
 export interface ScriptedPiResponse {
   readonly parts: readonly ScriptedPiPart[];
@@ -47,7 +47,7 @@ const toFauxPart = (part: ScriptedPiPart) => {
     case 'thinking':
       return fauxThinking(part.text);
     case 'tool-call':
-      return fauxToolCall(part.name, part.arguments);
+      return fauxToolCall(part.name, part.arguments, part.id === undefined ? {} : { id: part.id });
   }
 };
 
@@ -69,7 +69,6 @@ export const createScriptedPiAgentEngine = ({
   return composePiAgentRuntime({
     models,
     model,
-    systemPrompt: 'Use authorized HVAC Tools and finish through investigation.complete.',
     thinkingLevel: policy?.thinkingLevel ?? 'off',
     timeoutMs: policy?.timeoutMs ?? 30_000,
     maxOutputTokens: policy?.maxOutputTokens ?? 2_048,

@@ -19,10 +19,7 @@ const validEnvironment = Object.freeze({
 
 const expectConfigurationError = async (environment, code) => {
   await assert.rejects(
-    () => createProductionPiAgentRuntimeFromEnvironment({
-      environment,
-      systemPrompt: 'Use authorized HVAC Tools and finish through investigation.complete.',
-    }),
+    () => createProductionPiAgentRuntimeFromEnvironment({ environment }),
     (error) => error instanceof PiModelConfigurationError && error.code === code,
   );
 };
@@ -30,7 +27,6 @@ const expectConfigurationError = async (environment, code) => {
 test('production Pi composition validates one exact OpenAI model and exposes only non-secret policy', async () => {
   const runtime = await createProductionPiAgentRuntimeFromEnvironment({
     environment: validEnvironment,
-    systemPrompt: 'Use authorized HVAC Tools and finish through investigation.complete.',
   });
 
   assert.deepEqual(runtime.modelRef, { provider: 'openai', model: 'gpt-5-mini' });

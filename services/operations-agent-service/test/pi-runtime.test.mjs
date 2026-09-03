@@ -121,7 +121,7 @@ test('Pi Agent executes the project Tool loop and terminates through investigati
         {
           parts: [
             { type: 'thinking', text: 'I should inspect the Site context before concluding.' },
-            { type: 'tool-call', name: 'site.get_context', arguments: {} },
+            { type: 'tool-call', id: 'read-site-context', name: 'site.get_context', arguments: {} },
           ],
           stopReason: 'toolUse',
         },

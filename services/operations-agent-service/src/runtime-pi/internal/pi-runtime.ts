@@ -82,6 +82,7 @@ export const createPiAgentEngine = ({
   let toolCalls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let budgetFailureCode: string | null = null;
 
   const usage = (): AgentRunUsage => Object.freeze({
     inputTokens,
@@ -119,6 +120,9 @@ export const createPiAgentEngine = ({
     sessionId: input.session.id,
     runId: input.run.id,
     onArtifact: (artifact) => artifacts.push(artifact),
+    onBudgetExhausted: (code) => {
+      budgetFailureCode ??= code;
+    },
   });
 
   const agent = new Agent({
@@ -131,12 +135,25 @@ export const createPiAgentEngine = ({
     streamFn,
     sessionId: input.session.id,
     toolExecution: 'parallel',
+    shouldStopAfterTurn: () => {
+      if (artifacts.length > 0) return true;
+      if (budgetFailureCode !== null) return true;
+      if (outputTokens >= input.budget.maxOutputTokens) {
+        budgetFailureCode = 'OUTPUT_TOKEN_LIMIT';
+        return true;
+      }
+      if (modelCalls >= input.budget.maxModelCalls) {
+        budgetFailureCode = 'MODEL_CALL_LIMIT';
+        return true;
+      }
+      return false;
+    },
   });
 
   const abortAgent = (): void => agent.abort();
   input.signal.addEventListener('abort', abortAgent, { once: true });
 
-  agent.subscribe((event) => {
+  const unsubscribeAgent = agent.subscribe((event) => {
     switch (event.type) {
       case 'turn_start':
         modelCalls += 1;
@@ -218,6 +235,9 @@ export const createPiAgentEngine = ({
         if (terminalArtifact !== undefined && !emittedArtifactIds.has(terminalArtifact.id)) {
           emittedArtifactIds.add(terminalArtifact.id);
           emit('artifact.created', { artifact: terminalArtifact });
+          if (terminalArtifact.kind === 'INPUT_REQUEST') {
+            emit('input.required', { artifact: terminalArtifact });
+          }
         }
         break;
       }
@@ -243,11 +263,22 @@ export const createPiAgentEngine = ({
     });
   }
 
+  let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
+  const wallClockExpired = new Promise<void>((resolve) => {
+    wallClockTimer = setTimeout(() => {
+      budgetFailureCode ??= 'WALL_CLOCK_LIMIT';
+      agent.abort();
+      resolve();
+    }, input.budget.maxWallClockMs);
+  });
+
   try {
-    await agent.prompt(prompt.content);
+    await Promise.race([
+      agent.prompt(prompt.content),
+      wallClockExpired,
+    ]);
   } catch {
-    if (!input.signal.aborted) {
-      input.signal.removeEventListener('abort', abortAgent);
+    if (!input.signal.aborted && budgetFailureCode === null) {
       const failedRun = terminalRun(input.run, 'FAILED', usage(), 'PI_RUNTIME_FAILED');
       emit('run.failed', { run: failedRun });
       return Object.freeze({
@@ -260,7 +291,9 @@ export const createPiAgentEngine = ({
       });
     }
   } finally {
+    if (wallClockTimer !== undefined) clearTimeout(wallClockTimer);
     input.signal.removeEventListener('abort', abortAgent);
+    unsubscribeAgent();
   }
 
   if (input.signal.aborted) {
@@ -277,12 +310,24 @@ export const createPiAgentEngine = ({
   }
 
   const terminalArtifact = artifacts.at(-1);
-  if (terminalArtifact?.kind === 'FINDING') {
+  if (terminalArtifact === undefined && budgetFailureCode !== null) {
+    const failedRun = terminalRun(input.run, 'FAILED', usage(), budgetFailureCode);
+    emit('run.failed', { run: failedRun });
+    return Object.freeze({
+      runStatus: 'FAILED',
+      sessionStatus: 'FAILED',
+      usage: usage(),
+      finalizedMessages,
+      toolExecutions,
+      artifacts,
+    });
+  }
+  if (terminalArtifact?.kind === 'FINDING' || terminalArtifact?.kind === 'INPUT_REQUEST') {
     const completedRun = terminalRun(input.run, 'COMPLETED', usage(), null);
     emit('run.completed', { run: completedRun });
     return Object.freeze({
       runStatus: 'COMPLETED',
-      sessionStatus: 'COMPLETED',
+      sessionStatus: terminalArtifact.kind === 'INPUT_REQUEST' ? 'WAITING_FOR_INPUT' : 'COMPLETED',
       usage: usage(),
       finalizedMessages,
       toolExecutions,
