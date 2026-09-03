@@ -8,7 +8,11 @@ import {
 } from '@earendil-works/pi-ai';
 
 import type { AgentEngine, AgentModelRef } from '../agent/index.js';
-import { createPiAgentEngine } from './internal/pi-runtime.js';
+import {
+  composePiAgentRuntime,
+  type AgentModelThinkingLevel,
+  type PiAgentModelPolicy,
+} from './internal/model-runtime.js';
 
 export type ScriptedPiPart =
   | Readonly<{ type: 'text'; text: string }>
@@ -23,11 +27,17 @@ export interface ScriptedPiResponse {
 export interface ScriptedPiEngineOptions {
   readonly responses: readonly ScriptedPiResponse[];
   readonly tokensPerSecond?: number;
+  readonly policy?: Readonly<{
+    thinkingLevel?: AgentModelThinkingLevel;
+    timeoutMs?: number;
+    maxOutputTokens?: number;
+  }>;
 }
 
 export interface ScriptedPiAgentEngine {
   readonly engine: AgentEngine;
   readonly modelRef: AgentModelRef;
+  readonly policy: PiAgentModelPolicy;
 }
 
 const toFauxPart = (part: ScriptedPiPart) => {
@@ -44,6 +54,7 @@ const toFauxPart = (part: ScriptedPiPart) => {
 export const createScriptedPiAgentEngine = ({
   responses,
   tokensPerSecond,
+  policy,
 }: ScriptedPiEngineOptions): ScriptedPiAgentEngine => {
   const faux = fauxProvider(tokensPerSecond === undefined ? {} : { tokensPerSecond });
   faux.setResponses(responses.map((response) => fauxAssistantMessage(
@@ -55,12 +66,12 @@ export const createScriptedPiAgentEngine = ({
   models.setProvider(faux.provider);
   const model = faux.getModel();
 
-  return Object.freeze({
-    engine: createPiAgentEngine({
-      model,
-      streamFn: models.streamSimple.bind(models),
-      systemPrompt: 'Use authorized HVAC Tools and finish through investigation.complete.',
-    }),
-    modelRef: Object.freeze({ provider: model.provider, model: model.id }),
+  return composePiAgentRuntime({
+    models,
+    model,
+    systemPrompt: 'Use authorized HVAC Tools and finish through investigation.complete.',
+    thinkingLevel: policy?.thinkingLevel ?? 'off',
+    timeoutMs: policy?.timeoutMs ?? 30_000,
+    maxOutputTokens: policy?.maxOutputTokens ?? 2_048,
   });
 };

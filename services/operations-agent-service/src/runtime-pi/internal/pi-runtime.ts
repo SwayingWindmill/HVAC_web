@@ -4,7 +4,7 @@ import {
   Agent,
   type AgentEvent as PiAgentEvent,
 } from '@earendil-works/pi-agent-core';
-import type { Model } from '@earendil-works/pi-ai';
+import type { Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import {
   HVAC_AGENT_EVENT_VERSION,
@@ -26,6 +26,7 @@ export interface PiAgentEngineDependencies {
   readonly model: Model<any>;
   readonly streamFn: PiStreamFn;
   readonly systemPrompt: string;
+  readonly thinkingLevel: ModelThinkingLevel;
 }
 
 interface PendingToolExecution {
@@ -64,6 +65,7 @@ export const createPiAgentEngine = ({
   model,
   streamFn,
   systemPrompt,
+  thinkingLevel,
 }: PiAgentEngineDependencies): AgentEngine => async (input) => {
   const artifacts: AgentArtifact[] = [];
   const emittedArtifactIds = new Set<string>();
@@ -114,7 +116,7 @@ export const createPiAgentEngine = ({
     initialState: {
       systemPrompt,
       model,
-      thinkingLevel: 'off',
+      thinkingLevel,
       tools: piTools,
     },
     streamFn,
