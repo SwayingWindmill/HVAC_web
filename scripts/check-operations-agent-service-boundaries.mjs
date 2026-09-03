@@ -11,6 +11,7 @@ export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
   'domain',
   'application',
   'runtime-langgraph',
+  'runtime-pi',
   'model',
   'tools',
   'persistence',
@@ -32,6 +33,7 @@ const allowedInternalDependencies = Object.freeze({
   application: ['domain'],
   bootstrap: OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => name !== 'bootstrap'),
   ...Object.fromEntries(adapterModules.map((name) => [name, ['application', 'domain']])),
+  'runtime-pi': ['agent'],
 });
 
 const externalImportForbiddenModules = new Set(['agent', 'domain', 'application']);
