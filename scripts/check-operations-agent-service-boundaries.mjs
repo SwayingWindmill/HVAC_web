@@ -33,6 +33,7 @@ const allowedInternalDependencies = Object.freeze({
   application: ['domain'],
   bootstrap: OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => name !== 'bootstrap'),
   ...Object.fromEntries(adapterModules.map((name) => [name, ['application', 'domain']])),
+  tools: ['agent', 'application', 'domain'],
   'runtime-pi': ['agent'],
 });
 

@@ -18,7 +18,10 @@ import {
   type AgentRunUsage,
   type AgentToolExecution,
 } from '../../agent/index.js';
-import { createPiTools } from './pi-tools.js';
+import {
+  createPiTools,
+  projectToolFailureCodeFromPiResult,
+} from './pi-tools.js';
 
 type PiStreamFn = ConstructorParameters<typeof Agent>[0]['streamFn'];
 
@@ -103,9 +106,15 @@ export const createPiAgentEngine = ({
     sequence += 1;
   };
 
+  const allowedTools = input.tools.filter((tool) => (
+    tool.definition.requiredCapabilities.every((capability) => (
+      input.context.capabilities.includes(capability)
+    ))
+  ));
   const piTools = createPiTools({
-    tools: input.tools,
+    tools: allowedTools,
     context: input.context,
+    budget: input.budget,
     runSignal: input.signal,
     sessionId: input.session.id,
     runId: input.run.id,
@@ -200,7 +209,9 @@ export const createPiAgentEngine = ({
           finishedAt: Date.now(),
           resultSummary: event.isError ? null : 'Tool completed.',
           provenance,
-          failureCode: event.isError ? 'TOOL_EXECUTION_FAILED' : null,
+          failureCode: event.isError
+            ? projectToolFailureCodeFromPiResult(event.result) ?? 'TOOL_EXECUTION_FAILED'
+            : null,
         } as const satisfies AgentToolExecution);
         toolExecutions.push(execution);
         emit('tool.completed', { toolExecution: execution });

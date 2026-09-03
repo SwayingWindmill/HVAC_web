@@ -1,6 +1,8 @@
 export {
   AgentContractError,
+  AgentToolError,
   type AgentContractErrorCode,
+  type AgentToolErrorCode,
 } from './internal/errors.js';
 
 export {
