@@ -5,6 +5,7 @@ import {
   fauxText,
   fauxThinking,
   fauxToolCall,
+  type Message,
 } from '@earendil-works/pi-ai';
 
 import type { AgentEngine, AgentModelRef } from '../agent/index.js';
@@ -34,10 +35,16 @@ export interface ScriptedPiEngineOptions {
   }>;
 }
 
+export interface ScriptedPiRequestMessage {
+  readonly role: string;
+  readonly text: string;
+}
+
 export interface ScriptedPiAgentEngine {
   readonly engine: AgentEngine;
   readonly modelRef: AgentModelRef;
   readonly policy: PiAgentModelPolicy;
+  readonly requests: readonly (readonly ScriptedPiRequestMessage[])[];
 }
 
 const toFauxPart = (part: ScriptedPiPart) => {
@@ -49,6 +56,14 @@ const toFauxPart = (part: ScriptedPiPart) => {
     case 'tool-call':
       return fauxToolCall(part.name, part.arguments, part.id === undefined ? {} : { id: part.id });
   }
+};
+
+const visibleMessageText = (message: Message): string => {
+  if (typeof message.content === 'string') return message.content;
+  return message.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n');
 };
 
 export const createScriptedPiAgentEngine = ({
@@ -65,12 +80,28 @@ export const createScriptedPiAgentEngine = ({
   const models = createModels();
   models.setProvider(faux.provider);
   const model = faux.getModel();
-
-  return composePiAgentRuntime({
-    models,
+  const requests: ScriptedPiRequestMessage[][] = [];
+  const observedStreamSimple: typeof models.streamSimple = (requestModel, context, options) => {
+    requests.push(context.messages.map((message) => Object.freeze({
+      role: message.role,
+      text: visibleMessageText(message),
+    })));
+    return models.streamSimple(requestModel, context, options);
+  };
+  const observedModels = new Proxy(models, {
+    get(target, property, receiver) {
+      if (property === 'streamSimple') return observedStreamSimple;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const runtime = composePiAgentRuntime({
+    models: observedModels,
     model,
     thinkingLevel: policy?.thinkingLevel ?? 'off',
     timeoutMs: policy?.timeoutMs ?? 30_000,
     maxOutputTokens: policy?.maxOutputTokens ?? 2_048,
   });
+
+  return Object.freeze({ ...runtime, requests });
 };

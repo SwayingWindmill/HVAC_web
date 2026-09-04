@@ -155,6 +155,11 @@ try {
     '/migrations/operations/005_operations_audit_outbox.sql',
   );
   applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/006_pi_agent_sessions.sql',
+  );
+  applyMigration(
     'operations_agent_checkpoints_migrator',
     'checkpoints-migrator-local-only',
     '/migrations/checkpoints/001_agent_checkpoints.sql',
@@ -205,9 +210,19 @@ try {
       || '|'
       || (to_regclass('agent_operations.audit_records') IS NOT NULL)::text
       || '|'
+      || (to_regclass('agent_operations.agent_sessions') IS NOT NULL)::text
+      || '|'
+      || (to_regclass('agent_operations.agent_runs') IS NOT NULL)::text
+      || '|'
+      || (to_regclass('agent_operations.agent_messages') IS NOT NULL)::text
+      || '|'
+      || (to_regclass('agent_operations.agent_tool_executions') IS NOT NULL)::text
+      || '|'
+      || (to_regclass('agent_operations.agent_artifacts') IS NOT NULL)::text
+      || '|'
       || (to_regclass('agent_checkpoints.runtime_checkpoints') IS NOT NULL)::text
   `);
-  if (migrationState !== 'true|true|true|true|true|true|true') {
+  if (migrationState !== 'true|true|true|true|true|true|true|true|true|true|true|true') {
     throw new Error(`Operations Agent migrations are incomplete: ${migrationState}`);
   }
   report.assertions.migrations = migrationState;
@@ -230,6 +245,7 @@ try {
     'services/operations-agent-service/test/postgres-operations-audit.test.mjs',
     'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
     'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
+    'services/operations-agent-service/test/postgres-pi-agent-sessions.test.mjs',
   ], {
     env: {
       ...process.env,

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   Agent,
   type AgentEvent as PiAgentEvent,
+  type AgentMessage as PiAgentMessage,
 } from '@earendil-works/pi-agent-core';
 import type { Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
@@ -50,6 +51,38 @@ const textFromAssistantMessage = (message: Extract<PiAgentEvent, { type: 'messag
     .map((block) => block.text)
     .join('\n');
 };
+
+const EMPTY_PI_USAGE = Object.freeze({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }),
+});
+
+const restoreCommittedPiMessages = (
+  messages: readonly AgentMessage[],
+  model: Model<any>,
+): PiAgentMessage[] => messages.map((message): PiAgentMessage => {
+  if (message.role === 'OPERATOR') {
+    return {
+      role: 'user',
+      content: message.content,
+      timestamp: message.createdAt,
+    };
+  }
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text: message.content }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: EMPTY_PI_USAGE,
+    stopReason: 'stop',
+    timestamp: message.createdAt,
+  };
+});
 
 const terminalRun = (
   run: AgentRun,
@@ -131,6 +164,7 @@ export const createPiAgentEngine = ({
       model,
       thinkingLevel,
       tools: piTools,
+      messages: restoreCommittedPiMessages(input.messages.slice(0, -1), model),
     },
     streamFn,
     sessionId: input.session.id,

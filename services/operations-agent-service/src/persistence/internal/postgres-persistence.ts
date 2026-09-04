@@ -5,6 +5,7 @@ import {
 } from 'pg';
 
 import type {
+  AgentSessionStateStore,
   ApplicationEvent,
   ApplicationOutbox,
   AuditRecord,
@@ -27,6 +28,8 @@ import {
   type InvestigationBusinessRecord,
   type OperationsInvestigationSnapshot,
 } from '../../domain/index.js';
+import { createPostgresAgentSessionStateStore } from './postgres-agent-session-store.js';
+
 import {
   InvestigationRepositoryConflictError,
   createRunResourceBudgetSnapshot,
@@ -48,6 +51,7 @@ export interface PostgresCheckpointRepository extends CheckpointRepository {
 }
 
 export interface PostgresOperationsAgentPersistence {
+  readonly agentSessionStateStore: AgentSessionStateStore;
   readonly investigationRepository: InvestigationRepository;
   readonly businessRecordRepository: InvestigationBusinessRecordRepository;
   readonly investigationTransaction: InvestigationTransaction;
@@ -581,6 +585,7 @@ export const createPostgresOperationsAgentPersistence = (
     application_name: 'operations-agent-checkpoints',
     max,
   });
+  const agentSessionStateStore = createPostgresAgentSessionStateStore(operationsPool);
 
   const investigationRepository: InvestigationRepository = {
     async get(investigationId) {
@@ -1109,6 +1114,7 @@ export const createPostgresOperationsAgentPersistence = (
   };
 
   return Object.freeze({
+    agentSessionStateStore,
     investigationRepository,
     businessRecordRepository,
     investigationTransaction,

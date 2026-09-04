@@ -224,3 +224,64 @@ test('AbortSignal cancels an active Pi provider loop and returns a project-owned
   assert.equal(events.some((event) => event.type === 'run.completed'), false);
   assert.ok(events.some((event) => event.type === 'run.failed'));
 });
+
+test('a later Run reconstructs Pi context from committed finalized project Messages only', async () => {
+  const runtime = createScriptedPiAgentEngine({
+    responses: [{
+      parts: [{
+        type: 'tool-call',
+        name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'UNABLE_TO_CONCLUDE',
+          summary: 'The new Run continued from the finalized conversation history.',
+          evidenceRefs: [],
+          limitations: ['A safe READ may be repeated after restart.'],
+          recommendedNext: [],
+        },
+      }],
+      stopReason: 'toolUse',
+    }],
+  });
+  const previousOperator = Object.freeze({
+    id: 'message-previous-operator',
+    sessionId: baseSession.id,
+    runId: null,
+    role: 'OPERATOR',
+    content: 'Investigate overnight energy use.',
+    createdAt: 800,
+  });
+  const previousAssistant = Object.freeze({
+    id: 'message-previous-assistant',
+    sessionId: baseSession.id,
+    runId: 'run-pi-previous',
+    role: 'ASSISTANT',
+    content: 'The first Run needs the expected weekday schedule before it can conclude.',
+    createdAt: 900,
+  });
+  const currentOperator = Object.freeze({
+    id: 'message-current-operator',
+    sessionId: baseSession.id,
+    runId: null,
+    role: 'OPERATOR',
+    content: 'Use the weekday schedule and continue.',
+    createdAt: 1_000,
+  });
+
+  const result = await runtime.engine({
+    session: baseSession,
+    run: createRun(runtime.modelRef),
+    messages: [previousOperator, previousAssistant, currentOperator],
+    tools: [],
+    context: baseContext,
+    budget: baseBudget,
+    signal: new AbortController().signal,
+    emit: () => {},
+  });
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(runtime.requests[0], [
+    { role: 'user', text: previousOperator.content },
+    { role: 'assistant', text: previousAssistant.content },
+    { role: 'user', text: currentOperator.content },
+  ]);
+});

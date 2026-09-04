@@ -1,3 +1,4 @@
+import { agentModule } from '../agent/index.js';
 import { domainModule } from '../domain/index.js';
 
 export {
@@ -32,6 +33,21 @@ export {
   OPERATIONS_AGENT_TRUSTED_RUNTIME_MAXIMUM_IDENTITY_CHARACTERS,
   OPERATIONS_AGENT_TRUSTED_RUNTIME_SCOPE_KEYS,
 } from './internal/generated-runtime-control-contract.js';
+
+export {
+  AgentSessionLifecycleError,
+  createAgentSessionLifecycle,
+  type AgentSessionDescriptor,
+  type AgentSessionLifecycle,
+  type AgentSessionLifecycleErrorCode,
+  type AgentSessionState,
+  type AgentSessionStateStore,
+  type CancelAgentSessionRunCommand,
+  type CompleteAgentSessionRunCommand,
+  type CreateAgentSessionLifecycleInput,
+  type InterruptAgentSessionRunCommand,
+  type StartAgentSessionRunCommand,
+} from './internal/agent-session-lifecycle.js';
 
 export {
   FINDING_SYNTHESIS_DEFAULT_TIMEOUT_MS,
@@ -232,7 +248,7 @@ export {
 export const applicationModule = Object.freeze({
   name: 'application',
   layer: 'application',
-  dependencies: [domainModule.name],
+  dependencies: [agentModule.name, domainModule.name],
 } as const);
 
 export type ApplicationModule = typeof applicationModule;
