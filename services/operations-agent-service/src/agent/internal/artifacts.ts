@@ -98,6 +98,13 @@ export interface AgentInputRequestArtifact extends AgentArtifactBase {
   readonly request: InvestigationRequestInput;
 }
 
+export interface AgentInputResponseArtifact extends AgentArtifactBase {
+  readonly kind: 'INPUT_RESPONSE';
+  readonly requestArtifactId: string;
+  readonly value: string;
+  readonly submittedBy: string;
+}
+
 export interface AgentLimitationArtifact extends AgentArtifactBase {
   readonly kind: 'LIMITATION';
   readonly description: string;
@@ -108,6 +115,7 @@ export type AgentArtifact =
   | AgentFindingArtifact
   | AgentProposalArtifact
   | AgentInputRequestArtifact
+  | AgentInputResponseArtifact
   | AgentLimitationArtifact;
 
 export type AgentTerminalArtifact = AgentFindingArtifact | AgentInputRequestArtifact;

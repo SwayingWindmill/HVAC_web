@@ -3,12 +3,21 @@ import type {
   AgentInputRequestArtifact,
 } from './artifacts.js';
 import type {
+  AgentMessage,
   AgentRun,
   AgentSession,
   AgentToolExecution,
 } from './session.js';
 
 export const HVAC_AGENT_EVENT_VERSION = 'hvac.agent.event/v1' as const;
+
+export interface AgentSessionSnapshot {
+  readonly session: AgentSession;
+  readonly runs: readonly AgentRun[];
+  readonly messages: readonly AgentMessage[];
+  readonly toolExecutions: readonly AgentToolExecution[];
+  readonly artifacts: readonly AgentArtifact[];
+}
 
 interface AgentEventBase<TType extends string, TPayload> {
   readonly version: typeof HVAC_AGENT_EVENT_VERSION;
@@ -21,7 +30,7 @@ interface AgentEventBase<TType extends string, TPayload> {
 }
 
 export type AgentEvent =
-  | AgentEventBase<'session.snapshot', Readonly<{ session: AgentSession }>>
+  | AgentEventBase<'session.snapshot', Readonly<{ snapshot: AgentSessionSnapshot }>>
   | AgentEventBase<'run.started', Readonly<{ run: AgentRun }>>
   | AgentEventBase<'assistant.delta', Readonly<{ messageId: string; delta: string }>>
   | AgentEventBase<'tool.started', Readonly<{ toolExecutionId: string; toolName: string }>>

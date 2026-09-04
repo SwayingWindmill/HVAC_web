@@ -44,10 +44,26 @@ export {
   type AgentSessionStateStore,
   type CancelAgentSessionRunCommand,
   type CompleteAgentSessionRunCommand,
+  type ContinueAgentSessionWithInputCommand,
   type CreateAgentSessionLifecycleInput,
   type InterruptAgentSessionRunCommand,
   type StartAgentSessionRunCommand,
 } from './internal/agent-session-lifecycle.js';
+
+export {
+  AgentSessionServiceError,
+  createAgentSessionService,
+  type AgentSessionAccessContext,
+  type AgentSessionEvent,
+  type AgentSessionEventListener,
+  type AgentSessionService,
+  type AgentSessionServiceCancelInput,
+  type AgentSessionServiceCreateInput,
+  type AgentSessionServiceErrorCode,
+  type AgentSessionServiceInputResponse,
+  type AgentSessionServiceStartInput,
+  type CreateAgentSessionServiceInput,
+} from './internal/agent-session-service.js';
 
 export {
   FINDING_SYNTHESIS_DEFAULT_TIMEOUT_MS,

@@ -290,6 +290,7 @@ export const createPiAgentEngine = ({
     return Object.freeze({
       runStatus: 'FAILED',
       sessionStatus: 'FAILED',
+      failureCode: 'OPERATOR_PROMPT_REQUIRED',
       usage: usage(),
       finalizedMessages,
       toolExecutions,
@@ -318,6 +319,7 @@ export const createPiAgentEngine = ({
       return Object.freeze({
         runStatus: 'FAILED',
         sessionStatus: 'FAILED',
+        failureCode: 'PI_RUNTIME_FAILED',
         usage: usage(),
         finalizedMessages,
         toolExecutions,
@@ -336,6 +338,7 @@ export const createPiAgentEngine = ({
     return Object.freeze({
       runStatus: 'CANCELLED',
       sessionStatus: 'CANCELLED',
+      failureCode: 'RUN_CANCELLED',
       usage: usage(),
       finalizedMessages: [],
       toolExecutions,
@@ -350,6 +353,7 @@ export const createPiAgentEngine = ({
     return Object.freeze({
       runStatus: 'FAILED',
       sessionStatus: 'FAILED',
+      failureCode: budgetFailureCode,
       usage: usage(),
       finalizedMessages,
       toolExecutions,
@@ -362,6 +366,7 @@ export const createPiAgentEngine = ({
     return Object.freeze({
       runStatus: 'COMPLETED',
       sessionStatus: terminalArtifact.kind === 'INPUT_REQUEST' ? 'WAITING_FOR_INPUT' : 'COMPLETED',
+      failureCode: null,
       usage: usage(),
       finalizedMessages,
       toolExecutions,
@@ -374,6 +379,7 @@ export const createPiAgentEngine = ({
   return Object.freeze({
     runStatus: 'FAILED',
     sessionStatus: 'FAILED',
+    failureCode: 'TERMINAL_ARTIFACT_REQUIRED',
     usage: usage(),
     finalizedMessages,
     toolExecutions,

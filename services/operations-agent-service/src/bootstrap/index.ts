@@ -24,8 +24,14 @@ import {
   transportAgUiModule,
 } from '../transport-ag-ui/index.js';
 import {
+  createAgentSessionEventStreamResponse,
+  createAgentSessionHttpHandler as createAgentSessionHttpTransportHandler,
   createOperationsAgentHttpHandler as createOperationsAgentHttpTransportHandler,
   transportHttpModule,
+  type AgentSessionHttpAuthorizationInput,
+  type AgentSessionHttpAuthorizer,
+  type AgentSessionHttpHandler,
+  type AgentSessionHttpOptions,
   type OperationsAgentHttpAuthorizationInput,
   type OperationsAgentHttpAuthorizer,
   type OperationsAgentHttpCoordinatorContext,
@@ -51,6 +57,10 @@ export type {
 };
 
 export type {
+  AgentSessionHttpAuthorizationInput,
+  AgentSessionHttpAuthorizer,
+  AgentSessionHttpHandler,
+  AgentSessionHttpOptions,
   OperationsAgentHttpAuthorizationInput,
   OperationsAgentHttpAuthorizer,
   OperationsAgentHttpCoordinatorContext,
@@ -58,12 +68,26 @@ export type {
   OperationsAgentHttpOptions,
 };
 
+export const createAgentSessionHttpHandler = (
+  options: Omit<AgentSessionHttpOptions, 'createEventStreamResponse'>,
+): AgentSessionHttpHandler => createAgentSessionHttpTransportHandler({
+  ...options,
+  createEventStreamResponse: createAgentSessionEventStreamResponse,
+});
+
 export const createOperationsAgentHttpHandler = (
   options: OperationsAgentHttpOptions,
 ): OperationsAgentHttpHandler => createOperationsAgentHttpTransportHandler({
   ...options,
   createAgUiEventStreamResponse: createOperationsAgUiEventStreamResponse,
 });
+
+export {
+  createProductionAgentSessionRuntime,
+  type ProductionAgentSessionOwnerConfig,
+  type ProductionAgentSessionRuntime,
+  type ProductionAgentSessionRuntimeOptions,
+} from './internal/agent-session-runtime.js';
 
 export {
   OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST_ENV,

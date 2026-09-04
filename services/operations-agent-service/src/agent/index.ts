@@ -15,6 +15,7 @@ export {
   type AgentEvidenceRefArtifact,
   type AgentFindingArtifact,
   type AgentInputRequestArtifact,
+  type AgentInputResponseArtifact,
   type AgentLimitationArtifact,
   type AgentOwner,
   type AgentProposalArtifact,
@@ -32,6 +33,7 @@ export {
   type AgentEvent,
   type AgentEventSink,
   type AgentEventType,
+  type AgentSessionSnapshot,
 } from './internal/events.js';
 
 export {

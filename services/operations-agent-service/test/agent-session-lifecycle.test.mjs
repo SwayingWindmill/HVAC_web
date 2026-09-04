@@ -13,6 +13,12 @@ class MemoryAgentSessionStateStore {
     return this.state?.session.id === sessionId ? this.state : null;
   }
 
+  async list(tenantId, siteId) {
+    return this.state?.session.tenantId === tenantId && this.state.session.siteId === siteId
+      ? [this.state]
+      : [];
+  }
+
   async transact(sessionId, update) {
     const current = this.state?.session.id === sessionId ? this.state : null;
     const next = update(current);
@@ -264,6 +270,89 @@ test('terminal Run failure metadata cannot contradict its durable status', async
     }),
     (error) => error instanceof AgentSessionLifecycleError && error.code === 'LIFECYCLE_INPUT_INVALID',
   );
+});
+
+test('typed operator input atomically continues a waiting Session into one new Run', async () => {
+  const store = new MemoryAgentSessionStateStore();
+  const lifecycle = createAgentSessionLifecycle({ store });
+  const firstRun = runningRun('run-input-request', 3_100);
+  const started = await lifecycle.start({
+    session: { ...descriptor, createdAt: 3_000 },
+    expectedSessionRevision: null,
+    run: firstRun,
+    operatorMessage: operatorMessage('message-input-question', 'Investigate the schedule.', 3_050),
+  });
+  const requestArtifact = Object.freeze({
+    id: 'artifact-input-request',
+    sessionId: descriptor.id,
+    runId: firstRun.id,
+    kind: 'INPUT_REQUEST',
+    request: Object.freeze({
+      prompt: 'Which schedule should be used?',
+      response: Object.freeze({
+        kind: 'SINGLE_SELECT',
+        choices: Object.freeze([
+          Object.freeze({ value: 'weekday', label: 'Weekday' }),
+          Object.freeze({ value: 'weekend', label: 'Weekend' }),
+        ]),
+      }),
+    }),
+    createdAt: 3_200,
+  });
+  const waiting = await lifecycle.complete({
+    sessionId: descriptor.id,
+    runId: firstRun.id,
+    expectedSessionRevision: started.session.revision,
+    run: completedRun(firstRun, 3_200),
+    sessionStatus: 'WAITING_FOR_INPUT',
+    finalizedMessages: [],
+    toolExecutions: [],
+    artifacts: [requestArtifact],
+  });
+  const nextRun = runningRun('run-input-response', 3_300);
+  const responseArtifact = Object.freeze({
+    id: 'artifact-input-response',
+    sessionId: descriptor.id,
+    runId: nextRun.id,
+    kind: 'INPUT_RESPONSE',
+    requestArtifactId: requestArtifact.id,
+    value: 'weekday',
+    submittedBy: 'principal-1',
+    createdAt: 3_300,
+  });
+  const command = {
+    sessionId: descriptor.id,
+    expectedSessionRevision: waiting.session.revision,
+    run: nextRun,
+    operatorMessage: operatorMessage('message-input-response', 'Weekday', 3_300),
+    inputResponse: responseArtifact,
+  };
+
+  await assert.rejects(
+    () => lifecycle.continueWithInput({
+      ...command,
+      run: runningRun('run-invalid-choice', 3_250),
+      operatorMessage: operatorMessage('message-invalid-choice', 'Holiday', 3_250),
+      inputResponse: Object.freeze({
+        ...responseArtifact,
+        id: 'artifact-invalid-choice',
+        runId: 'run-invalid-choice',
+        value: 'holiday',
+        createdAt: 3_250,
+      }),
+    }),
+    (error) => error instanceof AgentSessionLifecycleError && error.code === 'LIFECYCLE_INPUT_INVALID',
+  );
+  assert.deepEqual(await lifecycle.get(descriptor.id), waiting);
+
+  const continued = await lifecycle.continueWithInput(command);
+  assert.equal(continued.session.status, 'ACTIVE');
+  assert.equal(continued.session.activeRunId, nextRun.id);
+  assert.equal(continued.session.revision, waiting.session.revision + 1);
+  assert.equal(continued.artifacts.at(-1).kind, 'INPUT_RESPONSE');
+  assert.equal(continued.artifacts.at(-1).submittedBy, 'principal-1');
+
+  assert.deepEqual(await lifecycle.continueWithInput(command), continued);
 });
 
 test('cancel is idempotent and prevents a stale Run completion from advancing the Session', async () => {

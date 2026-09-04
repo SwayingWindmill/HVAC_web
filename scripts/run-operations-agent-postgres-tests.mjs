@@ -160,6 +160,11 @@ try {
     '/migrations/operations/006_pi_agent_sessions.sql',
   );
   applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/007_agent_input_response.sql',
+  );
+  applyMigration(
     'operations_agent_checkpoints_migrator',
     'checkpoints-migrator-local-only',
     '/migrations/checkpoints/001_agent_checkpoints.sql',

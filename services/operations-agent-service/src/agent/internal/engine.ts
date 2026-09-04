@@ -29,6 +29,7 @@ export interface AgentEngineInput {
 export interface AgentEngineResult {
   readonly runStatus: AgentRunTerminalStatus;
   readonly sessionStatus: AgentSessionStatus;
+  readonly failureCode: string | null;
   readonly usage: AgentRunUsage;
   readonly finalizedMessages: readonly AgentMessage[];
   readonly toolExecutions: readonly AgentToolExecution[];

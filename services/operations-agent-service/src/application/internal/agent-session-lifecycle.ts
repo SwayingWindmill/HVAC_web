@@ -1,5 +1,7 @@
 import type {
   AgentArtifact,
+  AgentInputRequestArtifact,
+  AgentInputResponseArtifact,
   AgentMessage,
   AgentRun,
   AgentSession,
@@ -46,6 +48,7 @@ export interface AgentSessionState {
 
 export interface AgentSessionStateStore {
   get(sessionId: string): Promise<AgentSessionState | null>;
+  list(tenantId: string, siteId: string): Promise<readonly AgentSessionState[]>;
   transact(
     sessionId: string,
     update: (current: AgentSessionState | null) => AgentSessionState,
@@ -57,6 +60,14 @@ export interface StartAgentSessionRunCommand {
   readonly expectedSessionRevision: number | null;
   readonly run: AgentRun;
   readonly operatorMessage: AgentMessage;
+}
+
+export interface ContinueAgentSessionWithInputCommand {
+  readonly sessionId: string;
+  readonly expectedSessionRevision: number;
+  readonly run: AgentRun;
+  readonly operatorMessage: AgentMessage;
+  readonly inputResponse: AgentInputResponseArtifact;
 }
 
 export interface InterruptAgentSessionRunCommand {
@@ -85,7 +96,9 @@ export interface CancelAgentSessionRunCommand {
 
 export interface AgentSessionLifecycle {
   get(sessionId: string): Promise<AgentSessionState | null>;
+  list(tenantId: string, siteId: string): Promise<readonly AgentSessionState[]>;
   start(command: StartAgentSessionRunCommand): Promise<AgentSessionState>;
+  continueWithInput(command: ContinueAgentSessionWithInputCommand): Promise<AgentSessionState>;
   interrupt(command: InterruptAgentSessionRunCommand): Promise<AgentSessionState>;
   complete(command: CompleteAgentSessionRunCommand): Promise<AgentSessionState>;
   cancel(command: CancelAgentSessionRunCommand): Promise<AgentSessionState>;
@@ -441,6 +454,83 @@ const cancelState = (
   });
 };
 
+const inputResponseAlreadyCommitted = (
+  state: AgentSessionState,
+  command: ContinueAgentSessionWithInputCommand,
+): boolean => {
+  const run = state.runs.find(({ id }) => id === command.run.id);
+  const message = state.messages.find(({ id }) => id === command.operatorMessage.id);
+  const artifact = state.artifacts.find(({ id }) => id === command.inputResponse.id);
+  return run !== undefined
+    && message !== undefined
+    && artifact !== undefined
+    && recordMatches(run, command.run)
+    && recordMatches(message, command.operatorMessage)
+    && recordMatches(artifact, command.inputResponse);
+};
+
+const continueWithInputState = (
+  current: AgentSessionState | null,
+  command: ContinueAgentSessionWithInputCommand,
+): AgentSessionState => {
+  requireIdentity(command.sessionId, 'Session id');
+  const state = requireState(current);
+  if (inputResponseAlreadyCommitted(state, command)) return state;
+  if (state.session.status !== 'WAITING_FOR_INPUT' || state.session.activeRunId !== null) {
+    fail('RUN_STALE', 'Operator input may continue only a Session waiting for input.');
+  }
+  if (command.expectedSessionRevision !== state.session.revision) {
+    fail('SESSION_REVISION_CONFLICT', 'Session revision changed before Operator Input was accepted.');
+  }
+  validateInitialRun({
+    id: state.session.id,
+    tenantId: state.session.tenantId,
+    siteId: state.session.siteId,
+    agentDefinitionId: state.session.agentDefinitionId,
+    createdBy: state.session.createdBy,
+    createdAt: state.session.createdAt,
+  }, command.run, command.operatorMessage);
+  if (command.inputResponse.kind !== 'INPUT_RESPONSE'
+    || command.inputResponse.sessionId !== command.sessionId
+    || command.inputResponse.runId !== command.run.id) {
+    fail('LIFECYCLE_INPUT_INVALID', 'Operator Input response must belong to the continued Session and Run.');
+  }
+  requireIdentity(command.inputResponse.id, 'Operator Input response Artifact id');
+  requireIdentity(command.inputResponse.requestArtifactId, 'Operator Input request Artifact id');
+  requireIdentity(command.inputResponse.value, 'Operator Input value');
+  requireIdentity(command.inputResponse.submittedBy, 'Operator Input principal');
+  requireTimestamp(command.inputResponse.createdAt, 'Operator Input submittedAt');
+
+  const requestArtifact = state.artifacts.find((artifact): artifact is AgentInputRequestArtifact => (
+    artifact.kind === 'INPUT_REQUEST' && artifact.id === command.inputResponse.requestArtifactId
+  )) ?? fail(
+    'LIFECYCLE_INPUT_INVALID',
+    'Operator Input response does not reference a committed INPUT_REQUEST.',
+  );
+  const response = requestArtifact.request.response;
+  if (response.kind === 'TEXT') {
+    if (command.inputResponse.value.length > response.maxLength) {
+      fail('LIFECYCLE_INPUT_INVALID', 'Operator Input text exceeds the requested maximum length.');
+    }
+  } else if (!response.choices.some(({ value }) => value === command.inputResponse.value)) {
+    fail('LIFECYCLE_INPUT_INVALID', 'Operator Input value is not one of the requested choices.');
+  }
+
+  return freezeState({
+    ...state,
+    session: {
+      ...state.session,
+      status: 'ACTIVE',
+      activeRunId: command.run.id,
+      revision: state.session.revision + 1,
+      updatedAt: command.run.startedAt,
+    },
+    runs: [...state.runs, command.run],
+    messages: [...state.messages, command.operatorMessage],
+    artifacts: [...state.artifacts, command.inputResponse],
+  });
+};
+
 const interruptState = (
   current: AgentSessionState | null,
   command: InterruptAgentSessionRunCommand,
@@ -477,8 +567,16 @@ export const createAgentSessionLifecycle = ({
     requireIdentity(sessionId, 'Session id');
     return store.get(sessionId);
   },
+  list(tenantId: string, siteId: string) {
+    requireIdentity(tenantId, 'Tenant id');
+    requireIdentity(siteId, 'Site id');
+    return store.list(tenantId, siteId);
+  },
   start(command: StartAgentSessionRunCommand) {
     return store.transact(command.session.id, (current) => startState(current, command));
+  },
+  continueWithInput(command: ContinueAgentSessionWithInputCommand) {
+    return store.transact(command.sessionId, (current) => continueWithInputState(current, command));
   },
   interrupt(command: InterruptAgentSessionRunCommand) {
     return store.transact(command.sessionId, (current) => interruptState(current, command));

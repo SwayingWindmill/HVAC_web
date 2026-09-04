@@ -31,6 +31,10 @@ const targets = Object.freeze({
         root,
         'services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql',
       ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/007_agent_input_response.sql',
+      ),
     ],
   },
   checkpoints: {

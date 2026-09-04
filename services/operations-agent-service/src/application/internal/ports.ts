@@ -58,6 +58,7 @@ export interface AuthorizationDecision {
   readonly toolDelegationGrants?: Readonly<Partial<Record<ParallelReadRequest['tool'], string>>>;
   readonly policyRevision?: string;
   readonly auditActor?: OperationsAuditActor;
+  readonly capabilities?: readonly string[];
   readonly traceparent?: string;
   readonly tracestate?: string;
 }

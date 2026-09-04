@@ -69,6 +69,10 @@ interface ArtifactRow extends QueryResultRow {
   readonly artifact_payload: AgentSessionState['artifacts'][number];
 }
 
+interface SessionIdentityRow extends QueryResultRow {
+  readonly session_id: string;
+}
+
 const toSafeInteger = (value: string, label: string): number => {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error(`${label} is outside the safe integer range.`);
@@ -365,6 +369,21 @@ export const createPostgresAgentSessionStateStore = (
 ): AgentSessionStateStore => Object.freeze({
   get(sessionId: string) {
     return loadAgentSessionState(operationsPool, sessionId, false);
+  },
+  async list(tenantId: string, siteId: string) {
+    const sessions = await operationsPool.query<SessionIdentityRow>(
+      `SELECT session_id
+       FROM agent_operations.agent_sessions
+       WHERE tenant_id = $1 AND site_id = $2
+       ORDER BY updated_at_ms DESC, session_id`,
+      [tenantId, siteId],
+    );
+    const states: AgentSessionState[] = [];
+    for (const { session_id: sessionId } of sessions.rows) {
+      const state = await loadAgentSessionState(operationsPool, sessionId, false);
+      if (state !== null) states.push(state);
+    }
+    return Object.freeze(states);
   },
   transact(
     sessionId: string,

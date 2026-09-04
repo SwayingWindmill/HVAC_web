@@ -471,3 +471,128 @@ test('PostgreSQL rolls back a terminal Session transition when finalized append 
   assert.equal(afterFailure.messages.length, 1);
   assert.equal(afterFailure.artifacts.length, 0);
 });
+
+test('PostgreSQL persists typed INPUT_RESPONSE attribution across restart', async (t) => {
+  let persistence = createPersistence();
+  const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
+  t.after(async () => {
+    await Promise.all([persistence.close(), operationsPool.end()]);
+  });
+  let lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+  const descriptor = Object.freeze({
+    id: 'pi-session-input-response-1',
+    tenantId: 'tenant-postgres-pi',
+    siteId: 'site-postgres-pi',
+    agentDefinitionId: 'operations-investigation.v1',
+    createdBy: 'principal-postgres-pi',
+    createdAt: 40_000,
+  });
+  const firstRun = Object.freeze({
+    id: 'pi-run-input-request-1',
+    sessionId: descriptor.id,
+    modelRef,
+    status: 'RUNNING',
+    startedAt: 40_100,
+    finishedAt: null,
+    usage: zeroUsage,
+    failureCode: null,
+  });
+  const started = await lifecycle.start({
+    session: descriptor,
+    expectedSessionRevision: null,
+    run: firstRun,
+    operatorMessage: Object.freeze({
+      id: 'pi-message-input-request-1',
+      sessionId: descriptor.id,
+      runId: null,
+      role: 'OPERATOR',
+      content: 'Ask me for the operating schedule.',
+      createdAt: 40_050,
+    }),
+  });
+  const request = Object.freeze({
+    id: 'pi-artifact-input-request-durable',
+    sessionId: descriptor.id,
+    runId: firstRun.id,
+    kind: 'INPUT_REQUEST',
+    request: Object.freeze({
+      prompt: 'Which schedule applies?',
+      response: Object.freeze({
+        kind: 'SINGLE_SELECT',
+        choices: Object.freeze([
+          Object.freeze({ value: 'weekday', label: 'Weekday' }),
+          Object.freeze({ value: 'holiday', label: 'Holiday' }),
+        ]),
+      }),
+    }),
+    createdAt: 40_200,
+  });
+  const waiting = await lifecycle.complete({
+    sessionId: descriptor.id,
+    runId: firstRun.id,
+    expectedSessionRevision: started.session.revision,
+    run: completedRun(firstRun, 40_200, zeroUsage),
+    sessionStatus: 'WAITING_FOR_INPUT',
+    finalizedMessages: [],
+    toolExecutions: [],
+    artifacts: [request],
+  });
+  const secondRun = Object.freeze({
+    id: 'pi-run-input-response-1',
+    sessionId: descriptor.id,
+    modelRef,
+    status: 'RUNNING',
+    startedAt: 40_300,
+    finishedAt: null,
+    usage: zeroUsage,
+    failureCode: null,
+  });
+  const response = Object.freeze({
+    id: 'pi-artifact-input-response-durable',
+    sessionId: descriptor.id,
+    runId: secondRun.id,
+    kind: 'INPUT_RESPONSE',
+    requestArtifactId: request.id,
+    value: 'weekday',
+    submittedBy: 'principal-authenticated-input',
+    createdAt: 40_300,
+  });
+  const continued = await lifecycle.continueWithInput({
+    sessionId: descriptor.id,
+    expectedSessionRevision: waiting.session.revision,
+    run: secondRun,
+    operatorMessage: Object.freeze({
+      id: 'pi-message-input-response-1',
+      sessionId: descriptor.id,
+      runId: null,
+      role: 'OPERATOR',
+      content: 'Weekday',
+      createdAt: 40_300,
+    }),
+    inputResponse: response,
+  });
+  assert.equal(continued.session.status, 'ACTIVE');
+  assert.equal(continued.artifacts.at(-1).kind, 'INPUT_RESPONSE');
+
+  await persistence.close();
+  persistence = createPersistence();
+  lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+  const recovered = await lifecycle.get(descriptor.id);
+  assert.deepEqual(recovered, continued);
+  assert.deepEqual(recovered.artifacts.find(({ id }) => id === response.id), response);
+
+  const row = await operationsPool.query(
+    `SELECT kind, artifact_payload->>'requestArtifactId' AS request_artifact_id,
+            artifact_payload->>'value' AS value,
+            artifact_payload->>'submittedBy' AS submitted_by
+     FROM agent_operations.agent_artifacts
+     WHERE artifact_id = $1`,
+    [response.id],
+  );
+  assert.deepEqual(row.rows, [{
+    kind: 'INPUT_RESPONSE',
+    request_artifact_id: request.id,
+    value: 'weekday',
+    submitted_by: 'principal-authenticated-input',
+  }]);
+});
