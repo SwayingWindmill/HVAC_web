@@ -447,6 +447,7 @@ assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production 
 assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('iot-service:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning and 90% critical thresholds');
+assert(hostAlerts.includes('Phase1HostDiskWillFillWithin24Hours') && hostAlerts.includes('predict_linear('), 'host disk alerts must warn on projected rapid exhaustion before the static threshold is reached');
 assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'observability-full OTel Collector must route logs and traces to central backends');
 assert(otelLogs.includes('filelog/docker') && otelLogs.includes('otlphttp/loki') && !otelLogs.includes('otlp/tempo'), 'observability-logs OTel Collector must collect logs without requiring Tempo');
 assert(!prometheus.includes('otel-collector:9464'), 'Prometheus must scrape Go diagnostics endpoints directly instead of depending on the collector');
@@ -455,7 +456,11 @@ assert(tempo.includes('backend: local'), 'Phase 1 trace backend must use local s
 assert(grafanaDatasources.includes('Prometheus') && grafanaDatasources.includes('Loki') && grafanaDatasources.includes('Tempo'), 'Grafana must provision metrics, logs and traces datasources');
 assert(grafanaDashboards.includes('/var/lib/grafana/dashboards'), 'Grafana must provision checked-in dashboards');
 
-assert(compose.includes('archive_mode=on') && compose.includes('archive_command=test ! -f /var/lib/postgresql/wal-archive/%f'), 'PostgreSQL must continuously archive WAL');
+assert(compose.includes('archive_mode=${POSTGRES_ARCHIVE_MODE:-off}') && compose.includes('archive_command=test ! -f /var/lib/postgresql/wal-archive/%f'), 'PostgreSQL WAL archiving must be opt-in with the canonical archive command');
+assert(envs.testing.includes('POSTGRES_ARCHIVE_MODE=off'), 'testing must explicitly keep PostgreSQL WAL archiving disabled');
+for (const name of ['staging', 'production']) {
+  assert(envs[name].includes('POSTGRES_ARCHIVE_MODE=on'), `${name} must explicitly enable PostgreSQL WAL archiving`);
+}
 assert(compose.includes('profiles: ["backup"]') && compose.includes('postgres-backup:') && compose.includes('clickhouse-backup:'), 'backup operations must be explicit non-default Compose profiles');
 assert(postgresBackup.includes('pg_basebackup') && postgresBackup.includes('--wal-method=stream') && postgresBackup.includes('SHA256SUMS'), 'PostgreSQL base backup must include streamed WAL and checksums');
 assert(postgresBackup.includes('sha256sum ./* > SHA256SUMS'), 'PostgreSQL base backup checksum manifest must use restore-host-verifiable relative paths');

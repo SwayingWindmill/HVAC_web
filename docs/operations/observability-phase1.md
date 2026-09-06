@@ -111,6 +111,14 @@ When good rate falls:
 
 A high 4xx rate can be either user/scope misuse or a policy/client mismatch. Inspect operation distribution (`acknowledge`, `assign`, `suppress`, `close`, etc.) and authorization/audit evidence. Do not page the database team solely for 4xx rejection growth.
 
+## Host disk growth and PostgreSQL WAL
+
+1. Treat `Phase1HostDiskUsageWarning` and `Phase1HostDiskUsageCritical` as capacity incidents, not as reasons to delete database files manually.
+2. `Phase1HostDiskWillFillWithin24Hours` is an early warning based on the recent free-space trend. Investigate the fastest-growing durable store before the static 80% threshold is reached.
+3. For local PostgreSQL, compare the PostgreSQL data-directory size with `pg_wal`. A large `pg_wal` relative to relation data is a strong signal that WAL recycling is blocked.
+4. If `POSTGRES_ARCHIVE_MODE=on`, inspect `pg_stat_archiver` and the archive destination. Repeated archive failures must be fixed at the archive destination; never delete files from `pg_wal` by hand.
+5. Development and testing keep PostgreSQL WAL archiving disabled by default. Staging/production enable it only with writable, capacity-managed storage independent from the PostgreSQL data volume.
+
 ## Retention and cardinality
 
 The Phase 1 metric catalog is `deploy/observability/phase1-metric-catalog.v1.json`. New labels must be bounded before merge. Raw IDs remain forbidden in Prometheus metrics. High-frequency telemetry payloads are not logged by default.

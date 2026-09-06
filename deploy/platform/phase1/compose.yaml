@@ -469,7 +469,7 @@ services:
       - -c
       - wal_level=replica
       - -c
-      - archive_mode=on
+      - archive_mode=${POSTGRES_ARCHIVE_MODE:-off}
       - -c
       - archive_timeout=60s
       - -c

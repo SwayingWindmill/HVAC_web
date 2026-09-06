@@ -64,7 +64,6 @@ services:
     volumes:
       - phase1_wsl_postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-      - ./runtime/backups/postgres/wal:/backups/wal
       - ./runtime/backups/postgres/base:/backups/base
 
   clickhouse:
