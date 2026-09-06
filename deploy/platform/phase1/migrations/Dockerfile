@@ -58,6 +58,7 @@ COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/h
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
 COPY infra/connectivity/postgres/init/003-s12-edge-fleet.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-s12-edge-fleet.sql
+COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

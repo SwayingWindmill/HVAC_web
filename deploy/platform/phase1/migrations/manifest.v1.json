@@ -73,7 +73,8 @@
         "services/rule-runtime-service/migrations/002_s21_rule_management.sql",
         "infra/registry/postgres/init/013-s23-maintenance-retirement.sql",
         "infra/registry/postgres/init/014-s21-rule-management-capability.sql",
-        "infra/connectivity/postgres/init/003-s12-edge-fleet.sql"
+        "infra/connectivity/postgres/init/003-s12-edge-fleet.sql",
+        "infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql"
       ]
     },
     {
