@@ -50,6 +50,7 @@ const paths = {
   limitPolicy: 'deploy/platform/phase1/limit-policy.v1.json',
   roleCredentialTemplate: 'deploy/platform/phase1/migrations/role-credentials.sql.example',
   packageJson: 'package.json',
+  identityReset: 'scripts/phase1-reset-local-identity-password.mjs',
   goWork: 'go.work',
   goServiceDockerfile: 'deploy/platform/phase1/images/go-service.Dockerfile',
   observabilityRuntime: 'libs/observability/runtime.go',
@@ -72,7 +73,7 @@ const environmentFiles = {
   production: 'deploy/platform/phase1/environments/production.runtime.env.example',
 };
 
-const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson] = await Promise.all([
+const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson, identityReset] = await Promise.all([
   readJSON(paths.baseline),
   readJSON(paths.matrix),
   read(paths.compose),
@@ -105,6 +106,7 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   readJSON(paths.limitPolicy),
   read(paths.roleCredentialTemplate),
   read(paths.packageJson),
+  read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
 const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
@@ -516,7 +518,10 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 76-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(packageJson.includes('"deployment:phase1:identity-reset": "node scripts/phase1-reset-local-identity-password.mjs"'), 'development/testing Identity password recovery must have a stable package entrypoint');
+assert(identityReset.includes("['development', 'testing'].includes(environment)") && identityReset.includes("IDENTITY_ADMIN_OPERATION: 'reset-password-random'") && identityReset.includes('local-admin.credentials') && identityReset.includes('chmodSync(temporary, 0o600)') && !identityReset.includes('console.log(password'), 'Identity password recovery must be environment-bounded, atomically persist the canonical credential file, and never print the password');
+assert(phase1Readme.includes('canonical non-versioned `runtime/local-admin.credentials`') && phase1Readme.includes('Do not maintain a second local/test credential file by hand'), 'Phase 1 README must define one canonical local/test Identity credential file');
+assert(phase1Readme.includes('exact 77-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 assert(phase1Readme.includes('Deployment tiers and observability profiles') && phase1Readme.includes('observability-core') && phase1Readme.includes('observability-logs') && phase1Readme.includes('observability-full') && phase1Readme.includes('intelligence'), 'Phase 1 README must document tier profiles');
 assert(phase1Readme.includes('Availability and recovery evidence') && phase1Readme.includes('SINGLE_NODE_RECOVERABLE'), 'Phase 1 README must document the availability tier');
 
