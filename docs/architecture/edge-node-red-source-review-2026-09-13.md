@@ -16,8 +16,20 @@
 | ThingsBoard IoT Gateway | [`3.8.4`](https://github.com/thingsboard/thingsboard-gateway/releases/tag/3.8.4) | [`a735a2d654a218c007b5db7759ceed44794253f9`](https://github.com/thingsboard/thingsboard-gateway/tree/a735a2d654a218c007b5db7759ceed44794253f9) | Connector/Converter、本地事件存储、MQTT 批量上行与确认 |
 | OpenEMS | [`2026.7.0`](https://github.com/OpenEMS/openems/releases/tag/2026.7.0) | [`2e2792d59fc5ba3b99ce3cf98d15081c0a74895e`](https://github.com/OpenEMS/openems/tree/2e2792d59fc5ba3b99ce3cf98d15081c0a74895e) | Edge IPO/Process Image、Modbus 时序、Timedata/重发、无效值语义 |
 | MyEMS | [`v6.7.0`](https://github.com/MyEMS/myems/releases/tag/v6.7.0) | [`be6e6ce8ddeac57afb04bddb9621501fb555cab0`](https://github.com/MyEMS/myems/tree/be6e6ce8ddeac57afb04bddb9621501fb555cab0) | Modbus 采集映射、raw/latest 分层、计量归一化 |
+| Node-RED | [`4.0.0`](https://github.com/node-red/node-red/releases/tag/4.0.0) | [`cb0c48457952bc6209c4e1729038b12b9100630e`](https://github.com/node-red/node-red/tree/cb0c48457952bc6209c4e1729038b12b9100630e) | revision 部署、Inject 相位和共享 MQTT broker 行为 |
 
-三个提交均通过官方 Git tag 引用复核。ThingsBoard 网关文档是滚动文档，用于解释公开协议；精确运行机制以上述固定源码和测试为准。OpenEMS 与 MyEMS 的更广结论分别已记录在 [`openems-source-review.md`](./openems-source-review.md) 和 [`myems-source-review.md`](./myems-source-review.md)；本文不重新裁决其他产品域。
+四个提交均通过官方 Git tag 引用复核。ThingsBoard 网关文档是滚动文档，用于解释公开协议；精确运行机制以上述固定源码和测试为准。OpenEMS 与 MyEMS 的更广结论分别已记录在 [`openems-source-review.md`](./openems-source-review.md) 和 [`myems-source-review.md`](./myems-source-review.md)；本文不重新裁决其他产品域。
+
+### 2.1 现场 Node-RED 运行时裁决
+
+现场管理 API 确认实际运行 Node-RED `4.0.0`，核心 MQTT 节点来自 `node-red/mqtt`。本次读取了固定提交中的 [`editor-api/lib/admin/flows.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/packages/node_modules/%40node-red/editor-api/lib/admin/flows.js)、[`runtime/lib/api/flows.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/packages/node_modules/%40node-red/runtime/lib/api/flows.js)、[`20-inject.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/packages/node_modules/%40node-red/nodes/core/common/20-inject.js) 和 [`10-mqtt.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/packages/node_modules/%40node-red/nodes/core/network/10-mqtt.js)，并核对对应的 [`flows_spec.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/test/unit/%40node-red/editor-api/lib/admin/flows_spec.js)、[`20-inject_spec.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/test/nodes/core/common/20-inject_spec.js) 和 [`21-mqtt_spec.js`](https://github.com/node-red/node-red/blob/cb0c48457952bc6209c4e1729038b12b9100630e/test/nodes/core/network/21-mqtt_spec.js)。
+
+- `ADOPT`：使用 `Node-RED-API-Version: v2` 的 `{rev, flows}` 合同；官方 runtime 在 revision 不匹配时返回 409，并用 mutex 串行化部署。
+- `ADOPT`：Inject 的 `onceDelay` 决定第一次触发相位，之后才启动固定 repeat interval；因此七个轮询的相位在每次重启后保持错峰。
+- `ADOPT`：多个 MQTT output 节点引用同一个 broker config；核心节点通过该共享 broker connection 发布，并按节点/消息 QoS 调用 publish。
+- `ADAPT`：全量 flow POST 只用于这次已明确授权的旧路径切除；部署工具必须先保存原 revision 快照，并携带读取到的 revision，不能盲写。
+
+现场 Modbus 节点来自厂商包 `@iotrouter/history` `2.0.0`。公开 npm/GitHub 检索未找到该固定版本的官方运行时源码或测试，因此仍标记为 `UNVERIFIED`，不把它的私有 type 编码、错误恢复或调度语义提升为架构合同。当前继续使用它的理由仅是 EG8200 的 `/dev/ttyAS3` 厂商串口集成这一已存在硬件边界，并且七个读取在 ThingsBoard 中完成了两个实际采集周期验证；它不得承载控制、缓存或重发责任。后续替换该节点前必须选择有固定源码和测试的 Modbus 实现，并在真实 EG8200 串口上证明相同点表行为。
 
 ## 3. ThingsBoard：北向协议与离线上行边界
 

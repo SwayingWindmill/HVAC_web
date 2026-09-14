@@ -2,14 +2,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const baseUrl = process.env.HVAC_NODE_RED_BASE_URL;
-const username = process.env.HVAC_NODE_RED_USERNAME ?? "admin";
+const username = process.env.HVAC_NODE_RED_USERNAME;
 const password = process.env.HVAC_NODE_RED_PASSWORD;
 const backupPath = process.env.HVAC_NODE_RED_BACKUP_PATH;
 const dryRun = process.env.HVAC_NODE_RED_DRY_RUN === "true";
 
-if (!baseUrl || !password || !backupPath) {
+if (!baseUrl || !username || !password || !backupPath) {
   throw new Error(
-    "HVAC_NODE_RED_BASE_URL, HVAC_NODE_RED_PASSWORD and HVAC_NODE_RED_BACKUP_PATH are required.",
+    "HVAC_NODE_RED_BASE_URL, HVAC_NODE_RED_USERNAME, HVAC_NODE_RED_PASSWORD and HVAC_NODE_RED_BACKUP_PATH are required.",
   );
 }
 
@@ -57,10 +57,7 @@ await mkdir(dirname(backupPath), { recursive: true });
 await writeFile(backupPath, `${JSON.stringify(current, null, 2)}\n`, "utf8");
 
 const requiredIds = [
-  ids.temperatureTab,
-  ids.ammeterTab,
   ids.et1010Tab,
-  ids.waterflowTab,
   ids.aggregateTab,
   ids.modbus,
   ids.thingsBoardBroker,
