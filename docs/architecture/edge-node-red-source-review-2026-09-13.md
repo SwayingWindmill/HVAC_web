@@ -203,3 +203,27 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 现场最终已运行 flow revision 为 `d53701266c143242187989ccca5571c1640ec102c8aa5b78a192d080c1650271`，对象数 39、定时/启动 Inject 8 个、Modbus read 7 个、MQTT output 1 个。部署脚本会先核对运行模块版本，版本不符时明确拒绝部署，避免把新流程接到旧节点实现。该证据证明的是进程重启、流程重载和 MQTT 断连下的 at-least-once 耐久补发，不把它夸大为磁盘损坏容错、整机断电认证或端到端 exactly-once。
 
 本轮没有伪造尚不存在的 Registry Gateway/Device/Point ID、mapping revision 或 source sequence，也没有把 formatter 后的工程值宣称为可重演的协议 raw evidence。当前自由文本 ThingsBoard device name 和 `device:timestamp` 只属于已运行北向协议的临时定位键；稳定身份、原始观测、Cloud 幂等和完整 Timedata 仍是进入控制/结算层之前必须完成的边界。
+
+## 11. ThingsBoard 公网入口故障裁决（2026-09-15）
+
+现场确认 Web 地址为 `swayingwindmill.online`，ThingsBoard Web 地址为 `tb.swayingwindmill.online`。两个域名均 CNAME 到腾讯云 EdgeOne；HTTP/HTTPS Web 正常不等于 MQTT 正常。协议级探针得到以下可重复结果：
+
+- `139.199.58.47:1883` 明文 MQTT 返回 CONNACK `5`；结合该源站 Compose 的端口映射和随后持续落库的真实 telemetry，确认这是 ThingsBoard Broker 的凭据拒绝响应。
+- `tb.swayingwindmill.online:1883` 在 EdgeOne 节点被拒绝，未到达 Broker。
+- `tb.swayingwindmill.online:8883` 能完成由 EdgeOne 提供的公开证书 TLS 握手，并协商 HTTP/1.1，但 MQTT CONNECT 后始终没有 CONNACK；该入口是 HTTPS，不是 MQTT/TCP。
+- ThingsBoard CE `3.9.1` 容器未设置 `MQTT_SSL_ENABLED`，官方默认关闭；Compose 中原有的 `8883:8883` 端口映射不能凭空启用 MQTT TLS。
+
+本轮将现场 ThingsBoard CE 固定到官方 [`v3.9.1`](https://github.com/thingsboard/thingsboard/tree/258298131ca811fd50008636e08dc384867936ce) 提交 `258298131ca811fd50008636e08dc384867936ce`，并读取其 `application/src/main/resources/thingsboard.yml`、`MqttTransportServerInitializer.java`、`ReturnCodeResolver.java`、`BasicMqttCredentialsTest.java` 和 `MqttTestClient.java`。配置源码明确给出明文端口默认 `1883`、TLS 默认关闭和 TLS 端口默认 `8883`；初始化器只在 `sslEnabled` 时加入 Netty `SslHandler`；凭据集成测试证明错误凭据的 MQTT v3 连接被拒绝且 telemetry 不落库。裁决为 `ADOPT` 其端口/TLS 启用语义与“有效连接后再验 telemetry”的验收边界，不复制服务实现。
+
+仓库依赖中没有 MQTT 客户端或报文库。复用审查固定了 [`mqtt-packet@9.0.2`](https://github.com/mqttjs/mqtt-packet/tree/e39fb28c10628720fb50e5eb355492684ff0caaa) 提交 `e39fb28c10628720fb50e5eb355492684ff0caaa`，读取 `parser.js`、`constants.js` 和 `test.js` 中 MQTT 3.1.1 CONNECT/CONNACK 解析及 return code 5 测试。`REJECT` 为这个单用途连通探针引入完整报文库及传递依赖；`ADAPT` 其固定报文常量、分片接收和 CONNACK return code 语义为仅使用 Node.js `net`/`tls` 的最小实现。该探针只声明“收到 MQTT CONNACK”，不凭无效凭据独自证明服务身份；ThingsBoard 身份仍由受控源站、有效网关连接和 telemetry 落库共同证明。
+
+曾受控验证将宿主机 `8883` 映射到容器 `1883`，ThingsBoard Web 和源站 MQTT 均恢复正常，但域名 `8883` 仍无 CONNACK，证明 EdgeOne 当前没有按 MQTT 四层代理转发。验证失败后已恢复原 Compose。该实验排除了“只改 Docker 端口即可修复”的方案。
+
+当前裁决：
+
+- 当前运行事实：Node-RED 仍使用已验证的 `139.199.58.47:1883`，QoS 1 与耐久 Outbox 保护短时中断和服务重启；它是待迁移的明文入口，不是长期架构选择。
+- `ADOPT`：新增的 `scripts/test-thingsboard-mqtt-endpoint.mjs` 以 MQTT CONNACK 作为入口验收，不以 DNS、TCP、TLS 或网页 200 单独宣称 Broker 可用。无效凭据返回 CONNACK `5` 代表网络/协议路径已到 Broker。
+- `REJECT`：让同一个 EdgeOne HTTPS 站点配置同时冒充 MQTT/TCP 入口，或仅因 `8883` 有公开证书就将 Node-RED 切换到该端口。
+- `REJECT`：在网关 `/etc/hosts` 中绕过 DNS、关闭证书校验、使用公共通配解析域名，或把明文源站端口描述为 TLS。
+
+不增加机器的长期方案是为 `tb.swayingwindmill.online` 配置真正的 EdgeOne 四层 MQTT/TCP 入口并明确边缘与源站的 TLS 终止位置；若当前 EdgeOne 产品/套餐不能让同一主机名同时承载 Web 和 MQTT，再由域名所有者创建专用的 `mqtt.swayingwindmill.online` DNS-only 记录，并在 ThingsBoard 上启用及挂载该域名的 MQTT TLS 证书。切换前必须满足：公网 TLS 校验成功、MQTT CONNECT 收到 CONNACK、有效网关凭据连接成功、一次真实 telemetry 在 ThingsBoard 保留源时间落库、Node-RED 重启后自动恢复。完成这些条件前，不做不可验证的域名替换。
