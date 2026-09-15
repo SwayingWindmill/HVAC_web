@@ -1,7 +1,7 @@
 # Node-RED 智慧能源 Edge Gateway 源码审查与架构裁决
 
 日期：2026-09-13
-状态：`REVIEWED FOR ARCHITECTURE`；未实施，不表示本地 Node-RED 运行时、节点包或现场设备已通过生产验证。
+状态：`EDGE OUTBOX 1.0.2 LIVE-VERIFIED`；协议采集、北向上报、顺序发送和耐久 Outbox 已在现场 EG8200 验证，独立控制内核仍未实施。
 
 ## 1. 审查问题与边界
 
@@ -168,4 +168,38 @@ independent Edge control core   durable Edge Timedata / Outbox
 
 部署后从 ThingsBoard `ts_kv_latest` 只读复核：温度、水流和 ET1010 的时间戳连续跨越两个 60 秒周期；四块电表均完成第二个 300 秒周期的错峰更新。温度值已从寄存器整数恢复为工程值，例如 t1 为 13.9、t2 为 14.5。水流、ET1010 各状态和部分电表功率的零值是现场设备本次实际返回，不在 Edge 中改写或伪造。
 
-尚未实施的下一层能力仍是本记录第 6、7 节定义的独立 Process Image/控制内核、耐久 Timedata/Outbox、TLS 和 Cloud command governance；当前 Node-RED 流程不得被描述为这些合同已经完成。
+尚未实施的下一层能力仍是本记录第 6、7 节定义的独立 Process Image/控制内核、完整 Timedata、TLS 和 Cloud command governance；当前 Node-RED 流程不得被描述为这些合同已经完成。耐久 MQTT Outbox 已在下一节单独完成。
+
+## 10. 单机耐久 Outbox 实施与验收（2026-09-15）
+
+### 10.1 现场约束与依赖裁决
+
+现场管理 API 和诊断节点确认 EG8200 只有一台设备，运行 Linux `arm` 32 位、Node.js `20.12.2`、Node-RED `4.0.0`，物理内存约 512 MB；系统后台不可登录，部署入口只有 Node-RED 管理 API。因此实现不能依赖增加主机、Docker、外部数据库或网关 shell。
+
+候选依赖固定为 [`node-red-node-sqlite@2.0.1`](https://www.npmjs.com/package/node-red-node-sqlite/v/2.0.1) 及其原生依赖 [`sqlite3@6.0.1`](https://github.com/TryGhost/node-sqlite3/tree/a7badce)。前者官方安装说明明确指出 v2 可能缺少目标平台预编译产物并需要本机构建；后者 v6.0.1 的官方发布只提供 Linux `arm64`/`x64`，不提供 32 位 `arm`，README 还将预编译支持基线列为 Node.js 20.17.0 及以上。现场既不具备编译链，也不能稳定下载构建依赖，所以裁决如下：
+
+- `REJECT`：在这台 EG8200 上安装 `node-red-node-sqlite@2.0.1`。它不是坏方案，但与已验证硬件/运行时约束不兼容。
+- `REJECT`：第三方文件队列包和 Node-RED 核心 File/File In 流程。候选第三方包缺少持续维护证据；核心 File In 在现场厂商运行时探针中报告完成却没有输出记录，不能作为恢复合同。
+- `ADAPT`：保留 ThingsBoard Gateway 的“先耐久化、成功确认后删除”机制，但用 Node.js 核心 `fs` 实现本机 append-only journal，不引入原生依赖或后台服务。
+
+### 10.2 已实施合同
+
+本仓库新增 `@hvac/edge-outbox` `1.0.2`，通过 Node-RED 官方节点安装 API上传到 `/root/.node-red/node_modules/@hvac/edge-outbox`。现场正常重启后，诊断 API 已确认运行版本为 `1.0.2` 且没有 pending version；随后通过带 revision 的 flow deploy 启用与该版本匹配的串行化流程。
+
+实现只承担一个明确责任：在 MQTT 发布前将完整 ThingsBoard Gateway telemetry 事件追加到 `RED.settings.userDir/hvac-edge-outbox/outbox.jsonl` 并 `fsync`，收到 QoS 1 PUBACK 后追加 ACK 并 `fsync`。启动和 MQTT 重连时从最早未确认事件恢复；同一时刻只允许一条事件在途，当前事件 ACK 后才发送下一条，因此成功位置不会越过失败事件。累计 256 个 ACK 后用同目录临时文件、文件同步和原子 rename 压缩日志。队列达到 128 MB 时显式失败，不静默丢弃旧 telemetry。启动发现断电残留的末行时先压缩为完整未确认事件再接受新写入；Node-RED 热部署等待当前日志操作完成；入队和 ACK 都实时输出 pending 状态。
+
+Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功后调用 `done()`，Complete 节点只在无错误完成时发出消息。因此当前流程将 `Complete(MQTT)` 作为 PUBACK 后的 ACK 入口，不用 Delay、连接状态或“已调用 publish”冒充确认。七个采集 formatter 统一进入一个 Outbox，再串行进入唯一 MQTT output；ET1010 通过 Link 节点跨流程进入同一所有者。所有指向 `tb.oidcs.com`/`emqx.oidcs.com` 的配置和路径均已移除。
+
+### 10.3 最小行为证据
+
+本地 `node:test` 保护五个当前合同：未确认事件跨 store 重建保留、ACK 事件重启后不再重放、断电造成的末行残缺不遮蔽此前完整事件或后续写入、压缩后只保留未确认事件、后项只有在前项 ACK 后才发布。测试不覆盖 Node.js `fs` 自身或无业务意义的 getter。
+
+现场运行版本 1.0.2 的受控验收临时将同一个 MQTT broker 配置从 1883 改为不可达的 1884，并使用 `try/finally` 保证恢复：
+
+1. MQTT 状态转为 yellow/ring `connecting`，Outbox `pending` 从 0 变为 1，证明事件在 broker 不可达时已先落盘。
+2. 将端口恢复为 1883 并全量重载流程，Outbox 从 journal 启动恢复；`pending` 回到 0，`lastReplayAt` 和 `lastAckAt` 均推进，MQTT 恢复 green/dot `connected`。
+3. ThingsBoard PostgreSQL 在本次 1.0.2 断网测试窗口内保留了 `temperature|1789438513125`、`temperature|1789438519133` 和 `waterflow|1789438526124` 三个源时间样本；其中待发温度事件在恢复后落库，七类设备最新 `ts_kv` 随后继续推进。
+
+现场最终已运行 flow revision 为 `d53701266c143242187989ccca5571c1640ec102c8aa5b78a192d080c1650271`，对象数 39、定时/启动 Inject 8 个、Modbus read 7 个、MQTT output 1 个。部署脚本会先核对运行模块版本，版本不符时明确拒绝部署，避免把新流程接到旧节点实现。该证据证明的是进程重启、流程重载和 MQTT 断连下的 at-least-once 耐久补发，不把它夸大为磁盘损坏容错、整机断电认证或端到端 exactly-once。
+
+本轮没有伪造尚不存在的 Registry Gateway/Device/Point ID、mapping revision 或 source sequence，也没有把 formatter 后的工程值宣称为可重演的协议 raw evidence。当前自由文本 ThingsBoard device name 和 `device:timestamp` 只属于已运行北向协议的临时定位键；稳定身份、原始观测、Cloud 幂等和完整 Timedata 仍是进入控制/结算层之前必须完成的边界。

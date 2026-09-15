@@ -6,6 +6,7 @@ const username = process.env.HVAC_NODE_RED_USERNAME;
 const password = process.env.HVAC_NODE_RED_PASSWORD;
 const backupPath = process.env.HVAC_NODE_RED_BACKUP_PATH;
 const dryRun = process.env.HVAC_NODE_RED_DRY_RUN === "true";
+const requiredOutboxVersion = "1.0.2";
 
 if (!baseUrl || !username || !password || !backupPath) {
   throw new Error(
@@ -39,7 +40,9 @@ const authResponse = await fetch(`${baseUrl}/auth/token`, {
   body: form,
 });
 if (!authResponse.ok) {
-  throw new Error(`Node-RED authentication failed: HTTP ${authResponse.status}`);
+  throw new Error(
+    `Node-RED authentication failed: HTTP ${authResponse.status}`,
+  );
 }
 const { access_token: accessToken } = await authResponse.json();
 const headers = {
@@ -47,9 +50,27 @@ const headers = {
   "Node-RED-API-Version": "v2",
 };
 
+const outboxModuleResponse = await fetch(
+  `${baseUrl}/nodes/${encodeURIComponent("@hvac/edge-outbox")}`,
+  { headers },
+);
+if (!outboxModuleResponse.ok) {
+  throw new Error(
+    `Reading @hvac/edge-outbox module failed: HTTP ${outboxModuleResponse.status}`,
+  );
+}
+const outboxModule = await outboxModuleResponse.json();
+if (outboxModule.version !== requiredOutboxVersion) {
+  throw new Error(
+    `Flow deploy requires @hvac/edge-outbox ${requiredOutboxVersion}; active runtime is ${outboxModule.version}`,
+  );
+}
+
 const flowsResponse = await fetch(`${baseUrl}/flows`, { headers });
 if (!flowsResponse.ok) {
-  throw new Error(`Reading Node-RED flows failed: HTTP ${flowsResponse.status}`);
+  throw new Error(
+    `Reading Node-RED flows failed: HTTP ${flowsResponse.status}`,
+  );
 }
 const current = await flowsResponse.json();
 
@@ -98,7 +119,7 @@ function inject(id, z, name, repeat, onceDelay, x, y, target) {
     z,
     name,
     props: [{ p: "payload" }, { p: "topic", vt: "str" }],
-    repeat: String(repeat),
+    repeat: repeat === "" ? "" : String(repeat),
     crontab: "",
     once: true,
     onceDelay,
@@ -147,20 +168,44 @@ function functionNode(id, z, name, func, x, y, target) {
     libs: [],
     x,
     y,
-    wires: [[target]],
+    wires: target ? [[target]] : [],
   };
 }
 
 const mqttOutId = "ed30000000000001";
-const et1010MqttOutId = "ed30000000000002";
+const outboxPrepareId = "ed40000000000001";
+const outboxNodeId = "ed40000000000002";
+const outboxCompleteId = "ed40000000000005";
+const outboxAckId = "ed40000000000006";
+const outboxStatusId = "ed40000000000007";
+const outboxReplayId = "ed40000000000008";
+const outboxStateId = "ed40000000000009";
+const aggregateLinkInId = "ed4000000000000f";
+const et1010LinkOutId = "ed40000000000010";
+const outboxCatchId = "ed40000000000011";
+const outboxErrorStateId = "ed40000000000012";
+const outboxPublishAttemptId = "ed40000000000013";
+const outboxStartupReplayId = "ed40000000000016";
 const temperatureColumns = Array.from({ length: 20 }, (_, index) =>
   column(`t${index + 1}`, 30401 + index, 1),
 );
 const et1010Keys = [
-  "u11", "u12", "u13", "u14",
-  "u21", "u22", "u23", "u24",
-  "u31", "u32", "u33", "u34",
-  "u41", "u42", "u43", "u44",
+  "u11",
+  "u12",
+  "u13",
+  "u14",
+  "u21",
+  "u22",
+  "u23",
+  "u24",
+  "u31",
+  "u32",
+  "u33",
+  "u34",
+  "u41",
+  "u42",
+  "u43",
+  "u44",
 ];
 const et1010Columns = et1010Keys.map((key, index) => column(key, index, 23));
 
@@ -198,8 +243,60 @@ msg.topic = "v1/gateway/telemetry";
 msg.payload = { [device]: [{ ts: Date.now(), values: msg.payload }] };
 return msg;`;
 
+const outboxPrepareFunction = `const device = Object.keys(msg.payload)[0];
+const ts = msg.payload[device][0].ts;
+const id = device + ":" + ts;
+msg.outboxCommand = "enqueue";
+msg.outboxRecord = {
+  id,
+  topic: msg.topic,
+  payload: msg.payload,
+};
+return msg;`;
+
+const outboxAckFunction = `msg.outboxCommand = "ack";
+return msg;`;
+
+const outboxReplayFunction = `if (msg.status) {
+  flow.set("edgeMqttStatus", msg.status);
+  if (msg.status.fill !== "green" || msg.status.shape !== "dot") {
+    msg.outboxCommand = "reset";
+    return msg;
+  }
+}
+msg.outboxCommand = "replay";
+return msg;`;
+
+const outboxErrorStateFunction = `flow.set("edgeOutboxLastError", {
+  at: Date.now(),
+  source: msg.error && msg.error.source ? msg.error.source.name : "Outbox",
+  message: msg.error ? msg.error.message : "Unknown error",
+});
+return null;`;
+
+const outboxPublishAttemptFunction = `flow.set("edgeOutboxLastPublishAttemptAt", Date.now());
+return msg;`;
+
+const outboxStateFunction = `flow.set("edgeOutboxPending", msg.payload.pending);
+if (msg.payload.lastAckAt) {
+  flow.set("edgeOutboxLastAckAt", msg.payload.lastAckAt);
+}
+if (msg.payload.lastReplayAt) {
+  flow.set("edgeOutboxLastReplayAt", msg.payload.lastReplayAt);
+}
+return null;`;
+
 const edgeNodes = [
-  inject("ed00000000000001", ids.aggregateTab, "每60s·温度", 60, 1, 130, 80, "ed10000000000001"),
+  inject(
+    "ed00000000000001",
+    ids.aggregateTab,
+    "每60s·温度",
+    60,
+    1,
+    130,
+    80,
+    "ed10000000000001",
+  ),
   modbusRead(
     "ed10000000000001",
     ids.aggregateTab,
@@ -212,9 +309,26 @@ const edgeNodes = [
     80,
     "ed20000000000001",
   ),
-  functionNode("ed20000000000001", ids.aggregateTab, "温度·工程值", temperatureFunction, 610, 80, mqttOutId),
+  functionNode(
+    "ed20000000000001",
+    ids.aggregateTab,
+    "温度·工程值",
+    temperatureFunction,
+    610,
+    80,
+    outboxPrepareId,
+  ),
 
-  inject("ed00000000000002", ids.aggregateTab, "每60s·水流", 60, 8, 130, 180, "ed10000000000002"),
+  inject(
+    "ed00000000000002",
+    ids.aggregateTab,
+    "每60s·水流",
+    60,
+    8,
+    130,
+    180,
+    "ed10000000000002",
+  ),
   modbusRead(
     "ed10000000000002",
     ids.aggregateTab,
@@ -227,9 +341,26 @@ const edgeNodes = [
     180,
     "ed20000000000002",
   ),
-  functionNode("ed20000000000002", ids.aggregateTab, "水流·工程值", waterflowFunction, 610, 180, mqttOutId),
+  functionNode(
+    "ed20000000000002",
+    ids.aggregateTab,
+    "水流·工程值",
+    waterflowFunction,
+    610,
+    180,
+    outboxPrepareId,
+  ),
 
-  inject("ed00000000000003", ids.aggregateTab, "每300s·1号电表", 300, 15, 130, 280, "ed10000000000003"),
+  inject(
+    "ed00000000000003",
+    ids.aggregateTab,
+    "每300s·1号电表",
+    300,
+    15,
+    130,
+    280,
+    "ed10000000000003",
+  ),
   modbusRead(
     "ed10000000000003",
     ids.aggregateTab,
@@ -237,14 +368,34 @@ const edgeNodes = [
     5,
     3,
     62,
-    [column("powerTotal", 36, 5), column("combinedActiveTotalElectricalEnergy", 60, 5)],
+    [
+      column("powerTotal", 36, 5),
+      column("combinedActiveTotalElectricalEnergy", 60, 5),
+    ],
     360,
     280,
     "ed20000000000003",
   ),
-  functionNode("ed20000000000003", ids.aggregateTab, "1号电表·工程值", ammeterFunction("ammeter-unit1"), 610, 280, mqttOutId),
+  functionNode(
+    "ed20000000000003",
+    ids.aggregateTab,
+    "1号电表·工程值",
+    ammeterFunction("ammeter-unit1"),
+    610,
+    280,
+    outboxPrepareId,
+  ),
 
-  inject("ed00000000000004", ids.aggregateTab, "每300s·2号电表", 300, 22, 130, 380, "ed10000000000004"),
+  inject(
+    "ed00000000000004",
+    ids.aggregateTab,
+    "每300s·2号电表",
+    300,
+    22,
+    130,
+    380,
+    "ed10000000000004",
+  ),
   modbusRead(
     "ed10000000000004",
     ids.aggregateTab,
@@ -252,14 +403,34 @@ const edgeNodes = [
     2,
     3,
     62,
-    [column("powerTotal", 36, 5), column("combinedActiveTotalElectricalEnergy", 60, 5)],
+    [
+      column("powerTotal", 36, 5),
+      column("combinedActiveTotalElectricalEnergy", 60, 5),
+    ],
     360,
     380,
     "ed20000000000004",
   ),
-  functionNode("ed20000000000004", ids.aggregateTab, "2号电表·工程值", ammeterFunction("ammeter-unit2"), 610, 380, mqttOutId),
+  functionNode(
+    "ed20000000000004",
+    ids.aggregateTab,
+    "2号电表·工程值",
+    ammeterFunction("ammeter-unit2"),
+    610,
+    380,
+    outboxPrepareId,
+  ),
 
-  inject("ed00000000000005", ids.aggregateTab, "每300s·3号电表", 300, 29, 130, 480, "ed10000000000005"),
+  inject(
+    "ed00000000000005",
+    ids.aggregateTab,
+    "每300s·3号电表",
+    300,
+    29,
+    130,
+    480,
+    "ed10000000000005",
+  ),
   modbusRead(
     "ed10000000000005",
     ids.aggregateTab,
@@ -267,14 +438,34 @@ const edgeNodes = [
     3,
     3,
     62,
-    [column("powerTotal", 36, 5), column("combinedActiveTotalElectricalEnergy", 60, 5)],
+    [
+      column("powerTotal", 36, 5),
+      column("combinedActiveTotalElectricalEnergy", 60, 5),
+    ],
     360,
     480,
     "ed20000000000005",
   ),
-  functionNode("ed20000000000005", ids.aggregateTab, "3号电表·工程值", ammeterFunction("ammeter-unit3"), 610, 480, mqttOutId),
+  functionNode(
+    "ed20000000000005",
+    ids.aggregateTab,
+    "3号电表·工程值",
+    ammeterFunction("ammeter-unit3"),
+    610,
+    480,
+    outboxPrepareId,
+  ),
 
-  inject("ed00000000000006", ids.aggregateTab, "每300s·4号电表", 300, 36, 130, 580, "ed10000000000006"),
+  inject(
+    "ed00000000000006",
+    ids.aggregateTab,
+    "每300s·4号电表",
+    300,
+    36,
+    130,
+    580,
+    "ed10000000000006",
+  ),
   modbusRead(
     "ed10000000000006",
     ids.aggregateTab,
@@ -282,12 +473,70 @@ const edgeNodes = [
     4,
     3,
     66,
-    [column("powerTotal", 36, 5), column("combinedActiveTotalElectricalEnergy", 64, 5)],
+    [
+      column("powerTotal", 36, 5),
+      column("combinedActiveTotalElectricalEnergy", 64, 5),
+    ],
     360,
     580,
     "ed20000000000006",
   ),
-  functionNode("ed20000000000006", ids.aggregateTab, "4号电表·工程值", ammeterFunction("ammeter-unit4"), 610, 580, mqttOutId),
+  functionNode(
+    "ed20000000000006",
+    ids.aggregateTab,
+    "4号电表·工程值",
+    ammeterFunction("ammeter-unit4"),
+    610,
+    580,
+    outboxPrepareId,
+  ),
+
+  {
+    id: aggregateLinkInId,
+    type: "link in",
+    z: ids.aggregateTab,
+    name: "ET1010·进入Outbox",
+    links: [et1010LinkOutId],
+    x: 755,
+    y: 680,
+    wires: [[outboxPrepareId]],
+  },
+  functionNode(
+    outboxPrepareId,
+    ids.aggregateTab,
+    "Outbox·形成事件",
+    outboxPrepareFunction,
+    870,
+    330,
+    outboxNodeId,
+  ),
+  {
+    id: outboxNodeId,
+    type: "hvac-outbox",
+    z: ids.aggregateTab,
+    name: "HVAC·耐久Outbox",
+    x: 1110,
+    y: 330,
+    wires: [[outboxPublishAttemptId], [outboxStateId]],
+  },
+  functionNode(
+    outboxPublishAttemptId,
+    ids.aggregateTab,
+    "Outbox·发布尝试",
+    outboxPublishAttemptFunction,
+    1510,
+    330,
+    mqttOutId,
+  ),
+  functionNode(
+    outboxStateId,
+    ids.aggregateTab,
+    "Outbox·运行状态",
+    outboxStateFunction,
+    1320,
+    410,
+    null,
+  ),
 
   {
     id: mqttOutId,
@@ -303,12 +552,90 @@ const edgeNodes = [
     correl: "",
     expiry: "",
     broker: ids.thingsBoardBroker,
-    x: 900,
+    x: 1710,
     y: 330,
     wires: [],
   },
+  {
+    id: outboxCompleteId,
+    type: "complete",
+    z: ids.aggregateTab,
+    name: "MQTT·PUBACK完成",
+    scope: [mqttOutId],
+    uncaught: false,
+    x: 1110,
+    y: 460,
+    wires: [[outboxAckId]],
+  },
+  functionNode(
+    outboxAckId,
+    ids.aggregateTab,
+    "Outbox·形成ACK",
+    outboxAckFunction,
+    1320,
+    460,
+    outboxNodeId,
+  ),
+  inject(
+    outboxStartupReplayId,
+    ids.aggregateTab,
+    "启动·恢复Outbox",
+    "",
+    5,
+    840,
+    520,
+    outboxReplayId,
+  ),
+  {
+    id: outboxStatusId,
+    type: "status",
+    z: ids.aggregateTab,
+    name: "MQTT·连接状态",
+    scope: [mqttOutId],
+    x: 840,
+    y: 580,
+    wires: [[outboxReplayId]],
+  },
+  functionNode(
+    outboxReplayId,
+    ids.aggregateTab,
+    "Outbox·启动/重连恢复",
+    outboxReplayFunction,
+    1060,
+    550,
+    outboxNodeId,
+  ),
+  {
+    id: outboxCatchId,
+    type: "catch",
+    z: ids.aggregateTab,
+    name: "Outbox·错误",
+    scope: [outboxPrepareId, outboxNodeId, outboxPublishAttemptId, mqttOutId],
+    uncaught: false,
+    x: 840,
+    y: 600,
+    wires: [[outboxErrorStateId]],
+  },
+  functionNode(
+    outboxErrorStateId,
+    ids.aggregateTab,
+    "Outbox·记录错误",
+    outboxErrorStateFunction,
+    1040,
+    650,
+    null,
+  ),
 
-  inject("ed00000000000007", ids.et1010Tab, "每60s·状态", 60, 45, 130, 100, "ed10000000000007"),
+  inject(
+    "ed00000000000007",
+    ids.et1010Tab,
+    "每60s·状态",
+    60,
+    45,
+    130,
+    100,
+    "ed10000000000007",
+  ),
   modbusRead(
     "ed10000000000007",
     ids.et1010Tab,
@@ -321,21 +648,22 @@ const edgeNodes = [
     100,
     "ed20000000000007",
   ),
-  functionNode("ed20000000000007", ids.et1010Tab, "运行状态->TB", et1010Function, 610, 100, et1010MqttOutId),
+  functionNode(
+    "ed20000000000007",
+    ids.et1010Tab,
+    "运行状态->TB",
+    et1010Function,
+    610,
+    100,
+    et1010LinkOutId,
+  ),
   {
-    id: et1010MqttOutId,
-    type: "mqtt out",
+    id: et1010LinkOutId,
+    type: "link out",
     z: ids.et1010Tab,
-    name: "ThingsBoard·QoS1",
-    topic: "",
-    qos: "1",
-    retain: "",
-    respTopic: "",
-    contentType: "",
-    userProps: "",
-    correl: "",
-    expiry: "",
-    broker: ids.thingsBoardBroker,
+    name: "进入统一Outbox",
+    mode: "link",
+    links: [aggregateLinkInId],
     x: 860,
     y: 100,
     wires: [],
@@ -344,7 +672,10 @@ const edgeNodes = [
 
 const nextFlows = [...retained, ...edgeNodes];
 const serialized = JSON.stringify(nextFlows);
-if (serialized.includes("tb.oidcs.com") || serialized.includes("emqx.oidcs.com")) {
+if (
+  serialized.includes("tb.oidcs.com") ||
+  serialized.includes("emqx.oidcs.com")
+) {
   throw new Error("Legacy OIDCS endpoint remains in the transformed flows.");
 }
 
@@ -356,7 +687,9 @@ if (!dryRun) {
     body: JSON.stringify({ rev: current.rev, flows: nextFlows }),
   });
   if (!deployResponse.ok) {
-    throw new Error(`Deploying Node-RED flows failed: HTTP ${deployResponse.status}`);
+    throw new Error(
+      `Deploying Node-RED flows failed: HTTP ${deployResponse.status}`,
+    );
   }
   const deployed = await deployResponse.json();
   revision = deployed.rev;

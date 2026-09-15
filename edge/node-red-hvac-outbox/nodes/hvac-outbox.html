@@ -1,0 +1,30 @@
+<script type="text/javascript">
+  RED.nodes.registerType("hvac-outbox", {
+    category: "storage",
+    color: "#d8bfd8",
+    defaults: {
+      name: { value: "" },
+    },
+    inputs: 1,
+    outputs: 2,
+    icon: "file.png",
+    label: function () {
+      return this.name || "HVAC Outbox";
+    },
+    outputLabels: ["发布", "状态"],
+  });
+</script>
+
+<script type="text/html" data-template-name="hvac-outbox">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+    <input type="text" id="node-input-name" placeholder="HVAC Outbox" />
+  </div>
+</script>
+
+<script type="text/html" data-help-name="hvac-outbox">
+  <p>
+    EG8200 本地耐久上行队列。消息先 fsync 落盘，再从第一个输出发布；MQTT PUBACK
+    后发送 ack 命令。
+  </p>
+</script>
