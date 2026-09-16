@@ -239,4 +239,46 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 
 续期配置保存 deploy hook：先执行 `nginx -t`，成功后才 `systemctl reload nginx`。关闭 Certbot 定时任务专用随机等待后的完整 `renew --dry-run --run-deploy-hooks` 已成功，证明 HTTP-01、续期配置、Nginx 配置校验和平滑 reload 构成闭环。切换后 Web 与 MQTT 实际返回 Let's Encrypt 证书，MQTT CONNACK 正常，Node-RED 保持 connected、Outbox pending 为 0，ThingsBoard 最新遥测继续推进。
 
-外部监测不再增加现场机器。当前任务建立每 30 分钟只读心跳，检查 HTTPS、MQTT TLS/CONNACK、Nginx、ThingsBoard 容器、最新遥测不超过 15 分钟以及证书剩余有效期不少于 21 天；健康且状态未变化时保持安静，只在首次故障、故障变化、恢复或证书进入提醒窗口时通知。该心跳是运维通知，不是生产控制或本地安全联锁；现场断网时，耐久 Outbox 仍是数据恢复权威。
+外部监测没有增加现场机器。曾建立每 30 分钟只读心跳检查 HTTPS、MQTT TLS/CONNACK、Nginx、ThingsBoard、遥测时效和证书期限；2026-09-16 已按操作方要求删除该定时任务。它不再是当前运行合同。现场断网时，耐久 Outbox 仍是数据恢复权威；当前持续可见性由下一节的 ThingsBoard 告警与 Edge 状态遥测承担。
+
+## 13. ThingsBoard 离线告警与 Edge 状态遥测（2026-09-16）
+
+### 13.1 固定参考与裁决
+
+本轮继续固定现场 ThingsBoard CE `3.9.1` / commit [`258298131ca811fd50008636e08dc384867936ce`](https://github.com/thingsboard/thingsboard/tree/258298131ca811fd50008636e08dc384867936ce)。源码审查补充读取 `application/src/main/java/org/thingsboard/server/service/state/DefaultDeviceStateService.java`、`rule-engine/rule-engine-components/src/main/java/org/thingsboard/rule/engine/profile/TbDeviceProfileNode.java`、`application/src/test/java/org/thingsboard/server/service/state/DefaultDeviceStateServiceTest.java` 和 `rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/profile/TbDeviceProfileNodeTest.java`，并与官方 [Device Profiles](https://thingsboard.io/docs/user-guide/device-profiles/)、[Connectivity Status](https://thingsboard.io/docs/user-guide/connectivity-status/) 和 [Device Inactivity Alarm](https://thingsboard.io/docs/user-guide/rule-engine-2-0/tutorials/create-inactivity-alarm/) 文档对照。`DefaultDeviceStateServiceTest` 的 `givenInactivityTimeoutReached_whenUpdateInactivityStateIfExpired_thenReportsInactivity`、`increaseInactivityForInactiveDeviceTest` 和 `givenTestParameters_whenUpdateActivityState_thenShouldBeInTheExpectedStateAndPerformExpectedActions` 分别保护超时转 inactive、SERVER_SCOPE 超时变化和恢复 activity；Profile Node 测试保护 Profile alarm rule 的创建/清除处理。状态服务以每台设备的 SERVER_SCOPE `inactivityTimeout`、`lastActivityTime` 和 `active` 计算不活动事件；Device Profile 节点按 Profile 中的 alarm rule 创建和清除告警。
+
+裁决如下：
+
+- `ADOPT`：用独立 Device Profile 管理同采集周期设备的同一不活动合同，使用 SERVER_SCOPE `inactivityTimeout`，不改生产 Default Profile。
+- `ADOPT`：创建条件为 `active == false`，清除条件为 `active == true`；恢复上报后由同一 Profile 规则自动解除。
+- `ADAPT`：Gateway 自身失活命名为“网关离线”，下游现场设备失活命名为“遥测数据陈旧”，避免把北向链路失败与 Modbus/设备数据停止混为一个故障。
+- `REJECT`：所有设备使用同一超时、用一个仍在线的 Gateway MQTT session 代表所有下游设备健康，或把无样本解释成零值。
+
+当前 EG8200 流程没有为 `temperature`、`waterflow`、`et1010` 或四块电表发送 gateway connect、attributes 或 RPC activity；这些子设备在 ThingsBoard 中唯一的 activity 来源就是各自的 gateway telemetry。因此在当前已部署合同内，`active` 超时等价于“该设备没有新 telemetry”。如果以后增加 connect、attribute 或 RPC 消息，必须把 freshness 改为独立的成功采集时间事实，不能继续沿用这个等价关系。
+
+### 13.2 已部署告警合同
+
+`scripts/configure-thingsboard-edge-health.mjs` 通过 ThingsBoard REST API 幂等创建三组非默认 Device Profile，并在应用前保存原 Profile、设备和超时快照。现场当前合同为：
+
+| Device Profile | 设备 | 超时 | 告警 | 严重度 |
+| --- | --- | ---: | --- | --- |
+| `HVAC Edge Gateway` | `EdgeGateway` | 3 分钟 | 网关离线 | CRITICAL |
+| `HVAC Edge Fast Telemetry` | `temperature`、`waterflow`、`et1010` | 10 分钟 | 遥测数据陈旧 | MAJOR |
+| `HVAC Edge Meter Telemetry` | `ammeter-unit1` 至 `ammeter-unit4` | 20 分钟 | 遥测数据陈旧 | MAJOR |
+
+10 分钟是 60 秒采集的十个周期，20 分钟是 5 分钟电表采集的四个周期；两者能容纳短暂轮询抖动，同时不会让持续缺测长时间伪装成正常。受控验收临时将 `temperature.active` 置为 `false`，ThingsBoard 生成 `遥测数据陈旧 / MAJOR / ACTIVE_UNACK`；恢复为 `true` 后同一告警转为 `CLEARED_UNACK`。这证明当前 Profile、Root Rule Chain 的 Device Profile 节点和自动清除路径实际生效，而不是只保存了配置。
+
+### 13.3 Edge 运行状态遥测
+
+Node-RED revision 从 `fb093b341b507a5d475d0076af23f20e651ce6bccb7ed307e7f98ca9d4b2b15a` 更新为 `aaf505a368b5ebff6b7d35ad0ee799e5da3163737b20595e42dd84348ed74e26`，对象数从 40 增至 48；仍只有一个 MQTT output，`31268` 管理映射未改。新增的 60 秒 `EdgeGateway` 心跳经过同一耐久 Outbox 上报以下事实：
+
+- `gatewayBootTime`：部署时从已认证 Node-RED `/diagnostics` 的 Linux `os.uptime` 推导并固化的网关操作系统开机时间；
+- `edgeRuntimeStartedAt`：本次 Node-RED Edge 流程运行起点，用于区分整机重启与单独流程重载；
+- `mqttConnected`、`mqttStatus`：唯一 ThingsBoard MQTT output 的真实 Node-RED 状态；
+- `outboxPending`、`lastAckAt`：耐久队列积压和最近 QoS 1 PUBACK；
+- `modbusReadSuccess`、`modbusReadFailure`：本次 Edge runtime 内七条轮询的累计成功/失败数；
+- `lastModbusSuccessAt`、`lastModbusSuccessSource`、`lastModbusFailureAt`、`lastModbusFailureSource`：最近 Modbus 结果的位置证据。尚未发生失败时不制造 `0` 时间戳或虚构来源。
+
+部署后 Node-RED 上下文显示 MQTT `green/dot connected`、Outbox pending `0`、Modbus success 持续增加且 failure 为 `0`。ThingsBoard `EdgeGateway` 最新遥测已读到运行起点、MQTT connected、pending `0`、last ACK、Modbus 成功/失败计数和最近成功来源。状态心跳只提供故障分层证据，不成为采集值、控制状态或能耗结算权威。
+
+本轮仍未实施 Process Image、控制优先级、命令租约或物理回读。下一层应先建立版本化点表合同，固定设备身份、寄存器、数据类型、字节序、单位、比例、采集周期与 mapping revision，并明确缺测/坏质量不等于零；完成后才进入本地控制层。

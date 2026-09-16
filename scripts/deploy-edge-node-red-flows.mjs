@@ -1,6 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import {
+  buildInitializeEdgeRuntimeFunction,
+  edgeRuntimeTelemetryFunction,
+  instrumentModbusSuccess,
+  recordModbusFailureFunction,
+} from "./edge-node-red-runtime-health.mjs";
+
 const baseUrl = process.env.HVAC_NODE_RED_BASE_URL;
 const username = process.env.HVAC_NODE_RED_USERNAME;
 const password = process.env.HVAC_NODE_RED_PASSWORD;
@@ -52,6 +59,15 @@ const headers = {
   Authorization: `Bearer ${accessToken}`,
   "Node-RED-API-Version": "v2",
 };
+
+const diagnosticsResponse = await fetch(`${baseUrl}/diagnostics`, { headers });
+if (!diagnosticsResponse.ok) {
+  throw new Error(
+    `Reading Node-RED diagnostics failed: HTTP ${diagnosticsResponse.status}`,
+  );
+}
+const diagnostics = await diagnosticsResponse.json();
+const gatewayBootTime = Date.now() - Math.round(diagnostics.os.uptime * 1000);
 
 const outboxModuleResponse = await fetch(
   `${baseUrl}/nodes/${encodeURIComponent("@hvac/edge-outbox")}`,
@@ -206,6 +222,12 @@ const outboxCatchId = "ed40000000000011";
 const outboxErrorStateId = "ed40000000000012";
 const outboxPublishAttemptId = "ed40000000000013";
 const outboxStartupReplayId = "ed40000000000016";
+const edgeRuntimeInitializeId = "ed50000000000001";
+const edgeRuntimeTelemetryId = "ed50000000000002";
+const modbusFailureCatchId = "ed50000000000003";
+const modbusFailureStateId = "ed50000000000004";
+const et1010FailureCatchId = "ed50000000000006";
+const et1010FailureStateId = "ed50000000000007";
 const temperatureColumns = Array.from({ length: 20 }, (_, index) =>
   column(`t${index + 1}`, 30401 + index, 1),
 );
@@ -229,39 +251,51 @@ const et1010Keys = [
 ];
 const et1010Columns = et1010Keys.map((key, index) => column(key, index, 23));
 
-const temperatureFunction = `const device = "temperature";
+const temperatureFunction = instrumentModbusSuccess(
+  "temperature",
+  `const device = "temperature";
 const values = {};
 for (let index = 1; index <= 20; index += 1) {
   values[\`t\${index}\`] = msg.payload[\`t\${index}\`] / 10;
 }
 msg.topic = "v1/gateway/telemetry";
 msg.payload = { [device]: [{ ts: Date.now(), values }] };
-return msg;`;
+return msg;`,
+);
 
-const waterflowFunction = `const device = "waterflow";
+const waterflowFunction = instrumentModbusSuccess(
+  "waterflow",
+  `const device = "waterflow";
 const values = {
   flowMeter: msg.payload.flowMeter / 35.315,
   flowVelocity: msg.payload.flowVelocity * 0.3048 / 3600,
 };
 msg.topic = "v1/gateway/telemetry";
 msg.payload = { [device]: [{ ts: Date.now(), values }] };
-return msg;`;
+return msg;`,
+);
 
 function ammeterFunction(device) {
-  return `const device = "${device}";
+  return instrumentModbusSuccess(
+    device,
+    `const device = "${device}";
 const values = {
   powerTotal: msg.payload.powerTotal / 10,
   combinedActiveTotalElectricalEnergy: msg.payload.combinedActiveTotalElectricalEnergy,
 };
 msg.topic = "v1/gateway/telemetry";
 msg.payload = { [device]: [{ ts: Date.now(), values }] };
-return msg;`;
+return msg;`,
+  );
 }
 
-const et1010Function = `const device = "et1010";
+const et1010Function = instrumentModbusSuccess(
+  "et1010",
+  `const device = "et1010";
 msg.topic = "v1/gateway/telemetry";
 msg.payload = { [device]: [{ ts: Date.now(), values: msg.payload }] };
-return msg;`;
+return msg;`,
+);
 
 const outboxPrepareFunction = `const device = Object.keys(msg.payload)[0];
 const ts = msg.payload[device][0].ts;
@@ -311,6 +345,44 @@ if (msg.payload.lastReplayAt) {
 return null;`;
 
 const edgeNodes = [
+  inject(
+    "ed5000000000000b",
+    ids.aggregateTab,
+    "启动·初始化运行状态",
+    "",
+    0.5,
+    130,
+    700,
+    edgeRuntimeInitializeId,
+  ),
+  functionNode(
+    edgeRuntimeInitializeId,
+    ids.aggregateTab,
+    "Edge·初始化运行状态",
+    buildInitializeEdgeRuntimeFunction(gatewayBootTime),
+    380,
+    700,
+    null,
+  ),
+  inject(
+    "ed50000000000005",
+    ids.aggregateTab,
+    "每60s·Edge运行状态",
+    60,
+    10,
+    130,
+    760,
+    edgeRuntimeTelemetryId,
+  ),
+  functionNode(
+    edgeRuntimeTelemetryId,
+    ids.aggregateTab,
+    "Edge·运行状态遥测",
+    edgeRuntimeTelemetryFunction,
+    400,
+    760,
+    outboxPrepareId,
+  ),
   inject(
     "ed00000000000001",
     ids.aggregateTab,
@@ -649,6 +721,33 @@ const edgeNodes = [
     650,
     null,
   ),
+  {
+    id: modbusFailureCatchId,
+    type: "catch",
+    z: ids.aggregateTab,
+    name: "Modbus·读取失败",
+    scope: [
+      "ed10000000000001",
+      "ed10000000000002",
+      "ed10000000000003",
+      "ed10000000000004",
+      "ed10000000000005",
+      "ed10000000000006",
+    ],
+    uncaught: false,
+    x: 840,
+    y: 720,
+    wires: [[modbusFailureStateId]],
+  },
+  functionNode(
+    modbusFailureStateId,
+    ids.aggregateTab,
+    "Modbus·记录失败",
+    recordModbusFailureFunction,
+    1060,
+    720,
+    null,
+  ),
 
   inject(
     "ed00000000000007",
@@ -680,6 +779,26 @@ const edgeNodes = [
     610,
     100,
     et1010LinkOutId,
+  ),
+  {
+    id: et1010FailureCatchId,
+    type: "catch",
+    z: ids.et1010Tab,
+    name: "ET1010·读取失败",
+    scope: ["ed10000000000007"],
+    uncaught: false,
+    x: 360,
+    y: 180,
+    wires: [[et1010FailureStateId]],
+  },
+  functionNode(
+    et1010FailureStateId,
+    ids.et1010Tab,
+    "ET1010·记录失败",
+    recordModbusFailureFunction,
+    610,
+    180,
+    null,
   ),
   {
     id: et1010LinkOutId,
