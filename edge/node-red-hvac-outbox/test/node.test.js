@@ -78,3 +78,30 @@ test("publishes one durable event at a time and advances only after its ack", as
   assert.equal(latestStatus.payload.pending, 0);
   await outbox.close();
 });
+
+test("reset then replay resends the unacknowledged in-flight event", async () => {
+  const outbox = await createNode();
+  const first = { id: "temperature:1", topic: "t", payload: { value: 1 } };
+  const second = { id: "temperature:2", topic: "t", payload: { value: 2 } };
+
+  await outbox.input({ outboxCommand: "enqueue", outboxRecord: first });
+  await outbox.input({ outboxCommand: "enqueue", outboxRecord: second });
+  await outbox.input({ outboxCommand: "reset" });
+  await outbox.input({ outboxCommand: "replay" });
+
+  assert.deepEqual(
+    outbox.sent.flatMap(([published]) =>
+      published ? [published.outboxId] : [],
+    ),
+    [first.id, first.id],
+  );
+
+  await outbox.input({ outboxCommand: "ack", outboxId: first.id });
+  assert.deepEqual(
+    outbox.sent.flatMap(([published]) =>
+      published ? [published.outboxId] : [],
+    ),
+    [first.id, first.id, second.id],
+  );
+  await outbox.close();
+});

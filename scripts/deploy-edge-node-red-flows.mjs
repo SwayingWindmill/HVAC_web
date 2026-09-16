@@ -24,8 +24,11 @@ const ids = {
   modbus: "05c0a8d76be7c0b5",
   legacyMqttBroker: "d24a9e241a068ee0",
   thingsBoardBroker: "754e280e1d82ca7a",
+  thingsBoardTls: "ed30000000000002",
   unusedTls: "c6c91e3b96a4221a",
 };
+
+const thingsBoardHost = "hvac.swayingwindmill.online";
 
 const form = new URLSearchParams({
   client_id: "node-red-admin",
@@ -95,7 +98,11 @@ const removedTabs = new Set([
   ids.ammeterTab,
   ids.waterflowTab,
 ]);
-const removedConfigs = new Set([ids.legacyMqttBroker, ids.unusedTls]);
+const removedConfigs = new Set([
+  ids.legacyMqttBroker,
+  ids.thingsBoardTls,
+  ids.unusedTls,
+]);
 
 const retained = current.flows
   .filter((node) => !removedTabs.has(node.id))
@@ -103,6 +110,19 @@ const retained = current.flows
   .filter((node) => !removedConfigs.has(node.id))
   .filter((node) => node.z !== ids.aggregateTab && node.z !== ids.et1010Tab)
   .map((node) => {
+    if (node.id === ids.thingsBoardBroker) {
+      return {
+        ...node,
+        name: "ThingsBoard",
+        broker: thingsBoardHost,
+        port: "8883",
+        tls: ids.thingsBoardTls,
+        usetls: true,
+        protocolVersion: "4",
+        keepalive: "30",
+        cleansession: true,
+      };
+    }
     if (node.id === ids.aggregateTab) {
       return { ...node, label: "Edge·采集与上报" };
     }
@@ -263,6 +283,10 @@ const outboxReplayFunction = `if (msg.status) {
     msg.outboxCommand = "reset";
     return msg;
   }
+  const replay = { ...msg, outboxCommand: "replay" };
+  setTimeout(() => node.send(replay), 250);
+  msg.outboxCommand = "reset";
+  return msg;
 }
 msg.outboxCommand = "replay";
 return msg;`;
@@ -670,7 +694,22 @@ const edgeNodes = [
   },
 ];
 
-const nextFlows = [...retained, ...edgeNodes];
+const thingsBoardTls = {
+  id: ids.thingsBoardTls,
+  type: "tls-config",
+  name: "ThingsBoard·TLS",
+  cert: "",
+  key: "",
+  ca: "",
+  certname: "",
+  keyname: "",
+  caname: "",
+  servername: thingsBoardHost,
+  verifyservercert: true,
+  alpnprotocol: "",
+};
+
+const nextFlows = [...retained, thingsBoardTls, ...edgeNodes];
 const serialized = JSON.stringify(nextFlows);
 if (
   serialized.includes("tb.oidcs.com") ||

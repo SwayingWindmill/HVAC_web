@@ -192,7 +192,7 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 
 ### 10.3 最小行为证据
 
-本地 `node:test` 保护五个当前合同：未确认事件跨 store 重建保留、ACK 事件重启后不再重放、断电造成的末行残缺不遮蔽此前完整事件或后续写入、压缩后只保留未确认事件、后项只有在前项 ACK 后才发布。测试不覆盖 Node.js `fs` 自身或无业务意义的 getter。
+本地 `node:test` 保护六个当前合同：未确认事件跨 store 重建保留、ACK 事件重启后不再重放、断电造成的末行残缺不遮蔽此前完整事件或后续写入、压缩后只保留未确认事件、后项只有在前项 ACK 后才发布，以及连接失效后通过 `reset` + `replay` 重发未确认的在途事件。测试不覆盖 Node.js `fs` 自身或无业务意义的 getter。
 
 现场运行版本 1.0.2 的受控验收临时将同一个 MQTT broker 配置从 1883 改为不可达的 1884，并使用 `try/finally` 保证恢复：
 
@@ -200,7 +200,9 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 2. 将端口恢复为 1883 并全量重载流程，Outbox 从 journal 启动恢复；`pending` 回到 0，`lastReplayAt` 和 `lastAckAt` 均推进，MQTT 恢复 green/dot `connected`。
 3. ThingsBoard PostgreSQL 在本次 1.0.2 断网测试窗口内保留了 `temperature|1789438513125`、`temperature|1789438519133` 和 `waterflow|1789438526124` 三个源时间样本；其中待发温度事件在恢复后落库，七类设备最新 `ts_kv` 随后继续推进。
 
-现场最终已运行 flow revision 为 `d53701266c143242187989ccca5571c1640ec102c8aa5b78a192d080c1650271`，对象数 39、定时/启动 Inject 8 个、Modbus read 7 个、MQTT output 1 个。部署脚本会先核对运行模块版本，版本不符时明确拒绝部署，避免把新流程接到旧节点实现。该证据证明的是进程重启、流程重载和 MQTT 断连下的 at-least-once 耐久补发，不把它夸大为磁盘损坏容错、整机断电认证或端到端 exactly-once。
+后续公网 TLS 切换中的真实连接中断暴露出第二个边界：MQTT output 重连前尚未收到 PUBACK 的消息仍占用 Outbox 的 `inFlightId`，因此仅发送 `replay` 不会重发。当前流程在非连接状态先 `reset`，连接恢复时再次 `reset` 后延迟 250 ms `replay`；Node-RED 状态节点只承担触发职责，PUBACK 仍是唯一 ACK 权威。现场曾因一次管理 API 手工写入把函数换行错误编码为字面量 `` `n ``，导致 48 条真实事件积压；使用仓库部署脚本完整重载正确函数后，积压降为 0，连续采样保持为 0，`lastReplayAt`、`lastAckAt` 和后续发布时间继续推进。这个已观测故障由新增的 reset/replay 回归测试保护。
+
+现场最终 flow revision 为 `fb093b341b507a5d475d0076af23f20e651ce6bccb7ed307e7f98ca9d4b2b15a`，对象数 40、定时/启动 Inject 8 个、Modbus read 7 个、MQTT output 1 个。部署脚本会先核对运行模块版本，版本不符时明确拒绝部署，避免把新流程接到旧节点实现；同时固定 TLS broker 与证书校验配置，不再依赖现场历史配置。该证据证明的是进程重启、流程重载和 MQTT 断连下的 at-least-once 耐久补发，不把它夸大为磁盘损坏容错、整机断电认证或端到端 exactly-once。
 
 本轮没有伪造尚不存在的 Registry Gateway/Device/Point ID、mapping revision 或 source sequence，也没有把 formatter 后的工程值宣称为可重演的协议 raw evidence。当前自由文本 ThingsBoard device name 和 `device:timestamp` 只属于已运行北向协议的临时定位键；稳定身份、原始观测、Cloud 幂等和完整 Timedata 仍是进入控制/结算层之前必须完成的边界。
 
@@ -217,13 +219,16 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 
 仓库依赖中没有 MQTT 客户端或报文库。复用审查固定了 [`mqtt-packet@9.0.2`](https://github.com/mqttjs/mqtt-packet/tree/e39fb28c10628720fb50e5eb355492684ff0caaa) 提交 `e39fb28c10628720fb50e5eb355492684ff0caaa`，读取 `parser.js`、`constants.js` 和 `test.js` 中 MQTT 3.1.1 CONNECT/CONNACK 解析及 return code 5 测试。`REJECT` 为这个单用途连通探针引入完整报文库及传递依赖；`ADAPT` 其固定报文常量、分片接收和 CONNACK return code 语义为仅使用 Node.js `net`/`tls` 的最小实现。该探针只声明“收到 MQTT CONNACK”，不凭无效凭据独自证明服务身份；ThingsBoard 身份仍由受控源站、有效网关连接和 telemetry 落库共同证明。
 
-曾受控验证将宿主机 `8883` 映射到容器 `1883`，ThingsBoard Web 和源站 MQTT 均恢复正常，但域名 `8883` 仍无 CONNACK，证明 EdgeOne 当前没有按 MQTT 四层代理转发。验证失败后已恢复原 Compose。该实验排除了“只改 Docker 端口即可修复”的方案。
+曾受控验证将宿主机 `8883` 映射到容器 `1883`，ThingsBoard Web 和源站 MQTT 均恢复正常，但 `tb.swayingwindmill.online:8883` 仍无 CONNACK，证明 EdgeOne 当前没有按 MQTT 四层代理转发。EdgeOne 官方套餐能力复核进一步确认当前个人版不能创建所需的四层代理；升级会产生额外费用，因此没有把付费升级或增加机器当成现场修复前提。
 
-当前裁决：
+本轮选择同一台 ThingsBoard 宿主机上已有、DNS 直达源站且证书覆盖的 `hvac.swayingwindmill.online`。Ubuntu 官方 `libnginx-mod-stream` 提供 TCP stream 能力；实现遵循 Nginx 官方 `ngx_stream_ssl_module` 和 `ngx_stream_proxy_module` 合同：在 `8883` 终止 TLS 1.2/1.3，再代理到 `127.0.0.1:1883`。ThingsBoard Compose 只将容器 `1883` 发布到宿主回环地址，移除无效的容器 `8883:8883` 映射，公网不再直接暴露明文 Broker。`tb.swayingwindmill.online` 继续只承担 EdgeOne 后的 ThingsBoard Web 入口，不再兼任 MQTT 名称。
 
-- 当前运行事实：Node-RED 仍使用已验证的 `139.199.58.47:1883`，QoS 1 与耐久 Outbox 保护短时中断和服务重启；它是待迁移的明文入口，不是长期架构选择。
-- `ADOPT`：新增的 `scripts/test-thingsboard-mqtt-endpoint.mjs` 以 MQTT CONNACK 作为入口验收，不以 DNS、TCP、TLS 或网页 200 单独宣称 Broker 可用。无效凭据返回 CONNACK `5` 代表网络/协议路径已到 Broker。
-- `REJECT`：让同一个 EdgeOne HTTPS 站点配置同时冒充 MQTT/TCP 入口，或仅因 `8883` 有公开证书就将 Node-RED 切换到该端口。
-- `REJECT`：在网关 `/etc/hosts` 中绕过 DNS、关闭证书校验、使用公共通配解析域名，或把明文源站端口描述为 TLS。
+当前裁决与运行事实：
 
-不增加机器的长期方案是为 `tb.swayingwindmill.online` 配置真正的 EdgeOne 四层 MQTT/TCP 入口并明确边缘与源站的 TLS 终止位置；若当前 EdgeOne 产品/套餐不能让同一主机名同时承载 Web 和 MQTT，再由域名所有者创建专用的 `mqtt.swayingwindmill.online` DNS-only 记录，并在 ThingsBoard 上启用及挂载该域名的 MQTT TLS 证书。切换前必须满足：公网 TLS 校验成功、MQTT CONNECT 收到 CONNACK、有效网关凭据连接成功、一次真实 telemetry 在 ThingsBoard 保留源时间落库、Node-RED 重启后自动恢复。完成这些条件前，不做不可验证的域名替换。
+- `ADOPT`：Node-RED 固定连接 `hvac.swayingwindmill.online:8883`，启用 TLS、验证服务端证书并设置相同 SNI，MQTT 3.1.1、keepalive 30 秒、QoS 1；部署脚本显式生成 broker 与 TLS config，不继承旧 IP/端口。
+- `ADOPT`：Nginx stream 在源站终止 TLS 并只转发到回环 `1883`。该选择复用同一台现场服务器及既有证书，不增加机器、不关闭证书校验，也不依赖不可用的 EdgeOne 四层能力。
+- `ADOPT`：`scripts/test-thingsboard-mqtt-endpoint.mjs` 以 MQTT CONNACK 作为入口验收，不以 DNS、TCP、TLS 或网页 200 单独宣称 Broker 可用。无效凭据在 TLS 端点返回 CONNACK `5`；两个有效 Gateway 凭据的受控 QoS 1 探针均收到 PUBACK，证明 TLS 终止后到 ThingsBoard 的完整发布路径可用。
+- `ADOPT`：Nginx stream access log 只记录连接元数据，不记录 MQTT payload 或凭据；ThingsBoard、Nginx 和 Node-RED 重启后分别检查容器、配置与 Outbox 恢复状态。
+- `REJECT`：继续使用公网 `139.199.58.47:1883` 明文 MQTT、让 EdgeOne HTTPS 入口冒充 MQTT/TCP、在网关 `/etc/hosts` 中绕过 DNS、关闭证书校验、使用公共通配解析域名，或把明文源站端口描述为 TLS。
+
+最终验收包括：HTTPS 返回 200；`hvac.swayingwindmill.online:8883` 证书校验成功并收到 MQTT CONNACK；有效 Gateway QoS 1 发布收到 PUBACK；受控连接中断后 Outbox 的 48 条真实积压完整降为 0，随后 ACK 持续推进。当前方案仍是单机故障域，但已满足“现场只有这一台机器”的明确约束；以后若获得企业版四层入口，可重新评估把公网 TLS 终止迁到 EdgeOne，但这不是当前系统可用性的依赖。
