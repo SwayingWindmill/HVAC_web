@@ -232,3 +232,11 @@ Node-RED `4.0.0` 固定源码中的 MQTT output 只在 publish callback 成功�
 - `REJECT`：继续使用公网 `139.199.58.47:1883` 明文 MQTT、让 EdgeOne HTTPS 入口冒充 MQTT/TCP、在网关 `/etc/hosts` 中绕过 DNS、关闭证书校验、使用公共通配解析域名，或把明文源站端口描述为 TLS。
 
 最终验收包括：HTTPS 返回 200；`hvac.swayingwindmill.online:8883` 证书校验成功并收到 MQTT CONNACK；有效 Gateway QoS 1 发布收到 PUBACK；受控连接中断后 Outbox 的 48 条真实积压完整降为 0，随后 ACK 持续推进。当前方案仍是单机故障域，但已满足“现场只有这一台机器”的明确约束；以后若获得企业版四层入口，可重新评估把公网 TLS 终止迁到 EdgeOne，但这不是当前系统可用性的依赖。
+
+## 12. 证书生命周期与外部健康探测（2026-09-16）
+
+服务器原有 `certbot.timer` 虽然为 active，但 `certbot certificates` 返回空；Nginx 使用的 TrustAsia 证书是 `/etc/nginx/ssl/hvac/` 下的手工文件，因此不会被该定时器续期。HTTP-01 staging dry-run 成功后，为 `hvac.swayingwindmill.online` 正式签发 Certbot 管理的 Let's Encrypt ECDSA 证书，并将 Web `443` 与 MQTT `8883` 同时切换到 `/etc/letsencrypt/live/hvac.swayingwindmill.online/` 的稳定 `fullchain.pem`/`privkey.pem` 路径。当前证书到期时间为 2026-12-15。
+
+续期配置保存 deploy hook：先执行 `nginx -t`，成功后才 `systemctl reload nginx`。关闭 Certbot 定时任务专用随机等待后的完整 `renew --dry-run --run-deploy-hooks` 已成功，证明 HTTP-01、续期配置、Nginx 配置校验和平滑 reload 构成闭环。切换后 Web 与 MQTT 实际返回 Let's Encrypt 证书，MQTT CONNACK 正常，Node-RED 保持 connected、Outbox pending 为 0，ThingsBoard 最新遥测继续推进。
+
+外部监测不再增加现场机器。当前任务建立每 30 分钟只读心跳，检查 HTTPS、MQTT TLS/CONNACK、Nginx、ThingsBoard 容器、最新遥测不超过 15 分钟以及证书剩余有效期不少于 21 天；健康且状态未变化时保持安静，只在首次故障、故障变化、恢复或证书进入提醒窗口时通知。该心跳是运维通知，不是生产控制或本地安全联锁；现场断网时，耐久 Outbox 仍是数据恢复权威。
