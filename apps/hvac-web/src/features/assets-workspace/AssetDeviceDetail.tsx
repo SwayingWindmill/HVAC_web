@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  Clock,
   Gauge,
   RefreshCw,
   ShieldCheck,
@@ -47,6 +46,7 @@ import {
   connectionPresentation,
   deviceLocation,
   freshnessLabel,
+  latestTimestamp,
   metricPoints,
   qualityLabel,
   runningPresentation,
@@ -195,7 +195,6 @@ function LoadedDeviceDetail({
   const asset = connectedAsset(row);
   const keyPoints = metricPoints(row, 4);
   const trendSeries = keyPoints.map((point) => point.pointId).join(',');
-
   const parameterRows = useMemo<OperatingParameterRow[]>(
     () => row.telemetryPoints.map((point) => ({
       point,
@@ -297,25 +296,31 @@ function LoadedDeviceDetail({
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="设备关键实时参数">
         {Array.from({ length: 4 }).map((_, index) => {
           const point = keyPoints[index] ?? null;
-          const Icon = point ? pointMetricIcon(point.label) : Gauge;
+          const fallbackToDataState = !point && index === 3;
+          const Icon = point ? pointMetricIcon(point.label) : fallbackToDataState ? CheckCircle2 : Gauge;
+          const title = point?.label ?? (fallbackToDataState ? '数据状态' : `关键参数 ${index + 1}`);
+          const value = point?.state === 'PRESENT'
+            ? point.displayValue
+            : fallbackToDataState
+              ? freshnessLabel(row.operational.telemetry.freshness)
+              : '—';
+          const detail = point
+            ? `${freshnessLabel(point.freshness)} · ${qualityLabel(point.quality ?? 'MISSING')} · ${formatTimestamp(point.sampledAt, site.timezone)}`
+            : fallbackToDataState
+              ? `质量 ${qualityLabel(row.operational.telemetry.quality)} · ${latestTimestamp(row, site.timezone)}`
+              : '当前设备未提供该参数';
           return (
             <Card key={point?.pointId ?? `placeholder-${index}`} className="shadow-xs">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="truncate text-sm font-medium text-muted-foreground">
-                  {point?.label ?? `关键参数 ${index + 1}`}
-                </CardTitle>
+                <CardTitle className="truncate text-sm font-medium text-muted-foreground">{title}</CardTitle>
                 <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               </CardHeader>
               <CardContent className="space-y-1">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-                    {point?.state === 'PRESENT' ? point.displayValue : '—'}
-                  </span>
+                  <span className="text-2xl font-bold tracking-tight tabular-nums text-foreground">{value}</span>
                   {point?.state === 'PRESENT' && point.unit ? <span className="text-xs text-muted-foreground">{point.unit}</span> : null}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {point ? `${freshnessLabel(point.freshness)} · ${qualityLabel(point.quality ?? 'MISSING')} · ${formatTimestamp(point.sampledAt, site.timezone)}` : '当前设备未提供该参数'}
-                </div>
+                <div className="text-xs text-muted-foreground">{detail}</div>
               </CardContent>
             </Card>
           );
@@ -327,7 +332,7 @@ function LoadedDeviceDetail({
           <div>
             <CardTitle className="text-base font-semibold">24小时工况遥测曲线</CardTitle>
             <CardDescription className="text-xs">
-              原 Surface 07 的持续趋势区；当前设备详情数据源仅提供实时快照，历史序列进入趋势分析工作区。
+              查看关键参数最近 24 小时的变化与异常时段。
             </CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
@@ -337,17 +342,17 @@ function LoadedDeviceDetail({
               search={{ series: trendSeries || undefined }}
             >
               <TrendingUp className="size-3.5" aria-hidden="true" />
-              打开趋势
+              查看24小时趋势
             </Link>
           </Button>
         </CardHeader>
         <CardContent className="pt-4">
-          <div className="grid h-[260px] place-items-center rounded-md border border-dashed bg-muted/10 text-center">
-            <div className="max-w-sm px-6">
-              <Clock className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
-              <p className="mt-3 text-sm font-medium text-foreground">当前详情没有加载 24 小时历史序列</p>
+          <div className="grid h-[260px] place-items-center rounded-md border border-dashed bg-muted/10 px-6 text-center">
+            <div className="max-w-md">
+              <TrendingUp className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
+              <p className="mt-3 text-sm font-medium text-foreground">最近 24 小时趋势</p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                为避免伪造曲线，这里保留原 07 的趋势区域与出口；完整历史由趋势工作区按真实时序数据加载。
+                进入趋势分析查看当前设备关键参数的历史变化、异常时段和对比关系。
               </p>
             </div>
           </div>
@@ -358,9 +363,6 @@ function LoadedDeviceDetail({
         <Card className="min-w-0 shadow-xs">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-semibold">核心运行参数</CardTitle>
-            <CardDescription className="text-xs">
-              当前实测值与工况状态；设备模型未提供设计安全区间时显示“—”。
-            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             <DataTable
@@ -392,7 +394,6 @@ function LoadedDeviceDetail({
         <Card className="shadow-xs">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-semibold">设备铭牌与生命周期台账</CardTitle>
-            <CardDescription className="text-xs">设备清单中的稳定身份、关系与生命周期事实。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
