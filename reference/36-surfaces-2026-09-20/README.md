@@ -1,30 +1,31 @@
-# 36 Surface Frontend Source Baseline — 2026-09-20
+# 36 Surface Frontend Historical Source Snapshot — 2026-09-20
 
-This directory is an **immutable source baseline** copied from the original Windows worktree:
+This directory is an **immutable historical source snapshot** copied from the original Windows worktree:
 
 - source root: `E:\Code\HVAC_web`
 - WSL source path: `/mnt/e/Code/HVAC_web`
 - source Git HEAD: `38830a57858c914f3885c49631a39171b7f4ad95`
 - source branch: `feat/virtual-central-plant-phase1-20260828`
 - copied on: 2026-09-23
-- purpose: preserve the actual 36-Surface implementation that existed before the 36 → 10 Workspace consolidation.
+- purpose: preserve the actual 36-Surface implementation state that existed in the Windows worktree before the 36 → 10 Workspace consolidation.
 
-## Why this exists
+## Authority warning
 
-The 36 Surface frontend was created in an uncommitted working tree. During the WSL migration and later 10-Workspace consolidation, many of those files continued to evolve without a Git checkpoint. That made it possible to accidentally replace a previously reviewed Surface with a newly invented layout.
+This snapshot is **implementation provenance, not final visual authority**.
 
-This snapshot fixes that governance problem.
+The 36-Surface frontend was developed in an uncommitted working tree and continued to change after the Windows → WSL migration. Some files in this 2026-09-20 snapshot therefore preserve intermediate visual compositions that were subsequently rejected during the 2026-09-20/21 global Table, Card, copy and detail-page cleanup. Surface 06/07 are a concrete example: their historical source is useful for domain structure and implementation lineage, but contains Card-heavy layouts that must not be restored as the final design.
 
 **This directory is not production source and must not be imported by the running application.**  
-It is a design/implementation provenance baseline. Production code stays under `apps/hvac-web/src`.
+Production code stays under `apps/hvac-web/src`.
 
-When consolidating 36 Surfaces into 10 Workspaces:
+When consolidating 36 Surfaces into 10 Workspaces, use evidence in this order:
 
-1. read the corresponding source implementation in this baseline;
-2. read the corresponding Surface Specification;
-3. preserve mature page anatomy, information hierarchy, table/detail grammar and interaction semantics unless a new review explicitly changes them;
-4. apply later global improvements such as tablecn/TanStack DataTableBlock, shadcn primitives, Router conventions and WSL/toolchain fixes;
-5. do not copy obsolete compatibility code, old Ant UI, or routes that were explicitly retired.
+1. the corresponding 36-Surface specification and its accepted information architecture;
+2. later project-wide design decisions in `DESIGN.md` and the shadcn/tablecn Block contracts;
+3. this historical implementation snapshot for domain behavior, route lineage and implementation details;
+4. browser-reviewed current production implementation.
+
+Do not copy a historical component wholesale when it conflicts with a later accepted design decision. In particular, do not restore Card-wrapped page tables, Card walls, duplicate filtering controls, obsolete split inspectors, old Ant UI, or retired compatibility routes.
 
 ## Surface → actual implementation mapping
 

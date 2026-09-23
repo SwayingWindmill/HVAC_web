@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 
 import { DataTableBlock } from '@/blocks/data-table';
-import { FactStrip } from '@/blocks/fact-strip';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import type { HvacRouterContext } from '@/app/router-context';
 import {
@@ -404,10 +403,15 @@ export function AssetsWorkspace({
       header: '对象与位置',
       cell: ({ row }) => {
         const asset = connectedAsset(row.original);
+        const relationshipLabel = asset && asset !== row.original.device.displayName ? asset : null;
         return (
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-foreground">{asset ?? '未关联资产'}</div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">{deviceLocation(row.original)}</div>
+            {relationshipLabel ? (
+              <div className="truncate text-sm font-medium text-foreground">{relationshipLabel}</div>
+            ) : null}
+            <div className={cn('truncate text-xs text-muted-foreground', relationshipLabel && 'mt-0.5')}>
+              {deviceLocation(row.original)}
+            </div>
           </div>
         );
       },
@@ -643,28 +647,28 @@ export function AssetsWorkspace({
     <DataTableBlock>
       <DataTable
         table={table}
-      tableClassName="min-w-[900px]"
-      tableAriaLabel="设备"
-      empty={(
+        tableClassName="table-fixed w-full"
+        tableAriaLabel="设备"
+        empty={(
         <div className="py-10 text-center">
           <Search className="mx-auto size-6 text-muted-foreground" />
           <h3 className="mt-3 text-sm font-medium">没有符合条件的设备</h3>
           <p className="mt-1 text-xs text-muted-foreground">调整搜索、范围或筛选条件后再试。</p>
         </div>
-      )}
-      getHeaderCellProps={(header) => ({
+        )}
+        getHeaderCellProps={(header) => ({
         className:
-          header.id === 'device' ? 'min-w-[210px]' :
-          header.id === 'objectLocation' ? 'min-w-[170px]' :
-          header.id === 'running' ? 'w-[92px]' :
-          header.id === 'connection' ? 'w-[92px]' :
-          header.id === 'dataHealth' ? 'w-[110px]' :
-          header.id === 'metrics' ? 'min-w-[200px]' :
-          header.id === 'attention' ? 'w-[150px]' :
-          header.id === 'updated' ? 'w-[104px]' :
+          header.id === 'device' ? 'w-[20%]' :
+          header.id === 'objectLocation' ? 'w-[15%]' :
+          header.id === 'running' ? 'w-[7%]' :
+          header.id === 'connection' ? 'w-[7%]' :
+          header.id === 'dataHealth' ? 'w-[10%]' :
+          header.id === 'metrics' ? 'w-[18%]' :
+          header.id === 'attention' ? 'w-[13%]' :
+          header.id === 'updated' ? 'w-[10%]' :
           'hidden',
-      })}
-      getRowProps={(row) => {
+        })}
+        getRowProps={(row) => {
         const isSelected = row.original.device.id === inspected?.device.id;
         return {
           className: cn(
@@ -681,13 +685,13 @@ export function AssetsWorkspace({
             onSearchChange({ inspect: row.original.device.id });
           },
         };
-      }}
-      getCellProps={(cell) => ({
-        className: cell.column.id.endsWith('Filter') ? 'hidden' : 'px-3 py-2.5',
-      })}
-      footer={<DataTablePagination table={table} />}
-    >
-      <DataTableAdvancedToolbar table={table} className="p-0">
+        }}
+        getCellProps={(cell) => ({
+          className: cell.column.id.endsWith('Filter') ? 'hidden' : 'px-3 py-2.5',
+        })}
+        footer={<DataTablePagination table={table} />}
+      >
+        <DataTableAdvancedToolbar table={table} className="p-0">
         <div className="relative min-w-64 flex-1 lg:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -708,7 +712,7 @@ export function AssetsWorkspace({
             table.setPageIndex(0);
           }}
         />
-        <DataTableSortList table={table} />
+          <DataTableSortList table={table} />
           <DataTableFilterList table={table} />
         </DataTableAdvancedToolbar>
       </DataTable>
@@ -717,31 +721,35 @@ export function AssetsWorkspace({
 
   return (
     <Main fluid className="space-y-4" data-testid="assets-workspace" data-site-id={site.id}>
-      <FactStrip
-        ariaLabel="设备概况"
-        items={[
-          { label: '设备', value: data.rows.length, suffix: '台' },
-          { label: '在线', value: counts.online ?? '—', suffix: '台' },
-          { label: '需关注', value: counts.attention ?? '—', suffix: '台', tone: counts.attention ? 'warning' : 'default' },
-          { label: '数据问题', value: counts.dataIssue ?? '—', suffix: '台', tone: counts.dataIssue ? 'critical' : 'default' },
-        ]}
-      />
-
-      <div className="flex items-center justify-end gap-3 text-xs text-muted-foreground">
-        <span>{currentStateLabel}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={data.refresh}
-          disabled={data.registry.isFetching || data.current.isFetching}
-        >
-          <RefreshCw
-            className={cn((data.registry.isFetching || data.current.isFetching) && 'animate-spin')}
-            aria-hidden="true"
-          />
-          刷新
-        </Button>
-      </div>
+      <header className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">设备</h1>
+            <span className="text-sm text-muted-foreground">{data.rows.length} 台</span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-label="设备状态摘要">
+            <span>{site.displayName}</span>
+            <span><strong className="font-medium text-foreground">{counts.online ?? '—'}</strong> 在线</span>
+            <span className={counts.attention ? 'text-warning' : undefined}><strong className="font-medium">{counts.attention ?? '—'}</strong> 需关注</span>
+            <span className={counts.dataIssue ? 'text-destructive' : undefined}><strong className="font-medium">{counts.dataIssue ?? '—'}</strong> 数据问题</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="text-xs text-muted-foreground">{currentStateLabel}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={data.refresh}
+            disabled={data.registry.isFetching || data.current.isFetching}
+          >
+            <RefreshCw
+              className={cn((data.registry.isFetching || data.current.isFetching) && 'animate-spin')}
+              aria-hidden="true"
+            />
+            刷新
+          </Button>
+        </div>
+      </header>
 
       <div className="min-w-0" role="region" aria-label="设备" tabIndex={0}>
         {tableContent}
