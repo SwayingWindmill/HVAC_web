@@ -1,4 +1,3 @@
-// @surface-card-table-exception 06 — preserve reviewed Surface 06 ledger Card/table anatomy.
 import { useEffect, useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
@@ -20,6 +19,7 @@ import {
   Zap,
 } from 'lucide-react';
 
+import { DataTableBlock } from '@/blocks/data-table';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import type { HvacRouterContext } from '@/app/router-context';
 import {
@@ -152,7 +152,7 @@ function ScopeSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-9 min-w-44 font-normal" aria-label="设备范围">
+      <SelectTrigger className="h-8 min-w-44 text-xs font-normal" aria-label="设备范围">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -653,19 +653,56 @@ export function AssetsWorkspace({
   const onlineRate = data.rows.length > 0 ? (onlineCount / data.rows.length) * 100 : 0;
 
   const tableContent = (
-    <Card className="min-w-0 shadow-xs" aria-label="设备运行台账">
-      <CardHeader className="space-y-3 border-b pb-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle className="text-base font-semibold">设备运行台账</CardTitle>
-          <ScopeSelect
-            value={selectedScope?.key ?? defaultScope}
-            options={scopeOptions}
-            onChange={(scope) => {
-              onSearchChange({ scope, inspect: undefined });
-              table.setPageIndex(0);
-            }}
-          />
-        </div>
+    <DataTableBlock aria-label="设备台账">
+      <DataTable
+        table={table}
+        tableClassName="min-w-[1180px]"
+        tableAriaLabel="设备"
+        empty="未找到匹配的设备"
+        getHeaderRowProps={() => ({ className: 'bg-muted/20 hover:bg-transparent' })}
+        getHeaderCellProps={(header) => ({
+          className:
+            header.id === 'select' ? 'w-10 px-3 text-center' :
+            header.id === 'drag' ? 'w-6 px-0' :
+            header.id === 'code' ? 'w-28 text-xs font-medium' :
+            header.id === 'name' ? 'w-[250px] text-xs font-medium' :
+            header.id === 'location' ? 'w-[180px] text-xs font-medium' :
+            header.id === 'running' ? 'w-[100px] text-xs font-medium' :
+            header.id === 'load' ? 'w-[120px] text-xs font-medium' :
+            header.id === 'telemetry' ? 'w-[220px] text-xs font-medium' :
+            header.id === 'health' ? 'w-[110px] text-center text-xs font-medium' :
+            header.id === 'actions' ? 'w-[100px] text-right text-xs font-medium' :
+            'hidden',
+        })}
+        getRowProps={(row) => {
+          const isSelected = row.original.device.id === inspected?.device.id;
+          return {
+            className: cn(
+              'cursor-pointer text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+              isSelected ? 'bg-muted/60 hover:bg-muted/70' : 'hover:bg-muted/40',
+            ),
+            'data-state': isSelected ? 'selected' : undefined,
+            'aria-selected': isSelected,
+            tabIndex: 0,
+            onClick: () => onSearchChange({ inspect: row.original.device.id }),
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              onSearchChange({ inspect: row.original.device.id });
+            },
+          };
+        }}
+        getCellProps={(cell) => ({
+          className:
+            cell.column.id.endsWith('Filter') ? 'hidden' :
+            cell.column.id === 'select' ? 'w-10 px-3 text-center' :
+            cell.column.id === 'drag' ? 'w-6 px-0' :
+            cell.column.id === 'health' ? 'text-center' :
+            cell.column.id === 'actions' ? 'text-right' :
+            'py-2.5',
+        })}
+        footer={<DataTablePagination table={table} totalRows={baseRows.length} />}
+      >
         <DataTableAdvancedToolbar table={table} className="p-0">
           <div className="relative min-w-64 flex-1 lg:max-w-sm">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -681,61 +718,19 @@ export function AssetsWorkspace({
           </div>
           <DataTableSortList table={table} />
           <DataTableFilterList table={table} />
+          <div className="ml-auto">
+            <ScopeSelect
+              value={selectedScope?.key ?? defaultScope}
+              options={scopeOptions}
+              onChange={(scope) => {
+                onSearchChange({ scope, inspect: undefined });
+                table.setPageIndex(0);
+              }}
+            />
+          </div>
         </DataTableAdvancedToolbar>
-      </CardHeader>
-      <CardContent className="p-0">
-        <DataTable
-          table={table}
-          className="gap-0"
-          tableClassName="min-w-[1180px]"
-          tableAriaLabel="设备运行台账"
-          empty="未找到匹配的设备"
-          getHeaderRowProps={() => ({ className: 'bg-muted/20 hover:bg-transparent' })}
-          getHeaderCellProps={(header) => ({
-            className:
-              header.id === 'select' ? 'w-10 px-3 text-center' :
-              header.id === 'drag' ? 'w-6 px-0' :
-              header.id === 'code' ? 'w-28 text-xs font-medium' :
-              header.id === 'name' ? 'w-[250px] text-xs font-medium' :
-              header.id === 'location' ? 'w-[180px] text-xs font-medium' :
-              header.id === 'running' ? 'w-[100px] text-xs font-medium' :
-              header.id === 'load' ? 'w-[120px] text-xs font-medium' :
-              header.id === 'telemetry' ? 'w-[220px] text-xs font-medium' :
-              header.id === 'health' ? 'w-[110px] text-center text-xs font-medium' :
-              header.id === 'actions' ? 'w-[100px] text-right text-xs font-medium' :
-              'hidden',
-          })}
-          getRowProps={(row) => {
-            const isSelected = row.original.device.id === inspected?.device.id;
-            return {
-              className: cn(
-                'cursor-pointer text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                isSelected ? 'bg-muted/60 hover:bg-muted/70' : 'hover:bg-muted/40',
-              ),
-              'data-state': isSelected ? 'selected' : undefined,
-              'aria-selected': isSelected,
-              tabIndex: 0,
-              onClick: () => onSearchChange({ inspect: row.original.device.id }),
-              onKeyDown: (event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                onSearchChange({ inspect: row.original.device.id });
-              },
-            };
-          }}
-          getCellProps={(cell) => ({
-            className:
-              cell.column.id.endsWith('Filter') ? 'hidden' :
-              cell.column.id === 'select' ? 'w-10 px-3 text-center' :
-              cell.column.id === 'drag' ? 'w-6 px-0' :
-              cell.column.id === 'health' ? 'text-center' :
-              cell.column.id === 'actions' ? 'text-right' :
-              'py-2.5',
-          })}
-          footer={<DataTablePagination table={table} totalRows={baseRows.length} />}
-        />
-      </CardContent>
-    </Card>
+      </DataTable>
+    </DataTableBlock>
   );
 
   return (

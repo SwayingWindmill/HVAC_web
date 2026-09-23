@@ -148,7 +148,7 @@ async function validateDataTableSurfaceGrammar(root, errors) {
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
     const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
-    const surfaceCardTableException = /@surface-card-table-exception\s+(?:06|07)\b/.test(source);
+    const surfaceCardTableException = /@surface-card-table-exception\s+07\b/.test(source);
 
     if (source.includes('DataTableViewPills')) {
       errors.push(`${relativePath} must not reintroduce DataTableViewPills; status/type/tier belongs in Filter and true content-model switching belongs in Tabs`);

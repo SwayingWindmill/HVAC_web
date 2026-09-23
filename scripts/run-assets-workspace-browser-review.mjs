@@ -427,14 +427,15 @@ try {
   assert(desktop.rowCount === 10, `Assets ledger did not render the Surface 06 default 10 rows: ${desktop.rowCount}`);
   assert(desktop.sidebar?.width === 256 && desktop.header?.height === 56, `Assets workspace is not using the shared AppShell geometry: ${JSON.stringify({ sidebar: desktop.sidebar, header: desktop.header })}`);
   assert(desktop.summary?.top < 220 && desktop.ledger?.top < 620, `Surface 06 Card ribbon / ledger hierarchy drifted: ${JSON.stringify({ summary: desktop.summary, ledger: desktop.ledger })}`);
-  assert(desktop.scopeSelectCount === 1 && desktop.searchCount === 1, 'Surface 06 should keep one scope Select in the ledger Card header plus one search input');
+  assert(desktop.scopeSelectCount === 1 && desktop.searchCount === 1, 'Surface 06 should keep one scope Select and one search input in the standalone DataTable toolbar');
   assert(JSON.stringify(desktop.tableHeaders) === JSON.stringify(['设备编号', '设备名称 / 分项', '物理空间 / 机房', '运行工况', '实时负荷', '关键遥测指标', '健康评分', '操作']), `Assets ledger drifted from the original Surface 06 column grammar: ${JSON.stringify(desktop.tableHeaders)}`);
   for (const action of ['排序', '筛选', '列']) assert(desktop.toolbarText.includes(action), `Assets toolbar lost tablecn action: ${action}`);
   assert(desktop.antCount === 0, 'Assets workspace rendered legacy Ant DOM');
-  assert(desktop.cardCount === 5, `Surface 06 should render four summary Cards plus one ledger Card: ${desktop.cardCount}`);
+  assert(desktop.cardCount === 4, `Surface 06 should render only the four summary Cards; the ledger must stay standalone: ${desktop.cardCount}`);
   assert(desktop.body.scrollWidth <= desktop.body.clientWidth, 'Assets workspace has page-level horizontal overflow');
   assert(!desktop.text.includes(siteId), 'Assets workspace leaked the internal Site UUID');
   assert(desktop.text.includes('健康评分') && desktop.text.includes('未提供'), 'Surface 06 health-score column must remain present without fabricating a score');
+  assert(!desktop.text.includes('设备运行台账'), 'Surface 06 must not repeat a redundant table title above the standalone ledger');
   await capture(cdp, 'assets-ledger-desktop.png');
 
   assert(await evaluate(cdp, `(() => { const row = document.querySelector('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]'); if (!(row instanceof HTMLElement)) return false; row.click(); return true; })()`), 'First Assets row was not selectable');
