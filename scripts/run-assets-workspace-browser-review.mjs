@@ -395,7 +395,7 @@ try {
 
   await waitFor(
     cdp,
-    `document.querySelector('[data-testid="assets-workspace"] h1')?.textContent?.trim() === '设备' && document.querySelector('[aria-label="设备状态摘要"]')?.innerText.includes('在线') && document.querySelectorAll('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]').length === 15 && document.body.innerText.includes('当前状态已更新')`,
+    `document.querySelector('[data-testid="assets-workspace"] h1')?.textContent?.trim() === '设备中心' && document.querySelectorAll('[aria-label="设备概况卡片"] [data-slot="card"]').length === 4 && document.querySelectorAll('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]').length === 10 && document.body.innerText.includes('当前状态已更新')`,
     '200-device assets ledger',
   );
   await pause(500);
@@ -412,29 +412,29 @@ try {
       body: { scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
       sidebar: rect('[data-slot="sidebar"]'),
       header: rect('header'),
-      summary: rect('[aria-label="设备状态摘要"]'),
+      summary: rect('[aria-label="设备概况卡片"]'),
       ledger: rect('[aria-label="设备"]'),
       toolbarText: document.querySelector('[role="toolbar"]')?.textContent ?? '',
       rowCount: document.querySelectorAll('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]').length,
       tableHeaders: [...document.querySelectorAll('[aria-label="设备"] [data-slot="table-head"]')].map((node) => node.textContent?.trim() ?? '').filter(Boolean),
-      toolbarSelectCount: document.querySelectorAll('[role="toolbar"] [data-slot="select-trigger"]').length,
+      scopeSelectCount: document.querySelectorAll('[aria-label="设备范围"]').length,
       searchCount: document.querySelectorAll('[role="toolbar"] input[placeholder*="搜索设备"]').length,
       antCount: document.querySelectorAll('.ant-card, .ant-table, .ant-select, .ant-input').length,
       cardCount: document.querySelectorAll('[data-slot="card"]').length,
       text: document.body.innerText.slice(0, 5000),
     };
   })()`);
-  assert(desktop.rowCount === 15, `Assets ledger did not render 15 scan rows: ${desktop.rowCount}`);
+  assert(desktop.rowCount === 10, `Assets ledger did not render the Surface 06 default 10 rows: ${desktop.rowCount}`);
   assert(desktop.sidebar?.width === 256 && desktop.header?.height === 56, `Assets workspace is not using the shared AppShell geometry: ${JSON.stringify({ sidebar: desktop.sidebar, header: desktop.header })}`);
-  assert(desktop.summary?.top < 180 && desktop.ledger?.top < 250, `Assets hierarchy drifted below the first viewport: ${JSON.stringify({ summary: desktop.summary, ledger: desktop.ledger })}`);
-  assert(desktop.toolbarSelectCount === 1 && desktop.searchCount === 1, 'Assets toolbar should keep one scope Select plus one search input');
-  assert(JSON.stringify(desktop.tableHeaders) === JSON.stringify(['设备', '对象与位置', '运行', '连接', '数据', '关键值', '当前事项', '更新']), `Assets ledger drifted from the promoted Surface 06 column grammar: ${JSON.stringify(desktop.tableHeaders)}`);
+  assert(desktop.summary?.top < 220 && desktop.ledger?.top < 620, `Surface 06 Card ribbon / ledger hierarchy drifted: ${JSON.stringify({ summary: desktop.summary, ledger: desktop.ledger })}`);
+  assert(desktop.scopeSelectCount === 1 && desktop.searchCount === 1, 'Surface 06 should keep one scope Select in the ledger Card header plus one search input');
+  assert(JSON.stringify(desktop.tableHeaders) === JSON.stringify(['设备编号', '设备名称 / 分项', '物理空间 / 机房', '运行工况', '实时负荷', '关键遥测指标', '健康评分', '操作']), `Assets ledger drifted from the original Surface 06 column grammar: ${JSON.stringify(desktop.tableHeaders)}`);
   for (const action of ['排序', '筛选', '列']) assert(desktop.toolbarText.includes(action), `Assets toolbar lost tablecn action: ${action}`);
   assert(desktop.antCount === 0, 'Assets workspace rendered legacy Ant DOM');
-  assert(desktop.cardCount === 0, `Assets workspace regressed into card composition: ${desktop.cardCount}`);
+  assert(desktop.cardCount === 5, `Surface 06 should render four summary Cards plus one ledger Card: ${desktop.cardCount}`);
   assert(desktop.body.scrollWidth <= desktop.body.clientWidth, 'Assets workspace has page-level horizontal overflow');
   assert(!desktop.text.includes(siteId), 'Assets workspace leaked the internal Site UUID');
-  assert(!desktop.text.includes('健康分'), 'Assets workspace introduced a synthetic health score');
+  assert(desktop.text.includes('健康评分') && desktop.text.includes('未提供'), 'Surface 06 health-score column must remain present without fabricating a score');
   await capture(cdp, 'assets-ledger-desktop.png');
 
   assert(await evaluate(cdp, `(() => { const row = document.querySelector('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]'); if (!(row instanceof HTMLElement)) return false; row.click(); return true; })()`), 'First Assets row was not selectable');
@@ -468,35 +468,33 @@ try {
   assert(await clickText(cdp, '[aria-label="设备快速查看"] button', '打开完整设备详情'), 'Open full Device detail action was unavailable');
   await waitFor(
     cdp,
-    `Boolean(document.querySelector('[data-testid="asset-device-detail"]')) && document.body.innerText.includes('当前运行') && document.body.innerText.includes('最近证据') && document.body.innerText.includes('对象关系') && document.body.innerText.includes('工程点位') && document.body.innerText.includes('设备资料与来源')`,
+    `Boolean(document.querySelector('[data-testid="asset-device-detail"]')) && document.body.innerText.includes('24小时工况遥测曲线') && document.body.innerText.includes('核心运行参数') && document.body.innerText.includes('设备铭牌与生命周期台账')`,
     'durable Device detail surface',
   );
   const detail = await evaluate(cdp, `(() => ({
     body: { scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
-    identity: document.querySelector('[aria-label="设备身份"]') ? (() => { const r = document.querySelector('[aria-label="设备身份"]').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) }; })() : null,
-    stateStrip: document.querySelector('[aria-label="设备独立状态"]') ? (() => { const r = document.querySelector('[aria-label="设备独立状态"]').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) }; })() : null,
-    overviewTop: Math.round(document.querySelector('#overview')?.getBoundingClientRect().top ?? 0),
-    sectionNavText: document.querySelector('[aria-label="设备详情分区"]')?.textContent ?? '',
+    identity: document.querySelector('[aria-label="设备身份与当前状态"]') ? (() => { const r = document.querySelector('[aria-label="设备身份与当前状态"]').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) }; })() : null,
+    realtimeCards: document.querySelector('[aria-label="设备关键实时参数"]') ? (() => { const r = document.querySelector('[aria-label="设备关键实时参数"]').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) }; })() : null,
+    lowerWorkspaceTop: Math.round(document.querySelector('[aria-label="设备运行参数与铭牌"]')?.getBoundingClientRect().top ?? 0),
     h1Count: document.querySelectorAll('h1').length,
     cardCount: document.querySelectorAll('[data-slot="card"]').length,
-    engineeringRowCount: document.querySelectorAll('[aria-label="工程点位"] [data-slot="table-body"] [data-slot="table-row"]').length,
+    operatingParameterRowCount: document.querySelectorAll('[aria-label="设备核心运行参数"] [data-slot="table-body"] [data-slot="table-row"]').length,
     antCount: document.querySelectorAll('.ant-card, .ant-table, .ant-tabs').length,
     text: document.body.innerText.slice(0, 12000),
   }))()`);
   assert(detail.antCount === 0, 'Device detail rendered legacy Ant DOM');
   assert(detail.body.scrollWidth <= detail.body.clientWidth, 'Device detail has page-level horizontal overflow');
-  assert(detail.h1Count === 1 && detail.identity?.top < 260 && detail.stateStrip?.bottom < 430 && detail.overviewTop < 620, `Device detail hierarchy drifted: ${JSON.stringify(detail)}`);
-  assert(detail.cardCount === 0, `Device detail regressed into a dashboard/card wall: ${detail.cardCount}`);
-  assert(detail.engineeringRowCount === 4, `Device detail engineering points did not expose the registered point catalogue: ${detail.engineeringRowCount}`);
-  for (const section of ['概览', '证据', '关系', '工程点位', '资料']) assert(detail.sectionNavText.includes(section), `Device detail lost stable section navigation: ${section}`);
-  for (const fact of ['运行', '连接', '新鲜度', '质量', '当前运行', '当前事项', '最近证据', '对象关系', '工程点位', '设备资料与来源', '继续调查']) assert(detail.text.includes(fact), `Device detail drifted from Surface 07 responsibility: ${fact}`);
-  assert(!detail.text.includes('健康分'), 'Device detail introduced a synthetic health score');
+  assert(detail.h1Count === 1 && detail.identity?.top < 260 && detail.realtimeCards?.top < 320 && detail.lowerWorkspaceTop > detail.realtimeCards?.bottom, `Device detail hierarchy drifted from Surface 07: ${JSON.stringify(detail)}`);
+  assert(detail.cardCount === 7, `Surface 07 should render four realtime Cards, one trend Card and two lower Cards: ${detail.cardCount}`);
+  assert(detail.operatingParameterRowCount === 4, `Device detail core-parameter table did not expose the registered point catalogue: ${detail.operatingParameterRowCount}`);
+  for (const fact of ['24小时工况遥测曲线', '核心运行参数', '物理参数', '当前实测值', '设计安全区间', '工况状态', '设备铭牌与生命周期台账']) assert(detail.text.includes(fact), `Device detail drifted from original Surface 07 structure: ${fact}`);
+  assert(!/综合.*健康度\s*[:：]?\s*\d/.test(detail.text), 'Device detail fabricated a synthetic numeric health score');
   assert(!detail.text.includes('Registry'), 'Device detail leaked implementation vocabulary');
   assert(!detail.text.includes('不补零'), 'Device detail leaked design/explanation copy');
   await capture(cdp, 'asset-device-detail-desktop.png');
 
   assert(await evaluate(cdp, `(() => {
-    const target = document.querySelector('[aria-label="工程点位表格，可横向滚动"]');
+    const target = document.querySelector('[aria-label="设备核心运行参数"]');
     if (!(target instanceof HTMLElement)) return false;
     target.scrollIntoView({ block: 'start' });
     return true;
@@ -516,10 +514,9 @@ try {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       body: { scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
-      identity: rect(document.querySelector('[aria-label="设备身份"]')),
-      stateStrip: rect(document.querySelector('[aria-label="设备独立状态"]')),
-      sectionNav: rect(document.querySelector('[aria-label="设备详情分区"]')),
-      overview: rect(document.querySelector('#overview')),
+      identity: rect(document.querySelector('[aria-label="设备身份与当前状态"]')),
+      realtimeCards: rect(document.querySelector('[aria-label="设备关键实时参数"]')),
+      lowerWorkspace: rect(document.querySelector('[aria-label="设备运行参数与铭牌"]')),
       h1Count: document.querySelectorAll('h1').length,
       cardCount: document.querySelectorAll('[data-slot="card"]').length,
       antCount: document.querySelectorAll('.ant-card, .ant-table, .ant-tabs').length,
@@ -527,24 +524,24 @@ try {
   })()`);
   assert(detailNarrow.body.scrollWidth <= detailNarrow.body.clientWidth, `Device detail overflows at 768px: ${JSON.stringify(detailNarrow.body)}`);
   assert(detailNarrow.h1Count === 1 && detailNarrow.antCount === 0, 'Narrow Device detail lost heading semantics or shadcn composition');
-  assert(detailNarrow.cardCount === 0, `Narrow Device detail regressed into Card wall: ${detailNarrow.cardCount}`);
-  assert(detailNarrow.stateStrip?.bottom < detailNarrow.viewport.height && detailNarrow.sectionNav?.top < detailNarrow.viewport.height && detailNarrow.overview?.top < detailNarrow.viewport.height, `Device detail primary workflow was displaced below the first viewport: ${JSON.stringify({ stateStrip: detailNarrow.stateStrip, sectionNav: detailNarrow.sectionNav, overview: detailNarrow.overview })}`);
+  assert(detailNarrow.cardCount === 7, `Narrow Device detail lost Surface 07 Card structure: ${detailNarrow.cardCount}`);
+  assert(detailNarrow.realtimeCards?.top < detailNarrow.viewport.height, `Device detail key realtime Cards were displaced below the first viewport: ${JSON.stringify(detailNarrow.realtimeCards)}`);
   await capture(cdp, 'asset-device-detail-narrow.png');
 
-  assert(await clickText(cdp, 'button', '返回设备'), 'Device detail back action was unavailable');
+  assert(await clickText(cdp, 'button', '返回设备列表'), 'Device detail back action was unavailable');
   await waitFor(cdp, `Boolean(document.querySelector('[data-testid="assets-workspace"]'))`, 'Assets workspace return');
   await cdp.send('Runtime.evaluate', { expression: 'window.scrollTo(0, 0)' });
   await pause(300);
   const narrow = await evaluate(cdp, `(() => ({
     viewport: { width: innerWidth, height: innerHeight },
     body: { scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
-    summaryHeight: Math.round(document.querySelector('[aria-label="设备状态摘要"]')?.getBoundingClientRect().height ?? 0),
+    summaryHeight: Math.round(document.querySelector('[aria-label="设备概况卡片"]')?.getBoundingClientRect().height ?? 0),
     ledgerTop: Math.round(document.querySelector('[aria-label="设备"]')?.getBoundingClientRect().top ?? 0),
     rowCount: document.querySelectorAll('[aria-label="设备"] [data-slot="table-body"] [data-slot="table-row"]').length,
     antCount: document.querySelectorAll('.ant-card, .ant-table, .ant-select, .ant-input').length,
   }))()`);
   assert(narrow.body.scrollWidth <= narrow.body.clientWidth, `Assets workspace overflows at 768px: ${JSON.stringify(narrow.body)}`);
-  assert(narrow.rowCount === 15 && narrow.antCount === 0, 'Narrow Assets ledger lost density or shadcn composition');
+  assert(narrow.rowCount === 10 && narrow.antCount === 0, 'Narrow Assets ledger lost Surface 06 default page size or shadcn composition');
   assert(narrow.ledgerTop < narrow.viewport.height, `Filters displaced the ledger below the first viewport: ${narrow.ledgerTop}`);
   assert(await evaluate(cdp, `document.querySelectorAll('[data-slot="resizable-panel-group"]').length === 0`), 'Narrow Assets workspace should not render the desktop split inspector');
   await capture(cdp, 'assets-ledger-narrow.png');

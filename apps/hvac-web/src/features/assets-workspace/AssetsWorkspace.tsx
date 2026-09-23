@@ -1,10 +1,14 @@
+// @surface-card-table-exception 06 — preserve reviewed Surface 06 ledger Card/table anatomy.
 import { useEffect, useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import {
+  Activity,
   AlertTriangle,
   ArrowUpRight,
+  Box,
   CheckCircle2,
   Fan,
+  GripVertical,
   Radio,
   RadioTower,
   RefreshCw,
@@ -16,7 +20,6 @@ import {
   Zap,
 } from 'lucide-react';
 
-import { DataTableBlock } from '@/blocks/data-table';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import type { HvacRouterContext } from '@/app/router-context';
 import {
@@ -31,6 +34,8 @@ import { Main } from '@/components/layout/Main';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Empty,
   EmptyContent,
@@ -96,7 +101,7 @@ interface AssetsWorkspaceProps {
   readonly onOpenDetail: (deviceId: string) => void;
 }
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 10;
 
 function getDeviceTypeIcon(deviceType: string) {
   const normalized = deviceType.toLowerCase();
@@ -108,6 +113,19 @@ function getDeviceTypeIcon(deviceType: string) {
   if (normalized.includes('sensor') || normalized.includes('传感器')) return Radio;
   if (normalized.includes('meter') || normalized.includes('电表')) return Zap;
   return Server;
+}
+
+function primaryLoadPoint(row: AssetsDeviceRow) {
+  const points = metricPoints(row, 12);
+  return points.find((point) => /功率|power/i.test(point.label)) ?? points[0] ?? null;
+}
+
+function telemetrySummary(row: AssetsDeviceRow) {
+  return metricPoints(row, 4)
+    .filter((point) => point.state === 'PRESENT')
+    .slice(0, 2)
+    .map((point) => `${point.label} ${point.displayValue}${point.unit ? ` ${point.unit}` : ''}`)
+    .join(' · ');
 }
 
 function flattenScopes(root: AssetsHierarchyNode | null) {
@@ -374,156 +392,145 @@ export function AssetsWorkspace({
 
   const columns = useMemo<Array<ColumnDef<DataTableFeatures, AssetsDeviceRow>>>(() => [
     {
-      id: 'device',
+      id: 'select',
+      header: ({ table }) => (
+        <Checkbox
+          checked={table.getIsAllPageRowsSelected() ? true : table.getIsSomePageRowsSelected() ? 'indeterminate' : false}
+          onCheckedChange={(checked) => table.toggleAllPageRowsSelected(Boolean(checked))}
+          aria-label="全选设备"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(checked) => row.toggleSelected(Boolean(checked))}
+          aria-label={`选择设备 ${row.original.device.code}`}
+          onClick={(event) => event.stopPropagation()}
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+    },
+    {
+      id: 'drag',
+      header: '',
+      cell: () => <GripVertical className="size-3.5 text-muted-foreground/40" aria-hidden="true" />,
+      enableSorting: false,
+      enableHiding: false,
+    },
+    {
+      id: 'code',
+      accessorFn: (row) => row.device.code,
+      enableSorting: true,
+      meta: { label: '设备编号' },
+      header: '设备编号',
+      cell: ({ row }) => <span className="font-mono text-xs font-medium text-foreground">{row.original.device.code}</span>,
+    },
+    {
+      id: 'name',
       accessorFn: (row) => row.device.displayName,
       enableSorting: true,
-      enableHiding: false,
-      meta: { label: '设备' },
-      header: '设备',
+      meta: { label: '设备名称 / 分项' },
+      header: '设备名称 / 分项',
       cell: ({ row }) => {
         const DeviceIcon = getDeviceTypeIcon(row.original.device.deviceType);
         return (
-          <div className="flex min-w-0 items-start gap-2.5">
-            <DeviceIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
+              <DeviceIcon className="size-3" aria-hidden="true" />
+            </div>
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{row.original.device.displayName}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                {row.original.device.code} · {assetsDeviceTypeLabel(row.original.device.deviceType)}
-              </div>
+              <div className="truncate text-xs font-medium text-foreground">{row.original.device.displayName}</div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{assetsDeviceTypeLabel(row.original.device.deviceType)}</div>
             </div>
           </div>
         );
       },
     },
     {
-      id: 'objectLocation',
-      accessorFn: (row) => `${connectedAsset(row) ?? ''} ${deviceLocation(row)}`,
+      id: 'location',
+      accessorFn: (row) => deviceLocation(row),
       enableSorting: true,
-      meta: { label: '对象与位置' },
-      header: '对象与位置',
-      cell: ({ row }) => {
-        const asset = connectedAsset(row.original);
-        const relationshipLabel = asset && asset !== row.original.device.displayName ? asset : null;
-        return (
-          <div className="min-w-0">
-            {relationshipLabel ? (
-              <div className="truncate text-sm font-medium text-foreground">{relationshipLabel}</div>
-            ) : null}
-            <div className={cn('truncate text-xs text-muted-foreground', relationshipLabel && 'mt-0.5')}>
-              {deviceLocation(row.original)}
-            </div>
-          </div>
-        );
-      },
+      meta: { label: '物理空间 / 机房' },
+      header: '物理空间 / 机房',
+      cell: ({ row }) => <span className="text-xs text-muted-foreground">{deviceLocation(row.original)}</span>,
     },
     {
       id: 'running',
       accessorFn: (row) => runningPresentation(row).label,
-      meta: { label: '运行' },
-      header: '运行',
+      meta: { label: '运行工况' },
+      header: '运行工况',
       cell: ({ row }) => {
         const running = runningPresentation(row.original);
-        const attention = !['运行中', '已停止', '待机'].includes(running.label);
         return (
-          <span className={cn('inline-flex items-center gap-1.5 text-xs', attention ? 'font-medium text-warning' : 'text-foreground')}>
-            <span className={cn('size-1.5 rounded-full', attention ? 'bg-warning' : 'bg-muted-foreground/55')} aria-hidden="true" />
-            {running.label}
-          </span>
+          <StatusBadge
+            label={running.label}
+            tone={running.label === '运行中' ? 'in-progress' : running.label === '未知' ? 'warning' : 'neutral'}
+            className="h-6 px-2 text-[11px]"
+          />
         );
       },
     },
     {
-      id: 'connection',
-      accessorFn: (row) => connectionPresentation(row).label,
-      meta: { label: '连接' },
-      header: '连接',
-      cell: ({ row }) => {
-        const connection = connectionPresentation(row.original);
-        return (
-          <span className={cn(
-            'inline-flex items-center gap-1.5 text-xs',
-            connection.label === '离线' ? 'font-medium text-destructive' : connection.label === '未知' ? 'font-medium text-warning' : 'text-foreground',
-          )}>
-            <span className={cn(
-              'size-1.5 rounded-full',
-              connection.label === '离线' ? 'bg-destructive' : connection.label === '未知' ? 'bg-warning' : 'bg-muted-foreground/55',
-            )} aria-hidden="true" />
-            {connection.label}
-          </span>
-        );
-      },
-    },
-    {
-      id: 'dataHealth',
-      accessorFn: (row) => (
-        row.operational.telemetry.freshness === 'FRESH' && row.operational.telemetry.quality === 'GOOD'
-          ? 'healthy'
-          : 'issue'
-      ),
-      meta: { label: '数据' },
-      header: '数据',
-      cell: ({ row }) => {
-        const freshness = freshnessLabel(row.original.operational.telemetry.freshness);
-        const quality = qualityLabel(row.original.operational.telemetry.quality);
-        const healthy = row.original.operational.telemetry.freshness === 'FRESH'
-          && row.original.operational.telemetry.quality === 'GOOD';
-        return (
-          <div className={cn('text-xs', healthy ? 'text-muted-foreground' : 'font-medium text-warning')}>
-            <span>{freshness}</span>
-            <span className="px-1 text-muted-foreground" aria-hidden="true">·</span>
-            <span>{quality}</span>
-          </div>
-        );
-      },
-    },
-    {
-      id: 'metrics',
-      accessorFn: (row) => metricPoints(row, 2).map((point) => `${point.label}:${point.displayValue}`).join(' '),
+      id: 'load',
+      accessorFn: (row) => primaryLoadPoint(row)?.displayValue ?? '',
       enableSorting: false,
-      meta: { label: '关键值' },
-      header: '关键值',
+      meta: { label: '实时负荷' },
+      header: '实时负荷',
       cell: ({ row }) => {
-        const points = metricPoints(row.original, 2);
-        return points.length > 0 ? (
-          <div className="space-y-1 text-xs">
-            {points.map((point) => (
-              <div key={point.pointId} className="flex min-w-0 items-baseline justify-between gap-3">
-                <span className="truncate text-muted-foreground">{point.label}</span>
-                <span className="shrink-0 font-medium tabular-nums">
-                  {point.state === 'PRESENT' ? point.displayValue : '—'}
-                  {point.state === 'PRESENT' && point.unit ? ` ${point.unit}` : ''}
-                </span>
-              </div>
-            ))}
+        const point = primaryLoadPoint(row.original);
+        if (!point || point.state !== 'PRESENT') return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <div className="min-w-24 text-xs">
+            <div className="font-medium tabular-nums text-foreground">
+              {point.displayValue}{point.unit ? ` ${point.unit}` : ''}
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">负荷率 —</div>
           </div>
-        ) : <span className="text-muted-foreground">—</span>;
+        );
       },
     },
     {
-      id: 'attention',
-      accessorFn: (row) => row.operational.attentionReasons[0] ?? '',
-      enableSorting: true,
-      meta: { label: '当前事项' },
-      header: '当前事项',
-      cell: ({ row }) => row.original.operational.needsAttention
-        ? (
-          <span className="inline-flex max-w-40 items-center gap-1.5 truncate text-xs text-warning">
-            <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-            {ATTENTION_LABELS[row.original.operational.attentionReasons[0]!]}
-          </span>
-        )
-        : <span className="text-xs text-muted-foreground">—</span>,
+      id: 'telemetry',
+      accessorFn: (row) => telemetrySummary(row),
+      enableSorting: false,
+      meta: { label: '关键遥测指标' },
+      header: '关键遥测指标',
+      cell: ({ row }) => {
+        const summary = telemetrySummary(row.original);
+        return <span className="line-clamp-2 text-xs text-muted-foreground">{summary || '—'}</span>;
+      },
     },
     {
-      id: 'updated',
-      accessorFn: (row) => latestTimestamp(row, site.timezone),
-      enableSorting: true,
-      meta: { label: '更新' },
-      header: '更新',
+      id: 'health',
+      enableSorting: false,
+      meta: { label: '健康评分' },
+      header: '健康评分',
+      cell: () => (
+        <div className="text-center text-xs">
+          <span className="font-medium text-foreground">—</span>
+          <span className="ml-1 text-[10px] text-muted-foreground">未提供</span>
+        </div>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      enableSorting: false,
+      enableHiding: false,
       cell: ({ row }) => (
-        <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-          {latestTimestamp(row.original, site.timezone)}
-        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenDetail(row.original.device.id);
+          }}
+        >
+          <ArrowUpRight className="size-3.5" aria-hidden="true" />
+          查看详情
+        </Button>
       ),
     },
     {
@@ -594,7 +601,7 @@ export function AssetsWorkspace({
       header: () => null,
       cell: () => null,
     },
-  ], [deviceTypeOptions, site.timezone]);
+  ], [deviceTypeOptions, onOpenDetail]);
 
   const table = useDataTable({
     key: 'surface-06-device-workspace-v3',
@@ -642,97 +649,106 @@ export function AssetsWorkspace({
     : data.currentUnavailable
       ? '当前状态不可用'
       : '当前状态已更新';
+  const onlineCount = counts.online ?? 0;
+  const onlineRate = data.rows.length > 0 ? (onlineCount / data.rows.length) * 100 : 0;
 
   const tableContent = (
-    <DataTableBlock>
-      <DataTable
-        table={table}
-        tableClassName="table-fixed w-full"
-        tableAriaLabel="设备"
-        empty={(
-        <div className="py-10 text-center">
-          <Search className="mx-auto size-6 text-muted-foreground" />
-          <h3 className="mt-3 text-sm font-medium">没有符合条件的设备</h3>
-          <p className="mt-1 text-xs text-muted-foreground">调整搜索、范围或筛选条件后再试。</p>
-        </div>
-        )}
-        getHeaderCellProps={(header) => ({
-        className:
-          header.id === 'device' ? 'w-[20%]' :
-          header.id === 'objectLocation' ? 'w-[15%]' :
-          header.id === 'running' ? 'w-[7%]' :
-          header.id === 'connection' ? 'w-[7%]' :
-          header.id === 'dataHealth' ? 'w-[10%]' :
-          header.id === 'metrics' ? 'w-[18%]' :
-          header.id === 'attention' ? 'w-[13%]' :
-          header.id === 'updated' ? 'w-[10%]' :
-          'hidden',
-        })}
-        getRowProps={(row) => {
-        const isSelected = row.original.device.id === inspected?.device.id;
-        return {
-          className: cn(
-            'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-            isSelected ? 'bg-muted/60 hover:bg-muted/70' : 'hover:bg-muted/35',
-          ),
-          'data-state': isSelected ? 'selected' : undefined,
-          'aria-selected': isSelected,
-          tabIndex: 0,
-          onClick: () => onSearchChange({ inspect: row.original.device.id }),
-          onKeyDown: (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            onSearchChange({ inspect: row.original.device.id });
-          },
-        };
-        }}
-        getCellProps={(cell) => ({
-          className: cell.column.id.endsWith('Filter') ? 'hidden' : 'px-3 py-2.5',
-        })}
-        footer={<DataTablePagination table={table} />}
-      >
-        <DataTableAdvancedToolbar table={table} className="p-0">
-        <div className="relative min-w-64 flex-1 lg:max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="h-9 pl-8"
-            placeholder="搜索设备、编码或位置"
-            value={searchState.q ?? ''}
-            onChange={(event) => {
-              onSearchChange({ q: event.currentTarget.value || undefined, inspect: undefined });
+    <Card className="min-w-0 shadow-xs" aria-label="设备运行台账">
+      <CardHeader className="space-y-3 border-b pb-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="text-base font-semibold">设备运行台账</CardTitle>
+          <ScopeSelect
+            value={selectedScope?.key ?? defaultScope}
+            options={scopeOptions}
+            onChange={(scope) => {
+              onSearchChange({ scope, inspect: undefined });
               table.setPageIndex(0);
             }}
           />
         </div>
-        <ScopeSelect
-          value={selectedScope?.key ?? defaultScope}
-          options={scopeOptions}
-          onChange={(scope) => {
-            onSearchChange({ scope, inspect: undefined });
-            table.setPageIndex(0);
-          }}
-        />
+        <DataTableAdvancedToolbar table={table} className="p-0">
+          <div className="relative min-w-64 flex-1 lg:max-w-sm">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="h-8 pl-8 text-xs"
+              placeholder="搜索设备名称、编号或位置..."
+              value={searchState.q ?? ''}
+              onChange={(event) => {
+                onSearchChange({ q: event.currentTarget.value || undefined, inspect: undefined });
+                table.setPageIndex(0);
+              }}
+            />
+          </div>
           <DataTableSortList table={table} />
           <DataTableFilterList table={table} />
         </DataTableAdvancedToolbar>
-      </DataTable>
-    </DataTableBlock>
+      </CardHeader>
+      <CardContent className="p-0">
+        <DataTable
+          table={table}
+          className="gap-0"
+          tableClassName="min-w-[1180px]"
+          tableAriaLabel="设备运行台账"
+          empty="未找到匹配的设备"
+          getHeaderRowProps={() => ({ className: 'bg-muted/20 hover:bg-transparent' })}
+          getHeaderCellProps={(header) => ({
+            className:
+              header.id === 'select' ? 'w-10 px-3 text-center' :
+              header.id === 'drag' ? 'w-6 px-0' :
+              header.id === 'code' ? 'w-28 text-xs font-medium' :
+              header.id === 'name' ? 'w-[250px] text-xs font-medium' :
+              header.id === 'location' ? 'w-[180px] text-xs font-medium' :
+              header.id === 'running' ? 'w-[100px] text-xs font-medium' :
+              header.id === 'load' ? 'w-[120px] text-xs font-medium' :
+              header.id === 'telemetry' ? 'w-[220px] text-xs font-medium' :
+              header.id === 'health' ? 'w-[110px] text-center text-xs font-medium' :
+              header.id === 'actions' ? 'w-[100px] text-right text-xs font-medium' :
+              'hidden',
+          })}
+          getRowProps={(row) => {
+            const isSelected = row.original.device.id === inspected?.device.id;
+            return {
+              className: cn(
+                'cursor-pointer text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                isSelected ? 'bg-muted/60 hover:bg-muted/70' : 'hover:bg-muted/40',
+              ),
+              'data-state': isSelected ? 'selected' : undefined,
+              'aria-selected': isSelected,
+              tabIndex: 0,
+              onClick: () => onSearchChange({ inspect: row.original.device.id }),
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                onSearchChange({ inspect: row.original.device.id });
+              },
+            };
+          }}
+          getCellProps={(cell) => ({
+            className:
+              cell.column.id.endsWith('Filter') ? 'hidden' :
+              cell.column.id === 'select' ? 'w-10 px-3 text-center' :
+              cell.column.id === 'drag' ? 'w-6 px-0' :
+              cell.column.id === 'health' ? 'text-center' :
+              cell.column.id === 'actions' ? 'text-right' :
+              'py-2.5',
+          })}
+          footer={<DataTablePagination table={table} totalRows={baseRows.length} />}
+        />
+      </CardContent>
+    </Card>
   );
 
   return (
-    <Main fluid className="space-y-4" data-testid="assets-workspace" data-site-id={site.id}>
-      <header className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">设备</h1>
-            <span className="text-sm text-muted-foreground">{data.rows.length} 台</span>
+    <Main fluid className="space-y-6 pb-16" data-testid="assets-workspace" data-site-id={site.id}>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">设备中心</h1>
+            <Badge variant="outline" className="text-xs font-normal">在册 {data.rows.length} 台设备</Badge>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-label="设备状态摘要">
-            <span>{site.displayName}</span>
-            <span><strong className="font-medium text-foreground">{counts.online ?? '—'}</strong> 在线</span>
-            <span className={counts.attention ? 'text-warning' : undefined}><strong className="font-medium">{counts.attention ?? '—'}</strong> 需关注</span>
-            <span className={counts.dataIssue ? 'text-destructive' : undefined}><strong className="font-medium">{counts.dataIssue ?? '—'}</strong> 数据问题</span>
-          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {site.displayName} · {site.timezone} · 全站机电设备运行状态与关键遥测台账
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <span className="text-xs text-muted-foreground">{currentStateLabel}</span>
@@ -746,10 +762,53 @@ export function AssetsWorkspace({
               className={cn((data.registry.isFetching || data.current.isFetching) && 'animate-spin')}
               aria-hidden="true"
             />
-            刷新
+            刷新状态
           </Button>
         </div>
       </header>
+
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="设备概况卡片">
+        <Card className="shadow-xs">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">受控设备总数</CardTitle>
+            <Box className="size-4 text-muted-foreground" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div className="text-2xl font-bold tracking-tight tabular-nums">{data.rows.length} <span className="text-xs font-normal text-muted-foreground">台</span></div>
+            <p className="text-xs text-muted-foreground">当前站点设备清单</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-xs">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">实时在线率</CardTitle>
+            <Activity className="size-4 text-muted-foreground" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div className="text-2xl font-bold tracking-tight tabular-nums">{onlineRate.toFixed(1)}%</div>
+            <p className="text-xs text-muted-foreground">{onlineCount} 在线 · {Math.max(data.rows.length - onlineCount, 0)} 非在线</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-xs">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">需关注设备</CardTitle>
+            <AlertTriangle className="size-4 text-muted-foreground" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div className="text-2xl font-bold tracking-tight tabular-nums">{counts.attention ?? '—'} <span className="text-xs font-normal text-muted-foreground">台</span></div>
+            <p className="text-xs text-muted-foreground">连接、运行或遥测存在当前事项</p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-xs">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">数据质量问题</CardTitle>
+            <Radio className="size-4 text-muted-foreground" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div className="text-2xl font-bold tracking-tight tabular-nums">{counts.dataIssue ?? '—'} <span className="text-xs font-normal text-muted-foreground">台</span></div>
+            <p className="text-xs text-muted-foreground">新鲜度或质量需要核查</p>
+          </CardContent>
+        </Card>
+      </section>
 
       <div className="min-w-0" role="region" aria-label="设备" tabIndex={0}>
         {tableContent}
