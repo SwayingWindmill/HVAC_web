@@ -603,8 +603,8 @@ export function TrendAnalysis({ site, principal, searchState, onSearchChange }: 
           <section className="flex flex-wrap items-center justify-between gap-3 border-t pt-4" aria-label="继续调查">
             <p className="text-xs leading-5 text-muted-foreground">趋势可以支持调查假设，但不能仅凭曲线同时变化宣称因果关系。</p>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/alarms" params={{ siteId: site.id }} search={{}}>打开告警</Link></Button>
-              <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }} search={{}}>进入诊断</Link></Button>
+              <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'alarms' }}>打开告警</Link></Button>
+              <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'diagnostics' }}>进入诊断</Link></Button>
               <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/energy" params={{ siteId: site.id }} search={{}}>查看能源</Link></Button>
             </div>
           </section>

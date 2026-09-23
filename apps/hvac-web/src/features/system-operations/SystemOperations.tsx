@@ -263,7 +263,7 @@ function OperationsInspector({
               站点活动告警
             </div>
             <Button variant="ghost" size="xs" asChild className="h-7 text-xs gap-1">
-              <Link to="/sites/$siteId/alarms" params={{ siteId: site.id }}>
+              <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'alarms' }}>
                 查看<ArrowRight className="size-3" aria-hidden="true" />
               </Link>
             </Button>
@@ -286,7 +286,7 @@ function OperationsInspector({
           </Link>
         </Button>
         <Button variant="outline" size="sm" asChild className="gap-1.5">
-          <Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }}>
+          <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'diagnostics' }}>
             <Stethoscope className="size-3.5 text-muted-foreground" aria-hidden="true" />
             诊断
           </Link>

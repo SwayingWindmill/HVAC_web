@@ -3,7 +3,7 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `10 诊断中心`  
-> **Route intent：** `/sites/:siteId/diagnostics`  
+> **Route intent：** `/sites/:siteId/issues?view=diagnostics`
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
 > **设计输入声明：** 本文件不参考当前项目已有 FDD 页面、旧诊断页、旧 AI 调查页、旧 Ant/ProComponents 页面或旧设计稿。当前代码只可在实施阶段作为真实 Alarm / AFDD Finding / Rule / Model / Evidence / Device / Work / Verification / Permission / Route contract 的候选证据来源。
 
@@ -437,7 +437,7 @@ Insufficient evidence / deferred
 Canonical route：
 
 ```text
-/sites/:siteId/diagnostics
+/sites/:siteId/issues?view=diagnostics
 ```
 
 推荐 Search Params：

@@ -744,7 +744,7 @@ export function EnergyAnalytics({ site, principal, initialPeriod, searchState, o
           <p className="mt-1 text-xs leading-5 text-muted-foreground">差异回答“何时不同”，不自动回答“为什么”。需要解释运行原因时进入诊断。</p>
         </div>
         <Button variant="outline" size="sm" asChild>
-          <Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }} search={{ source: 'energy' }}>进入诊断</Link>
+          <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'diagnostics', source: 'energy' }}>进入诊断</Link>
         </Button>
       </section>
     </Main>

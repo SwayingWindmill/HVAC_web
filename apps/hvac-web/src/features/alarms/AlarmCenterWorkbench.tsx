@@ -30,6 +30,7 @@ import {
   type ScopedAlarmRequestOptions,
 } from '@/api/alarms';
 import { DataTableBlock } from '@/blocks/data-table';
+import { FactStrip } from '@/blocks/fact-strip';
 import {
   createPlatformGatewayClient,
   type CurrentPrincipalResponse,
@@ -41,7 +42,6 @@ import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -88,7 +88,7 @@ import {
 } from './alarm-center-model';
 
 export interface AlarmCenterSearchState {
-  readonly view?: AlarmCenterView;
+  readonly alarmView?: AlarmCenterView;
   readonly q?: string;
   readonly severity?: AlarmSeverity;
   readonly ack?: Exclude<AlarmAcknowledgementFilter, 'all'>;
@@ -182,60 +182,43 @@ function HandlingBadge({ row }: { row: AlarmRow }) {
 
 function LoadContext({ rows, truncated, unavailable }: { rows: readonly AlarmRow[]; truncated: boolean; unavailable: boolean }) {
   const active = rows.filter((row) => row.alarm.condition === 'ACTIVE');
-  const values = [
-    {
-      label: '活动告警',
-      value: lowerBoundCount(active.length, truncated),
-      unit: '项',
-      icon: BellRing,
-      iconClass: 'text-destructive',
-      bgClass: 'bg-destructive/10',
-    },
-    {
-      label: '未确认',
-      value: lowerBoundCount(active.filter((row) => !row.alarm.acknowledgement).length, truncated),
-      unit: '项',
-      icon: AlarmClock,
-      iconClass: 'text-amber-600 dark:text-amber-400',
-      bgClass: 'bg-amber-500/10',
-    },
-    {
-      label: '未指派',
-      value: lowerBoundCount(active.filter((row) => !row.alarm.assigneeId).length, truncated),
-      unit: '项',
-      icon: UsersRound,
-      iconClass: 'text-primary',
-      bgClass: 'bg-primary/10',
-    },
-    {
-      label: '已搁置',
-      value: lowerBoundCount(active.filter((row) => Boolean(row.alarm.suppression)).length, truncated),
-      unit: '项',
-      icon: ShieldAlert,
-      iconClass: 'text-muted-foreground',
-      bgClass: 'bg-muted',
-    },
-  ];
   return (
-    <div
-      className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4"
-      aria-label="当前告警负荷"
-      data-testid="alarm-load-context"
-    >
-      {values.map(({ label, value, unit, icon: Icon, iconClass, bgClass }) => (
-        <div key={label} className="min-w-0 rounded-lg border bg-card p-3 sm:p-4 shadow-xs space-y-1.5">
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-xs sm:text-sm font-medium text-foreground truncate">{label}</span>
-            <div className={cn('flex size-7 items-center justify-center rounded-md', bgClass)}>
-              <Icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden="true" />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl sm:text-2xl font-bold tracking-tight tabular-nums">{unavailable ? '—' : value}</span>
-            {!unavailable ? <span className="text-xs text-muted-foreground font-normal">{unit}</span> : null}
-          </div>
-        </div>
-      ))}
+    <div data-testid="alarm-load-context">
+      <FactStrip
+        ariaLabel="当前告警负荷"
+        items={[
+          {
+            key: 'active',
+            label: '活动告警',
+            value: unavailable ? '—' : lowerBoundCount(active.length, truncated),
+            suffix: unavailable ? undefined : '项',
+            icon: <BellRing />,
+            tone: active.length > 0 ? 'critical' : 'default',
+          },
+          {
+            key: 'unacknowledged',
+            label: '未确认',
+            value: unavailable ? '—' : lowerBoundCount(active.filter((row) => !row.alarm.acknowledgement).length, truncated),
+            suffix: unavailable ? undefined : '项',
+            icon: <AlarmClock />,
+            tone: active.some((row) => !row.alarm.acknowledgement) ? 'warning' : 'default',
+          },
+          {
+            key: 'unassigned',
+            label: '未指派',
+            value: unavailable ? '—' : lowerBoundCount(active.filter((row) => !row.alarm.assigneeId).length, truncated),
+            suffix: unavailable ? undefined : '项',
+            icon: <UsersRound />,
+          },
+          {
+            key: 'shelved',
+            label: '已搁置',
+            value: unavailable ? '—' : lowerBoundCount(active.filter((row) => Boolean(row.alarm.suppression)).length, truncated),
+            suffix: unavailable ? undefined : '项',
+            icon: <ShieldAlert />,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -285,17 +268,13 @@ function ContextTrail({ source, device, site }: { source: string; device: string
 
 function PerformanceUnavailable() {
   return (
-    <Card className="min-h-[420px] shadow-none">
-      <CardContent className="flex min-h-[420px] items-center justify-center">
-        <Empty>
-          <EmptyMedia variant="icon"><Gauge aria-hidden="true" /></EmptyMedia>
-          <EmptyHeader>
-            <EmptyTitle>当前没有可用的告警绩效统计</EmptyTitle>
-            <EmptyDescription>告警率、Flood、Standing、Chattering 等指标只在站点告警绩效数据可用时展示，不使用前端阈值推算。</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      </CardContent>
-    </Card>
+    <Empty className="min-h-[420px] rounded-lg border">
+      <EmptyMedia variant="icon"><Gauge aria-hidden="true" /></EmptyMedia>
+      <EmptyHeader>
+        <EmptyTitle>当前没有可用的告警绩效统计</EmptyTitle>
+        <EmptyDescription>告警率、Flood、Standing、Chattering 等指标只在站点告警绩效数据可用时展示，不使用前端阈值推算。</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -313,7 +292,7 @@ export function AlarmCenterWorkbench({
   const canReadRegistry = capabilities.includes('asset.list') && capabilities.includes('device.list');
   const canReadWorkOrders = capabilities.includes('work-order.list');
 
-  const view: AlarmCenterView = searchState.view ?? 'active';
+  const view: AlarmCenterView = searchState.alarmView ?? 'active';
   const severity: AlarmSeverity | 'all' = searchState.severity ?? 'all';
   const ack: AlarmAcknowledgementFilter = searchState.ack ?? 'all';
   const owner: AlarmOwnershipFilter = searchState.owner ?? 'all';
@@ -477,7 +456,7 @@ export function AlarmCenterWorkbench({
   const closeInspector = useCallback(() => onSearchChange({ selected: undefined }), [onSearchChange]);
   const changeView = useCallback((next: string) => {
     onSearchChange({
-      view: next === 'active' ? undefined : next as AlarmCenterView,
+      alarmView: next === 'active' ? undefined : next as AlarmCenterView,
       selected: undefined,
       q: undefined,
       severity: undefined,
@@ -603,7 +582,7 @@ const columnWidths: Record<string, string> = {
       <section className="space-y-2 border-t pt-4">
         <h4 className="text-sm font-medium">继续调查</h4>
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-          <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }} search={{ source: 'alarm', alarm: detailRow.alarm.alarmId }}>进入诊断<ArrowRight aria-hidden="true" /></Link></Button>
+          <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'diagnostics', source: 'alarm', alarm: detailRow.alarm.alarmId }}>进入诊断<ArrowRight aria-hidden="true" /></Link></Button>
           <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/operations" params={{ siteId: site.id }}>系统运行<ArrowRight aria-hidden="true" /></Link></Button>
           {detailRow.alarm.deviceId ? <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/devices/$deviceId" params={{ siteId: site.id, deviceId: detailRow.alarm.deviceId }}>设备详情<ArrowRight aria-hidden="true" /></Link></Button> : null}
           {canReadWorkOrders ? <Button variant="outline" size="sm" asChild><Link to="/sites/$siteId/work-orders" params={{ siteId: site.id }} search={{ sourceAlarm: detailRow.alarm.alarmId, source: 'alarm' }}>进入工单<Wrench aria-hidden="true" /></Link></Button> : null}
@@ -642,10 +621,6 @@ const columnWidths: Record<string, string> = {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="h-8 px-2.5 font-normal text-xs text-muted-foreground gap-1.5">
-            <span className="size-1.5 rounded-full bg-emerald-500 inline-block" />
-            实时连接正常
-          </Badge>
           <Button
             variant="outline"
             size="sm"
@@ -682,13 +657,6 @@ const columnWidths: Record<string, string> = {
           <DataTableBlock
             className="min-w-0"
             data-testid="alarm-triage-ledger"
-            title={view === 'active' ? '活动告警' : view === 'history' ? '告警历史' : '已搁置告警'}
-            actions={(
-              <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={filteredRows.length === 0} onClick={() => exportCsv(filteredRows, site.timezone)}>
-                <Download className="size-3.5" aria-hidden="true" />
-                导出
-              </Button>
-            )}
           >
 
             {listQuery.isError && alarms.length === 0 ? (
@@ -709,7 +677,11 @@ const columnWidths: Record<string, string> = {
                   className: 'bg-muted/40',
                 })}
                 getHeaderCellProps={(header) => ({
-                  className: cn('px-3 py-2.5 font-medium text-muted-foreground', columnWidths[header.id]),
+                  className: cn(
+                    'px-3 py-2.5 font-medium text-muted-foreground',
+                    columnWidths[header.id],
+                    ['owner', 'duration', 'repeat', 'suppression', 'transition'].includes(header.id) && 'hidden 2xl:table-cell',
+                  ),
                 })}
                 getRowProps={(row) => {
                   const isSelected = selectedAlarmId === row.original.alarm.alarmId;
@@ -731,7 +703,12 @@ const columnWidths: Record<string, string> = {
                     },
                   };
                 }}
-                getCellProps={() => ({ className: 'px-3 py-2.5' })}
+                getCellProps={(cell) => ({
+                  className: cn(
+                    'px-3 py-2.5',
+                    ['owner', 'duration', 'repeat', 'suppression', 'transition'].includes(cell.column.id) && 'hidden 2xl:table-cell',
+                  ),
+                })}
               >
                 <div className="flex flex-wrap items-center gap-2" data-testid="alarm-triage-toolbar">
                   <InputGroup className="w-full min-w-0 flex-1 sm:w-auto sm:min-w-56 lg:max-w-sm">
@@ -762,6 +739,10 @@ const columnWidths: Record<string, string> = {
                     <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectGroup><SelectItem value="all">全部来源</SelectItem><SelectItem value="DEVICE_RULE">设备规则</SelectItem><SelectItem value="SITE_RULE">站点规则</SelectItem><SelectItem value="EXTERNAL">外部接入</SelectItem></SelectGroup></SelectContent>
                   </Select>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={filteredRows.length === 0} onClick={() => exportCsv(filteredRows, site.timezone)}>
+                    <Download className="size-3.5" aria-hidden="true" />
+                    导出
+                  </Button>
                 </div>
               </DataTable>
             )}
@@ -769,13 +750,13 @@ const columnWidths: Record<string, string> = {
           </DataTableBlock>
 
           <aside className="hidden min-w-0 xl:block" aria-label="告警详情">
-            <Card className="sticky top-20 shadow-xs">
-              <CardHeader className="border-b">
-                <CardTitle>告警详情</CardTitle>
-                <CardDescription>{detailRow ? `${detailRow.deviceLabel} · ${detailRow.locationLabel}` : '选择一条告警查看详情'}</CardDescription>
-              </CardHeader>
-              <CardContent className="pt-4">{inspectorBody}</CardContent>
-            </Card>
+            <section className="sticky top-20 overflow-hidden rounded-lg border bg-card">
+              <div className="border-b px-4 py-3.5">
+                <h2 className="text-sm font-semibold">告警详情</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">{detailRow ? `${detailRow.deviceLabel} · ${detailRow.locationLabel}` : '选择一条告警查看详情'}</p>
+              </div>
+              <div className="p-4">{inspectorBody}</div>
+            </section>
           </aside>
         </section>
       )}

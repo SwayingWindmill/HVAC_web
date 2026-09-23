@@ -11,6 +11,7 @@ export type SiteRouteLeaf =
   | 'dashboard'
   | 'devices'
   | 'diagnostics'
+  | 'issues'
   | 'energy'
   | 'forecast'
   | 'control'
@@ -53,6 +54,8 @@ export function isUUIDv7(value: string): boolean {
 export function siteRoute(site: Pick<Site, 'id'>, leaf: SiteRouteLeaf): string {
   if (!isUUIDv7(site.id)) throw new Error('Site identity must be a Registry UUIDv7.');
   if (leaf === 'control' || leaf === 'trends') return `/sites/${site.id}/operations/${leaf}`;
+  if (leaf === 'alarms' || leaf === 'issues') return `/sites/${site.id}/issues`;
+  if (leaf === 'diagnostics') return `/sites/${site.id}/issues?view=diagnostics`;
   return `/sites/${site.id}/${leaf}`;
 }
 

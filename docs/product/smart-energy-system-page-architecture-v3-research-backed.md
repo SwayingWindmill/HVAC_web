@@ -449,6 +449,13 @@ Site context：
 
 **吸收：** 09、10。
 
+**设计继承规则：**
+- 09 / 10 继续作为这个 Workspace 的设计母体，而不是只保留字段和业务能力。合并只改变一级导航与共享上下文，不把两个 Surface 重做成同一种通用 Dashboard；
+- `告警` View 保留 09 的 active-first operator triage：告警负荷事实 → Active / History / Shelved / Performance 子视图 → standalone ledger → desktop 固定详情区 / narrow Sheet。ACK、Assign、Shelve 等处置事实与 physical condition 继续并行；
+- `诊断` View 保留 10 的 evidence-led investigation：finding queue → selected investigation → Verified Facts → Published Finding → Hypothesis / evidence → Next Verification → Work / Verification handoff。Finding、Hypothesis 与 confirmed Root Cause 不得在合并后被压平；
+- 两个 View 共享 Site / object / source trail，但不共享状态机；跨 View 跳转通过 `view=alarms|diagnostics` 与显式 Alarm/Finding identity 完成；
+- 36→10 不允许为了“视觉统一”把 09 的告警台账和 10 的调查工作台改成相同的卡片墙，也不允许再次出现 table 外层 Card + 重复标题。standalone `DataTableBlock`、shadcn Tabs/Sheet/Dialog 和必要的 detail section 是共同语法，业务层级仍由原 Surface 决定。
+
 为什么可合并成一个一级 workspace：
 - 两者共享 site / object / time / severity / evidence context；
 - 用户频繁从 alarm 进入 diagnosis；

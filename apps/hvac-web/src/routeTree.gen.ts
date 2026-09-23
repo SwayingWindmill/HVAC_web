@@ -23,7 +23,6 @@ import { Route as AppSitesSiteIdRouteImport } from './routes/_app.sites.$siteId'
 import { Route as AppSitesSiteIdIndexRouteImport } from './routes/_app.sites.$siteId.index'
 import { Route as AppSitesSiteIdActionPlansRouteImport } from './routes/_app.sites.$siteId.action-plans'
 import { Route as AppSitesSiteIdAiRouteImport } from './routes/_app.sites.$siteId.ai'
-import { Route as AppSitesSiteIdAlarmsRouteImport } from './routes/_app.sites.$siteId.alarms'
 import { Route as AppSitesSiteIdBenchmarkingRouteImport } from './routes/_app.sites.$siteId.benchmarking'
 import { Route as AppSitesSiteIdBigscreenRouteImport } from './routes/_app.sites.$siteId.bigscreen'
 import { Route as AppSitesSiteIdBillingRouteImport } from './routes/_app.sites.$siteId.billing'
@@ -34,13 +33,13 @@ import { Route as AppSitesSiteIdDataQualityRouteImport } from './routes/_app.sit
 import { Route as AppSitesSiteIdDemandRouteImport } from './routes/_app.sites.$siteId.demand'
 import { Route as AppSitesSiteIdDerRouteImport } from './routes/_app.sites.$siteId.der'
 import { Route as AppSitesSiteIdDevicesRouteImport } from './routes/_app.sites.$siteId.devices'
-import { Route as AppSitesSiteIdDiagnosticsRouteImport } from './routes/_app.sites.$siteId.diagnostics'
 import { Route as AppSitesSiteIdEfficiencyRouteImport } from './routes/_app.sites.$siteId.efficiency'
 import { Route as AppSitesSiteIdEnergyRouteImport } from './routes/_app.sites.$siteId.energy'
 import { Route as AppSitesSiteIdEnergyReviewRouteImport } from './routes/_app.sites.$siteId.energy-review'
 import { Route as AppSitesSiteIdExecutionsRouteImport } from './routes/_app.sites.$siteId.executions'
 import { Route as AppSitesSiteIdFddRouteImport } from './routes/_app.sites.$siteId.fdd'
 import { Route as AppSitesSiteIdForecastRouteImport } from './routes/_app.sites.$siteId.forecast'
+import { Route as AppSitesSiteIdIssuesRouteImport } from './routes/_app.sites.$siteId.issues'
 import { Route as AppSitesSiteIdManagementReviewsRouteImport } from './routes/_app.sites.$siteId.management-reviews'
 import { Route as AppSitesSiteIdModelRouteImport } from './routes/_app.sites.$siteId.model'
 import { Route as AppSitesSiteIdMonitorRouteImport } from './routes/_app.sites.$siteId.monitor'
@@ -135,11 +134,6 @@ const AppSitesSiteIdAiRoute = AppSitesSiteIdAiRouteImport.update({
   path: '/ai',
   getParentRoute: () => AppSitesSiteIdRoute,
 } as any)
-const AppSitesSiteIdAlarmsRoute = AppSitesSiteIdAlarmsRouteImport.update({
-  id: '/alarms',
-  path: '/alarms',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
 const AppSitesSiteIdBenchmarkingRoute =
   AppSitesSiteIdBenchmarkingRouteImport.update({
     id: '/benchmarking',
@@ -192,12 +186,6 @@ const AppSitesSiteIdDevicesRoute = AppSitesSiteIdDevicesRouteImport.update({
   path: '/devices',
   getParentRoute: () => AppSitesSiteIdRoute,
 } as any)
-const AppSitesSiteIdDiagnosticsRoute =
-  AppSitesSiteIdDiagnosticsRouteImport.update({
-    id: '/diagnostics',
-    path: '/diagnostics',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
 const AppSitesSiteIdEfficiencyRoute =
   AppSitesSiteIdEfficiencyRouteImport.update({
     id: '/efficiency',
@@ -229,6 +217,11 @@ const AppSitesSiteIdFddRoute = AppSitesSiteIdFddRouteImport.update({
 const AppSitesSiteIdForecastRoute = AppSitesSiteIdForecastRouteImport.update({
   id: '/forecast',
   path: '/forecast',
+  getParentRoute: () => AppSitesSiteIdRoute,
+} as any)
+const AppSitesSiteIdIssuesRoute = AppSitesSiteIdIssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
   getParentRoute: () => AppSitesSiteIdRoute,
 } as any)
 const AppSitesSiteIdManagementReviewsRoute =
@@ -376,7 +369,6 @@ export interface FileRoutesByFullPath {
   '/sites/': typeof AppSitesIndexRoute
   '/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
   '/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/sites/$siteId/alarms': typeof AppSitesSiteIdAlarmsRoute
   '/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
   '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
@@ -387,13 +379,13 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
   '/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
   '/sites/$siteId/devices': typeof AppSitesSiteIdDevicesRouteWithChildren
-  '/sites/$siteId/diagnostics': typeof AppSitesSiteIdDiagnosticsRoute
   '/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
   '/sites/$siteId/energy': typeof AppSitesSiteIdEnergyRouteWithChildren
   '/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
   '/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
   '/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
   '/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
+  '/sites/$siteId/issues': typeof AppSitesSiteIdIssuesRoute
   '/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
   '/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
   '/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
@@ -430,7 +422,6 @@ export interface FileRoutesByTo {
   '/sites': typeof AppSitesIndexRoute
   '/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
   '/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/sites/$siteId/alarms': typeof AppSitesSiteIdAlarmsRoute
   '/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
   '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
@@ -440,12 +431,12 @@ export interface FileRoutesByTo {
   '/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
   '/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
   '/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
-  '/sites/$siteId/diagnostics': typeof AppSitesSiteIdDiagnosticsRoute
   '/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
   '/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
   '/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
   '/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
   '/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
+  '/sites/$siteId/issues': typeof AppSitesSiteIdIssuesRoute
   '/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
   '/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
   '/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
@@ -486,7 +477,6 @@ export interface FileRoutesById {
   '/_app/sites/': typeof AppSitesIndexRoute
   '/_app/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
   '/_app/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/_app/sites/$siteId/alarms': typeof AppSitesSiteIdAlarmsRoute
   '/_app/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
   '/_app/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/_app/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
@@ -497,13 +487,13 @@ export interface FileRoutesById {
   '/_app/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
   '/_app/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
   '/_app/sites/$siteId/devices': typeof AppSitesSiteIdDevicesRouteWithChildren
-  '/_app/sites/$siteId/diagnostics': typeof AppSitesSiteIdDiagnosticsRoute
   '/_app/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
   '/_app/sites/$siteId/energy': typeof AppSitesSiteIdEnergyRouteWithChildren
   '/_app/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
   '/_app/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
   '/_app/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
   '/_app/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
+  '/_app/sites/$siteId/issues': typeof AppSitesSiteIdIssuesRoute
   '/_app/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
   '/_app/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
   '/_app/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
@@ -544,7 +534,6 @@ export interface FileRouteTypes {
     | '/sites/'
     | '/sites/$siteId/action-plans'
     | '/sites/$siteId/ai'
-    | '/sites/$siteId/alarms'
     | '/sites/$siteId/benchmarking'
     | '/sites/$siteId/bigscreen'
     | '/sites/$siteId/billing'
@@ -555,13 +544,13 @@ export interface FileRouteTypes {
     | '/sites/$siteId/demand'
     | '/sites/$siteId/der'
     | '/sites/$siteId/devices'
-    | '/sites/$siteId/diagnostics'
     | '/sites/$siteId/efficiency'
     | '/sites/$siteId/energy'
     | '/sites/$siteId/energy-review'
     | '/sites/$siteId/executions'
     | '/sites/$siteId/fdd'
     | '/sites/$siteId/forecast'
+    | '/sites/$siteId/issues'
     | '/sites/$siteId/management-reviews'
     | '/sites/$siteId/model'
     | '/sites/$siteId/monitor'
@@ -598,7 +587,6 @@ export interface FileRouteTypes {
     | '/sites'
     | '/sites/$siteId/action-plans'
     | '/sites/$siteId/ai'
-    | '/sites/$siteId/alarms'
     | '/sites/$siteId/benchmarking'
     | '/sites/$siteId/bigscreen'
     | '/sites/$siteId/billing'
@@ -608,12 +596,12 @@ export interface FileRouteTypes {
     | '/sites/$siteId/data-quality'
     | '/sites/$siteId/demand'
     | '/sites/$siteId/der'
-    | '/sites/$siteId/diagnostics'
     | '/sites/$siteId/efficiency'
     | '/sites/$siteId/energy-review'
     | '/sites/$siteId/executions'
     | '/sites/$siteId/fdd'
     | '/sites/$siteId/forecast'
+    | '/sites/$siteId/issues'
     | '/sites/$siteId/management-reviews'
     | '/sites/$siteId/model'
     | '/sites/$siteId/monitor'
@@ -653,7 +641,6 @@ export interface FileRouteTypes {
     | '/_app/sites/'
     | '/_app/sites/$siteId/action-plans'
     | '/_app/sites/$siteId/ai'
-    | '/_app/sites/$siteId/alarms'
     | '/_app/sites/$siteId/benchmarking'
     | '/_app/sites/$siteId/bigscreen'
     | '/_app/sites/$siteId/billing'
@@ -664,13 +651,13 @@ export interface FileRouteTypes {
     | '/_app/sites/$siteId/demand'
     | '/_app/sites/$siteId/der'
     | '/_app/sites/$siteId/devices'
-    | '/_app/sites/$siteId/diagnostics'
     | '/_app/sites/$siteId/efficiency'
     | '/_app/sites/$siteId/energy'
     | '/_app/sites/$siteId/energy-review'
     | '/_app/sites/$siteId/executions'
     | '/_app/sites/$siteId/fdd'
     | '/_app/sites/$siteId/forecast'
+    | '/_app/sites/$siteId/issues'
     | '/_app/sites/$siteId/management-reviews'
     | '/_app/sites/$siteId/model'
     | '/_app/sites/$siteId/monitor'
@@ -801,13 +788,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSitesSiteIdAiRouteImport
       parentRoute: typeof AppSitesSiteIdRoute
     }
-    '/_app/sites/$siteId/alarms': {
-      id: '/_app/sites/$siteId/alarms'
-      path: '/alarms'
-      fullPath: '/sites/$siteId/alarms'
-      preLoaderRoute: typeof AppSitesSiteIdAlarmsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
     '/_app/sites/$siteId/benchmarking': {
       id: '/_app/sites/$siteId/benchmarking'
       path: '/benchmarking'
@@ -878,13 +858,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSitesSiteIdDevicesRouteImport
       parentRoute: typeof AppSitesSiteIdRoute
     }
-    '/_app/sites/$siteId/diagnostics': {
-      id: '/_app/sites/$siteId/diagnostics'
-      path: '/diagnostics'
-      fullPath: '/sites/$siteId/diagnostics'
-      preLoaderRoute: typeof AppSitesSiteIdDiagnosticsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
     '/_app/sites/$siteId/efficiency': {
       id: '/_app/sites/$siteId/efficiency'
       path: '/efficiency'
@@ -925,6 +898,13 @@ declare module '@tanstack/react-router' {
       path: '/forecast'
       fullPath: '/sites/$siteId/forecast'
       preLoaderRoute: typeof AppSitesSiteIdForecastRouteImport
+      parentRoute: typeof AppSitesSiteIdRoute
+    }
+    '/_app/sites/$siteId/issues': {
+      id: '/_app/sites/$siteId/issues'
+      path: '/issues'
+      fullPath: '/sites/$siteId/issues'
+      preLoaderRoute: typeof AppSitesSiteIdIssuesRouteImport
       parentRoute: typeof AppSitesSiteIdRoute
     }
     '/_app/sites/$siteId/management-reviews': {
@@ -1122,7 +1102,6 @@ const AppSitesSiteIdEnergyRouteWithChildren =
 interface AppSitesSiteIdRouteChildren {
   AppSitesSiteIdActionPlansRoute: typeof AppSitesSiteIdActionPlansRoute
   AppSitesSiteIdAiRoute: typeof AppSitesSiteIdAiRoute
-  AppSitesSiteIdAlarmsRoute: typeof AppSitesSiteIdAlarmsRoute
   AppSitesSiteIdBenchmarkingRoute: typeof AppSitesSiteIdBenchmarkingRoute
   AppSitesSiteIdBigscreenRoute: typeof AppSitesSiteIdBigscreenRoute
   AppSitesSiteIdBillingRoute: typeof AppSitesSiteIdBillingRoute
@@ -1133,13 +1112,13 @@ interface AppSitesSiteIdRouteChildren {
   AppSitesSiteIdDemandRoute: typeof AppSitesSiteIdDemandRoute
   AppSitesSiteIdDerRoute: typeof AppSitesSiteIdDerRoute
   AppSitesSiteIdDevicesRoute: typeof AppSitesSiteIdDevicesRouteWithChildren
-  AppSitesSiteIdDiagnosticsRoute: typeof AppSitesSiteIdDiagnosticsRoute
   AppSitesSiteIdEfficiencyRoute: typeof AppSitesSiteIdEfficiencyRoute
   AppSitesSiteIdEnergyRoute: typeof AppSitesSiteIdEnergyRouteWithChildren
   AppSitesSiteIdEnergyReviewRoute: typeof AppSitesSiteIdEnergyReviewRoute
   AppSitesSiteIdExecutionsRoute: typeof AppSitesSiteIdExecutionsRoute
   AppSitesSiteIdFddRoute: typeof AppSitesSiteIdFddRoute
   AppSitesSiteIdForecastRoute: typeof AppSitesSiteIdForecastRoute
+  AppSitesSiteIdIssuesRoute: typeof AppSitesSiteIdIssuesRoute
   AppSitesSiteIdManagementReviewsRoute: typeof AppSitesSiteIdManagementReviewsRoute
   AppSitesSiteIdModelRoute: typeof AppSitesSiteIdModelRoute
   AppSitesSiteIdMonitorRoute: typeof AppSitesSiteIdMonitorRoute
@@ -1165,7 +1144,6 @@ interface AppSitesSiteIdRouteChildren {
 const AppSitesSiteIdRouteChildren: AppSitesSiteIdRouteChildren = {
   AppSitesSiteIdActionPlansRoute: AppSitesSiteIdActionPlansRoute,
   AppSitesSiteIdAiRoute: AppSitesSiteIdAiRoute,
-  AppSitesSiteIdAlarmsRoute: AppSitesSiteIdAlarmsRoute,
   AppSitesSiteIdBenchmarkingRoute: AppSitesSiteIdBenchmarkingRoute,
   AppSitesSiteIdBigscreenRoute: AppSitesSiteIdBigscreenRoute,
   AppSitesSiteIdBillingRoute: AppSitesSiteIdBillingRoute,
@@ -1176,13 +1154,13 @@ const AppSitesSiteIdRouteChildren: AppSitesSiteIdRouteChildren = {
   AppSitesSiteIdDemandRoute: AppSitesSiteIdDemandRoute,
   AppSitesSiteIdDerRoute: AppSitesSiteIdDerRoute,
   AppSitesSiteIdDevicesRoute: AppSitesSiteIdDevicesRouteWithChildren,
-  AppSitesSiteIdDiagnosticsRoute: AppSitesSiteIdDiagnosticsRoute,
   AppSitesSiteIdEfficiencyRoute: AppSitesSiteIdEfficiencyRoute,
   AppSitesSiteIdEnergyRoute: AppSitesSiteIdEnergyRouteWithChildren,
   AppSitesSiteIdEnergyReviewRoute: AppSitesSiteIdEnergyReviewRoute,
   AppSitesSiteIdExecutionsRoute: AppSitesSiteIdExecutionsRoute,
   AppSitesSiteIdFddRoute: AppSitesSiteIdFddRoute,
   AppSitesSiteIdForecastRoute: AppSitesSiteIdForecastRoute,
+  AppSitesSiteIdIssuesRoute: AppSitesSiteIdIssuesRoute,
   AppSitesSiteIdManagementReviewsRoute: AppSitesSiteIdManagementReviewsRoute,
   AppSitesSiteIdModelRoute: AppSitesSiteIdModelRoute,
   AppSitesSiteIdMonitorRoute: AppSitesSiteIdMonitorRoute,
