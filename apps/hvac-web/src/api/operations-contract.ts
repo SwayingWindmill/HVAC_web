@@ -370,7 +370,7 @@ const runFinishedSchema = z.object({
   outcome: z.object({ type: z.literal('success') }).strict(),
 }).strict();
 
-export const operationsAgUiEventSchema = z.discriminatedUnion('type', [
+export const operationsAgentEventSchema = z.discriminatedUnion('type', [
   runStartedSchema,
   stateSnapshotSchema,
   toolCallStartSchema,
@@ -394,7 +394,7 @@ export type OperationsInvestigationView = z.infer<typeof operationsInvestigation
 export type OperationsInvestigationSummary = z.infer<typeof operationsInvestigationSummarySchema>;
 export type OperationsInvestigationList = z.infer<typeof operationsInvestigationListSchema>;
 export type OperationsInvestigationStateSnapshot = z.infer<typeof operationsInvestigationStateSnapshotSchema>;
-export type OperationsAgUiEvent = z.infer<typeof operationsAgUiEventSchema>;
+export type OperationsAgentEvent = z.infer<typeof operationsAgentEventSchema>;
 
 const forbiddenStreamKeys = new Set([
   'lease', 'leaseHistory', 'checkpoint', 'opaqueState', 'runtimeRevision',
@@ -416,15 +416,15 @@ function rejectForbiddenStreamFields(value: unknown): void {
   }
 }
 
-export interface ParsedOperationsAgUiEvent {
+export interface ParsedOperationsAgentEvent {
   id: string;
-  event: OperationsAgUiEvent;
+  event: OperationsAgentEvent;
 }
 
 export type OperationsStreamRecoveryMode = 'FULL_SNAPSHOT' | 'RESUME';
 export type OperationsStreamRecoveryReason = 'INITIAL' | 'VALID' | 'UNKNOWN' | 'EXPIRED' | 'CONFLICT';
 
-export interface OperationsAgUiStreamRecovery {
+export interface OperationsAgentStreamRecovery {
   readonly mode: OperationsStreamRecoveryMode;
   readonly reason: OperationsStreamRecoveryReason;
   readonly snapshotPosition: string;
@@ -432,15 +432,15 @@ export interface OperationsAgUiStreamRecovery {
   readonly replayFromPosition: string | null;
 }
 
-export interface OperationsAgUiStreamBatch {
-  readonly events: readonly ParsedOperationsAgUiEvent[];
-  readonly recovery: OperationsAgUiStreamRecovery;
+export interface OperationsAgentStreamBatch {
+  readonly events: readonly ParsedOperationsAgentEvent[];
+  readonly recovery: OperationsAgentStreamRecovery;
 }
 
-export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgUiEvent[] {
+export function parseOperationsAgentEventStream(raw: string): ParsedOperationsAgentEvent[] {
   const normalized = raw.replace(/\r\n/gu, '\n');
   if (!normalized.endsWith('\n\n')) throw new Error('Operations event stream is incomplete.');
-  const parsed: ParsedOperationsAgUiEvent[] = [];
+  const parsed: ParsedOperationsAgentEvent[] = [];
   const sequences: number[] = [];
   let streamRevision: string | undefined;
   let previousSequence = -1;
@@ -471,7 +471,7 @@ export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgU
     sequences.push(sequence);
     const candidate: unknown = JSON.parse(data);
     rejectForbiddenStreamFields(candidate);
-    const event = operationsAgUiEventSchema.parse(candidate);
+    const event = operationsAgentEventSchema.parse(candidate);
     if (event.type !== eventName) throw new Error('Operations event name does not match its payload.');
     if (event.type === 'TOOL_CALL_ARGS') {
       const activity: unknown = JSON.parse(event.delta);

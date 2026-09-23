@@ -1,0 +1,943 @@
+.hvac-monitor {
+  --hvac-surface: #fff;
+  --hvac-surface-subtle: #f8fafc;
+  --hvac-surface-muted: #f5f7fa;
+  --hvac-border: #e3e8ef;
+  --hvac-border-strong: #d6dee9;
+  --hvac-text: #1f2937;
+  --hvac-text-strong: #101828;
+  --hvac-muted: #667085;
+  --hvac-faint: #98a2b3;
+  --hvac-radius: 6px;
+  --hvac-gap: 10px;
+  background: var(--hvac-surface-muted);
+  color: var(--hvac-text);
+}
+
+.hvac-ref,
+.hvac-plant-ref,
+.hvac-terminal-ref,
+.hvac-monitor__reference-deep-frame {
+  color: var(--hvac-text);
+}
+
+.hvac-ref__breadcrumb,
+.hvac-plant-ref__breadcrumb,
+.hvac-terminal-ref__breadcrumb,
+.hvac-monitor__reference-breadcrumb {
+  min-height: 24px;
+  margin: 0;
+  color: var(--hvac-muted);
+  font-size: 13px;
+}
+
+.hvac-ref__breadcrumb strong,
+.hvac-plant-ref__breadcrumb strong,
+.hvac-terminal-ref__breadcrumb strong,
+.hvac-monitor__reference-breadcrumb strong {
+  color: var(--hvac-text-strong);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.hvac-ref__main,
+.hvac-ref__side,
+.hvac-plant-ref,
+.hvac-terminal-ref,
+.hvac-monitor__reference-deep-frame,
+.hvac-monitor__reference-deep-frame .hvac-monitor__deep-page {
+  gap: var(--hvac-gap);
+}
+
+.hvac-ref__layout,
+.hvac-plant-ref__main-grid,
+.hvac-plant-ref__right-stack,
+.hvac-plant-ref__right-pair,
+.hvac-plant-ref__bottom-grid,
+.hvac-terminal-ref__main-grid,
+.hvac-terminal-ref__right-stack,
+.hvac-monitor__analysis-grid,
+.hvac-monitor__anomaly-grid,
+.hvac-monitor__mode-layout {
+  gap: var(--hvac-gap);
+}
+
+.hvac-ref [data-slot="card"],
+.hvac-plant-ref [data-slot="card"],
+.hvac-terminal-ref [data-slot="card"],
+.hvac-monitor__reference-deep-frame [data-slot="card"],
+.hvac-monitor__anomaly-canvas,
+.hvac-monitor__energy-workbench,
+.hvac-monitor__topology-canvas,
+.hvac-monitor__energy-flow-visual,
+.hvac-monitor__power-flow-visual,
+.hvac-monitor__hydraulic-visual {
+  border: 1px solid var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: var(--hvac-surface);
+  box-shadow: none;
+}
+
+.hvac-ref [data-slot="card"] > [data-slot="card-header"],
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-header"],
+.hvac-terminal-ref [data-slot="card"] > [data-slot="card-header"],
+.hvac-monitor__reference-deep-frame [data-slot="card"] > [data-slot="card-header"] {
+  min-height: 38px;
+  padding-inline: 12px;
+  border-bottom-color: #edf0f4;
+}
+
+.hvac-ref [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"],
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"],
+.hvac-terminal-ref [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"],
+.hvac-monitor__reference-deep-frame [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"] {
+  padding-block: 9px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.hvac-ref [data-slot="card"] > [data-slot="card-content"],
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-content"],
+.hvac-terminal-ref [data-slot="card"] > [data-slot="card-content"],
+.hvac-monitor__reference-deep-frame [data-slot="card"] > [data-slot="card-content"] {
+  padding: 10px 12px;
+}
+
+.hvac-ref__kpis,
+.hvac-plant-ref__kpis,
+.hvac-terminal-ref__kpis {
+  gap: var(--hvac-gap);
+}
+
+.hvac-ref__kpi,
+.hvac-plant-ref__kpi,
+.hvac-terminal-ref__kpi {
+  min-height: 76px;
+  padding: 9px 10px;
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: var(--hvac-surface);
+  box-shadow: none;
+}
+
+.hvac-ref__kpi:hover,
+.hvac-plant-ref__kpi:hover,
+.hvac-terminal-ref__kpi:hover {
+  border-color: #b8c8dc;
+  background: #fbfcfe;
+}
+
+.hvac-ref__kpi:focus-visible,
+.hvac-plant-ref__kpi:focus-visible,
+.hvac-terminal-ref__kpi:focus-visible {
+  outline: 2px solid #91caff;
+  outline-offset: 1px;
+}
+
+.hvac-ref__kpi-icon,
+.hvac-plant-ref__kpi-icon,
+.hvac-terminal-ref__kpi-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--hvac-radius);
+  background: color-mix(in oklch, var(--primary) 8%, var(--background));
+  color: var(--primary);
+  font-size: 16px;
+}
+
+.hvac-plant-ref__kpi.is-green .hvac-plant-ref__kpi-icon {
+  background: color-mix(in oklch, var(--success) 10%, var(--background));
+  color: var(--success);
+}
+
+.hvac-plant-ref__kpi.is-purple .hvac-plant-ref__kpi-icon {
+  background: #f3f0ff;
+  color: #6750c7;
+}
+
+.hvac-ref__kpi-copy small,
+.hvac-plant-ref__kpi small,
+.hvac-terminal-ref__kpi small {
+  color: var(--hvac-muted);
+  font-size: 11px;
+}
+
+.hvac-ref__kpi-copy strong,
+.hvac-plant-ref__kpi strong,
+.hvac-terminal-ref__kpi strong {
+  color: var(--hvac-text-strong);
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.hvac-plant-ref__kpi em,
+.hvac-terminal-ref__kpi em {
+  display: none;
+}
+
+.hvac-ref__status-strip,
+.hvac-ref__legend,
+.hvac-plant-ref__operating-strip,
+.hvac-terminal-ref__context-card {
+  min-height: 62px;
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: var(--hvac-surface);
+}
+
+.hvac-ref__status-item,
+.hvac-plant-ref__operating-item {
+  min-height: 46px;
+  padding-inline: 12px;
+  border-right-color: #edf0f4;
+}
+
+.hvac-ref__status-item > span,
+.hvac-plant-ref__operating-icon {
+  color: #1677ff;
+  font-size: 18px;
+}
+
+.hvac-ref__status-item strong,
+.hvac-plant-ref__operating-item strong {
+  color: #344054;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.hvac-ref__status-item.is-accent strong,
+.hvac-plant-ref__operating-item strong {
+  color: #175cd3;
+}
+
+.hvac-plant-ref__operating-item em {
+  display: none;
+}
+
+.hvac-ref__topology-card,
+.hvac-plant-ref__topology-card,
+.hvac-terminal-ref__floor-card {
+  border-color: var(--hvac-border-strong) !important;
+  border-radius: var(--hvac-radius) !important;
+}
+
+.hvac-x6-node {
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .92);
+  transition: border-color .14s ease, background-color .14s ease;
+}
+
+.hvac-x6-node:hover {
+  border-color: #b7cae3;
+  background: #fbfcfe;
+}
+
+.hvac-x6-node.is-selected {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 1px rgba(22, 119, 255, .16);
+}
+
+.hvac-x6-node > strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.hvac-x6-node > small,
+.hvac-x6-node__state {
+  font-size: 11px;
+}
+
+.hvac-ref__parameter-grid > button,
+.hvac-ref__parameter-grid > div {
+  min-height: 60px;
+  border-right-color: #edf0f4;
+  border-bottom-color: #edf0f4;
+}
+
+.hvac-ref__parameter-grid small {
+  font-size: 11px;
+}
+
+.hvac-ref__parameter-grid strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.hvac-ref__alarm-list > a,
+.hvac-plant-ref__alarm-list a,
+.hvac-terminal-ref__alarms a {
+  border-bottom-color: #eef1f5;
+}
+
+.hvac-ref__alarm-list > a:hover,
+.hvac-plant-ref__alarm-list a:hover,
+.hvac-terminal-ref__alarms a:hover {
+  background: #fbfcfe;
+}
+
+.hvac-plant-ref__chiller-nodes button,
+.hvac-terminal-ref__floor-plan > button,
+.hvac-plant-ref__efficiency-grid button,
+.hvac-monitor__opportunity-list > button,
+.hvac-monitor__mode-grid button,
+.hvac-monitor__execution-rail > div,
+.hvac-monitor__parameter-change,
+.hvac-monitor__drawer-device-summary,
+.hvac-monitor__energy-device-strip > button,
+.hvac-monitor__energy-device-strip > span,
+.hvac-monitor__power-source,
+.hvac-monitor__power-branches > button,
+.hvac-monitor__hydraulic-terminal {
+  border-radius: var(--hvac-radius);
+  box-shadow: none;
+}
+
+.hvac-terminal-ref__context-card {
+  border-color: var(--hvac-border);
+  background: var(--hvac-surface-subtle);
+}
+
+.hvac-terminal-ref__context-card > [data-slot="card-content"] {
+  padding: 8px 12px !important;
+}
+
+.hvac-terminal-ref__floor-plan {
+  gap: 6px;
+  padding: 10px;
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: #fbfcfe;
+}
+
+.hvac-terminal-ref__floor-plan > button {
+  padding: 10px;
+  border-color: var(--hvac-border);
+  background: #fff;
+}
+
+.hvac-terminal-ref__floor-plan > button.is-unknown {
+  background: #fff;
+}
+
+.hvac-terminal-ref__floor-plan > button:hover,
+.hvac-terminal-ref__floor-plan > button:focus-visible,
+.hvac-terminal-ref__floor-plan > button.is-selected {
+  border-color: #91b7ea;
+  box-shadow: inset 0 0 0 1px #91b7ea;
+}
+
+.hvac-terminal-ref__comfort-ring {
+  width: 88px;
+  height: 88px;
+  box-shadow: inset 0 0 0 11px #fff;
+}
+
+.hvac-monitor__metric {
+  min-height: 88px;
+  padding: 12px;
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: var(--hvac-surface);
+}
+
+.hvac-monitor__metric > span {
+  font-size: 12px;
+}
+
+.hvac-monitor__metric > strong {
+  margin: 6px 0 2px;
+  font-size: 22px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.hvac-monitor__metric > small {
+  color: var(--hvac-muted);
+  font-size: 11px;
+}
+
+button.hvac-monitor__metric:hover {
+  border-color: #b8c8dc;
+  background: #fbfcfe;
+}
+
+.hvac-monitor__analysis-grid {
+  gap: var(--hvac-gap);
+}
+
+.hvac-monitor__analysis-chart {
+  min-height: 210px;
+  background: #fbfcfe;
+}
+
+.hvac-monitor__analysis-empty svg {
+  color: #98a2b3;
+  font-size: 24px;
+}
+
+.hvac-monitor__analysis-empty strong {
+  color: #475467;
+  font-size: 13px;
+}
+
+.hvac-monitor__analysis-empty small {
+  color: var(--hvac-faint);
+  font-size: 11px;
+}
+
+.hvac-monitor__opportunity-list {
+  gap: 6px;
+}
+
+.hvac-monitor__opportunity-list > button {
+  padding: 9px 10px;
+  border-color: var(--hvac-border);
+  background: #fff;
+}
+
+.hvac-monitor__opportunity-list > button:hover {
+  border-color: #b8c8dc;
+  background: #fbfcfe;
+}
+
+.hvac-monitor__mode-summary {
+  gap: var(--hvac-gap);
+}
+
+.hvac-monitor__mode-summary > section {
+  min-height: 78px;
+  padding: 12px 14px;
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: #fff;
+}
+
+.hvac-monitor__mode-summary > section.is-candidate {
+  border-color: #b7d2f5;
+  background: #f6f9fe;
+}
+
+.hvac-monitor__mode-summary > section.is-authority {
+  background: #fafbfc;
+}
+
+.hvac-monitor__mode-summary > section > strong {
+  font-size: 17px;
+}
+
+.hvac-monitor__mode-grid {
+  gap: 8px;
+}
+
+.hvac-monitor__mode-grid button {
+  min-height: 86px;
+  padding: 12px;
+  border-color: var(--hvac-border);
+  background: #fff;
+  cursor: pointer;
+}
+
+.hvac-monitor__mode-grid button:hover {
+  border-color: #b8c8dc;
+  background: #fbfcfe;
+}
+
+.hvac-monitor__mode-grid button.is-selected {
+  border-color: #91b7ea;
+  background: #f6f9fe;
+}
+
+.hvac-monitor__mode-grid svg {
+  color: #667085;
+  font-size: 18px;
+}
+
+.hvac-monitor__mode-grid button.is-selected svg {
+  color: #1677ff;
+}
+
+.hvac-monitor__parameter-change,
+.hvac-monitor__execution-rail > div {
+  background: #fafbfc;
+}
+
+.hvac-monitor__execution-rail .is-current {
+  background: #f6f9fe;
+}
+
+.hvac-monitor__anomaly-grid {
+  grid-template-columns: minmax(0, 2.1fr) minmax(300px, .9fr);
+}
+
+.hvac-monitor__anomaly-main,
+.hvac-monitor__anomaly-side {
+  gap: var(--hvac-gap);
+}
+
+.hvac-monitor__anomaly-canvas {
+  padding: 10px;
+}
+
+.hvac-monitor__anomaly-impact-strip > button,
+.hvac-monitor__anomaly-impact-strip > section {
+  min-height: 92px;
+  padding: 12px;
+  border-radius: var(--hvac-radius);
+  box-shadow: none;
+}
+
+.hvac-monitor__energy-workbench,
+.hvac-monitor__topology-canvas {
+  padding: 14px;
+}
+
+.hvac-monitor__energy-flow-visual,
+.hvac-monitor__power-flow-visual,
+.hvac-monitor__hydraulic-visual {
+  margin-bottom: 10px;
+  border-color: var(--hvac-border-strong);
+  background: #fbfcfe;
+}
+
+.hvac-monitor__energy-flow-node {
+  border-radius: var(--hvac-radius);
+  box-shadow: none;
+}
+
+.hvac-monitor__energy-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--hvac-gap);
+  align-items: stretch;
+}
+
+.hvac-monitor__energy-main,
+.hvac-monitor__energy-side {
+  min-width: 0;
+}
+
+.hvac-monitor__energy-side {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr)) auto;
+  gap: var(--hvac-gap);
+}
+
+.hvac-monitor__energy-side > [data-slot="card"] {
+  min-height: 0;
+  height: 100%;
+  border-color: var(--hvac-border);
+}
+
+.hvac-monitor__energy-side .hvac-monitor__fact-list {
+  gap: 6px;
+}
+
+.hvac-monitor__energy-side .hvac-monitor__fact-list > div {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding-bottom: 6px;
+}
+
+.hvac-monitor__energy-side .hvac-monitor__fact-list > div > small {
+  grid-column: 1 / -1;
+}
+
+.hvac-monitor__energy-strategy {
+  display: grid;
+  gap: 5px;
+}
+
+.hvac-monitor__energy-strategy > small {
+  color: var(--hvac-muted);
+  font-size: 11px;
+}
+
+.hvac-monitor__energy-strategy > [data-slot="button"] {
+  width: fit-content;
+  height: auto;
+  padding-inline: 0;
+}
+
+@media (max-width: 1180px) {
+  .hvac-monitor__energy-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hvac-monitor__energy-side {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: auto;
+  }
+}
+
+.hvac-monitor__drawer [data-slot="sheet-content"],
+.hvac-monitor__drawer [data-slot="sheet-header"],
+.hvac-monitor__drawer [data-slot="sheet-footer"] {
+  background: #fff;
+}
+
+.hvac-monitor__drawer [data-slot="sheet-header"] {
+  padding: 14px 16px 10px;
+  border-bottom-color: var(--hvac-border);
+}
+
+.hvac-monitor__drawer [data-slot="sheet-body"] {
+  padding: 12px 16px 16px;
+}
+
+.hvac-monitor__drawer [data-slot="sheet-footer"] {
+  padding: 10px 16px;
+  border-top-color: var(--hvac-border);
+}
+
+.hvac-monitor__drawer-device-summary {
+  min-height: 100px;
+  padding: 12px;
+  border-color: var(--hvac-border);
+  background: #fafbfc;
+}
+
+.hvac-monitor__drawer-section {
+  gap: 14px;
+}
+
+.hvac-monitor__reference-deep-frame > .hvac-monitor__reference-breadcrumb,
+.hvac-plant-ref > .hvac-plant-ref__breadcrumb,
+.hvac-terminal-ref > .hvac-terminal-ref__breadcrumb,
+.hvac-ref > .hvac-ref__breadcrumb {
+  padding-inline: 1px;
+}
+
+.hvac-plant-ref [data-slot="table"],
+.hvac-terminal-ref [data-slot="table"],
+.hvac-monitor__reference-deep-frame [data-slot="table"] {
+  font-size: 12px;
+}
+
+.hvac-plant-ref [data-slot="table-head"],
+.hvac-terminal-ref [data-slot="table-head"],
+.hvac-monitor__reference-deep-frame [data-slot="table-head"] {
+  padding: 7px 9px;
+  background: #fafbfc;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.hvac-plant-ref [data-slot="table-cell"],
+.hvac-terminal-ref [data-slot="table-cell"],
+.hvac-monitor__reference-deep-frame [data-slot="table-cell"] {
+  padding: 8px 9px;
+  color: #344054;
+}
+
+.hvac-plant-ref__aggregate-slots span,
+.hvac-plant-ref__topology-group > header span,
+.hvac-plant-ref__chiller-nodes small,
+.hvac-plant-ref__pump-nodes small,
+.hvac-terminal-ref__legend,
+.hvac-terminal-ref__alarms small,
+.hvac-ref__alarm-list small,
+.hvac-ref__alarm-list time,
+.hvac-ref__topology-total,
+.hvac-ref__equipment-unit > small,
+.hvac-x6-node > small,
+.hvac-x6-node__state {
+  font-size: 11px;
+}
+
+.hvac-plant-ref__aggregate-slots img {
+  width: 58px;
+  height: 42px;
+}
+
+.hvac-plant-ref__chiller-nodes img {
+  width: 72px;
+  height: 58px;
+}
+
+.hvac-plant-ref__pump-nodes img {
+  width: 48px;
+  height: 36px;
+}
+
+.hvac-plant-ref__recommendations span,
+.hvac-plant-ref__alarm-list strong,
+.hvac-terminal-ref__alarms strong,
+.hvac-ref__alarm-list strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hvac-plant-ref__recommendations small,
+.hvac-plant-ref__alarm-list small,
+.hvac-terminal-ref__alarms small {
+  color: #98a2b3;
+}
+
+.hvac-monitor__mode-summary {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  background: #fff;
+}
+
+.hvac-monitor__mode-summary > section {
+  min-height: 76px;
+  border: 0;
+  border-right: 1px solid #edf0f4;
+  border-radius: 0;
+}
+
+.hvac-monitor__mode-summary > section.is-candidate {
+  border-color: #edf0f4;
+  background: #f7faff;
+}
+
+.hvac-monitor__mode-summary > section.is-authority {
+  border-right: 0;
+  background: #fafbfc;
+}
+
+.hvac-monitor__mode-summary > i {
+  background: #fff;
+  color: #98a2b3;
+  font-size: 18px;
+}
+
+.hvac-monitor__reference-deep-frame > [data-slot="card"] {
+  border-color: var(--hvac-border);
+}
+
+.hvac-monitor__deep-actions {
+  padding-top: 2px;
+  border-top: 0;
+}
+
+.hvac-plant-ref__main-grid,
+.hvac-terminal-ref__main-grid {
+  align-items: stretch;
+}
+
+.hvac-plant-ref__right-stack,
+.hvac-terminal-ref__right-stack {
+  height: 100%;
+}
+
+.hvac-plant-ref__right-stack > [data-slot="card"],
+.hvac-plant-ref__right-pair > [data-slot="card"],
+.hvac-terminal-ref__right-stack > [data-slot="card"],
+.hvac-plant-ref__bottom-grid > [data-slot="card"] {
+  min-height: 0;
+  height: 100%;
+}
+
+.hvac-plant-ref__bottom-grid {
+  align-items: stretch;
+}
+
+.hvac-plant-ref__bottom-grid > [data-slot="card"] > [data-slot="card-content"] {
+  height: calc(100% - 38px);
+}
+
+.hvac-terminal-ref__right-stack {
+  grid-template-rows: minmax(132px, auto) minmax(110px, auto) minmax(0, 1fr);
+}
+
+.hvac-terminal-ref__floor-card,
+.hvac-terminal-ref__right-stack > [data-slot="card"] {
+  align-self: stretch;
+}
+
+.hvac-ref__parameter-grid small {
+  font-size: 11px;
+}
+
+.hvac-monitor__reference-deep-frame [data-slot="alert"] {
+  border-radius: var(--hvac-radius);
+}
+
+.hvac-monitor__reference-deep-frame [data-slot="alert-title"] {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hvac-monitor__reference-deep-frame [data-slot="alert-description"] {
+  color: var(--hvac-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hvac-monitor__reference-deep-frame .hvac-monitor__kpi-grid .hvac-monitor__metric {
+  min-height: 76px;
+  align-content: center;
+}
+
+.hvac-monitor__reference-deep-frame .hvac-monitor__kpi-grid .hvac-monitor__metric > small {
+  display: none;
+}
+
+.hvac-monitor__reference-deep-frame .hvac-monitor__kpi-grid .hvac-monitor__metric > strong {
+  margin-bottom: 0;
+}
+
+.hvac-monitor__linkage-primary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--hvac-gap);
+  align-items: stretch;
+}
+
+.hvac-monitor__linkage-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--hvac-gap);
+  min-width: 0;
+}
+
+.hvac-monitor__linkage-primary-grid > [data-slot="card"],
+.hvac-monitor__linkage-side > [data-slot="card"],
+.hvac-monitor__linkage-secondary-grid > [data-slot="card"] {
+  min-width: 0;
+  height: 100%;
+}
+
+.hvac-monitor__linkage-graph {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hvac-monitor__linkage-graph-canvas {
+  width: 100%;
+  min-height: 332px;
+  overflow: hidden;
+  background: #fbfcfe;
+}
+
+.hvac-monitor__linkage-graph-actions {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #edf0f4;
+  color: var(--hvac-muted);
+  font-size: 11px;
+}
+
+.hvac-monitor__linkage-secondary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: var(--hvac-gap);
+  align-items: stretch;
+}
+
+.hvac-monitor__linkage-secondary-grid .hvac-monitor__opportunity-list > button {
+  border-radius: 5px;
+  background: #fbfcfe;
+}
+
+@media (max-width: 1180px) {
+  .hvac-monitor__linkage-primary-grid,
+  .hvac-monitor__linkage-secondary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hvac-monitor__linkage-side {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto;
+  }
+}
+
+.hvac-monitor__anomaly-grid [data-slot="card"],
+.hvac-monitor__energy-side [data-slot="card"] {
+  border-color: var(--hvac-border);
+  border-radius: var(--hvac-radius);
+  box-shadow: none;
+}
+
+.hvac-monitor__anomaly-grid [data-slot="card"] > [data-slot="card-header"],
+.hvac-monitor__energy-side [data-slot="card"] > [data-slot="card-header"] {
+  min-height: 38px;
+  padding-inline: 12px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.hvac-monitor__anomaly-grid [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"],
+.hvac-monitor__energy-side [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"] {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.hvac-monitor__anomaly-grid [data-slot="card"] > [data-slot="card-content"],
+.hvac-monitor__energy-side [data-slot="card"] > [data-slot="card-content"] {
+  padding: 10px 12px;
+}
+
+.hvac-monitor__drawer-alarm-list {
+  display: grid;
+}
+
+.hvac-monitor__drawer-alarm-list > a {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--hvac-border);
+  color: inherit;
+}
+
+.hvac-monitor__drawer-alarm-list > a:last-child {
+  border-bottom: 0;
+}
+
+.hvac-monitor__drawer-alarm-list > a > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.hvac-monitor__drawer-alarm-list strong,
+.hvac-monitor__drawer-alarm-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-monitor__drawer-alarm-list strong {
+  color: var(--hvac-text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hvac-monitor__drawer-alarm-list small {
+  color: var(--hvac-muted);
+  font-size: 11px;
+}
+
+.hvac-monitor__drawer-alarm-list > a > span:last-child {
+  color: var(--hvac-faint);
+  font-size: 18px;
+}
+
+@media (min-width: 1400px) {
+  .hvac-ref__layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 12px;
+  }
+
+  .hvac-plant-ref__main-grid {
+    grid-template-columns: minmax(0, 1.12fr) minmax(560px, .88fr);
+  }
+
+  .hvac-terminal-ref__main-grid {
+    grid-template-columns: minmax(0, 1.62fr) minmax(350px, .7fr);
+  }
+}

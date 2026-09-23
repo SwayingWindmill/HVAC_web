@@ -1,4 +1,4 @@
-import type { RealReadModelBoundary } from '../real-read-model-boundary';
+import type { ReadModelBoundary } from '../read-model-boundary';
 
 export const FDD_READ_MODEL_BOUNDARY = {
   domain: 'fdd',
@@ -7,4 +7,4 @@ export const FDD_READ_MODEL_BOUNDARY = {
   authority: 'fdd-service',
   fallback: 'none',
   requiredFields: ['findingType', 'assetId', 'evaluationWindow', 'evidenceIds', 'ruleRevisionId', 'modelDeploymentRevisionId', 'confidence', 'alarmId', 'workOrderId'],
-} as const satisfies RealReadModelBoundary;
+} as const satisfies ReadModelBoundary;

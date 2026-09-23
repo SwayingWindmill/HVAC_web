@@ -1,4 +1,4 @@
-import type { RealReadModelBoundary } from '../real-read-model-boundary';
+import type { ReadModelBoundary } from '../read-model-boundary';
 
 export const SETTLEMENT_READ_MODEL_BOUNDARY = {
   domain: 'settlement',
@@ -7,4 +7,4 @@ export const SETTLEMENT_READ_MODEL_BOUNDARY = {
   authority: 'backend-contract-pending',
   fallback: 'none',
   requiredFields: ['period', 'status', 'revision', 'sourceReadingLineage', 'tariffVersion', 'reconciliation', 'correctionHistory'],
-} as const satisfies RealReadModelBoundary;
+} as const satisfies ReadModelBoundary;

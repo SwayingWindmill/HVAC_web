@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Input, Radio, Tag, Typography } from 'antd';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
@@ -56,16 +59,25 @@ function latestPendingInput(snapshot: AgentSessionSnapshot | null): AgentInputRe
 }
 
 function StatusTag({ status }: { readonly status: AgentSessionSnapshot['session']['status'] }) {
-  const color = status === 'ACTIVE'
-    ? 'processing'
+  const label = status === 'ACTIVE'
+    ? '调查中'
     : status === 'WAITING_FOR_INPUT'
-      ? 'warning'
+      ? '等待输入'
       : status === 'COMPLETED'
-        ? 'success'
+        ? '已完成'
         : status === 'FAILED'
-          ? 'error'
-          : 'default';
-  return <Tag color={color}>{status.replace(/_/gu, ' ')}</Tag>;
+          ? '失败'
+          : '已关闭';
+  const className = status === 'ACTIVE'
+    ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300'
+    : status === 'WAITING_FOR_INPUT'
+      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+      : status === 'COMPLETED'
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+        : status === 'FAILED'
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : undefined;
+  return <Badge variant="outline" className={className}>{label}</Badge>;
 }
 
 export function AgentSessionWorkspace({ site, principal, registerProtectedResource }: AgentSessionWorkspaceProps) {
@@ -225,9 +237,9 @@ export function AgentSessionWorkspace({ site, principal, registerProtectedResour
     <section className="agent-session-workspace" aria-labelledby="agent-session-title">
       <header className="agent-session-header">
         <div>
-          <Typography.Text className="agent-session-eyebrow">SITE-SCOPED AGENT</Typography.Text>
-          <Typography.Title level={2} id="agent-session-title">AI 运维调查</Typography.Title>
-          <Typography.Text type="secondary">{site.displayName} · 权威 Session 快照 + 当前 Run 实时事件</Typography.Text>
+          <span className="agent-session-eyebrow">智能运维排查</span>
+          <h2 id="agent-session-title">运行异常辅助排查</h2>
+          <p className="text-sm text-muted-foreground">{site.displayName} · 当前排查状态与实时进展</p>
         </div>
         <div className="agent-session-connection" role="status" aria-live="polite">
           <span className="agent-session-connection-dot" data-state={connection} />
@@ -235,25 +247,25 @@ export function AgentSessionWorkspace({ site, principal, registerProtectedResour
         </div>
       </header>
 
-      {error ? <Alert type="error" showIcon message="AI 运维调查不可用" description={error} /> : null}
+      {error ? <Alert variant="destructive"><AlertTitle>辅助排查服务不可用</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
 
       <div className="agent-session-composer">
-        <label htmlFor="agent-session-question">向当前 Site 发起调查</label>
-        <Input.TextArea id="agent-session-question" value={question} maxLength={4000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="例如：昨夜能耗为什么高于基线？" disabled={busy} onChange={(event) => setQuestion(event.target.value)} />
+        <label htmlFor="agent-session-question">向当前站点发起排查</label>
+        <Textarea id="agent-session-question" value={question} maxLength={4000} rows={3} placeholder="例如：2号离心机排气温度偏高、夜间低负荷水泵频率异常等" disabled={busy} onChange={(event) => setQuestion(event.target.value)} />
         <div className="agent-session-composer-actions">
-          <Typography.Text type="secondary">{question.length}/4000</Typography.Text>
-          <Button type="primary" loading={busy} disabled={!question.trim()} onClick={() => { void create(); }}>开始调查</Button>
+          <span className="text-xs text-muted-foreground">{question.length}/4000</span>
+          <Button disabled={busy || !question.trim()} onClick={() => { void create(); }}>{busy ? '正在创建…' : '开始排查'}</Button>
         </div>
       </div>
 
       <div className="agent-session-body">
-        <nav className="agent-session-list" aria-label="AI 运维调查列表">
-          <div className="agent-session-section-title"><strong>Sessions</strong><span>{sessions.length}</span></div>
-          {sessions.length === 0 ? <Typography.Text type="secondary">当前 Site 尚无调查。</Typography.Text> : null}
+        <nav className="agent-session-list" aria-label="排查记录列表">
+          <div className="agent-session-section-title"><strong>排查记录</strong><span>{sessions.length}</span></div>
+          {sessions.length === 0 ? <span className="text-sm text-muted-foreground">当前站点暂无排查记录。</span> : null}
           {sessions.map((item) => (
             <button type="button" key={item.session.id} className="agent-session-list-item" aria-current={item.session.id === selectedId ? 'page' : undefined} onClick={() => setSelectedId(item.session.id)}>
               <span><StatusTag status={item.session.status} /></span>
-              <strong>{item.messages.find((message) => message.role === 'OPERATOR')?.content ?? 'AI 运维调查'}</strong>
+              <strong>{item.messages.find((message) => message.role === 'OPERATOR')?.content ?? '运维排查任务'}</strong>
               <small>{formatTime(item.session.updatedAt, site.timezone)}</small>
             </button>
           ))}
@@ -261,40 +273,47 @@ export function AgentSessionWorkspace({ site, principal, registerProtectedResour
 
         <div className="agent-session-detail">
           {!snapshot ? (
-            <div className="agent-session-empty"><strong>选择一个 Session</strong><span>查看已提交消息、证据和当前 Run。</span></div>
+            <div className="agent-session-empty"><strong>选择排查会话</strong><span>查看已提交消息、运行记录和当前诊断步骤。</span></div>
           ) : (
             <>
               <div className="agent-session-detail-heading">
-                <div><strong>{snapshot.session.id}</strong><span>revision {snapshot.session.revision}</span></div>
-                <div><StatusTag status={snapshot.session.status} />{snapshot.session.status === 'ACTIVE' ? <Button danger disabled={busy} onClick={() => { void cancel(); }}>取消 Run</Button> : null}</div>
+                <div><strong>当前排查</strong><span>最近更新 {formatTime(snapshot.session.updatedAt, site.timezone)}</span></div>
+                <div><StatusTag status={snapshot.session.status} />{snapshot.session.status === 'ACTIVE' ? <Button variant="destructive" size="sm" disabled={busy} onClick={() => { void cancel(); }}>取消排查</Button> : null}</div>
               </div>
 
-              <section className="agent-session-transcript" aria-label="调查消息">
+              <section className="agent-session-transcript" aria-label="排查记录">
                 {visibleMessages.map((message) => (
                   <article key={message.id} data-role={message.role}>
-                    <small>{message.role === 'OPERATOR' ? '操作员' : 'AI 运维调查'} · {formatTime(message.createdAt, site.timezone)}</small>
+                    <small>{message.role === 'OPERATOR' ? '操作员' : '智能排查助手'} · {formatTime(message.createdAt, site.timezone)}</small>
                     <p>{message.content}</p>
                   </article>
                 ))}
-                {streamText ? <article data-role="ASSISTANT" data-streaming="true" aria-label="AI 正在生成回复"><small>AI 运维调查 · streaming</small><p>{streamText}</p></article> : null}
+                {streamText ? <article data-role="ASSISTANT" data-streaming="true" aria-label="正在分析排查结果"><small>智能排查助手 · 正在分析中</small><p>{streamText}</p></article> : null}
               </section>
 
               {pendingInput ? (
                 <section className="agent-session-input" aria-labelledby="agent-session-input-title">
-                  <Typography.Title level={3} id="agent-session-input-title">需要操作员输入</Typography.Title>
+                  <h3 id="agent-session-input-title">需要操作员输入</h3>
                   <p>{pendingInput.request.prompt}</p>
                   {pendingInput.request.response.kind === 'TEXT' ? (
-                    <Input.TextArea aria-label="操作员输入" value={inputValue} maxLength={pendingInput.request.response.maxLength} disabled={busy} onChange={(event) => setInputValue(event.target.value)} />
+                    <Textarea aria-label="操作员输入" value={inputValue} maxLength={pendingInput.request.response.maxLength} disabled={busy} onChange={(event) => setInputValue(event.target.value)} />
                   ) : (
-                    <Radio.Group aria-label="操作员选项" value={inputValue} disabled={busy} options={pendingInput.request.response.choices.map((choice) => ({ label: choice.label, value: choice.value }))} onChange={(event) => setInputValue(String(event.target.value))} />
+                    <div className="grid gap-2" role="radiogroup" aria-label="操作员选项">
+                      {pendingInput.request.response.choices.map((choice) => (
+                        <label key={choice.value} className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                          <input type="radio" name="agent-session-input-choice" value={choice.value} checked={inputValue === choice.value} disabled={busy} onChange={(event) => setInputValue(event.target.value)} />
+                          <span>{choice.label}</span>
+                        </label>
+                      ))}
+                    </div>
                   )}
-                  <Button type="primary" loading={busy} disabled={!inputValue} onClick={() => { void submitInput(); }}>提交并继续调查</Button>
+                  <Button disabled={busy || !inputValue} onClick={() => { void submitInput(); }}>{busy ? '正在提交…' : '提交并继续调查'}</Button>
                 </section>
               ) : null}
 
               {finding?.kind === 'FINDING' ? (
                 <section className="agent-session-finding" aria-labelledby="agent-session-finding-title">
-                  <div className="agent-session-section-title"><Typography.Title level={3} id="agent-session-finding-title">调查结论</Typography.Title><Tag color={finding.finding.outcome === 'SUPPORTED_FINDING' ? 'success' : 'warning'}>{finding.finding.outcome}</Tag></div>
+                  <div className="agent-session-section-title"><h3 id="agent-session-finding-title">调查结论</h3><Badge variant="outline" className={finding.finding.outcome === 'SUPPORTED_FINDING' ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'}>{finding.finding.outcome === 'SUPPORTED_FINDING' ? '有证据支持' : '证据不足'}</Badge></div>
                   <p>{finding.finding.summary}</p>
                   {finding.finding.limitations.length ? <p><strong>限制：</strong>{finding.finding.limitations.join('；')}</p> : null}
                   {finding.finding.recommendedNext.length ? <p><strong>建议下一步：</strong>{finding.finding.recommendedNext.join('；')}</p> : null}

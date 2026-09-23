@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { API_MODE } from './config';
 import {
   createPlatformGatewayClient,
   type Device,
@@ -218,7 +217,7 @@ export function useVisibleDevicePresence(
   return useQuery({
     queryKey: [...PRESENCE_QUERY_ROOT, tenantId, siteId, deviceIds],
     queryFn: ({ signal }) => readVisibleDevicePresence(stableDevices, tenantId!, siteId!, runtime, signal),
-    enabled: API_MODE === 'real' && Boolean(tenantId && siteId && stableDevices.length > 0),
+    enabled: Boolean(tenantId && siteId && stableDevices.length > 0),
     staleTime: 10_000,
     refetchInterval: 30_000,
     retry: (failureCount, error) => failureCount < 1 && !(error instanceof S2TelemetryClientError && !error.problem.retryable),
@@ -240,7 +239,7 @@ export function useDeviceTelemetryLive(
   const keySignature = selectedKeys.join('|');
 
   useEffect(() => {
-    if (API_MODE !== 'real' || !device) {
+    if (!device) {
       setResult({ state: null, pending: false, error: null });
       return undefined;
     }

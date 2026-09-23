@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_MODE } from './config';
 import {
   PlatformApiError,
   createPlatformGatewayClient,
@@ -9,6 +8,7 @@ import {
   uuidV7Schema,
 } from './generated/platformGateway.gen';
 import { startSiteDashboardLive } from './site-dashboard-live';
+import { createFrontendReviewDashboardSummary } from '@/app/frontend-review-overview-data';
 
 const client = createPlatformGatewayClient();
 
@@ -16,6 +16,7 @@ export const siteDashboardSummaryQueryKey = (tenantId: string, siteId: string, a
   ['presentation', 'site-dashboard-summary', tenantId, siteId, authorizationScope] as const;
 
 export async function readSiteDashboardSummary(siteId: string, signal?: AbortSignal): Promise<SiteDashboardSummary> {
+  if (__HVAC_WEB_FRONTEND_REVIEW__) return createFrontendReviewDashboardSummary(siteId);
   const response = await client.getSiteDashboardSummary(uuidV7Schema.parse(siteId), { signal });
   return response.data;
 }
@@ -26,14 +27,14 @@ export function useSiteDashboardSummary(tenantId: string, siteId: string, author
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => readSiteDashboardSummary(siteId, signal),
-    enabled: API_MODE === 'real' && enabled,
+    enabled,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
     retry: (failureCount, error) => failureCount < 1 && (!(error instanceof PlatformApiError) || error.problem.retryable),
   });
 
   useEffect(() => {
-    if (API_MODE !== 'real' || !enabled || !query.isSuccess || !query.data) return undefined;
+    if (__HVAC_WEB_FRONTEND_REVIEW__ || !enabled || !query.isSuccess || !query.data) return undefined;
     const session = startSiteDashboardLive(tenantId, siteId, query.data, {
       readSummary: () => readSiteDashboardSummary(siteId),
       getSummary: () => queryClient.getQueryData<SiteDashboardSummary>(queryKey),

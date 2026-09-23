@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "composite": true,
-    "tsBuildInfoFile": "../../node_modules/.tmp/tsconfig.node.tsbuildinfo",
-    "outDir": "../../node_modules/.tmp/node-build",
+    "tsBuildInfoFile": ".cache/tsconfig.node.tsbuildinfo",
+    "outDir": ".cache/node-build",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -10,5 +10,5 @@
     "allowSyntheticDefaultImports": true,
     "strict": true
   },
-  "include": ["vite.config.ts", "vite.real.config.ts", "vite.shared.config.ts"]
+  "include": ["vite.config.ts"]
 }

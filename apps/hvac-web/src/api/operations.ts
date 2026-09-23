@@ -5,14 +5,14 @@ import {
   operationsInvestigationViewSchema,
   operationsOperatorInputSubmissionRequestSchema,
   operationsOperatorInputSubmissionSchema,
-  parseOperationsAgUiEventStream,
-  type OperationsAgUiStreamBatch,
-  type OperationsAgUiStreamRecovery,
+  parseOperationsAgentEventStream,
+  type OperationsAgentStreamBatch,
+  type OperationsAgentStreamRecovery,
   type OperationsInvestigationList,
   type OperationsInvestigationView,
   type OperationsOperatorInputSubmission,
   type OperationsOperatorInputValues,
-  type ParsedOperationsAgUiEvent,
+  type ParsedOperationsAgentEvent,
 } from './operations-contract';
 
 const problemSchema = z.object({
@@ -256,9 +256,9 @@ const streamPositionPattern = /^(0|[1-9]\d*):(0|[1-9]\d*)$/u;
 
 function streamRecoveryFrom(
   response: Response,
-  events: readonly ParsedOperationsAgUiEvent[],
+  events: readonly ParsedOperationsAgentEvent[],
   requestedPosition?: string,
-): OperationsAgUiStreamRecovery {
+): OperationsAgentStreamRecovery {
   const mode = response.headers.get('X-Operations-Recovery-Mode');
   const reason = response.headers.get('X-Operations-Recovery-Reason');
   const snapshotPosition = response.headers.get('X-Operations-Snapshot-Position');
@@ -299,13 +299,13 @@ function streamRecoveryFrom(
     snapshotPosition,
     latestPosition,
     replayFromPosition,
-  } as OperationsAgUiStreamRecovery);
+  } as OperationsAgentStreamRecovery);
 }
 
 export async function streamSiteNightEnergyInvestigationEvents(
   investigationId: string,
   options: ScopedOperationsRequestOptions,
-): Promise<OperationsAgUiStreamBatch> {
+): Promise<OperationsAgentStreamBatch> {
   const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
   const response = await fetchImplementation(
     `${options.baseUrl ?? ''}${pathFor(options.trustedSiteId, `/${encodeURIComponent(investigationId)}/events`)}`,
@@ -325,7 +325,7 @@ export async function streamSiteNightEnergyInvestigationEvents(
   if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith('text/event-stream')) {
     throw new OperationsApiError(502, 'OPERATIONS_STREAM_INVALID', 'Operations Agent 返回了无效事件流。', true);
   }
-  const events = parseOperationsAgUiEventStream(await response.text());
+  const events = parseOperationsAgentEventStream(await response.text());
   const snapshot = events.find((item) => item.event.type === 'STATE_SNAPSHOT');
   if (snapshot?.event.type !== 'STATE_SNAPSHOT'
     || snapshot.event.snapshot.investigation.scope.tenantId !== options.trustedTenantId
@@ -339,9 +339,9 @@ export async function streamSiteNightEnergyInvestigationEvents(
 }
 
 export type {
-  OperationsAgUiEvent,
-  OperationsAgUiStreamBatch,
-  OperationsAgUiStreamRecovery,
+  OperationsAgentEvent,
+  OperationsAgentStreamBatch,
+  OperationsAgentStreamRecovery,
   OperationsAnalysisReference,
   OperationsEvidence,
   OperationsFinding,
@@ -359,5 +359,5 @@ export type {
   OperationsStreamRecoveryMode,
   OperationsStreamRecoveryReason,
   OperationsToolReceipt,
-  ParsedOperationsAgUiEvent,
+  ParsedOperationsAgentEvent,
 } from './operations-contract';

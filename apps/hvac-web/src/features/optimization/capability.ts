@@ -1,4 +1,4 @@
-import type { RealReadModelBoundary } from '../real-read-model-boundary';
+import type { ReadModelBoundary } from '../read-model-boundary';
 
 export const OPTIMIZATION_READ_MODEL_BOUNDARY = {
   domain: 'optimization',
@@ -7,4 +7,4 @@ export const OPTIMIZATION_READ_MODEL_BOUNDARY = {
   authority: 'optimization-service',
   fallback: 'none',
   requiredFields: ['runId', 'status', 'objective', 'constraints', 'baseline', 'candidate', 'expectedImpact', 'uncertainty', 'risk', 'approval', 'rollbackPlan', 'verificationPlan'],
-} as const satisfies RealReadModelBoundary;
+} as const satisfies ReadModelBoundary;

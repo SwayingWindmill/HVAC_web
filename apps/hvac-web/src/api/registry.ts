@@ -1,6 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
-import { API_MODE } from './config';
 import {
   PlatformApiError,
   createPlatformGatewayClient,
@@ -57,7 +56,7 @@ export interface RegistryErrorPresentation {
 
 export type AuthorizedRegistrySite = Site;
 
-const registryQueryEnabled = (enabled: boolean) => API_MODE === 'real' && enabled;
+const registryQueryEnabled = (enabled: boolean) => enabled;
 const registryId = (value: string) => uuidV7Schema.parse(value);
 
 const retryRegistryQuery = (failureCount: number, error: Error) => {

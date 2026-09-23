@@ -1,625 +1,816 @@
 ---
-schema: design.md/v1
-version: 1.0.0
-name: 泉来禾智慧能源平台设计系统
-sourceOfTruth: true
-designDirection: Industrial Calm
-systems:
-  components: Ant Design + Ant Design Pro Components
-  applicationShell: Ant Design ProLayout
-  pageFramework: Ant Design Pro PageContainer
-  charts: ECharts
-  icons: Ant Design Icons
-implementation:
-  palette: apps/hvac-web/src/theme/tokens.ts
-  theme: apps/hvac-web/src/theme/AppTheme.tsx
-  sharedComponents: apps/hvac-web/src/components/OperationsUI.tsx
-previews:
-  light: docs/design-system/preview.html
-  dark: docs/design-system/preview-dark.html
-  styles: docs/design-system/preview.css
-references:
-  linear:
-    path: docs/design-references/linear/DESIGN.md
-    policy: reference-only
-colors:
-  brandPrimaryRgb: [15, 181, 174]
-  brandStrongRgb: [14, 156, 150]
-  brandDeepRgb: [11, 74, 76]
-  semanticSuccessRgb: [22, 163, 74]
-  semanticWarningRgb: [245, 158, 11]
-  semanticErrorRgb: [220, 38, 38]
-  semanticInformationRgb: [37, 99, 235]
-radii:
-  feature: 20px
-  card: 16px
-  control: 8px
-  pill: 999px
-spacing:
-  base: 4px
-  scale: [4px, 8px, 12px, 16px, 20px, 24px]
-breakpoints:
-  mobileMax: 767px
-  tabletMax: 1199px
-  desktopMin: 1200px
-governance:
-  check: npm run design:check
-  test: npm run design:test
-  updateRadiusBaseline: node scripts/check-design-system.mjs --update-radius-baseline
+version: shadcn-app-v1
+name: 泉来禾智慧能源平台
+designStatus: selected
+selectedDirection: shadcn-application
+scope: apps/hvac-web
+directionDecision: docs/design-system/shadcn-redesign-2026-09-13.md
+architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 ---
 
-# 泉来禾智慧能源平台设计系统
+# 泉来禾智慧能源平台 DESIGN.md
 
-## 1. Design Read
+## 1. 当前设计方向
 
-这是面向楼宇运维人员、能源管理者和研发人员的企业级实时运营产品。
+2026-09-13 起，全站视觉与页面布局采用 **Shadcn Application System**。
 
-设计方向：**Industrial Calm**。
+主要视觉参考：
 
-界面必须体现：
+- `satnaing/shadcn-admin`：应用壳、Sidebar、Header、Command Search、页面密度、后台产品布局与响应式处理。
+- 当前 `shadcn/ui`：组件语法、Card / Tabs / Table / Command / Sheet / Dialog / Form 等交互与视觉基线。
+- `sadmann7/tablecn`：scan-heavy Data Table / ledger 的筛选、排序、分页、列控制与工具栏 grammar；本项目以 TanStack Table v9-native 实现吸收其 pattern，不维护第二套表格体系。
+- `ReUI`、`Kibo UI`、`Dice UI`：shadcn/ui 之上的复杂应用组件与组合来源。ReUI 偏 Frame / advanced Filters / Timeline / Kanban / Gantt / Event Calendar / Tree/Cascader；Kibo UI 偏 Gantt / Calendar / Editor / Dropzone 等功能型组件；Dice UI 偏 Sortable / Kanban / Editable / Selection Toolbar / Tour / Tags Input 等高级交互。它们是 copy-and-own source，不形成第二套 primitive framework。
+- `Shadcnblocks`：应用级 Block / 页面组合候选来源，优先用于 Dashboard、Application Shell、Chart Group、复杂内容区等已经成熟的 shadcn 组合；不得取代官方 shadcn primitive，也不得绕过 tablecn 的 operational ledger 责任。只采用当前账号合法可访问、经过 source review 的条目。
 
-- 可信：数据来源、更新时间、计算口径和权限边界清楚。
-- 克制：不依靠发光、玻璃和大量阴影制造科技感。
-- 实时：状态变化明确，但动画只用于反馈和状态转换。
-- 异常优先：正常对象退居背景，需要处理的对象优先出现。
-- 数据优先：卡片必须回答一个运营问题，而不是只承载装饰。
+这次是直接重设计，不对上一版 Control Desk、旧 Ant Design / ProComponents 页面或历史截图做视觉兼容。
 
-设计参数：
+旧 Control Desk、Ant/ProComponents 设计决策和历史截图包不再保留为设计资料；需要追溯历史时使用 Git 历史，不在当前工作树中保留可误用的视觉入口。
 
-```text
-DESIGN_VARIANCE: 4
-MOTION_INTENSITY: 2
-VISUAL_DENSITY: 7
-```
+业务事实、安全边界和状态语义仍由 `PRODUCT.md` 决定。
 
-## 2. 技术与组件系统
+## 2. 权威顺序
 
-- 唯一组件体系：Ant Design + Ant Design Pro Components。Ant Design 提供基础组件，Ant Design Pro Components 提供企业级应用壳、页面、表单、表格和详情等高阶模式。
-- 应用主壳优先使用 `ProLayout`；业务页壳优先使用 `PageContainer`；数据密集表格优先使用 `ProTable`；复杂表单优先使用 `ProForm`；详情与只读属性优先使用 `ProDescriptions`。
-- Ant Design / Ant Design Pro 已提供的能力不得在项目内重复实现。只有当官方组件无法满足明确的 HVAC 领域交互或安全约束时，才允许维护薄封装或领域组件，并应优先组合官方组件而不是重写基础 UI 行为。
-- 图表系统：ECharts。
-- 图标系统：Ant Design Icons，项目内不混用第二套图标风格。
-- 不引入 Carbon、Fluent、Material、shadcn 或其他第二套通用组件系统与 Ant Design / Ant Design Pro 混用。
-- IBM Carbon 仅作为企业信息层级、间距和低阴影原则的参考。
-- Cohere 仅作为 AI 助手区域的柔和表面与生成状态参考。
-- ClickHouse 仅作为演示大屏的深色高对比参考。
+发生冲突时按以下顺序裁决：
 
-## 3. 色彩职责
+1. 当前用户明确要求。
+2. `PRODUCT.md` 的业务事实、控制安全、数据真实性与工作流。
+3. `docs/product/smart-energy-system-page-architecture-v3-research-backed.md` 与 `docs/product/global-navigation-context-interaction-contract-v2.md` 的 Workspace Catalog、Surface placement、页面职责、跨页闭环、capability gating、Inspector / Detail Route 边界，以及“易用性 × 专业性”规则。
+4. `docs/product/global-navigation-context-interaction-contract-v1.md` 的导航投影、URL/Search Params 状态所有权、跨页 Context、Inspector/Detail/Dialog/Tab 边界和可访问性交互规则。
+5. 匹配的 `docs/product/surface-specifications/*.md` 页面级 Surface Specification；这些 Spec 必须基于 v2 蓝图和 Interaction Contract 生成。v1、旧 `docs/product/surfaces/*.md` 和更早 IA 不再是当前权威。
+6. `docs/design-system/shadcn-redesign-2026-09-13.md`。
+7. 本 `DESIGN.md`。
+8. `docs/design-system/hvac-application-ui-specification.md` 的应用级组件层次、Page Header、Surface archetype、tablecn 与 ReUI / Kibo UI / Dice UI 边界及 UI Definition of Done。
+9. `docs/design-system/shadcn-component-contract.md` 的组件选择与组合规则。
+10. `docs/architecture/shadcn-tablecn-reui-source-review-2026-09-20.md` 的 tablecn / ReUI 上游采用边界与兼容性证据。
+11. `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md` 的 Kibo UI / Dice UI 复杂组件采用边界与 source-first 规则。
+12. `docs/architecture/shadcnblocks-source-review-2026-09-22.md` 的 Shadcnblocks Block 采用、许可与 CLI 边界。
+13. `docs/design-system/legacy-ui-quarantine.md` 的历史 UI 隔离规则。
+14. 当前 shadcn/ui、satnaing/shadcn-admin、sadmann7/tablecn、ReUI、Kibo UI、Dice UI 与 Shadcnblocks 的成熟模式。
+14. 前端架构与状态所有权边界，以及 TanStack / Recharts / ECharts / X6 / G6 的真实能力边界。
+15. Impeccable / frontend-design / web-design-guidelines 的审查方法。
 
-### 品牌色
+**当前实现和历史参考图不在视觉权威链中。** 现有实现、旧菜单、旧路由、旧 Ant/ProComponents 页面、旧截图包、历史组件画廊和被 `legacy-ui-quarantine.md` 隔离的资料没有设计上的既得权。当前 36→10 Workspace 收敛有一个已经明确批准的例外：本轮 36 Surface 体系中已经完成并通过 PROMOTED / BROWSER REVIEWED 验收的 shadcn Surface（以 `surface-specifications` 和对应 visual-reframe 记录为准）是新 Workspace 的设计母体，必须继承其页面 archetype、Table/Detail/Inspector 结构、信息层级和状态语义，再叠加后期统一的 tablecn / DataTableBlock / AppShell 规范。更早 Ant / Control Desk 资产仍然只提取业务事实，必须丢弃其视觉结构。
 
-```text
-HVAC Teal: #0FB5AE
-Deep Teal: #0B4A4C
-```
-
-品牌色用于：
-
-- 主要操作
-- 链接和选中状态
-- 实际运行数据
-- 主要图表曲线
-- 焦点环
-
-### 品牌标识
-
-- 产品中文名统一使用 `泉来禾智慧能源`，英文短名统一使用 `QUANLAIHE ENERGY`；不得与旧品牌名混用。
-- Logo 使用“泉眼节点 + 三层流线”的单色几何符号：深青绿底、白色流线和低饱和薄荷色节点。不得使用叶片、字母缩写、复杂渐变、拟物高光或多层装饰。
-- 标志必须在 24px–38px 范围内保持清晰，侧栏、favicon 和大屏使用同一 SVG，不维护多套近似图形。
-- 品牌阴影只用于从白色背景中建立边界，必须低透明度、短扩散，不制造发光效果。
-
-### 语义色
+## 3. 技术基线
 
 ```text
-Blue     预测、信息状态
-Green    正常、成功、已闭环
-Amber    风险、待处理、接近阈值
-Red      严重故障、失败、越限
-Slate    备用、停机、未知、辅助信息
+React 19
+Vite
+TypeScript
+Tailwind CSS v4
+shadcn/ui through components/ui
+Lucide
+TanStack Router
+TanStack Query
+TanStack Table
+React Hook Form
+Zod
+Recharts through shadcn Chart for ordinary application charts
+Apache ECharts
+AntV X6 where fixed engineering topology is required
+AntV G6 where dynamic relationship graph is required
+WebSocket / realtime layer
 ```
 
-同一种颜色不得同时承担品牌、预测和风险三种职责。
+规则：
 
-## 4. 表面与层级
+- shadcn/ui 是 primitive authority；业务代码优先依赖项目自己的 `components/ui`。tablecn 是专业 Data Table / ledger source，ReUI / Kibo UI / Dice UI 是复杂应用组件 source，Shadcnblocks 是应用级 Block / composed-pattern source；全部采用 copy-and-own，不形成第二套 primitive framework。
+- 本项目当前 shadcn registry 配置由 `apps/hvac-web/components.json` 决定；当前基线是 `radix-nova`。
+- 当前生产项目继续使用 Radix base，不因为 shadcn 对“新项目默认值”的调整而混入 Base UI API；Radix 组合使用 `asChild`，不使用 Base UI `render`。
+- ReUI / Dice UI 如同时提供 Radix / Base UI 实现，当前项目只允许采用 Radix flavor；Kibo UI 组件采用前必须核实其实际 primitive/headless dependencies，不能间接混入与当前 `radix-nova` 冲突的 Base UI composition。
+- 新增或修改的 Radix primitive 内部统一使用 `radix-ui` 包；Feature 不直接依赖 Radix primitive。
+- 应用级页面组合、Surface archetype、Page Header、tablecn 与复杂组件层（ReUI / Kibo UI / Dice UI）选型边界由 `docs/design-system/hvac-application-ui-specification.md` 固定；组件选择、Data Table、Field、Dialog / AlertDialog / Sheet 的职责边界由 `docs/design-system/shadcn-component-contract.md` 固定。
+- Lucide 是产品 UI 图标库；图标优先用于导航、明确动作和需要快速扫描的状态，不为普通指标、每一行数据或每个 Card 添加装饰性 SVG。
+- 不建立 Ant Design 兼容层。
+- 不建立旧 Control Desk 视觉兼容层。
+- Ant Design、ProComponents、Ant Design Charts 只允许作为尚未迁移 Surface 的临时历史依赖；最后一个 caller 迁移后删除。
 
-### Surface
+## 4. shadcn/ui 的角色
 
+shadcn/ui 是源码级组件系统，不是黑盒依赖。
+
+优先采用：
+
+- Button
+- Badge
+- Card / CardHeader / CardTitle / CardDescription / CardAction / CardContent / CardFooter
+- Field / FieldLabel / FieldDescription / FieldError / FieldGroup / FieldSet
+- Input / Input Group / Textarea / Select / Combobox
+- Checkbox / Radio / Switch
+- Tabs
+- Table primitives + TanStack Table v9
+- Command
+- Dropdown Menu
+- Popover / Tooltip
+- Dialog / AlertDialog
+- Sheet
+- Skeleton
+- Separator
+- Scroll Area
+- Resizable，仅真实需要时
+
+原则：
+
+- 默认先用 Tailwind + `components/ui` 表达页面，不为每个 Surface 新建大型专用视觉框架。
+- **Reuse before invention.** 新增任何通用交互、布局、导航、状态、表单、数据展示或图表组合前，按 `existing project → shadcn primitive/block → tablecn（表格任务）→ approved domain component → advanced application layer (ReUI / Kibo UI / Dice UI) → Shadcnblocks application block → small project composition` 顺序检查。复杂组件层内部按任务语义、a11y/keyboard、依赖重量、Radix 兼容性、源码质量选一个，不并行维护重复实现。只有这些能力无法满足业务任务、无障碍语义或 HVAC 专业工作流时，才允许自定义组件。
+- **官方 shadcn Blocks 是应用级组合参考，不只是组件 API 参考。** Overview / Dashboard / Workspace 类页面优先研究当前官方 `dashboard-*`、`sidebar-*`、Data Table、Chart block 的完整构图，再根据能源业务改写；不得只换成 shadcn 组件却保留旧页面骨架。
+- **项目内正式区分 Component 与 Block。** `components/ui` 是 shadcn primitive，`components/data-table` 是可复用 DataTable 能力层；`blocks` 是应用级标准组合，只负责稳定的布局与交互 grammar，不吞业务数据、查询、columns 或 feature state。页面级表格的当前标准 Block 是 `@/blocks/data-table/DataTableBlock`，工单页作为 canonical reference。
+- 标准 Route Surface 允许并推荐 `Breadcrumb → Page Header → Title / Description / Local Actions → Surface Content`。Breadcrumb 表达层级，Page Header 的 `h1` 表达当前 Surface；全局 App Header 不再重复同一大标题，正文第一张 Card/Section 也不得再次用 route title 充当 section title。
+- `Sidebar variant="inset"` 必须与 `SidebarInset` 成套使用；collapsed / mobile / inset spacing 应沿用 shadcn Sidebar 的 data-attribute composition，而不是业务 CSS 另造壳层。
+- Card 是有完整语义的 section，不是所有内容的默认外壳；指标卡优先采用 `CardDescription → CardTitle → CardAction`，业务 section 优先采用 `CardTitle + CardDescription + CardAction`，避免自建标题栏。
+- 设备、告警、工单等 scan-heavy Surface 默认使用 **tablecn interaction/composition grammar + 项目 TanStack Table v9-native DataTable + shadcn Table primitive**；Feature 自己定义 columns / filters / selection / server state，不建立吞掉所有差异的 mega DataTable。ReUI / Tablecn Data Grid 只在 spreadsheet-style editing、重 virtualization、tree/grid、cell editing 等真正不同的高级 grid 任务中，经 source/API review 后采用。
+- **DataTable 只代表页面级数据工作台，不再提供 embedded surface。** DataTable 自己拥有唯一 border/radius，并且必须放在 `DataTableBlock` 中；不得把 DataTable 塞进 Card、Drawer、Sheet、`rounded border` wrapper 或另一层 workspace surface。对象详情、Drawer/Sheet、Dashboard 卡片内部若只是少量只读字段对照，直接使用 shadcn `Table`；用于选择对象的 master-detail 列表使用 shadcn `ItemGroup / Item`；时间顺序事件优先 Timeline；不要为了“统一”把所有结构都继续塞进 DataTable。
+- **页面级表格默认一律采用 tablecn / 工单页式 standalone grammar，而不是 Card。** 只要一个表格承担当前页面、Tab 或 workspace 的主要扫描任务，或自身带 Search / Sort / Filter / Columns / Pagination，就按 **DataTableBlock → DataTable（toolbar 作为 DataTable child）→ pagination** 组织，由 DataTable 自己提供唯一 border/radius。Dashboard 中的“证据表”“排行表”“审计表”“资源表”也不因为位于 Dashboard 就自动获得 Card 外壳。小型只读 `Table` 可以存在于 Card/Sheet/Drawer 中，但父 surface 与 Table 之间不得再添加第二层 Card、圆角边框容器或“Table Card”；一个局部信息单元只能有一个完整外框。主台账默认继承共享 DataTable 的 `text-sm` 行密度与 `text-xs` 表头，不允许 Feature 无业务理由整体降成 `text-xs`。
+- **表格只保留一套筛选模型。** 状态、等级、类别、区域、来源、协议、优先级等行级条件统一进入 `Filter`（tablecn advanced filter grammar），不得再在 Filter 上方并列一排 “全部 / 某状态 / 某类别” pills、segmented buttons 或 Tabs 作为第二套筛选入口。`Sort` 负责排序，`Filter` 负责行级条件，`View` 专指列可见性/列显示配置，三者语义不得混用。
+- `Tabs` 只用于真正不同的内容视图或数据域，例如 `连接器 / DLQ`、`站点台账 / 电价方案 / 运行日历`、`SEU / 影响变量 / 历史版本`；如果切换后仍是同一批行，只是按 status/type/tier 等字段缩小结果集，就属于 Filter，不得使用 Tabs。
+- 图表只用于存在权威 series / category data 的业务事实；没有可信时间序列时不为贴近模板制造趋势。**按数据关系择图，而不是按页面模板固定图型**：完整且类别较少的 part-to-whole 用 Donut/Pie；类别超过约 5 个时优先聚合为 `Top N + 其他`，或改用 horizontal Bar；类别比较、排名和精确差异优先 Bar；时间序列用 Line/Area；相关性/分布才用 Scatter。不完整 composition 不得用饼/环图伪装成完整整体。
+- 普通应用级图表优先使用 **shadcn Chart + Recharts v3**，直接复用 shadcn chart tokens、responsive container 与 accessibility layer；高密度 HVAC 时序、多轴、dataZoom、brush、linked cursor、大数据量等工程分析能力使用 Apache ECharts。两者按能力边界选择，不在 Feature 内自造第三套 chart abstraction。
+- 等宽 KPI / metric strip 只有在指标确实同级、需要快速横向扫描时才使用；范围、主 KPI、异常状态、过程证据等不同语义不得为了整齐强行等权联排，应按业务对象分组并建立视觉主次。过程量优先按工程对象（如冷冻水、冷却水、冷机、泵组）组织，不把不同含义的参数机械切成 5～6 个等宽单元。
+- **形式复用优先，但不能制造错误的可访问性或交互语义。** 如果某个 shadcn 组件在视觉形式上完全适合业务，可以优先复用；只有当其内建 ARIA role、键盘模型、状态机或交互预期会把业务含义表达错误时，才不直接使用该 primitive，而是复用其 visual grammar 或选择更中性的 shadcn 组合。例如 category share 可以复用 Progress 的视觉形式；若直接暴露 `progressbar` 会把“占比”误读成“任务完成度”，则隐藏该视觉 primitive 的辅助语义并由相邻文字完整表达事实，或直接选择更合适的 Chart composition。
+- Field 是表单 label / help / error 的统一组合语法；带 icon、结果数、unit、inline action 的搜索/输入使用 Input Group。
+- Tabs 用于同一任务的平级视图，不用作跨业务模块导航。
+- Dialog 用于短时模态任务；AlertDialog 用于明确的高后果确认；Sheet 只做真实临时辅助内容，不作为默认详情容器。
+- scan-heavy workspace 可使用同页 contextual inspector 保持空间记忆；durable complex detail 使用 Route。
+
+## 5. shadcn-admin / tablecn / advanced application component layer 的角色
+
+### 5.1 shadcn-admin
+
+shadcn-admin 是当前主要应用布局与后台产品参考。
+
+深度参考：
+
+- neutral application shell；
+- light Sidebar in light mode；
+- product/team/site switcher；
+- compact grouped navigation；
+- compact Header；
+- Command Search；
+- Theme / notification / user controls；
+- Main content density；
+- Data Table layout；
+- responsive shell behavior；
+- Breadcrumb / Page Header / local action 与 content grid 的比例。
+
+不复制其示例业务数据、示例路由命名、示例 Dashboard 指标或不匹配 HVAC 业务的工作流。
+
+### 5.2 tablecn
+
+tablecn 是 scan-heavy operational ledger 的默认交互与 composition 参考。
+
+采用：
+
+- filter / sort / pagination / visibility / selection grammar；
+- table toolbar 与 dense border-first presentation；
+- 可分享状态与 server-side table workflow 的成熟 pattern。
+
+项目仍使用自己的 TanStack Table v9-native DataTable；上游 tablecn 当前 v9 兼容性必须按 `docs/architecture/shadcn-tablecn-reui-source-review-2026-09-20.md` 处理，不能直接复制未核验实现。
+
+### 5.3 ReUI
+
+ReUI 是复杂应用组件层的一部分。
+
+优先考虑：
+
+- Frame；
+- advanced Filters；
+- Timeline / Kanban / Gantt / Event Calendar；
+- Tree / Cascader / Sortable / Stepper；
+- base shadcn blocks 不足以覆盖的成熟 composed application pattern。
+
+规则：
+
+- primitive-specific 组件只采用 Radix flavor；
+- 普通 table/ledger 不绕过 tablecn 项目层；
+- ReUI Data Grid 只用于 spreadsheet、重 virtualization、tree/grid 等真正不同的高级 grid 任务，并且必须先核实选定源码的 TanStack Table v9 API；
+- 不复制 ReUI 示例业务，不把 ReUI 页面模板当产品 IA。
+
+### 5.4 Kibo UI
+
+Kibo UI 是复杂应用组件层的功能型 component / block source，重点减少高功能组件的重复实现。
+
+优先考虑：
+
+- Gantt / scheduling；
+- Calendar；
+- Editor / rich text；
+- Dropzone / file workflow；
+- 复杂内容展示与 application blocks；
+- 其他明确建立在 shadcn token / CSS-variable 体系之上的成熟功能组件。
+
+规则：
+
+- Kibo Table 不取代项目 tablecn operational ledger；
+- 引入前检查实际 headless library / primitive dependencies；
+- 不直接把 Kibo Dashboard/block 当 HVAC Surface 模板；
+- 只引入当前任务真正需要的组件，不整套搬入。
+
+### 5.5 Dice UI
+
+Dice UI 是复杂应用组件层的高级交互 source。
+
+优先考虑：
+
+- Sortable / drag-and-drop；
+- Kanban；
+- Editable；
+- Selection Toolbar / Action Bar；
+- Tour；
+- Tags Input / Mention / Listbox；
+- File Upload / Media / Cropper；
+- 其他 shadcn/ui 未覆盖的 accessibility-heavy interaction。
+
+规则：
+
+- 当前项目只采用 Dice UI 的 Radix source path；
+- 不通过 Dice UI 重新引入一套 Dialog / Select / Button primitive family；
+- 与 ReUI/Kibo 重叠时按 task semantics、a11y/keyboard、dependency weight、Radix compatibility 与 source quality 选一个实现。
+
+### 5.6 复杂组件层共同规则
+
+`ReUI + Kibo UI + Dice UI` 是同一层的候选 source，不是三个必须同时存在的 runtime framework。
+
+同一 capability 只保留一个项目实现。所有 production adoption 必须遵守 `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md` 与既有 source-first 规则，记录精确 tag/commit、源码、测试与 ADOPT/ADAPT/REJECT 结论。
+
+我们学习和拥有的是成熟 Pattern / Source，而不是并行维护多个视觉世界。
+
+## 6. 全局视觉语言
+
+### 6.1 性格
+
+目标是现代、克制、精密、可信的智慧能源 Web 应用。
+
+不是：
+
+- 大屏/HMI 风格后台；
+- 永久深色工业控制台；
+- 装饰性渐变与阴影堆叠；
+- 大量彩色 KPI 卡；
+- 每个区块都用大圆角 Card；
+- AI 生成感很强的“模块拼贴”。
+
+### 6.2 颜色
+
+全站采用 **Zinc 极简中性外壳 + 官方 shadcn chart 精准色彩调色板** 双层策略：
+
+1. **框架中性色（Zinc 主题）**：
+Light mode 与 Dark mode 严格对标 shadcn 经典 Zinc 调色体系，外壳保持克制、安静、高对比度，为内容与数据让出视觉焦点。
+
+Light mode：
 ```text
-Canvas    页面背景
-Raised    普通卡片和面板
-Inset     摘要块、筛选区和局部数据组
-Hero      首页重点运营区域
-Overlay   Drawer、Popover、Modal
+background        #FAFAFA
+foreground        #18181B
+card              #FFFFFF
+secondary/muted   #F4F4F5
+muted text        #71717A
+border            #E4E4E7
+primary           #18181B
+ring              #A1A1AA
 ```
 
-### Elevation
-
+Dark mode：
 ```text
-Level 0   无边框、无阴影，用留白分组
-Level 1   1px 边框，无阴影，普通卡片默认
-Level 2   浅色阴影，仅用于 Drawer、Popover、悬浮按钮
-Level 3   Modal 和重要确认层
+background        #09090B
+card/sidebar      #18181B
+secondary/muted   #27272A
+foreground        #FAFAFA
+muted text        #A1A1AA
+border            #27272A
+primary           #FAFAFA
 ```
 
-普通 Dashboard 卡片禁止统一使用悬浮阴影。
-
-## 5. 圆角系统
-
-只允许以下四级：
-
-```text
-Feature   20px  Hero 和大型特殊区域
-Card      16px  普通 Card
-Control    8px  列表项、摘要块、输入框和按钮
-Pill      999px Tag、Badge 和状态胶囊
-```
-
-禁止新增 9px、10px、11px、13px、18px 等中间圆角。
-
-## 6. 间距与密度
-
-基础网格为 4px。
-
-```text
-4   图标与文字微间距
-8   控件内部间距
-12  紧凑内容组
-16  卡片内边距
-20  页面主要间距
-24  大型内容区间距
-```
-
-桌面端默认紧凑。平板端多列内容纵向排列。移动端只保留行动所需信息。
-
-## 7. 字体与数字
-
-- 中文：PingFang SC、Microsoft YaHei、系统无衬线。
-- 英文与普通数字：系统无衬线。
-- Dashboard 大数字、百分比和金额使用系统无衬线字体，只启用 `tabular-nums`；等宽字体仅限日志、代码、设备 ID 和时间戳等技术文本。
-- 正文不得使用衬线字体。
-- 数值单位必须弱化，数值本身保持最高对比。
-
-### 文案蒸馏
-
-- 一个区域只能保留一个主标题；eyebrow、标题、副标题、范围、状态中只有对当前决策新增信息的层级才允许常驻。
-- 页面位置已经由侧栏表达时，业务页不得再用眉题重复模块名称；标题能够自解释时，不展示产品愿景式长副标题。
-- 同一事实不得在页头、欢迎区和右侧 Inspector 重复出现。范围信息只保留在最接近操作的位置，状态使用短词而不是完整说明句。
-- 未来接入、技术路线、模拟接口等实现说明不得出现在正式业务界面；进入文档、Tooltip 或开发模式。
-- 指标辅助文案优先使用“2 需关注”“1 告警 · 1 维护”等短状态，不重复单位、对象名和主数值已经表达的含义。
-- `设备与建筑` 等对象管理页使用紧凑页头：只保留页面标题和权限状态；不常驻眉题、产品说明、当前选中复述或模拟接口提示。范围变化由树选中态和台账结果直接反馈。
-
-## 8. Dashboard 规则
-
-### 卡片准入
-
-每张 Dashboard 卡片必须回答一个问题：
-
-- 当前发生了什么？
-- 为什么需要关注？
-- 下一步应该做什么？
-- 风险或收益是多少？
-
-无法回答以上问题的内容应下沉到业务页。
-
-### 数据来源
-
-以下数据必须显示来源或口径：
-
-- 模型预测
-- 模拟基线
-- 示例电价
-- 舒适度达标率
-- 节能收益
-- 置信度
-
-Mock 精确值必须标记为“演示数据”或“示例预测”。
-
-### 状态优先
-
-- 首页列表默认只显示异常、风险和待决策对象。
-- 正常对象用汇总数量表达，不占用完整列表行。
-- 同类重复异常必须聚合。
-
-## 9. 图表规范
-
-### 颜色
-
-```text
-实际值      Teal 实线
-预测值      Blue 虚线
-预测区间    Blue 低透明度面积
-容量阈值    Amber 虚线和浅色风险区
-严重越限    Red，仅用于真实越限
-```
-
-### 必需元素
-
-时间序列图应包含：
-
-- 实际值与预测值的清晰视觉区分
-- 单位
-- Tooltip
-- 空状态
-- 加载骨架
-- 错误或降级状态
-- ECharts aria 文本描述
-
-当前点、峰值、阈值和数据来源应按任务需要放在摘要栏、Tooltip 或说明弹层中，不得同时作为永久标注堆叠在图面上。只有真实越限时才显示风险区或阈值强调。
-
-移动端应减少刻度、图例和摘要数量，不缩小到不可读。
-
-## 10. 运营卡片体系
-
-Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营卡片分为三类：
-
-### 决策队列
-
-适用于异常与工单、优化机会：
-
-- 允许使用无背景的摘要数据栏。
-- 每行必须体现对象、必要上下文、流程状态或决策价值；Dashboard 行内最多保留标题与一行上下文，长期影响和完整诊断说明进入 Tooltip、Drawer 或业务详情页。
-- 异常队列右侧优先显示工单编号、未派工和 SLA；严重未派工项只使用短风险线和状态文字，不使用整行粉红背景。
-- 优化队列优先显示预计日收益和审批状态，并使用 01/02/03 排序建立决策顺序；风险只在高风险时着色，不使用风险圆点占据首要层级。
-- 固定显示相同数量的高优先级事项，避免通过空白强行等高。
-
-### 异常对象
-
-适用于需关注设备、关键控制偏差：
-
-- 不设置额外摘要栏，只显示最严重的 2 项。
-- 设备必须展示异常原因、健康线差值和最后更新时间；底部汇总合并为一句运营结论，不把多个统计值分散到卡片两端。
-- 控制偏差按标准化偏差分级，使用“设定值 → 实际值 → 偏差”的专用参数结构，不复用普通报警列表行；其他偏差和正常项在底部汇总。
-- 严重项只在偏差值、严重度或短风险线中使用红色；普通项不得保持选中态背景。
-
-### 运行状态矩阵
-
-适用于冷源设备运行矩阵：
-
-- 使用系统级运行判断，不在窄卡中平均展开全部设备。
-- 每行展示系统名称、运行组合、关键设备或参数、运行判断；顶部不再重复展示运行数、高负荷数和备用数等同义统计。
-- 正常设备合并表达，正常判断使用中性色；只有高频、过载等异常判断使用橙色和短风险线。
-- 标题右侧显示真正需要关注的异常数量，不用“在线率”冒充健康结论。
-
-### 共同视觉纪律
-
-- 外层只保留一个 Card 边界；内部使用留白和必要的 1px 分隔线，不嵌套浅色小卡，避免每个层级都画边界。
-- 卡片标题区约 62px，左右内边距 24px；标题使用 17px / 600–620。
-- 行标题 15px / 600，业务辅助信息不小于 13px，主要数值 18–22px / 650；避免标题、编号、状态和数值同时使用 700 字重。
-- 状态优先使用短风险线、必要的圆点和纯文本；一行最多一个主状态色，正常结论使用中性色。
-- 同一业务组的卡片可以等高，但不得为了等高制造无意义空白；移动端由内容自然决定高度。
-- 可点击行使用轻量 hover、active 和 focus-visible，不使用随机青色选中背景。
-- 所有横向滚动表格的表头、sticky 容器和固定列必须使用与主题匹配的不透明实色背景；滚动、hover 和选中状态下都不得透出后方列内容。
-
-禁止模式：
-
-- `Card > List > Tag > Badge` 多层组件堆叠。
-- 同一行同时出现三个以上胶囊标签或两种以上高饱和状态色。
-- 红色或橙色满宽进度条表达温度、压力等偏差。
-- 右侧关键值小于 13px，或设备运行值被省略号截断。
-- 把工单编号、收益、在线率和偏差值都当成同一种右侧大数字。
-- 为了视觉统一，强迫不同业务任务使用完全相同的行结构。
-
-## 11. AI 助手规范
-
-### 单一助手模型
-
-- 产品内只有一个 `泉来禾 AI 运维助手`。全局 `CopilotPopup` 与 `/ai` 完整工作台共享同一个 `default` Agent、消息状态、上下文和工具注册，不得维护第二套助手身份。
-- 全局入口直接使用 CopilotKit 官方 `CopilotPopup`、官方 `CopilotKit` Provider 和官方 `styles.css`；不得再包裹自定义 Drawer、Popup 外壳、Skills 首页、历史页或标准/聚焦窗口状态。
-- `/ai` 不提供“场景选择器”。助手应根据当前路由、建筑、角色、遥测、FDD、工单和优化上下文自动理解问题；推荐问题只能作为启动提示，不能改变助手身份。
-- 当前页面上下文和前端工具统一通过 `CopilotContextBridge` 注册，并且所有 CopilotKit hooks 必须从 `@copilotkit/react-core/v2` 主入口导入，避免产生重复 Provider context。
-- 当前仅注册只读 self-managed `HvacMockAgent`。未来远端 Operations Agent 必须通过 Platform Gateway 和受治理的 AG-UI 合同接入，并保持同一产品助手身份；不得恢复浏览器直连独立 Runtime 的环境变量开关。
-
-### 官方 CopilotPopup
-
-- CopilotKit 官方 `CopilotPopup` 继续负责窗口开合、焦点、Escape、消息列表、输入、流式状态、Markdown 和移动端全屏行为；不得在外部再包裹 Drawer、Modal 或第二套窗口状态。
-- 产品化定制必须使用官方 slot/props：启动按钮保留官方 `CopilotChatToggleButton`，Header 保留官方 `CopilotModalHeader` 和其注入的关闭回调，应用只替换图标内容、Header 内容、欢迎页、输入提示、建议问题和 CSS token。
-- 桌面启动入口使用 58×58px 的主题色圆形按钮，白色机器人图标作为唯一主识别；不得叠加未读数字、待关注数量或其他角标。按钮需具备清晰阴影、键盘焦点和足够对比度，不使用文字胶囊或弱对比小圆点。
-- 桌面 Popup 使用 520px 宽、最高约 660px、20px 圆角和柔和浮层阴影；Header 高度约 56px，只保留当前会话标题、历史、新建和关闭，不展示范围副标题、状态装饰条、“只读”、Runtime、角色或第二个展开入口。
-- 空状态采用轻聊天窗口结构：顶部只有一行当前页面上下文，中部保留大面积安静留白，底部展示最近 3 条会话和主 Composer；不得展示欢迎 Hero、页面说明、范围卡、建议问题列表或页面已有全局指标。
-- Popup Composer 是底部主视觉锚点：高度约 76px、18px 圆角、清晰边框和克制的双层阴影；聚焦时显示 3px 品牌色外环，发送按钮不小于 40×40px。不可用的附件入口必须退出布局，输入区不得与页面背景融为一体，也不得依靠占位文案承担全部可发现性。
-- Header 中的历史入口必须在当前 Popup 内切换到会话列表，支持搜索和恢复；完整工作台入口放在历史页底部。Popup 打开后右下角圆形按钮继续保留并切换为关闭图标，必须可见、可点击且不得与窗口重叠。
-- 对话中的结构化结果通过 CopilotKit `useComponent` 注册，不得硬编码成 Markdown。首批标准组件为 `AssetStatusCard`、`EnergyAnomalyCard` 和 `FddEvidenceCard`；结果使用单一证据面板、分隔线和状态色表达层级，不叠加阴影卡与内部指标小卡，只提供查看与业务深链，不执行写操作。
-- 手机端使用 CopilotKit 官方全屏 Popup 行为，不增加自定义 Sheet 或 Drawer。
-- Popup、消息区、输入区、建议问题、结构化结果、Markdown、代码块和表格在任何状态、主题和视口下都不得出现横向滚动条；长内容必须换行或在容器内收敛。
-- 本地 self-managed Agent 只允许读取 Mock 遥测、流式输出和触发只读展示组件，不得暴露设备控制、工单写入或优化下发能力。
-- CopilotKit 1.62.3 在 React 开发模式下会从官方 `DropdownMenuTrigger` 产生 ref 警告。审计必须单独记录该上游已知告警，但不得因此忽略其他应用错误、HTTP 错误或网络失败。
-
-### 工作台结构
-
-```text
-AppShell Content（固定视口、零内边距）
-└── Full-bleed AI Workspace（无页面 Hero、无外层 Card）
-    ├── Thread Navigator   Inset 背景 + 右分隔线
-    ├── CopilotChat Pane   主视觉与唯一纵向滚动区域
-    └── Evidence Inspector 左分隔线 + 按需证据和业务动作
-```
-
-- `/ai` 是全屏工作台，不使用普通业务页的 `PageScaffold`、eyebrow、页面标题、说明或顶部状态胶囊；左侧主导航已经表达页面位置，当前线程标题和范围由中间会话 Header 承担。
-- `/ai` 仍必须复用 `OperationsUI.css` 的颜色、字号、8px Control 圆角与信息层级，不得创建独立品牌语言；但工作台根节点必须与 AppShell Content 四边对齐，外层不留 20px 页面内边距、不使用 16px Card 圆角或独立外边框。
-- `/ai` 主对话区必须直接嵌入 CopilotKit 官方 `CopilotChat`，不得使用 `AssistantConversation` 或其他平行消息状态转译层。
-- Popup 与工作台 Chat 必须共享同一个 `default` Agent、活动线程、`CopilotContextBridge`、工具注册和 Generative UI 组件。
-- `/ai` 必须占满 AppShell 剩余视口；浏览器文档、Content、工作台根容器、左侧线程栏和右侧证据栏均不得产生纵向滚动。只有中间 CopilotKit 消息视口允许纵向滚动，输入区必须始终可见。
-- 工作台 Composer 必须始终锚定在中间对话区底部：空状态的说明与建议问题位于其上方并在低高度视口中独立滚动，有消息后只有消息视口滚动。桌面 Composer 最大宽度约 760px、高度约 78px、18px 圆角，使用清晰边框和克制阴影；聚焦状态与 Popup 一致，发送按钮不小于 42×42px，不可用的附件入口不得占位。移动端只缩小外边距和圆角，不得把 Composer 卷入内容区。
-- 空状态只保留一个工作台标题、一个范围接入提示、一句能力说明和最多 3 条建议问题；不得同时出现“AI 运维调查”“开始调查”“可以这样开始”“分析范围”等同义标签，也不得在 Composer 上方重复字段名。
-- CopilotKit 默认的常驻免责声明不得出现在 Popup 或工作台 Composer 下方。只读边界用 Inspector 中的短状态表达，审批、派工与控制确认只在用户真正发起写操作时出现。
-- 左侧线程行只显示标题、必要摘要、流程状态和时间；类型、状态、范围等信息不得在同一行重复堆叠。
-- 桌面端采用左侧线程导航、中间主对话、右侧证据 Inspector 三列结构；三列置于一个外层 Raised Surface 内，列间距为 0，只使用必要的 1px 分隔线，不得形成三个同权重独立 Card。中间对话宽度应至少为任一辅助栏的 1.5 倍。
-- 小屏幕将左右栏折叠为 Drawer，但主页面仍保持固定视口。
-- 工作台不得把右侧每个信息组包装成独立 Card，也不得在顶部叠加整条彩色“AI 安全说明”卡。
-- 业务辅助文字不低于 11px，常规摘要和操作文字使用 12–14px，Inspector 主要读数使用 18–22px；不得通过 9–10px 微型文字强行塞满固定视口。
-- 对话是页面主任务，桌面端获得剩余主宽度；左右栏是低权重导航和按需证据区域，不得随长对话一起移动。
-- 本地演示阶段使用 Zustand persist 保存线程、消息、范围、摘要和时间，支持搜索、恢复、重命名、固定、归档和删除；刷新后必须恢复当前活动线程。正式环境由后端线程服务替换存储实现，但交互契约保持一致。
-- 普通对话区域保持平面、安静，不使用大面积渐变、发光边框或独立“AI 输出卡片”。
-- 用户与助手消息只通过方向、头像和单一品牌色区分；助手消息保持容器色，避免每条消息使用彩色背景。
-- 推荐问题位于欢迎页或消息区中，最多展示 3–4 条；工作台空状态必须与正文和 Composer 共用同一条内容轴，桌面端使用按内容自适应宽度的纵向单行行动项，提供明确右向箭头，不使用满宽分隔行或等宽卡片；移动端允许收窄并省略过长文本，禁止横向滚动。
-- 数据来源必须表达“当前接入了什么”和“覆盖到什么范围”，不能写成未来接入说明或技术路线占位文案。
-- 闭环入口只负责跳转到 FDD、工单、优化、成本等业务页；AI 页面不复制审批、派工或设备控制表单。
-
-### 安全、状态与权限
-
-- Agent 状态、生成中和工具调用可以使用轻量品牌色表面。
-- 所有写操作必须经过人在回路确认；助手只允许解释、总结、检索与建议。
-- 上下文必须按角色权限过滤，推荐问题和可跳转入口不得暴露无权限模块。
-- Runtime 离线、Mock 模式和真实模型连接状态必须可见，但不得把技术供应商名称作为页面主标题。
-- 停止生成、清空对话、Enter 发送、Shift+Enter 换行和 `aria-live` 消息播报必须在 Drawer 与完整工作台行为一致。
-
-## 12. 交互状态
-
-所有可交互元素必须包含：
-
-- hover
-- active
-- focus-visible
-- disabled
-- loading
-- error
-
-推荐反馈：
+2. **图表官方配色规范（Chart Color Palette - shadcn 经典科技蓝体系）**：
+数据可视化图表严格采用 shadcn 官方图表规范（`https://ui.shadcn.com/charts/bar#charts`）展示的经典科技蓝体系，具有层级鲜明、沉稳科技、高明度梯度的 5 阶蓝色系色谱，杜绝随手指定纯色或无序色盘：
 
 ```css
-:active {
-  transform: scale(0.99);
-}
-
-:focus-visible {
-  outline: 2px solid #0FB5AE;
-  outline-offset: 2px;
-}
+/* Light Mode 图表变量（对标 shadcn 官方图表示例色谱） */
+--chart-1: #2b7fff;  /* Vibrant Azure / 鲜亮科技蓝 - 实际运行负荷主曲线 / 核心用能分项 */
+--chart-2: #8ec5ff;  /* Sky Blue / 浅天蓝 - 能耗基准对比虚线 / 次级分项 */
+--chart-3: #155dfc;  /* Royal Blue / 皇家蓝 - 关键动力设备负荷 */
+--chart-4: #1447e6;  /* Cobalt Blue / 深钴蓝 - 输配管网分项 */
+--chart-5: #193cb8;  /* Deep Navy / 沉稳藏青 - 其他末端辅助分项 */
 ```
+Dark Mode 映射至深色背景下的高辨识度蓝色阶（`#3b82f6`、`#93c5fd`、`#60a5fa`、`#2563eb`、`#1d4ed8`）。所有业务图表（AreaChart、Donut、Bar 等）一律通过 `var(--chart-1)` ~ `var(--chart-5)` 或 `--color-<name>` 访问，严禁在业务组件内随意硬编码孤立色值。
 
-不使用无意义的持续动画。实时状态点可有轻微状态变化，但必须尊重 `prefers-reduced-motion`。
+3. **业务语义色**：
+业务语义色独立且仅用于真实业务状态：
+- success：正常/已完成/满足；
+- warning：需要关注；
+- destructive：明确严重异常或危险动作；
+- information：信息性业务状态；
+- unknown：未知、不完整、不可用。
 
-## 13. 响应式
+语义色只用于真实业务状态，不作为页面品牌大面积铺色。
+
+### 6.3 Typography
+
+优先使用系统中文字体栈。
+
+建议层级：
+
+- Page title：24px / 600；
+- Section title：14px / 600；
+- Card title：14px / 600；
+- Body：13–14px；
+- Label / supporting text：11–12px；
+- Summary metric：22–28px / 600；
+- Table：12–13px；
+- 变化数值使用 `tabular-nums`。
+
+不把 uppercase English eyebrow 当全站视觉语言。
+
+### 6.4 产品语言 / 专业术语
+
+面向中文用户的业务界面默认 **中文优先**。专业性通过正确的业务语义、单位、证据和工程上下文体现，不通过大面积英文体现。
+
+规则：
+
+- 页面标题、区块标题、按钮、筛选器、状态、说明、空状态和下一步动作默认使用中文；
+- 行业通用缩写和单位可保留，例如 `COP`、`kW/RT`、`EnPI`、`EnB`、`SEU`、`PM2.5`；
+- 首次或关键位置使用“中文业务名称 + 缩写”，例如“能源绩效指标（EnPI）”“能源基线（EnB）”“重大用能（SEU）”；
+- 英文标准原文、模型字段名、算法名和底层 technical enum 只进入工程详情、方法说明、帮助文本或审计信息；
+- 不允许为了显得专业，把中文可清楚表达的 `Load / Boundary / Expected / Valid / Contributor / Evidence` 等直接作为主界面文案；
+- 对确无稳定中文译法的标准术语，保留英文并给出简短中文解释；
+- 同一页面术语必须一致，不在“冷站 / Plant”“负荷 / Load”“有效 / VALID”之间随机切换。
+
+原则：
+
+> **中文负责可理解性，标准缩写负责专业精度；用户不应先翻译界面，再理解业务。**
+
+### 6.5 用户可理解性 / Content Design
+
+页面视觉和内容必须共同服务用户完成当前任务，而不是展示系统拥有多少字段。
+
+默认视图优先回答：
 
 ```text
-< 768px      单列、移动导航 Drawer、行动信息优先
-768-1199px   多列卡片纵向排列、Header 收起次要控件
->= 1200px    完整驾驶舱布局
+我现在看的是谁 / 什么范围？
+当前最重要的事实是什么？
+为什么值得注意？
+这个结论值得信吗？
+下一步应该做什么？
 ```
 
-任何多列区域必须明确声明移动端降级方式。
+规则：
 
-## 14. 业务页面统一语言
+- 区块标题优先使用用户问题和业务名称，例如“需要关注”“当前运行”“已验证结果”“下一步”，而不是 `Projection / Read Model / Payload`；
+- 异常、失败、不可用状态必须尽量同时提供“事实 + 原因 + 下一步”，不能只显示一个红色 Badge；
+- 空状态必须区分“当前没有事项”和“数据/服务不可用”；
+- 默认层只展示完成主要任务需要的信息，内部 ID、raw enum、trace/correlation、schema/model hash 进入 Advanced / Audit；
+- 设计原则、实现理由和数据建模约束不得直接写进业务界面，例如“一个事实一个 owner”“不做推断”“这些状态必须独立”“不合并成健康分”等只属于规范、代码和审计说明；
+- `owner / projection / read model / authority / schema / transport / payload` 等内部架构词默认禁止出现在普通用户文案中；只有面向专业工程/审计任务且该术语本身就是业务对象时例外；
+- 缺失能力或缺失数据在界面上只表达用户需要知道的结果和可采取动作，例如“运行模式暂不可用”，不要解释“因为某 owner 尚未提供”；
+- Primary Action 使用具体动词 + 对象，例如“创建工单”“查看能源分析”“释放临时覆盖”，避免“处理 / 操作 / 确定 / 执行”这类含糊按钮；
+- 产品文案遵循 `docs/product/content-design.md`。标题优先写用户正在处理的业务对象，而不是 UI 容器名称；不要因为内容采用 Table 就写成“XX 台账 / XX 列表 / XX 明细 / XX 工作台”。
+- **灰色 supporting copy 默认不出现。** 只有时间范围、数据范围、方法/标准、当前状态、重要限制或异常条件等会改变用户理解的信息才保留；“查看 / 管理 / 支持 / 用于……”这类解释可见 UI 功能的说明默认删除。
+- Page title 已经准确命名当前对象时，正文主表允许无二级标题，直接进入 Search / Filter / Sort / Columns / Table，禁止“设备 → 设备台账”“工单 → 工单台账”这类语义重复。
+- KPI label 使用最短且不丢失含义的业务名称，例如“当前功率 / 系统 COP / 在线率 / 最大需量 / 可调负荷”，避免报告式长标题和行政化名词堆叠。
+- 状态使用文字 + 图标/形状/标签表达，颜色只作为冗余编码；
+- 实时刷新不能抢 focus、重置筛选/分页、关闭用户正在操作的浮层或让列表持续跳动；
+- 默认 Ledger 在目标桌面宽度下必须无需横向滚动即可完成核心判断，低频列进入 Column Settings / Detail；
+- hover 不作为获取关键业务信息的唯一方式；
+- 图表必须存在标题、单位、时间范围、数据质量语义，并提供可访问的文字或表格替代；
+- Wireframe 与实现以 WCAG 2.2 AA 方向作为 accessibility baseline。
 
-Dashboard 之外的资产、工单、FDD、优化、能耗、成本、AI 和系统管理页面遵循同一套 **Industrial Operations Workspace** 语言。实现方法参考 `pbakaus/impeccable` 的 `extract → layout → typeset → distill → harden → polish → audit` 工作流，但不引入第二套 UI 组件库。
-
-### 页面骨架
-
-- 统一使用 `PageScaffold`，页头只保留一个页面标题和右侧上下文/权限；主导航已经表达所属业务域，不再增加眉题或用途说明。
-- 标题使用 25–32px / 700。页面标题下不得常驻“本页用于……”式副标题；真正影响判断的口径、风险或权限信息进入指标、Alert、状态标签或内容区。
-- 页面主内容间距为 18–20px，移动端降至 14–16px。
-- BigScreen 属于独立的远距展示表面，不套用业务工作区页头。
-- BigScreen 使用工业级能源运行指挥台语言：顶部为系统状态与场景切换，KPI 合并为连续数据带，中间冷站系统视图占据主导宽度，左右栏分别承载趋势与异常行动，底部只显示数据新鲜度、设备在线和只读状态，不展示宣传口号。
-- 中央 3D 默认使用等轴视图，允许有限角度拖拽和受控缩放但禁止自动旋转；缩放距离限制在 10.5–18.5，既能检查设备细节，也不得进入模型内部或缩到失去业务可读性。设备详情不得使用与模型脱节的绝对定位浮层，统一进入主视图下方的设备状态带。冷站模型需使用可辨识的工业设备结构：双筒式冷机、泵电机与蜗壳、方形逆流冷却塔、负荷模块、法兰、阀门和分区底座，并通过金属度、粗糙度、轮廓、状态灯与业务色表达层级；分区底座不得使用 `Edges` 或在透视中形成外溢长线的高亮边条，只能通过低强度材质差异划分区域；不得退回方盒、单圆柱和无连接细节的占位几何。
-- 所有 ECharts 必须置于明确高度的裁切容器中，Canvas 不得越过所属面板或与其他图表相交；1920×1080、1440×900、1366×768 和 1024×768 均需通过大屏布局审计。低高度桌面优先减少次要图表，而不是压缩主要图表到不可读高度。
-
-### 关键指标带
-
-- 页面级 KPI 使用 `OperationsMetrics` 合并为一个有边界的指标带，不再使用四张独立 `Card + Statistic` 小卡。
-- 指标带必须同时表达数值和运营口径；辅助说明优先回答来源、范围、目标或下一步判断。
-- 品牌色只强调当前核心指标；绿色、橙色、红色分别用于成功、风险和严重异常，正常指标保持中性。
-- 桌面端一行展示，平板端两列，窄手机端单列；单位和说明不得挤压主数值。
-
-### 内容面板与工具栏
-
-- 业务面板统一使用 16px 圆角、1px 边框、无阴影；标题区约 58–62px。
-- 筛选、搜索和列表标题使用 `.ops-toolbar`，允许换行，但不得把筛选器拆成多个无意义小卡。
-- 表格表头使用轻量底色和 13px / 620 字重，行间只保留横向分隔；hover 只提供低透明度品牌色反馈。
-- Alert 默认保持白色/深色容器表面，以图标、边框和文字表达语义，避免整块高饱和背景。
-- 复杂详情进入 Drawer 或 Modal；页面正文不重复堆叠同一对象的完整说明。
-
-### 分析页面与图表契约
-
-能耗、成本、绩效、趋势和其他分析型页面统一使用以下结构：
+易用性不能通过合并专业事实获得。仍必须保持：
 
 ```text
-PageScaffold
-├── OperationsMetrics       页面级结果与风险
-├── OperationsInsightBand   诊断结论与行动提示
-├── OperationsChartCard     图表、口径与状态
-└── Card + Table            可下钻对象明细
+Offline ≠ Fault
+Stale ≠ Offline
+ACK ≠ Cleared
+Expected ≠ Verified
+Approved ≠ Executed
+Delivered ≠ Read
 ```
 
-#### `OperationsChartCard`
+> **用户友好 = 更快理解正确事实并知道下一步，而不是把复杂业务压成一个模糊分数。**
 
-每张分析图必须提供：
+### 6.6 Spacing / radius / elevation
 
-- **标题**：说明业务对象，不把单位、时间范围和来源全部塞进标题。
-- **说明**：一行解释图表回答的问题或计算关系。
-- **Meta**：时间范围、设备数量、统计周期或因子等短上下文。
-- **状态**：只在真实需要判断时显示，例如“已达标”“推进中”“模拟基线”“示例电价”。
-- **图表区**：桌面端主图建议 300–320px，次图建议 260–280px；同一行图表高度必须一致。
-- **Footer**：显示数据口径、来源、单位、基准或关键汇总结论，不重复图表标题。
-- **状态覆盖**：必须支持 loading、empty；接口失败时由页面数据层转换为 error/degraded 状态，不允许保留空白画布。
-- **无障碍**：容器提供明确 `ariaLabel`，ECharts option 同时启用 `aria.enabled` 并提供业务描述。
+- 主要间距：4 / 8 / 12 / 16 / 24 / 32。
+- 普通页面遵循 shadcn-admin 的紧凑主区：默认约 `px-4 py-6`，需要更宽呼吸感时 desktop 可提升到 `px-6`；不再把固定 24px 当所有页面的硬规则。
+- compact control：28–32px 高。
+- Card 默认 radius 跟随 shadcn 当前组件，不再为业务页面任意放大。
+- 默认无装饰性大阴影；边框和层级优先。
 
-图表标题区保持平面，不使用大号图标方块、渐变标题背景或多个高饱和 Tag。来源标记优先使用 `.ops-chart-status` 的圆点和文字。
-
-#### `OperationsInsightBand`
-
-- 用于承载 2–4 条已计算的诊断结论，不用于展示原始数据。
-- 每条结论必须是完整判断，例如“峰时费用占比偏高，建议转移可延迟负荷”，而不是“峰时 58%”。
-- 正常、风险、严重分别使用绿色、橙色、红色圆点；正文保持中性色，禁止整行铺色。
-- 桌面端标题与结论并列，移动端自动单列。
-
-#### 分析页布局
-
-- 首行采用 `15/9` 或等价的“主趋势 + 结构分解”，主图优先获得宽度。
-- 第二层展示经营目标、峰谷结构、周期比较等支持判断的内容；不得为了对称重复同义图表。
-- 明细表位于分析图之后，标题必须说明对象与数量；表格不是页面首要视觉焦点。
-- 峰平谷、分项成本等同组指标使用 `OperationsMetrics.is-embedded`，禁止 `Card > Card > Statistic`。
-- 日、周、月切换只改变时间口径，不改变整页组件顺序，避免用户重新定位。
-
-#### 能耗计量语义
-
-- `kW` 只表示瞬时功率或负荷；`kWh` 只表示某一计量周期内的累计电量。两者不得进入同一序列、共用同一 Y 轴名称或互相追加末点。
-- 实时遥测用于 24 小时负荷、当前总功率和峰值判断；日/月/年能耗必须来自电表累计量或明确标注的模拟聚合数据。
-- 月内主图优先使用“日期 × 设备类别”的堆叠电量，帮助定位异常日期和增量来源；年度层使用月度电量柱图叠加 COP 折线，左右轴必须分别标注。
-- 设备明细按累计 `kWh` 排名，并同时提供运行时间、单位运行时能耗、系统占比和周期变化；不得用某一时刻的实时功率冒充设备能耗贡献。
-- 电费可以作为能耗指标的次级上下文展示，计算口径和综合电价必须可见；峰平谷成本和复杂经营分析仍归入成本页。
-- 当历史数据尚未接入真实计量服务时，页面、图表和导出文件必须明确标识“模拟聚合”，禁止让用户误认为是真实账单或电表读数。
-- 当前月只能展示截至今天的 MTD 实际量；未来日期不得生成“实际值”，未来月份在年度图和汇总表中必须留空或标记为未发生。
-- MTD 环比和同比必须使用相同截止日，例如 7 月 1–11 日对比 6 月 1–11 日及去年 7 月 1–11 日；历史完整月份才允许完整月对完整月。
-- 能耗分析钻取顺序统一为“日期 → 设备类别 → 设备详情”。日期、类别和设备 ID 使用 `year`、`month`、`day`、`type`、`device` 查询参数保存，刷新、分享和浏览器前进后退必须恢复相同上下文。
-- 点击日堆叠柱可同时选择日期和设备类别，点击构成图只改变类别，点击年度柱或月度表只改变月份；所有入口最终驱动同一设备明细区，禁止各图维护互不一致的局部筛选。
-
-#### 综合能耗时间尺度架构
-
-- 侧边栏只保留 `/energy` 一个入口，系统内部使用 `/energy/year`、`/energy/month`、`/energy/week`、`/energy/day` 四个嵌套路由；时间尺度导航在四页保持同一位置和顺序。
-- 共享壳层固定展示建筑范围、能源类型、当前周期、数据状态、对比口径和当前视图导出；子页面不得重复这些全局筛选，只保留本尺度专属钻取。
-- 年度页主任务是目标、同比、费用、碳排和建筑绩效；月度页主任务是 MTD、异常日期和设备类别；周度页主任务是日程、工作日/周末和非营业时段；日度页主任务是小时功率、累计电量、峰平谷、启停和业务事件。
-- 页面间钻取必须保留共享查询参数：`year`、`month`、`week`、`day`、`date`、`energyType`、`compare`；设备级继续使用 `type` 和 `device`。
-- 年度图点击已发生月份进入月度页；月度页选择日期后可进入日度页；周度每日柱和日程表进入对应日度页；日度异常事件进入资产、FDD 或优化建议。
-- 未来日期和未来月份只能显示为空或“未发生”，不得用预测值伪装实际值。水耗、燃气和冷量在未接入真实计量源前仅作为禁用的“待接入”选项。
-- 四个工作台统一采用“核心指标 → 主图证据 → 分析结论 → 次级分析与明细”的阅读顺序；结论不得在用户看到主图证据之前占用整屏空间。
-- 综合能耗页在 1440px 桌面视口下首张主图顶部不得低于页面 650px，在 1024px 平板下不得低于 820px，在 390px 手机下不得低于 1000px；该阈值由全站 UI 审计持续验证。
-- 手机端四项核心指标使用 2×2 紧凑矩阵，不得退化为四张纵向长卡；全局数据状态可降级隐藏，但当前周期、能源类型和对比口径必须可恢复。
-
-#### 图表视觉参数
+## 7. Application Shell
 
 ```text
-主趋势高度       320px
-结构分解高度     320px
-次级比较高度     260–280px
-图表标题         16px / 620
-图表说明         12px / secondary
-坐标轴文字       11–12px
-图例文字         12px
-图表 Footer       12px / secondary
+ApplicationShell
+├── Sidebar
+│   ├── Product + Site switcher
+│   ├── Primary navigation
+│   ├── Grouped navigation
+│   └── Collapse
+├── Header
+│   ├── Current route identity
+│   ├── Realtime status
+│   ├── Command Search
+│   ├── Theme
+│   ├── Notifications
+│   └── Account
+└── Main
+    └── Route-owned Surface
 ```
 
-- 实际值使用 Teal；基线使用 Slate 虚线；目标或阈值使用低饱和 Amber；成功收益可使用 Green。
-- 面积填充只能辅助趋势阅读，透明度从低到更低，不作为装饰背景。
-- 饼图仅用于 3–5 个稳定分类；分类更多时改用排序条形图或表格。
-- Gauge/Progress 只表达明确目标完成率，不用于一般设备健康度或抽象评分。
-- 图表不得依赖颜色作为唯一信息编码；Tooltip、图例、标签或文字状态至少提供一种补充编码。
+### Sidebar
 
-### 详情层契约
+- expanded：约 240px；
+- collapsed：约 48px；
+- Light theme 使用浅色 Sidebar；Dark theme 跟随 dark token；
+- Site selector 放在 Sidebar 顶部 product/site switcher；
+- active item 使用轻量背景，不使用永久高饱和色块或左侧工业指示条；
+- group label 安静、紧凑；
+- 不把设备树、楼层树等业务 scope 塞进全局 Sidebar。
 
-设备、诊断、工单、优化建议和治理配置使用统一的详情层结构：
+### Header
+
+- 高度约 56px；
+- sticky；
+- 只保留全局能力；
+- page-specific KPI、天气、站点大标题不进入 Header；
+- Search 使用 Command；
+- Theme、Notification、Account 保持紧凑。
+
+### Main
+
+- 普通页面：默认 `px-4 py-6`，desktop 按信息密度可用 `px-6`；
+- 常规 Surface 由页面自身决定 max-width，通常 1400–1600px；
+- 工程 Canvas 可用更宽 fluid content；
+- 页面决定自己的纵向滚动，不建立旧固定工作台兼容规则。
+
+## 8. 页面通用语法
+
+### Breadcrumb + Page Header（页面头部标准语法）
+
+标准 Route Surface 采用：
 
 ```text
-Drawer / Modal
-├── OperationsDetailHeader       对象类型、名称、状态、编号与范围
-├── OperationsSummaryStrip       3–4 个决定下一步行动的关键指标
-├── OperationsDetailSection      基本信息、影响、证据、建议和约束
-├── OperationsTimeline           诊断、工单、审批或执行过程
-└── OperationsActionFooter       权限/风险说明 + 次操作 + 主操作
+Breadcrumb
+
+Left: Page Title (h1 24px semibold)       Right: Local Actions
+      Description / scope / freshness            Secondary status when useful
 ```
 
-- 业务详情 Drawer 桌面端统一为 `720px`；小于 `768px` 时全屏，不保留窄边距假装桌面抽屉。
-- Header 不重复页面标题。Eyebrow 表达对象类型和时间，主标题表达对象名称，状态只显示一次，编号放在低层级 meta。
-- SummaryStrip 只展示 3–4 个决定行动的指标；禁止在详情内继续堆叠 `Card + Statistic`。
-- Section 使用平面边界分组，不在 Section 内再嵌套 Card。标题必须说明信息用途，例如“影响评估”“回滚条件”，不能只写“详情”。
-- Descriptions 桌面端最多两列，移动端单列；长文本进入独立 Section，不塞进狭窄 label/value 单元格。
-- 证据列表采用名称和值的稳定双列结构，数值使用 tabular nums；关键证据不能只存在于 Tooltip。
-- Timeline 必须表达当前过程位置和未完成步骤，不仅罗列历史时间。
-- Footer 左侧说明权限、风险或写入边界，右侧排列关闭、跳转、危险操作和唯一主操作；移动端纵向排列并保证按钮可触达。
-- `danger` 仅用于驳回、禁用或不可逆动作。推进工单、生成工单、审批和确认下发使用主按钮，并在需要时增加二次确认。
-- Drawer 通过 Portal 渲染，必须在 `.ops-detail-drawer` 自身声明明暗主题变量，不能依赖 `.ops-page` 祖先继承。
-- 配置 Modal 使用 `OperationsDetailHeader` 和 `OperationsActionFooter`，桌面建议 `620px`；移动端使用近全屏宽度并让表单区域独立滚动。
-- 所有详情必须支持关闭按钮、遮罩关闭和 Esc 关闭；打开后焦点留在详情层，关闭后回到触发入口。
+Breadcrumb 与 Page Header 是不同职责，因此可以同时存在：
 
-### 业务闭环与对象深链契约
+- **Breadcrumb**：表达导航层级与当前对象路径；
+- **Page Header / H1**：表达当前 Surface 的唯一主标题；
+- **Supporting line**：只在能补充 scope、freshness、任务说明时存在；
+- **Actions**：只放当前 Surface 的关键本地动作。
 
-核心运维链路必须围绕稳定业务对象键连续运行：
+#### 1. 规范构图（Canonical Page Header Layout）
+- Breadcrumb 紧凑置于 H1 上方，不放入 Card；
+- `h1` 页面主标题使用 `text-xl font-semibold tracking-tight sm:text-2xl text-foreground`；
+- supporting line 使用 `text-sm text-muted-foreground` 或更紧凑的 `text-xs` 元信息；
+- 右侧动作优先使用紧凑 Button / Dropdown / period control，不堆满状态徽章；
+- Page Header 保持扁平语义结构，不建设万能 boxed `PageHeader` component。
+
+#### 2. 严禁的反模式（Anti-patterns & Lessons Learned）
+- **禁止 route title 向下重复**：Page Header 已表达“工单中心”时，第一张 Card/Section 应写“待处理工作”“SLA 风险”等真实 section task，而不是再次写“工单中心”；
+- **禁止 App Header 再做第二个大标题**：全局 Header 负责全局能力，不与 route-owned H1 竞争；
+- **严禁左侧空洞失衡**：不能使用单纯的 `justify-end` 将所有元素推至右侧；
+- **严禁过度胶囊化**：只读站点、时区、更新时间优先使用纯文本，不伪装成控件。
+
+### Summary Cards (KPI Stat Cards 标准语法与经验教训)
+
+Summary Card（如 4 联顶层 KPI 卡片）是用户进入系统第一眼建立全局感知的关键层，必须严格遵守 `satnaing/shadcn-admin` 官方成熟形态与克制原则：
+
+#### 1. 规范的三行式结构（Canonical 3-Row Anatomy）
+每个标准 Stat Card 容器高度严格一致，由 3 行构成：
+- **行 1 (CardHeader)**：
+  - `CardTitle` 使用 `text-sm font-medium text-muted-foreground`；
+  - 右侧仅放置极简轻量裸图标（`size-4 text-muted-foreground`），与标题在同一水平基线上；
+  - 严禁为图标外包灰色底座（如 `grid size-8 rounded-md bg-muted`），保持通透无遮挡。
+- **行 2 (Hero Value)**：
+  - 核心数值使用 `text-2xl font-bold tracking-tight tabular-nums`；
+  - 辅助单位（如 `kW`、`COP`、`项`、`%`）统一使用紧凑的 `ml-1 text-sm font-normal text-muted-foreground`，严禁单位与数值脱节，严禁将 `%` 连在粗体主数值内破坏整排卡片的统一字重律动。
+- **行 3 (Subtitle / Supporting Context)**：
+  - 辅助事实与基准使用 `text-xs text-muted-foreground`；
+  - 单行展现，多事实间使用中置点 ` · ` 优雅分隔（例如：`环比提升 +6.1% · 综合节能率 8.6%` 或 `在线可用 125 / 175 台 · 状态未知 25 台`）；
+  - 必须保持单行高度与基线对齐，严禁内部折行造成相邻卡片高度脱节。
+
+#### 2. 严禁的反模式（Anti-patterns & Lessons Learned）
+- **禁止卡片内做微型仪表盘（Mini-Dashboard Inception）**：卡片宽度通常仅 200~300px，绝不能在卡片内部塞入粗进度条、纵向两行小标题、断行多列统计标签（如“25 离线 25 延迟 25 未知”）。复杂多维数据应下沉至下一级的分析图表或矩阵表格。
+- **禁止视觉重量失衡与碎片化**：单张卡片内若既有数值、又有 Badge、又有进度条、又有两行小字，会使得整排 4 张卡片严重变形割裂（如早期迭代中第 3 张卡片在 200px 内塞入 6 项元素造成严重崩坏）。
+- **禁止大面积高饱和彩色卡片**：卡片背景一律采用干净的白底（Dark mode 下为深灰），禁止使用大色块底色；色彩只允许出现在图表与明确的业务告警 Badge 上。
+- **只展示权威事实**：不伪造趋势，不展示无依据的平滑曲线或衍生虚假比例；严格保证 4 联卡片在任何桌面视口下高度对称、基线严格统一。
+
+### Ledger / Data Table
+
+设备、告警、工单优先使用：
 
 ```text
-资产 / 设备
-→ FDD 诊断
-→ 工单生成与状态流转
-→ 优化建议审批 / 驳回 / 下发
-→ 返回诊断或资产验证结果
+Breadcrumb + Page Header
+Search + Filters + View/column controls
+Data Table
+Pagination / server result state
 ```
 
-- 页面间跳转不得只进入模块首页。设备、诊断、工单和优化建议分别使用 `device`、`diagnosis`、`workOrder`、`suggestion` 查询参数定位对象。
-- 查询参数必须可刷新、可分享，并在对象存在时自动打开对应详情；对象不存在时移除无效参数并显示明确反馈。
-- 关闭详情时必须同步删除当前对象参数，保留其他无关查询参数。
-- FDD 生成工单必须返回稳定工单 ID，并在工单上保存 `sourceFddId`、`linkedAssetId` 和 `linkedSuggestionId`，禁止只把来源写进描述文本。
-- 重复生成同一诊断的工单时返回原工单，不创建重复闭环对象。
-- 工单状态推进必须同步更新列表、详情、负责人和来源 FDD 时间线；完成闭环后目标行不能因默认筛选立即消失。
-- 优化建议状态变化必须同步更新列表、详情 Header、主操作和审批时间线；筛选器不得让正在操作的对象在状态更新后丢失。
-- 跨模块按钮必须同时满足路由查看权限和对象关联存在。无权限时隐藏跳转入口，写操作则保留只读说明。
-- 写操作成功后提供包含对象 ID 和结果状态的反馈；失败时保留当前详情与输入上下文。
-- 正式链路回归使用 `npm run audit:ops-loop`，在单次 SPA 会话中验证对象深链、工单闭环、优化审批下发和角色边界。
+Table 负责快速扫描、排序、比较和批量选择。卡片视图只有真实使用价值时才保留。
 
-### 治理与配置页面契约
-
-系统管理、权限、接入、规则和审计类页面统一采用：
+### Analysis
 
 ```text
-PageScaffold
-└── Tabs
-    └── OperationsSectionIntro  当前治理任务、范围与主操作
-        ├── OperationsMetrics   仅在需要汇总状态时使用
-        ├── OperationsInsightBand  风险边界、降级或发布条件
-        └── Card + Table/Tree/Descriptions  配置对象与证据
+Breadcrumb + Page Header + period/context controls
+Primary quantitative chart
+Supporting comparison/evidence Cards
+Drill-down table
 ```
 
-- 每个 Tab 必须有独立的 `OperationsSectionIntro`，说明本 Tab 管什么、影响什么、当前范围是什么；Card 标题不重复 Tab 标题。
-- Tab 名称使用业务对象，例如“用户权限”“数据接入”“规则治理”，避免“配置一”“其他设置”等模糊名称。
-- Tab 状态应同步到 URL 查询参数，刷新或分享链接后保持当前治理上下文。
-- 主操作放在 SectionIntro 右侧；筛选器放在内容 Card 内的统一工具栏，不把筛选器塞进 Card title extra。
-- 账户禁用、提权、资产结构变更和规则发布属于高风险操作，必须同时提供影响说明、明确动作按钮和二次确认。
-- `danger` 只用于不可逆或立即阻断能力的操作；“编辑”“启用”“查看”保持中性。
-- Mock 写入必须在页头和确认流程中明确标识，不能只在开发注释中说明。
-- 服务健康、连接状态和审计结果必须同时提供颜色与文字，不得只显示红绿圆点。
-- 审计详情通过可展开行展示 traceId、客户端和结构化详情；不使用仅 hover 可见的 Tooltip 承载关键证据。
-- 桌面端可以使用并列治理面板；平板和移动端必须允许 Tab 横向滚动、筛选器单列、表格横向滚动和 Modal 全宽降级。
-- 表格筛选后无结果时必须显示任务相关的 Empty 文案，不保留空白表体。
+量化图表按能力边界收敛：普通应用级 Pie/Donut、Bar、基础 Line/Area 优先使用 shadcn Chart + Recharts；高密度时序、多轴、dataZoom、brush、linked cursor 与大数据工程分析使用 Apache ECharts。图型必须由数据关系和用户判断任务决定，不以“页面模板里有什么图”为依据；禁止同一 Feature 为相同问题并行维护多套图表实现。
 
-#### `OperationsSectionIntro`
+### Detail
 
-- 用于页面内部一级任务切换后的标题层，不替代 `PageScaffold`。
-- 只包含标题、可选 meta 和 0–2 个主操作；Tab 名称已经表达用途，不再常驻第二行说明。
-- 同一页面所有 Tab 必须保持相同位置和间距，避免切换后操作区跳动。
-- 移动端标题和操作纵向排列；Select 与主按钮应保持可触达宽度。
+- Row → durable Route：复杂、可分享、可恢复的持续调查；
+- Row → Quick Preview：高频连续比较，只显示做“是否继续调查”判断所需的少量事实；
+- 设备类 Ledger 的桌面 Quick Preview 默认保持主表完整宽度，采用 non-modal overlay；窄屏使用 modal Sheet；
+- Sheet primitive 可以承载 Quick Preview，但产品层仍称 Quick Preview / 快速查看，不把完整详情塞进侧栏；
+- Dialog：确认或小表单。
 
-### 共享组件准入
+不做 `Card → Drawer → Splitter → Full Route` 的固定兼容路径，也不为了展示 Quick Preview 给 Ledger 增加可拖动 splitter。
 
-新增跨页面视觉模式时，按以下顺序决策：
+## 9. Dashboard → Shadcn Overview
 
-1. 先判断是否能使用 `PageScaffold`、`OperationsMetrics`、`OperationsInsightBand`、`OperationsChartCard` 或 `OperationsPanelHeading`。
-2. 同一模式在两个以上页面出现时，进入 `src/components/OperationsUI.tsx` 与 `OperationsUI.css`。
-3. 页面私有布局只保留业务特有结构，不覆盖共享组件的圆角、标题、边框和响应式基础规则。
-4. 修改共享组件后，至少验证 `/energy`、`/cost` 和一个表格型页面，防止分析页优化破坏其他工作区。
+Dashboard 不是旧 Control Desk 的固定 Operational Home 构图。
 
-### Impeccable 反模式约束
+当前 baseline：
 
-- 不使用 `Card > Card > Statistic`、每个字段一张卡、默认 SaaS 四宫格 KPI 或无任务依据的图标方块。
-- 不使用灰字叠在高饱和背景、紫蓝渐变、发光边框、弹跳缓动和纯装饰动画。
-- 不为了“统一”强迫表格、聊天、图表和配置页采用完全相同的内部布局；统一的是排版、边界、色彩职责和交互反馈。
-- 新页面完成后至少执行一次 `distill` 思路的删减检查和一次 `audit` 思路的可访问性、响应式、溢出与状态检查。
+```text
+Breadcrumb + Page Header + actions
+4 concise metric Cards
+Run posture / device evidence           Priority handling
+Optimization opportunity                Data confidence         Continue workflows
+```
 
-## 15. 发布前检查
+Dashboard 必须回答：
 
-- 普通卡片是否仍有不必要阴影？
-- 圆角是否只使用 20、16、8 和 pill？
-- 是否存在未标记的 Mock 精确值？
-- 颜色职责是否混乱？
-- 图表是否清晰区分实际与预测，并避免永久标注堆叠？
-- 列表型卡片是否仍存在 Tag/Badge 堆叠、进度条偏差或关键值截断？
-- 加载、空、错误和降级状态是否完整？
-- 页面在 1440、1024、390 宽度下是否无横向溢出？
-- 所有操作是否有 focus-visible 和 active 反馈？
-- Dashboard 是否只保留支持判断和行动的内容？
+- 当前有什么值得注意；
+- 核心运行事实是什么；
+- 哪些告警/设备事项优先；
+- 数据是否足够可信；
+- 下一步进入哪个工作流。
+
+禁止 opaque health score。
+
+## 10. HVAC / Realtime → Shadcn Engineering Workspace
+
+HVAC 是工程工作区，但周边 UI 服从 shadcn 语法。
+
+```text
+Breadcrumb + Page Header + local actions
+Compact summary Cards
+Line Tabs: topology / anomaly / energy evidence
+Workspace Card
+├── X6 engineering topology, or
+├── measured energy evidence
+└── optional Context Inspector Card
+Supporting Evidence Cards
+```
+
+规则：
+
+- X6 只负责真实固定工程拓扑；
+- anomaly 保持空间记忆；
+- energy flow 不伪造流量/分配；
+- Inspector 展示业务事实，不泄漏 raw enum / UUID / trace；
+- 旧 Control Desk CSS 不作为视觉权威。
+
+## 11. Device Center → Data Table First
+
+默认视图是 Ledger / TanStack Data Table。
+
+```text
+Breadcrumb + Page Header
+Search / filters / column controls
+Device Data Table
+Optional Quick Preview (no ledger reflow)
+```
+
+主要列优先：
+
+- 设备名称与类型；
+- 位置；
+- 运行；
+- 连接；
+- 遥测新鲜度 / 质量；
+- 关键当前值；
+- 告警；
+- 最近更新时间；
+- actions。
+
+Card wall 不再作为默认。
+
+## 12. Alarm Center → Triage Data Table
+
+```text
+Breadcrumb + Page Header
+Small severity/queue summary
+Filters
+Alarm Data Table
+Investigation detail / route
+```
+
+用户必须快速判断：严重度、对象、时间、状态、当前证据、责任和下一动作。
+
+## 13. Work Orders
+
+```text
+Breadcrumb + Page Header
+Compact queue summary
+Filters
+Work Order Data Table
+Durable detail surface
+```
+
+显式展示 Owner、Priority、SLA、Source、Progress、Blocker、Next action。
+
+## 14. Energy Analytics
+
+```text
+Breadcrumb + Page Header
+Period / scope controls
+Primary capability-appropriate analysis
+Comparison / evidence Cards
+Drill-down Table
+```
+
+Year / Month / Week / Day 仍保持 URL 可恢复语义。
+
+## 15. Control / Strategy / FDD
+
+按决策链设计：
+
+```text
+Current fact
+→ diagnosis / candidate
+→ evidence
+→ impact / safety
+→ approve / execute
+→ verify
+```
+
+危险操作继续遵守 `PRODUCT.md` 控制安全规则。
+
+## 16. Truth rules
+
+无论视觉如何重设计：
+
+- Offline != Fault；
+- Missing != Zero；
+- Unknown != Healthy；
+- ACK != achieved target；
+- Timeout != confirmed failure；
+- Runtime / Connectivity / Freshness / Quality / Diagnosis / Alarm / Maintenance / Control 保持独立；
+- 用户界面显示业务事实，内部 UUID / trace / revision / raw technical enum 只留在数据、URL、请求和日志层，除非任务确实需要。
+
+## 17. Responsive
+
+- desktop：完整 Sidebar + Header + multi-column content；
+- tablet：内容 grid 逐步降为两列/一列；
+- mobile：Sidebar overlay，Header 只保留关键 controls，Card/Table 改变结构而不是强行缩放；
+- Table 在小屏根据任务隐藏次要列或进入 row detail，不做不可读的横向压缩。
+
+## 18. Migration policy
+
+直接迁移，不做视觉兼容层。
+
+顺序：
+
+1. AppShell；
+2. Dashboard；
+3. HVAC / Realtime；
+4. Device Center；
+5. Alarm Center；
+6. Work Orders；
+7. Energy Analytics；
+8. Control / Strategy / FDD；
+9. System / Registry；
+10. 删除旧 shared UI / CSS，最后删除 Ant Design / ProComponents / Ant Design Charts。
+
+每个 Surface 完成标准：
+
+- 业务事实与权限语义正确；
+- 使用新 shadcn application grammar；
+- 无旧视觉兼容 JSX/CSS；
+- TypeScript / relevant tests / build 通过；
+- 使用 WSL + Windows Chrome/Chromium 做真实浏览器视觉验收。
+
+## 19. 旧参考资料的地位
+
+以下资料只用于恢复业务语义、信息需求或历史上下文，不是新的视觉 source of truth：
+
+- 旧 HVAC 01–08 设计稿；
+- 旧 Device Center 图片；
+- 旧 Alarm Center 图片；
+- Ant Design Pro / ProComponents 示例；
+- Control Desk v1 截图和 CSS；
+- 当前尚未迁移的产品页面。
+
+需要新的视觉判断时，优先对照当前 shadcn/ui、shadcn-admin 和本设计文档。
+
+## 20. 视觉审查反面模式与经验教训（Visual Review Anti-patterns & Practical Lessons）
+
+在 2026-09 视觉大重构与真实浏览器审查中，沉淀出以下 6 大常见视觉反面模式（Anti-patterns）与实战精进法则：
+
+### 20.1 首屏三重回声（The Triple Echo）
+- **反面模式**：全局 App Header、Page Header、第一张 Card/Section 连续重复相同 route title，或 Breadcrumb、H1、ContextBar、CardTitle 都机械重复同一站点/对象名称。
+- **根因分析**：没有区分导航层级、页面身份、业务上下文和 section task 的职责。
+- **精进法则**：
+  - **App Header** 负责 Sidebar trigger、全局搜索、通知、主题、账户和真正全局的系统状态；
+  - **Breadcrumb** 负责层级路径；
+  - **Page Header / H1** 负责当前 Surface 的唯一页面主标题；
+  - **Supporting context** 负责 scope / freshness / 时间范围等必要上下文，不再重复 H1；
+  - **CardTitle / Section Title** 必须表达该区块的业务功能与任务语义（例如“运行概况”“关键过程量”“待处理工作”），严禁再次使用 route title 作为 section 标题。
+
+### 20.2 蔓延的横向滚动条（The Creeping Scrollbar）
+- **反面模式**：在标准桌面视口（1440px～1672px）下，设备中心或告警中心的台账表格外层或内部容器出现横向滚动条，内容被无故截断或需拖动查看。
+- **根因分析**：
+  - 给 Table 随意设置 `min-w-[1080px]` 等固定最小宽度；
+  - 单元格文字未加 `truncate`，遇到复合标题或多标签时撑破列宽；
+  - 容器层多重包裹 `overflow-x-auto`，导致滚动条层叠蔓延。
+- **精进法则**：
+  - **目标桌面视口下，核心台账必须实现零横向滚动**；
+  - 采用 `table-fixed w-full`，并在 `TableHeader` 中为每一列显式分配百分比宽度（总和严格为 100%），如：等级 7%、告警标题 28%、状态 8%、确认 8%、负责人 9%、持续 10%、重复 6%、搁置 11%、最近变化 13%；
+  - 主文案列（告警标题、设备名称、关联空间）强制配合 `min-w-0 pr-2` 与 `truncate`，确保在全屏或双栏 Split 检查器打开时均自适应折叠，决不撑破视口。
+
+### 20.3 机械等权平铺（Equal-weight Flattening）
+- **反面模式**：顶部 KPI 概况栏机械采用 5 等宽或 6 等宽卡片并排，将核心运行成果（当前总功率、系统 COP）、静态范围（工作区设备数）、异常告警（活动告警）和通信延迟等完全不同的概念按相同字号、相同尺寸一字排开。
+- **根因分析**：把 KPI 栏当成了后端 DTO 的简单 Grid 映射，违背了 ISA-101 工业态势感知的主次层次。
+- **精进法则**：
+  - 必须采用两级主次架构（Primary Hero Metrics vs. Supporting Context）；
+  - **主运行量**（当前功率、系统 COP）使用强视觉锚点：大号排版（如 30px / tracking-tight）、鲜明的语义强调色块图标（如绿色 Zap、蓝色趋势图）；
+  - **辅助上下文与数据质量**（设备群运行、活动告警、数据延迟）使用紧凑度量定义列表（`dl/dt/dd`）并列，并明确区分与标注统计口径（例如“当前工作区范围” vs “站点设备数据范围”）。
+
+### 20.4 低数据量断崖留白（The Wasteland Layout）
+- **反面模式**：当站点告警较少（仅 1～2 条）、或者外层 Card 固定高度过大（如固定 400px）而内部图表自身半径过小时，卡片内部出现大面积惨白断层，产生“系统卡死或数据未加载完”的劣质感。
+- **根因分析**：图表几何参数（如甜甜圈图内径外径）使用了小卡片的固定像素，在宽屏自适应容器下未进行比例伸展。
+- **精进法则**：
+  - 甜甜圈图与饼图必须根据卡片高度适配饱满度（如 innerRadius: 68, outerRadius: 100~110），消除周围不合理的巨大留白；
+  - 维持垂直视觉张力（Vertical Balance），低数据量或无选中态时，使用结构完备的 `Empty` 组件（配合 `EmptyMedia` 图标与引导文案），杜绝孤立悬空的文本框。
+
+### 20.5 灰字未知网格与真实工业数据语义（Industrial Data Realism）
+- **反面模式**：面对设备离线或数据源中断，表格中直接出现一排单调无解释的灰色“未知”或破折号“—”，甚至在某些异常下误用绿色 Badge 标为正常。
+- **根因分析**：混淆了物理状态与数据质量，缺乏对工业数据不完备性的认知。
+- **精进法则**：
+  - 坚决执行真实性原则：$Offline \neq Fault$、$Missing \neq Zero$、$Unknown \neq Healthy$；
+  - 运行状态（Running/Stopped）、连接状态（Online/Offline）、数据新鲜度（Fresh/Stale）和数据质量（Good/Suspect）必须**四维严格独立解耦**；
+  - 针对异常或未知，必须提供具体业务归因（例如“通信离线”“点位配置需核查”“数据不完整”），并在侧边检查器中提供“进入诊断”“进入工单”等闭环行动入口。
+
+### 20.6 色彩克制与视觉噪声控制（Noise & Palette Discipline）
+- **反面模式**：图表使用全黑柱条、或者页面堆砌大面积高饱和度的彩色卡片，导致操作员产生视觉疲劳，对真正的异常失去敏锐度。
+- **根因分析**：混淆了面向大众消费者的“炫酷大屏”与面向专业值班人员的“高可靠工作台”。
+- **精进法则**：
+  - 常态维持中性克制（Zinc neutral/muted）；
+  - 彩色仅保留给**需要值班人员立即干预的异常与偏离**（Critical/Major/Minor 语义色）；
+  - 统计图表使用品牌与主题色系的低刺激度阶梯色，并提供平滑过渡与 Hover 状态，保持工业级沉稳感。
+
+## 21. 站点总览与成熟大盘仪表板规范（Site Overview & Mature Dashboard Architecture）
+
+在 2026-09-18 针对 03 站点总览的系统化重构中，彻底摒弃了早期粗糙拼贴卡片墙设计，深度吸纳 `satnaing/shadcn-admin` 与 `shadcn/ui` 的经典工业仪表盘设计哲学，确立以下成熟大盘标准：
+
+### 21.1 经典三层立体韵律（Three-tier Visual Architecture）
+- **Tier 1: 顶层 4 联精细化度量卡片（Metric Stat Grid）**：
+  - 4 栏等高网格（`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4`）；
+  - 分工明确：
+    1. **实时运行功率**：秒级遥测，大字号 24px + 节降趋势与基准对比；
+    2. **综合运行能效 (COP)**：小时级聚合，保留两位有效数字 + 环比趋势与节能率；
+    3. **数据状态与在线可用**：严格使用系统权威分母（`125 / 175`），配备微型进度条与离线/未知/延迟三元统计标签；
+    4. **协同待办概要**：活动告警与工单汇聚，强视觉语义 Badge 标识。
+- **Tier 2: 中层 7:5 黄金分析层（Analytics Layer）**：
+  - 左侧 `7` 份：**24小时逐时负荷走势**（AreaChart 区域平滑曲线），采用极浅渐变填充与虚线基准对比，直观呈现全天能耗波峰波谷；
+  - 右侧 `5` 份：**分项用能构成**（Donut 甜甜圈图 + 分项排行），中心直接呈现总耗电量数值（如 `860 kWh`），下方清晰配列图例与多色彩条。
+- **Tier 3: 底层 7:5 运行与行动流（Operations & Action Flow）**：
+  - 左侧 `7` 份：**当前运行设备群工况表**，极简行内状态圆点指示（全部运行 vs 部分运行），直连 `系统运行` 工作台；
+  - 右侧 `5` 份：**优先处理协同流**，告警与工单统一按严重度/紧急度排序呈现，配备清晰的处置入口与时间差。
+
+### 21.2 告别“拼贴感”与网格对齐标准（Grid Precision & Cohesion）
+### 21.3 视觉真实审查暴露的典型缺陷与治理法则（Visual Review Lessons & Hardening）
+
+在真实的无头 Chrome 视口视觉评审（Headless Visual Review）中，曾客观暴露了以下六类极易被忽视的仪表板缺陷，已作为铁律固化到设计规范中：
+
+1. **容器拉伸腰斩切断（The Clipping Cut - 严禁）**：
+   - **现象**：右侧优先卡片因左侧表格高度被拉伸等高，但内部条目塞入过多，导致第 3 或第 4 条被卡片底部生硬腰斩切断，露出半截文字与按钮；
+   - **治理**：大盘总览卡的优先事项严禁机械列出 6～8 条，必须收敛至首屏黄金容量（**3 条**），超出部分在 Header Action 提供明确的「全部事项 (N) $\to$」导航，并在容器底部预留安全的内边距，绝不出现任何文字腰斩。
+
+2. **暖通物理走势与时区倒挂（Physical & Timezone Inversion - 严禁）**：
+   - **现象**：未结合站点本地时区（如 `Asia/Tokyo` UTC+9），直接按 UTC 0 点生成曲线，导致东京当地时间白天 11:00～15:00 负荷处于最低谷（38%），而半夜 20:00～03:00 处于满载高峰（95%），严重违背冷站日间工商业用能常识；
+   - **治理**：所有逐时走势图表必须在数据产生端与前端呈现端严格绑定站点本地时区（Site Local Timezone），呈现符合物理规律的形态：08:00 预冷爬坡、13:00～15:00 高温高辐射峰值、18:00 负荷骤降、夜间平稳维持在低底载（~35%）。
+
+3. **单图表孤悬惨白留白（The Donut Wasteland - 严禁）**：
+   - **现象**：在中等宽屏（560px 宽度卡片）中，孤零零居中放一个 280px 的甜甜圈图，左右留出上百像素的惨白荒漠，且下方图例仅有色块与名称，缺乏量化数值；
+   - **治理**：成熟仪表盘采用**双栏紧凑复合布局**（Donut + Ranked Breakdown）——左侧 190px 甜甜圈图，中心醒目标注总能耗（如 `860 kWh`）；右侧紧凑排列各分项排行榜，直观附带分类色标、Progress 进度条、量化用电量与占比百分比（如 `冷水机组 420 kWh (48.8%)`），瞬间充实信息密度。
+
+4. **KPI 卡片头部节奏断裂（Broken Header Rhythm - 严禁）**：
+   - **现象**：卡片 1、2 右上角为图标底座；卡片 3 右上角放文字 Badge，图标塞在标题里；卡片 4 右上角放数字 Badge，没有图标。4 张卡片头部高低错落，极度凌乱；
+   - **治理**：严格统一 shadcn-admin 标准卡片 Header 规范——右上角统一使用规范化的 `8x8` 浅灰圆角底座承载语义图标（Zap、Gauge、Database、TriangleAlert）；状态 Badge 与警示标签一律归置在 CardContent 数值行或次级辅助行中，保证 4 张卡片头部几何基线 100% 绝对一致。
+
+5. **表格横向空旷与列信息稀疏（Sparse Table Columns - 治理）**：
+   - **现象**：在 700px+ 宽度的设备群表格中仅放了“设备组”、“运行状态”、“当前功率” 3 列，列与列之间空隙过大，视觉空洞；
+   - **治理**：补充关键暖通运行事实——增加「负荷占比」列与微型进度条（例如“冷水机组 240 kW 占当前总负荷 47.6%”），让运行工况表不仅说明“谁在开”，更说明“谁耗能最多”，大幅提升运行调度价值。
+
+6. **工业数据工程精度（Precision Consistency - 细节）**：
+   - **现象**：能效指标 COP 显示为 `5.8`，缺少工业仪表的严肃感；
+   - **治理**：涉及 COP、系统能效比等高敏感系数，统一遵循工程惯例强制保留 2 位小数（`5.80`，`minDigits = 2`），并在格式化工具函数中严密保障。
+
+

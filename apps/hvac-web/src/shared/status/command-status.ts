@@ -1,6 +1,6 @@
 import type { Command } from '../../api/command-contract.ts';
 
-export type RealCommandStage =
+export type CommandStage =
   | 'CREATED'
   | 'APPROVAL_PENDING'
   | 'DISPATCHED'
@@ -13,7 +13,7 @@ export type RealCommandStage =
   | 'EXPIRED'
   | 'TIMEOUT';
 
-export function projectCommandStage(command: Command): RealCommandStage {
+export function projectCommandStage(command: Command): CommandStage {
   const latestReason = command.transitions.at(-1)?.reason.toUpperCase() ?? '';
   if (latestReason.includes('TIMEOUT')) return 'TIMEOUT';
   switch (command.status) {

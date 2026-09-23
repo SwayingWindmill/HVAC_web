@@ -16,7 +16,6 @@ import {
   type AlarmOperation,
   type AlarmSeverity,
 } from './alarm-contract';
-import { API_MODE } from './config';
 import { alarmPaths } from './generated/platformGateway.gen';
 
 export {
@@ -49,9 +48,8 @@ export type {
   AlarmTimelineEntry,
 } from './alarm-contract';
 
-export const ALARM_PUBLIC_ROUTES_ENABLED = API_MODE === 'real';
-export const ALARM_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
-  && import.meta.env.DEV
+export const ALARM_PUBLIC_ROUTES_ENABLED = true;
+export const ALARM_LOCAL_ROUTES_ENABLED = import.meta.env.DEV
   && (import.meta.env.VITE_S4_LOCAL_ALARMS as string | undefined) === 'true';
 export const ALARM_ROUTES_AVAILABLE = ALARM_PUBLIC_ROUTES_ENABLED || ALARM_LOCAL_ROUTES_ENABLED;
 
@@ -302,8 +300,28 @@ export async function acknowledgeScopedAlarm(alarmId: string, input: AlarmAcknow
   return validateAlarmScope(payload.data, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
-export function assignScopedAlarm(alarmId: string, input: AlarmAssignInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
-  return mutateScopedAlarm(alarmId, 'ASSIGN', assignInputSchema.parse(input), options);
+export async function assignScopedAlarm(alarmId: string, input: AlarmAssignInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
+  if (!ALARM_PUBLIC_ROUTES_ENABLED) {
+    throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 指派路由尚未启用。');
+  }
+  const { tenantId, siteId } = validatedScope(options);
+  const validatedAlarmId = alarmUUIDV7(alarmId);
+  const body = assignInputSchema.parse(input);
+  if (!options.csrfToken) {
+    throw new AlarmApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
+  }
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    'X-CSRF-Token': options.csrfToken,
+    'Idempotency-Key': options.idempotencyKey ?? `alarm-assign-${crypto.randomUUID()}`,
+  });
+  const payload = await alarmRequest(
+    alarmPaths.assign.replace('{alarmId}', encodeURIComponent(validatedAlarmId)),
+    publicAlarmEnvelopeSchema,
+    { method: 'POST', headers, body: JSON.stringify(body) },
+    options,
+  );
+  return validateAlarmScope(payload.data, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 export function unassignScopedAlarm(alarmId: string, input: AlarmLifecycleInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {

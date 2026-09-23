@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
-import { API_MODE } from './config';
 import {
   PlatformApiError,
   createPlatformGatewayClient,
@@ -28,7 +27,7 @@ export interface RuleErrorPresentation {
   traceId?: string;
 }
 
-const enabledInRealMode = (enabled: boolean) => API_MODE === 'real' && enabled;
+const queryEnabled = (enabled: boolean) => enabled;
 const authorizationScope = (tenantId: string, sessionId: string, policyRevision: string) => `${tenantId}:${sessionId}:${policyRevision}`;
 const mutationInit = (session: PrincipalSession): RequestInit => ({ headers: { 'X-CSRF-Token': session.csrfToken } });
 
@@ -68,7 +67,7 @@ export function useRuleCatalog(tenantId: string, sessionId: string, policyRevisi
   return useQuery({
     queryKey: ['rule-management', 'catalog', scope],
     queryFn: async ({ signal }) => (await client.getRuleCatalog({ signal })).data,
-    enabled: enabledInRealMode(enabled),
+    enabled: queryEnabled(enabled),
     retry: retryRuleQuery,
   });
 }
@@ -78,7 +77,7 @@ export function useRuleRevisions(tenantId: string, sessionId: string, policyRevi
   return useQuery({
     queryKey: ['rule-management', 'revisions', scope, ruleId ?? 'all'],
     queryFn: async ({ signal }) => (await client.listRuleRevisions(ruleId, { signal })).data.items,
-    enabled: enabledInRealMode(enabled),
+    enabled: queryEnabled(enabled),
     retry: retryRuleQuery,
   });
 }
@@ -88,7 +87,7 @@ export function useRuleBindings(tenantId: string, sessionId: string, policyRevis
   return useQuery({
     queryKey: ['rule-management', 'bindings', scope, siteId],
     queryFn: async ({ signal }) => (await client.listRuleBindings(siteId!, { signal })).data.items,
-    enabled: enabledInRealMode(enabled && Boolean(siteId)),
+    enabled: queryEnabled(enabled && Boolean(siteId)),
     retry: retryRuleQuery,
   });
 }
@@ -98,7 +97,7 @@ export function useRuleExecutionEvidence(tenantId: string, sessionId: string, po
   return useQuery({
     queryKey: ['rule-management', 'evidence', scope, siteId],
     queryFn: async ({ signal }) => (await client.listRuleExecutionEvidence({ siteId: siteId!, limit: 50 }, { signal })).data.items,
-    enabled: enabledInRealMode(enabled && Boolean(siteId)),
+    enabled: queryEnabled(enabled && Boolean(siteId)),
     retry: retryRuleQuery,
   });
 }
