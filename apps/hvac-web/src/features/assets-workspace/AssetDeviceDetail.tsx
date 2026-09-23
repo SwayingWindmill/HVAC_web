@@ -337,7 +337,7 @@ function LoadedDeviceDetail({
           </div>
           <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
             <Link
-              to="/sites/$siteId/trends"
+              to="/sites/$siteId/operations/trends"
               params={{ siteId: site.id }}
               search={{ series: trendSeries || undefined }}
             >

@@ -6,6 +6,8 @@
 > **Route intent：** `/sites/:siteId/operations`  
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
 > **设计输入声明：** 本文件不参考当前项目已有 System Operations / Monitor / Realtime 页面、旧设计稿、旧拓扑、旧菜单、旧 Ant/ProComponents 页面或旧组件构图。当前代码只可在实施阶段作为真实 domain owner、capability、permission 和 transport contract 的候选证据来源。
+>
+> **2026-09-23 Workspace placement：** 04 已成为“运行” Workspace 的 `系统运行` core view。当前 runtime route 仍为 `/sites/:siteId/operations`；Workspace composition 以 `docs/product/surfaces/02-system-operations.md` 为准。
 
 ---
 

@@ -26,13 +26,13 @@ import {
   Zap,
 } from 'lucide-react';
 import { readDashboardOverview } from '@/api/dashboard-overview';
+import { FactStrip } from '@/blocks/fact-strip';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import { presentSiteDashboardError, useSiteDashboardSummary } from '@/api/site-dashboard';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import {
   Sheet,
@@ -125,15 +125,6 @@ const EQUIPMENT_GROUP_ICON = {
   'vav-fcu': SlidersHorizontal,
 } as const;
 
-const EQUIPMENT_GROUP_META: Record<string, { subtitle: string; tag: string }> = {
-  'cooling-tower': { subtitle: '冷却散热循环塔群', tag: '开式冷却' },
-  chiller: { subtitle: '离心/螺杆式冷水主机', tag: '核心冷源' },
-  'chw-pump': { subtitle: '一次/二次冷冻水循环泵', tag: '冷量输送' },
-  'cw-pump': { subtitle: '冷凝器冷却水循环泵', tag: '散热循环' },
-  ahu: { subtitle: '大温差组合式空气处理机组', tag: '集中空调' },
-  'vav-fcu': { subtitle: '区域末端变风量/风机盘管', tag: '分区末端' },
-};
-
 function OperationsEmpty({ title, description }: { readonly title: string; readonly description?: string }) {
   return (
     <Empty className="min-h-56 border-0">
@@ -185,7 +176,6 @@ function OperationsInspector({
   if (!selected) return <p className="text-sm text-muted-foreground">选择设备群查看详情。</p>;
 
   const GroupIcon = EQUIPMENT_GROUP_ICON[selected.key as keyof typeof EQUIPMENT_GROUP_ICON] ?? Box;
-  const meta = EQUIPMENT_GROUP_META[selected.key] ?? { subtitle: '暖通受控设备群', tag: '运行单元' };
   const runningRatio = selected.total && selected.total > 0 && selected.running != null
     ? Math.round((selected.running / selected.total) * 100)
     : 0;
@@ -198,44 +188,29 @@ function OperationsInspector({
 
   return (
     <div className="space-y-5">
-      {/* Hero Header Card */}
-      <div className="rounded-xl border bg-gradient-to-br from-card to-muted/30 p-4 shadow-xs">
+      <div className="border-b pb-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-primary/10 text-primary">
-              <GroupIcon className="size-5.5" aria-hidden="true" />
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground">
+              <GroupIcon className="size-4.5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground font-medium">设备群</span>
-                <span className="text-[10px] rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{meta.tag}</span>
-              </div>
+              <span className="text-xs text-muted-foreground">设备群</span>
               <strong className="block truncate text-base font-semibold tracking-tight text-foreground">{selected.label}</strong>
-              <span className="block truncate text-xs text-muted-foreground">{meta.subtitle}</span>
             </div>
           </div>
           <Badge variant="outline" className={cn('shrink-0 font-medium', groupStateBadgeClass(selected))} data-testid="operations-selected-state">
             {groupState(selected)}
           </Badge>
         </div>
-
-        {/* Running progress bar */}
-        <div className="mt-3.5 space-y-1.5 border-t border-border/50 pt-3">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">在网运行率</span>
-            <span className="font-semibold text-foreground tabular-nums">{runningRatio}%</span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn('h-full rounded-full transition-all duration-300', selected.running === selected.total ? 'bg-success' : 'bg-primary')}
-              style={{ width: `${runningRatio}%` }}
-            />
-          </div>
+        <div className="mt-3 flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">运行比例</span>
+          <span className="font-semibold tabular-nums text-foreground">{runningRatio}%</span>
         </div>
       </div>
 
       {/* Telemetry Metrics Grid */}
-      <div className="divide-y rounded-xl border bg-card shadow-xs">
+      <div className="divide-y rounded-lg border bg-card">
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
             <Box className="size-4 text-primary" aria-hidden="true" />
@@ -270,18 +245,18 @@ function OperationsInspector({
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
             <Cpu className="size-4 text-muted-foreground" aria-hidden="true" />
-            控制策略模式
+            当前控制来源
           </span>
-          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
-            自动联动控制
+          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <span className="size-1.5 rounded-full bg-muted-foreground/50" aria-hidden="true" />
+            未提供
           </div>
         </div>
       </div>
 
       {/* Alarms Section */}
       {canReadAlarms ? (
-        <div className="rounded-xl border bg-card p-3.5 shadow-xs space-y-2">
+        <div className="rounded-lg border bg-card p-3.5 space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <Bell className="size-4 text-destructive" aria-hidden="true" />
@@ -297,26 +272,29 @@ function OperationsInspector({
         </div>
       ) : null}
 
-      {/* Action Links */}
-      <div className="space-y-2 border-t pt-4">
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" size="sm" asChild className="gap-1.5">
-            <Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }}>
-              <Stethoscope className="size-3.5 text-muted-foreground" aria-hidden="true" />
-              诊断
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild className="gap-1.5">
-            <Link to="/sites/$siteId/control" params={{ siteId: site.id }}>
-              <SlidersHorizontal className="size-3.5 text-muted-foreground" aria-hidden="true" />
-              控制
-            </Link>
-          </Button>
-        </div>
-        <Button variant="ghost" size="sm" asChild className="w-full text-xs text-muted-foreground hover:text-foreground">
+      <div className="grid grid-cols-2 gap-2 border-t pt-4">
+        <Button variant="outline" size="sm" asChild className="gap-1.5">
+          <Link to="/sites/$siteId/operations/trends" params={{ siteId: site.id }}>
+            <ChartNoAxesColumnIncreasing className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            趋势
+          </Link>
+        </Button>
+        <Button variant="outline" size="sm" asChild className="gap-1.5">
           <Link to="/sites/$siteId/devices" params={{ siteId: site.id }}>
-            查看设备
-            <ArrowRight className="ml-1 size-3" aria-hidden="true" />
+            <Box className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            设备
+          </Link>
+        </Button>
+        <Button variant="outline" size="sm" asChild className="gap-1.5">
+          <Link to="/sites/$siteId/diagnostics" params={{ siteId: site.id }}>
+            <Stethoscope className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            诊断
+          </Link>
+        </Button>
+        <Button variant="outline" size="sm" asChild className="gap-1.5">
+          <Link to="/sites/$siteId/operations/control" params={{ siteId: site.id }}>
+            <SlidersHorizontal className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            控制
           </Link>
         </Button>
       </div>
@@ -392,14 +370,7 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
       {/* Top Command Deck Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="flex items-center gap-2.5">
-            
-            <Badge variant="outline" className="hidden sm:inline-flex items-center gap-1.5 border-primary/30 bg-primary/10 text-primary text-xs font-normal">
-              <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-              群控自动优化模式
-            </Badge>
-          </div>
-          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span>{site.displayName}</span>
             <span aria-hidden="true">·</span>
             <span>{site.timezone}</span>
@@ -434,129 +405,83 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
         </Alert>
       ) : null}
 
-      {/* 5-Card Operational KPI Ribbon */}
-      <section aria-label="当前运行上下文" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Card className="shadow-xs transition-shadow hover:shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">实时运行功率</CardTitle>
-            <div className="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <Zap className="size-4" aria-hidden="true" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            <div className="text-2xl font-bold tracking-tight tabular-nums" data-testid="operations-current-power">
-              {formatNumber(summary?.fastMetrics.currentPower.value, 0)}
-              <span className="ml-1 text-sm font-normal text-muted-foreground">{summary?.fastMetrics.currentPower.unit ?? 'kW'}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              站点 HVAC 实时总负荷
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-xs transition-shadow hover:shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">系统能效比 (COP)</CardTitle>
-            <div className="flex size-7 items-center justify-center rounded-md bg-chart-2/15 text-[var(--chart-2)]">
-              <ChartNoAxesColumnIncreasing className="size-4" aria-hidden="true" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            <div className="text-2xl font-bold tracking-tight tabular-nums text-foreground">
-              {formatNumber(summary?.slowMetrics.cop.value ?? overview?.kpis.averageCop, 2, 2)}
-              <span className="ml-1 text-sm font-normal text-muted-foreground">COP</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              站点 HVAC 综合制冷能效
-            </p>
-          </CardContent>
-        </Card>
-
-        <dl aria-label="运行状态摘要" className="contents">
-          <Card className="shadow-xs transition-shadow hover:shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <dt className="text-sm font-medium text-muted-foreground">设备群运行</dt>
-              <div className="flex size-7 items-center justify-center rounded-md bg-chart-1/15 text-[var(--chart-1)]">
-                <Box className="size-4" aria-hidden="true" />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <dd className="text-2xl font-bold tracking-tight tabular-nums m-0">
-                <span data-testid="operations-workspace-population">
-                  {workspacePopulation.complete ? `${workspacePopulation.running} / ${workspacePopulation.total}` : '—'}
-                </span>
-                <span className="ml-1 text-sm font-normal text-muted-foreground">台</span>
-              </dd>
-              <p className="text-xs text-muted-foreground m-0">
-                当前工作区范围
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-xs transition-shadow hover:shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <dt className="text-sm font-medium text-muted-foreground">活动告警</dt>
-              <div className={cn('flex size-7 items-center justify-center rounded-md', (summary?.fastMetrics.openAlarms.activeCount ?? 0) > 0 ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground')}>
-                <Bell className="size-4" aria-hidden="true" />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <dd className="text-2xl font-bold tracking-tight tabular-nums m-0">
-                {summary?.fastMetrics.openAlarms.activeCount ?? 0}
-                <span className="ml-1 text-sm font-normal text-muted-foreground">项</span>
-              </dd>
-              <p className="text-xs text-muted-foreground m-0 truncate">
-                {summary?.fastMetrics.openAlarms.highestSeverity ? `最高 ${SEVERITY_LABEL[summary.fastMetrics.openAlarms.highestSeverity] ?? summary.fastMetrics.openAlarms.highestSeverity}` : '当前无告警'}
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-xs transition-shadow hover:shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <dt className="text-sm font-medium text-muted-foreground">数据通信质量</dt>
-              <div className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                <Database className="size-4" aria-hidden="true" />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <dd className={cn('text-2xl font-bold tracking-tight tabular-nums m-0', population?.stale ? 'text-warning' : 'text-foreground')}>
-                {population ? `${population.stale}` : '0'}
-                <span className="ml-1 text-sm font-normal text-muted-foreground">台延迟</span>
-              </dd>
-              <p className="text-xs text-muted-foreground m-0">
-                站点设备数据范围
-              </p>
-            </CardContent>
-          </Card>
-        </dl>
-      </section>
+      <FactStrip
+        ariaLabel="当前运行事实"
+        items={[
+          {
+            key: 'power',
+            label: '实时运行功率',
+            value: formatNumber(summary?.fastMetrics.currentPower.value, 0),
+            suffix: summary?.fastMetrics.currentPower.unit ?? 'kW',
+            detail: '站点 HVAC 当前总负荷',
+            icon: <Zap />,
+            tone: 'accent',
+          },
+          {
+            key: 'cop',
+            label: '系统能效比',
+            value: formatNumber(summary?.slowMetrics.cop.value ?? overview?.kpis.averageCop, 2, 2),
+            suffix: 'COP',
+            detail: '当前综合制冷能效',
+            icon: <ChartNoAxesColumnIncreasing />,
+          },
+          {
+            key: 'running',
+            label: '设备群运行',
+            value: workspacePopulation.complete ? [workspacePopulation.running, workspacePopulation.total].join(' / ') : '—',
+            suffix: '台',
+            detail: '当前工作区范围',
+            icon: <Box />,
+          },
+          {
+            key: 'alarms',
+            label: '活动告警',
+            value: summary?.fastMetrics.openAlarms.activeCount ?? 0,
+            suffix: '项',
+            detail: summary?.fastMetrics.openAlarms.highestSeverity
+              ? '最高 ' + (SEVERITY_LABEL[summary.fastMetrics.openAlarms.highestSeverity] ?? summary.fastMetrics.openAlarms.highestSeverity)
+              : '当前无活动告警',
+            icon: <Bell />,
+            tone: (summary?.fastMetrics.openAlarms.activeCount ?? 0) > 0 ? 'critical' : 'default',
+          },
+          {
+            key: 'freshness',
+            label: '数据延迟',
+            value: population?.stale ?? 0,
+            suffix: '台',
+            detail: '站点设备数据范围',
+            icon: <Database />,
+            tone: population?.stale ? 'warning' : 'default',
+          },
+        ]}
+      />
 
       {/* Main Engineering Operations Workspace */}
       <section className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]" aria-label="系统运行工作区">
-        <Card className="h-full min-w-0 gap-0 py-0 shadow-xs">
-          <CardHeader className="border-b bg-muted/10 py-4">
+        <section className="h-full min-w-0 overflow-hidden rounded-lg border bg-card">
+          <div className="border-b px-4 py-3.5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <h2 className="flex items-center gap-2 text-base font-semibold">
                   <Settings2 className="size-4.5 text-primary" aria-hidden="true" />
                   设备与过程
-                </CardTitle>
+                </h2>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-                  <Activity className="mr-1 size-3 text-success" aria-hidden="true" />
-                  自动控制运行中
+                  <Activity className="mr-1 size-3" aria-hidden="true" />
+                  实时运行状态
                 </Badge>
               </div>
             </div>
-          </CardHeader>
+          </div>
 
-          <CardContent className="p-0">
+          <div>
             {/* Digital Twin Dual-Circuit Process Dynamics */}
             <div className="grid gap-3 border-b bg-muted/20 p-4 lg:grid-cols-2" aria-label="关键过程量">
               {/* Circuit 1: 冷冻水供回回路 */}
-              <section className="overflow-hidden rounded-xl border bg-card shadow-xs transition-shadow hover:shadow-sm" aria-labelledby="chilled-water-title">
-                <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-background px-4 py-2.5">
+              <section className="overflow-hidden rounded-lg border bg-background" aria-labelledby="chilled-water-title">
+                <div className="flex items-center justify-between border-b px-4 py-2.5">
                   <div className="flex items-center gap-2">
                     <div className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
                       <Snowflake className="size-3.5" aria-hidden="true" />
@@ -600,7 +525,7 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
                         <strong className="text-xl font-bold tracking-tight text-foreground tabular-nums">
                           {water?.returnC == null ? '—' : `${formatNumber(water.returnC, 1)} °C`}
                         </strong>
-                        <span className="text-xs text-muted-foreground font-normal">工况平稳</span>
+                        <span className="text-xs text-muted-foreground font-normal">当前实测</span>
                       </div>
                     </div>
                   </div>
@@ -615,15 +540,15 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
                       <strong className="text-sm font-semibold tabular-nums text-foreground">
                         {deltaT == null ? '—' : `${formatNumber(deltaT, 1)} K`}
                       </strong>
-                      <span className="text-[11px] text-success bg-success/10 px-1.5 py-0.5 rounded font-medium">设计区间正常</span>
+                      <span className="text-[11px] text-muted-foreground">参考区间未接入</span>
                     </div>
                   </div>
                 </div>
               </section>
 
               {/* Circuit 2: 冷却水散热回路 */}
-              <section className="overflow-hidden rounded-xl border bg-card shadow-xs transition-shadow hover:shadow-sm" aria-labelledby="condenser-water-title">
-                <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-background px-4 py-2.5">
+              <section className="overflow-hidden rounded-lg border bg-background" aria-labelledby="condenser-water-title">
+                <div className="flex items-center justify-between border-b px-4 py-2.5">
                   <div className="flex items-center gap-2">
                     <div className="flex size-6 items-center justify-center rounded-md bg-chart-2/15 text-[var(--chart-2)]">
                       <Droplets className="size-3.5" aria-hidden="true" />
@@ -683,8 +608,8 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
                       <span>回水温差状态</span>
                     </div>
                     <div className="flex items-center gap-1.5 text-foreground font-medium">
-                      <CheckCircle2 className="size-3.5 text-success" aria-hidden="true" />
-                      <span>循环水流稳定</span>
+                      <CheckCircle2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                      <span>{condenserDeltaT == null ? '当前温差 —' : `当前温差 ${formatNumber(condenserDeltaT, 1)} K`}</span>
                     </div>
                   </div>
                 </div>
@@ -701,7 +626,6 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
                 {equipmentGroups.map((row) => {
                   const isSelected = row.key === selected?.key;
                   const GroupIcon = EQUIPMENT_GROUP_ICON[row.key as keyof typeof EQUIPMENT_GROUP_ICON] ?? Box;
-                  const meta = EQUIPMENT_GROUP_META[row.key] ?? { subtitle: '暖通受控设备', tag: '受控群' };
                   const runPercent = row.total && row.total > 0 && row.running != null
                     ? Math.round((row.running / row.total) * 100)
                     : 0;
@@ -733,14 +657,9 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
                           <GroupIcon className="size-4.5" aria-hidden="true" />
                         </ItemMedia>
                         <ItemContent>
-                          <ItemTitle>
-                            {row.label}
-                            <Badge variant="secondary" className="h-4 px-1.5 py-0 text-[10px] font-normal">{meta.tag}</Badge>
-                          </ItemTitle>
+                          <ItemTitle>{row.label}</ItemTitle>
                           <ItemDescription className="space-y-1">
                             <span className="flex items-center gap-2">
-                              <span>{meta.subtitle}</span>
-                              <span aria-hidden="true">·</span>
                               <span className="inline-flex items-center gap-1.5">
                                 <span className={cn(
                                   'size-2 rounded-full',
@@ -777,32 +696,32 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
             ) : (
               <OperationsEmpty title="暂无设备群数据" />
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
         {/* Desktop Inspector */}
         <aside className="hidden h-full xl:block" aria-label="运行详情">
-          <Card className="h-full shadow-xs">
-            <CardHeader className="border-b bg-muted/10 pb-3">
+          <section className="h-full overflow-hidden rounded-lg border bg-card">
+            <div className="border-b px-4 py-3.5">
               <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <h2 className="flex items-center gap-2 text-base font-semibold">
                   <Layers className="size-4 text-primary" aria-hidden="true" />
                   当前选择
-                </CardTitle>
+                </h2>
                 <Badge variant="secondary" className="text-xs font-normal">
                   实时遥测
                 </Badge>
               </div>
-            </CardHeader>
-            <CardContent className="pt-4">
+            </div>
+            <div className="p-4">
               <OperationsInspector
                 selected={selected}
                 canReadAlarms={canReadAlarms}
                 site={site}
                 totalPowerKW={currentTotalPower}
               />
-            </CardContent>
-          </Card>
+            </div>
+          </section>
         </aside>
       </section>
 

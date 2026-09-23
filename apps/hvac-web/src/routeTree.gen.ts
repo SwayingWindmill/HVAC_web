@@ -28,8 +28,6 @@ import { Route as AppSitesSiteIdBenchmarkingRouteImport } from './routes/_app.si
 import { Route as AppSitesSiteIdBigscreenRouteImport } from './routes/_app.sites.$siteId.bigscreen'
 import { Route as AppSitesSiteIdBillingRouteImport } from './routes/_app.sites.$siteId.billing'
 import { Route as AppSitesSiteIdCarbonRouteImport } from './routes/_app.sites.$siteId.carbon'
-import { Route as AppSitesSiteIdComfortRouteImport } from './routes/_app.sites.$siteId.comfort'
-import { Route as AppSitesSiteIdControlRouteImport } from './routes/_app.sites.$siteId.control'
 import { Route as AppSitesSiteIdCostRouteImport } from './routes/_app.sites.$siteId.cost'
 import { Route as AppSitesSiteIdDashboardRouteImport } from './routes/_app.sites.$siteId.dashboard'
 import { Route as AppSitesSiteIdDataQualityRouteImport } from './routes/_app.sites.$siteId.data-quality'
@@ -56,13 +54,14 @@ import { Route as AppSitesSiteIdReportsRouteImport } from './routes/_app.sites.$
 import { Route as AppSitesSiteIdRulesRouteImport } from './routes/_app.sites.$siteId.rules'
 import { Route as AppSitesSiteIdSettlementRouteImport } from './routes/_app.sites.$siteId.settlement'
 import { Route as AppSitesSiteIdStrategiesRouteImport } from './routes/_app.sites.$siteId.strategies'
-import { Route as AppSitesSiteIdTrendsRouteImport } from './routes/_app.sites.$siteId.trends'
 import { Route as AppSitesSiteIdVerificationsRouteImport } from './routes/_app.sites.$siteId.verifications'
 import { Route as AppSitesSiteIdWorkOrdersRouteImport } from './routes/_app.sites.$siteId.work-orders'
 import { Route as AppSitesSiteIdDevicesIndexRouteImport } from './routes/_app.sites.$siteId.devices.index'
 import { Route as AppSitesSiteIdDevicesDeviceIdRouteImport } from './routes/_app.sites.$siteId.devices.$deviceId'
 import { Route as AppSitesSiteIdEnergyIndexRouteImport } from './routes/_app.sites.$siteId.energy.index'
 import { Route as AppSitesSiteIdEnergyPeriodRouteImport } from './routes/_app.sites.$siteId.energy.$period'
+import { Route as AppSitesSiteIdOperationsControlRouteImport } from './routes/_app.sites.$siteId.operations_.control'
+import { Route as AppSitesSiteIdOperationsTrendsRouteImport } from './routes/_app.sites.$siteId.operations_.trends'
 import { Route as AppSitesSiteIdStrategiesStrategyIdRouteImport } from './routes/_app.sites.$siteId.strategies_.$strategyId'
 import { Route as AppSitesSiteIdWorkOrdersWorkOrderIdRouteImport } from './routes/_app.sites.$siteId.work-orders_.$workOrderId'
 
@@ -160,16 +159,6 @@ const AppSitesSiteIdBillingRoute = AppSitesSiteIdBillingRouteImport.update({
 const AppSitesSiteIdCarbonRoute = AppSitesSiteIdCarbonRouteImport.update({
   id: '/carbon',
   path: '/carbon',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdComfortRoute = AppSitesSiteIdComfortRouteImport.update({
-  id: '/comfort',
-  path: '/comfort',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdControlRoute = AppSitesSiteIdControlRouteImport.update({
-  id: '/control',
-  path: '/control',
   getParentRoute: () => AppSitesSiteIdRoute,
 } as any)
 const AppSitesSiteIdCostRoute = AppSitesSiteIdCostRouteImport.update({
@@ -313,11 +302,6 @@ const AppSitesSiteIdStrategiesRoute =
     path: '/strategies',
     getParentRoute: () => AppSitesSiteIdRoute,
   } as any)
-const AppSitesSiteIdTrendsRoute = AppSitesSiteIdTrendsRouteImport.update({
-  id: '/trends',
-  path: '/trends',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
 const AppSitesSiteIdVerificationsRoute =
   AppSitesSiteIdVerificationsRouteImport.update({
     id: '/verifications',
@@ -354,6 +338,18 @@ const AppSitesSiteIdEnergyPeriodRoute =
     path: '/$period',
     getParentRoute: () => AppSitesSiteIdEnergyRoute,
   } as any)
+const AppSitesSiteIdOperationsControlRoute =
+  AppSitesSiteIdOperationsControlRouteImport.update({
+    id: '/operations_/control',
+    path: '/operations/control',
+    getParentRoute: () => AppSitesSiteIdRoute,
+  } as any)
+const AppSitesSiteIdOperationsTrendsRoute =
+  AppSitesSiteIdOperationsTrendsRouteImport.update({
+    id: '/operations_/trends',
+    path: '/operations/trends',
+    getParentRoute: () => AppSitesSiteIdRoute,
+  } as any)
 const AppSitesSiteIdStrategiesStrategyIdRoute =
   AppSitesSiteIdStrategiesStrategyIdRouteImport.update({
     id: '/strategies_/$strategyId',
@@ -385,8 +381,6 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
   '/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/sites/$siteId/comfort': typeof AppSitesSiteIdComfortRoute
-  '/sites/$siteId/control': typeof AppSitesSiteIdControlRoute
   '/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
   '/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
   '/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
@@ -413,12 +407,13 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
   '/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
   '/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/sites/$siteId/trends': typeof AppSitesSiteIdTrendsRoute
   '/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
   '/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/sites/$siteId/': typeof AppSitesSiteIdIndexRoute
   '/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
   '/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
+  '/sites/$siteId/operations/control': typeof AppSitesSiteIdOperationsControlRoute
+  '/sites/$siteId/operations/trends': typeof AppSitesSiteIdOperationsTrendsRoute
   '/sites/$siteId/strategies/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
   '/sites/$siteId/work-orders/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
   '/sites/$siteId/devices/': typeof AppSitesSiteIdDevicesIndexRoute
@@ -440,8 +435,6 @@ export interface FileRoutesByTo {
   '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
   '/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/sites/$siteId/comfort': typeof AppSitesSiteIdComfortRoute
-  '/sites/$siteId/control': typeof AppSitesSiteIdControlRoute
   '/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
   '/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
   '/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
@@ -466,12 +459,13 @@ export interface FileRoutesByTo {
   '/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
   '/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
   '/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/sites/$siteId/trends': typeof AppSitesSiteIdTrendsRoute
   '/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
   '/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/sites/$siteId': typeof AppSitesSiteIdIndexRoute
   '/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
   '/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
+  '/sites/$siteId/operations/control': typeof AppSitesSiteIdOperationsControlRoute
+  '/sites/$siteId/operations/trends': typeof AppSitesSiteIdOperationsTrendsRoute
   '/sites/$siteId/strategies/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
   '/sites/$siteId/work-orders/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
   '/sites/$siteId/devices': typeof AppSitesSiteIdDevicesIndexRoute
@@ -497,8 +491,6 @@ export interface FileRoutesById {
   '/_app/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
   '/_app/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
   '/_app/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/_app/sites/$siteId/comfort': typeof AppSitesSiteIdComfortRoute
-  '/_app/sites/$siteId/control': typeof AppSitesSiteIdControlRoute
   '/_app/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
   '/_app/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
   '/_app/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
@@ -525,12 +517,13 @@ export interface FileRoutesById {
   '/_app/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
   '/_app/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
   '/_app/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/_app/sites/$siteId/trends': typeof AppSitesSiteIdTrendsRoute
   '/_app/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
   '/_app/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/_app/sites/$siteId/': typeof AppSitesSiteIdIndexRoute
   '/_app/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
   '/_app/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
+  '/_app/sites/$siteId/operations_/control': typeof AppSitesSiteIdOperationsControlRoute
+  '/_app/sites/$siteId/operations_/trends': typeof AppSitesSiteIdOperationsTrendsRoute
   '/_app/sites/$siteId/strategies_/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
   '/_app/sites/$siteId/work-orders_/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
   '/_app/sites/$siteId/devices/': typeof AppSitesSiteIdDevicesIndexRoute
@@ -556,8 +549,6 @@ export interface FileRouteTypes {
     | '/sites/$siteId/bigscreen'
     | '/sites/$siteId/billing'
     | '/sites/$siteId/carbon'
-    | '/sites/$siteId/comfort'
-    | '/sites/$siteId/control'
     | '/sites/$siteId/cost'
     | '/sites/$siteId/dashboard'
     | '/sites/$siteId/data-quality'
@@ -584,12 +575,13 @@ export interface FileRouteTypes {
     | '/sites/$siteId/rules'
     | '/sites/$siteId/settlement'
     | '/sites/$siteId/strategies'
-    | '/sites/$siteId/trends'
     | '/sites/$siteId/verifications'
     | '/sites/$siteId/work-orders'
     | '/sites/$siteId/'
     | '/sites/$siteId/devices/$deviceId'
     | '/sites/$siteId/energy/$period'
+    | '/sites/$siteId/operations/control'
+    | '/sites/$siteId/operations/trends'
     | '/sites/$siteId/strategies/$strategyId'
     | '/sites/$siteId/work-orders/$workOrderId'
     | '/sites/$siteId/devices/'
@@ -611,8 +603,6 @@ export interface FileRouteTypes {
     | '/sites/$siteId/bigscreen'
     | '/sites/$siteId/billing'
     | '/sites/$siteId/carbon'
-    | '/sites/$siteId/comfort'
-    | '/sites/$siteId/control'
     | '/sites/$siteId/cost'
     | '/sites/$siteId/dashboard'
     | '/sites/$siteId/data-quality'
@@ -637,12 +627,13 @@ export interface FileRouteTypes {
     | '/sites/$siteId/rules'
     | '/sites/$siteId/settlement'
     | '/sites/$siteId/strategies'
-    | '/sites/$siteId/trends'
     | '/sites/$siteId/verifications'
     | '/sites/$siteId/work-orders'
     | '/sites/$siteId'
     | '/sites/$siteId/devices/$deviceId'
     | '/sites/$siteId/energy/$period'
+    | '/sites/$siteId/operations/control'
+    | '/sites/$siteId/operations/trends'
     | '/sites/$siteId/strategies/$strategyId'
     | '/sites/$siteId/work-orders/$workOrderId'
     | '/sites/$siteId/devices'
@@ -667,8 +658,6 @@ export interface FileRouteTypes {
     | '/_app/sites/$siteId/bigscreen'
     | '/_app/sites/$siteId/billing'
     | '/_app/sites/$siteId/carbon'
-    | '/_app/sites/$siteId/comfort'
-    | '/_app/sites/$siteId/control'
     | '/_app/sites/$siteId/cost'
     | '/_app/sites/$siteId/dashboard'
     | '/_app/sites/$siteId/data-quality'
@@ -695,12 +684,13 @@ export interface FileRouteTypes {
     | '/_app/sites/$siteId/rules'
     | '/_app/sites/$siteId/settlement'
     | '/_app/sites/$siteId/strategies'
-    | '/_app/sites/$siteId/trends'
     | '/_app/sites/$siteId/verifications'
     | '/_app/sites/$siteId/work-orders'
     | '/_app/sites/$siteId/'
     | '/_app/sites/$siteId/devices/$deviceId'
     | '/_app/sites/$siteId/energy/$period'
+    | '/_app/sites/$siteId/operations_/control'
+    | '/_app/sites/$siteId/operations_/trends'
     | '/_app/sites/$siteId/strategies_/$strategyId'
     | '/_app/sites/$siteId/work-orders_/$workOrderId'
     | '/_app/sites/$siteId/devices/'
@@ -844,20 +834,6 @@ declare module '@tanstack/react-router' {
       path: '/carbon'
       fullPath: '/sites/$siteId/carbon'
       preLoaderRoute: typeof AppSitesSiteIdCarbonRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/comfort': {
-      id: '/_app/sites/$siteId/comfort'
-      path: '/comfort'
-      fullPath: '/sites/$siteId/comfort'
-      preLoaderRoute: typeof AppSitesSiteIdComfortRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/control': {
-      id: '/_app/sites/$siteId/control'
-      path: '/control'
-      fullPath: '/sites/$siteId/control'
-      preLoaderRoute: typeof AppSitesSiteIdControlRouteImport
       parentRoute: typeof AppSitesSiteIdRoute
     }
     '/_app/sites/$siteId/cost': {
@@ -1042,13 +1018,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSitesSiteIdStrategiesRouteImport
       parentRoute: typeof AppSitesSiteIdRoute
     }
-    '/_app/sites/$siteId/trends': {
-      id: '/_app/sites/$siteId/trends'
-      path: '/trends'
-      fullPath: '/sites/$siteId/trends'
-      preLoaderRoute: typeof AppSitesSiteIdTrendsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
     '/_app/sites/$siteId/verifications': {
       id: '/_app/sites/$siteId/verifications'
       path: '/verifications'
@@ -1090,6 +1059,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/sites/$siteId/energy/$period'
       preLoaderRoute: typeof AppSitesSiteIdEnergyPeriodRouteImport
       parentRoute: typeof AppSitesSiteIdEnergyRoute
+    }
+    '/_app/sites/$siteId/operations_/control': {
+      id: '/_app/sites/$siteId/operations_/control'
+      path: '/operations/control'
+      fullPath: '/sites/$siteId/operations/control'
+      preLoaderRoute: typeof AppSitesSiteIdOperationsControlRouteImport
+      parentRoute: typeof AppSitesSiteIdRoute
+    }
+    '/_app/sites/$siteId/operations_/trends': {
+      id: '/_app/sites/$siteId/operations_/trends'
+      path: '/operations/trends'
+      fullPath: '/sites/$siteId/operations/trends'
+      preLoaderRoute: typeof AppSitesSiteIdOperationsTrendsRouteImport
+      parentRoute: typeof AppSitesSiteIdRoute
     }
     '/_app/sites/$siteId/strategies_/$strategyId': {
       id: '/_app/sites/$siteId/strategies_/$strategyId'
@@ -1144,8 +1127,6 @@ interface AppSitesSiteIdRouteChildren {
   AppSitesSiteIdBigscreenRoute: typeof AppSitesSiteIdBigscreenRoute
   AppSitesSiteIdBillingRoute: typeof AppSitesSiteIdBillingRoute
   AppSitesSiteIdCarbonRoute: typeof AppSitesSiteIdCarbonRoute
-  AppSitesSiteIdComfortRoute: typeof AppSitesSiteIdComfortRoute
-  AppSitesSiteIdControlRoute: typeof AppSitesSiteIdControlRoute
   AppSitesSiteIdCostRoute: typeof AppSitesSiteIdCostRoute
   AppSitesSiteIdDashboardRoute: typeof AppSitesSiteIdDashboardRoute
   AppSitesSiteIdDataQualityRoute: typeof AppSitesSiteIdDataQualityRoute
@@ -1172,10 +1153,11 @@ interface AppSitesSiteIdRouteChildren {
   AppSitesSiteIdRulesRoute: typeof AppSitesSiteIdRulesRoute
   AppSitesSiteIdSettlementRoute: typeof AppSitesSiteIdSettlementRoute
   AppSitesSiteIdStrategiesRoute: typeof AppSitesSiteIdStrategiesRoute
-  AppSitesSiteIdTrendsRoute: typeof AppSitesSiteIdTrendsRoute
   AppSitesSiteIdVerificationsRoute: typeof AppSitesSiteIdVerificationsRoute
   AppSitesSiteIdWorkOrdersRoute: typeof AppSitesSiteIdWorkOrdersRoute
   AppSitesSiteIdIndexRoute: typeof AppSitesSiteIdIndexRoute
+  AppSitesSiteIdOperationsControlRoute: typeof AppSitesSiteIdOperationsControlRoute
+  AppSitesSiteIdOperationsTrendsRoute: typeof AppSitesSiteIdOperationsTrendsRoute
   AppSitesSiteIdStrategiesStrategyIdRoute: typeof AppSitesSiteIdStrategiesStrategyIdRoute
   AppSitesSiteIdWorkOrdersWorkOrderIdRoute: typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
 }
@@ -1188,8 +1170,6 @@ const AppSitesSiteIdRouteChildren: AppSitesSiteIdRouteChildren = {
   AppSitesSiteIdBigscreenRoute: AppSitesSiteIdBigscreenRoute,
   AppSitesSiteIdBillingRoute: AppSitesSiteIdBillingRoute,
   AppSitesSiteIdCarbonRoute: AppSitesSiteIdCarbonRoute,
-  AppSitesSiteIdComfortRoute: AppSitesSiteIdComfortRoute,
-  AppSitesSiteIdControlRoute: AppSitesSiteIdControlRoute,
   AppSitesSiteIdCostRoute: AppSitesSiteIdCostRoute,
   AppSitesSiteIdDashboardRoute: AppSitesSiteIdDashboardRoute,
   AppSitesSiteIdDataQualityRoute: AppSitesSiteIdDataQualityRoute,
@@ -1216,10 +1196,11 @@ const AppSitesSiteIdRouteChildren: AppSitesSiteIdRouteChildren = {
   AppSitesSiteIdRulesRoute: AppSitesSiteIdRulesRoute,
   AppSitesSiteIdSettlementRoute: AppSitesSiteIdSettlementRoute,
   AppSitesSiteIdStrategiesRoute: AppSitesSiteIdStrategiesRoute,
-  AppSitesSiteIdTrendsRoute: AppSitesSiteIdTrendsRoute,
   AppSitesSiteIdVerificationsRoute: AppSitesSiteIdVerificationsRoute,
   AppSitesSiteIdWorkOrdersRoute: AppSitesSiteIdWorkOrdersRoute,
   AppSitesSiteIdIndexRoute: AppSitesSiteIdIndexRoute,
+  AppSitesSiteIdOperationsControlRoute: AppSitesSiteIdOperationsControlRoute,
+  AppSitesSiteIdOperationsTrendsRoute: AppSitesSiteIdOperationsTrendsRoute,
   AppSitesSiteIdStrategiesStrategyIdRoute:
     AppSitesSiteIdStrategiesStrategyIdRoute,
   AppSitesSiteIdWorkOrdersWorkOrderIdRoute:

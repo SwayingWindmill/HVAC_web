@@ -3,9 +3,11 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `05 趋势分析`  
-> **Route intent：** `/sites/:siteId/trends`  
+> **Route intent：** `/sites/:siteId/operations/trends`
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
 > **设计输入声明：** 本文件不参考当前项目已有趋势页、Monitor trend、历史图表页、旧设计稿、旧 Ant/AntV 图表布局或实现导出的行为。当前代码仅可在实施阶段作为真实 historian owner、capability、permission、route contract 与 transport contract 的候选证据来源。
+>
+> **2026-09-23 Workspace placement：** 05 不再是一级 Workspace，作为“运行”的 Advanced Trend Studio 保留 durable route：`/sites/:siteId/operations/trends`。
 
 ---
 
@@ -253,7 +255,7 @@ W3C WCAG 要求 color 不作为表达信息的唯一视觉手段。
 Canonical route：
 
 ```text
-/sites/:siteId/trends
+/sites/:siteId/operations/trends
 ```
 
 Durable identity 放 Path；可恢复分析状态放 TanStack Router Search Params。

@@ -13,7 +13,7 @@ const trendSearchSchema = z.object({
   eventTypes: z.literal('alarm').optional(),
 });
 
-export const Route = createFileRoute('/_app/sites/$siteId/trends')({
+export const Route = createFileRoute('/_app/sites/$siteId/operations_/trends')({
   validateSearch: zodValidator(trendSearchSchema),
   beforeLoad: ({ context }) => {
     requireCapabilities(context.runtime, ['site.read', 'asset.list', 'device.list', 'telemetry.history.read']);
@@ -30,16 +30,17 @@ function TrendAnalysisRoute() {
   const { site, principal } = Route.useRouteContext();
   const searchState = Route.useSearch();
   const navigate = Route.useNavigate();
+
   return (
-    <section data-route-state="READY" data-site-id={site.id} data-site-route="trends" aria-label="趋势分析">
+    <section data-route-state="READY" data-site-id={site.id} data-site-route="operations-trends" aria-label="趋势分析">
       <Suspense fallback={<RouteLoading label="正在加载趋势分析" />}>
         <TrendAnalysis
           site={site}
           principal={principal}
           searchState={searchState}
-          onSearchChange={(patch: any) => {
+          onSearchChange={(patch) => {
             void navigate({
-              search: (previous: any) => ({ ...previous, ...patch }),
+              search: (previous) => ({ ...previous, ...patch }),
               replace: true,
             });
           }}

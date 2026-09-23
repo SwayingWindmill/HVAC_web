@@ -71,6 +71,7 @@
     "operations-agent:safety-certification:verify": "node scripts/verify-operations-agent-safety-certification.mjs",
     "operations-workspace:test": "node --test scripts/test-operations-workspace.mjs",
     "operations-workspace:browser": "node scripts/run-operations-workspace-browser-audit.mjs",
+    "operations-workspace:ui-browser": "node scripts/run-operations-workspace-ui-review.mjs",
     "contracts:generate": "node scripts/generate-platform-contracts.mjs",
     "contracts:check": "node scripts/generate-platform-contracts.mjs --check",
     "web:principal:contract": "node --test scripts/test-rms-principal-capability-contract.mjs",

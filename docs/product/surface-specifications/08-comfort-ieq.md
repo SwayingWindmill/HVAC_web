@@ -3,9 +3,11 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `08 舒适与室内环境（Capability-gated）`  
-> **Route intent：** `/sites/:siteId/comfort`  
+> **Route intent：** `/sites/:siteId/operations?view=comfort`
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
 > **设计输入声明：** 本文件不参考当前项目已有房间/区域页、旧舒适度卡片、旧空气质量页面、旧设计稿或旧 Ant/ProComponents 页面。当前代码仅可在实施阶段作为真实 Space/Zone Model、Telemetry、Occupancy、Comfort Target、IAQ、Alarm、Diagnosis、Work、Control、Complaint owner、capability、permission 与 route contract 的候选证据来源。
+>
+> **2026-09-23 Workspace placement：** 08 已合并为“运行” Workspace 的 `空间与环境` peer view，通过 `/sites/:siteId/operations?view=comfort` 进入；旧 `/comfort` runtime route 已删除。
 
 ---
 
@@ -311,7 +313,7 @@ ASHRAE 55 non-compliant
 Canonical route：
 
 ```text
-/sites/:siteId/comfort
+/sites/:siteId/operations?view=comfort
 ```
 
 推荐 Search Params：
@@ -325,7 +327,8 @@ status
 system
 timeStart
 timeEnd
-view            // attention | thermal | air-quality
+view            // workspace owner: comfort
+comfortView     // thermal | air-quality
 sort
 page
 size

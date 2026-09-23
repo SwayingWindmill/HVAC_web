@@ -9,10 +9,10 @@ const controlSearchSchema = z.object({
   target: z.string().max(256).optional(),
 });
 
-export const Route = createFileRoute('/_app/sites/$siteId/control')({
+export const Route = createFileRoute('/_app/sites/$siteId/operations_/control')({
   validateSearch: zodValidator(controlSearchSchema),
   staticData: {
-    title: '控制',
+    title: '即时控制',
     scope: 'site',
     requiredCapabilities: ['site.read'],
   },
@@ -25,16 +25,16 @@ function ControlRoute() {
   const navigate = Route.useNavigate();
 
   return (
-    <section className="real-route-surface" data-route-state="READY" data-site-id={site.id} data-site-route="control" aria-label="控制">
-      <Suspense fallback={<RouteLoading label="正在加载控制" />}>
+    <section className="real-route-surface" data-route-state="READY" data-site-id={site.id} data-site-route="operations-control" aria-label="即时控制">
+      <Suspense fallback={<RouteLoading label="正在加载即时控制" />}>
         <ControlCenter
           site={site}
           principal={principal}
           runtime={runtime}
           searchState={searchState}
-          onSearchChange={(patch: any) => {
+          onSearchChange={(patch) => {
             void navigate({
-              search: (previous: any) => ({ ...previous, ...(patch as object) }),
+              search: (previous) => ({ ...previous, ...patch }),
               replace: true,
             });
           }}

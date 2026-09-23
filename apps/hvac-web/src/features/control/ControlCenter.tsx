@@ -11,6 +11,7 @@ import {
   type CurrentPrincipalResponse,
   type Site,
 } from '@/api/generated/platformGateway.gen';
+import { createFrontendReviewAssetsRegistry } from '@/app/frontend-review-assets-data';
 import {
   createS2TelemetryClient,
   type DeviceObservationSnapshot,
@@ -177,7 +178,9 @@ export function ControlCenter({
 
   const registryQuery = useQuery({
     queryKey: [...queryPrefix, 'asset-model'],
-    queryFn: async ({ signal }) => (await platformClient.getSiteAssetModel(site.id, { signal })).data,
+    queryFn: async ({ signal }) => __HVAC_WEB_FRONTEND_REVIEW__
+      ? createFrontendReviewAssetsRegistry(tenantId, site.id).assetModel
+      : (await platformClient.getSiteAssetModel(site.id, { signal })).data,
     enabled: canReadRegistry,
     staleTime: 60_000,
     refetchOnMount: false,

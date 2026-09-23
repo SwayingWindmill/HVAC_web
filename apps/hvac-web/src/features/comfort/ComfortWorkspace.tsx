@@ -58,7 +58,7 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { cn } from '@/lib/utils';
 
 export interface ComfortSearchState {
-  readonly view?: 'thermal' | 'air-quality';
+  readonly comfortView?: 'thermal' | 'air-quality';
   readonly q?: string;
   readonly area?: string;
   readonly data?: 'all' | 'available' | 'issue';
@@ -267,11 +267,11 @@ function SpaceInspector({ site, row, open, onOpenChange }: { readonly site: Read
         <SheetFooter className="flex-wrap">
           {series ? (
             <Button variant="outline" size="sm" asChild>
-              <Link to="/sites/$siteId/trends" params={{ siteId: site.id }} search={{ series }}>查看趋势 <ArrowRight /></Link>
+              <Link to="/sites/$siteId/operations/trends" params={{ siteId: site.id }} search={{ series }}>查看趋势 <ArrowRight /></Link>
             </Button>
           ) : <Button variant="outline" size="sm" disabled>查看趋势 <ArrowRight /></Button>}
           <Button variant="outline" size="sm" asChild>
-            <Link to="/sites/$siteId/operations" params={{ siteId: site.id }}>系统运行 <ArrowRight /></Link>
+            <Link to="/sites/$siteId/operations" params={{ siteId: site.id }} search={{ view: 'systems' }}>系统运行 <ArrowRight /></Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/sites/$siteId/devices" params={{ siteId: site.id }} search={{ scope: `space:${row.space.id}` }}>相关设备 <ArrowRight /></Link>
@@ -297,7 +297,7 @@ export function ComfortWorkspace({ site, principal, runtime, searchState, onSear
   const data = useSiteAssetsData({ site, principal, runtime });
   const spaces = data.registry.data?.assetModel.spaces ?? [];
   const allRows = useMemo(() => buildComfortRows(spaces, data.rows, data.currentUnavailable), [data.currentUnavailable, data.rows, spaces]);
-  const view = searchState.view ?? 'thermal';
+  const comfortView = searchState.comfortView ?? 'thermal';
   const query = (searchState.q ?? '').trim().toLocaleLowerCase('zh-CN');
   const areaFilter = searchState.area ?? 'all';
   const dataFilter = searchState.data ?? 'all';
@@ -438,16 +438,13 @@ export function ComfortWorkspace({ site, principal, runtime, searchState, onSear
           { label: '空间', value: allRows.length.toLocaleString('zh-CN'), detail: '区域 / 房间 / 租户空间', icon: <Building2 /> },
           { label: '有环境实测', value: measuredCount.toLocaleString('zh-CN'), detail: '存在温度或湿度当前值', icon: <Thermometer /> },
           { label: '数据需核查', value: issueCount.toLocaleString('zh-CN'), detail: '缺测、延迟或质量问题', icon: <AlertTriangle />, tone: issueCount > 0 ? 'warning' : 'default' },
-          { label: '占用上下文', value: '未接入', detail: '当前无法按占用判断', tone: 'warning' },
-          { label: '运营目标', value: '未接入', detail: '当前无法判断目标偏离', tone: 'warning' },
-          { label: 'IAQ 维度', value: '未接入', detail: '空气质量分析不可用', icon: <Wind />, tone: 'warning' },
+          { label: '目标上下文', value: '未接入', detail: '占用 / 运营目标 / IAQ', icon: <Wind />, tone: 'warning' },
         ]}
       />
 
       <DataTableBlock
-        title="空间环境"
         controls={(
-          <Tabs value={view} onValueChange={(val) => onSearchChange({ view: val as ComfortSearchState['view'], inspect: undefined })}>
+          <Tabs value={comfortView} onValueChange={(val) => onSearchChange({ comfortView: val as ComfortSearchState['comfortView'], inspect: undefined })}>
             <TabsList className="h-9">
               <TabsTrigger value="thermal">热环境 {measuredCount}</TabsTrigger>
               <TabsTrigger value="air-quality" disabled>空气质量（未接入）</TabsTrigger>
@@ -456,7 +453,7 @@ export function ComfortWorkspace({ site, principal, runtime, searchState, onSear
         )}
       >
 
-        {view === 'air-quality' ? (
+        {comfortView === 'air-quality' ? (
           <Empty className="min-h-80 rounded-md border">
             <EmptyHeader>
               <EmptyMedia variant="icon"><Wind aria-hidden="true" /></EmptyMedia>
@@ -468,19 +465,31 @@ export function ComfortWorkspace({ site, principal, runtime, searchState, onSear
           <DataTable
             table={table}
             role="region"
-            aria-label="空间环境，可横向滚动"
+            aria-label="空间环境"
             tabIndex={0}
             tableAriaLabel="空间环境"
             empty="没有符合条件的空间"
-            getHeaderCellProps={() => ({
-              className: 'whitespace-nowrap',
+            getHeaderCellProps={(header) => ({
+              className: cn(
+                'whitespace-nowrap',
+                ['select', 'humidity', 'devices'].includes(header.column.id) && 'hidden xl:table-cell',
+                ['area', 'updated'].includes(header.column.id) && 'hidden lg:table-cell',
+                ['occupancy', 'target', 'iaq'].includes(header.column.id) && 'hidden 2xl:table-cell',
+              ),
             })}
             getRowProps={(row) => ({
               className: cn('cursor-pointer', row.original.space.id === inspected?.space.id && 'bg-muted/50'),
               'data-state': row.original.space.id === inspected?.space.id ? 'selected' : undefined,
               onClick: () => onSearchChange({ inspect: row.original.space.id }),
             })}
-            getCellProps={() => ({ className: 'py-2.5' })}
+            getCellProps={(cell) => ({
+              className: cn(
+                'py-2.5',
+                ['select', 'humidity', 'devices'].includes(cell.column.id) && 'hidden xl:table-cell',
+                ['area', 'updated'].includes(cell.column.id) && 'hidden lg:table-cell',
+                ['occupancy', 'target', 'iaq'].includes(cell.column.id) && 'hidden 2xl:table-cell',
+              ),
+            })}
             footer={<DataTablePagination table={table} totalRows={filteredRows.length} />}
           >
             <DataTableAdvancedToolbar table={table}>

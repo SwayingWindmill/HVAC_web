@@ -17,6 +17,8 @@ import {
 } from '@/components/ui/dialog';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { matchSurface, surfacePath, WIREFRAME_READY_SURFACE_IDS } from './surface-catalog';
+import { getWorkspace } from './workspace-catalog';
+import { matchWorkspace, workspaceEntryPath } from './workspace-route-manifest';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime-status';
 import { useAppTheme } from './ThemeGate';
 import type { ShellSnapshot } from './shell-runtime';
@@ -116,7 +118,12 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const capabilities = useMemo(() => new Set<string>(principal.authorization.capabilities), [principal.authorization.capabilities]);
   const appNavigation = useMemo(() => buildAppNavigation({ siteId: activeSite?.id, capabilities }), [activeSite?.id, capabilities]);
   const currentSurface = matchSurface(pathname);
-  const pageTitle = currentSurface?.title ?? '智慧能源';
+  const currentWorkspaceId = matchWorkspace(pathname);
+  const currentWorkspace = currentWorkspaceId ? getWorkspace(currentWorkspaceId) : undefined;
+  const currentWorkspaceEntry = currentWorkspaceId ? workspaceEntryPath(currentWorkspaceId, { siteId: activeSite?.id }) : undefined;
+  const pageTitle = currentWorkspace && currentWorkspaceEntry === pathname
+    ? currentWorkspace.label
+    : currentSurface?.title ?? currentWorkspace?.label ?? '智慧能源';
   const principalRole = principalRoleLabel(principal.principal.roles[0]);
   const sites = snapshot.sites?.items ?? [];
 

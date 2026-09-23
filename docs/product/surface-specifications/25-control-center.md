@@ -3,10 +3,12 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `25 控制中心`  
-> **Route intent：** `/sites/:siteId/control`  
+> **Route intent：** `/sites/:siteId/operations/control`
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → `DESIGN.md` → 本文件  
 > **产品语言：** 中文优先；`ACK`、`Readback`、`Interlock`、`Override`、`BACnet Priority Array` 等标准术语只作为专业辅助。  
 > **设计输入声明：** 本文件不参考当前项目已有命令页、旧 Commands 页面、点位写入表单、旧 Ant/ProComponents 控制台或历史设计稿。现有代码只能在实施阶段作为真实 Target / Control Authority / Permission / Interlock / Command / Readback / Verification / Audit contract 的候选证据来源。
+>
+> **2026-09-23 Workspace placement：** 25 已从一级页面降为“运行 / 设备”对象上下文中的即时控制能力；当前 durable contextual route 为 `/sites/:siteId/operations/control`，不再暴露 `/control` 一级入口。
 
 ---
 
@@ -449,8 +451,8 @@ Recent Execution Summary
 Canonical routes：
 
 ```text
-/sites/:siteId/control
-/sites/:siteId/control/executions/:executionId
+/sites/:siteId/operations/control
+/sites/:siteId/executions/:executionId   // Surface 28 execution owner, when implemented
 ```
 
 Search Params 可以包括：

@@ -94,7 +94,7 @@ export const WORKSPACE_CATALOG = [
     scopes: ['site'],
     routePlan: {
       site: '/sites/:siteId/operations',
-      secondary: ['/sites/:siteId/operations/trends'],
+      secondary: ['/sites/:siteId/operations/trends', '/sites/:siteId/operations/control'],
     },
     views: [
       { id: 'systems', label: '系统', surfaceIds: ['04'] },
