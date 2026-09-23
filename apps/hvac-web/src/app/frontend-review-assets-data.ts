@@ -153,6 +153,36 @@ function buildReviewAssetModel(tenantId: string, siteId: string): SiteAssetModel
     updatedAt: REVIEW_CREATED_AT,
   }];
 
+  const officeFloorId = reviewId(0x1001, 1);
+  spaces.push({
+    id: officeFloorId,
+    tenantId,
+    siteId,
+    parentSpaceId: null,
+    code: 'OFFICE-F03',
+    displayName: '办公区 3F',
+    spaceType: 'FLOOR',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: REVIEW_CREATED_AT,
+    updatedAt: REVIEW_CREATED_AT,
+  });
+  for (let zoneIndex = 1; zoneIndex <= 8; zoneIndex += 1) {
+    spaces.push({
+      id: reviewId(0x1002, zoneIndex),
+      tenantId,
+      siteId,
+      parentSpaceId: officeFloorId,
+      code: `F03-Z${String(zoneIndex).padStart(2, '0')}`,
+      displayName: `3F · 区域 ${String(zoneIndex).padStart(2, '0')}`,
+      spaceType: 'ZONE',
+      status: 'ACTIVE',
+      revision: 1,
+      createdAt: REVIEW_CREATED_AT,
+      updatedAt: REVIEW_CREATED_AT,
+    });
+  }
+
   const assets: Asset[] = [];
   const devices: Device[] = [];
   const telemetryPoints: TelemetryPoint[] = [];
