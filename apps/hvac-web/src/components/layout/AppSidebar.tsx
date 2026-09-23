@@ -56,6 +56,7 @@ function NavigationLink({
       <SidebarMenuButton asChild isActive={active} tooltip={entry.label}>
         <a
           href={entry.path}
+          data-workspace-id={entry.workspaceId}
           aria-current={active ? 'page' : undefined}
           onClick={(event) => {
             event.preventDefault();

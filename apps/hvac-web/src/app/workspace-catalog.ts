@@ -66,9 +66,9 @@ export interface SurfaceWorkspacePlacement {
  * Product-level workspace catalog.
  *
  * This is the target information architecture for the page-consolidation work.
- * It deliberately does not drive the current runtime navigation until the
- * corresponding workspace routes exist. The legacy Surface Catalog remains the
- * route matcher during migration; this catalog is the target navigation model.
+ * It now drives the 10-item shell navigation through workspace-route-manifest.
+ * The 36-Surface catalog remains the canonical deep-link matcher while the
+ * consolidated workspace routes are introduced incrementally.
  */
 export const WORKSPACE_CATALOG = [
   {

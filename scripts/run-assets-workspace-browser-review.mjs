@@ -421,9 +421,13 @@ try {
       searchCount: document.querySelectorAll('[role="toolbar"] input[placeholder*="搜索设备"]').length,
       antCount: document.querySelectorAll('.ant-card, .ant-table, .ant-select, .ant-input').length,
       cardCount: document.querySelectorAll('[data-slot="card"]').length,
+      workspaceNavLabels: [...document.querySelectorAll('[data-workspace-id]')].map((node) => node.textContent?.trim() ?? ''),
+      activeWorkspaceIds: [...document.querySelectorAll('[data-workspace-id][aria-current="page"]')].map((node) => node.getAttribute('data-workspace-id')),
       text: document.body.innerText.slice(0, 5000),
     };
   })()`);
+  assert(JSON.stringify(desktop.workspaceNavLabels) === JSON.stringify(['总览', '运行', '设备', '告警与诊断', '工单与验证', '能源与绩效', '改进', '自动化', '报告', '设置']), `Shell did not cut over to the 10-workspace navigation: ${JSON.stringify(desktop.workspaceNavLabels)}`);
+  assert(JSON.stringify(desktop.activeWorkspaceIds) === JSON.stringify(['devices']), `Device route did not keep the Devices workspace active: ${JSON.stringify(desktop.activeWorkspaceIds)}`);
   assert(desktop.rowCount === 10, `Assets ledger did not render the Surface 06 default 10 rows: ${desktop.rowCount}`);
   assert(desktop.sidebar?.width === 256 && desktop.header?.height === 56, `Assets workspace is not using the shared AppShell geometry: ${JSON.stringify({ sidebar: desktop.sidebar, header: desktop.header })}`);
   assert(desktop.summary?.top < 220 && desktop.ledger?.top < 620, `Surface 06 Card ribbon / ledger hierarchy drifted: ${JSON.stringify({ summary: desktop.summary, ledger: desktop.ledger })}`);
