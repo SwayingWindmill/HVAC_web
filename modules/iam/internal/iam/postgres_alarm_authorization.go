@@ -112,7 +112,7 @@ ORDER BY site_id, action, effect
 			return nil, fmt.Errorf("scan IAM Alarm permission: %w", err)
 		}
 		permission.Action = alarmauth.Action(action)
-		if permission.Action != alarmauth.ActionRead && permission.Action != alarmauth.ActionAck {
+		if permission.Action != alarmauth.ActionRead && permission.Action != alarmauth.ActionAck && permission.Action != alarmauth.ActionAssign {
 			return nil, fmt.Errorf("validate IAM Alarm permission action: unsupported action %q", action)
 		}
 		permissions = append(permissions, permission)

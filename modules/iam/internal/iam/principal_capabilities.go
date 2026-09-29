@@ -184,6 +184,7 @@ var principalAlarmCapabilities = []struct {
 }{
 	{identitycontext.CapabilityAlarmList, alarmauth.ActionRead},
 	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
+	{identitycontext.CapabilityAlarmAssign, alarmauth.ActionAssign},
 }
 
 var principalWorkOrderLifecycleActions = [...]workorderauth.Action{
