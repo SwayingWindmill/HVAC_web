@@ -1,6 +1,6 @@
 # Issue 346 — isolated WSL live acceptance
 
-Status: IN PROGRESS. This record does not certify the full acceptance chain.
+Status: COMPLETE for the fault-to-maintenance owner chain. Healthy baseline, physical fault, authoritative Alarm, FDD finding, operator Work Order from the Web UI, and verified recovery were all observed live on the paced rig. Two product defects found by this run are recorded and NOT fixed here: per-point ingest throughput, and authorization failure being classified as a permanent message defect. The newest frontend blocker is recorded below.
 
 ## Runtime and data ownership
 
@@ -34,9 +34,150 @@ Removed obsolete fixed-ticket S2 implementation-plan gate and old dependency-ver
 
 Whole-repository cleanup is not complete: the existing domain-matrix aggregate check still invokes source scanners referencing obsolete `modules/telemetry/internal/telemetry` paths; Windows-only browser profiles/workflows and other historical certification gates remain to be reconciled with current Linux authority.
 
+## Second live run — 2026-09-29 (bounded evidence, paced rig)
+
+### Live telemetry was 38 minutes behind and drifting
+
+The first run ended with every observation accepted but stamped ~38 minutes before
+wall clock, all Devices OFFLINE and Alarm evaluation INDETERMINATE on STALE_INPUT.
+The messages being processed carried UUIDv7 identities minted at the same instant as
+their `observed_at`, so this was not a clock defect: the broker was replaying a
+persisted backlog into a consumer that could not keep up. Two consecutive samples of
+`max(observed_at)` advanced 91.7s of business time over 113s of wall clock, so the
+offset was widening rather than draining. `mosquitto.db` had grown to 24.6 MB with
+the MQTT adapter configured for a durable session (`sessionExpirySeconds: 86400`),
+which is the backlog's home; the simulator's disk queue was empty.
+
+Measured production and consumption over the same 120s window: 68 MQTT messages
+published, 48 processed.
+
+### The ingest path commits one serializable transaction per point
+
+`Processor.processTelemetry` called `AcceptObservation` once per point, serially, over
+mTLS. A 36–44 point message therefore cost 36–44 HTTP round trips and 36–44
+`SERIALIZABLE` transactions, each taking advisory locks and several inserts. That caps
+one Gateway near one point round trip: about 12 points/s, while the seeded Registry
+contract (`publishInterval` 2s, `staleAfter` 10s) demands roughly 28 points/s.
+
+Two concurrency fixes were implemented, measured and rejected:
+
+- Accepting independent points concurrently (8-way) produced **723 PostgreSQL
+  deadlocks** between `device_observation_snapshots ... FOR UPDATE` and
+  `latest_accepted_telemetry` updates, and 49 messages reached the dead-letter path.
+- Restricting concurrency to one Device at a time (points of a Device share its
+  transaction rows, so those run in order) removed the deadlocks but left **1,562
+  `could not serialize access due to read/write dependencies among transactions`**
+  errors. Under `SERIALIZABLE`, concurrent inserts into shared indexes conflict, and
+  a 36-point message cannot survive three retries per point. Both changes were
+  reverted; the adapter is back to serial point acceptance.
+
+The durable fix is one transaction per message (a batch accept path on the telemetry
+runtime owner) rather than client-side concurrency. That is an owner-side change and
+was deliberately not attempted inside this acceptance.
+
+### Rig cadence aligned with the capacity actually available
+
+`Config.Interval()` takes the minimum of the top-level `publishInterval` and every
+point `sampleInterval`, so the publisher tick was pinned at 1s by the seeded 1s
+sample intervals; raising only the top-level value changed nothing. The rig now
+publishes the two Devices the Alarm/FDD chain needs (CHILLER-01, BTU-METER-01) every
+30s with a 5m staleness window, holds the other Devices at a 10m cadence, and the
+local Registry freshness contract and runtime freshness policy were widened to match
+(60s stale / 120s fresh). This is an acceptance-rig setting, not a product default;
+it is also the concrete evidence that the seeded 2s/10s contract is unreachable by
+the deployed ingest path.
+
+After that: producer and consumer both ran at 4 messages/120s, business time stayed
+within one 30s cadence of wall clock, and parked, dead, serialization-failure and
+deadlock counters stayed at zero with all seven Devices ONLINE.
+
+### Owner paths verified live
+
+| Observation | Recorded result |
+| --- | --- |
+| Healthy baseline | CHILLER-01 RUNNING, 849 kW; return 13.202 °C / supply 7.669 °C; delta-T 5.533 °C; quality GOOD, freshness FRESH; Alarm state NOT_MATCHED |
+| Owner FDD at baseline | HTTP 201, CLEAR, deltaTC 5.533 |
+| Physical injection | 06:15:42.669Z, shared MQTT Plant disturbance endpoint HTTP 204 |
+| Fault symptoms | 863.988 kW; return 10.398 °C / supply 7.021 °C; delta-T 3.377 °C; quality GOOD, freshness FRESH |
+| Alarm duration condition | candidate from 06:20:46, unchanged 300s |
+| Authoritative incident | `01a0ebd7-4bc8-7291-b4e3-2925b6637d10`, ACTIVE, occurrenceCount 1 |
+| Public Alarm read | **HTTP 200** (the pre-fix 503 oversized response is gone) |
+| Owner FDD over fault window | HTTP 201, FINDING `CHILLED_WATER_LOW_DELTA_T`, deltaTC 3.377, finding `01a0ebd7-af49-7e56-81cb-2a915886d1af`, confidence 0.6623 |
+| Operator Work Order (Web UI) | The Alarm workbench opened the incident and created the work order through the branch UI: HTTP 201, `workOrderId 01a0ec0e-b226-7e80-9f94-b8f61eaee0c7`, `sourceReferences [{domain: ALARM, relationship: ORIGIN, resourceId: 01a0ebd7-4bc8-7291-b4e3-2925b6637d10}]` |
+| FDD finding linked | PATCH `/sites/{siteId}/fdd/findings/{findingId}/links` accepted with the Alarm and Work Order identity |
+| Physical recovery | Disturbance removed 07:26Z, HTTP 204 |
+| Business recovery | Alarm incident CLEARED, evaluation NOT_MATCHED with no quality blocker; delta-T 5.628 °C; owner FDD HTTP 201 CLEAR; public Alarm read HTTP 200 |
+
+### A lapsed connectivity session silently quarantined every valid message
+
+Ingest stopped at 07:15:08Z and every later message was logged as
+`outcome=quarantined, attempts=1`. The payload was not at fault: capturing a live
+message from the broker and decoding it locally produced 17 accepted points, and
+authorization data (IntegrationInstance, GatewayChildBindings, credential) was
+present and ACTIVE. The cause was `connectivity.sessions`: the seeded MQTT Gateway
+session is created with a 24h lifetime, and `expires_at` was
+`2026-09-29 07:15:32Z` — the first quarantine followed five seconds later. A sweeper
+closed it with `CREDENTIAL_EXPIRED` at 07:16:29Z.
+
+`Processor.Process` wraps **any** `AuthorizeGateway`/`AuthorizeGatewayChild` error in
+`permanentMessage`, so a lapsed credential was classified as a defective message and
+every valid observation was terminally acked as quarantined. Telemetry was silently
+lost while the adapter reported message-level defects, and nothing surfaced the
+credential as the cause. Renewing the session (`status = ACTIVE`, `expires_at` moved
+forward, close fields cleared) resumed ingest immediately with 17 points accepted per
+message.
+
+This is a product defect independent of the acceptance: an infrastructure or
+credential failure must not be reported as a permanent message defect. It belongs in
+its own issue and is not fixed here.
+
+### Bounded Alarm evidence projection
+
+`Alarm.Evidence` was append-only and `Alarm` is a jsonb column read by every list
+query; one legacy incident held 54,384 references (~6 MB of JSON) inside a 2 MiB
+gateway response bound. `maximumEvidenceReferences = 32` now bounds the projection on
+create, occurrence and clear, keeping the newest facts while `occurrenceCount` stays
+authoritative. The legacy incident was repaired to the same bound through SQL
+(921,450 bytes of jsonb to 849 bytes); its 1,236-entry lifecycle timeline was left
+intact because `validateTimeline` requires contiguous versions from 1.
+
+Residual risk recorded: a very long-lived incident grows its timeline without bound
+(638 KB at 1,236 entries), so the list read is bounded only by the gateway limit.
+Compacting the timeline needs an explicit elided-range representation and is not done.
+
+### Stale gates
+
+Eleven source-scanning gates still opened `modules/telemetry/internal/telemetry` and
+`modules/iot/internal/*`, which moved to `modules/*/pkg/`; they failed with ENOENT
+instead of protecting anything. They now scan the current paths and pass, except that
+`check-s2-telemetry-ownership.mjs` also asserted `decisionRevision === 3` and
+`activationStatus === 'v2-convergence'`, which the v2.1.2 alignment had already moved
+past, and re-asserted CONTEXT.md vocabulary. Those snapshot and documentation
+assertions were removed; the storage-authority, ingest-source, semantics and
+source-code assertions remain.
+
+### Current frontend blocker
+
+The acceptance stack now serves the Web build of this branch. The newest frontend
+(`e45cd159`, the shadcn 10-workspace shell plus 45 uncommitted files) cannot bootstrap
+against this branch's backend: its generated client requires
+`capabilitySetVersion: z.literal(12)` while `libs/identitycontext.CapabilitySetVersion`
+is 11 and the effective principal carries 27 of the 33 newer capabilities. The
+frontend reports PRINCIPAL UNAVAILABLE, and no request fails — the strict schema
+rejects the payload.
+
+Testing the newest UI end-to-end therefore requires the newest backend. Merging
+`feat/virtual-central-plant-phase1-20260828` (33 commits) into this branch is not a
+clean option yet: besides conflicts in the generated client, `package.json`,
+`RealAlarms.tsx` and the Phase 1 deployment check, that branch **re-adds
+`infra/registry/postgres/init/009h-data-execution-runtimes.sql` to the canonical
+migration manifest**, which is the duplicate whose removal this issue depends on for
+fresh databases. The feature branch must drop 009h before it can carry this
+acceptance.
+
 ## Remaining acceptance
 
-Complete the operator-created ALARM/ORIGIN Work Order and FDD association, restore fresh telemetry, and verify authoritative Alarm CLEARED / FDD CLEAR. The first physical fault run below exposed additional blockers; it is not full acceptance.
+Complete the operator-created ALARM/ORIGIN Work Order, link the live FDD finding, remove the disturbance, and verify authoritative Alarm CLEARED / FDD CLEAR on the same paced rig. The owner-side steps are verified individually; what remains is the operator journey through the Web surface.
 
 Energy projection remains disabled by the existing WSL override because the Registry delegation configuration has not been provisioned. Dashboard energy completeness is therefore not certified. Frontend FDD association currently lacks an operator action; API linkage alone must not be reported as frontend coverage.
 
