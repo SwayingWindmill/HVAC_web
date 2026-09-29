@@ -218,9 +218,9 @@ interface AppState {
   policyRevision: string;
 }
 
-function selectedDevice(site: Site): string | undefined {
+function selectedDetail(site: Site) {
   const parsed = parseRealAssetsDetailPath(location.pathname, site.id);
-  return parsed.state === 'detail' ? parsed.deviceId : undefined;
+  return parsed.state === 'detail' ? parsed.target : undefined;
 }
 
 function App() {
@@ -269,11 +269,12 @@ function App() {
         key={`${state.site.id}:${state.sessionId}:${state.policyRevision}:${generation}`}
         site={state.site}
         principal={currentPrincipal}
-        requestedDeviceId={selectedDevice(state.site)}
+        requestedDetail={selectedDetail(state.site)}
         protectedGeneration={generation}
         protectedRequestToken={() => protectedScope.requestToken()}
         registerProtectedResource={(resource) => protectedScope.registerResource(resource)}
         telemetryRuntime={telemetryRuntime}
+        publishRealtimeStatus={() => undefined}
       />
     </main>
   );

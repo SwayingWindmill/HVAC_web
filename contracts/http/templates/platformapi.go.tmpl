@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 11
+	CapabilitySetVersion                 = 12
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -38,6 +38,7 @@ const (
 	ListAlarmsPath                        = "__ALARMS_PATH__"
 	GetAlarmPathTemplate                  = "__ALARM_PATH__"
 	AckAlarmPathTemplate                  = "__ALARM_ACK_PATH__"
+	AssignAlarmPathTemplate               = "__ALARM_ASSIGN_PATH__"
 )
 
 type BuildInfo struct {
@@ -102,6 +103,7 @@ const (
 	CapabilityTelemetryHistoryRead  Capability = "telemetry.history.read"
 	CapabilityAlarmList             Capability = "alarm.list"
 	CapabilityAlarmRead             Capability = "alarm.read"
+	CapabilityAlarmAssign           Capability = "alarm.assign"
 	CapabilityWorkOrderList         Capability = "work-order.list"
 	CapabilityWorkOrderRead         Capability = "work-order.read"
 	CapabilityWorkOrderCreate       Capability = "work-order.create"
@@ -318,10 +320,10 @@ type TelemetryPoint struct {
 	Writable          bool           `json:"writable"`
 	SampleIntervalMS  int            `json:"sampleIntervalMs"`
 	PublishIntervalMS int            `json:"publishIntervalMs"`
-	StaleAfterMS      int            `json:"staleAfterMs"`
-	CounterDecreaseMode *string `json:"counterDecreaseMode"`
-	CounterRolloverModulus *float64 `json:"counterRolloverModulus"`
-	SourceMetadata    map[string]any `json:"sourceMetadata"`
+	StaleAfterMS           int            `json:"staleAfterMs"`
+	CounterDecreaseMode    *string        `json:"counterDecreaseMode"`
+	CounterRolloverModulus *float64       `json:"counterRolloverModulus"`
+	SourceMetadata         map[string]any `json:"sourceMetadata"`
 	Status            string         `json:"status"`
 	Revision          int64          `json:"revision"`
 	CreatedAt         string         `json:"createdAt"`

@@ -242,6 +242,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchRuleRoute(h, writer, request, ruleRoute)
 			return
 		}
+		if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
+			dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
+			return
+		}
 		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
 			dispatchOperationsRoute(h, writer, request, operationsRoute)
 			return
@@ -279,6 +283,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
+		dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
+		return
+	}
 	if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
 		dispatchOperationsRoute(h, writer, request, operationsRoute)
 		return
@@ -751,6 +759,9 @@ func safeLogPath(path string) string {
 			if registryRoute, _, matches := matchPublicRegistryRoute(method, path); matches {
 				return registryRoute.template
 			}
+		}
+		if agentSessionRoute, matches := matchPublicAgentSessionRoute(path); matches {
+			return agentSessionRoute.template
 		}
 		if operationsRoute, matches := matchPublicOperationsRoute(path); matches {
 			return operationsRoute.template

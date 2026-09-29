@@ -7,9 +7,11 @@ import ts from 'typescript';
 export const OPERATIONS_AGENT_SERVICE_PACKAGE_NAME = '@hvac/operations-agent-service';
 
 export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
+  'agent',
   'domain',
   'application',
   'runtime-langgraph',
+  'runtime-pi',
   'model',
   'tools',
   'persistence',
@@ -21,18 +23,21 @@ export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
 ]);
 
 const adapterModules = OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => (
-  !['domain', 'application', 'bootstrap'].includes(name)
+  !['agent', 'domain', 'application', 'bootstrap'].includes(name)
 ));
 
 const allowedInternalDependencies = Object.freeze({
-  root: ['application', 'bootstrap'],
+  root: ['agent', 'application', 'bootstrap'],
+  agent: [],
   domain: [],
-  application: ['domain'],
+  application: ['agent', 'domain'],
   bootstrap: OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => name !== 'bootstrap'),
   ...Object.fromEntries(adapterModules.map((name) => [name, ['application', 'domain']])),
+  tools: ['agent', 'application', 'domain'],
+  'runtime-pi': ['agent'],
 });
 
-const externalImportForbiddenModules = new Set(['domain', 'application']);
+const externalImportForbiddenModules = new Set(['agent', 'domain', 'application']);
 const forbiddenToolBypassPatterns = Object.freeze([
   { name: 'ClickHouse', pattern: /clickhouse/iu },
   { name: 'Cube', pattern: /\bcube(?:js)?\b/iu },

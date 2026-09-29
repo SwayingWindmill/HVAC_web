@@ -50,6 +50,7 @@ const paths = {
   limitPolicy: 'deploy/platform/phase1/limit-policy.v1.json',
   roleCredentialTemplate: 'deploy/platform/phase1/migrations/role-credentials.sql.example',
   packageJson: 'package.json',
+  identityReset: 'scripts/phase1-reset-local-identity-password.mjs',
   goWork: 'go.work',
   goServiceDockerfile: 'deploy/platform/phase1/images/go-service.Dockerfile',
   observabilityRuntime: 'libs/observability/runtime.go',
@@ -72,7 +73,7 @@ const environmentFiles = {
   production: 'deploy/platform/phase1/environments/production.runtime.env.example',
 };
 
-const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson] = await Promise.all([
+const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson, identityReset] = await Promise.all([
   readJSON(paths.baseline),
   readJSON(paths.matrix),
   read(paths.compose),
@@ -105,6 +106,7 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   readJSON(paths.limitPolicy),
   read(paths.roleCredentialTemplate),
   read(paths.packageJson),
+  read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
 const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
@@ -382,7 +384,7 @@ assert(nginx.includes('location /realtime/'), 'Nginx must proxy realtime WebSock
 assert(!nginx.includes('location /connection/'), 'Nginx must not expose the internal Centrifugo connection path');
 assert(!nginx.includes('proxy_pass http://centrifugo:8000;'), 'Nginx must not proxy browsers directly to Centrifugo');
 assert(nginx.includes('try_files $uri $uri/ /index.html;'), 'Nginx must serve the React SPA fallback');
-assert(webDockerfile.includes('npm run build:real'), 'production web image must build the Real artifact');
+assert(webDockerfile.includes('npm run build'), 'production web image must build the authoritative web artifact');
 assert(!webDockerfile.includes('npm run dev'), 'production web image must never run a Vite development server');
 
 const environmentObservability = {
@@ -447,6 +449,7 @@ assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production 
 assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('iot-service:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning and 90% critical thresholds');
+assert(hostAlerts.includes('Phase1HostDiskWillFillWithin24Hours') && hostAlerts.includes('predict_linear('), 'host disk alerts must warn on projected rapid exhaustion before the static threshold is reached');
 assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'observability-full OTel Collector must route logs and traces to central backends');
 assert(otelLogs.includes('filelog/docker') && otelLogs.includes('otlphttp/loki') && !otelLogs.includes('otlp/tempo'), 'observability-logs OTel Collector must collect logs without requiring Tempo');
 assert(!prometheus.includes('otel-collector:9464'), 'Prometheus must scrape Go diagnostics endpoints directly instead of depending on the collector');
@@ -455,7 +458,11 @@ assert(tempo.includes('backend: local'), 'Phase 1 trace backend must use local s
 assert(grafanaDatasources.includes('Prometheus') && grafanaDatasources.includes('Loki') && grafanaDatasources.includes('Tempo'), 'Grafana must provision metrics, logs and traces datasources');
 assert(grafanaDashboards.includes('/var/lib/grafana/dashboards'), 'Grafana must provision checked-in dashboards');
 
-assert(compose.includes('archive_mode=on') && compose.includes('archive_command=test ! -f /var/lib/postgresql/wal-archive/%f'), 'PostgreSQL must continuously archive WAL');
+assert(compose.includes('archive_mode=${POSTGRES_ARCHIVE_MODE:-off}') && compose.includes('archive_command=test ! -f /var/lib/postgresql/wal-archive/%f'), 'PostgreSQL WAL archiving must be opt-in with the canonical archive command');
+assert(envs.testing.includes('POSTGRES_ARCHIVE_MODE=off'), 'testing must explicitly keep PostgreSQL WAL archiving disabled');
+for (const name of ['staging', 'production']) {
+  assert(envs[name].includes('POSTGRES_ARCHIVE_MODE=on'), `${name} must explicitly enable PostgreSQL WAL archiving`);
+}
 assert(compose.includes('profiles: ["backup"]') && compose.includes('postgres-backup:') && compose.includes('clickhouse-backup:'), 'backup operations must be explicit non-default Compose profiles');
 assert(postgresBackup.includes('pg_basebackup') && postgresBackup.includes('--wal-method=stream') && postgresBackup.includes('SHA256SUMS'), 'PostgreSQL base backup must include streamed WAL and checksums');
 assert(postgresBackup.includes('sha256sum ./* > SHA256SUMS'), 'PostgreSQL base backup checksum manifest must use restore-host-verifiable relative paths');
@@ -485,7 +492,8 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(!manifestEntries.some((entry) => entry.endsWith('|infra/registry/postgres/init/009h-data-execution-runtimes.sql')), 'superseded cross-domain 009h runtime migration must not return to the production allowlist');
+assert(manifestEntries.includes('hvac_s1|infra/registry/postgres/init/016-s24-alarm-assign-capability.sql'), 'production migrations must install alarm assignment authorization before local admin grants and alarm assignment can work');
+assert(!manifestEntries.some((entry) => entry.endsWith('|infra/registry/postgres/init/009h-data-execution-runtimes.sql')), 'the superseded cross-domain 009h runtime migration must not return to the production allowlist');
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
@@ -511,7 +519,10 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 76-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(packageJson.includes('"deployment:phase1:identity-reset": "node scripts/phase1-reset-local-identity-password.mjs"'), 'development/testing Identity password recovery must have a stable package entrypoint');
+assert(identityReset.includes("['development', 'testing'].includes(environment)") && identityReset.includes("IDENTITY_ADMIN_OPERATION: 'reset-password-random'") && identityReset.includes('local-admin.credentials') && identityReset.includes('chmodSync(temporary, 0o600)') && !identityReset.includes('console.log(password'), 'Identity password recovery must be environment-bounded, atomically persist the canonical credential file, and never print the password');
+assert(phase1Readme.includes('canonical non-versioned `runtime/local-admin.credentials`') && phase1Readme.includes('Do not maintain a second local/test credential file by hand'), 'Phase 1 README must define one canonical local/test Identity credential file');
+assert(phase1Readme.includes('exact 77-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 assert(phase1Readme.includes('Deployment tiers and observability profiles') && phase1Readme.includes('observability-core') && phase1Readme.includes('observability-logs') && phase1Readme.includes('observability-full') && phase1Readme.includes('intelligence'), 'Phase 1 README must document tier profiles');
 assert(phase1Readme.includes('Availability and recovery evidence') && phase1Readme.includes('SINGLE_NODE_RECOVERABLE'), 'Phase 1 README must document the availability tier');
 

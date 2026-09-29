@@ -21,9 +21,10 @@ const requireText = (source, expected, label) => {
 
 requireText(workspace, 'data-total-device-count', 'Real Assets workspace');
 requireText(workspace, 'data-filtered-device-count', 'Real Assets workspace');
-requireText(workspace, 'data-testid="real-assets-list-all"', 'Real Assets workspace');
-requireText(workspace, 'data-testid="real-assets-hierarchy-equipment"', 'Real Assets workspace');
-requireText(drawer, "import('./DeviceHistoryTrends.tsx')", 'Device Drawer lazy history boundary');
+requireText(workspace, 'data-testid="real-assets-table-wrap"', 'Real Assets workspace');
+requireText(workspace, "useState<LedgerMode>('devices')", 'Real Assets Device-first default');
+requireText(workspace, 'realAssetsDevicePath', 'Real Assets typed Device detail path');
+requireText(drawer, "import('./DeviceHistoryTrends')", 'Device Drawer lazy history boundary');
 requireText(trends, 'animation: false', 'history reduced-motion-safe chart');
 requireText(trends, 'aria: { enabled: true', 'history chart accessibility');
 requireText(runner, 'REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION', 'certification runner fixture revision binding');

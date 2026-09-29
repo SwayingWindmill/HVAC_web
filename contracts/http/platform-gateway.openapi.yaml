@@ -1475,6 +1475,27 @@
         }
       }
     },
+    "/api/v1/alarms/{alarmId}/assign": {
+      "post": {
+        "operationId": "assignAlarmV212",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AssignAlarmRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after assignment.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
+      }
+    },
     "/api/v1/commands": {
       "post": {
         "operationId": "createCommandV212",
@@ -2121,7 +2142,7 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 11 IAM-authored browser capability identifier. Registry reads, Rule management and governed writes are capability-authorized; IAM administration is capability-authorized rather than Role-name-authorized.",
+        "description": "Version 12 IAM-authored browser capability identifier. Registry reads, Rule management and governed writes are capability-authorized; IAM administration is capability-authorized rather than Role-name-authorized.",
         "enum": [
           "site.list",
           "site.read",
@@ -2145,6 +2166,7 @@
           "telemetry.history.read",
           "alarm.list",
           "alarm.read",
+          "alarm.assign",
           "work-order.list",
           "work-order.read",
           "work-order.create",
@@ -2169,7 +2191,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 11
+            "const": 12
           },
           "policyRevision": {
             "type": "string",
@@ -2178,7 +2200,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 32,
+            "maxItems": 33,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"
