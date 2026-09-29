@@ -286,6 +286,9 @@ services:
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       ANALYTICS_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       TELEMETRY_LIMIT_POLICY_REDIS_URL: ${TELEMETRY_LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
+      TELEMETRY_ALARM_EVALUATION_ENABLED: "true"
+      TELEMETRY_ALARM_EVALUATION_URL: https://alarm-service:8448/internal/v1/alarm/evaluations/telemetry
+      TELEMETRY_ALARM_SERVER_NAME: alarm-service
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -389,6 +392,8 @@ services:
       OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
       OPTIMIZATION_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
+      OPTIMIZATION_CLICKHOUSE_READER_USERNAME: optimization_service_reader
+      OPTIMIZATION_CLICKHOUSE_READER_PASSWORD: ${OPTIMIZATION_CLICKHOUSE_READER_PASSWORD:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -418,9 +423,16 @@ services:
     environment:
       FDD_HTTP_ADDR: :19094
       FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
+      FDD_HISTORY_QUERY_URL: ${FDD_HISTORY_QUERY_URL:-https://telemetry-query-service:18447}
+      FDD_HISTORY_SERVER_NAME: ${FDD_HISTORY_SERVER_NAME:-telemetry-query-service}
+      FDD_HISTORY_TLS_CERT: ${FDD_HISTORY_TLS_CERT:-/run/hvac/fdd/client-cert.pem}
+      FDD_HISTORY_TLS_KEY: ${FDD_HISTORY_TLS_KEY:-/run/hvac/fdd/client-key.pem}
+      FDD_HISTORY_SERVER_CA: ${FDD_HISTORY_SERVER_CA:-/run/hvac/fdd/ca.pem}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
+    volumes:
+      - ${FDD_RUNTIME_DIR:-./runtime/fdd}:/run/hvac/fdd:ro
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]

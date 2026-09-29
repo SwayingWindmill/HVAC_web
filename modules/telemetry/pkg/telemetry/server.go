@@ -42,9 +42,11 @@ type ServerConfig struct {
 	AllowedGatewaySPIFFE           string
 	RuntimeAudience                string
 	ObservationAcceptor            ObservationAcceptor
+	HistoricalObservationAcceptor  HistoricalObservationAcceptor
 	CoverageReporter               CoverageReporter
 	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
 	SourceAuthenticator            SourceAuthenticator
+	AllowedHistoricalReplaySPIFFE  string
 	Realtime                       *RealtimeService
 	AllowedCentrifugoSPIFFE        string
 	CentrifugoProxySecret          string
@@ -67,9 +69,11 @@ type handler struct {
 	allowedGatewaySPIFFE           string
 	runtimeAudience                string
 	observationAcceptor            ObservationAcceptor
+	historicalObservationAcceptor  HistoricalObservationAcceptor
 	coverageReporter               CoverageReporter
 	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
 	sourceAuthenticator            SourceAuthenticator
+	allowedHistoricalReplaySPIFFE  string
 	realtime                       *RealtimeService
 	allowedCentrifugoSPIFFE        string
 	centrifugoProxySecret          string
@@ -103,9 +107,12 @@ func NewHandler(config ServerConfig) http.Handler {
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
-		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
+		observationAcceptor:           config.ObservationAcceptor,
+		historicalObservationAcceptor: config.HistoricalObservationAcceptor,
+		coverageReporter:              config.CoverageReporter,
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
 		sourceAuthenticator:            config.SourceAuthenticator,
+		allowedHistoricalReplaySPIFFE:  strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
 		realtime:                       config.Realtime,
 		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
 		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
@@ -135,6 +142,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer = captured
 	if request.URL.Path == InternalSourceObservationPath {
 		h.handleSourceObservation(writer, request)
+		return
+	}
+	if request.URL.Path == InternalHistoricalReplayObservationPath {
+		h.handleHistoricalReplayObservation(writer, request)
 		return
 	}
 	if request.URL.Path == InternalSourceCoveragePath {

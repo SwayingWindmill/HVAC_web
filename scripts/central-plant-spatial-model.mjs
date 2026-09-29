@@ -67,7 +67,7 @@ const sensorByDeviceSource = new Map([
   ['CT-01/ambientWetBulbTemperatureC', 'sensor-ct01-wet-bulb'],
 ]);
 
-const stateSources = new Set(['runState', 'businessRevision', 'faultCode']);
+const stateSources = new Set(['runState', 'faultCode']);
 const settingSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'loadLimitPct', 'frequencyHz', 'fanSpeedPct']);
 const counterSources = new Set(['energyKwh', 'accumulatedCoolingEnergyKwh']);
 
@@ -232,13 +232,19 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
   const points = assignCentralPlantPointIds([...observedPoints, ...controlPoints]);
   const simulatorSubjectType = (value) => ({ EQUIPMENT: 'ASSET', AREA: 'SPACE' })[value] ?? value;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     gatewayId: 'EG8200-COMMERCIAL-001',
     publishInterval: overrides.publishInterval ?? '5s',
+    scenario: {
+      schemaVersion: 1,
+      mode: 'STATIC',
+      inputs: {
+        ambientDryBulbC: 34,
+        ambientWetBulbC: 27,
+        coolingLoadKw: 864,
+      },
+    },
     plant: {
-      ambientDryBulbC: 34,
-      ambientWetBulbC: 27,
-      loadFraction: 0.72,
       initialEnergyKwh: overrides.initialEnergyKwh ?? 0,
       chiller: { id: 'CHILLER-01', ratedCoolingCapacityKw: 1200, baseCop: 5.6, initialSetpointC: 7, initialLoadLimitPct: 100, initiallyRunning: true },
       chilledWaterPump: { id: 'CHWP-01', ratedPowerKw: 45, ratedFlowM3h: 220, initialFrequencyHz: 50, initiallyRunning: true },

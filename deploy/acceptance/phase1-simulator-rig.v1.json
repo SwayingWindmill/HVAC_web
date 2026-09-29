@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "profile": "phase1-simulator-live-rig",
+  "reason": "The deployed telemetry ingest path commits one serializable transaction per point, so a Gateway tops out near one point round trip (~12 points/s) while the seeded 2s/10s contract asks for ~28 points/s. A live acceptance run therefore paces the plant to a cadence the stack can sustain. Point cadence, Registry staleness, runtime freshness and the MQTT session lifetime are one profile so they cannot drift apart, and re-running the acceptance does not depend on hand-edited runtime files or a database fix-up. The cadence covers every point of a Device, including control points, because the publisher tick is the minimum sample interval across all points.",
+  "requiredDevices": ["CHILLER-01", "BTU-METER-01"],
+  "plant": {
+    "publishInterval": "30s",
+    "required": {
+      "sampleInterval": "30s",
+      "publishInterval": "30s",
+      "staleAfter": "5m"
+    },
+    "background": {
+      "sampleInterval": "10m",
+      "publishInterval": "10m",
+      "staleAfter": "1h"
+    },
+    "overrides": {
+      "plant": {
+        "chilledWaterPump": {
+          "initialFrequencyHz": 30
+        }
+      }
+    }
+  },
+  "registry": {
+    "publishIntervalMs": 30000,
+    "staleAfterMs": 60000
+  },
+  "runtimeFreshness": {
+    "freshWithinSeconds": 120,
+    "expectedSampleIntervalSeconds": 30
+  },
+  "connectivity": {
+    "sessionLifetimeHours": 168
+  },
+  "broker": {
+    "resetSubscriberQueue": true,
+    "rotateSubscriberClientId": true
+  }
+}

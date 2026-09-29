@@ -37,6 +37,7 @@ import {
   type WorkOrderStatus,
 } from '@/api/work-orders';
 import type { ProtectedScopeResource } from '@/app/protected-scope';
+import { linkFDDFinding, listSiteFDDFindings } from '@/api/intelligence';
 import { siteRoute } from '@/app/router-paths';
 import {
   DataTable,
@@ -480,6 +481,28 @@ export function WorkOrders({ site, principal, registerProtectedResource }: WorkO
       signal,
     }),
     enabled: Boolean(originAlarmId && canReadAlarm),
+  });
+
+  // The FDD owner publishes findings against equipment; a finding only learns the Alarm
+  // and Work Order it belongs to when an operator records the association. Listing by the
+  // origin Alarm would therefore only ever return findings that were already associated,
+  // so the candidates are the Site's open findings and the operator picks the one that
+  // justified this work.
+  const originFindingsQuery = useQuery({
+    queryKey: ['fdd', 'findings', site.id, 'association-candidates'],
+    queryFn: ({ signal }) => listSiteFDDFindings(site.id, signal, { limit: 50 }),
+    enabled: canReadAlarm,
+  });
+
+  const linkFindingMutation = useMutation({
+    mutationFn: (findingId: string) => linkFDDFinding(site.id, findingId, {
+      alarmId: originAlarmId!,
+      workOrderId: detail!.workOrderId,
+    }, { csrfToken: principal.session.csrfToken }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['fdd', 'findings', site.id] });
+      setSuccessMessage('诊断发现已关联本工单');
+    },
   });
 
   const sourceAlarmQuery = useQuery({
@@ -1097,6 +1120,47 @@ export function WorkOrders({ site, principal, registerProtectedResource }: WorkO
                           { label: '首次发生', value: formatInstant(originAlarmQuery.data.firstOccurredAt, site.timezone) },
                           { label: '最近发生', value: formatInstant(originAlarmQuery.data.lastOccurredAt, site.timezone) },
                         ]} />
+                        <div className="space-y-2 border-t pt-3">
+                          <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                            <Link2 className="size-3.5" />
+                            诊断发现
+                          </div>
+                          {originFindingsQuery.isPending ? (
+                            <span className="text-xs text-muted-foreground">正在读取诊断发现…</span>
+                          ) : originFindingsQuery.isError ? (
+                            <Alert>
+                              <AlertTitle>诊断发现暂不可用</AlertTitle>
+                              <AlertDescription>{workOrderErrorMessage(originFindingsQuery.error)}</AlertDescription>
+                            </Alert>
+                          ) : (originFindingsQuery.data ?? []).filter((finding) => !finding.workOrderId || finding.workOrderId === detail.workOrderId).length === 0 ? (
+                            <span className="text-xs text-muted-foreground">暂无可关联的诊断发现</span>
+                          ) : (
+                            <div className="space-y-2">
+                              {(originFindingsQuery.data ?? []).filter((finding) => !finding.workOrderId || finding.workOrderId === detail.workOrderId).map((finding) => (
+                                <div key={finding.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant="outline">{finding.findingType}</Badge>
+                                    <span className="text-xs text-muted-foreground">
+                                      {formatInstant(finding.evaluationTo, site.timezone)} · 置信度 {Math.round(finding.confidence * 100)}%
+                                    </span>
+                                  </div>
+                                  {finding.workOrderId === detail.workOrderId ? (
+                                    <Badge variant="secondary">已关联本工单</Badge>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={linkFindingMutation.isPending}
+                                      onClick={() => linkFindingMutation.mutate(finding.id)}
+                                    >
+                                      关联到本工单
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ) : null}
                   </div>

@@ -25,7 +25,7 @@ func loadGeneratedCentralPlantConfig(t *testing.T) Config {
 
 func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
-	plant := NewPlant(config.Plant, time.Unix(2000, 0).UTC())
+	plant := NewPlant(config.Plant, config.Scenario, time.Unix(2000, 0).UTC())
 	runtime := edgecontrol.NewRuntime()
 	capabilities, err := edgecontrol.NewStandardCapabilityRegistry()
 	if err != nil {
@@ -55,7 +55,7 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Components) != 7 || len(manifest.Channels) != 65 || len(manifest.CapabilityProfiles) != 6 {
+	if len(manifest.Components) != 7 || len(manifest.Channels) != 61 || len(manifest.CapabilityProfiles) != 6 {
 		t.Fatalf("unexpected Edge Manifest sizes: components=%d channels=%d profiles=%d", len(manifest.Components), len(manifest.Channels), len(manifest.CapabilityProfiles))
 	}
 
@@ -68,8 +68,8 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 		}
 		updates += result.Updates
 	}
-	if updates != 48 {
-		t.Fatalf("expected 48 observed Channel updates, got %d", updates)
+	if updates != 44 {
+		t.Fatalf("expected 44 observed Channel updates, got %d", updates)
 	}
 	image := runtime.SwitchProcessImage(time.Unix(2001, 0).UTC())
 	available := 0
@@ -78,7 +78,7 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 			available++
 		}
 	}
-	if available != 48 {
-		t.Fatalf("expected 48 values in Process Image, got %d", available)
+	if available != 44 {
+		t.Fatalf("expected 44 values in Process Image, got %d", available)
 	}
 }

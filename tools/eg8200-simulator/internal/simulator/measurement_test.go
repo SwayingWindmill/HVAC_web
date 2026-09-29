@@ -11,7 +11,7 @@ func TestMeasurementSchedulerPublishesPointsIndependently(t *testing.T) {
 	config := testConfig()
 	config.Points = config.Points[:2]
 	start := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
-	plant := NewPlant(config.Plant, start)
+	plant := NewPlant(config.Plant, config.Scenario, start)
 	scheduler, err := NewMeasurementScheduler(config)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestMeasurementSchedulerRejectsMissingSourcePoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plant := NewPlant(config.Plant, time.Now().UTC())
+	plant := NewPlant(config.Plant, config.Scenario, time.Now().UTC())
 	if _, err := scheduler.Observe(plant.Tick(time.Second)); err == nil {
 		t.Fatal("expected missing source point failure")
 	}
@@ -79,7 +79,7 @@ func TestMeasurementSchedulerContinuesPersistedSequences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plant := NewPlant(config.Plant, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	plant := NewPlant(config.Plant, config.Scenario, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
 	measurements, err := scheduler.Observe(plant.Tick(time.Second))
 	if err != nil {
 		t.Fatal(err)

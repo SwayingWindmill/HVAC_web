@@ -14,7 +14,7 @@ const [catalog, invariants, redaction, trace, securityGo, metricsGo, runtimeMetr
   json('deploy/s2/observability/trace-chain.v1.json'),
   text('libs/observability/s2_security.go'),
   text('libs/observability/metrics.go'),
-  text('modules/telemetry/internal/telemetry/metrics.go'),
+  text('modules/telemetry/pkg/telemetry/metrics.go'),
   text('cmd/telemetry-worker/main.go'),
   text('cmd/energy-api/internal/gateway/telemetry_metrics.go'),
   text('cmd/energy-api/internal/gateway/telemetry.go'),

@@ -8,6 +8,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
+	github.com/quanlaihe/hvac-web/modules/telemetry v0.0.0
 )
 
 require (
@@ -25,3 +26,5 @@ replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identit
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
+
+replace github.com/quanlaihe/hvac-web/modules/telemetry => ../telemetry

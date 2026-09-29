@@ -10,7 +10,6 @@ on:
       - "scripts/check-npm-production-audit.mjs"
       - "scripts/check-production-licenses.mjs"
       - "scripts/test-npm-production-audit-retry.mjs"
-      - "scripts/test-react-router-security-upgrade.mjs"
   push:
     branches: [main]
     paths:
@@ -20,7 +19,6 @@ on:
       - "scripts/check-npm-production-audit.mjs"
       - "scripts/check-production-licenses.mjs"
       - "scripts/test-npm-production-audit-retry.mjs"
-      - "scripts/test-react-router-security-upgrade.mjs"
   workflow_dispatch:
 
 permissions:

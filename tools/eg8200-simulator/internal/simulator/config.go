@@ -10,12 +10,13 @@ import (
 	"time"
 )
 
-const ConfigSchemaVersion = 2
+const ConfigSchemaVersion = 3
 
 type Config struct {
 	SchemaVersion   int                    `json:"schemaVersion"`
 	GatewayID       string                 `json:"gatewayId"`
 	PublishInterval string                 `json:"publishInterval"`
+	Scenario        Scenario               `json:"scenario"`
 	Plant           PlantConfig            `json:"plant"`
 	Spaces          []SpaceConfig          `json:"spaces"`
 	Assets          []AssetConfig          `json:"assets"`
@@ -25,9 +26,6 @@ type Config struct {
 }
 
 type PlantConfig struct {
-	AmbientDryBulbC  float64            `json:"ambientDryBulbC"`
-	AmbientWetBulbC  float64            `json:"ambientWetBulbC"`
-	LoadFraction     float64            `json:"loadFraction"`
 	InitialEnergyKWh float64            `json:"initialEnergyKwh,omitempty"`
 	Chiller          ChillerConfig      `json:"chiller"`
 	ChilledWaterPump PumpConfig         `json:"chilledWaterPump"`
@@ -90,6 +88,9 @@ func (config Config) Validate() error {
 	if err != nil || interval < time.Second || interval > time.Minute {
 		return errors.New("publishInterval must be between 1s and 1m")
 	}
+	if err := config.Scenario.Validate(); err != nil {
+		return err
+	}
 	if err := config.Plant.Validate(); err != nil {
 		return err
 	}
@@ -100,12 +101,6 @@ func (config Config) Validate() error {
 }
 
 func (config PlantConfig) Validate() error {
-	if config.AmbientDryBulbC < -30 || config.AmbientDryBulbC > 60 || config.AmbientWetBulbC < -40 || config.AmbientWetBulbC > config.AmbientDryBulbC {
-		return errors.New("plant ambient conditions are invalid")
-	}
-	if config.LoadFraction < 0 || config.LoadFraction > 1.2 {
-		return errors.New("plant loadFraction must be between 0 and 1.2")
-	}
 	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
 		return errors.New("plant initialEnergyKwh must be a finite non-negative number")
 	}

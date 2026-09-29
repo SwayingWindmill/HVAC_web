@@ -161,7 +161,6 @@ test('capability task CLI preserves command order for migrated aggregates', () =
     'npm run s2:ownership:check',
     'npm run s2:public-contract:check',
     'npm run s2:rollout-gates:check',
-    'npm run s2:implementation-plan:check',
     'npm run contracts:check',
     'npm run release:evidence-assets',
     'npm run s1:registry:check',

@@ -13,10 +13,11 @@ const (
 	SourcePathPush           SourcePath = "PUSH"
 	SourcePathPoll           SourcePath = "POLL"
 	SourcePathReconciliation SourcePath = "RECONCILIATION"
+	SourcePathHistoryReplay  SourcePath = "HISTORY_REPLAY"
 )
 
 func (path SourcePath) Valid() bool {
-	return path == SourcePathWebhook || path == SourcePathPush || path == SourcePathPoll || path == SourcePathReconciliation
+	return path == SourcePathWebhook || path == SourcePathPush || path == SourcePathPoll || path == SourcePathReconciliation || path == SourcePathHistoryReplay
 }
 
 type ObservationStatus string
@@ -241,6 +242,70 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision.ReevaluateSnapshot = true
 	decision.ReplaceLatest = true
 	decision.EmitPresenceSignal = true
+	return decision
+}
+
+func EvaluateHistoricalObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
+	if facts.EventAlreadySeen {
+		return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonDuplicate, false)
+	}
+	if facts.CurrentPosition != nil {
+		switch {
+		case candidate.Position.Offset < facts.CurrentPosition.Offset:
+			return terminalObservation(ObservationOutOfOrder, QualityInvalid, QualityReasonOutOfOrder, false)
+		case candidate.Position.Offset == facts.CurrentPosition.Offset:
+			return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonReplayed, false)
+		}
+	}
+
+	binding, quarantine := resolveRuntimeBinding(candidate, facts.Bindings)
+	if quarantine != "" {
+		return ObservationDecision{Status: ObservationQuarantined, Quality: QualityInvalid, QuarantineReason: quarantine, AdvancePosition: true}
+	}
+	decision := ObservationDecision{
+		TenantID: binding.TenantID, DeviceID: binding.DeviceID, SiteID: binding.SiteID,
+		Status: ObservationQuarantined, Quality: QualityInvalid, AdvancePosition: true,
+	}
+	pointBinding, pointQuarantine := resolveRuntimePointBinding(candidate, binding, facts.PointBindings)
+	if pointQuarantine != "" {
+		decision.QuarantineReason = pointQuarantine
+		return decision
+	}
+	decision.PointID = pointBinding.PointID
+	decision.PointType = pointBinding.PointType
+	decision.PointRevision = pointBinding.PointRevision
+	if pointBinding.CounterDecreaseMode != nil {
+		decision.CounterDecreaseMode = *pointBinding.CounterDecreaseMode
+	}
+	if pointBinding.CounterRolloverModulus != nil {
+		modulus := *pointBinding.CounterRolloverModulus
+		decision.CounterRolloverModulus = &modulus
+	}
+	if pointBinding.SensorID != nil {
+		decision.SensorID = *pointBinding.SensorID
+	}
+	if facts.Policy == nil || facts.Policy.Revision < 1 {
+		decision.QuarantineReason = QuarantinePolicyNotConfigured
+		return decision
+	}
+	decision.PolicyRevision = facts.Policy.Revision
+	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
+
+	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
+	reasons = slices.DeleteFunc(reasons, func(reason QualityReason) bool { return reason == QualityReasonSourceLagExceeded })
+	decision.QualityReasons = reasons
+	decision.QuarantineReason = ""
+	if rejected {
+		decision.Status = ObservationRejected
+		decision.Quality = QualityInvalid
+		return decision
+	}
+
+	decision.Status = ObservationAccepted
+	decision.Quality = QualityGood
+	if slices.Contains(reasons, QualityReasonSourceUntrusted) {
+		decision.Quality = QualityPartial
+	}
 	return decision
 }
 

@@ -22,7 +22,7 @@ const requiredFiles = [
   'modules/command/pkg/commandservice/runtime_http.go',
   'modules/command/pkg/commanddispatcher/runtime_client.go',
   'modules/command/pkg/commanddispatcher/reported_state_client.go',
-  'modules/telemetry/internal/telemetry/command_verifier_server.go',
+  'modules/telemetry/pkg/telemetry/command_verifier_server.go',
   'tools/eg8200-simulator/internal/simulator/edge_runtime.go',
   'tools/eg8200-simulator/internal/simulator/edge_driver.go',
   'tools/eg8200-simulator/internal/simulator/mqtt_command.go',
@@ -70,7 +70,7 @@ if (failures.length === 0) {
   }
   requireText('modules/command/pkg/commanddispatcher/runtime_client.go', 'ClaimDispatch');
   requireText('modules/command/pkg/commanddispatcher/reported_state_client.go', 'validS2EvidenceID');
-  requireText('modules/telemetry/internal/telemetry/command_verifier_server.go', 'allowedCommandVerifierSPIFFE');
+  requireText('modules/telemetry/pkg/telemetry/command_verifier_server.go', 'allowedCommandVerifierSPIFFE');
 
   requireText('deploy/platform/phase1/wsl.override.yaml', 'COMMAND_RUNTIME_COHORTS_FILE');
   requireText('deploy/platform/phase1/wsl.override.yaml', 'COMMAND_RUNTIME_BINDINGS_FILE');

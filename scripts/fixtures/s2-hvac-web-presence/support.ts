@@ -102,7 +102,6 @@ function chillerValueStates(keys: readonly string[], updated: boolean): Telemetr
     ['chiller.entering_chilled_water_temperature', present('chiller.entering_chilled_water_temperature', updated ? 12.3 : 12.1, 'NUMBER', 'Cel')],
     ['chiller.chilled_water_temperature_setpoint', present('chiller.chilled_water_temperature_setpoint', 6.5, 'NUMBER', 'Cel')],
     ['chiller.entering_cooling_water_temperature', present('chiller.entering_cooling_water_temperature', updated ? 29.2 : 29.4, 'NUMBER', 'Cel')],
-    ['chiller.business_revision', present('chiller.business_revision', updated ? 8 : 7, 'NUMBER', null)],
     ['chiller.fault_code', present('chiller.fault_code', 'NONE', 'STRING', null)],
   ]);
   return keys.map((key) => states.get(key) ?? {

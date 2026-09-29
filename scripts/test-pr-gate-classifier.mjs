@@ -57,7 +57,7 @@ test('Operations Workspace changes select dedicated unit and Linux browser profi
 });
 
 test('Realtime backend changes select the durable realtime PostgreSQL profile', () => {
-  const classification = runClassification(['modules/telemetry/internal/telemetry/realtime.go']);
+  const classification = runClassification(['modules/telemetry/pkg/telemetry/realtime.go']);
   assert.ok(classification.unitProfiles.includes('s2'));
   assert.deepEqual(classification.integrationProfiles, ['s2-realtime']);
   assert.equal(classification.broad, false);
@@ -65,7 +65,7 @@ test('Realtime backend changes select the durable realtime PostgreSQL profile', 
 
 test('domain module changes stay scoped to their affected profiles instead of broad fallback', () => {
   for (const [file, unitProfile, integrationProfile] of [
-    ['modules/iot/internal/adapter/runtime.go', 's2', 's2-baseline'],
+    ['modules/iot/pkg/adapter/runtime.go', 's2', 's2-baseline'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {

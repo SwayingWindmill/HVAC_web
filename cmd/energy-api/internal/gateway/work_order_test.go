@@ -58,11 +58,16 @@ func TestGatewayWorkOrderQueryBoundary(t *testing.T) {
 	if limit, ok := validatePublicWorkOrderQuery(collection, url.Values{"status": {"OPEN"}, "limit": {"25"}}); !ok || limit != 25 {
 		t.Fatalf("valid Work Order query rejected: limit=%d ok=%t", limit, ok)
 	}
+	if _, ok := validatePublicWorkOrderQuery(collection, url.Values{"sourceDomain": {"ALARM"}, "sourceRef": {gatewayWorkOrderTestAlarmID}}); !ok {
+		t.Fatal("valid Alarm source Work Order query was rejected")
+	}
 	for _, query := range []url.Values{
 		{"unknown": {"value"}},
 		{"limit": {"0"}},
 		{"limit": {"101"}},
 		{"status": {"OPEN", "CLOSED"}},
+		{"sourceDomain": {"ALARM"}},
+		{"sourceRef": {gatewayWorkOrderTestAlarmID}},
 	} {
 		if _, ok := validatePublicWorkOrderQuery(collection, query); ok {
 			t.Fatalf("invalid Work Order query was accepted: %v", query)

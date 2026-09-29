@@ -151,7 +151,7 @@ func TestEvaluatePolicySiteScheduleUsesIanaTimezoneAcrossDST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.State.Status != EvaluationMatched || decision.State.QualityBlocker != "" {
+	if decision.Effect != EvaluationEffectNone || decision.State.Status != EvaluationMatched || decision.State.QualityBlocker != "" {
 		t.Fatalf("schedule did not remain active across DST jump: %#v", decision)
 	}
 

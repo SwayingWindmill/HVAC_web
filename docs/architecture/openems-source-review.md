@@ -35,14 +35,177 @@ All modules below existed locally before completing their pinned-source review a
 | Capability Profile Registry | VERIFIED | Nature interfaces + ChannelId/Doc contracts |
 | Edge Component Registry | VERIFIED | OpenemsComponent / ComponentManager lifecycle |
 | Edge Manifest | VERIFIED | EdgeConfig / Component/Channel serialization |
+| Edge Runtime Host | VERIFIED | production Component / Nature composition + CycleWorker lifecycle |
 | Device Driver | VERIFIED | common physical/simulated driver contract + protocol mapping boundary |
-| Protocol Bridge | REVIEWING | Bridge.Modbus task/worker implementation; no real protocol driver exists yet |
+| Protocol Bridge | VERIFIED | #336 production Modbus/TCP Bridge + real TCP integration tracer |
 | Remote Intent Lease | VERIFIED | external write timeout / controller API behavior |
 | Edge Timedata | VERIFIED | local latest/history/query authority; Cloud resend worker remains separate |
 | Simulator Driver | VERIFIED | Simulator/DataSource acting/reacting implementations |
 | MQTT Command Edge Adapter | VERIFIED | S11 governed Edge execution evidence + Cloud independent readback; CycleWorker boundary retained |
 
 A state may change to `VERIFIED` only when the reviewed source files, relevant upstream tests, material differences, local justification for every retained conflict, and focused behavior tests are all recorded below.
+
+## Review 011 — Production-neutral Edge runtime Host
+
+Date: 2026-08-28
+
+Local issue: #335
+
+OpenEMS implementation checkpoint: `develop` commit `a7efc1c1eacd05f7a0f8eb43f962564ccf66ead6`
+
+Standing comparison baselines: ThingsBoard CE `v4.3.1.1` / `c2a52e46c44e308ddee430e7266b8e10eddde9c4`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`
+
+### Official source, tests, and documentation reviewed
+
+OpenEMS:
+
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/component/OpenemsComponent.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/component/AbstractOpenemsComponent.java`;
+- `io.openems.edge.common/test/io/openems/edge/common/component/OpenemsComponentTest.java`;
+- `io.openems.edge.common/test/io/openems/edge/common/component/AbstractOpenemsComponentTest.java`;
+- `io.openems.edge.scheduler.fixedorder/src/io/openems/edge/scheduler/fixedorder/SchedulerFixedOrderImpl.java`;
+- official `Edge Architecture` documentation, especially Input-Process-Output, Cycle, Process Image, asynchronous synchronization, and Nature sections.
+
+ThingsBoard:
+
+- `common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java`;
+- `common/transport/mqtt/src/test/java/org/thingsboard/server/transport/mqtt/MqttTransportHandlerTest.java`;
+- official IoT Gateway documentation.
+
+MyEMS:
+
+- `myems-modbus-tcp/main.py`;
+- `myems-modbus-tcp/test.py`;
+- `myems-modbus-tcp/README.md`.
+
+The OpenEMS `develop` checkpoint is unchanged from the parent #331 source checkpoint. The relevant Cycle and production Component behavior has not materially diverged from the pinned `2026.7.0` baseline already reviewed above.
+
+### Source-level findings and decisions
+
+- `ADOPT`: one production runtime host owns Component registration, typed Channels, the stable Process Image, configured Controller schedule, governed writes, Cycle hooks, and Timedata attachment. The host performs device reads before Process Image promotion and actuator writes only in the execute-write phase; a write is observable only through a later independent device read.
+- `ADAPT`: production and simulated devices implement the same Go `DeviceAdapter` plus semantic Capability boundary. OpenEMS Nature/Component behavior is retained without importing OSGi service discovery, ConfigurationAdmin, dynamic target filters, or Java inheritance.
+- `ADAPT`: the Host exposes its owned `IntentStore` before the schedule is fixed so the existing governed `IntentController` can be constructed. The controller schedule is then started exactly once and remains configured-order authoritative.
+- `ADAPT`: MQTT/TLS stays a separate northbound transport using the existing HVAC envelope, durable Edge queue, command path, and IoT/Telemetry ownership. ThingsBoard confirms that MQTT session/transport adaptation is a distinct boundary; it does not justify embedding Cloud transport into the control Cycle.
+- `ADAPT`: MyEMS confirms that field acquisition can be an independently deployable runtime responsibility. Its process-per-data-source polling and database-authored protocol configuration are not used for Cycle causality; the future concrete Modbus Bridge remains #336 scope.
+- `REJECT`: simulator/Plant/Scenario dependencies in the production Host, a simulator fallback when a production adapter or MQTT path fails, OpenEMS Backend WebSocket adoption, generic protocol/plugin factories, and OSGi lifecycle translation.
+
+### Local implementation consequence
+
+`libs/edgecontrol.Host` is now the production-neutral composition root for the existing `Runtime`, standard `CapabilityRegistry`, `ComponentRegistry`, `DeviceHost`, `IntentStore`, `Scheduler`, `Cycle`, `DeviceOutputWriter`, Cycle hooks, and Timedata recorder. The EG8200 simulator registers its Plant-backed adapters into this Host but Plant remains below the adapter seam. Its existing MQTT/TLS publisher consumes the Host-derived Process Image exactly as before; no alternate transport or fallback was added.
+
+Focused behavior evidence is `TestHostRunsProductionAdapterThroughReadControlWriteReadbackCycle`: a `DEVICE_DRIVER` adapter polls into the current stable Process Image, receives an Intent-governed write at execute-write, and exposes that result only on a later independent poll.
+
+## Review 012 — Production Modbus/TCP Bridge
+
+Date: 2026-08-28
+
+Local issue: #336
+
+OpenEMS implementation checkpoint: `develop` commit `1a1dd4d2568f8050f99512f44ea62713ba55e505` (re-checked after the #331/#335 checkpoint).
+
+Standing comparison baselines: ThingsBoard IoT Gateway `3.8.3` / release commit `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official source, tests, and documentation reviewed
+
+OpenEMS:
+
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/BridgeModbusTcpImpl.java`;
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/api/AbstractModbusBridge.java` and its task/worker package;
+- `io.openems.edge.bridge.modbus/test/io/openems/edge/bridge/modbus/BridgeModbusTcpImplTest.java`;
+- `io.openems.edge.meter.siemens/src/io/openems/edge/meter/siemens/pac2200/MeterSiemensPac2200Impl.java` and its test;
+- `io.openems.edge.bridge.modbus/readme.adoc` plus the official `Implementing a device` documentation.
+
+The current upstream `BridgeModbusTcpImplTest` is still annotated `@Disabled`; it is design evidence for the intended real-TCP integration shape, not evidence that OpenEMS currently runs this test in CI.
+
+ThingsBoard IoT Gateway:
+
+- `thingsboard_gateway/connectors/modbus/modbus_connector.py` at `3.8.3`;
+- `tests/integration/connectors/modbus/test_modbus_connector.py` plus the black-box Modbus tests/configs at the same release;
+- official IoT Gateway Modbus connector documentation.
+
+MyEMS:
+
+- `myems-modbus-tcp/main.py`;
+- `myems-modbus-tcp/test.py`;
+- `myems-modbus-tcp/README.md` and deployment documentation.
+
+Implementation dependency review:
+
+- `github.com/simonvetter/modbus` `v1.6.4` (MIT): existing Go Modbus TCP client/server implementation with request timeout, raw register reads/writes and a real TCP server usable by integration tests. HVAC wraps only Modbus/TCP FC3/FC4/FC6/FC16 rather than reimplementing MBAP framing or importing its other transport modes.
+
+### Source-level findings and decisions
+
+- `ADOPT`: one Bridge owns the reusable Modbus/TCP master connection, serializes shared transactions, applies a bounded request timeout/retry count, reconnects after transaction failure and exposes raw failures with endpoint/unit/function/address/task context.
+- `ADOPT`: vendor DeviceAdapters own unit ID, function code, register addresses, register values, scaling and semantic Channel conversion. The Bridge never maps registers directly to HVAC business semantics.
+- `ADAPT`: OpenEMS synchronizes Bridge workers through OSGi Cycle events. HVAC already has the production `DeviceAdapter` causality seam: adapter `Poll` runs before Process Image promotion and adapter `Apply` is called only by `DeviceOutputWriter` in `EXECUTE_WRITE`. Modbus tasks therefore execute through those existing boundaries instead of introducing EventAdmin or a second scheduler.
+- `ADAPT`: the first concrete Bridge serializes every task and retries/reconnects boundedly. OpenEMS HIGH/LOW fair scheduling and defective-component backoff remain valid future shared-bus techniques, but implementing a priority scheduler before #337 introduces a second production device/cadence would violate #331's no-speculative-framework rule; they are not compatibility fallbacks and are not required for this one-device Bridge slice.
+- `ADOPT`: protocol integration evidence uses a real localhost TCP endpoint. The tracer proves FC3 read before the stable Process Image, governed FC6 write in `EXECUTE_WRITE`, and later independent readback; a separate failure tracer proves no device value is fabricated after a failed transaction.
+- `ADAPT`: ThingsBoard's connector confirms that field-protocol connection ownership, timeout handling and read/write RPC transport belong below the Cloud/business boundary. Its backward-compatibility adapter and generic connector/plugin surface are not imported.
+- `ADAPT`: MyEMS confirms a separately deployable Modbus acquisition responsibility and validates real TCP reachability before register reads. Its process-per-data-source/database-configured polling model is not copied into the deterministic Edge Cycle.
+- `REJECT`: OSGi service discovery/EventAdmin, generic multi-protocol factories, simulator fallback, fabricated register values, direct Controller socket access and any ATV630 register/template semantics (owned by #337).
+
+### Local implementation consequence
+
+`libs/edgecontrol.ModbusTCPBridge` is a concrete Modbus/TCP-only transport owner. `ModbusReadTask`/`ModbusWriteTask` carry raw protocol intent from a DeviceAdapter; `Read`/`Write` reuse one serialized connection, bound each request, retry only up to the configured count and reconnect after failure. The production-style test adapter demonstrates that the existing Host controls Cycle placement without a second lifecycle framework.
+
+Focused behavior evidence: `TestModbusTCPBridgeRunsProductionAdapterThroughRealTCPCycle`, `TestModbusTCPBridgeDoesNotFabricateDeviceValuesOnReadFailure`, `TestModbusTCPBridgeWriteFailureHaltsGovernedCycle`, and `TestModbusTCPBridgeRetriesBoundedlyAndSurfacesTransactionContext`.
+
+## Review 013 — Schneider ATV630 release candidate and production DeviceAdapter
+
+Date: 2026-08-28
+
+Local issue: #337
+
+OpenEMS implementation checkpoint: `develop` commit `df53f1670ed9b1a782c6c215082a375d5dd4b55e`.
+
+Standing comparison baselines: ThingsBoard IoT Gateway `3.8.3` / `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official vendor/source/test/documentation reviewed
+
+Schneider Electric ATV600/ATV630:
+
+- Embedded Ethernet Manual `EAV64327`, version 03;
+- Communication Parameters `EAV64332`, version 4.6, dated 2026-05-01;
+- Schneider ATV630/ATV600 support material for Embedded Modbus/CiA402 command and frequency control, including CMD `8501`, LFR `8502`, ETA `3201`, RFR `3202`, the `6 -> 7 -> 15` start sequence, stop command `7`, and CiA402 fault-reset bit 7 behavior;
+- Schneider's ATV630/ATV650 Modbus TCP implementation guidance showing that each CiA402 START transition waits for the corresponding later ETA state before the next CMD value is sent;
+- Schneider communication/fault support material confirming LFT `7121` is Last Fault Occurred and must be gated by ETA fault bit 3 when representing a current fault;
+- Schneider ATV600 communication parameter semantics confirming the default CMI bit 9 mode uses signed 16-bit LFR/RFR with `0.1 Hz` resolution rather than an auto-detected standardized reference mode.
+
+OpenEMS:
+
+- `io.openems.edge.heat.mypv/src/io/openems/edge/heat/mypv/HeatMyPvImpl.java` at the checkpoint above;
+- `io.openems.edge.heat.mypv/test/io/openems/edge/heat/mypv/HeatMyPvImplTest.java`;
+- the Modbus Bridge/task sources already reviewed in Review 012.
+
+The current real vendor component declares concrete `FC3ReadRegistersTask` and `FC6WriteRegisterTask` instances with raw element/address mapping in `defineModbusProtocol()`. Its focused test inspects those task types and addresses. The vendor component depends on a Bridge rather than owning a TCP loop. This remains materially consistent with the device/bridge separation adopted by HVAC.
+
+ThingsBoard IoT Gateway:
+
+- `tests/integration/data/modbus/modbus_rpc.json` at `3.8.3`, together with the connector implementation/integration tests already reviewed in Review 012. Per-device mapping carries function code, address, raw type and byte/word order below the platform/business boundary.
+
+MyEMS:
+
+- `myems-modbus-tcp/README.md` at `v6.7.0`, together with the acquisition source/test reviewed in Review 012. Point acquisition mapping carries slave id, function code, offset, register count and raw format independently from central energy semantics.
+
+### Source-level findings and decisions
+
+- `ADOPT`: the ATV630 release candidate is exactly the five Schneider parameters required by #331/#337: ETA `3201`, RFR `3202`, LFT `7121`, CMD `8501`, LFR `8502`. No optional power/current/torque/PID/thermal registers are imported.
+- `ADOPT`: all five are one-register Modbus holding-register values. ETA/CMD are 16-bit bit words, RFR/LFR are signed 16-bit frequency values, and LFT is a 16-bit enumeration. RFR/LFR use the pinned default `0.1 Hz` scale. One-register Modbus values use big-endian byte order; word order is not applicable.
+- `ADOPT`: ETA/RFR/LFT are read through FC3. CMD/LFR retain their vendor read/write mapping semantics and production control writes use FC6 single-register writes.
+- `ADOPT`: CiA402/DriveCom command translation is driver-owned. START advances one state transition per Cycle: after the latest ETA poll it writes CMD `6` from Switch-on disabled, `7` from Ready to switch on, and `15` from Switched on/Operation enabled; the next transition is not sent until a later ETA poll confirms drive progress. STOP writes CMD `7`; RESET_FAULT raises CMD bit 7 then clears it (`128`, `0`); SET_FREQUENCY converts the governed semantic Hz value to signed LFR units. Controllers never manipulate CMD bits or register addresses.
+- `ADOPT`: semantic run state is derived from ETA, with operation-enabled bit 2 represented as `RUNNING` and active-fault bit 3 represented as `FAULT`. RFR becomes the semantic frequency. LFT is read/exposed as current `faultCode` only while ETA bit 3 indicates an active fault, so retained Last Fault history cannot masquerade as current state.
+- `ADAPT`: OpenEMS represents vendor mapping with Java `ModbusProtocol`, task/element classes and Nature Channels. HVAC keeps the same ownership boundary in one Go `ATV630DeviceAdapter` and a narrow `ModbusRegisterTransport` consumer interface implemented by the #336 Bridge; semantic capability/Channel types remain the existing `VARIABLE_SPEED_PUMP` contract.
+- `ADAPT`: ThingsBoard/MyEMS demonstrate configurable raw mapping vocabularies, but the first ATV630 candidate is explicit code/data rather than a generic plugin/config parser. #339 owns promoting this exact candidate into an immutable Registry `RELEASED` template only after real-TCP conformance.
+- `REJECT`: I/O Profile support or auto-detection, CMI bit 9 standardized-frequency auto-detection, register aliases, dual-register probing, old/new mapping fallback, simulator-only address variants, controller-owned command words, OSGi/service discovery and real-hardware certification claims.
+
+### Local implementation consequence
+
+`libs/edgecontrol.ATV630ProtocolReleaseCandidate()` returns a fresh candidate descriptor pinned to the two Schneider references and the five raw mappings above. `ATV630DeviceAdapter` is a production `DEVICE_DRIVER` implementing the existing `VARIABLE_SPEED_PUMP` semantic Channel contract. It accepts canonical Point identities and a raw-register transport, so the same adapter can be used unchanged by #338/#339 against the Virtual ATV630 endpoint and later against hardware through `ModbusTCPBridge`.
+
+This ticket deliberately does not create a Registry `RELEASED` revision. #339 explicitly requires real-TCP Bridge/DeviceAdapter/Virtual-slave conformance before immutable Registry release; hardware Vendor Template Certification remains a later, separate evidence state.
+
+Focused behavior evidence: `TestATV630ProtocolReleaseCandidatePinsSchneiderMinimalMap`, `TestATV630AdapterProjectsRawDriveStateIntoVariableSpeedPumpChannels`, `TestATV630AdapterAdvancesStartOnlyAfterDriveComETAProgression`, and `TestATV630AdapterTranslatesGovernedSemanticCommandsIntoDriveComWrites`.
 
 ## Review 001 — Channel, Process Image, Cycle, Scheduler
 
@@ -467,3 +630,50 @@ The next source reviews are performed before their implementation slices:
 
 1. Single/Cluster Controller patterns;
 2. EnergyScheduler V2 time-slot/mode optimization.
+
+## Review 014 — ATV630 real-TCP conformance and immutable Registry release
+
+Date: 2026-08-29
+
+Local issue: #339
+
+OpenEMS pinned baseline: release `2026.7.0`, commit `2e2792d`. The current `develop` Modbus TCP Bridge/Cycle source was re-checked for this ticket and retains the same before-Process-Image read synchronization and execute-write causality used by the pinned baseline.
+
+Standing secondary baselines: ThingsBoard IoT Gateway `3.8.3` / `7f7e0bf061bf92c2feb12b5098620f118dce364b`; MyEMS `v6.7.0` / `be6e6ce8ddeac57afb04bddb9621501fb555cab0`.
+
+### Official source, tests, and documentation re-checked
+
+OpenEMS:
+
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/BridgeModbusTcpImpl.java`;
+- `io.openems.edge.bridge.modbus/src/io/openems/edge/bridge/modbus/api/AbstractModbusBridge.java` and the Modbus task/worker implementation;
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java` and current Cycle implementation;
+- the reacting simulator plus `ModbusSlave`/Modbus slave simulator sources already reviewed for #333/#338;
+- the vendor Modbus component declaration pattern already reviewed for #337.
+
+ThingsBoard IoT Gateway:
+
+- `tests/integration/data/modbus/modbus_server.py` at `3.8.3`, which starts a real TCP slave/process image for gateway integration tests;
+- the pinned Modbus connector integration surface already reviewed for #336/#338.
+
+MyEMS:
+
+- `myems-modbus-tcp/test.py` at `v6.7.0`, which first establishes real TCP reachability and then performs Modbus TCP master reads;
+- the pinned Modbus acquisition implementation already reviewed for #336/#337.
+
+### ADOPT / ADAPT / REJECT
+
+- **ADOPT**: protocol conformance is proven at the production causality boundary: production `ModbusTCPBridge` performs the real socket transactions, production `ATV630DeviceAdapter` owns the Schneider mapping and semantic conversion, and production `Host` polls before Process Image/controller evaluation and executes governed writes only in the write phase. A physical result is accepted only through a later independent poll.
+- **ADOPT**: the same production Bridge and ATV630 adapter run unchanged against the Virtual ATV630 endpoint. The conformance tracer advances START through ETA-confirmed `6 -> 7 -> 15` Cycles, writes LFR through governed `SET_FREQUENCY`, observes later RFR/CHWP flow, exercises governed STOP and RESET_FAULT, and derives active fault state through ETA plus LFT.
+- **ADOPT**: a disconnected Virtual endpoint fails with the same authoritative ETA/RFR FC3/address context. No alternate profile, address alias, dual-register probe, or simulator fallback is attempted.
+- **ADOPT**: after protocol conformance, the exact #337 release-candidate parameter set is published through the existing tenant-scoped Registry `ReleaseTemplate` owner as a `DEVICE` TemplateRevision with status `RELEASED`. The persisted payload is compared with the candidate, and the existing database immutability trigger rejects an in-place update.
+- **ADAPT**: OpenEMS event-driven `BEFORE_PROCESS_IMAGE` / `EXECUTE_WRITE` Bridge participation is represented by HVAC's synchronous `Host.RunCycle` read -> Process Image -> Controllers -> write sequence rather than importing OSGi events/workers.
+- **ADAPT**: ThingsBoard's static process image and MyEMS TCP reachability utilities are useful integration evidence only. HVAC keeps the reacting `Plant` as physical truth and Registry as mapping/release authority instead of adopting either project's generic connector/configuration ownership.
+- **ADAPT**: Registry `RELEASED` records that this immutable protocol contract passed production-Bridge/adapter Virtual-device conformance. The release payload explicitly keeps `hardwareCertified=false`; real ATV630 Vendor Template Certification remains a separate later hardware evidence gate.
+- **REJECT**: a second ATV630-specific Registry lifecycle, a new permanent conformance gate/table, release by seed SQL/direct database bypass, mutation of a released revision, profile/register fallback, address aliases, dual probing, or a claim of real-hardware certification.
+
+### Local evidence
+
+- `tools/eg8200-simulator/internal/simulator/atv630_conformance_test.go`: real localhost TCP production Bridge + production ATV630 DeviceAdapter + production Host + Virtual ATV630 + reacting CHWP read/write/readback tracer, including disconnect/no-fallback evidence.
+- `modules/registry/internal/core/atv630_release_integration_test.go`: existing Registry owner releases the exact candidate with `EAV64327 v03` and `EAV64332 v4.6 (2026-05-01)` references, reads it back from PostgreSQL, preserves `hardwareCertified=false`, and proves the released revision immutable.
+- `node scripts/run-s1-registry-postgres-tests.mjs`: existing real PostgreSQL Registry harness passes with the ATV630 release case; no production tenant is pre-seeded or bypassed.

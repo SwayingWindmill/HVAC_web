@@ -1748,7 +1748,7 @@ try {
       effective_from, status, revision, created_at, updated_at
     ) VALUES (
       '${optimizationPolicyVersionId}', '018f1d00-0000-7000-8000-000000000001', '${optimizationPolicyId}', 1,
-      'COST', '{"cost":1}'::jsonb, '{"comfort":{"zoneTempMinC":22,"zoneTempMaxC":27},"safety":{"maxChwSupplyC":12}}'::jsonb, 'SHADOW',
+      'COST', '{"cost":1}'::jsonb, '{"comfort":{"zoneTempMinC":21,"zoneTempMaxC":25},"safety":{"supplyTempMinC":6,"supplyTempMaxC":10,"maxSupplyTempStepC":1},"inputMapping":{"supplyTemperatureKey":"btu_meter.supply_water_temperature","zoneTemperatureKey":"zone.temperature"},"maintenanceConstraints":{"outOfService":[]},"manualLocks":{"resources":[]},"responseModel":{"dailyEnergyDeltaKWhPerSupplyTempC":-180,"zoneTempDeltaCPerSupplyTempC":0.4,"energyUncertaintyP90KWh":60,"zoneTempUncertaintyP90C":0.2}}'::jsonb, 'SHADOW',
       'RULE_STRATEGY', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-08-01T00:00:00Z', 'RELEASED', 1, now(), now()
     );
     INSERT INTO core_registry.optimization_input_snapshots (
@@ -1983,6 +1983,19 @@ try {
       || has_table_privilege('optimization_runtime','core_registry.optimization_input_resources','SELECT')::text;
   `);
   expectEqual(obsoleteDispatchPrivileges, 'false|false|false', 'Optimization runtime cannot use obsolete ESS Dispatch surface');
+
+  const optimizationPreparationPrivileges = psql(`
+    SELECT has_table_privilege('optimization_runtime','core_registry.optimization_policies','SELECT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.energy_topology_versions','SELECT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.forecast_snapshots','SELECT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.forecast_input_snapshots','SELECT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.tariff_versions','SELECT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.optimization_input_snapshots','INSERT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.optimization_input_snapshots','UPDATE')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.optimization_runs','INSERT')::text || '|'
+      || has_table_privilege('optimization_runtime','core_registry.job_instances','INSERT')::text;
+  `);
+  expectEqual(optimizationPreparationPrivileges, 'true|true|true|true|true|true|true|true|true', 'Optimization runtime owns server-side preparation only');
 
   const optimizationRls = psql(`
     BEGIN;

@@ -21,6 +21,7 @@ const (
 	WorkOrderWriteContextHeader  = "X-Work-Order-Write-Context"
 	WorkOrderListAction          = "work-order:list"
 	WorkOrderReadAction          = "work-order:read"
+
 	WorkOrderCreateAction        = "work-order:create"
 	WorkOrderAssignAction        = "work-order:assign"
 	WorkOrderPlanAction          = "work-order:plan"
@@ -509,14 +510,15 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 			return Filter{}, false
 		}
 		switch key {
-		case "status", "priority", "assigneeId", "cursor", "limit":
+		case "status", "priority", "assigneeId", "sourceDomain", "sourceRef", "cursor", "limit":
 		default:
 			return Filter{}, false
 		}
 	}
 	filter := Filter{
 		Status: workordermodel.Status(query.Get("status")), Priority: workordermodel.Priority(query.Get("priority")),
-		AssigneeID: strings.TrimSpace(query.Get("assigneeId")), Cursor: strings.TrimSpace(query.Get("cursor")), Limit: 50,
+		AssigneeID: strings.TrimSpace(query.Get("assigneeId")), SourceDomain: workordermodel.SourceDomain(query.Get("sourceDomain")),
+		SourceRef: strings.TrimSpace(query.Get("sourceRef")), Cursor: strings.TrimSpace(query.Get("cursor")), Limit: 50,
 	}
 	if raw := query.Get("limit"); raw != "" {
 		value, err := strconv.Atoi(raw)
@@ -525,7 +527,7 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 		}
 		filter.Limit = value
 	}
-	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 {
+	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 || !validSourceFilter(filter) {
 		return Filter{}, false
 	}
 	if raw := query.Get("cursor"); raw != "" && (filter.Cursor == "" || filter.Cursor != raw || len(filter.Cursor) > 512) {

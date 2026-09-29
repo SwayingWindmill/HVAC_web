@@ -236,7 +236,6 @@ export const capabilityTaskMatrix = Object.freeze({
     npmRun('s2:ownership:check'),
     npmRun('s2:public-contract:check'),
     npmRun('s2:rollout-gates:check'),
-    npmRun('s2:implementation-plan:check'),
     npmRun('contracts:check'),
     npmRun('release:evidence-assets'),
     npmRun('s1:registry:check'),

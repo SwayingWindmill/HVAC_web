@@ -2,6 +2,7 @@ package alarmmodel
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -71,6 +72,33 @@ func TestOccurrenceCanLowerCurrentSeverityWithoutLosingPeak(t *testing.T) {
 	}
 	if minor.CurrentSeverity != SeverityMinor || minor.PeakSeverity != SeverityCritical || minor.OccurrenceCount != 3 {
 		t.Fatalf("unexpected severity projection: %#v", minor)
+	}
+}
+
+func TestOccurrenceKeepsBoundedEvidenceProjection(t *testing.T) {
+	alarm := validAlarm(t)
+	initialOccurrences := alarm.OccurrenceCount
+	occurrences := maximumEvidenceReferences + 5
+	for index := 0; index < occurrences; index++ {
+		occurrence, err := RecordOccurrence(alarm, OccurrenceInput{
+			Severity: alarm.CurrentSeverity, OccurredAt: fmt.Sprintf("2026-07-31T10:%02d:00Z", index), RuleRevision: "alarm-policy-10",
+			ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: fmt.Sprintf("occurrence-%d", index),
+			Evidence: []EvidenceReference{{Kind: "telemetry-snapshot", Reference: fmt.Sprintf("snapshot:%d", index), CapturedAt: "2026-07-31T09:00:00Z"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		alarm = occurrence
+	}
+	if len(alarm.Evidence) != maximumEvidenceReferences {
+		t.Fatalf("evidence projection is unbounded: %d references", len(alarm.Evidence))
+	}
+	newest := alarm.Evidence[len(alarm.Evidence)-1]
+	if newest.Reference != fmt.Sprintf("snapshot:%d", occurrences-1) {
+		t.Fatalf("evidence projection dropped the newest fact: %#v", newest)
+	}
+	if alarm.OccurrenceCount != initialOccurrences+uint64(occurrences) {
+		t.Fatalf("occurrence count stopped being authoritative: %d", alarm.OccurrenceCount)
 	}
 }
 

@@ -203,26 +203,28 @@ WHERE job_id=$1::uuid AND attempt_no=$2 AND worker_id=$3 AND completed_at IS NUL
 	return tx.Commit(ctx)
 }
 
-func ValidateForecastSchedulerJob(job SchedulerJob) (Request, error) {
-	if job.JobType != "FORECAST_RUN" || job.TenantID == "" || job.SiteID == "" || job.TimeoutSeconds <= 0 || job.AttemptNo <= 0 || job.MaxAttempts <= 0 {
-		return Request{}, errors.New("forecast scheduler job envelope is invalid")
+type SchedulerForecastReference struct {
+	ForecastJobID      string `json:"forecastJobId"`
+	ForecastSnapshotID string `json:"forecastSnapshotId"`
+}
+
+func ValidateForecastSchedulerJob(job SchedulerJob) (SchedulerForecastReference, error) {
+	if job.JobType != "FORECAST_RUN" || !uuidPattern.MatchString(job.JobID) || !uuidPattern.MatchString(job.TenantID) || !uuidPattern.MatchString(job.SiteID) || job.TimeoutSeconds <= 0 || job.AttemptNo <= 0 || job.MaxAttempts <= 0 {
+		return SchedulerForecastReference{}, errors.New("forecast scheduler job envelope is invalid")
 	}
-	var request Request
+	var reference SchedulerForecastReference
 	decoder := json.NewDecoder(bytes.NewReader(job.Payload))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return Request{}, fmt.Errorf("decode FORECAST_RUN payload: %w", err)
+	if err := decoder.Decode(&reference); err != nil {
+		return SchedulerForecastReference{}, fmt.Errorf("decode FORECAST_RUN reference: %w", err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
-		return Request{}, err
+		return SchedulerForecastReference{}, err
 	}
-	if request.TenantID != job.TenantID || request.SiteID != job.SiteID {
-		return Request{}, errors.New("FORECAST_RUN payload scope must match scheduler Job scope")
+	if reference.ForecastJobID != job.JobID || !uuidPattern.MatchString(reference.ForecastSnapshotID) {
+		return SchedulerForecastReference{}, errors.New("FORECAST_RUN reference must identify the server-created Forecast job and result snapshot")
 	}
-	if err := request.Validate(); err != nil {
-		return Request{}, err
-	}
-	return request, nil
+	return reference, nil
 }
 
 func forecastRetryDelay(attempt int) time.Duration {

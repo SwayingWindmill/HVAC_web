@@ -71,6 +71,9 @@ export const fddFindingSchema = z.object({
   createdAt: z.string().datetime(),
 });
 export type FDDFinding = z.infer<typeof fddFindingSchema>;
+export type FDDFindingFilter = { alarmId?: string; workOrderId?: string; limit?: number };
+export type FDDLinkInput = { alarmId: string; workOrderId: string };
+export type FDDMutationOptions = { csrfToken: string; signal?: AbortSignal };
 
 const revalidationSchema = z.object({
   snapshotId: z.string().min(1),
@@ -141,9 +144,33 @@ export function getSitePVForecast(siteId: string, signal?: AbortSignal) {
   return getJSON(`/api/v1/sites/${encodeURIComponent(siteId)}/forecast/pv`, publishedForecastSchema, signal);
 }
 
-export async function listSiteFDDFindings(siteId: string, signal?: AbortSignal): Promise<FDDFinding[]> {
-  const result = await getJSON(`/api/v1/sites/${encodeURIComponent(siteId)}/fdd/findings?limit=100`, fddListSchema, signal);
+export async function listSiteFDDFindings(siteId: string, signal?: AbortSignal, filter: FDDFindingFilter = {}): Promise<FDDFinding[]> {
+  const query = new URLSearchParams();
+  query.set('limit', String(filter.limit ?? 100));
+  if (filter.alarmId) query.set('alarmId', filter.alarmId);
+  if (filter.workOrderId) query.set('workOrderId', filter.workOrderId);
+  const result = await getJSON(`/api/v1/sites/${encodeURIComponent(siteId)}/fdd/findings?${query.toString()}`, fddListSchema, signal);
   return result?.items ?? [];
+}
+
+export async function linkFDDFinding(siteId: string, findingId: string, input: FDDLinkInput, options: FDDMutationOptions): Promise<FDDFinding> {
+  const response = await fetch(`/api/v1/sites/${encodeURIComponent(siteId)}/fdd/findings/${encodeURIComponent(findingId)}/links`, {
+    method: 'PATCH',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json, application/problem+json',
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': options.csrfToken,
+    },
+    body: JSON.stringify(input),
+    signal: options.signal,
+  });
+  const payload: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const problem = z.object({ code: z.string().optional(), detail: z.string().optional(), title: z.string().optional() }).passthrough().safeParse(payload);
+    throw new IntelligenceApiError(response.status, problem.success ? problem.data.code ?? 'FDD_LINK_UNAVAILABLE' : 'FDD_LINK_UNAVAILABLE', problem.success ? problem.data.detail ?? problem.data.title ?? 'FDD 关联暂时不可用。' : 'FDD 关联暂时不可用。');
+  }
+  return fddFindingSchema.parse(payload);
 }
 
 export function getLatestOptimizationRecommendation(siteId: string, signal?: AbortSignal) {

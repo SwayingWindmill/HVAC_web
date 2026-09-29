@@ -89,6 +89,7 @@ func main() {
 	intelligenceConfig := &gateway.IntelligenceConfig{
 		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "http://forecast-service:19092"),
 		FDDBaseURL:          envOr("FDD_SERVICE_URL", "http://fdd-service:19094"),
+		FDDWorkloadSPIFFE:   envOr("FDD_WORKLOAD_SPIFFE", "spiffe://hvac.local/fdd-service"),
 		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
 		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
 		Timeout:             8 * time.Second,

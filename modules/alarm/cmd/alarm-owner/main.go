@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"log/slog"
@@ -63,13 +62,20 @@ func main() {
 		logger.Error("alarm_http_configuration_invalid", "error_code", "ALARM_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if peerSPIFFE(request) != gatewaySPIFFE {
-			writeProblem(writer, http.StatusForbidden, "ALARM_GATEWAY_WORKLOAD_FORBIDDEN")
-			return
-		}
-		handler.ServeHTTP(writer, request)
+	telemetryEvaluationHandler, err := alarmservice.NewTelemetryEvaluationHandler(store)
+	if err != nil {
+		logger.Error("alarm_telemetry_evaluation_configuration_invalid", "error_code", "ALARM_TELEMETRY_EVALUATION_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
+	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
+		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
+		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
 	})
+	if err != nil {
+		logger.Error("alarm_owner_router_configuration_invalid", "error_code", "ALARM_OWNER_ROUTER_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
 	instrumentedRouter := observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
 		Namespace: "hvac_alarm", Service: "alarm-service", SpanName: "http.alarm.request", Route: alarmObservabilityRoute,
 	})
@@ -111,6 +117,9 @@ func alarmObservabilityRoute(request *http.Request) string {
 		return "unknown"
 	}
 	path := request.URL.Path
+	if path == alarmservice.InternalTelemetryEvaluationPath {
+		return "alarms.evaluate_telemetry"
+	}
 	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
 		return "unknown"
 	}
@@ -170,27 +179,6 @@ func loadRequiredValueFile(path string, maximumBytes int64) (string, error) {
 		return "", errors.New("value file content is invalid")
 	}
 	return value, nil
-}
-
-func peerSPIFFE(request *http.Request) string {
-	if request == nil || request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
-		return ""
-	}
-	leaf := request.TLS.PeerCertificates[0]
-	if leaf == nil || len(leaf.URIs) != 1 || leaf.URIs[0] == nil {
-		return ""
-	}
-	identity := leaf.URIs[0].String()
-	if !strings.HasPrefix(identity, "spiffe://") {
-		return ""
-	}
-	return identity
-}
-
-func writeProblem(writer http.ResponseWriter, status int, code string) {
-	writer.Header().Set("Content-Type", "application/problem+json")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(map[string]any{"code": code, "retryable": false})
 }
 
 func envOr(name, fallback string) string {

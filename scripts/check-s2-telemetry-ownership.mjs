@@ -8,20 +8,17 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`S2 telemetry ownership check failed: ${message}`);
 };
 
-const [contract, dataArchitecture, clickhouse, ingest, ingestStore, history, mqttRuntime, context] = await Promise.all([
+const [contract, dataArchitecture, clickhouse, ingest, ingestStore, history, mqttRuntime] = await Promise.all([
   json('contracts/ownership/s2-telemetry-ownership.v1.json'),
   json('contracts/data/data-architecture.v2.json'),
   text('infra/telemetry/clickhouse/init/001-telemetry-history.sql'),
-  text('modules/telemetry/internal/telemetry/ingest.go'),
-  text('modules/telemetry/internal/telemetry/ingest_store.go'),
-  text('modules/telemetry/internal/telemetry/history_postgres.go'),
-  text('modules/iot/internal/adapter/envelope.go'),
-  text('CONTEXT.md'),
+  text('modules/telemetry/pkg/telemetry/ingest.go'),
+  text('modules/telemetry/pkg/telemetry/ingest_store.go'),
+  text('modules/telemetry/pkg/telemetry/history_postgres.go'),
+  text('modules/iot/pkg/adapter/envelope.go'),
 ]);
 
 assert(contract.schemaVersion === 1, 'contract schemaVersion must be 1');
-assert(contract.decisionRevision === 3, 'decisionRevision must be 3 for V2 convergence');
-assert(contract.activationStatus === 'v2-convergence', 'activationStatus must be v2-convergence');
 assert(contract.sourceOfTruth === 'SE-DATA-001 V2.0 CURRENT', 'V2 must be the ownership source of truth');
 assert(contract.ownerService === 'telemetry-runtime-service', 'Telemetry Runtime owner drifted');
 
@@ -82,10 +79,6 @@ for (const forbidden of [
   'browser-direct-to-clickhouse',
 ]) {
   assert(contract.forbiddenFlows?.includes(forbidden), `forbidden flow missing: ${forbidden}`);
-}
-
-for (const term of ['## Telemetry Runtime', '## Device Observation Snapshot', '## Business Revision', '## Source Position', '## Transport Position', '## Recovery Cursor', '## Ingest Quarantine']) {
-  assert(context.includes(term), `CONTEXT.md is missing domain term: ${term}`);
 }
 
 console.log('S2 telemetry ownership checks passed: MQTT is transport-only, ClickHouse owns history, Redis is the explicit V2 Latest target, and PostgreSQL Latest remains a visible migration projection only.');

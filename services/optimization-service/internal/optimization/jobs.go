@@ -203,26 +203,28 @@ WHERE job_id=$1::uuid AND attempt_no=$2 AND worker_id=$3 AND completed_at IS NUL
 	return tx.Commit(ctx)
 }
 
-func ValidateOptimizationSchedulerJob(job SchedulerJob) (Request, error) {
-	if job.JobType != "OPTIMIZATION_RUN" || job.TenantID == "" || job.SiteID == "" || job.TimeoutSeconds <= 0 || job.AttemptNo <= 0 || job.MaxAttempts <= 0 {
-		return Request{}, errors.New("optimization scheduler job envelope is invalid")
+type SchedulerOptimizationReference struct {
+	OptimizationRunID string `json:"optimizationRunId"`
+	InputSnapshotID   string `json:"inputSnapshotId"`
+}
+
+func ValidateOptimizationSchedulerJob(job SchedulerJob) (SchedulerOptimizationReference, error) {
+	if job.JobType != "OPTIMIZATION_RUN" || !uuidPattern.MatchString(job.JobID) || !uuidPattern.MatchString(job.TenantID) || !uuidPattern.MatchString(job.SiteID) || job.TimeoutSeconds <= 0 || job.AttemptNo <= 0 || job.MaxAttempts <= 0 {
+		return SchedulerOptimizationReference{}, errors.New("optimization scheduler job envelope is invalid")
 	}
-	var request Request
+	var reference SchedulerOptimizationReference
 	decoder := json.NewDecoder(bytes.NewReader(job.Payload))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return Request{}, fmt.Errorf("decode OPTIMIZATION_RUN payload: %w", err)
+	if err := decoder.Decode(&reference); err != nil {
+		return SchedulerOptimizationReference{}, fmt.Errorf("decode OPTIMIZATION_RUN reference: %w", err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
-		return Request{}, err
+		return SchedulerOptimizationReference{}, err
 	}
-	if request.TenantID != job.TenantID || request.SiteID != job.SiteID {
-		return Request{}, errors.New("OPTIMIZATION_RUN payload scope must match scheduler Job scope")
+	if reference.OptimizationRunID != job.JobID || !uuidPattern.MatchString(reference.InputSnapshotID) {
+		return SchedulerOptimizationReference{}, errors.New("OPTIMIZATION_RUN reference must identify the server-created Optimization run and SEALED input snapshot")
 	}
-	if err := request.Validate(); err != nil {
-		return Request{}, err
-	}
-	return request, nil
+	return reference, nil
 }
 
 func optimizationRetryDelay(attempt int) time.Duration {
