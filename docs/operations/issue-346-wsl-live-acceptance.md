@@ -203,16 +203,68 @@ and observed live:
 | FDD finding linked | PATCH 200 with the Alarm and Work Order identity |
 | Recovery | disturbance removed 08:32:2xZ HTTP 204; incident CLEARED; evaluation NOT_MATCHED; FDD 201 CLEAR at delta-T 5.447 °C |
 
+## Closing the three acceptance gaps
+
+### Repeatable live rig
+
+`deploy/acceptance/phase1-simulator-rig.v1.json` is now the single reviewed source for the
+plant cadence, the Registry publish/staleness contract, the runtime freshness window, the
+MQTT session lifetime and the broker queue requirement. The plant configuration is
+generated from it (`acceptance:phase1:rig:config`), the central-plant seed applies the
+Registry cadence and freshness and creates a session that cannot outlive the profile
+window (`acceptance:phase1:rig:seed`), and `acceptance:phase1:rig:check` fails when a
+running stack drifts from the profile. Reproducing the rig from the profile alone was
+verified: Registry/connectivity/runtime contracts reseeded, simulator configuration
+regenerated, business time within one cadence of wall clock and no adapter terminal
+outcomes. The previous run depended on hand-edited runtime state and a 24h session that
+expired mid-run, which made the adapter quarantine every valid message.
+
+The merge also left the acceptance matrix naming npm scripts the converging product branch
+had consolidated, and its static check had been failing on both branches for a requirement
+that referenced a gate which never existed. `npm run acceptance:phase1:check` passes again
+(requirements=29, gates=18).
+
+### Operator association of an FDD finding with a Work Order
+
+The Work Order detail now lists the Site's FDD findings that are not yet associated with a
+Work Order and lets the operator associate one with the Work Order being handled. Verified
+live: the action issued `PATCH /api/v1/sites/{siteId}/fdd/findings/{findingId}/links` with
+HTTP 200 and the finding then carried `alarmId=01a0ec45-7ab5-7e9c-aa96-927ee5e050f2` and
+`workOrderId=01a0ec79-cce5-7ffe-8dd3-6394743bc842`.
+
+The first implementation looked the findings up by the origin Alarm and could never have
+worked: a finding only carries `alarmId` *after* an association is recorded, so listing by
+that Alarm returns exactly the findings that are already associated.
+
+### Energy projection needs a product capability, not configuration
+
+`ANALYTICS_PROJECTION_ENABLED` stays `false` in the WSL override, and this is not a missing
+setting. The projector presents a static delegation grant to the Registry owner
+(`X-Delegation-Grant` against `/internal/v1/registry/sites/{siteId}/meter-bindings/resolve`,
+`modules/energy/internal/coreclient/resolver.go`), and its only inputs are
+`ANALYTICS_CORE_REGISTRY_GRANT[_FILE]` (`cmd/telemetry-worker/main.go`). Nothing in the
+repository can mint that grant: a Registry delegation grant is bound to a principal
+session, subject issuer, audience, presenter and parent token
+(`libs/registryauth/registry.go` `GrantClaims`), and the platform gateway obtains one
+dynamically from IAM instead of reading it from configuration. Enabling energy projection
+therefore requires the analytics read-model workload to acquire an IAM-issued delegation
+the same way the gateway does, plus ClickHouse reader/writer credentials for
+`telemetry_history.counter_deltas` and `analytics.energy_interval_facts`. Fabricating a
+session-bound delegation locally would be a security shortcut, not an acceptance step, so
+Dashboard/Energy completeness remains uncertified.
+
 ## Remaining acceptance
 
 The fault-to-maintenance chain is complete and was observed end to end on the merged
 stack with the current frontend (run 3). What remains open is outside this chain:
 
-- Energy projection stays disabled by the WSL override because Registry delegation is
-  not provisioned, so Dashboard energy completeness is not certified.
-- The frontend still has no operator action that links an FDD finding to a Work Order;
-  the finding was linked through the owner API, and API linkage must not be reported as
-  frontend coverage.
+- Energy/Dashboard completeness stays uncertified until the analytics read-model workload
+  can acquire an IAM-issued Registry delegation; see above for the concrete gap.
+- The Work Orders ledger does not display existing Work Orders: the owner API returns them
+  (`GET /api/v1/sites/{siteId}/work-orders?limit=10` → 200 with the Work Order) while the
+  ledger and its summary counts render empty, so an operator cannot reach an existing Work
+  Order from the list. This predates the association work — the run-3 screenshot shows the
+  same empty ledger — and needs its own fix.
 
 ## Live run — 2026-09-29 (UTC)
 
