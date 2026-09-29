@@ -156,30 +156,63 @@ past, and re-asserted CONTEXT.md vocabulary. Those snapshot and documentation
 assertions were removed; the storage-authority, ingest-source, semantics and
 source-code assertions remain.
 
-### Current frontend blocker
+### Current frontend blocker (RESOLVED — see run 3)
 
-The acceptance stack now serves the Web build of this branch. The newest frontend
-(`e45cd159`, the shadcn 10-workspace shell plus 45 uncommitted files) cannot bootstrap
-against this branch's backend: its generated client requires
-`capabilitySetVersion: z.literal(12)` while `libs/identitycontext.CapabilitySetVersion`
-is 11 and the effective principal carries 27 of the 33 newer capabilities. The
-frontend reports PRINCIPAL UNAVAILABLE, and no request fails — the strict schema
-rejects the payload.
+The acceptance stack originally served this branch's own Web build because the newest
+frontend (`e45cd159`) required `capabilitySetVersion: 12` while this branch served 11 and
+had no `alarm.assign`. That mismatch is resolved: the feature branch now publishes v12
+with the assignment capability, and the acceptance branch has merged it while keeping
+009h out of the canonical allowlist.
 
-Testing the newest UI end-to-end therefore requires the newest backend. Merging
-`feat/virtual-central-plant-phase1-20260828` (33 commits) into this branch is not a
-clean option yet: besides conflicts in the generated client, `package.json`,
-`RealAlarms.tsx` and the Phase 1 deployment check, that branch **re-adds
+Recorded history: before the merge, the acceptance stack served this branch's own Web
+build because the newest frontend could not bootstrap against this backend — its
+generated client required `capabilitySetVersion: z.literal(12)` while
+`libs/identitycontext.CapabilitySetVersion` was 11 and the effective principal carried
+27 of the 33 newer capabilities, so the strict schema rejected the payload and the UI
+reported PRINCIPAL UNAVAILABLE with no failing request. Merging the feature branch at
+that time was also blocked because it re-added
 `infra/registry/postgres/init/009h-data-execution-runtimes.sql` to the canonical
-migration manifest**, which is the duplicate whose removal this issue depends on for
-fresh databases. The feature branch must drop 009h before it can carry this
-acceptance.
+migration manifest. Both conditions were removed before run 3.
+
+### Run 3 — the chain re-proven on the merged stack with the current frontend
+
+The blocker below was resolved by moving the acceptance onto the current product branch:
+the feature branch removed the superseded 009h migration (015 only creates the
+role-binding revocation trigger over objects 006 and 009 already create, so it does not
+duplicate), published capability set v12 with `alarm.assign` together with the IAM
+authorization path, catalog revision 4 and the gateway operation, and tracked the
+operational scripts its own package.json already called. The acceptance branch then
+merged that branch (conflicts resolved in favour of the branch's template, deployment
+check and regenerated clients, keeping the 009h guard; the Ant-era Alarm page deleted
+because the Issues workspace replaced it) and applied the new migrations
+(`schema=8675ccacee093ae0005d7103ad578f809f311a2012dc05681c1c5ad4585f9e39`).
+
+The stack now serves the current shadcn 10-workspace frontend against the current
+backend: `capabilitySetVersion = 12`, the principal bootstraps, and
+`/sites/{siteId}/issues` renders the Alarm workbench. The whole chain was then re-run
+and observed live:
+
+| Step | Recorded result |
+| --- | --- |
+| Healthy baseline | delta-T 5.628 °C; owner FDD 201 CLEAR; Alarm NOT_MATCHED |
+| Physical injection | 08:20:07Z, HTTP 204 |
+| Fault | delta-T 3.377 °C; quality GOOD, freshness FRESH |
+| Authoritative Alarm | ACTIVE after the unchanged 300s condition; incident `01a0ec45-7ab5-7e9c-aa96-927ee5e050f2`; public read HTTP 200 |
+| Owner FDD | 201 FINDING `01a0ec48-f931-702a-bd4c-36678c6aec01`, deltaTC 3.377 |
+| Operator Work Order (current frontend) | The Issues workspace opened the incident and the 告警转工单 dialog created the work order: HTTP 201, `workOrderId 01a0ec4a-e550-70ff-ae76-fed6d6e729cd`, `sourceReferences [{domain: ALARM, relationship: ORIGIN, resourceId: 01a0ec45-7ab5-7e9c-aa96-927ee5e050f2}]` |
+| FDD finding linked | PATCH 200 with the Alarm and Work Order identity |
+| Recovery | disturbance removed 08:32:2xZ HTTP 204; incident CLEARED; evaluation NOT_MATCHED; FDD 201 CLEAR at delta-T 5.447 °C |
 
 ## Remaining acceptance
 
-Complete the operator-created ALARM/ORIGIN Work Order, link the live FDD finding, remove the disturbance, and verify authoritative Alarm CLEARED / FDD CLEAR on the same paced rig. The owner-side steps are verified individually; what remains is the operator journey through the Web surface.
+The fault-to-maintenance chain is complete and was observed end to end on the merged
+stack with the current frontend (run 3). What remains open is outside this chain:
 
-Energy projection remains disabled by the existing WSL override because the Registry delegation configuration has not been provisioned. Dashboard energy completeness is therefore not certified. Frontend FDD association currently lacks an operator action; API linkage alone must not be reported as frontend coverage.
+- Energy projection stays disabled by the WSL override because Registry delegation is
+  not provisioned, so Dashboard energy completeness is not certified.
+- The frontend still has no operator action that links an FDD finding to a Work Order;
+  the finding was linked through the owner API, and API linkage must not be reported as
+  frontend coverage.
 
 ## Live run — 2026-09-29 (UTC)
 
