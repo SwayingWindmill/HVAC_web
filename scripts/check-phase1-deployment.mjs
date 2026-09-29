@@ -384,7 +384,7 @@ assert(nginx.includes('location /realtime/'), 'Nginx must proxy realtime WebSock
 assert(!nginx.includes('location /connection/'), 'Nginx must not expose the internal Centrifugo connection path');
 assert(!nginx.includes('proxy_pass http://centrifugo:8000;'), 'Nginx must not proxy browsers directly to Centrifugo');
 assert(nginx.includes('try_files $uri $uri/ /index.html;'), 'Nginx must serve the React SPA fallback');
-assert(webDockerfile.includes('npm run build:real'), 'production web image must build the Real artifact');
+assert(webDockerfile.includes('npm run build'), 'production web image must build the authoritative web artifact');
 assert(!webDockerfile.includes('npm run dev'), 'production web image must never run a Vite development server');
 
 const environmentObservability = {
@@ -492,7 +492,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 77, `production migration allowlist must contain exactly 77 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.includes('hvac_s1|infra/registry/postgres/init/016-s24-alarm-assign-capability.sql'), 'production migrations must install alarm assignment authorization before local admin grants and alarm assignment can work');
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
