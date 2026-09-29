@@ -493,6 +493,7 @@ assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion 
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
 assert(manifestEntries.includes('hvac_s1|infra/registry/postgres/init/016-s24-alarm-assign-capability.sql'), 'production migrations must install alarm assignment authorization before local admin grants and alarm assignment can work');
+assert(!manifestEntries.some((entry) => entry.endsWith('|infra/registry/postgres/init/009h-data-execution-runtimes.sql')), 'the superseded cross-domain 009h runtime migration must not return to the production allowlist');
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
