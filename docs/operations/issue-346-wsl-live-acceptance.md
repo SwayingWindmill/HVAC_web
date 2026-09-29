@@ -236,22 +236,47 @@ The first implementation looked the findings up by the origin Alarm and could ne
 worked: a finding only carries `alarmId` *after* an association is recorded, so listing by
 that Alarm returns exactly the findings that are already associated.
 
-### Energy projection needs a product capability, not configuration
+### Energy projection needs a code change, not configuration
 
-`ANALYTICS_PROJECTION_ENABLED` stays `false` in the WSL override, and this is not a missing
-setting. The projector presents a static delegation grant to the Registry owner
-(`X-Delegation-Grant` against `/internal/v1/registry/sites/{siteId}/meter-bindings/resolve`,
+`ANALYTICS_PROJECTION_ENABLED` stays `false` in the WSL override, and no configuration can
+change that. The analytics read-model projector presents a static delegation grant to the
+Registry owner (`X-Delegation-Grant` against
+`/internal/v1/registry/sites/{siteId}/meter-bindings/resolve`, see
 `modules/energy/internal/coreclient/resolver.go`), and its only inputs are
-`ANALYTICS_CORE_REGISTRY_GRANT[_FILE]` (`cmd/telemetry-worker/main.go`). Nothing in the
-repository can mint that grant: a Registry delegation grant is bound to a principal
-session, subject issuer, audience, presenter and parent token
-(`libs/registryauth/registry.go` `GrantClaims`), and the platform gateway obtains one
-dynamically from IAM instead of reading it from configuration. Enabling energy projection
-therefore requires the analytics read-model workload to acquire an IAM-issued delegation
-the same way the gateway does, plus ClickHouse reader/writer credentials for
-`telemetry_history.counter_deltas` and `analytics.energy_interval_facts`. Fabricating a
-session-bound delegation locally would be a security shortcut, not an acceptance step, so
-Dashboard/Energy completeness remains uncertified.
+`ANALYTICS_CORE_REGISTRY_GRANT` or `ANALYTICS_CORE_REGISTRY_GRANT_FILE`
+(`cmd/telemetry-worker/main.go`, `modules/energy/cmd/energy-projector/main.go`). A Registry
+delegation grant expires after at most thirty seconds — `registryauth.MaximumGrantLifetime
+= 30 * time.Second`, enforced when IAM signs and when the Registry verifies
+(`libs/registryauth/registry.go`). A statically configured grant is therefore expired before
+the projector's second poll (`ANALYTICS_PROJECTOR_POLL_INTERVAL` defaults to 500ms), so the
+projection can never sustain itself from configuration in any environment.
+
+Nor can the projector obtain one today. IAM issues Registry delegations only from a decision
+request that carries a principal's signed claims together with the calling workload identity
+(`modules/iam/internal/iam/server.go`, `RegistryDecisionPath`), and it refuses to name a
+different presenter unless that presenter is in `AllowedRegistryGrantPresenters`; the
+platform gateway is the only caller and it asks on behalf of a user session
+(`cmd/energy-api/internal/gateway/registry.go`). A background workload has no session, which
+is why the projector was given a static-grant input that the thirty-second lifetime
+invalidates.
+
+Everything downstream is already provisioned: `analytics.energy_interval_facts` exists,
+`telemetry_history.counter_deltas` holds 15,956 rows, and the
+`analytics_projector_reader`/`analytics_projector_writer` ClickHouse users exist with
+their grants (`infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql`). The
+Registry owner already expects the presenter identity
+(`CORE_ANALYTICS_PROJECTOR_SPIFFE` defaults to
+`spiffe://hvac.local/analytics-read-model-projector`), but the issuing side has no path for
+it, and the standalone projector compose does not even set `ANALYTICS_CORE_REGISTRY_URL` or
+`ANALYTICS_CORE_CA` (`infra/telemetry/compose.yaml`), so that service has never been
+runnable either.
+
+Closing this needs: an IAM-mediated, refreshable delegation for the read-model workload
+(short-lived and renewed, not a static file), the presenter allowed on the issuing side, and
+`ANALYTICS_CORE_CA`/`ANALYTICS_CORE_REGISTRY_URL` wired for the projector. Minting a grant
+locally and writing it to the grant file would expire within thirty seconds, and minting one
+outside the authorization path would be a security shortcut, so Dashboard/Energy
+completeness remains uncertified rather than asserted.
 
 ## Remaining acceptance
 
@@ -259,7 +284,8 @@ The fault-to-maintenance chain is complete and was observed end to end on the me
 stack with the current frontend (run 3). What remains open is outside this chain:
 
 - Energy/Dashboard completeness stays uncertified until the analytics read-model workload
-  can acquire an IAM-issued Registry delegation; see above for the concrete gap.
+  can obtain a refreshable Registry delegation; the thirty-second grant lifetime makes the
+  current static-grant input unusable, so this is a code change rather than a setting.
 - The Work Orders ledger does not display existing Work Orders: the owner API returns them
   (`GET /api/v1/sites/{siteId}/work-orders?limit=10` → 200 with the Work Order) while the
   ledger and its summary counts render empty, so an operator cannot reach an existing Work
