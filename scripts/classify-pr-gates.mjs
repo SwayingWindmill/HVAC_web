@@ -72,38 +72,38 @@ const selectBroad = (file, reason) => {
 
 const selectWeb = (file, reason, { browser = true } = {}) => {
   add(unitProfiles, ['web']);
-  if (browser) add(browserProfiles, ['rms', 's0', 's1', 's2']);
+  if (browser) add(browserProfiles, ['web', 'platform', 'registry', 'telemetry']);
   addReason(file, reason);
 };
 
-const selectS0 = (file, reason, { integration = false, browser = false } = {}) => {
+const selectPlatform = (file, reason, { integration = false, browser = false } = {}) => {
   add(contractProfiles, ['core']);
-  add(unitProfiles, ['s0']);
-  if (integration) add(integrationProfiles, ['s0']);
-  if (browser) add(browserProfiles, ['s0']);
+  add(unitProfiles, ['platform']);
+  if (integration) add(integrationProfiles, ['platform']);
+  if (browser) add(browserProfiles, ['platform']);
   addReason(file, reason);
 };
 
-const selectS1 = (file, reason, { integration = false, browser = false } = {}) => {
-  add(contractProfiles, ['core', 's1']);
-  add(unitProfiles, ['s1']);
-  if (integration) add(integrationProfiles, ['s1']);
-  if (browser) add(browserProfiles, ['s1']);
+const selectRegistry = (file, reason, { integration = false, browser = false } = {}) => {
+  add(contractProfiles, ['core', 'registry']);
+  add(unitProfiles, ['registry']);
+  if (integration) add(integrationProfiles, ['registry']);
+  if (browser) add(browserProfiles, ['registry']);
   addReason(file, reason);
 };
 
-const selectS2 = (file, reason, { integration = 's2-baseline', browser = false } = {}) => {
-  add(contractProfiles, ['core', 's2']);
-  add(unitProfiles, ['s2']);
-  if (integration) add(integrationProfiles, [integration]);
-  if (browser) add(browserProfiles, ['s2']);
+const selectTelemetry = (file, reason, { integration = false, browser = false } = {}) => {
+  add(contractProfiles, ['core', 'telemetry']);
+  add(unitProfiles, ['telemetry']);
+  if (integration) add(integrationProfiles, ['telemetry']);
+  if (browser) add(browserProfiles, ['telemetry']);
   addReason(file, reason);
 };
 
-const selectS3 = (file, reason, { integration = false } = {}) => {
-  add(contractProfiles, ['core', 's3']);
-  add(unitProfiles, ['s3']);
-  if (integration) add(integrationProfiles, ['s3']);
+const selectCommand = (file, reason, { integration = false } = {}) => {
+  add(contractProfiles, ['core', 'command']);
+  add(unitProfiles, ['command']);
+  if (integration) add(integrationProfiles, ['command']);
   addReason(file, reason);
 };
 
@@ -152,7 +152,7 @@ for (const file of files) {
     addReason(file, 'dependency lock changed; compile and unit checks run, database and browser gates stay selective');
   });
   match(file === 'go.work' || file === 'go.work.sum', () => {
-    add(unitProfiles, ['s0', 's1', 's2', 's3', 'alarm', 'workorder', 'analytics']);
+    add(unitProfiles, ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']);
     addReason(file, 'Go workspace graph changed');
   });
   match(file === 'AGENTS.md' || file === 'README.md' || file === 'LICENSE' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
@@ -164,7 +164,6 @@ for (const file of files) {
     'scripts/classify-pr-gates.mjs',
     'scripts/domain-task-matrix.mjs',
     'scripts/package-script-long-chain-baseline.json',
-    'scripts/run-capability-task.mjs',
     'scripts/run-domain-task.mjs',
     'scripts/run-pr-gate.mjs',
     'scripts/test-domain-task-matrix.mjs',
@@ -176,46 +175,41 @@ for (const file of files) {
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
   match(
     file.startsWith('apps/hvac-web/src/api/operations')
-      || file.startsWith('apps/hvac-web/src/real/OperationsInvestigation')
-      || file.startsWith('apps/hvac-web/src/real/operations/'),
+      || file.startsWith('apps/hvac-web/src/features/operations/'),
     () => selectOperationsAgent(file, 'Operations Workspace runtime changed', { integration: false }),
   );
   match(file.startsWith('contracts/'), () => {
     add(contractProfiles, ['core']);
     if (file.includes('operations-agent') || file.includes('operations-investigation')) {
       selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
-    } else if (file.includes('telemetry') || file.includes('s2-')) selectS2(file, 'telemetry contract changed', { integration: false, browser: true });
-    else if (file.includes('command') || file.includes('s3-')) selectS3(file, 'command contract changed');
+    } else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed', { integration: false, browser: true });
+    else if (file.includes('command') || file.includes('s3-')) selectCommand(file, 'command contract changed');
     else if (file.includes('alarm') || file.includes('s4-')) selectAlarm(file, 'Alarm contract changed');
     else if (file.includes('work-order') || file.includes('workorder') || file.includes('s5-')) selectWorkOrder(file, 'Work Order contract changed');
     else selectBroad(file, 'shared contract changed');
   });
 
-  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('services/outbox-relay/') || file.startsWith('modules/registry/'), () => selectS0(file, 'S0 identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
-  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('tools/legacy-private-fixture/') || file.startsWith('deploy/s1/') || file.startsWith('infra/s1-'), () => selectS1(file, 'S1 registry capability changed', { integration: true, browser: file.includes('hvac-web') }));
+  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('services/outbox-relay/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
+  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('tools/legacy-private-fixture/') || file.startsWith('deploy/s1/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true, browser: file.includes('hvac-web') }));
   match(file.startsWith('libs/telemetryauth/') || file.startsWith('modules/iot/') || file.startsWith('modules/telemetry/internal/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('deploy/s2/') || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
-    const integration = lower.includes('realtime') || lower.includes('centrifugo') || lower.includes('005-s2-realtime')
-      ? 's2-realtime'
-      : lower.includes('history') || lower.includes('clickhouse') || lower.includes('projector')
-        ? 's2-history'
-        : lower.includes('ingest') || lower.includes('outbox')
-          ? 's2-ingest'
-          : 's2-baseline';
-    selectS2(file, 'S2 telemetry capability changed', { integration, browser: lower.includes('live') || lower.includes('hvac-web') });
+    selectTelemetry(file, 'telemetry capability changed', {
+      integration: true,
+      browser: lower.includes('live') || lower.includes('hvac-web'),
+    });
   });
-  match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('services/thingsboard-connector-control/') || file.startsWith('deploy/s3/') || file.startsWith('infra/command/'), () => selectS3(file, 'S3 command capability changed', { integration: true }));
+  match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('deploy/s3/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('deploy/s4/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('deploy/s5/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
   match(file.startsWith('libs/analyticsmodel/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/telemetry/cmd/telemetry-query-owner/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('deploy/analytics/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('benchmarks/operations-agent/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 
   match(file.startsWith('modules/iam/') || file.startsWith('cmd/energy-api/'), () => {
-    selectS0(file, 'shared IAM or Gateway boundary changed', { browser: true });
-    selectS1(file, 'shared IAM or Gateway boundary changed', { browser: true });
-    selectS2(file, 'shared IAM or Gateway boundary changed', { integration: 's2-baseline', browser: true });
-    selectS3(file, 'shared IAM or Gateway boundary changed');
-    add(browserProfiles, ['rms']);
+    selectPlatform(file, 'shared IAM or Gateway boundary changed', { browser: true });
+    selectRegistry(file, 'shared IAM or Gateway boundary changed', { browser: true });
+    selectTelemetry(file, 'shared IAM or Gateway boundary changed', { integration: true, browser: true });
+    selectCommand(file, 'shared IAM or Gateway boundary changed');
+    add(browserProfiles, ['web']);
   });
   match(
     file.startsWith('cmd/energy-api/internal/gateway/operations_agent'),
@@ -243,7 +237,6 @@ for (const file of files) {
       'scripts/classify-pr-gates.mjs',
       'scripts/domain-task-matrix.mjs',
       'scripts/package-script-long-chain-baseline.json',
-      'scripts/run-capability-task.mjs',
       'scripts/run-domain-task.mjs',
       'scripts/run-pr-gate.mjs',
       'scripts/test-domain-task-matrix.mjs',
@@ -252,13 +245,13 @@ for (const file of files) {
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('ui-audit') || lower.includes('bigscreen') || lower.includes('ops-loop'), () => selectWeb(file, 'browser or RMS automation changed'));
-    scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectS0(file, 'S0 automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
-    scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectS1(file, 'S1 automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('hvac-web') }));
+    scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
+    scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('hvac-web') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {
-      const integration = lower.includes('realtime') ? 's2-realtime' : lower.includes('history') ? 's2-history' : lower.includes('ingest') ? 's2-ingest' : lower.includes('postgres') ? 's2-baseline' : false;
-      selectS2(file, 'S2 automation changed', { integration, browser: lower.includes('browser') || lower.includes('live-client') || lower.includes('hvac-web') });
+      const integration = lower.includes('realtime') || lower.includes('history') || lower.includes('ingest') || lower.includes('postgres');
+      selectTelemetry(file, 'telemetry automation changed', { integration, browser: lower.includes('browser') || lower.includes('live-client') || lower.includes('hvac-web') });
     });
-    scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectS3(file, 'S3 automation changed', { integration: lower.includes('postgres') || lower.includes('thingsboard') }));
+    scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectCommand(file, 'command automation changed', { integration: lower.includes('postgres') || lower.includes('thingsboard') }));
     scriptMatch(lower.includes('s4-') || lower.includes('alarm'), () => selectAlarm(file, 'Alarm automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
@@ -272,10 +265,10 @@ for (const file of files) {
 
   match(file.startsWith('docs/operations/'), () => {
     const lower = file.toLowerCase();
-    if (lower.includes('rms')) add(contractProfiles, ['rms']);
-    if (lower.includes('s1-') || lower.includes('registry')) add(contractProfiles, ['s1']);
-    if (lower.includes('s2-') || lower.includes('telemetry')) add(contractProfiles, ['s2']);
-    if (lower.includes('s3-') || lower.includes('command')) add(contractProfiles, ['s3']);
+    if (lower.includes('rms') || lower.includes('web')) add(contractProfiles, ['web']);
+    if (lower.includes('s1-') || lower.includes('registry')) add(contractProfiles, ['registry']);
+    if (lower.includes('s2-') || lower.includes('telemetry')) add(contractProfiles, ['telemetry']);
+    if (lower.includes('s3-') || lower.includes('command')) add(contractProfiles, ['command']);
     addReason(file, 'operations contract or runbook changed');
   });
 
@@ -287,10 +280,6 @@ for (const file of files) {
   }
 }
 
-const browserWindowsProfileSet = new Set(gateProfileSets['browser-windows'].browser);
-const browserLinuxProfileSet = new Set(gateProfileSets['browser-linux'].browser);
-const browserWindowsProfiles = sorted([...browserProfiles].filter((profile) => browserWindowsProfileSet.has(profile)));
-const browserLinuxProfiles = sorted([...browserProfiles].filter((profile) => browserLinuxProfileSet.has(profile)));
 const classification = {
   schemaVersion: 1,
   changedFiles: sorted(files),
@@ -300,14 +289,10 @@ const classification = {
   units: unitProfiles.size > 0,
   integrations: integrationProfiles.size > 0,
   browsers: browserProfiles.size > 0,
-  browserWindows: browserWindowsProfiles.length > 0,
-  browserLinux: browserLinuxProfiles.length > 0,
   contractProfiles: sorted(contractProfiles),
   unitProfiles: sorted(unitProfiles),
   integrationProfiles: sorted(integrationProfiles),
   browserProfiles: sorted(browserProfiles),
-  browserWindowsProfiles,
-  browserLinuxProfiles,
   reasons,
 };
 
@@ -321,14 +306,10 @@ if (process.env.GITHUB_OUTPUT) {
     `units=${classification.units}`,
     `integrations=${classification.integrations}`,
     `browsers=${classification.browsers}`,
-    `browser_windows=${classification.browserWindows}`,
-    `browser_linux=${classification.browserLinux}`,
     `contract_profiles=${classification.contractProfiles.join(',')}`,
     `unit_profiles=${classification.unitProfiles.join(',')}`,
     `integration_profiles=${classification.integrationProfiles.join(',')}`,
     `browser_profiles=${classification.browserProfiles.join(',')}`,
-    `browser_windows_profiles=${classification.browserWindowsProfiles.join(',')}`,
-    `browser_linux_profiles=${classification.browserLinuxProfiles.join(',')}`,
   ];
   await appendFile(process.env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`);
 }

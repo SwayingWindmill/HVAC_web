@@ -104,8 +104,8 @@ const validStream = [
 ].join('');
 
 test('Operations Workspace parser accepts the bounded committed event lifecycle', async () => {
-  const { parseOperationsAgUiEventStream } = await loadContract();
-  const parsed = parseOperationsAgUiEventStream(validStream);
+  const { parseOperationsAgentEventStream } = await loadContract();
+  const parsed = parseOperationsAgentEventStream(validStream);
   assert.deepEqual(parsed.map((item) => item.event.type), [
     'RUN_STARTED', 'STATE_SNAPSHOT', 'RUN_FINISHED',
   ]);
@@ -114,12 +114,12 @@ test('Operations Workspace parser accepts the bounded committed event lifecycle'
 });
 
 test('Operations Workspace parser rejects internal state and arbitrary Tool payloads', async () => {
-  const { parseOperationsAgUiEventStream } = await loadContract();
+  const { parseOperationsAgentEventStream } = await loadContract();
   const unsafeState = validStream.replace(
     '"findings":[]',
     '"findings":[],"checkpoint":{"opaqueState":"secret"}',
   );
-  assert.throws(() => parseOperationsAgUiEventStream(unsafeState), /forbidden field checkpoint/u);
+  assert.throws(() => parseOperationsAgentEventStream(unsafeState), /forbidden field checkpoint/u);
 
   const unsafeTool = validStream.replace(
     event('9:2', 'RUN_FINISHED', {
@@ -144,12 +144,12 @@ test('Operations Workspace parser rejects internal state and arbitrary Tool payl
       outcome: { type: 'success' },
     }),
   );
-  assert.throws(() => parseOperationsAgUiEventStream(unsafeTool), /forbidden field metadata/u);
+  assert.throws(() => parseOperationsAgentEventStream(unsafeTool), /forbidden field metadata/u);
 
   const outOfOrder = validStream.replace('id: 9:1', 'id: 9:2');
-  assert.throws(() => parseOperationsAgUiEventStream(outOfOrder), /identity is invalid/u);
+  assert.throws(() => parseOperationsAgentEventStream(outOfOrder), /identity is invalid/u);
   const crossRevision = validStream.replace('id: 9:2', 'id: 10:2');
-  assert.throws(() => parseOperationsAgUiEventStream(crossRevision), /identity is invalid/u);
+  assert.throws(() => parseOperationsAgentEventStream(crossRevision), /identity is invalid/u);
 });
 
 test('scoped Operations API accepts the authorized stream and rejects a mismatched Tenant', async () => {
@@ -448,7 +448,7 @@ test('Operations recovery positions persist only opaque scoped cursors in sessio
     createOperationsInvestigationRecoveryPositionStore,
     normalizeOperationsRecoveryPosition,
   } = await loadBundledModule(
-    'apps/hvac-web/src/real/operations/operations-recovery-position.ts',
+    'apps/hvac-web/src/features/operations/operations-recovery-position.ts',
   );
   const values = new Map();
   const removed = [];
@@ -515,9 +515,9 @@ test('Operations recovery positions persist only opaque scoped cursors in sessio
   assert.equal(store.load(thirdScope), '11:3');
 });
 
-test('Headless Operations agent reconnects after interruption without duplicating durable Tool records', async () => {
-  const { OperationsInvestigationAgent } = await loadBundledModule(
-    'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
+test('Operations stream reconnects after interruption and converges on the authoritative snapshot', async () => {
+  const { OperationsInvestigationStream } = await loadBundledModule(
+    'apps/hvac-web/src/features/operations/OperationsInvestigationStream.ts',
     { stubCopilot: true },
   );
   const activity = {
@@ -609,7 +609,7 @@ test('Headless Operations agent reconnects after interruption without duplicatin
     if (next instanceof Error) throw next;
     return next;
   };
-  const agent = new OperationsInvestigationAgent({
+  const stream = new OperationsInvestigationStream({
     tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: investigation.id,
@@ -620,25 +620,16 @@ test('Headless Operations agent reconnects after interruption without duplicatin
     onSnapshot: (snapshot) => snapshots.push(snapshot),
     onConnectionState: (state) => connectionStates.push(state.status),
   });
-  const delivered = [];
-  await new Promise((resolve, reject) => {
-    agent.run({ threadId: 'ui-thread', runId: 'ui-run' }).subscribe({
-      next: (nextEvent) => delivered.push(nextEvent),
-      error: reject,
-      complete: resolve,
-    });
-  });
+  await stream.start();
   assert.equal(requests.length, 3);
   assert.equal(requests[1].headers['Last-Event-ID'], '1:5');
   assert.equal(requests[2].headers['Last-Event-ID'], '1:5');
   assert.deepEqual(snapshots.map((snapshot) => snapshot.investigation.revision), [1, 2]);
   assert.deepEqual(connectionStates, ['CONNECTING', 'LIVE', 'RETRYING', 'LIVE', 'TERMINAL']);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'RUN_STARTED').length, 1);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'STATE_SNAPSHOT').length, 2);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'TOOL_CALL_START').length, 1);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'TOOL_CALL_ARGS').length, 1);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'TOOL_CALL_END').length, 1);
-  assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'RUN_FINISHED').length, 1);
+  assert.deepEqual(
+    snapshots.map((snapshot) => snapshot.toolActivities.map((record) => record.recordId)),
+    [['receipt-stable'], ['receipt-stable']],
+  );
   assert.deepEqual(recoveryOperations.map(({ operation, position }) => (
     position === undefined ? operation : `${operation}:${position}`
   )), ['load', 'save:1:5', 'clear']);
@@ -650,8 +641,8 @@ test('Headless Operations agent reconnects after interruption without duplicatin
 });
 
 test('Headless Operations agent restores a scoped cursor on the first request after reload', async () => {
-  const { OperationsInvestigationAgent } = await loadBundledModule(
-    'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
+  const { OperationsInvestigationStream } = await loadBundledModule(
+    'apps/hvac-web/src/features/operations/OperationsInvestigationStream.ts',
     { stubCopilot: true },
   );
   const requests = [];
@@ -668,7 +659,7 @@ test('Headless Operations agent restores a scoped cursor on the first request af
       recoveryOperations.push({ operation: 'clear', scope });
     },
   };
-  const agent = new OperationsInvestigationAgent({
+  const stream = new OperationsInvestigationStream({
     tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: investigation.id,
@@ -683,24 +674,19 @@ test('Headless Operations agent restores a scoped cursor on the first request af
     onSnapshot: () => undefined,
   });
 
-  await new Promise((resolve, reject) => {
-    agent.run({ threadId: 'reload-thread', runId: 'reload-run' }).subscribe({
-      error: reject,
-      complete: resolve,
-    });
-  });
+  await stream.start();
   assert.equal(requests.length, 1);
   assert.equal(requests[0].headers['Last-Event-ID'], '9:2');
   assert.deepEqual(recoveryOperations.map(({ operation }) => operation), ['load', 'clear']);
 });
 
 test('Headless Operations agent does not retry a nondiscoverable Investigation', async () => {
-  const { OperationsInvestigationAgent } = await loadBundledModule(
-    'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
+  const { OperationsInvestigationStream } = await loadBundledModule(
+    'apps/hvac-web/src/features/operations/OperationsInvestigationStream.ts',
     { stubCopilot: true },
   );
   let requests = 0;
-  const agent = new OperationsInvestigationAgent({
+  const stream = new OperationsInvestigationStream({
     tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: 'hidden-investigation',
@@ -722,19 +708,20 @@ test('Headless Operations agent does not retry a nondiscoverable Investigation',
     },
     onSnapshot: () => assert.fail('nondiscoverable Investigation emitted a snapshot'),
   });
-  const failure = await new Promise((resolve) => {
-    agent.run({ threadId: 'ui-thread', runId: 'ui-run' }).subscribe({
-      error: resolve,
-      complete: () => resolve(new Error('unexpected completion')),
-    });
-  });
+  let failure;
+  try {
+    await stream.start();
+    assert.fail('nondiscoverable Investigation completed unexpectedly');
+  } catch (error) {
+    failure = error;
+  }
   assert.equal(requests, 1);
   assert.equal(failure.status, 404);
   assert.equal(failure.code, 'RESOURCE_NOT_FOUND');
 });
 
-test('Real Site shell resolves a URL Operations route backed by CopilotKit Headless', async () => {
-  const routingModule = await loadBundledModule('apps/hvac-web/src/real/site-routing.ts');
+test('TanStack route exposes the Site-scoped Operations workspace', async () => {
+  const routingModule = await loadBundledModule('apps/hvac-web/src/app/router-paths.ts');
   const site = {
     id: '0198f5c0-7c00-7000-8000-000000000002',
     tenantId: '0198f5c0-7c00-7000-8000-000000000001',
@@ -748,38 +735,26 @@ test('Real Site shell resolves a URL Operations route backed by CopilotKit Headl
   };
   const path = routingModule.siteRoute(site, 'operations');
   assert.equal(path, `/sites/${site.id}/operations`);
-  assert.deepEqual(
-    routingModule.resolveSiteRouting(path, [site], ['site.read']),
-    {
-      state: 'READY',
-      route: 'operations',
-      context: { site },
-    },
-  );
-  assert.deepEqual(routingModule.resolveSiteRouting(path, [site], []), { state: 'FORBIDDEN' });
-
-  const [shell, workspace, agent, dashboard, realEntry, realApp, demoEntry] = await Promise.all([
-    readFile('apps/hvac-web/src/real/SiteScopedShell.tsx', 'utf8'),
-    readFile('apps/hvac-web/src/real/OperationsInvestigation.tsx', 'utf8'),
-    readFile('apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts', 'utf8'),
-    readFile('apps/hvac-web/src/real/RealDashboard.tsx', 'utf8'),
-    readFile('apps/hvac-web/src/real/main.tsx', 'utf8'),
-    readFile('apps/hvac-web/src/real/RealApp.tsx', 'utf8'),
-    readFile('apps/hvac-web/src/demo/main.tsx', 'utf8'),
+  const [route, workspace, agent, appEntry, appHost] = await Promise.all([
+    readFile('apps/hvac-web/src/routes/_app.sites.$siteId.operations.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/features/operations/OperationsInvestigation.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/features/operations/OperationsInvestigationStream.ts', 'utf8'),
+    readFile('apps/hvac-web/src/app/main.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/app/AppRuntimeHost.tsx', 'utf8'),
   ]);
-  assert.match(shell, /siteRoute\(site, 'operations'\)/u);
-  assert.match(shell, /label: 'Operations Workspace'/u);
-  assert.match(shell, /primary: true/u);
-  assert.match(shell, /<OperationsInvestigation/u);
-  assert.match(dashboard, /real-dashboard-open-operations/u);
-  assert.match(workspace, /<CopilotKit/u);
+  assert.match(route, /createFileRoute\('\/_app\/sites\/\$siteId\/operations'\)/u);
+  assert.match(route, /requiredCapabilities: \['site\.read'\]/u);
+  assert.match(route, /Route\.useRouteContext\(\)/u);
+  assert.match(route, /<OperationsWorkspace/u);
+  assert.match(workspace, /new OperationsInvestigationStream/u);
+  assert.match(workspace, /stream\.start\(\)/u);
   assert.match(workspace, /registerProtectedResource/u);
   assert.match(workspace, /cancelSiteNightEnergyInvestigation/u);
   assert.match(workspace, /data-primary-agent-experience="true"/u);
   assert.match(agent, /streamSiteNightEnergyInvestigationEvents/u);
   assert.doesNotMatch(
-    `${realEntry}\n${realApp}\n${shell}\n${workspace}\n${agent}`,
+    `${appEntry}\n${appHost}\n${route}\n${workspace}\n${agent}`,
     /HvacMockAgent|AiProvider|GlobalAiAssistant|useAiHistory|localStorage|mock telemetry|variant="popup"/iu,
   );
-  assert.match(demoEntry, /AiProvider/u);
+
 });

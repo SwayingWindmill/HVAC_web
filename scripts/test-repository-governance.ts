@@ -76,27 +76,27 @@ test('Linguist exclusions cover ancillary tooling without touching product/runti
     .some((violation) => violation.includes('benchmarks/** -linguist-detectable')));
 });
 
-test('documentation checks cover service catalog, runtime modes, and React major version', () => {
+test('documentation checks cover service catalog, authoritative web commands, and React major version', () => {
   assert.deepEqual(findDocumentationViolations({
     serviceNames: ['platform-gateway'],
     moduleNames: ['alarm'],
     commandNames: ['energy-api'],
-    rootReadme: '`alarm/`\n`energy-api/`\nnpm run dev:demo',
+    rootReadme: '`alarm/`\n`energy-api/`\nnpm run dev',
     appReadme: 'Vite + React 18',
     reactVersion: '19.2.7',
   }), [
     'README.md: missing service catalog entry `platform-gateway/`',
-    'README.md: missing runtime command `npm run dev:real`',
+    'README.md: missing runtime command `npm run build`',
     'apps/hvac-web/README.md: expected React 19 runtime documentation',
   ]);
 });
 
 test('workflow checks require the repository governance gate once', () => {
   assert.deepEqual(findWorkflowViolations(`
-    - run: npm run --silent repo:check
+    - run: node scripts/run-pr-gate.mjs --gate=static
   `), []);
   assert.deepEqual(findWorkflowViolations(''), [
-    '.github/workflows/pr-gates.yml: missing static gate `npm run --silent repo:check`',
+    '.github/workflows/pr-gates.yml: missing canonical static gate `node scripts/run-pr-gate.mjs --gate=static`',
   ]);
 });
 
@@ -148,15 +148,14 @@ test('package script governance ratchets long chains and capability delegates', 
     capabilityTasks,
   }), []);
 
-  const revertedCapability = {
+  const historicalStageScript = {
     ...scripts,
-    migrated: 'one && two && three && four && five',
+    's1:test': 'echo test',
   };
   assert.ok(findPackageScriptViolations({
-    scripts: revertedCapability,
+    scripts: historicalStageScript,
     baseline,
-    capabilityTasks,
-  }).some((violation) => violation.includes('capability task `migrated` must delegate')));
+  }).some((violation) => violation.includes('historical stage task `s1:test` must be expressed')));
 
   const removedLegacy = { ...scripts };
   delete removedLegacy.legacy;

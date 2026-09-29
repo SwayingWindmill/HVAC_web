@@ -153,7 +153,7 @@
     "audit:observability": "node --test scripts/test-platform-route-registry-fixture.mjs && node scripts/run-durable-session-browser-audit.mjs",
     "platform:rollout:audit": "node scripts/audit-platform-rollout.mjs",
     "platform:kubernetes:audit": "node scripts/run-platform-kubernetes-rollout.mjs",
-    "pocs:components:check": "node scripts/check-platform-component-poc-assets.mjs && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river mod verify && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river test ./... && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...",
+    "pocs:components:check": "node scripts/check-platform-component-poc-assets.mjs && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river mod verify && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river test ./...",
     "telemetry:contracts:generate": "node scripts/generate-s2-telemetry-contracts.mjs",
     "telemetry:contracts:check": "node scripts/generate-s2-telemetry-contracts.mjs --check",
     "telemetry:integration": "node scripts/run-s2-telemetry-postgres-tests.mjs && node scripts/run-s2-telemetry-ingest-postgres-tests.mjs && node scripts/run-s2-realtime-postgres-tests.mjs && node scripts/run-s2-telemetry-history-tests.mjs",

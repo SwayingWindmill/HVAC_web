@@ -4,8 +4,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { capabilityTaskMatrix } from './domain-task-matrix.mjs';
-
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;
 const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
@@ -68,21 +66,16 @@ export const createPackageScriptLongChainBaseline = (scripts) => ({
   ),
 });
 
-export const findPackageScriptViolations = ({ scripts, baseline, capabilityTasks = capabilityTaskMatrix }) => {
+export const findPackageScriptViolations = ({ scripts, baseline }) => {
   const violations = [];
   if (baseline?.schemaVersion !== 1 || baseline?.maximumInlineCommands !== maximumInlineCommands
     || !baseline.scripts || typeof baseline.scripts !== 'object') {
     return [`${longChainBaselinePath}: invalid or unsupported baseline schema`];
   }
 
-  for (const task of Object.keys(capabilityTasks)) {
-    const expected = `node scripts/run-capability-task.mjs --task=${task}`;
-    if (scripts[task] !== expected) {
-      violations.push(`package.json: capability task \`${task}\` must delegate to \`${expected}\``);
-    }
-    if (Object.hasOwn(baseline.scripts, task)) {
-      violations.push(`${longChainBaselinePath}: migrated capability task \`${task}\` must not remain exempted`);
-    }
+  const historicalStageScripts = Object.keys(scripts).filter((name) => /^s\d+:/u.test(name));
+  for (const name of historicalStageScripts) {
+    violations.push(`package.json: historical stage task \`${name}\` must be expressed through a stable domain task`);
   }
 
   for (const [name, command] of Object.entries(scripts)) {
@@ -194,7 +187,7 @@ export const findDocumentationViolations = ({
     }
   }
 
-  for (const command of ['npm run dev:demo', 'npm run dev:real']) {
+  for (const command of ['npm run dev', 'npm run build']) {
     if (!rootReadme.includes(command)) {
       violations.push(`README.md: missing runtime command \`${command}\``);
     }
@@ -213,41 +206,16 @@ export const findLinguistViolations = (gitattributes) => requiredLinguistExclusi
   .map((entry) => `.gitattributes: missing ancillary Linguist exclusion \`${entry}\``);
 
 export const findWorkflowViolations = (workflow) => {
-  const violations = [];
-  for (const command of [
-    'npm run --silent repo:check',
-  ]) {
-    if (!workflow.includes(`- run: ${command}`)) {
-      violations.push(`.github/workflows/pr-gates.yml: missing static gate \`${command}\``);
-    }
-  }
-  return violations;
+  const required = 'node scripts/run-pr-gate.mjs --gate=static';
+  return workflow.includes(`- run: ${required}`)
+    ? []
+    : [`.github/workflows/pr-gates.yml: missing canonical static gate \`${required}\``];
 };
 
-const normalizeGitDirForPlatform = (gitDir) => {
-  if (process.platform !== 'win32') return gitDir;
-  const match = gitDir.match(/^\/mnt\/([a-zA-Z])\/(.*)$/u);
-  if (!match) return gitDir;
-  return `${match[1].toUpperCase()}:\\${match[2].replaceAll('/', '\\')}`;
-};
-
-const resolveGitListFilesInvocation = (root) => {
-  const gitExecutable = process.platform === 'win32' ? 'git.exe' : 'git';
-  const fallbackArgs = ['-C', root, 'ls-files', '-z'];
-  if (process.platform !== 'win32') return { gitExecutable, args: fallbackArgs };
-
-  try {
-    const pointer = readFileSync(join(root, '.git'), 'utf8').trim();
-    if (!pointer.startsWith('gitdir: ')) return { gitExecutable, args: fallbackArgs };
-    const gitDir = normalizeGitDirForPlatform(pointer.slice('gitdir: '.length));
-    return {
-      gitExecutable,
-      args: ['--git-dir', gitDir, '--work-tree', root, 'ls-files', '-z'],
-    };
-  } catch {
-    return { gitExecutable, args: fallbackArgs };
-  }
-};
+const resolveGitListFilesInvocation = (root) => ({
+  gitExecutable: 'git',
+  args: ['-C', root, 'ls-files', '-z'],
+});
 
 const listTrackedFiles = (root) => {
   const { gitExecutable, args } = resolveGitListFilesInvocation(root);

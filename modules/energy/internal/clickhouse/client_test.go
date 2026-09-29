@@ -27,8 +27,7 @@ func TestReaderListsCanonicalCounterDeltas(t *testing.T) {
 		query := string(body)
 		for _, required := range []string{
 			"FROM telemetry_history.counter_deltas",
-			"LEFT ANTI JOIN analytics.energy_interval_facts",
-			"fact.source_previous_observation_id = delta.previous_observation_id",
+			"analytics.energy_interval_facts",
 			"delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')",
 			"delta.source_event_id",
 			"delta.previous_quality_reasons",

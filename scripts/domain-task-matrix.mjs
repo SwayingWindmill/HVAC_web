@@ -1,6 +1,4 @@
-const npmCommand = (args, label) => process.platform === 'win32'
-  ? { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `npm ${args.join(' ')}`], label }
-  : { command: 'npm', args, label };
+const npmCommand = (args, label) => ({ command: 'npm', args, label });
 
 export const npmRun = (script) => npmCommand(['run', '--silent', script], `npm run ${script}`);
 export const npmCi = (prefix) => npmCommand(['--prefix', prefix, 'ci'], `npm --prefix ${prefix} ci`);
@@ -9,25 +7,27 @@ export const nodeRun = (...args) => ({ command: process.execPath, args, label: `
 export const gateCommandMatrix = Object.freeze({
   static: Object.freeze({
     default: Object.freeze([
+      npmRun('repo:check'),
+      npmRun('design:check'),
       npmRun('lint'),
-      npmRun('rms:topology:check'),
-      npmRun('s1:topology:check'),
-      npmRun('s2:topology:check'),
-      npmRun('build:demo'),
+      npmRun('build'),
     ]),
   }),
   contracts: Object.freeze({
     core: Object.freeze([npmRun('contracts:check'), npmRun('ownership:check')]),
-    rms: Object.freeze([npmRun('rms:topology:check')]),
-    s1: Object.freeze([npmRun('s1:topology:check'), npmRun('s1:registry:check')]),
-    s2: Object.freeze([npmRun('s2:topology:check'), npmRun('s2:contracts:check'), npmRun('s2:release:check')]),
-    s3: Object.freeze([npmRun('s3:baseline:check')]),
+    web: Object.freeze([npmRun('web:principal:contract')]),
+    registry: Object.freeze([nodeRun('scripts/check-s1-registry-baseline.mjs')]),
+    telemetry: Object.freeze([
+      nodeRun('scripts/generate-s2-telemetry-contracts.mjs', '--check'),
+      nodeRun('scripts/check-s2-telemetry-public-contract.mjs'),
+    ]),
+    command: Object.freeze([nodeRun('scripts/check-s3-command-gateway.mjs')]),
   }),
   unit: Object.freeze({
-    web: Object.freeze([npmRun('rms:trusted-shell:test'), npmRun('web:energy:test')]),
-    s0: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
-    s1: Object.freeze([npmRun('test:registry-routing')]),
-    s2: Object.freeze([
+    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:energy:test')]),
+    platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
+    registry: Object.freeze([npmRun('test:registry-routing')]),
+    telemetry: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
@@ -36,19 +36,18 @@ export const gateCommandMatrix = Object.freeze({
         './cmd/energy-api/...',
       ),
     ]),
-    s3: Object.freeze([
+    command: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
         './libs/commandauth/...',
         './libs/commandmodel/...',
         './modules/command/...',
-        './services/thingsboard-connector-control/...',
       ),
     ]),
     alarm: Object.freeze([
       nodeRun('scripts/run-go.mjs', 'test', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),
-      npmRun('real-alarms:test'),
+      npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
       nodeRun(
@@ -73,60 +72,83 @@ export const gateCommandMatrix = Object.freeze({
     pocs: Object.freeze([npmRun('pocs:components:check')]),
   }),
   integration: Object.freeze({
-    s0: Object.freeze([npmRun('test:durable-postgres')]),
-    s1: Object.freeze([npmRun('s1:registry:postgres')]),
-    's2-baseline': Object.freeze([npmRun('s2:postgres')]),
-    's2-ingest': Object.freeze([npmRun('s2:ingest:postgres')]),
-    's2-realtime': Object.freeze([npmRun('s2:realtime:postgres')]),
-    's2-history': Object.freeze([npmRun('s2:history:integration')]),
-    s3: Object.freeze([npmRun('s3:postgres')]),
-    alarm: Object.freeze([npmRun('s4:alarm:postgres')]),
+    platform: Object.freeze([npmRun('test:durable-postgres')]),
+    registry: Object.freeze([nodeRun('scripts/run-s1-registry-postgres-tests.mjs')]),
+    telemetry: Object.freeze([
+      nodeRun('scripts/run-s2-telemetry-postgres-tests.mjs'),
+      nodeRun('scripts/run-s2-telemetry-ingest-postgres-tests.mjs'),
+      nodeRun('scripts/run-s2-realtime-postgres-tests.mjs'),
+      nodeRun('scripts/run-s2-telemetry-history-tests.mjs'),
+    ]),
+    command: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s3-command-postgres-tests.ts')]),
+    alarm: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s4-alarm-postgres-tests.ts')]),
     workorder: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts')]),
-    analytics: Object.freeze([npmRun('analytics:history:integration')]),
+    analytics: Object.freeze([
+      nodeRun('scripts/run-analytics-history-tests.mjs'),
+      nodeRun('scripts/run-analytics-cube-tests.mjs'),
+    ]),
     'operations-agent': Object.freeze([
       npmCi('services/operations-agent-service'),
       npmRun('operations-agent-service:postgres'),
     ]),
   }),
   browser: Object.freeze({
-    rms: Object.freeze([npmRun('rms:web-browser')]),
-    'operations-agent': Object.freeze([npmRun('operations-workspace:browser')]),
-    s0: Object.freeze([npmRun('audit:security-failure')]),
-    s1: Object.freeze([npmRun('audit:s1-registry-web')]),
-    s2: Object.freeze([npmRun('s2:live-client:browser'), npmRun('s2:hvac-web:browser')]),
-    alarm: Object.freeze([npmRun('real-alarms:browser'), npmRun('real-alarms:lifecycle-browser')]),
-    workorder: Object.freeze([
-      npmRun('s5:work-order:read-canary:browser'),
-      npmRun('s5:work-order:create-assign:browser'),
-      npmRun('s5:work-order:lifecycle:browser'),
+    web: Object.freeze([npmRun('web:browser')]),
+    platform: Object.freeze([npmRun('audit:security-failure')]),
+    registry: Object.freeze([
+      nodeRun('scripts/run-s1-hvac-web-registry-browser-audit.mjs', '--report=out/registry-web/hvac-web-registry-browser.json'),
     ]),
+    telemetry: Object.freeze([
+      nodeRun('scripts/run-s2-telemetry-live-browser-audit.mjs'),
+      nodeRun('scripts/run-s2-hvac-web-presence-browser-audit.mjs'),
+    ]),
+    alarm: Object.freeze([
+      npmRun('alarm:browser'),
+      npmRun('alarm:lifecycle:browser'),
+    ]),
+    workorder: Object.freeze([
+      nodeRun('scripts/run-s5-work-order-read-browser-audit.mjs'),
+      nodeRun('scripts/run-s5-work-order-create-assign-browser-audit.mjs'),
+      nodeRun('scripts/run-s5-work-order-lifecycle-browser-audit.mjs'),
+    ]),
+    'operations-agent': Object.freeze([npmRun('operations-workspace:browser')]),
   }),
 });
 
 export const gateProfileSets = Object.freeze({
   all: Object.freeze({
-    contracts: Object.freeze(['core', 'rms', 's1', 's2', 's3']),
-    unit: Object.freeze(['alarm', 'analytics', 'operations-agent', 'pocs', 's0', 's1', 's2', 's3', 'web', 'workorder']),
+    contracts: Object.freeze(['command', 'core', 'registry', 'telemetry', 'web']),
+    unit: Object.freeze([
+      'alarm',
+      'analytics',
+      'command',
+      'operations-agent',
+      'platform',
+      'pocs',
+      'registry',
+      'telemetry',
+      'web',
+      'workorder',
+    ]),
     integration: Object.freeze([
       'alarm',
       'analytics',
+      'command',
       'operations-agent',
-      's0',
-      's1',
-      's2-baseline',
-      's2-history',
-      's2-ingest',
-      's2-realtime',
-      's3',
+      'platform',
+      'registry',
+      'telemetry',
       'workorder',
     ]),
-    browser: Object.freeze(['alarm', 'operations-agent', 'rms', 's0', 's1', 's2', 'workorder']),
-  }),
-  'browser-linux': Object.freeze({
-    browser: Object.freeze(['alarm', 'operations-agent', 's0', 's1', 's2', 'workorder']),
-  }),
-  'browser-windows': Object.freeze({
-    browser: Object.freeze(['rms']),
+    browser: Object.freeze([
+      'alarm',
+      'operations-agent',
+      'platform',
+      'registry',
+      'telemetry',
+      'web',
+      'workorder',
+    ]),
   }),
 });
 
@@ -147,14 +169,6 @@ for (const gate of ['contracts', 'unit', 'integration', 'browser']) {
     Object.keys(gateCommandMatrix[gate]),
   );
 }
-assertExactProfiles(
-  'Browser platform profile sets',
-  [
-    ...gateProfileSets['browser-linux'].browser,
-    ...gateProfileSets['browser-windows'].browser,
-  ],
-  gateProfileSets.all.browser,
-);
 
 export const resolveGateProfileSet = (gate, profileSet) => {
   const profiles = gateProfileSets[profileSet]?.[gate];
@@ -166,33 +180,33 @@ export const resolveGateProfileSet = (gate, profileSet) => {
 
 export const domainTaskProfiles = Object.freeze({
   web: Object.freeze({
-    contracts: Object.freeze(['rms']),
+    contracts: Object.freeze(['web']),
     unit: Object.freeze(['web']),
     integration: Object.freeze([]),
-    browser: Object.freeze(['rms', 's0', 's1', 's2']),
+    browser: Object.freeze(['web']),
   }),
   platform: Object.freeze({
     contracts: Object.freeze(['core']),
-    unit: Object.freeze(['s0']),
-    integration: Object.freeze(['s0']),
-    browser: Object.freeze(['s0']),
+    unit: Object.freeze(['platform']),
+    integration: Object.freeze(['platform']),
+    browser: Object.freeze(['platform']),
   }),
   registry: Object.freeze({
-    contracts: Object.freeze(['core', 's1']),
-    unit: Object.freeze(['s1']),
-    integration: Object.freeze(['s1']),
-    browser: Object.freeze(['s1']),
+    contracts: Object.freeze(['core', 'registry']),
+    unit: Object.freeze(['registry']),
+    integration: Object.freeze(['registry']),
+    browser: Object.freeze(['registry']),
   }),
   telemetry: Object.freeze({
-    contracts: Object.freeze(['core', 's2']),
-    unit: Object.freeze(['s2']),
-    integration: Object.freeze(['s2-baseline', 's2-ingest', 's2-realtime', 's2-history']),
-    browser: Object.freeze(['s2']),
+    contracts: Object.freeze(['core', 'telemetry']),
+    unit: Object.freeze(['telemetry']),
+    integration: Object.freeze(['telemetry']),
+    browser: Object.freeze(['telemetry']),
   }),
   command: Object.freeze({
-    contracts: Object.freeze(['core', 's3']),
-    unit: Object.freeze(['s3']),
-    integration: Object.freeze(['s3']),
+    contracts: Object.freeze(['core', 'command']),
+    unit: Object.freeze(['command']),
+    integration: Object.freeze(['command']),
     browser: Object.freeze([]),
   }),
   alarm: Object.freeze({
@@ -226,226 +240,6 @@ export const domainTaskProfiles = Object.freeze({
     browser: Object.freeze([]),
   }),
 });
-
-export const capabilityTaskMatrix = Object.freeze({
-  's2:telemetry-baseline': Object.freeze([
-    npmRun('s2:topology:check'),
-    npmRun('s2:contracts:check'),
-    npmRun('ownership:check'),
-    npmRun('s2:baseline:check'),
-    npmRun('s2:ownership:check'),
-    npmRun('s2:public-contract:check'),
-    npmRun('s2:rollout-gates:check'),
-    npmRun('s2:implementation-plan:check'),
-    npmRun('contracts:check'),
-    npmRun('release:evidence-assets'),
-    npmRun('s1:registry:check'),
-    npmRun('test:ownership'),
-    npmRun('test:registry-routing'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './modules/telemetry/...',
-    ),
-    npmRun('lint'),
-    npmRun('build'),
-    npmRun('s2:postgres'),
-  ]),
-  's2:iam-authorization': Object.freeze([
-    npmRun('s2:topology:check'),
-    npmRun('s2:iam:check'),
-    nodeRun('scripts/run-go.mjs', 'test', './libs/telemetryauth/...'),
-    nodeRun('scripts/run-go.mjs', 'test', './modules/iam/...'),
-    npmRun('ownership:check'),
-    npmRun('s2:baseline:check'),
-    npmRun('s1:registry:check'),
-    npmRun('release:evidence-assets'),
-    npmRun('lint'),
-    npmRun('build'),
-    npmRun('s2:iam:postgres'),
-  ]),
-  's2:history': Object.freeze([
-    npmRun('s2:history:check'),
-    nodeRun('scripts/run-go.mjs', 'test', './modules/telemetry/...'),
-    nodeRun('scripts/run-go.mjs', 'vet', './modules/telemetry/...'),
-    npmRun('build:telemetry-history-projector'),
-    npmRun('s2:history:integration'),
-  ]),
-  's2:telemetry-ingest': Object.freeze([
-    npmRun('s2:topology:check'),
-    npmRun('s2:ingest:check'),
-    nodeRun('scripts/run-go.mjs', 'test', './modules/telemetry/...'),
-    nodeRun('scripts/run-go.mjs', 'vet', './modules/telemetry/...'),
-    npmRun('build:telemetry-worker'),
-    npmRun('ownership:check'),
-    npmRun('s2:baseline:check'),
-    npmRun('s2:iam:check'),
-    npmRun('s2:contracts:check'),
-    npmRun('contracts:check'),
-    npmRun('release:evidence-assets'),
-    npmRun('lint'),
-    npmRun('build'),
-    npmRun('s2:ingest:postgres'),
-  ]),
-  's2:realtime-backend': Object.freeze([
-    npmRun('s2:topology:check'),
-    npmRun('s2:realtime:check'),
-    npmRun('s2:contracts:check'),
-    npmRun('ownership:check'),
-    npmRun('s2:baseline:check'),
-    npmRun('s2:ownership:check'),
-    npmRun('s2:public-contract:check'),
-    npmRun('s2:rollout-gates:check'),
-    npmRun('s2:iam:check'),
-    npmRun('s2:centrifugo:check'),
-    npmRun('contracts:check'),
-    npmRun('release:evidence-assets'),
-    npmRun('test:gateway'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './libs/telemetryauth/...',
-      './modules/iam/...',
-      './modules/telemetry/...',
-    ),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'vet',
-      './cmd/energy-api/...',
-      './modules/telemetry/...',
-    ),
-    npmRun('build:energy-api'),
-    npmRun('build:telemetry-worker'),
-    npmRun('lint'),
-    npmRun('build'),
-    npmRun('s2:realtime:postgres'),
-    npmRun('s2:realtime:config'),
-    npmRun('s2:realtime:transport'),
-  ]),
-  's3:command-safety': Object.freeze([
-    npmRun('s3:baseline:check'),
-    npmRun('ownership:check'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './libs/commandmodel/...',
-      './modules/command/...',
-      './services/thingsboard-connector-control/...',
-    ),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'vet',
-      './libs/commandmodel/...',
-      './modules/command/...',
-      './services/thingsboard-connector-control/...',
-    ),
-  ]),
-  's3:command-authority': Object.freeze([
-    npmRun('s3:postgres:check'),
-    npmRun('s3:governance-dispatch:check'),
-    npmRun('s3:verification:check'),
-    npmRun('ownership:check'),
-    npmRun('s3:postgres'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './libs/commandauth/...',
-      './libs/commandmodel/...',
-      './modules/command/...',
-      './services/thingsboard-connector-control/...',
-    ),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'vet',
-      './libs/commandauth/...',
-      './libs/commandmodel/...',
-      './modules/command/...',
-      './services/thingsboard-connector-control/...',
-    ),
-    npmRun('lint'),
-    npmRun('build'),
-  ]),
-  's3:command-api': Object.freeze([
-    npmRun('s3:gateway:check'),
-    npmRun('ownership:check'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './libs/commandauth/...',
-      './modules/iam/...',
-      './modules/command/...',
-      './cmd/energy-api/...',
-    ),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'vet',
-      './libs/commandauth/...',
-      './modules/iam/...',
-      './modules/command/...',
-      './cmd/energy-api/...',
-    ),
-  ]),
-  's3:command-ux': Object.freeze([
-    npmRun('s3:command-ux:check'),
-    npmRun('s3:gateway:check'),
-    npmRun('s3:verification:check'),
-    npmRun('ownership:check'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      './modules/command/...',
-      './cmd/energy-api/...',
-    ),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'vet',
-      './modules/command/...',
-      './cmd/energy-api/...',
-    ),
-    npmRun('lint'),
-    npmRun('build'),
-  ]),
-  's5:work-order:create-assign': Object.freeze([
-    npmRun('s5:work-order:create-assign:check'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      '-count=1',
-      './libs/workorderauth/...',
-      './libs/workordermodel/...',
-      './libs/identitycontext/...',
-      './libs/ownershipregistry/...',
-      './modules/iam/...',
-      './cmd/energy-api/...',
-      './modules/workorder/...',
-    ),
-    nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts'),
-    npmRun('s5:work-order:create-assign:browser'),
-  ]),
-  's5:work-order:lifecycle': Object.freeze([
-    npmRun('s5:work-order:lifecycle:check'),
-    nodeRun(
-      'scripts/run-go.mjs',
-      'test',
-      '-count=1',
-      './libs/workorderauth/...',
-      './libs/workordermodel/...',
-      './libs/identitycontext/...',
-      './libs/ownershipregistry/...',
-      './modules/iam/...',
-      './cmd/energy-api/...',
-      './modules/workorder/...',
-    ),
-    nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts'),
-    npmRun('s5:work-order:lifecycle:browser'),
-  ]),
-});
-
-export const resolveCapabilityTask = (task) => {
-  const commands = capabilityTaskMatrix[task];
-  if (!commands) throw new Error(`Unsupported capability task: ${task ?? '<missing>'}`);
-  return [...commands];
-};
 
 const commandIdentity = (command) => `${command.command}\0${command.args.join('\0')}`;
 
@@ -490,7 +284,7 @@ export const resolveDomainCommands = (domain, layers = ['unit']) => {
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     domain,
     layers: [...layers],
     profiles: selectedProfiles,
