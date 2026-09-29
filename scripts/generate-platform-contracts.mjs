@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -15,8 +14,7 @@ const tsTemplatePath = resolve(root, 'contracts/http/templates/platformGateway.t
 const goOutputPath = resolve(root, 'cmd/energy-api/internal/platformapi/api.gen.go');
 const tsOutputPath = resolve(root, 'apps/hvac-web/src/api/generated/platformGateway.gen.ts');
 const checkOnly = process.argv.includes('--check');
-const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
-const gofmtBinary = process.env.GOFMT_BINARY ?? (process.platform === 'win32' && existsSync(windowsGofmtPath) ? windowsGofmtPath : 'gofmt');
+const gofmtBinary = process.env.GOFMT_BINARY ?? 'gofmt';
 
 const normalizeLineEndings = (value) => value.replace(/\r\n?/g, '\n');
 const [specSource, toolingLockSource, goTemplateSource, tsTemplateSource] = await Promise.all([
@@ -113,6 +111,7 @@ const expectedOperations = {
   listAlarmsV212: ['get', '/api/v1/alarms'],
   getAlarmV212: ['get', '/api/v1/alarms/{alarmId}'],
   ackAlarmV212: ['post', '/api/v1/alarms/{alarmId}/ack'],
+  assignAlarmV212: ['post', '/api/v1/alarms/{alarmId}/assign'],
   getRuleCatalog: ['get', '/api/v1/rules/catalog'],
   listRuleRevisions: ['get', '/api/v1/rules/revisions'],
   validateRuleDraft: ['post', '/api/v1/rules/validate'],
@@ -273,6 +272,7 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'telemetry.history.read',
   'alarm.list',
   'alarm.read',
+  'alarm.assign',
   'work-order.list',
   'work-order.read',
   'work-order.create',
@@ -284,9 +284,9 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'api-credential.manage',
   'rule.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 11, 'EffectiveAuthorization capability set version must be 11');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 12, 'EffectiveAuthorization capability set version must be 12');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 32, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 33, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
@@ -351,6 +351,7 @@ const replacements = {
   __ALARMS_PATH__: operations.listAlarmsV212.path,
   __ALARM_PATH__: operations.getAlarmV212.path,
   __ALARM_ACK_PATH__: operations.ackAlarmV212.path,
+  __ALARM_ASSIGN_PATH__: operations.assignAlarmV212.path,
   __RULE_CATALOG_PATH__: operations.getRuleCatalog.path,
   __RULE_REVISIONS_PATH__: operations.listRuleRevisions.path,
   __RULE_VALIDATE_PATH__: operations.validateRuleDraft.path,
