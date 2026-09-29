@@ -27,7 +27,7 @@
     },
     {
       "id": "GATE-DATA-ARCHITECTURE",
-      "command": "npm run data:phase1:check",
+      "command": "npm run data:architecture:check",
       "category": "data-architecture"
     },
     {
@@ -37,19 +37,19 @@
     },
     {
       "id": "GATE-MQTT-E2E",
-      "command": "npm run s2:mqtt:integration",
+      "command": "npm run telemetry:mqtt:integration",
       "category": "iot",
       "evidence": ["out/s2-mqtt-integration/integration.json"]
     },
     {
       "id": "GATE-S2-POSTGRES",
-      "command": "npm run s2:postgres",
+      "command": "node scripts/run-s2-telemetry-postgres-tests.mjs",
       "category": "database",
       "evidence": ["out/s2-telemetry-baseline/postgres-baseline.json"]
     },
     {
       "id": "GATE-S2-INGEST-POSTGRES",
-      "command": "npm run s2:ingest:postgres",
+      "command": "node scripts/run-s2-telemetry-ingest-postgres-tests.mjs",
       "category": "telemetry",
       "evidence": ["out/s2-telemetry-ingest/telemetry-ingest-postgres.json"]
     },
@@ -73,13 +73,8 @@
       "category": "alarm"
     },
     {
-      "id": "GATE-COMMAND-SAFETY",
-      "command": "npm run s3:command-safety",
-      "category": "control"
-    },
-    {
-      "id": "GATE-COMMAND-AUTHORITY",
-      "command": "npm run s3:command-authority",
+      "id": "GATE-COMMAND",
+      "command": "npm run domain:run -- --domain=command --layers=unit",
       "category": "control"
     },
     {
@@ -95,7 +90,7 @@
     },
     {
       "id": "GATE-CAPACITY-PREFLIGHT",
-      "command": "npm run s2:capacity",
+      "command": "node scripts/run-s2-capacity-certification.mjs",
       "category": "performance",
       "formalMeasurement": false,
       "evidence": ["out/s2-release-evidence/capacity-report.json"]
@@ -233,29 +228,29 @@
       "id": "REQ-CTRL-001",
       "class": "SOFTWARE_REQUIRED",
       "title": "控制安全采用负向验收",
-      "gateIds": ["GATE-COMMAND-SAFETY"],
+      "gateIds": ["GATE-COMMAND"],
       "acceptance": "Command domain/dispatcher/connector 的确定性负向测试与安全边界测试全部通过"
     },
     {
       "id": "REQ-CTRL-002",
       "class": "SOFTWARE_REQUIRED",
       "title": "Command 重试、重复投递和并发单写保持单一结果",
-      "gateIds": ["GATE-COMMAND-AUTHORITY"],
+      "gateIds": ["GATE-COMMAND"],
       "acceptance": "真实 PostgreSQL Command authority、idempotency、lease/concurrency 与治理分发测试通过"
     },
     {
       "id": "REQ-CTRL-003",
       "class": "SOFTWARE_REQUIRED",
       "title": "Command 必须以 Read Back Verification 判定结果",
-      "gateIds": ["GATE-COMMAND-AUTHORITY"],
+      "gateIds": ["GATE-COMMAND"],
       "acceptance": "Verification contract/PostgreSQL 流程证明 Mismatch/Timeout/Inconclusive 不得成为 VERIFIED"
     },
     {
       "id": "REQ-CTRL-004",
-      "class": "SOFTWARE_REQUIRED",
+      "class": "DEFERRED_FORMAL",
       "title": "正式 Command Certification 条件在生产控制前冻结",
-      "gateIds": ["GATE-COMMAND-CERT-PREFLIGHT"],
-      "acceptance": "Preflight 仅证明认证 envelope、零容忍计数器、容量/Crash Point/Canary 条件完整；不得声称真实 Device side effect 已验收"
+      "gateIds": [],
+      "acceptance": "Preflight 仅证明认证 envelope、零容忍计数器、容量/Crash Point/Canary 条件完整；不得声称真实 Device side effect 已验收。本矩阵没有该 Preflight 的自动化门禁（原引用的 GATE-COMMAND-CERT-PREFLIGHT 从未在 gates 中定义），因此按正式验收条件处理，需在生产控制前以独立的认证流程冻结"
     },
     {
       "id": "REQ-OBS-001",

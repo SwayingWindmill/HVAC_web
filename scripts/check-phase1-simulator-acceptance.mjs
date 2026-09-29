@@ -22,8 +22,10 @@ for (const gate of matrix.gates) {
   assert(!gateIds.has(gate.id), `duplicate gate id ${gate.id}`);
   gateIds.add(gate.id);
   assert(typeof gate.command === 'string' && gate.command.trim(), `gate ${gate.id} has no command`);
+  // A gate may pass arguments to the npm script (for example the domain runner), so only
+  // the first token after "npm run" is the script name.
   if (gate.command.startsWith('npm run ')) {
-    const script = gate.command.slice('npm run '.length).trim();
+    const script = gate.command.slice('npm run '.length).trim().split(/\s+/)[0];
     assert(pkg.scripts?.[script], `gate ${gate.id} references missing npm script ${script}`);
   } else if (gate.command.startsWith('node ')) {
     const scriptPath = gate.command.trim().split(/\s+/)[1];
