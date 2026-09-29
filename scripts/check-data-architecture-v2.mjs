@@ -123,11 +123,11 @@ invariant(topologyMeteringSQL.includes("from_type = 'ESS'") && topologyMeteringS
 invariant(topologyMeteringSQL.includes("to_type = 'ESS'") && topologyMeteringSQL.includes("NEW.direction <> 'CHARGE'"), 'ESS charge sign rule is missing');
 invariant(gateStatus.UNIT_DIRECTION_STANDARD === 'PASS', 'UNIT_DIRECTION_STANDARD must be PASS when Unit/Direction SQL evidence is present');
 
-const telemetryIngest = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/ingest.go'), 'utf8');
+const telemetryIngest = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/ingest.go'), 'utf8');
 invariant(telemetryIngest.includes('QualityPartial') && telemetryIngest.includes('QualityInvalid'), 'Telemetry runtime V2 quality model is incomplete');
 invariant(!telemetryIngest.includes('QualitySuspect') && !telemetryIngest.includes('QualityRejected'), 'legacy principal quality values remain in runtime');
 
-const historyPostgres = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/history_postgres.go'), 'utf8');
+const historyPostgres = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/history_postgres.go'), 'utf8');
 invariant(historyPostgres.includes('decision.Status == ObservationOutOfOrder && decision.PointID != ""'), 'mapped out-of-order facts are not preserved in history');
 
 const telemetryOwnership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
@@ -143,15 +143,15 @@ invariant(telemetryOwnership.storageAuthorities?.postgresLatestProjection?.imple
 invariant(telemetryOwnership.storageAuthorities?.postgresLatestProjection?.publicRead === false, 'PostgreSQL latest projection must not be public read authority');
 invariant(telemetryOwnership.storageAuthorities?.mqtt?.authority === 'transport-only', 'MQTT must remain transport-only');
 
-const latestCacheCode = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/latest_cache.go'), 'utf8');
+const latestCacheCode = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/latest_cache.go'), 'utf8');
 invariant(latestCacheCode.includes('redisLatestCAS') && latestCacheCode.includes('PutIfNewer'), 'Redis Latest revision CAS implementation is missing');
 invariant(latestCacheCode.includes('RebuildLatestCache') && latestCacheCode.includes('LatestCacheRebuildSource'), 'Redis Latest rebuild implementation is missing');
-const latestCachePostgres = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/latest_cache_postgres.go'), 'utf8');
+const latestCachePostgres = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/latest_cache_postgres.go'), 'utf8');
 invariant(latestCachePostgres.includes('device_observation_snapshots') && latestCachePostgres.includes('latest_cache_state = \'PENDING\''), 'Redis Latest rebuild/outbox persistence evidence is missing');
 const latestCacheMigration = await readFile(resolve(root, 'infra/telemetry/postgres/init/004d-s2-redis-latest.sql'), 'utf8');
 invariant(latestCacheMigration.includes("'NOT_APPLICABLE', 'PENDING', 'MATERIALIZED'"), 'Redis Latest outbox state model is incomplete');
 invariant(latestCacheMigration.includes('subscription_id IS NULL') && latestCacheMigration.includes('latest_cache_materialized_at'), 'Redis Latest canonical snapshot materialization boundary is missing');
-const telemetryServer = await readFile(resolve(root, 'modules/telemetry/internal/telemetry/server.go'), 'utf8');
+const telemetryServer = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/server.go'), 'utf8');
 invariant(telemetryServer.includes('readLatestSnapshot') && telemetryServer.includes('LatestCache'), 'Current Snapshot read path is not Redis Latest-aware');
 const telemetryMain = await readFile(resolve(root, 'cmd/telemetry-worker/main.go'), 'utf8');
 invariant(telemetryMain.includes('TELEMETRY_LATEST_CACHE_ENABLED') && telemetryMain.includes('RebuildLatestCache') && telemetryMain.includes('runLatestCacheRelay'), 'Redis Latest production startup/relay path is incomplete');

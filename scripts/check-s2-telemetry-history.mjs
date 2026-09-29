@@ -11,10 +11,10 @@ const [
   read('infra/telemetry/postgres/init/000-bootstrap-identities.sql'),
   read('infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql'),
   read('infra/telemetry/postgres/init/004-s2-telemetry-history-outbox.sql'),
-  read('modules/telemetry/internal/telemetry/ingest_store.go'),
-  read('modules/telemetry/internal/telemetry/history.go'),
-  read('modules/telemetry/internal/telemetry/history_postgres.go'),
-  read('modules/telemetry/internal/telemetry/history_clickhouse.go'),
+  read('modules/telemetry/pkg/telemetry/ingest_store.go'),
+  read('modules/telemetry/pkg/telemetry/history.go'),
+  read('modules/telemetry/pkg/telemetry/history_postgres.go'),
+  read('modules/telemetry/pkg/telemetry/history_clickhouse.go'),
   read('modules/telemetry/cmd/telemetry-history-projector/main.go'),
   read('infra/telemetry/clickhouse/init/001-telemetry-history.sql'),
   read('infra/telemetry/compose.yaml'),
@@ -84,7 +84,7 @@ for (const marker of ['AcceptanceOutOfOrder', 'ValueTypeNumber', 'ValueTypeStrin
 for (const marker of ['PointTypeTelemetry', 'PointTypeCounter', 'PointTypeState', 'AggregateGranularityDay', 'AggregateQualityValidOnly', 'AggregateQualityUsable', 'CounterAggregate', 'StateAggregate']) {
   assert(aggregateModel.includes(marker), `missing typed aggregate model marker ${marker}`);
 }
-for (const marker of ["acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')", "value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')", 'ORDER BY telemetry_key, sampled_at, toString(observation_id)', 'max(projected_at)', 'LastObservationID']) {
+for (const marker of ["acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')", "value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')", 'ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)', 'max(projected_at)', 'LastObservationID']) {
   assert(historyClient.includes(marker), `missing stable typed History query marker ${marker}`);
 }
 for (const marker of ['RESET_TO_ZERO', 'ROLLOVER', 'REVISION_BOUNDARY', 'UNIT_BOUNDARY', 'previous_quality', 'toStartOfDay', 'toStartOfMonth']) {

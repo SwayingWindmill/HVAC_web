@@ -108,12 +108,12 @@ const commandService = await readFile(resolve(root, 'modules/command/pkg/command
 invariant(commandService.includes('strings.HasSuffix(raw, "/approve")'), 'Command Service must route canonical /approve');
 invariant(!commandService.includes('strings.HasSuffix(raw, ":approve")'), 'Command Service production route must not parse legacy :approve');
 
-const mqttConfig = await readFile(resolve(root, 'modules/iot/internal/adapter/config.go'), 'utf8');
+const mqttConfig = await readFile(resolve(root, 'modules/iot/pkg/adapter/config.go'), 'utf8');
 for (const messageType of ['telemetry', 'state', 'event', 'heartbeat']) {
   invariant(mqttConfig.includes(`energy/v1/+/+/+/${messageType}`), `MQTT uplink subscription is missing ${messageType}`);
 }
 invariant(!mqttConfig.includes('energy/v1/+/+/+/#'), 'MQTT uplink adapter must not subscribe to command/reply through #');
-const mqttProcessor = await readFile(resolve(root, 'modules/iot/internal/adapter/processor.go'), 'utf8');
+const mqttProcessor = await readFile(resolve(root, 'modules/iot/pkg/adapter/processor.go'), 'utf8');
 invariant(mqttProcessor.includes('MessageTypeState') && mqttProcessor.includes('MessageTypeEvent') && mqttProcessor.includes('MessageTypeHeartbeat'), 'MQTT V2.1.2 message family is incomplete');
 invariant(mqttProcessor.includes('SOURCE_ACTIVITY'), 'MQTT wire activity must publish Presence evidence');
 
@@ -121,8 +121,8 @@ const durableIntegration = await readFile(resolve(root, 'infra/registry/postgres
 for (const token of ['domain_outbox_events', 'domain_event_deliveries', 'domain_consumer_inbox', 'cross_store_publications', 'publication_evidence']) {
   invariant(durableIntegration.includes(token), `durable/cross-store foundation missing ${token}`);
 }
-const metricEngine = await readFile(resolve(root, 'modules/metric/internal/metric/engine.go'), 'utf8');
-invariant(metricEngine.includes('PERSISTING') || (await readFile(resolve(root, 'modules/metric/internal/metric/postgres.go'), 'utf8')).includes('PERSISTING'), 'Metric PERSISTING publication state is missing');
+const metricEngine = await readFile(resolve(root, 'modules/metric/pkg/metric/engine.go'), 'utf8');
+invariant(metricEngine.includes('PERSISTING') || (await readFile(resolve(root, 'modules/metric/pkg/metric/postgres.go'), 'utf8')).includes('PERSISTING'), 'Metric PERSISTING publication state is missing');
 const forecastService = await readFile(resolve(root, 'services/forecast-service/internal/forecast/service.go'), 'utf8');
 invariant(forecastService.includes('type ForecastEngine interface') && forecastService.includes('Reconcile('), 'Forecast cross-store reconciliation boundary is incomplete');
 const optimizationService = await readFile(resolve(root, 'services/optimization-service/internal/optimization/service.go'), 'utf8');
