@@ -18,6 +18,7 @@ import {
   centralPlantEquipment,
   centralPlantSensors,
 } from './central-plant-spatial-model.mjs';
+import { applyRegistryRigToPoints, loadAcceptanceRig } from './lib/acceptance-rig.mjs';
 
 const repoRoot = path.resolve(process.env.PHASE1_REPO_ROOT || process.cwd());
 const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-postgres-1';
@@ -297,7 +298,7 @@ SET tenant_id=EXCLUDED.tenant_id,
 COMMIT;`;
 }
 
-function buildConnectivitySeed() {
+function buildConnectivitySeed(rig) {
   const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
   const transportProfileId = localUUID(0x810000000001);
   const credentialRefId = localUUID(0x810000000002);
@@ -422,14 +423,14 @@ INSERT INTO connectivity.sessions (
   ${sqlLiteral(sessionId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
   ${sqlLiteral(credentialRefId)}, (SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(credentialRefId)}::uuid),
   'EG8200-COMMERCIAL-001', 'ACTIVE', clock_timestamp(),
-  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '24 hours'),
+  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '${(rig?.connectivity.sessionLifetimeHours ?? 24)} hours'),
   NULL, NULL, 1, clock_timestamp()
 )
 ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, credential_revision=EXCLUDED.credential_revision, status='ACTIVE', opened_at=EXCLUDED.opened_at, expires_at=EXCLUDED.expires_at, closed_at=NULL, close_reason=NULL, revision=connectivity.sessions.revision+1, updated_at=clock_timestamp();
 COMMIT;`;
 }
 
-function buildS2Seed(points) {
+function buildS2Seed(points, rig) {
   const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
   const ids = buildIdentities(points);
   const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
@@ -460,9 +461,13 @@ function buildS2Seed(points) {
 
   const freshness = points.map((point) => {
     const device = deviceByName.get(point.deviceId);
+    const expectedSeconds = Math.max(1, Math.round(durationMilliseconds(point.sampleInterval) / 1000));
+    // A configured policy must keep fresh_within_seconds >= the expected sample interval,
+    // so a Device the rig intentionally paces slowly cannot carry the fast window.
+    const freshWithinSeconds = Math.max(rig?.runtimeFreshness.freshWithinSeconds ?? 30, expectedSeconds);
     return `(
-      ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)}, 1, 30, true,
-      ${Math.max(1, Math.round(durationMilliseconds(point.sampleInterval) / 1000))},
+      ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)}, 1, ${freshWithinSeconds}, true,
+      ${expectedSeconds},
       ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, NULL, NULL, clock_timestamp()
     )`;
   }).join(',\n');
@@ -588,19 +593,27 @@ const pointContract = JSON.parse(readFileSync(pointContractPath, 'utf8'));
 const rawObservedPoints = buildCentralPlantSimulatorPoints(pointContract);
 const rawControlPoints = buildCentralPlantControlPoints(rawObservedPoints);
 const registryPoints = assignCentralPlantPointIds([...rawObservedPoints, ...rawControlPoints]);
-const observedPoints = registryPoints.filter((point) => point.pointType !== 'COMMAND');
-const controlPoints = registryPoints.filter((point) => point.pointType === 'COMMAND');
+
+// --rig applies the reviewed live-acceptance profile so the published cadence, the
+// Registry staleness contract, the runtime freshness policy and the MQTT session
+// lifetime come from one source instead of hand-edited runtime state.
+const rigArgument = process.argv.indexOf('--rig');
+const rigProfilePath = rigArgument >= 0 ? process.argv[rigArgument + 1] : undefined;
+const rig = rigProfilePath ? await loadAcceptanceRig(repoRoot, rigProfilePath) : undefined;
+const seededPoints = rig ? applyRegistryRigToPoints(rig, registryPoints) : registryPoints;
+const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMAND');
+const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
 ensureSimulatorCertificate();
 ensureFleetReleaseKeys();
-psql('hvac_s1', buildS1Seed(registryPoints));
-psql('hvac_s1', buildConnectivitySeed());
+psql('hvac_s1', buildS1Seed(seededPoints));
+psql('hvac_s1', buildConnectivitySeed(rig));
 const credentialRevision = Number(psqlScalar('hvac_s1', `SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(localUUID(0x810000000002))}::uuid`));
 if (!Number.isSafeInteger(credentialRevision) || credentialRevision < 1) throw new Error('simulator CredentialRef revision is invalid');
 writeSimulatorConfig(credentialRevision);
-psql('hvac_s2', buildS2Seed(observedPoints));
+psql('hvac_s2', buildS2Seed(observedPoints, rig));
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
 startSimulatorService();
 
-console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}`);
+console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}${rig ? `, rig=${rig.profile}` : ''}`);
