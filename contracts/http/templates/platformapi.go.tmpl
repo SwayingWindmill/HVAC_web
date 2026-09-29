@@ -319,6 +319,8 @@ type TelemetryPoint struct {
 	SampleIntervalMS  int            `json:"sampleIntervalMs"`
 	PublishIntervalMS int            `json:"publishIntervalMs"`
 	StaleAfterMS      int            `json:"staleAfterMs"`
+	CounterDecreaseMode *string `json:"counterDecreaseMode"`
+	CounterRolloverModulus *float64 `json:"counterRolloverModulus"`
 	SourceMetadata    map[string]any `json:"sourceMetadata"`
 	Status            string         `json:"status"`
 	Revision          int64          `json:"revision"`

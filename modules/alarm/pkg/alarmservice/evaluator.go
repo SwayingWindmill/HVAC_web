@@ -304,7 +304,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 		state.Status = EvaluationMatched
 		state.QualityBlocker = ""
 		finishEvaluationState(&state, snapshot, now)
-		if raiseResult.status == EvaluationMatched && newInput {
+		if raiseResult.status == EvaluationMatched && policyChanged {
 			publication := publicationForDecision(policy, snapshot, now)
 			return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectPublish, Fingerprint: fingerprint, State: state, Publication: &publication}, nil
 		}

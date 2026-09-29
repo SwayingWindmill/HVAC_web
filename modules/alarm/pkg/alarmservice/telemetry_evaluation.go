@@ -252,8 +252,10 @@ func buildSiteEvaluationSnapshot(triggerEventID, tenantID, siteID string, record
 			if err != nil {
 				return EvaluationSnapshot{}, err
 			}
+			key = record.DeviceID + "/" + key
+			fact.Key = key
 			if _, duplicate := inputs[key]; duplicate {
-				return EvaluationSnapshot{}, fmt.Errorf("%w: duplicate canonical telemetry key %q across Site devices", ErrTelemetryEvaluationInvalid, key)
+				return EvaluationSnapshot{}, fmt.Errorf("%w: duplicate telemetry input %q", ErrTelemetryEvaluationInvalid, key)
 			}
 			inputs[key] = fact
 		}

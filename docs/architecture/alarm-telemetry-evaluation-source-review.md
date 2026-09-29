@@ -81,11 +81,11 @@ Alarm persists the latest accepted canonical Device snapshot per Tenant/Site/Dev
 
 For SITE assignments, Alarm deterministically merges the current Device records into one `EvaluationSnapshot`. The input revision is derived from the sorted `(device, business revision, event)` set, so delivery order does not change rule identity.
 
-Canonical telemetry keys are retained as Alarm input keys. The first tracer therefore combines:
+Canonical telemetry keys remain device-scoped. SITE evaluation inputs use `deviceId/telemetryKey`. The current tracer combines:
 
-- `chiller.run_state`;
-- `chiller.cooling_capacity`;
-- `btu_meter.return_water_temperature`.
+- `<chiller-device-id>/run_state`;
+- `<chiller-device-id>/cooling_capacity`;
+- `<btu-device-id>/return_water_temperature`.
 
 The accepted tracer policy uses the parent #331 thresholds: running chiller, at least 30% of 1200 kW rated capacity (`>= 360 kW`), return water `<= 10.5 °C` for 300 seconds; clear at return water `>= 11.5 °C` or when the chiller is no longer running.
 
@@ -112,3 +112,32 @@ The #340 implementation is covered by:
 - Phase1 deployment verification confirming the two new production migrations are in the migration allowlist and the canonical runtime topology remains valid.
 
 This evidence supports `ADAPT` decisions above without treating any pre-existing local implementation as the default authority.
+
+## 2026-09-28 live acceptance: device-scoped inputs
+
+Observed in #346: central-plant Registry uses device-scoped point codes (`run_state`, `frequency`, `return_water_temperature`). The Site bridge rejected duplicate keys across devices; its tests had used globally prefixed names that the live ingest path does not emit. FDD also selected those obsolete names.
+
+Re-read official ThingsBoard `v4.3.1.3`, commit `105351615126682762caf849619f0ea02df1faf3`:
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/cf/configuration/Argument.java`: referenced entity identity and referenced key are separate input coordinates.
+- `application/src/main/java/org/thingsboard/server/service/cf/ctx/state/alarm/AlarmRuleState.java`: duration uses event/current time and preserves evaluation state.
+- `application/src/test/java/org/thingsboard/server/cf/AlarmRulesTest.java`: duration and argument-source change scenarios.
+- Official documentation: https://thingsboard.io/docs/user-guide/calculated-fields/ (argument sources and cross-device calculation).
+
+ADOPT entity-plus-key input identity. ADAPT to the existing HVAC Condition.Input string as `deviceId/telemetryKey`, preserving original event/key evidence. REJECT a global point-key uniqueness assumption and any compatibility lookup for old prefixed names. FDD already has an explicit deviceId and now selects that device's canonical `supply_water_temperature` and `return_water_temperature`. Existing device-level IAM authorization remains authoritative. No external source was copied.
+
+OpenEMS reacting source/test at `a7efc1c1eacd05f7a0f8eb43f962564ccf66ead6` was also re-read (the paths in `virtual-central-plant-chwp-stuck-high-source-review.md`): ADOPT elapsed-time physics. The MQTT simulator previously advanced a fixed interval even after delayed ticks; it now advances by actual elapsed time. MyEMS acquisition/business separation remains the applicable comparison recorded there; neither simulator produces Alarm/FDD/Work Order facts.
+
+Verification: the existing Site merge test was first reproduced failing with two real device-scoped `return_water_temperature` inputs, then passed after qualification. Existing freshness/quality tests and Alarm/FDD package tests pass. Live end-to-end acceptance is still pending; this record does not certify it.
+
+### Continuous matching incident (2026-09-29 live regression)
+
+Also reviewed `application/src/main/java/org/thingsboard/server/service/cf/ctx/state/alarm/AlarmCalculatedFieldState.java` at the same pinned ThingsBoard commit, including `calculateAlarmResult`, alongside `AlarmRuleState.doEval` / `evalDuration` and `AlarmRulesTest.testCreateAlarm_durationCondition`.
+
+ThingsBoard updates the existing alarm end timestamp/details for new matching telemetry; its scheduled reevaluation skips unchanged severity. It does not implement HVAC's append-only occurrence evidence collection. HVAC's previous mapping of every matching snapshot to `RecordOccurrence` accumulated 54,340 evidence references within one continuous incident and made the public read exceed its response limit.
+
+- ADAPT: retain the active incident while its condition remains matched; evaluate clear conditions on subsequent observations.
+- REJECT: translating every telemetry revision into another business occurrence. HVAC occurrence publication appends immutable evidence and timeline entries, unlike the upstream current-details update; ordinary sampling is not a new occurrence under the current fixed-severity policy.
+- RETAIN: a changed policy revision can publish its changed severity/rule evidence against the active incident. A genuine clear followed by a new trigger creates the next incident through the existing owner.
+
+The evaluator still persists the latest input revision, freshness state and next due time. No telemetry is discarded and no historical incident is deleted. Historical oversized responses from the pre-fix run remain a separate read-projection problem; this change does not certify their readability.

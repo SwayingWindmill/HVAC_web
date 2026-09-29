@@ -2,6 +2,9 @@ package simulator
 
 import (
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -9,6 +12,16 @@ import (
 func TestCHWPStuckHighDisturbanceProducesLowDeltaTAndRecovers(t *testing.T) {
 	config := testPlantConfig()
 	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC))
+	mux := http.NewServeMux()
+	RegisterCHWPDisturbance(mux, plant)
+	setDisturbance := func(body string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/acceptance/chwp/stuck-high", strings.NewReader(body)))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("disturbance request failed: %s", response.Body.String())
+		}
+	}
 
 	lowerTarget := plant.ApplyCommand(Command{
 		DeviceID: config.ChilledWaterPump.ID,
@@ -33,7 +46,7 @@ func TestCHWPStuckHighDisturbanceProducesLowDeltaTAndRecovers(t *testing.T) {
 	}
 	assertWaterSideEnergyBalance(t, healthy, config)
 
-	plant.SetCHWPStuckHighDisturbance(true)
+	setDisturbance(`{"active":true}`)
 	disturbed := plant.Tick(3 * time.Minute)
 	disturbedCHWP := disturbed.Devices[config.ChilledWaterPump.ID]
 	disturbedBTU := disturbed.Devices[config.BTUMeterID]
@@ -52,7 +65,7 @@ func TestCHWPStuckHighDisturbanceProducesLowDeltaTAndRecovers(t *testing.T) {
 	}
 	assertWaterSideEnergyBalance(t, disturbed, config)
 
-	plant.SetCHWPStuckHighDisturbance(false)
+	setDisturbance(`{"active":false}`)
 	recovered := plant.Tick(3 * time.Minute)
 	recoveredCHWP := recovered.Devices[config.ChilledWaterPump.ID]
 	recoveredBTU := recovered.Devices[config.BTUMeterID]

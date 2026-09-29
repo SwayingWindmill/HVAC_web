@@ -50,8 +50,8 @@ func TestPostgresTelemetryBridgeMergesDevicesKeepsNewestFactsAndDrivesDurationCl
 	}
 
 	chiller1 := telemetryBridgeSnapshot(telemetryBridgeChillerID, 1, startedAt,
-		presentTelemetryState("chiller.run_state", "STRING", `"RUNNING"`, "GOOD", "FRESH", startedAt),
-		presentTelemetryState("chiller.cooling_capacity", "NUMBER", `420`, "GOOD", "FRESH", startedAt))
+		presentTelemetryState("run_state", "STRING", `"RUNNING"`, "GOOD", "FRESH", startedAt),
+		presentTelemetryState("cooling_capacity", "NUMBER", `420`, "GOOD", "FRESH", startedAt))
 	decisions, err := store.EvaluateTelemetrySnapshot(ctx, telemetryBridgeEventChiller1, chiller1, startedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestPostgresTelemetryBridgeMergesDevicesKeepsNewestFactsAndDrivesDurationCl
 
 	completeAt := startedAt.Add(time.Second)
 	btu1 := telemetryBridgeSnapshot(telemetryBridgeBTUID, 1, completeAt,
-		presentTelemetryState("btu_meter.return_water_temperature", "NUMBER", `10.2`, "GOOD", "FRESH", completeAt))
+		presentTelemetryState("return_water_temperature", "NUMBER", `10.2`, "GOOD", "FRESH", completeAt))
 	decisions, err = store.EvaluateTelemetrySnapshot(ctx, telemetryBridgeEventBTU1, btu1, completeAt)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +73,8 @@ func TestPostgresTelemetryBridgeMergesDevicesKeepsNewestFactsAndDrivesDurationCl
 
 	newerAt := completeAt.Add(10 * time.Second)
 	chiller2 := telemetryBridgeSnapshot(telemetryBridgeChillerID, 2, newerAt,
-		presentTelemetryState("chiller.run_state", "STRING", `"RUNNING"`, "GOOD", "FRESH", newerAt),
-		presentTelemetryState("chiller.cooling_capacity", "NUMBER", `430`, "GOOD", "FRESH", newerAt))
+		presentTelemetryState("run_state", "STRING", `"RUNNING"`, "GOOD", "FRESH", newerAt),
+		presentTelemetryState("cooling_capacity", "NUMBER", `430`, "GOOD", "FRESH", newerAt))
 	if _, err := store.EvaluateTelemetrySnapshot(ctx, telemetryBridgeEventChiller2, chiller2, newerAt); err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +110,14 @@ func TestPostgresTelemetryBridgeMergesDevicesKeepsNewestFactsAndDrivesDurationCl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !alarmEvidenceHasReference(raisedAlarm.Evidence, telemetryBridgeEventChiller2+"#chiller.run_state") ||
-		!alarmEvidenceHasReference(raisedAlarm.Evidence, telemetryBridgeEventBTU1+"#btu_meter.return_water_temperature") {
+	if !alarmEvidenceHasReference(raisedAlarm.Evidence, telemetryBridgeEventChiller2+"#run_state") ||
+		!alarmEvidenceHasReference(raisedAlarm.Evidence, telemetryBridgeEventBTU1+"#return_water_temperature") {
 		t.Fatalf("Telemetry-derived Alarm did not retain authoritative Device snapshot evidence: %#v", raisedAlarm.Evidence)
 	}
 
 	clearAt := dueAt.Add(time.Second)
 	btu2 := telemetryBridgeSnapshot(telemetryBridgeBTUID, 2, clearAt,
-		presentTelemetryState("btu_meter.return_water_temperature", "NUMBER", `11.7`, "GOOD", "FRESH", clearAt))
+		presentTelemetryState("return_water_temperature", "NUMBER", `11.7`, "GOOD", "FRESH", clearAt))
 	decisions, err = store.EvaluateTelemetrySnapshot(ctx, telemetryBridgeEventBTU2, btu2, clearAt)
 	if err != nil {
 		t.Fatal(err)
@@ -146,13 +146,13 @@ func telemetryBridgePolicy() AlarmPolicyRevision {
 	policy.TriggerMode = TriggerDuration
 	policy.DurationSeconds = 300
 	policy.Raise = Condition{Kind: ConditionAnd, Children: []Condition{
-		{Kind: ConditionCompare, Input: "chiller.run_state", Operator: CompareEQ, Value: StringValue("RUNNING")},
-		{Kind: ConditionCompare, Input: "chiller.cooling_capacity", Operator: CompareGTE, Value: NumberValue(360)},
-		{Kind: ConditionCompare, Input: "btu_meter.return_water_temperature", Operator: CompareLTE, Value: NumberValue(10.5)},
+		{Kind: ConditionCompare, Input: telemetryBridgeChillerID + "/run_state", Operator: CompareEQ, Value: StringValue("RUNNING")},
+		{Kind: ConditionCompare, Input: telemetryBridgeChillerID + "/cooling_capacity", Operator: CompareGTE, Value: NumberValue(360)},
+		{Kind: ConditionCompare, Input: telemetryBridgeBTUID + "/return_water_temperature", Operator: CompareLTE, Value: NumberValue(10.5)},
 	}}
 	policy.Clear = Condition{Kind: ConditionOr, Children: []Condition{
-		{Kind: ConditionCompare, Input: "btu_meter.return_water_temperature", Operator: CompareGTE, Value: NumberValue(11.5)},
-		{Kind: ConditionCompare, Input: "chiller.run_state", Operator: CompareNE, Value: StringValue("RUNNING")},
+		{Kind: ConditionCompare, Input: telemetryBridgeBTUID + "/return_water_temperature", Operator: CompareGTE, Value: NumberValue(11.5)},
+		{Kind: ConditionCompare, Input: telemetryBridgeChillerID + "/run_state", Operator: CompareNE, Value: StringValue("RUNNING")},
 	}}
 	sealAlarmPolicy(&policy)
 	return policy

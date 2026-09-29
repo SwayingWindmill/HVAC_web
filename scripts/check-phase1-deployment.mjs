@@ -485,7 +485,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 79, `production migration allowlist must contain exactly 79 migrations, got ${manifestEntries.length}`);
+assert(!manifestEntries.some((entry) => entry.endsWith('|infra/registry/postgres/init/009h-data-execution-runtimes.sql')), 'superseded cross-domain 009h runtime migration must not return to the production allowlist');
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');

@@ -89,19 +89,7 @@ func virtualDiagnosticsServer(address string, plant *simulator.Plant) *http.Serv
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(plant.Snapshot().Devices["CHWP-01"])
 	})
-	mux.HandleFunc("PUT /acceptance/chwp/stuck-high", func(writer http.ResponseWriter, request *http.Request) {
-		var body struct {
-			Active bool `json:"active"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1024))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&body); err != nil {
-			http.Error(writer, "invalid disturbance payload", http.StatusBadRequest)
-			return
-		}
-		plant.SetCHWPStuckHighDisturbance(body.Active)
-		writer.WriteHeader(http.StatusNoContent)
-	})
+	simulator.RegisterCHWPDisturbance(mux, plant)
 	mux.HandleFunc("PUT /acceptance/chwp/fault", func(writer http.ResponseWriter, request *http.Request) {
 		var body struct {
 			Code string `json:"code"`

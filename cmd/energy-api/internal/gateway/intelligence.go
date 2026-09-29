@@ -29,8 +29,8 @@ const (
 	defaultIntelligenceTimeout      = 8 * time.Second
 	maximumIntelligenceRequestBytes = int64(256 << 10)
 	maximumIntelligenceResponse     = int64(8 << 20)
-	fddSupplyTemperatureKey         = "btu_meter.supply_water_temperature"
-	fddReturnTemperatureKey         = "btu_meter.return_water_temperature"
+	fddSupplyTemperatureKey         = "supply_water_temperature"
+	fddReturnTemperatureKey         = "return_water_temperature"
 )
 
 type IntelligenceConfig struct {
