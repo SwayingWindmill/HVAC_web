@@ -232,6 +232,8 @@ export {
   type CommandCapabilityReader,
   type CurrentTelemetryReadRequest,
   type CurrentTelemetryReader,
+  type DeviceTelemetryReadRequest,
+  type DeviceTelemetryReader,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
   type GeneratedIdentityKind,
@@ -257,6 +259,7 @@ export {
   type RuntimePlanningContext,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
+  type ToolAuthorizableReadRequest,
   type ToolAuthorizationGrant,
   type ToolAuthorizationReader,
 } from './internal/ports.js';

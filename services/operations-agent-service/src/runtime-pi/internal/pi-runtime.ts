@@ -9,8 +9,12 @@ import type { Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import {
   HVAC_AGENT_EVENT_VERSION,
+  NOOP_AGENT_RUNTIME_TELEMETRY,
   type AgentArtifact,
   type AgentEngine,
+  type AgentRuntimeBudgetDimension,
+  type AgentRuntimeOwnerErrorClass,
+  type AgentRuntimeTelemetrySink,
   type AgentEngineResult,
   type AgentEvent,
   type AgentMessage,
@@ -31,6 +35,7 @@ export interface PiAgentEngineDependencies {
   readonly streamFn: PiStreamFn;
   readonly systemPrompt: string;
   readonly thinkingLevel: ModelThinkingLevel;
+  readonly telemetry?: AgentRuntimeTelemetrySink;
 }
 
 interface PendingToolExecution {
@@ -43,6 +48,55 @@ interface PendingToolExecution {
 const digestArguments = (argumentsValue: unknown): string => createHash('sha256')
   .update(JSON.stringify(argumentsValue))
   .digest('hex');
+
+const safeRecordTelemetry = (
+  telemetry: AgentRuntimeTelemetrySink,
+  event: Parameters<AgentRuntimeTelemetrySink['record']>[0],
+): void => {
+  try {
+    telemetry.record(event);
+  } catch {
+    // Runtime telemetry is diagnostic only and cannot change Agent execution.
+  }
+};
+
+const budgetDimensionFromFailureCode = (failureCode: string): AgentRuntimeBudgetDimension | null => {
+  switch (failureCode) {
+    case 'MODEL_CALL_LIMIT':
+      return 'MODEL_CALLS';
+    case 'TOOL_CALL_LIMIT':
+      return 'TOOL_CALLS';
+    case 'TOOL_CONCURRENCY_LIMIT':
+      return 'TOOL_CONCURRENCY';
+    case 'TOOL_RESULT_TOO_LARGE':
+      return 'TOOL_RESULT_BYTES';
+    case 'WALL_CLOCK_LIMIT':
+      return 'WALL_CLOCK_MS';
+    case 'INPUT_TOKEN_LIMIT':
+      return 'INPUT_TOKENS';
+    case 'OUTPUT_TOKEN_LIMIT':
+      return 'OUTPUT_TOKENS';
+    default:
+      return null;
+  }
+};
+
+const ownerErrorClassFromFailureCode = (failureCode: string | null): AgentRuntimeOwnerErrorClass | null => {
+  switch (failureCode) {
+    case 'TOOL_OWNER_REQUEST_REJECTED':
+      return 'REQUEST_REJECTED';
+    case 'TOOL_OWNER_RESOURCE_NOT_FOUND':
+      return 'RESOURCE_NOT_FOUND';
+    case 'TOOL_OWNER_TIMEOUT':
+      return 'TIMEOUT';
+    case 'TOOL_OWNER_UNAVAILABLE':
+      return 'UNAVAILABLE';
+    case 'TOOL_OWNER_RESPONSE_INVALID':
+      return 'RESPONSE_INVALID';
+    default:
+      return null;
+  }
+};
 
 const textFromAssistantMessage = (message: Extract<PiAgentEvent, { type: 'message_end' }>['message']): string => {
   if (message.role !== 'assistant') return '';
@@ -102,6 +156,7 @@ export const createPiAgentEngine = ({
   streamFn,
   systemPrompt,
   thinkingLevel,
+  telemetry = NOOP_AGENT_RUNTIME_TELEMETRY,
 }: PiAgentEngineDependencies): AgentEngine => async (input) => {
   const artifacts: AgentArtifact[] = [];
   const emittedArtifactIds = new Set<string>();
@@ -116,12 +171,58 @@ export const createPiAgentEngine = ({
   let inputTokens = 0;
   let outputTokens = 0;
   let budgetFailureCode: string | null = null;
+  let activeModelStartedAt: number | null = null;
+  let activeModelCall = 0;
+  const runStartedAt = Date.now();
 
   const usage = (): AgentRunUsage => Object.freeze({
     inputTokens,
     outputTokens,
     modelCalls,
     toolCalls,
+  });
+
+  const markBudgetFailure = (failureCode: string): void => {
+    if (budgetFailureCode !== null) return;
+    budgetFailureCode = failureCode;
+    const dimension = budgetDimensionFromFailureCode(failureCode);
+    if (dimension === null) return;
+    safeRecordTelemetry(telemetry, {
+      type: 'budget.exhausted',
+      sessionId: input.session.id,
+      runId: input.run.id,
+      correlationId: input.context.correlationId,
+      at: Date.now(),
+      dimension,
+      failureCode,
+    });
+  };
+
+  const recordRunCompleted = (
+    status: AgentEngineResult['runStatus'],
+    failureCode: string | null,
+  ): void => {
+    const at = Date.now();
+    safeRecordTelemetry(telemetry, {
+      type: 'run.completed',
+      sessionId: input.session.id,
+      runId: input.run.id,
+      correlationId: input.context.correlationId,
+      at,
+      status,
+      durationMs: Math.max(0, at - runStartedAt),
+      usage: usage(),
+      failureCode,
+    });
+  };
+
+  safeRecordTelemetry(telemetry, {
+    type: 'run.started',
+    sessionId: input.session.id,
+    runId: input.run.id,
+    correlationId: input.context.correlationId,
+    at: runStartedAt,
+    modelRef: input.run.modelRef,
   });
 
   const emit = <TType extends AgentEvent['type']>(
@@ -153,9 +254,7 @@ export const createPiAgentEngine = ({
     sessionId: input.session.id,
     runId: input.run.id,
     onArtifact: (artifact) => artifacts.push(artifact),
-    onBudgetExhausted: (code) => {
-      budgetFailureCode ??= code;
-    },
+    onBudgetExhausted: (code) => markBudgetFailure(code),
   });
 
   const agent = new Agent({
@@ -172,12 +271,16 @@ export const createPiAgentEngine = ({
     shouldStopAfterTurn: () => {
       if (artifacts.length > 0) return true;
       if (budgetFailureCode !== null) return true;
+      if (inputTokens >= input.budget.maxInputTokens) {
+        markBudgetFailure('INPUT_TOKEN_LIMIT');
+        return true;
+      }
       if (outputTokens >= input.budget.maxOutputTokens) {
-        budgetFailureCode = 'OUTPUT_TOKEN_LIMIT';
+        markBudgetFailure('OUTPUT_TOKEN_LIMIT');
         return true;
       }
       if (modelCalls >= input.budget.maxModelCalls) {
-        budgetFailureCode = 'MODEL_CALL_LIMIT';
+        markBudgetFailure('MODEL_CALL_LIMIT');
         return true;
       }
       return false;
@@ -189,9 +292,21 @@ export const createPiAgentEngine = ({
 
   const unsubscribeAgent = agent.subscribe((event) => {
     switch (event.type) {
-      case 'turn_start':
+      case 'turn_start': {
         modelCalls += 1;
+        activeModelCall = modelCalls;
+        activeModelStartedAt = Date.now();
+        safeRecordTelemetry(telemetry, {
+          type: 'model.started',
+          sessionId: input.session.id,
+          runId: input.run.id,
+          correlationId: input.context.correlationId,
+          at: activeModelStartedAt,
+          modelRef: input.run.modelRef,
+          modelCall: activeModelCall,
+        });
         break;
+      }
       case 'message_start':
         if (event.message.role === 'assistant') {
           activeAssistantMessageId = `message-${input.run.id}-${assistantMessageIndex}`;
@@ -210,6 +325,25 @@ export const createPiAgentEngine = ({
         if (event.message.role === 'assistant') {
           inputTokens += event.message.usage.input;
           outputTokens += event.message.usage.output;
+          const completedAt = Date.now();
+          const turnUsage = event.message.usage;
+          if (activeModelStartedAt !== null) {
+            safeRecordTelemetry(telemetry, {
+              type: 'model.completed',
+              sessionId: input.session.id,
+              runId: input.run.id,
+              correlationId: input.context.correlationId,
+              at: completedAt,
+              modelRef: input.run.modelRef,
+              modelCall: activeModelCall,
+              durationMs: Math.max(0, completedAt - activeModelStartedAt),
+              inputTokens: turnUsage.input,
+              outputTokens: turnUsage.output,
+            });
+            activeModelStartedAt = null;
+          }
+          if (inputTokens >= input.budget.maxInputTokens) markBudgetFailure('INPUT_TOKEN_LIMIT');
+          if (outputTokens >= input.budget.maxOutputTokens) markBudgetFailure('OUTPUT_TOKEN_LIMIT');
           if (!input.signal.aborted && activeAssistantMessageId !== null) {
             const content = textFromAssistantMessage(event.message);
             if (content.length > 0) {
@@ -235,6 +369,16 @@ export const createPiAgentEngine = ({
           startedAt: Date.now(),
         });
         pendingTools.set(event.toolCallId, pending);
+        safeRecordTelemetry(telemetry, {
+          type: 'tool.started',
+          sessionId: input.session.id,
+          runId: input.run.id,
+          correlationId: input.context.correlationId,
+          at: pending.startedAt,
+          toolExecutionId: event.toolCallId,
+          toolName: event.toolName,
+          activeToolCalls: pendingTools.size,
+        });
         emit('tool.started', {
           toolExecutionId: event.toolCallId,
           toolName: event.toolName,
@@ -249,6 +393,10 @@ export const createPiAgentEngine = ({
         const provenance = terminalArtifact?.kind === 'FINDING'
           ? terminalArtifact.finding.evidenceRefs
           : [];
+        const finishedAt = Date.now();
+        const failureCode = event.isError
+          ? projectToolFailureCodeFromPiResult(event.result) ?? 'TOOL_EXECUTION_FAILED'
+          : null;
         const execution = Object.freeze({
           id: pending.id,
           sessionId: input.session.id,
@@ -257,14 +405,25 @@ export const createPiAgentEngine = ({
           argumentsDigest: pending.argumentsDigest,
           status: event.isError ? 'FAILED' : 'COMPLETED',
           startedAt: pending.startedAt,
-          finishedAt: Date.now(),
+          finishedAt,
           resultSummary: event.isError ? null : 'Tool completed.',
           provenance,
-          failureCode: event.isError
-            ? projectToolFailureCodeFromPiResult(event.result) ?? 'TOOL_EXECUTION_FAILED'
-            : null,
+          failureCode,
         } as const satisfies AgentToolExecution);
         toolExecutions.push(execution);
+        safeRecordTelemetry(telemetry, {
+          type: 'tool.completed',
+          sessionId: input.session.id,
+          runId: input.run.id,
+          correlationId: input.context.correlationId,
+          at: finishedAt,
+          toolExecutionId: pending.id,
+          toolName: pending.toolName,
+          status: execution.status,
+          durationMs: Math.max(0, finishedAt - pending.startedAt),
+          failureCode,
+          ownerErrorClass: ownerErrorClassFromFailureCode(failureCode),
+        });
         emit('tool.completed', { toolExecution: execution });
         if (terminalArtifact !== undefined && !emittedArtifactIds.has(terminalArtifact.id)) {
           emittedArtifactIds.add(terminalArtifact.id);
@@ -287,6 +446,7 @@ export const createPiAgentEngine = ({
     input.signal.removeEventListener('abort', abortAgent);
     const failedRun = terminalRun(input.run, 'FAILED', usage(), 'OPERATOR_PROMPT_REQUIRED');
     emit('run.failed', { run: failedRun });
+    recordRunCompleted('FAILED', 'OPERATOR_PROMPT_REQUIRED');
     return Object.freeze({
       runStatus: 'FAILED',
       sessionStatus: 'FAILED',
@@ -301,7 +461,7 @@ export const createPiAgentEngine = ({
   let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
   const wallClockExpired = new Promise<void>((resolve) => {
     wallClockTimer = setTimeout(() => {
-      budgetFailureCode ??= 'WALL_CLOCK_LIMIT';
+      markBudgetFailure('WALL_CLOCK_LIMIT');
       agent.abort();
       resolve();
     }, input.budget.maxWallClockMs);
@@ -316,6 +476,7 @@ export const createPiAgentEngine = ({
     if (!input.signal.aborted && budgetFailureCode === null) {
       const failedRun = terminalRun(input.run, 'FAILED', usage(), 'PI_RUNTIME_FAILED');
       emit('run.failed', { run: failedRun });
+      recordRunCompleted('FAILED', 'PI_RUNTIME_FAILED');
       return Object.freeze({
         runStatus: 'FAILED',
         sessionStatus: 'FAILED',
@@ -335,6 +496,7 @@ export const createPiAgentEngine = ({
   if (input.signal.aborted) {
     const cancelledRun = terminalRun(input.run, 'CANCELLED', usage(), 'RUN_CANCELLED');
     emit('run.failed', { run: cancelledRun });
+    recordRunCompleted('CANCELLED', 'RUN_CANCELLED');
     return Object.freeze({
       runStatus: 'CANCELLED',
       sessionStatus: 'CANCELLED',
@@ -350,6 +512,7 @@ export const createPiAgentEngine = ({
   if (terminalArtifact === undefined && budgetFailureCode !== null) {
     const failedRun = terminalRun(input.run, 'FAILED', usage(), budgetFailureCode);
     emit('run.failed', { run: failedRun });
+    recordRunCompleted('FAILED', budgetFailureCode);
     return Object.freeze({
       runStatus: 'FAILED',
       sessionStatus: 'FAILED',
@@ -363,6 +526,7 @@ export const createPiAgentEngine = ({
   if (terminalArtifact?.kind === 'FINDING' || terminalArtifact?.kind === 'INPUT_REQUEST') {
     const completedRun = terminalRun(input.run, 'COMPLETED', usage(), null);
     emit('run.completed', { run: completedRun });
+    recordRunCompleted('COMPLETED', null);
     return Object.freeze({
       runStatus: 'COMPLETED',
       sessionStatus: terminalArtifact.kind === 'INPUT_REQUEST' ? 'WAITING_FOR_INPUT' : 'COMPLETED',
@@ -376,6 +540,7 @@ export const createPiAgentEngine = ({
 
   const failedRun = terminalRun(input.run, 'FAILED', usage(), 'TERMINAL_ARTIFACT_REQUIRED');
   emit('run.failed', { run: failedRun });
+  recordRunCompleted('FAILED', 'TERMINAL_ARTIFACT_REQUIRED');
   return Object.freeze({
     runStatus: 'FAILED',
     sessionStatus: 'FAILED',

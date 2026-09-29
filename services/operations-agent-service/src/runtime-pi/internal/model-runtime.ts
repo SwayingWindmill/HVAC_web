@@ -8,7 +8,11 @@ import {
 } from '@earendil-works/pi-ai';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 
-import type { AgentEngine, AgentModelRef } from '../../agent/index.js';
+import type {
+  AgentEngine,
+  AgentModelRef,
+  AgentRuntimeTelemetrySink,
+} from '../../agent/index.js';
 import { createPiAgentEngine } from './pi-runtime.js';
 import { OPERATIONS_INVESTIGATION_SYSTEM_POLICY } from './system-policy.js';
 
@@ -76,6 +80,7 @@ export interface PiAgentRuntime {
 
 export interface ProductionPiAgentRuntimeOptions {
   readonly environment: PiModelEnvironment;
+  readonly telemetry?: AgentRuntimeTelemetrySink;
 }
 
 interface ParsedModelConfiguration {
@@ -92,6 +97,7 @@ interface ComposePiAgentRuntimeOptions {
   readonly thinkingLevel: ModelThinkingLevel;
   readonly timeoutMs: number;
   readonly maxOutputTokens: number;
+  readonly telemetry?: AgentRuntimeTelemetrySink;
 }
 
 const required = (
@@ -232,6 +238,7 @@ export const composePiAgentRuntime = ({
   thinkingLevel,
   timeoutMs,
   maxOutputTokens,
+  telemetry,
 }: ComposePiAgentRuntimeOptions): PiAgentRuntime => {
   const modelRef = Object.freeze({ provider: model.provider, model: model.id });
   const policy = Object.freeze({ modelRef, thinkingLevel, timeoutMs, maxOutputTokens });
@@ -242,6 +249,7 @@ export const composePiAgentRuntime = ({
       streamFn: createPolicyStreamFn(models, policy),
       systemPrompt: OPERATIONS_INVESTIGATION_SYSTEM_POLICY,
       thinkingLevel,
+      ...(telemetry === undefined ? {} : { telemetry }),
     }),
     modelRef,
     policy,
@@ -263,6 +271,7 @@ const createConfiguredModels = (environment: PiModelEnvironment) => {
 
 export const createProductionPiAgentRuntimeFromEnvironment = async ({
   environment,
+  telemetry,
 }: ProductionPiAgentRuntimeOptions): Promise<PiAgentRuntime> => {
   const configuration = parseConfiguration(environment);
   const models = createConfiguredModels(environment);
@@ -288,5 +297,6 @@ export const createProductionPiAgentRuntimeFromEnvironment = async ({
     thinkingLevel,
     timeoutMs,
     maxOutputTokens,
+    ...(telemetry === undefined ? {} : { telemetry }),
   });
 };

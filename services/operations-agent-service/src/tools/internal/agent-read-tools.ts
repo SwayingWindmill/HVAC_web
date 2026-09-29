@@ -10,22 +10,26 @@ import {
 import {
   OwnerReadError,
   type AuthorizationDecision,
+  type DeviceTelemetryReadRequest,
+  type DeviceTelemetryReader,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
   type OwnerReadContext,
   type OwnerReadErrorCode,
   type OwnerReadResult,
-  type ParallelReadRequest,
   type RegistryReadRequest,
+  type ToolAuthorizableReadRequest,
   type RegistryReader,
   type ToolAuthorizationReader,
 } from '../../application/index.js';
+import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'site.get_context',
   'assets.list',
+  'telemetry.get_current',
   'energy.query_series',
   'energy.compare_periods',
 ] as const);
@@ -45,6 +49,7 @@ export interface CreateHvacReadToolsInput {
   readonly authorization: AuthorizationDecision;
   readonly toolAuthorizationReader: ToolAuthorizationReader;
   readonly registryReader: RegistryReader;
+  readonly deviceTelemetryReader: DeviceTelemetryReader;
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly limits?: Partial<HvacReadToolLimits>;
 }
@@ -59,11 +64,31 @@ const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
 
 const SITE_CAPABILITIES = Object.freeze(['site.read']);
 const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
+const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
 
 const emptyInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({}),
+  additionalProperties: false,
+});
+
+const telemetryInputSchema = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    deviceId: Object.freeze({
+      type: 'string',
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+    }),
+    pointKeys: Object.freeze({
+      type: 'array',
+      minItems: 1,
+      maxItems: 16,
+      uniqueItems: true,
+      items: Object.freeze({ type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$' }),
+    }),
+  }),
+  required: Object.freeze(['deviceId', 'pointKeys']),
   additionalProperties: false,
 });
 
@@ -141,6 +166,39 @@ const exactEmptyArguments = (value: unknown): void => {
   if (!isRecord(value) || Object.keys(value).length !== 0) {
     fail('TOOL_ARGUMENTS_INVALID', 'This Tool does not accept model-selected scope arguments.');
   }
+};
+
+interface TelemetryArguments {
+  readonly deviceId: string;
+  readonly pointKeys: readonly string[];
+}
+
+const validUuidV7 = (value: string): boolean => (
+  value.length === 36
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/u.test(value)
+);
+
+const validTelemetryKey = (value: string): boolean => (
+  value.length >= 1
+  && value.length <= 128
+  && /^[A-Za-z][A-Za-z0-9_.:-]*/u.exec(value)?.[0] === value
+);
+
+const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
+  const record = requireRecord(value, 'Telemetry query arguments are invalid.');
+  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys'])) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Telemetry query arguments are invalid.');
+  }
+  const deviceId = requireString(record.deviceId, 'Telemetry query arguments are invalid.');
+  if (!validUuidV7(deviceId)
+    || !Array.isArray(record.pointKeys)
+    || record.pointKeys.length < 1
+    || record.pointKeys.length > 16
+    || record.pointKeys.some((key) => typeof key !== 'string' || !validTelemetryKey(key))
+    || new Set(record.pointKeys).size !== record.pointKeys.length) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Telemetry query arguments are invalid.');
+  }
+  return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
 };
 
 interface EnergyArguments {
@@ -264,7 +322,7 @@ const runBounded = async <T>(
 const requestIdFor = (
   context: AgentRunContext,
   semanticTool: HvacReadToolName,
-  ownerRequest: Omit<ParallelReadRequest, 'requestId'>,
+  ownerRequest: Omit<ToolAuthorizableReadRequest, 'requestId'>,
 ): string => {
   const digest = createHash('sha256')
     .update(JSON.stringify([context.runId, semanticTool, ownerRequest]))
@@ -299,15 +357,21 @@ const authorizeOwnerRead = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
   reader: ToolAuthorizationReader,
-  request: ParallelReadRequest,
+  request: ToolAuthorizableReadRequest,
 ): Promise<OwnerReadContext> => {
   const base = baseOwnerContext(context, authorization);
-  const grant = await reader.authorize({ request, context: base });
+  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot'
+    ? {
+      ...base,
+      scope: { ...base.scope, deviceId: request.input.deviceId },
+    }
+    : base;
+  const grant = await reader.authorize({ request, context: scoped });
   if (grant.delegationGrant.trim().length === 0) {
     fail('TOOL_UNAUTHORIZED', 'Owner authorization returned an empty grant.');
   }
   return {
-    ...base,
+    ...scoped,
     authorization: {
       ...authorization,
       delegationGrant: grant.delegationGrant,
@@ -339,6 +403,14 @@ const assetsPayloadFrom = (
   const payload = result.payload as RegistryOwnerPayload;
   if (payload.kind !== 'SITE_ASSETS') fail('TOOL_OWNER_RESPONSE_INVALID');
   return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSETS' }>;
+};
+
+const telemetryPayloadFrom = (result: OwnerReadResult): DeviceObservationSnapshotDto => {
+  const payload = result.payload as DeviceObservationSnapshotDto;
+  if (payload.schemaVersion !== 1 || !Array.isArray(payload.values)) {
+    fail('TOOL_OWNER_RESPONSE_INVALID');
+  }
+  return payload;
 };
 
 const energyPayloadFrom = (result: OwnerReadResult): EnergySeriesResponseDto => {
@@ -385,6 +457,56 @@ const readAssets = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
   return { result, payload: assetsPayloadFrom(result) };
+};
+
+const readTelemetry = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  telemetry: DeviceTelemetryReader,
+  query: TelemetryArguments,
+) => {
+  const draft = {
+    tool: 'telemetry.current.getDeviceObservationSnapshot' as const,
+    input: {
+      siteId: context.siteId,
+      deviceId: query.deviceId,
+      pointKeys: query.pointKeys,
+    },
+  };
+  const request: DeviceTelemetryReadRequest = {
+    ...draft,
+    requestId: requestIdFor(context, 'telemetry.get_current', draft),
+  };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await telemetry.read({ request, context: ownerContext });
+  const payload = telemetryPayloadFrom(result);
+  const completeness = payload.evaluationAvailability === 'AVAILABLE'
+    && payload.telemetryReadiness === 'CURRENT'
+    && payload.values.every((value) => value.state === 'PRESENT')
+    ? 'COMPLETE' as const
+    : 'PARTIAL' as const;
+  return {
+    deviceId: payload.deviceId,
+    evaluatedAt: payload.evaluatedAt,
+    evaluationAvailability: payload.evaluationAvailability,
+    availabilityReasons: payload.availabilityReasons,
+    presence: payload.presence,
+    telemetryReadiness: payload.telemetryReadiness,
+    displayState: payload.displayState,
+    values: payload.values,
+    completeness,
+    quality: result.quality,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      businessRevision: payload.businessRevision,
+      evaluatedAt: payload.evaluatedAt,
+    },
+  };
 };
 
 const readEnergy = async (
@@ -503,6 +625,7 @@ export const createHvacReadTools = ({
   authorization,
   toolAuthorizationReader,
   registryReader,
+  deviceTelemetryReader,
   energyAnalyticsReader,
   limits: inputLimits,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
@@ -576,6 +699,25 @@ export const createHvacReadTools = ({
           },
         }, limits);
       });
+    },
+  });
+
+  const telemetryTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'telemetry.get_current',
+      'Read bounded current telemetry for one Device in the current Site. Tenant and Site are injected by the server.',
+      telemetryInputSchema,
+      TELEMETRY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseTelemetryArguments(argumentsValue);
+      assertExecutionCapability(context, TELEMETRY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => (
+        assertResultBytes(
+          await readTelemetry(context, authorization, toolAuthorizationReader, deviceTelemetryReader, query),
+          limits,
+        )
+      ));
     },
   });
 
@@ -654,6 +796,7 @@ export const createHvacReadTools = ({
   return Object.freeze([
     siteTool,
     assetsTool,
+    telemetryTool,
     energyQueryTool,
     energyCompareTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));

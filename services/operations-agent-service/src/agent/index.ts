@@ -55,6 +55,14 @@ export {
 } from './internal/policy.js';
 
 export {
+  NOOP_AGENT_RUNTIME_TELEMETRY,
+  type AgentRuntimeBudgetDimension,
+  type AgentRuntimeOwnerErrorClass,
+  type AgentRuntimeTelemetryEvent,
+  type AgentRuntimeTelemetrySink,
+} from './internal/telemetry.js';
+
+export {
   transitionAgentSession,
   type ActiveAgentSession,
   type AgentMessage,

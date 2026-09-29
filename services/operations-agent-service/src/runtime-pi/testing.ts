@@ -8,7 +8,11 @@ import {
   type Message,
 } from '@earendil-works/pi-ai';
 
-import type { AgentEngine, AgentModelRef } from '../agent/index.js';
+import type {
+  AgentEngine,
+  AgentModelRef,
+  AgentRuntimeTelemetrySink,
+} from '../agent/index.js';
 import {
   composePiAgentRuntime,
   type AgentModelThinkingLevel,
@@ -28,6 +32,7 @@ export interface ScriptedPiResponse {
 export interface ScriptedPiEngineOptions {
   readonly responses: readonly ScriptedPiResponse[];
   readonly tokensPerSecond?: number;
+  readonly telemetry?: AgentRuntimeTelemetrySink;
   readonly policy?: Readonly<{
     thinkingLevel?: AgentModelThinkingLevel;
     timeoutMs?: number;
@@ -69,6 +74,7 @@ const visibleMessageText = (message: Message): string => {
 export const createScriptedPiAgentEngine = ({
   responses,
   tokensPerSecond,
+  telemetry,
   policy,
 }: ScriptedPiEngineOptions): ScriptedPiAgentEngine => {
   const faux = fauxProvider(tokensPerSecond === undefined ? {} : { tokensPerSecond });
@@ -101,6 +107,7 @@ export const createScriptedPiAgentEngine = ({
     thinkingLevel: policy?.thinkingLevel ?? 'off',
     timeoutMs: policy?.timeoutMs ?? 30_000,
     maxOutputTokens: policy?.maxOutputTokens ?? 2_048,
+    ...(telemetry === undefined ? {} : { telemetry }),
   });
 
   return Object.freeze({ ...runtime, requests });

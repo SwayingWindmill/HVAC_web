@@ -1,7 +1,7 @@
 import {
   OwnerReadError,
   type OwnerReadInput,
-  type ParallelReadRequest,
+  type ToolAuthorizableReadRequest,
   type ToolAuthorizationReader,
 } from '../../application/index.js';
 import {
@@ -25,7 +25,7 @@ export const createGatewayToolAuthorizationReader = (
     async authorize({
       request,
       context,
-    }: OwnerReadInput<ParallelReadRequest>) {
+    }: OwnerReadInput<ToolAuthorizableReadRequest>) {
       const serviceDelegation = context.authorization.delegationGrant;
       if (context.authorization.decision !== 'ALLOW'
         || serviceDelegation === undefined

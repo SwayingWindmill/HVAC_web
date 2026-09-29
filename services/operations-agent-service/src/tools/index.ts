@@ -8,6 +8,14 @@ export {
   type HvacReadToolName,
 } from './internal/agent-read-tools.js';
 export {
+  createDeviceTelemetryOwnerReader,
+  type DeviceObservationSnapshotDto,
+  type DeviceTelemetryKeyStateDto,
+  type DeviceTelemetryMissingStateDto,
+  type DeviceTelemetryOwnerReaderConfig,
+  type DeviceTelemetryPresentStateDto,
+} from './internal/device-telemetry-owner-reader.js';
+export {
   createEnergyAnalyticsOwnerReader,
   type EnergyAnalyticsOwnerReaderConfig,
   type EnergyGranularity,

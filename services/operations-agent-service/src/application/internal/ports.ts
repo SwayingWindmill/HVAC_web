@@ -55,7 +55,7 @@ export interface AuthorizationDecision {
   readonly decisionId: string;
   readonly reason?: string;
   readonly delegationGrant?: string;
-  readonly toolDelegationGrants?: Readonly<Partial<Record<ParallelReadRequest['tool'], string>>>;
+  readonly toolDelegationGrants?: Readonly<Partial<Record<ToolAuthorizableReadRequest['tool'], string>>>;
   readonly policyRevision?: string;
   readonly auditActor?: OperationsAuditActor;
   readonly capabilities?: readonly string[];
@@ -111,6 +111,16 @@ export interface CurrentTelemetryReadRequest {
   };
 }
 
+export interface DeviceTelemetryReadRequest {
+  readonly requestId: string;
+  readonly tool: 'telemetry.current.getDeviceObservationSnapshot';
+  readonly input: {
+    readonly siteId: string;
+    readonly deviceId: string;
+    readonly pointKeys: readonly string[];
+  };
+}
+
 export interface EnergyAnalyticsReadRequest {
   readonly requestId: string;
   readonly tool: 'analytics.getEnergySeries';
@@ -139,6 +149,8 @@ export type ParallelReadRequest =
   | CurrentTelemetryReadRequest
   | EnergyAnalyticsReadRequest
   | CommandCapabilityReadRequest;
+
+export type ToolAuthorizableReadRequest = ParallelReadRequest | DeviceTelemetryReadRequest;
 
 export interface ParallelReadBatch {
   readonly batchId: string;
@@ -367,7 +379,7 @@ export interface BudgetGuard {
 
 export interface OwnerReadResult {
   readonly requestId: string;
-  readonly owner: 'registry' | 'telemetry-query-service' | 'command-service';
+  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service' | 'command-service';
   readonly scope: InvestigationScope;
   readonly revision: string;
   readonly quality: 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
@@ -402,7 +414,7 @@ export interface OwnerReadContext {
   readonly stepId?: string;
 }
 
-export interface OwnerReadInput<TRequest extends ParallelReadRequest> {
+export interface OwnerReadInput<TRequest extends ToolAuthorizableReadRequest> {
   readonly request: TRequest;
   readonly context: OwnerReadContext;
 }
@@ -413,7 +425,7 @@ export interface ToolAuthorizationGrant {
 }
 
 export interface ToolAuthorizationReader {
-  authorize(input: OwnerReadInput<ParallelReadRequest>): Promise<ToolAuthorizationGrant>;
+  authorize(input: OwnerReadInput<ToolAuthorizableReadRequest>): Promise<ToolAuthorizationGrant>;
 }
 
 export interface RegistryReader {
@@ -422,6 +434,10 @@ export interface RegistryReader {
 
 export interface CurrentTelemetryReader {
   read(input: OwnerReadInput<CurrentTelemetryReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface DeviceTelemetryReader {
+  read(input: OwnerReadInput<DeviceTelemetryReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface EnergyAnalyticsReader {

@@ -17,10 +17,12 @@ import {
   type PiModelEnvironment,
 } from '../../runtime-pi/index.js';
 import {
+  createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
   createRegistryOwnerReader,
+  type DeviceTelemetryOwnerReaderConfig,
   type EnergyAnalyticsOwnerReaderConfig,
   type GatewayToolAuthorizationReaderConfig,
   type RegistryOwnerReaderConfig,
@@ -34,6 +36,7 @@ import {
 
 export interface ProductionAgentSessionOwnerConfig {
   readonly registry: RegistryOwnerReaderConfig;
+  readonly deviceTelemetry: DeviceTelemetryOwnerReaderConfig;
   readonly energyAnalytics: EnergyAnalyticsOwnerReaderConfig;
   readonly gatewayToolAuthorization: GatewayToolAuthorizationReaderConfig;
 }
@@ -74,6 +77,7 @@ export const createProductionAgentSessionRuntime = async (
   const persistence = createPostgresOperationsAgentPersistence(options.persistence);
   try {
     const registryReader = createRegistryOwnerReader(options.owners.registry);
+    const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.energyAnalytics);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
@@ -91,6 +95,7 @@ export const createProductionAgentSessionRuntime = async (
         authorization: context.authorization,
         toolAuthorizationReader,
         registryReader,
+        deviceTelemetryReader,
         energyAnalyticsReader,
       }),
     });
