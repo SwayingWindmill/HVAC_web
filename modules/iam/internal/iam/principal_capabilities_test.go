@@ -64,6 +64,7 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 		identitycontext.CapabilityTelemetryHistoryRead,
 		identitycontext.CapabilityAlarmList,
 		identitycontext.CapabilityAlarmRead,
+		identitycontext.CapabilityAlarmAssign,
 		identitycontext.CapabilityWorkOrderList,
 		identitycontext.CapabilityWorkOrderRead,
 		identitycontext.CapabilityWorkOrderCreate,
@@ -231,6 +232,7 @@ func principalAlarmFacts() iam.AlarmAuthorizationFacts {
 		Permissions: []iam.AlarmPermission{
 			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionAssign, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 		},
 	}
 }

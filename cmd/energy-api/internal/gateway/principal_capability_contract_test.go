@@ -25,6 +25,7 @@ func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {
 		platformapi.CapabilityTelemetryHistoryRead,
 		platformapi.CapabilityAlarmList,
 		platformapi.CapabilityAlarmRead,
+		platformapi.CapabilityAlarmAssign,
 		platformapi.CapabilityWorkOrderList,
 		platformapi.CapabilityWorkOrderRead,
 		platformapi.CapabilityWorkOrderCreate,

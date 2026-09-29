@@ -236,6 +236,62 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
+	if route.action == alarmauth.ActionAssign {
+		var payload struct {
+			ExpectedVersion uint64 `json:"expectedVersion"`
+			Reason          string `json:"reason"`
+			AssigneeID      string `json:"assigneeId"`
+		}
+		body, err := readBoundedBody(publicRequest.Body, 16<<10)
+		if err != nil || len(body) == 0 || decodeStrictAlarmJSON(body, &payload) != nil {
+			failure := alarmInvalid("The Alarm assignment request is invalid.")
+			return nil, 0, &failure
+		}
+		payload.Reason = strings.TrimSpace(payload.Reason)
+		payload.AssigneeID = strings.TrimSpace(payload.AssigneeID)
+		idempotencyKey := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key"))
+		if payload.ExpectedVersion == 0 || payload.Reason == "" || len(payload.Reason) > 256 || payload.AssigneeID == "" || len(payload.AssigneeID) > 256 || len(idempotencyKey) < 8 || len(idempotencyKey) > 128 {
+			failure := alarmInvalid("The Alarm assignment request is invalid.")
+			return nil, 0, &failure
+		}
+		actorID := "principal:operator"
+		if session, ok := routeSessionFromContext(publicRequest.Context()); ok && session.Principal.Subject != "" {
+			actorID = session.Principal.Subject
+		}
+		assigneeID := payload.AssigneeID
+		res, err := a.store.Apply(ctx, tenantID, route.siteID, route.alarmID, alarmservice.Mutation{
+			Operation: alarmmodel.OperationAssign, ExpectedVersion: payload.ExpectedVersion, Reason: payload.Reason,
+			AssigneeID: &assigneeID, IdempotencyKey: idempotencyKey,
+			ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: "1", CorrelationID: idempotencyKey,
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, alarmservice.ErrNotFound):
+				failure := alarmNotFound()
+				return nil, http.StatusNotFound, &failure
+			case errors.Is(err, alarmmodel.ErrVersionConflict):
+				failure := alarmFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before assignment was committed."}
+				return nil, http.StatusConflict, &failure
+			case errors.Is(err, alarmservice.ErrIdempotencyConflict):
+				failure := alarmIdempotencyConflict()
+				return nil, http.StatusConflict, &failure
+			case errors.Is(err, alarmmodel.ErrInvalidOperation), errors.Is(err, alarmmodel.ErrInvalidTransition):
+				failure := alarmFailure{status: http.StatusUnprocessableEntity, code: "ALARM_TRANSITION_INVALID", title: "Alarm transition invalid", detail: "The Alarm cannot be assigned from its current authoritative state."}
+				return nil, http.StatusUnprocessableEntity, &failure
+			default:
+				failure := alarmUnavailable("Alarm Service could not complete the assignment.")
+				return nil, http.StatusServiceUnavailable, &failure
+			}
+		}
+		response, err := json.Marshal(res.Alarm)
+		if err != nil {
+			failure := alarmUnavailable("Alarm Service returned an invalid Alarm projection.")
+			return nil, http.StatusServiceUnavailable, &failure
+		}
+		return response, http.StatusOK, nil
+	}
+
 	failure := alarmUnavailable("Alarm Service returned an unsupported response.")
 	return nil, http.StatusServiceUnavailable, &failure
 }
@@ -325,6 +381,19 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			requestBody = bytes.NewReader(body)
 		}
 	}
+	if route.action == alarmauth.ActionAssign {
+		method = http.MethodPost
+		path += ":assign"
+		upstreamURL = a.baseURL + path
+		if publicRequest.Body != nil && publicRequest.ContentLength != 0 {
+			body, err := readBoundedBody(publicRequest.Body, 16<<10)
+			if err != nil {
+				failure := alarmInvalid("The Alarm assignment body is too large or unreadable.")
+				return nil, 0, &failure
+			}
+			requestBody = bytes.NewReader(body)
+		}
+	}
 	request, err := http.NewRequestWithContext(callCtx, method, upstreamURL, requestBody)
 	if err != nil {
 		failure := alarmUnavailable("The Alarm service request could not be constructed.")
@@ -341,6 +410,14 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		}
 	} else {
 		request.Header.Set(alarmReadContextHeader, serviceContext)
+	}
+	if route.action == alarmauth.ActionAssign {
+		request.Header.Del(alarmReadContextHeader)
+		request.Header.Set(alarmWriteContextHeader, serviceContext)
+		request.Header.Set("Content-Type", publicRequest.Header.Get("Content-Type"))
+		if key := strings.TrimSpace(publicRequest.Header.Get("Idempotency-Key")); key != "" {
+			request.Header.Set("Idempotency-Key", key)
+		}
 	}
 	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
 	observability.InjectHTTP(publicRequest.Context(), request.Header)
@@ -421,6 +498,11 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 			template: "/api/v1/alarms/{alarmId}", alarmID: alarmID, action: alarmauth.ActionRead,
 		}, true
 	}
+	if segments[1] == "assign" {
+		return publicAlarmRoute{
+			template: "/api/v1/alarms/{alarmId}/assign", alarmID: alarmID, action: alarmauth.ActionAssign,
+		}, true
+	}
 	if segments[1] != "ack" {
 		return publicAlarmRoute{}, false
 	}
@@ -431,6 +513,9 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 
 func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
 	expectedMethod := http.MethodGet
+	if route.action == alarmauth.ActionAssign {
+		expectedMethod = http.MethodPost
+	}
 	if route.action == alarmauth.ActionAck {
 		expectedMethod = http.MethodPost
 	}
@@ -819,6 +904,8 @@ func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.
 		h.writeAlarmFailure(writer, request, alarmDenied())
 	case status == http.StatusConflict && value.Code == "ALARM_IDEMPOTENCY_CONFLICT":
 		h.writeAlarmFailure(writer, request, alarmIdempotencyConflict())
+	case status == http.StatusConflict && value.Code == "ALARM_VERSION_CONFLICT":
+		h.writeAlarmFailure(writer, request, alarmVersionConflict())
 	case status == http.StatusBadRequest && value.Code == "INVALID_CURSOR":
 		h.writeAlarmFailure(writer, request, alarmInvalidCursor())
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity || status == http.StatusUnsupportedMediaType:
@@ -875,7 +962,11 @@ func alarmDenied() alarmFailure {
 }
 
 func alarmIdempotencyConflict() alarmFailure {
-	return alarmFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The supplied Idempotency-Key is already bound to a different Alarm acknowledgement request."}
+	return alarmFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The supplied Idempotency-Key is already bound to a different Alarm mutation request."}
+}
+
+func alarmVersionConflict() alarmFailure {
+	return alarmFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before this mutation was committed."}
 }
 
 func alarmUnavailable(detail string) alarmFailure {
