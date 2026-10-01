@@ -23,14 +23,16 @@
 
 全页采用紧凑任务标题、整体指标带、24px 页面/20px 模块间距、最大1600px内容宽度；只使用承担任务的图表。默认账本 tablecn + 当前 TanStack Table v9；普通图 shadcn Chart/Recharts；需量和能流 ECharts。详情使用非模态 Sheet，保留主结果上下文；输入/状态/视图/期间位于 Router search；查询按 scope/period 隔离。
 
-本批完成的是前端评审工作区。DEV/review 的示例标识每页一次；正式聚合 owner 未接入时显示未接入状态，不使用示例回退。上海运行样本不能用于其他站点。正式配置写入、控制下发、审批、报告签发/分发仍由相应 owner 提供权威能力后实现。用户授权的运维处理允许会话内可重置模拟，不得冒充生产执行结果。
+本批原有实现是前端评审工作区，不能作为真实链路验证证据。正式聚合 owner 未接入时显示未接入状态，不使用示例回退。上海运行样本不能用于其他站点。正式配置写入、控制下发、审批、报告签发/分发仍由相应 owner 提供权威能力后实现。DEV 模式本身不代表数据是示例；真实后端页面不得因开发环境展示示例标识。
 
 2026-10-01 节能主线：三个页面共用既有模拟 owner 组合；机会 `inspect` → 项目 `opportunity` / `inspect` → 验证 `project` / `record` / `inspect` 保持准确关联。详情刷新和浏览器历史恢复筛选与对象；不存在或错配记录明确提示，未测量项目只展示计划。模拟实施时间、报告期间、测量边界与复核日期已核对。来源与验证见 `docs/architecture/optimization-flow-source-review-2026-10-01.md`。
 
 源码比较与明确 ADOPT/ADAPT/REJECT 见 `docs/design-system/remaining-workspaces-redesign-2026-09-30.md`，版本与许可证见 `docs/architecture/energy-dashboard-source-review-2026-09-30.md`。86 个被替换的旧组合与查询文件经 TypeScript module resolver 确认无外部引用后移出活动源树；不保留视觉兼容层。
 # 2026-10-01 用户补充要求
 
-运维主线使用现有模拟 owner，设备 → 告警 → 工单准确关联。确认、完成检查项、作业完成和恢复验证各有独立状态；受阻不能提交、失败不解除告警、通过才恢复。新增操作只保存在评审会话，刷新可重放、可重置。详情/来源在 Router search，结果归 TanStack Query；原诊断快照与恢复观测分开。具体判据、参考源码、范围边界和验证见 `docs/architecture/operations-flow-source-review-2026-10-01.md`。
+用户明确要求采用 #346 所描述的真实前后端链路；该问题中的过时参数和页面方案不约束当前实现。模拟源是 EG8200 / Virtual Plant 的物理设备输入，经 Edge/MQTT、Telemetry、Alarm、FDD 和 Work Order 的实际 owner 形成业务事实。浏览器静态 fixture、sessionStorage 操作重放和前端自行恢复告警不能作为该链路的实现或证据，现有运维评审模拟需要移除。
+
+站点范围来自当前用户授权的 Registry 站点，不能将未知范围默认为上海样本。设备在线状态、工况值、时间、质量和新鲜度来自 Snapshot + Stream。确认告警独立于告警恢复；工单完成独立于物理故障解除；解除物理扰动后必须通过新观测、Alarm owner 的恢复事实及保留的 FDD / 工单历史验证闭环。检查项仅展示 owner 实际提供的事实，不创建仅在浏览器中生效的任务。详情/来源保存在 Router search，查询和提交结果归 TanStack Query。当前接入进度和已核实的合并取舍见 `docs/architecture/live-chain-merge-review-2026-10-01.md`。
 
 适量使用 Lucide，按任务借鉴 arham 各页组合而非所有页统一 KPI + 卡片 + 表格。报表中心采用报告资料库：每份报告唯一主卡展示期间、负责人、生成时间、内容目录和查看入口，详情继续负责报告内容与真实可用的数据下载，不再同时重述为功能介绍卡和对象账本。实时运行按设备类别分组；工作中心完成进度只使用已有检查项事实。来源取舍见 `docs/design-system/workspace-layout-refinement-2026-10-01.md`。
 
