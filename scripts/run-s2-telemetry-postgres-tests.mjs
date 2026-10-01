@@ -474,7 +474,7 @@ try {
   report.assertions.redisLatestCAS = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestRedisLatestCacheNeverRegressesBusinessRevision', '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', 'TestRedisLatestCacheNeverRegressesBusinessRevision', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,

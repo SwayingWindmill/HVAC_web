@@ -89,7 +89,7 @@ try {
   const testOutput = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', testPattern, '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', testPattern, '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,
