@@ -175,7 +175,10 @@ for (const file of files) {
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
   match(
     file.startsWith('apps/hvac-web/src/api/operations')
-      || file.startsWith('apps/hvac-web/src/features/operations/'),
+      || file === 'apps/hvac-web/src/api/agent-sessions.ts'
+      // The Operations Investigation UI is the top level of features/operations;
+      // its subfolders are the realtime and equipment workspaces.
+      || /^apps\/hvac-web\/src\/features\/operations\/[^/]+$/.test(file),
     () => selectOperationsAgent(file, 'Operations Workspace runtime changed', { integration: false }),
   );
   match(file.startsWith('contracts/'), () => {

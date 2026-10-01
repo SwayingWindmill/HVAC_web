@@ -155,7 +155,7 @@ function manualTargets() {
   if (explicitTargets.length > 0) return explicitTargets;
   const scope = scopeArg?.slice('--scope='.length) ?? 'web';
   if (scope === 'device-center') return ['apps/hvac-web/src/features/devices'];
-  if (scope === 'shell') return ['apps/hvac-web/src/app/shell.css', 'apps/hvac-web/src/app/ShellChrome.tsx'];
+  if (scope === 'shell') return ['apps/hvac-web/src/app/ShellChrome.tsx'];
   if (scope === 'changed') return changedUiFiles();
   return [UI_ROOT];
 }

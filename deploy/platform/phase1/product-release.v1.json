@@ -71,8 +71,7 @@
     "s2:history:check",
     "s11:command-readback:check",
     "s4:alarm:check",
-    "s16:notification:check",
-    "real-dashboard:test"
+    "s16:notification:check"
   ],
   "rollbackEvidence": [
     "scripts/run-phase1-postgres-restore-test.mjs",

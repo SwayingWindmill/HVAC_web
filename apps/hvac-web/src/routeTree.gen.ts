@@ -13,16 +13,12 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppSiteRouteImport } from './routes/_app._site'
 import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
-import { Route as AppSitesRouteImport } from './routes/_app.sites'
 import { Route as AppSystemRouteImport } from './routes/_app.system'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
 import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
-import { Route as AppPortfolioOverviewRouteImport } from './routes/_app.portfolio.overview'
 import { Route as AppSettingsAccessRouteImport } from './routes/_app.settings.access'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
 import { Route as AppSettingsSitesRouteImport } from './routes/_app.settings.sites'
-import { Route as AppSitesIndexRouteImport } from './routes/_app.sites.index'
-import { Route as AppSitesSiteIdRouteImport } from './routes/_app.sites.$siteId'
 import { Route as AppSiteEnergyAnalysisBenchmarkingRouteImport } from './routes/_app._site.energy-analysis.benchmarking'
 import { Route as AppSiteEnergyAnalysisBreakdownRouteImport } from './routes/_app._site.energy-analysis.breakdown'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
@@ -36,51 +32,6 @@ import { Route as AppSiteOptimizationOpportunitiesRouteImport } from './routes/_
 import { Route as AppSiteOptimizationProjectsRouteImport } from './routes/_app._site.optimization.projects'
 import { Route as AppSiteOptimizationVerificationRouteImport } from './routes/_app._site.optimization.verification'
 import { Route as AppSiteSettingsIndexRouteImport } from './routes/_app._site.settings.index'
-import { Route as AppSitesSiteIdIndexRouteImport } from './routes/_app.sites.$siteId.index'
-import { Route as AppSitesSiteIdActionPlansRouteImport } from './routes/_app.sites.$siteId.action-plans'
-import { Route as AppSitesSiteIdAiRouteImport } from './routes/_app.sites.$siteId.ai'
-import { Route as AppSitesSiteIdBenchmarkingRouteImport } from './routes/_app.sites.$siteId.benchmarking'
-import { Route as AppSitesSiteIdBigscreenRouteImport } from './routes/_app.sites.$siteId.bigscreen'
-import { Route as AppSitesSiteIdBillingRouteImport } from './routes/_app.sites.$siteId.billing'
-import { Route as AppSitesSiteIdCarbonRouteImport } from './routes/_app.sites.$siteId.carbon'
-import { Route as AppSitesSiteIdCostRouteImport } from './routes/_app.sites.$siteId.cost'
-import { Route as AppSitesSiteIdDashboardRouteImport } from './routes/_app.sites.$siteId.dashboard'
-import { Route as AppSitesSiteIdDataQualityRouteImport } from './routes/_app.sites.$siteId.data-quality'
-import { Route as AppSitesSiteIdDemandRouteImport } from './routes/_app.sites.$siteId.demand'
-import { Route as AppSitesSiteIdDerRouteImport } from './routes/_app.sites.$siteId.der'
-import { Route as AppSitesSiteIdDevicesRouteImport } from './routes/_app.sites.$siteId.devices'
-import { Route as AppSitesSiteIdEfficiencyRouteImport } from './routes/_app.sites.$siteId.efficiency'
-import { Route as AppSitesSiteIdEnergyRouteImport } from './routes/_app.sites.$siteId.energy'
-import { Route as AppSitesSiteIdEnergyReviewRouteImport } from './routes/_app.sites.$siteId.energy-review'
-import { Route as AppSitesSiteIdExecutionsRouteImport } from './routes/_app.sites.$siteId.executions'
-import { Route as AppSitesSiteIdFddRouteImport } from './routes/_app.sites.$siteId.fdd'
-import { Route as AppSitesSiteIdForecastRouteImport } from './routes/_app.sites.$siteId.forecast'
-import { Route as AppSitesSiteIdIssuesRouteImport } from './routes/_app.sites.$siteId.issues'
-import { Route as AppSitesSiteIdManagementReviewsRouteImport } from './routes/_app.sites.$siteId.management-reviews'
-import { Route as AppSitesSiteIdModelRouteImport } from './routes/_app.sites.$siteId.model'
-import { Route as AppSitesSiteIdMonitorRouteImport } from './routes/_app.sites.$siteId.monitor'
-import { Route as AppSitesSiteIdMvRouteImport } from './routes/_app.sites.$siteId.mv'
-import { Route as AppSitesSiteIdOperationsRouteImport } from './routes/_app.sites.$siteId.operations'
-import { Route as AppSitesSiteIdOpportunitiesRouteImport } from './routes/_app.sites.$siteId.opportunities'
-import { Route as AppSitesSiteIdOptimizationPlansRouteImport } from './routes/_app.sites.$siteId.optimization-plans'
-import { Route as AppSitesSiteIdOptimizeRouteImport } from './routes/_app.sites.$siteId.optimize'
-import { Route as AppSitesSiteIdOverviewRouteImport } from './routes/_app.sites.$siteId.overview'
-import { Route as AppSitesSiteIdReportsRouteImport } from './routes/_app.sites.$siteId.reports'
-import { Route as AppSitesSiteIdRulesRouteImport } from './routes/_app.sites.$siteId.rules'
-import { Route as AppSitesSiteIdSettlementRouteImport } from './routes/_app.sites.$siteId.settlement'
-import { Route as AppSitesSiteIdStrategiesRouteImport } from './routes/_app.sites.$siteId.strategies'
-import { Route as AppSitesSiteIdVerificationsRouteImport } from './routes/_app.sites.$siteId.verifications'
-import { Route as AppSitesSiteIdWorkOrdersRouteImport } from './routes/_app.sites.$siteId.work-orders'
-import { Route as AppSitesSiteIdDevicesIndexRouteImport } from './routes/_app.sites.$siteId.devices.index'
-import { Route as AppSitesSiteIdDevicesDeviceIdRouteImport } from './routes/_app.sites.$siteId.devices.$deviceId'
-import { Route as AppSitesSiteIdEnergyIndexRouteImport } from './routes/_app.sites.$siteId.energy.index'
-import { Route as AppSitesSiteIdEnergyPeriodRouteImport } from './routes/_app.sites.$siteId.energy.$period'
-import { Route as AppSitesSiteIdIssuesIndexRouteImport } from './routes/_app.sites.$siteId.issues.index'
-import { Route as AppSitesSiteIdIssuesIssueIdRouteImport } from './routes/_app.sites.$siteId.issues.$issueId'
-import { Route as AppSitesSiteIdOperationsControlRouteImport } from './routes/_app.sites.$siteId.operations_.control'
-import { Route as AppSitesSiteIdOperationsTrendsRouteImport } from './routes/_app.sites.$siteId.operations_.trends'
-import { Route as AppSitesSiteIdStrategiesStrategyIdRouteImport } from './routes/_app.sites.$siteId.strategies_.$strategyId'
-import { Route as AppSitesSiteIdWorkOrdersWorkOrderIdRouteImport } from './routes/_app.sites.$siteId.work-orders_.$workOrderId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -100,11 +51,6 @@ const AppNotificationsRoute = AppNotificationsRouteImport.update({
   path: '/notifications',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSitesRoute = AppSitesRouteImport.update({
-  id: '/sites',
-  path: '/sites',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSystemRoute = AppSystemRouteImport.update({
   id: '/system',
   path: '/system',
@@ -120,11 +66,6 @@ const AppSiteReportsRoute = AppSiteReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => AppSiteRoute,
 } as any)
-const AppPortfolioOverviewRoute = AppPortfolioOverviewRouteImport.update({
-  id: '/portfolio/overview',
-  path: '/portfolio/overview',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSettingsAccessRoute = AppSettingsAccessRouteImport.update({
   id: '/settings/access',
   path: '/settings/access',
@@ -139,16 +80,6 @@ const AppSettingsSitesRoute = AppSettingsSitesRouteImport.update({
   id: '/settings/sites',
   path: '/settings/sites',
   getParentRoute: () => AppRoute,
-} as any)
-const AppSitesIndexRoute = AppSitesIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppSitesRoute,
-} as any)
-const AppSitesSiteIdRoute = AppSitesSiteIdRouteImport.update({
-  id: '/$siteId',
-  path: '/$siteId',
-  getParentRoute: () => AppSitesRoute,
 } as any)
 const AppSiteEnergyAnalysisBenchmarkingRoute =
   AppSiteEnergyAnalysisBenchmarkingRouteImport.update({
@@ -226,269 +157,16 @@ const AppSiteSettingsIndexRoute = AppSiteSettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => AppSiteRoute,
 } as any)
-const AppSitesSiteIdIndexRoute = AppSitesSiteIdIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdActionPlansRoute =
-  AppSitesSiteIdActionPlansRouteImport.update({
-    id: '/action-plans',
-    path: '/action-plans',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdAiRoute = AppSitesSiteIdAiRouteImport.update({
-  id: '/ai',
-  path: '/ai',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdBenchmarkingRoute =
-  AppSitesSiteIdBenchmarkingRouteImport.update({
-    id: '/benchmarking',
-    path: '/benchmarking',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdBigscreenRoute = AppSitesSiteIdBigscreenRouteImport.update({
-  id: '/bigscreen',
-  path: '/bigscreen',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdBillingRoute = AppSitesSiteIdBillingRouteImport.update({
-  id: '/billing',
-  path: '/billing',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdCarbonRoute = AppSitesSiteIdCarbonRouteImport.update({
-  id: '/carbon',
-  path: '/carbon',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdCostRoute = AppSitesSiteIdCostRouteImport.update({
-  id: '/cost',
-  path: '/cost',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdDashboardRoute = AppSitesSiteIdDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdDataQualityRoute =
-  AppSitesSiteIdDataQualityRouteImport.update({
-    id: '/data-quality',
-    path: '/data-quality',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdDemandRoute = AppSitesSiteIdDemandRouteImport.update({
-  id: '/demand',
-  path: '/demand',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdDerRoute = AppSitesSiteIdDerRouteImport.update({
-  id: '/der',
-  path: '/der',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdDevicesRoute = AppSitesSiteIdDevicesRouteImport.update({
-  id: '/devices',
-  path: '/devices',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdEfficiencyRoute =
-  AppSitesSiteIdEfficiencyRouteImport.update({
-    id: '/efficiency',
-    path: '/efficiency',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdEnergyRoute = AppSitesSiteIdEnergyRouteImport.update({
-  id: '/energy',
-  path: '/energy',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdEnergyReviewRoute =
-  AppSitesSiteIdEnergyReviewRouteImport.update({
-    id: '/energy-review',
-    path: '/energy-review',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdExecutionsRoute =
-  AppSitesSiteIdExecutionsRouteImport.update({
-    id: '/executions',
-    path: '/executions',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdFddRoute = AppSitesSiteIdFddRouteImport.update({
-  id: '/fdd',
-  path: '/fdd',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdForecastRoute = AppSitesSiteIdForecastRouteImport.update({
-  id: '/forecast',
-  path: '/forecast',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdIssuesRoute = AppSitesSiteIdIssuesRouteImport.update({
-  id: '/issues',
-  path: '/issues',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdManagementReviewsRoute =
-  AppSitesSiteIdManagementReviewsRouteImport.update({
-    id: '/management-reviews',
-    path: '/management-reviews',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdModelRoute = AppSitesSiteIdModelRouteImport.update({
-  id: '/model',
-  path: '/model',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdMonitorRoute = AppSitesSiteIdMonitorRouteImport.update({
-  id: '/monitor',
-  path: '/monitor',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdMvRoute = AppSitesSiteIdMvRouteImport.update({
-  id: '/mv',
-  path: '/mv',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdOperationsRoute =
-  AppSitesSiteIdOperationsRouteImport.update({
-    id: '/operations',
-    path: '/operations',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdOpportunitiesRoute =
-  AppSitesSiteIdOpportunitiesRouteImport.update({
-    id: '/opportunities',
-    path: '/opportunities',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdOptimizationPlansRoute =
-  AppSitesSiteIdOptimizationPlansRouteImport.update({
-    id: '/optimization-plans',
-    path: '/optimization-plans',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdOptimizeRoute = AppSitesSiteIdOptimizeRouteImport.update({
-  id: '/optimize',
-  path: '/optimize',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdOverviewRoute = AppSitesSiteIdOverviewRouteImport.update({
-  id: '/overview',
-  path: '/overview',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdReportsRoute = AppSitesSiteIdReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdRulesRoute = AppSitesSiteIdRulesRouteImport.update({
-  id: '/rules',
-  path: '/rules',
-  getParentRoute: () => AppSitesSiteIdRoute,
-} as any)
-const AppSitesSiteIdSettlementRoute =
-  AppSitesSiteIdSettlementRouteImport.update({
-    id: '/settlement',
-    path: '/settlement',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdStrategiesRoute =
-  AppSitesSiteIdStrategiesRouteImport.update({
-    id: '/strategies',
-    path: '/strategies',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdVerificationsRoute =
-  AppSitesSiteIdVerificationsRouteImport.update({
-    id: '/verifications',
-    path: '/verifications',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdWorkOrdersRoute =
-  AppSitesSiteIdWorkOrdersRouteImport.update({
-    id: '/work-orders',
-    path: '/work-orders',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdDevicesIndexRoute =
-  AppSitesSiteIdDevicesIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppSitesSiteIdDevicesRoute,
-  } as any)
-const AppSitesSiteIdDevicesDeviceIdRoute =
-  AppSitesSiteIdDevicesDeviceIdRouteImport.update({
-    id: '/$deviceId',
-    path: '/$deviceId',
-    getParentRoute: () => AppSitesSiteIdDevicesRoute,
-  } as any)
-const AppSitesSiteIdEnergyIndexRoute =
-  AppSitesSiteIdEnergyIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppSitesSiteIdEnergyRoute,
-  } as any)
-const AppSitesSiteIdEnergyPeriodRoute =
-  AppSitesSiteIdEnergyPeriodRouteImport.update({
-    id: '/$period',
-    path: '/$period',
-    getParentRoute: () => AppSitesSiteIdEnergyRoute,
-  } as any)
-const AppSitesSiteIdIssuesIndexRoute =
-  AppSitesSiteIdIssuesIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppSitesSiteIdIssuesRoute,
-  } as any)
-const AppSitesSiteIdIssuesIssueIdRoute =
-  AppSitesSiteIdIssuesIssueIdRouteImport.update({
-    id: '/$issueId',
-    path: '/$issueId',
-    getParentRoute: () => AppSitesSiteIdIssuesRoute,
-  } as any)
-const AppSitesSiteIdOperationsControlRoute =
-  AppSitesSiteIdOperationsControlRouteImport.update({
-    id: '/operations_/control',
-    path: '/operations/control',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdOperationsTrendsRoute =
-  AppSitesSiteIdOperationsTrendsRouteImport.update({
-    id: '/operations_/trends',
-    path: '/operations/trends',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdStrategiesStrategyIdRoute =
-  AppSitesSiteIdStrategiesStrategyIdRouteImport.update({
-    id: '/strategies_/$strategyId',
-    path: '/strategies/$strategyId',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
-const AppSitesSiteIdWorkOrdersWorkOrderIdRoute =
-  AppSitesSiteIdWorkOrdersWorkOrderIdRouteImport.update({
-    id: '/work-orders_/$workOrderId',
-    path: '/work-orders/$workOrderId',
-    getParentRoute: () => AppSitesSiteIdRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/notifications': typeof AppNotificationsRoute
-  '/sites': typeof AppSitesRouteWithChildren
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
-  '/portfolio/overview': typeof AppPortfolioOverviewRoute
   '/settings/access': typeof AppSettingsAccessRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/settings/sites': typeof AppSettingsSitesRoute
-  '/sites/$siteId': typeof AppSitesSiteIdRouteWithChildren
-  '/sites/': typeof AppSitesIndexRoute
   '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -501,52 +179,7 @@ export interface FileRoutesByFullPath {
   '/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
   '/optimization/projects': typeof AppSiteOptimizationProjectsRoute
   '/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
-  '/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
-  '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
-  '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
-  '/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
-  '/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
-  '/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
-  '/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
-  '/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
-  '/sites/$siteId/devices': typeof AppSitesSiteIdDevicesRouteWithChildren
-  '/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
-  '/sites/$siteId/energy': typeof AppSitesSiteIdEnergyRouteWithChildren
-  '/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
-  '/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
-  '/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
-  '/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
-  '/sites/$siteId/issues': typeof AppSitesSiteIdIssuesRouteWithChildren
-  '/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
-  '/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
-  '/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
-  '/sites/$siteId/mv': typeof AppSitesSiteIdMvRoute
-  '/sites/$siteId/operations': typeof AppSitesSiteIdOperationsRoute
-  '/sites/$siteId/opportunities': typeof AppSitesSiteIdOpportunitiesRoute
-  '/sites/$siteId/optimization-plans': typeof AppSitesSiteIdOptimizationPlansRoute
-  '/sites/$siteId/optimize': typeof AppSitesSiteIdOptimizeRoute
-  '/sites/$siteId/overview': typeof AppSitesSiteIdOverviewRoute
-  '/sites/$siteId/reports': typeof AppSitesSiteIdReportsRoute
-  '/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
-  '/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
-  '/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
-  '/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/settings/': typeof AppSiteSettingsIndexRoute
-  '/sites/$siteId/': typeof AppSitesSiteIdIndexRoute
-  '/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
-  '/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
-  '/sites/$siteId/issues/$issueId': typeof AppSitesSiteIdIssuesIssueIdRoute
-  '/sites/$siteId/operations/control': typeof AppSitesSiteIdOperationsControlRoute
-  '/sites/$siteId/operations/trends': typeof AppSitesSiteIdOperationsTrendsRoute
-  '/sites/$siteId/strategies/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
-  '/sites/$siteId/work-orders/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
-  '/sites/$siteId/devices/': typeof AppSitesSiteIdDevicesIndexRoute
-  '/sites/$siteId/energy/': typeof AppSitesSiteIdEnergyIndexRoute
-  '/sites/$siteId/issues/': typeof AppSitesSiteIdIssuesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -554,11 +187,9 @@ export interface FileRoutesByTo {
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
-  '/portfolio/overview': typeof AppPortfolioOverviewRoute
   '/settings/access': typeof AppSettingsAccessRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/settings/sites': typeof AppSettingsSitesRoute
-  '/sites': typeof AppSitesIndexRoute
   '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -571,66 +202,20 @@ export interface FileRoutesByTo {
   '/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
   '/optimization/projects': typeof AppSiteOptimizationProjectsRoute
   '/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
-  '/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
-  '/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
-  '/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
-  '/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
-  '/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
-  '/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
-  '/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
-  '/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
-  '/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
-  '/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
-  '/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
-  '/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
-  '/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
-  '/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
-  '/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
-  '/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
-  '/sites/$siteId/mv': typeof AppSitesSiteIdMvRoute
-  '/sites/$siteId/operations': typeof AppSitesSiteIdOperationsRoute
-  '/sites/$siteId/opportunities': typeof AppSitesSiteIdOpportunitiesRoute
-  '/sites/$siteId/optimization-plans': typeof AppSitesSiteIdOptimizationPlansRoute
-  '/sites/$siteId/optimize': typeof AppSitesSiteIdOptimizeRoute
-  '/sites/$siteId/overview': typeof AppSitesSiteIdOverviewRoute
-  '/sites/$siteId/reports': typeof AppSitesSiteIdReportsRoute
-  '/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
-  '/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
-  '/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
-  '/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/settings': typeof AppSiteSettingsIndexRoute
-  '/sites/$siteId': typeof AppSitesSiteIdIndexRoute
-  '/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
-  '/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
-  '/sites/$siteId/issues/$issueId': typeof AppSitesSiteIdIssuesIssueIdRoute
-  '/sites/$siteId/operations/control': typeof AppSitesSiteIdOperationsControlRoute
-  '/sites/$siteId/operations/trends': typeof AppSitesSiteIdOperationsTrendsRoute
-  '/sites/$siteId/strategies/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
-  '/sites/$siteId/work-orders/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
-  '/sites/$siteId/devices': typeof AppSitesSiteIdDevicesIndexRoute
-  '/sites/$siteId/energy': typeof AppSitesSiteIdEnergyIndexRoute
-  '/sites/$siteId/issues': typeof AppSitesSiteIdIssuesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_app/_site': typeof AppSiteRouteWithChildren
   '/_app/notifications': typeof AppNotificationsRoute
-  '/_app/sites': typeof AppSitesRouteWithChildren
   '/_app/system': typeof AppSystemRoute
   '/_app/': typeof AppIndexRoute
   '/_app/_site/overview': typeof AppSiteOverviewRoute
   '/_app/_site/reports': typeof AppSiteReportsRoute
-  '/_app/portfolio/overview': typeof AppPortfolioOverviewRoute
   '/_app/settings/access': typeof AppSettingsAccessRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/_app/settings/sites': typeof AppSettingsSitesRoute
-  '/_app/sites/$siteId': typeof AppSitesSiteIdRouteWithChildren
-  '/_app/sites/': typeof AppSitesIndexRoute
   '/_app/_site/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/_app/_site/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -643,68 +228,19 @@ export interface FileRoutesById {
   '/_app/_site/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
   '/_app/_site/optimization/projects': typeof AppSiteOptimizationProjectsRoute
   '/_app/_site/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/_app/sites/$siteId/action-plans': typeof AppSitesSiteIdActionPlansRoute
-  '/_app/sites/$siteId/ai': typeof AppSitesSiteIdAiRoute
-  '/_app/sites/$siteId/benchmarking': typeof AppSitesSiteIdBenchmarkingRoute
-  '/_app/sites/$siteId/bigscreen': typeof AppSitesSiteIdBigscreenRoute
-  '/_app/sites/$siteId/billing': typeof AppSitesSiteIdBillingRoute
-  '/_app/sites/$siteId/carbon': typeof AppSitesSiteIdCarbonRoute
-  '/_app/sites/$siteId/cost': typeof AppSitesSiteIdCostRoute
-  '/_app/sites/$siteId/dashboard': typeof AppSitesSiteIdDashboardRoute
-  '/_app/sites/$siteId/data-quality': typeof AppSitesSiteIdDataQualityRoute
-  '/_app/sites/$siteId/demand': typeof AppSitesSiteIdDemandRoute
-  '/_app/sites/$siteId/der': typeof AppSitesSiteIdDerRoute
-  '/_app/sites/$siteId/devices': typeof AppSitesSiteIdDevicesRouteWithChildren
-  '/_app/sites/$siteId/efficiency': typeof AppSitesSiteIdEfficiencyRoute
-  '/_app/sites/$siteId/energy': typeof AppSitesSiteIdEnergyRouteWithChildren
-  '/_app/sites/$siteId/energy-review': typeof AppSitesSiteIdEnergyReviewRoute
-  '/_app/sites/$siteId/executions': typeof AppSitesSiteIdExecutionsRoute
-  '/_app/sites/$siteId/fdd': typeof AppSitesSiteIdFddRoute
-  '/_app/sites/$siteId/forecast': typeof AppSitesSiteIdForecastRoute
-  '/_app/sites/$siteId/issues': typeof AppSitesSiteIdIssuesRouteWithChildren
-  '/_app/sites/$siteId/management-reviews': typeof AppSitesSiteIdManagementReviewsRoute
-  '/_app/sites/$siteId/model': typeof AppSitesSiteIdModelRoute
-  '/_app/sites/$siteId/monitor': typeof AppSitesSiteIdMonitorRoute
-  '/_app/sites/$siteId/mv': typeof AppSitesSiteIdMvRoute
-  '/_app/sites/$siteId/operations': typeof AppSitesSiteIdOperationsRoute
-  '/_app/sites/$siteId/opportunities': typeof AppSitesSiteIdOpportunitiesRoute
-  '/_app/sites/$siteId/optimization-plans': typeof AppSitesSiteIdOptimizationPlansRoute
-  '/_app/sites/$siteId/optimize': typeof AppSitesSiteIdOptimizeRoute
-  '/_app/sites/$siteId/overview': typeof AppSitesSiteIdOverviewRoute
-  '/_app/sites/$siteId/reports': typeof AppSitesSiteIdReportsRoute
-  '/_app/sites/$siteId/rules': typeof AppSitesSiteIdRulesRoute
-  '/_app/sites/$siteId/settlement': typeof AppSitesSiteIdSettlementRoute
-  '/_app/sites/$siteId/strategies': typeof AppSitesSiteIdStrategiesRoute
-  '/_app/sites/$siteId/verifications': typeof AppSitesSiteIdVerificationsRoute
-  '/_app/sites/$siteId/work-orders': typeof AppSitesSiteIdWorkOrdersRoute
   '/_app/_site/settings/': typeof AppSiteSettingsIndexRoute
-  '/_app/sites/$siteId/': typeof AppSitesSiteIdIndexRoute
-  '/_app/sites/$siteId/devices/$deviceId': typeof AppSitesSiteIdDevicesDeviceIdRoute
-  '/_app/sites/$siteId/energy/$period': typeof AppSitesSiteIdEnergyPeriodRoute
-  '/_app/sites/$siteId/issues/$issueId': typeof AppSitesSiteIdIssuesIssueIdRoute
-  '/_app/sites/$siteId/operations_/control': typeof AppSitesSiteIdOperationsControlRoute
-  '/_app/sites/$siteId/operations_/trends': typeof AppSitesSiteIdOperationsTrendsRoute
-  '/_app/sites/$siteId/strategies_/$strategyId': typeof AppSitesSiteIdStrategiesStrategyIdRoute
-  '/_app/sites/$siteId/work-orders_/$workOrderId': typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
-  '/_app/sites/$siteId/devices/': typeof AppSitesSiteIdDevicesIndexRoute
-  '/_app/sites/$siteId/energy/': typeof AppSitesSiteIdEnergyIndexRoute
-  '/_app/sites/$siteId/issues/': typeof AppSitesSiteIdIssuesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/notifications'
-    | '/sites'
     | '/system'
     | '/overview'
     | '/reports'
-    | '/portfolio/overview'
     | '/settings/access'
     | '/settings/integrations'
     | '/settings/sites'
-    | '/sites/$siteId'
-    | '/sites/'
     | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -717,52 +253,7 @@ export interface FileRouteTypes {
     | '/optimization/opportunities'
     | '/optimization/projects'
     | '/optimization/verification'
-    | '/sites/$siteId/action-plans'
-    | '/sites/$siteId/ai'
-    | '/sites/$siteId/benchmarking'
-    | '/sites/$siteId/bigscreen'
-    | '/sites/$siteId/billing'
-    | '/sites/$siteId/carbon'
-    | '/sites/$siteId/cost'
-    | '/sites/$siteId/dashboard'
-    | '/sites/$siteId/data-quality'
-    | '/sites/$siteId/demand'
-    | '/sites/$siteId/der'
-    | '/sites/$siteId/devices'
-    | '/sites/$siteId/efficiency'
-    | '/sites/$siteId/energy'
-    | '/sites/$siteId/energy-review'
-    | '/sites/$siteId/executions'
-    | '/sites/$siteId/fdd'
-    | '/sites/$siteId/forecast'
-    | '/sites/$siteId/issues'
-    | '/sites/$siteId/management-reviews'
-    | '/sites/$siteId/model'
-    | '/sites/$siteId/monitor'
-    | '/sites/$siteId/mv'
-    | '/sites/$siteId/operations'
-    | '/sites/$siteId/opportunities'
-    | '/sites/$siteId/optimization-plans'
-    | '/sites/$siteId/optimize'
-    | '/sites/$siteId/overview'
-    | '/sites/$siteId/reports'
-    | '/sites/$siteId/rules'
-    | '/sites/$siteId/settlement'
-    | '/sites/$siteId/strategies'
-    | '/sites/$siteId/verifications'
-    | '/sites/$siteId/work-orders'
     | '/settings/'
-    | '/sites/$siteId/'
-    | '/sites/$siteId/devices/$deviceId'
-    | '/sites/$siteId/energy/$period'
-    | '/sites/$siteId/issues/$issueId'
-    | '/sites/$siteId/operations/control'
-    | '/sites/$siteId/operations/trends'
-    | '/sites/$siteId/strategies/$strategyId'
-    | '/sites/$siteId/work-orders/$workOrderId'
-    | '/sites/$siteId/devices/'
-    | '/sites/$siteId/energy/'
-    | '/sites/$siteId/issues/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -770,11 +261,9 @@ export interface FileRouteTypes {
     | '/system'
     | '/overview'
     | '/reports'
-    | '/portfolio/overview'
     | '/settings/access'
     | '/settings/integrations'
     | '/settings/sites'
-    | '/sites'
     | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -787,65 +276,19 @@ export interface FileRouteTypes {
     | '/optimization/opportunities'
     | '/optimization/projects'
     | '/optimization/verification'
-    | '/sites/$siteId/action-plans'
-    | '/sites/$siteId/ai'
-    | '/sites/$siteId/benchmarking'
-    | '/sites/$siteId/bigscreen'
-    | '/sites/$siteId/billing'
-    | '/sites/$siteId/carbon'
-    | '/sites/$siteId/cost'
-    | '/sites/$siteId/dashboard'
-    | '/sites/$siteId/data-quality'
-    | '/sites/$siteId/demand'
-    | '/sites/$siteId/der'
-    | '/sites/$siteId/efficiency'
-    | '/sites/$siteId/energy-review'
-    | '/sites/$siteId/executions'
-    | '/sites/$siteId/fdd'
-    | '/sites/$siteId/forecast'
-    | '/sites/$siteId/management-reviews'
-    | '/sites/$siteId/model'
-    | '/sites/$siteId/monitor'
-    | '/sites/$siteId/mv'
-    | '/sites/$siteId/operations'
-    | '/sites/$siteId/opportunities'
-    | '/sites/$siteId/optimization-plans'
-    | '/sites/$siteId/optimize'
-    | '/sites/$siteId/overview'
-    | '/sites/$siteId/reports'
-    | '/sites/$siteId/rules'
-    | '/sites/$siteId/settlement'
-    | '/sites/$siteId/strategies'
-    | '/sites/$siteId/verifications'
-    | '/sites/$siteId/work-orders'
     | '/settings'
-    | '/sites/$siteId'
-    | '/sites/$siteId/devices/$deviceId'
-    | '/sites/$siteId/energy/$period'
-    | '/sites/$siteId/issues/$issueId'
-    | '/sites/$siteId/operations/control'
-    | '/sites/$siteId/operations/trends'
-    | '/sites/$siteId/strategies/$strategyId'
-    | '/sites/$siteId/work-orders/$workOrderId'
-    | '/sites/$siteId/devices'
-    | '/sites/$siteId/energy'
-    | '/sites/$siteId/issues'
   id:
     | '__root__'
     | '/_app'
     | '/_app/_site'
     | '/_app/notifications'
-    | '/_app/sites'
     | '/_app/system'
     | '/_app/'
     | '/_app/_site/overview'
     | '/_app/_site/reports'
-    | '/_app/portfolio/overview'
     | '/_app/settings/access'
     | '/_app/settings/integrations'
     | '/_app/settings/sites'
-    | '/_app/sites/$siteId'
-    | '/_app/sites/'
     | '/_app/_site/energy-analysis/benchmarking'
     | '/_app/_site/energy-analysis/breakdown'
     | '/_app/_site/energy-analysis/consumption'
@@ -858,52 +301,7 @@ export interface FileRouteTypes {
     | '/_app/_site/optimization/opportunities'
     | '/_app/_site/optimization/projects'
     | '/_app/_site/optimization/verification'
-    | '/_app/sites/$siteId/action-plans'
-    | '/_app/sites/$siteId/ai'
-    | '/_app/sites/$siteId/benchmarking'
-    | '/_app/sites/$siteId/bigscreen'
-    | '/_app/sites/$siteId/billing'
-    | '/_app/sites/$siteId/carbon'
-    | '/_app/sites/$siteId/cost'
-    | '/_app/sites/$siteId/dashboard'
-    | '/_app/sites/$siteId/data-quality'
-    | '/_app/sites/$siteId/demand'
-    | '/_app/sites/$siteId/der'
-    | '/_app/sites/$siteId/devices'
-    | '/_app/sites/$siteId/efficiency'
-    | '/_app/sites/$siteId/energy'
-    | '/_app/sites/$siteId/energy-review'
-    | '/_app/sites/$siteId/executions'
-    | '/_app/sites/$siteId/fdd'
-    | '/_app/sites/$siteId/forecast'
-    | '/_app/sites/$siteId/issues'
-    | '/_app/sites/$siteId/management-reviews'
-    | '/_app/sites/$siteId/model'
-    | '/_app/sites/$siteId/monitor'
-    | '/_app/sites/$siteId/mv'
-    | '/_app/sites/$siteId/operations'
-    | '/_app/sites/$siteId/opportunities'
-    | '/_app/sites/$siteId/optimization-plans'
-    | '/_app/sites/$siteId/optimize'
-    | '/_app/sites/$siteId/overview'
-    | '/_app/sites/$siteId/reports'
-    | '/_app/sites/$siteId/rules'
-    | '/_app/sites/$siteId/settlement'
-    | '/_app/sites/$siteId/strategies'
-    | '/_app/sites/$siteId/verifications'
-    | '/_app/sites/$siteId/work-orders'
     | '/_app/_site/settings/'
-    | '/_app/sites/$siteId/'
-    | '/_app/sites/$siteId/devices/$deviceId'
-    | '/_app/sites/$siteId/energy/$period'
-    | '/_app/sites/$siteId/issues/$issueId'
-    | '/_app/sites/$siteId/operations_/control'
-    | '/_app/sites/$siteId/operations_/trends'
-    | '/_app/sites/$siteId/strategies_/$strategyId'
-    | '/_app/sites/$siteId/work-orders_/$workOrderId'
-    | '/_app/sites/$siteId/devices/'
-    | '/_app/sites/$siteId/energy/'
-    | '/_app/sites/$siteId/issues/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -940,13 +338,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppNotificationsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/sites': {
-      id: '/_app/sites'
-      path: '/sites'
-      fullPath: '/sites'
-      preLoaderRoute: typeof AppSitesRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/system': {
       id: '/_app/system'
       path: '/system'
@@ -968,13 +359,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteReportsRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/portfolio/overview': {
-      id: '/_app/portfolio/overview'
-      path: '/portfolio/overview'
-      fullPath: '/portfolio/overview'
-      preLoaderRoute: typeof AppPortfolioOverviewRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/settings/access': {
       id: '/_app/settings/access'
       path: '/settings/access'
@@ -995,20 +379,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/sites'
       preLoaderRoute: typeof AppSettingsSitesRouteImport
       parentRoute: typeof AppRoute
-    }
-    '/_app/sites/': {
-      id: '/_app/sites/'
-      path: '/'
-      fullPath: '/sites/'
-      preLoaderRoute: typeof AppSitesIndexRouteImport
-      parentRoute: typeof AppSitesRoute
-    }
-    '/_app/sites/$siteId': {
-      id: '/_app/sites/$siteId'
-      path: '/$siteId'
-      fullPath: '/sites/$siteId'
-      preLoaderRoute: typeof AppSitesSiteIdRouteImport
-      parentRoute: typeof AppSitesRoute
     }
     '/_app/_site/energy-analysis/benchmarking': {
       id: '/_app/_site/energy-analysis/benchmarking'
@@ -1101,321 +471,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteSettingsIndexRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/sites/$siteId/': {
-      id: '/_app/sites/$siteId/'
-      path: '/'
-      fullPath: '/sites/$siteId/'
-      preLoaderRoute: typeof AppSitesSiteIdIndexRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/action-plans': {
-      id: '/_app/sites/$siteId/action-plans'
-      path: '/action-plans'
-      fullPath: '/sites/$siteId/action-plans'
-      preLoaderRoute: typeof AppSitesSiteIdActionPlansRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/ai': {
-      id: '/_app/sites/$siteId/ai'
-      path: '/ai'
-      fullPath: '/sites/$siteId/ai'
-      preLoaderRoute: typeof AppSitesSiteIdAiRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/benchmarking': {
-      id: '/_app/sites/$siteId/benchmarking'
-      path: '/benchmarking'
-      fullPath: '/sites/$siteId/benchmarking'
-      preLoaderRoute: typeof AppSitesSiteIdBenchmarkingRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/bigscreen': {
-      id: '/_app/sites/$siteId/bigscreen'
-      path: '/bigscreen'
-      fullPath: '/sites/$siteId/bigscreen'
-      preLoaderRoute: typeof AppSitesSiteIdBigscreenRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/billing': {
-      id: '/_app/sites/$siteId/billing'
-      path: '/billing'
-      fullPath: '/sites/$siteId/billing'
-      preLoaderRoute: typeof AppSitesSiteIdBillingRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/carbon': {
-      id: '/_app/sites/$siteId/carbon'
-      path: '/carbon'
-      fullPath: '/sites/$siteId/carbon'
-      preLoaderRoute: typeof AppSitesSiteIdCarbonRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/cost': {
-      id: '/_app/sites/$siteId/cost'
-      path: '/cost'
-      fullPath: '/sites/$siteId/cost'
-      preLoaderRoute: typeof AppSitesSiteIdCostRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/dashboard': {
-      id: '/_app/sites/$siteId/dashboard'
-      path: '/dashboard'
-      fullPath: '/sites/$siteId/dashboard'
-      preLoaderRoute: typeof AppSitesSiteIdDashboardRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/data-quality': {
-      id: '/_app/sites/$siteId/data-quality'
-      path: '/data-quality'
-      fullPath: '/sites/$siteId/data-quality'
-      preLoaderRoute: typeof AppSitesSiteIdDataQualityRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/demand': {
-      id: '/_app/sites/$siteId/demand'
-      path: '/demand'
-      fullPath: '/sites/$siteId/demand'
-      preLoaderRoute: typeof AppSitesSiteIdDemandRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/der': {
-      id: '/_app/sites/$siteId/der'
-      path: '/der'
-      fullPath: '/sites/$siteId/der'
-      preLoaderRoute: typeof AppSitesSiteIdDerRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/devices': {
-      id: '/_app/sites/$siteId/devices'
-      path: '/devices'
-      fullPath: '/sites/$siteId/devices'
-      preLoaderRoute: typeof AppSitesSiteIdDevicesRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/efficiency': {
-      id: '/_app/sites/$siteId/efficiency'
-      path: '/efficiency'
-      fullPath: '/sites/$siteId/efficiency'
-      preLoaderRoute: typeof AppSitesSiteIdEfficiencyRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/energy': {
-      id: '/_app/sites/$siteId/energy'
-      path: '/energy'
-      fullPath: '/sites/$siteId/energy'
-      preLoaderRoute: typeof AppSitesSiteIdEnergyRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/energy-review': {
-      id: '/_app/sites/$siteId/energy-review'
-      path: '/energy-review'
-      fullPath: '/sites/$siteId/energy-review'
-      preLoaderRoute: typeof AppSitesSiteIdEnergyReviewRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/executions': {
-      id: '/_app/sites/$siteId/executions'
-      path: '/executions'
-      fullPath: '/sites/$siteId/executions'
-      preLoaderRoute: typeof AppSitesSiteIdExecutionsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/fdd': {
-      id: '/_app/sites/$siteId/fdd'
-      path: '/fdd'
-      fullPath: '/sites/$siteId/fdd'
-      preLoaderRoute: typeof AppSitesSiteIdFddRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/forecast': {
-      id: '/_app/sites/$siteId/forecast'
-      path: '/forecast'
-      fullPath: '/sites/$siteId/forecast'
-      preLoaderRoute: typeof AppSitesSiteIdForecastRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/issues': {
-      id: '/_app/sites/$siteId/issues'
-      path: '/issues'
-      fullPath: '/sites/$siteId/issues'
-      preLoaderRoute: typeof AppSitesSiteIdIssuesRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/management-reviews': {
-      id: '/_app/sites/$siteId/management-reviews'
-      path: '/management-reviews'
-      fullPath: '/sites/$siteId/management-reviews'
-      preLoaderRoute: typeof AppSitesSiteIdManagementReviewsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/model': {
-      id: '/_app/sites/$siteId/model'
-      path: '/model'
-      fullPath: '/sites/$siteId/model'
-      preLoaderRoute: typeof AppSitesSiteIdModelRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/monitor': {
-      id: '/_app/sites/$siteId/monitor'
-      path: '/monitor'
-      fullPath: '/sites/$siteId/monitor'
-      preLoaderRoute: typeof AppSitesSiteIdMonitorRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/mv': {
-      id: '/_app/sites/$siteId/mv'
-      path: '/mv'
-      fullPath: '/sites/$siteId/mv'
-      preLoaderRoute: typeof AppSitesSiteIdMvRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/operations': {
-      id: '/_app/sites/$siteId/operations'
-      path: '/operations'
-      fullPath: '/sites/$siteId/operations'
-      preLoaderRoute: typeof AppSitesSiteIdOperationsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/opportunities': {
-      id: '/_app/sites/$siteId/opportunities'
-      path: '/opportunities'
-      fullPath: '/sites/$siteId/opportunities'
-      preLoaderRoute: typeof AppSitesSiteIdOpportunitiesRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/optimization-plans': {
-      id: '/_app/sites/$siteId/optimization-plans'
-      path: '/optimization-plans'
-      fullPath: '/sites/$siteId/optimization-plans'
-      preLoaderRoute: typeof AppSitesSiteIdOptimizationPlansRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/optimize': {
-      id: '/_app/sites/$siteId/optimize'
-      path: '/optimize'
-      fullPath: '/sites/$siteId/optimize'
-      preLoaderRoute: typeof AppSitesSiteIdOptimizeRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/overview': {
-      id: '/_app/sites/$siteId/overview'
-      path: '/overview'
-      fullPath: '/sites/$siteId/overview'
-      preLoaderRoute: typeof AppSitesSiteIdOverviewRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/reports': {
-      id: '/_app/sites/$siteId/reports'
-      path: '/reports'
-      fullPath: '/sites/$siteId/reports'
-      preLoaderRoute: typeof AppSitesSiteIdReportsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/rules': {
-      id: '/_app/sites/$siteId/rules'
-      path: '/rules'
-      fullPath: '/sites/$siteId/rules'
-      preLoaderRoute: typeof AppSitesSiteIdRulesRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/settlement': {
-      id: '/_app/sites/$siteId/settlement'
-      path: '/settlement'
-      fullPath: '/sites/$siteId/settlement'
-      preLoaderRoute: typeof AppSitesSiteIdSettlementRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/strategies': {
-      id: '/_app/sites/$siteId/strategies'
-      path: '/strategies'
-      fullPath: '/sites/$siteId/strategies'
-      preLoaderRoute: typeof AppSitesSiteIdStrategiesRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/verifications': {
-      id: '/_app/sites/$siteId/verifications'
-      path: '/verifications'
-      fullPath: '/sites/$siteId/verifications'
-      preLoaderRoute: typeof AppSitesSiteIdVerificationsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/work-orders': {
-      id: '/_app/sites/$siteId/work-orders'
-      path: '/work-orders'
-      fullPath: '/sites/$siteId/work-orders'
-      preLoaderRoute: typeof AppSitesSiteIdWorkOrdersRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/devices/': {
-      id: '/_app/sites/$siteId/devices/'
-      path: '/'
-      fullPath: '/sites/$siteId/devices/'
-      preLoaderRoute: typeof AppSitesSiteIdDevicesIndexRouteImport
-      parentRoute: typeof AppSitesSiteIdDevicesRoute
-    }
-    '/_app/sites/$siteId/devices/$deviceId': {
-      id: '/_app/sites/$siteId/devices/$deviceId'
-      path: '/$deviceId'
-      fullPath: '/sites/$siteId/devices/$deviceId'
-      preLoaderRoute: typeof AppSitesSiteIdDevicesDeviceIdRouteImport
-      parentRoute: typeof AppSitesSiteIdDevicesRoute
-    }
-    '/_app/sites/$siteId/energy/': {
-      id: '/_app/sites/$siteId/energy/'
-      path: '/'
-      fullPath: '/sites/$siteId/energy/'
-      preLoaderRoute: typeof AppSitesSiteIdEnergyIndexRouteImport
-      parentRoute: typeof AppSitesSiteIdEnergyRoute
-    }
-    '/_app/sites/$siteId/energy/$period': {
-      id: '/_app/sites/$siteId/energy/$period'
-      path: '/$period'
-      fullPath: '/sites/$siteId/energy/$period'
-      preLoaderRoute: typeof AppSitesSiteIdEnergyPeriodRouteImport
-      parentRoute: typeof AppSitesSiteIdEnergyRoute
-    }
-    '/_app/sites/$siteId/issues/': {
-      id: '/_app/sites/$siteId/issues/'
-      path: '/'
-      fullPath: '/sites/$siteId/issues/'
-      preLoaderRoute: typeof AppSitesSiteIdIssuesIndexRouteImport
-      parentRoute: typeof AppSitesSiteIdIssuesRoute
-    }
-    '/_app/sites/$siteId/issues/$issueId': {
-      id: '/_app/sites/$siteId/issues/$issueId'
-      path: '/$issueId'
-      fullPath: '/sites/$siteId/issues/$issueId'
-      preLoaderRoute: typeof AppSitesSiteIdIssuesIssueIdRouteImport
-      parentRoute: typeof AppSitesSiteIdIssuesRoute
-    }
-    '/_app/sites/$siteId/operations_/control': {
-      id: '/_app/sites/$siteId/operations_/control'
-      path: '/operations/control'
-      fullPath: '/sites/$siteId/operations/control'
-      preLoaderRoute: typeof AppSitesSiteIdOperationsControlRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/operations_/trends': {
-      id: '/_app/sites/$siteId/operations_/trends'
-      path: '/operations/trends'
-      fullPath: '/sites/$siteId/operations/trends'
-      preLoaderRoute: typeof AppSitesSiteIdOperationsTrendsRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/strategies_/$strategyId': {
-      id: '/_app/sites/$siteId/strategies_/$strategyId'
-      path: '/strategies/$strategyId'
-      fullPath: '/sites/$siteId/strategies/$strategyId'
-      preLoaderRoute: typeof AppSitesSiteIdStrategiesStrategyIdRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
-    '/_app/sites/$siteId/work-orders_/$workOrderId': {
-      id: '/_app/sites/$siteId/work-orders_/$workOrderId'
-      path: '/work-orders/$workOrderId'
-      fullPath: '/sites/$siteId/work-orders/$workOrderId'
-      preLoaderRoute: typeof AppSitesSiteIdWorkOrdersWorkOrderIdRouteImport
-      parentRoute: typeof AppSitesSiteIdRoute
-    }
   }
 }
 
@@ -1459,158 +514,11 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
 const AppSiteRouteWithChildren =
   AppSiteRoute._addFileChildren(AppSiteRouteChildren)
 
-interface AppSitesSiteIdDevicesRouteChildren {
-  AppSitesSiteIdDevicesDeviceIdRoute: typeof AppSitesSiteIdDevicesDeviceIdRoute
-  AppSitesSiteIdDevicesIndexRoute: typeof AppSitesSiteIdDevicesIndexRoute
-}
-
-const AppSitesSiteIdDevicesRouteChildren: AppSitesSiteIdDevicesRouteChildren = {
-  AppSitesSiteIdDevicesDeviceIdRoute: AppSitesSiteIdDevicesDeviceIdRoute,
-  AppSitesSiteIdDevicesIndexRoute: AppSitesSiteIdDevicesIndexRoute,
-}
-
-const AppSitesSiteIdDevicesRouteWithChildren =
-  AppSitesSiteIdDevicesRoute._addFileChildren(
-    AppSitesSiteIdDevicesRouteChildren,
-  )
-
-interface AppSitesSiteIdEnergyRouteChildren {
-  AppSitesSiteIdEnergyPeriodRoute: typeof AppSitesSiteIdEnergyPeriodRoute
-  AppSitesSiteIdEnergyIndexRoute: typeof AppSitesSiteIdEnergyIndexRoute
-}
-
-const AppSitesSiteIdEnergyRouteChildren: AppSitesSiteIdEnergyRouteChildren = {
-  AppSitesSiteIdEnergyPeriodRoute: AppSitesSiteIdEnergyPeriodRoute,
-  AppSitesSiteIdEnergyIndexRoute: AppSitesSiteIdEnergyIndexRoute,
-}
-
-const AppSitesSiteIdEnergyRouteWithChildren =
-  AppSitesSiteIdEnergyRoute._addFileChildren(AppSitesSiteIdEnergyRouteChildren)
-
-interface AppSitesSiteIdIssuesRouteChildren {
-  AppSitesSiteIdIssuesIssueIdRoute: typeof AppSitesSiteIdIssuesIssueIdRoute
-  AppSitesSiteIdIssuesIndexRoute: typeof AppSitesSiteIdIssuesIndexRoute
-}
-
-const AppSitesSiteIdIssuesRouteChildren: AppSitesSiteIdIssuesRouteChildren = {
-  AppSitesSiteIdIssuesIssueIdRoute: AppSitesSiteIdIssuesIssueIdRoute,
-  AppSitesSiteIdIssuesIndexRoute: AppSitesSiteIdIssuesIndexRoute,
-}
-
-const AppSitesSiteIdIssuesRouteWithChildren =
-  AppSitesSiteIdIssuesRoute._addFileChildren(AppSitesSiteIdIssuesRouteChildren)
-
-interface AppSitesSiteIdRouteChildren {
-  AppSitesSiteIdActionPlansRoute: typeof AppSitesSiteIdActionPlansRoute
-  AppSitesSiteIdAiRoute: typeof AppSitesSiteIdAiRoute
-  AppSitesSiteIdBenchmarkingRoute: typeof AppSitesSiteIdBenchmarkingRoute
-  AppSitesSiteIdBigscreenRoute: typeof AppSitesSiteIdBigscreenRoute
-  AppSitesSiteIdBillingRoute: typeof AppSitesSiteIdBillingRoute
-  AppSitesSiteIdCarbonRoute: typeof AppSitesSiteIdCarbonRoute
-  AppSitesSiteIdCostRoute: typeof AppSitesSiteIdCostRoute
-  AppSitesSiteIdDashboardRoute: typeof AppSitesSiteIdDashboardRoute
-  AppSitesSiteIdDataQualityRoute: typeof AppSitesSiteIdDataQualityRoute
-  AppSitesSiteIdDemandRoute: typeof AppSitesSiteIdDemandRoute
-  AppSitesSiteIdDerRoute: typeof AppSitesSiteIdDerRoute
-  AppSitesSiteIdDevicesRoute: typeof AppSitesSiteIdDevicesRouteWithChildren
-  AppSitesSiteIdEfficiencyRoute: typeof AppSitesSiteIdEfficiencyRoute
-  AppSitesSiteIdEnergyRoute: typeof AppSitesSiteIdEnergyRouteWithChildren
-  AppSitesSiteIdEnergyReviewRoute: typeof AppSitesSiteIdEnergyReviewRoute
-  AppSitesSiteIdExecutionsRoute: typeof AppSitesSiteIdExecutionsRoute
-  AppSitesSiteIdFddRoute: typeof AppSitesSiteIdFddRoute
-  AppSitesSiteIdForecastRoute: typeof AppSitesSiteIdForecastRoute
-  AppSitesSiteIdIssuesRoute: typeof AppSitesSiteIdIssuesRouteWithChildren
-  AppSitesSiteIdManagementReviewsRoute: typeof AppSitesSiteIdManagementReviewsRoute
-  AppSitesSiteIdModelRoute: typeof AppSitesSiteIdModelRoute
-  AppSitesSiteIdMonitorRoute: typeof AppSitesSiteIdMonitorRoute
-  AppSitesSiteIdMvRoute: typeof AppSitesSiteIdMvRoute
-  AppSitesSiteIdOperationsRoute: typeof AppSitesSiteIdOperationsRoute
-  AppSitesSiteIdOpportunitiesRoute: typeof AppSitesSiteIdOpportunitiesRoute
-  AppSitesSiteIdOptimizationPlansRoute: typeof AppSitesSiteIdOptimizationPlansRoute
-  AppSitesSiteIdOptimizeRoute: typeof AppSitesSiteIdOptimizeRoute
-  AppSitesSiteIdOverviewRoute: typeof AppSitesSiteIdOverviewRoute
-  AppSitesSiteIdReportsRoute: typeof AppSitesSiteIdReportsRoute
-  AppSitesSiteIdRulesRoute: typeof AppSitesSiteIdRulesRoute
-  AppSitesSiteIdSettlementRoute: typeof AppSitesSiteIdSettlementRoute
-  AppSitesSiteIdStrategiesRoute: typeof AppSitesSiteIdStrategiesRoute
-  AppSitesSiteIdVerificationsRoute: typeof AppSitesSiteIdVerificationsRoute
-  AppSitesSiteIdWorkOrdersRoute: typeof AppSitesSiteIdWorkOrdersRoute
-  AppSitesSiteIdIndexRoute: typeof AppSitesSiteIdIndexRoute
-  AppSitesSiteIdOperationsControlRoute: typeof AppSitesSiteIdOperationsControlRoute
-  AppSitesSiteIdOperationsTrendsRoute: typeof AppSitesSiteIdOperationsTrendsRoute
-  AppSitesSiteIdStrategiesStrategyIdRoute: typeof AppSitesSiteIdStrategiesStrategyIdRoute
-  AppSitesSiteIdWorkOrdersWorkOrderIdRoute: typeof AppSitesSiteIdWorkOrdersWorkOrderIdRoute
-}
-
-const AppSitesSiteIdRouteChildren: AppSitesSiteIdRouteChildren = {
-  AppSitesSiteIdActionPlansRoute: AppSitesSiteIdActionPlansRoute,
-  AppSitesSiteIdAiRoute: AppSitesSiteIdAiRoute,
-  AppSitesSiteIdBenchmarkingRoute: AppSitesSiteIdBenchmarkingRoute,
-  AppSitesSiteIdBigscreenRoute: AppSitesSiteIdBigscreenRoute,
-  AppSitesSiteIdBillingRoute: AppSitesSiteIdBillingRoute,
-  AppSitesSiteIdCarbonRoute: AppSitesSiteIdCarbonRoute,
-  AppSitesSiteIdCostRoute: AppSitesSiteIdCostRoute,
-  AppSitesSiteIdDashboardRoute: AppSitesSiteIdDashboardRoute,
-  AppSitesSiteIdDataQualityRoute: AppSitesSiteIdDataQualityRoute,
-  AppSitesSiteIdDemandRoute: AppSitesSiteIdDemandRoute,
-  AppSitesSiteIdDerRoute: AppSitesSiteIdDerRoute,
-  AppSitesSiteIdDevicesRoute: AppSitesSiteIdDevicesRouteWithChildren,
-  AppSitesSiteIdEfficiencyRoute: AppSitesSiteIdEfficiencyRoute,
-  AppSitesSiteIdEnergyRoute: AppSitesSiteIdEnergyRouteWithChildren,
-  AppSitesSiteIdEnergyReviewRoute: AppSitesSiteIdEnergyReviewRoute,
-  AppSitesSiteIdExecutionsRoute: AppSitesSiteIdExecutionsRoute,
-  AppSitesSiteIdFddRoute: AppSitesSiteIdFddRoute,
-  AppSitesSiteIdForecastRoute: AppSitesSiteIdForecastRoute,
-  AppSitesSiteIdIssuesRoute: AppSitesSiteIdIssuesRouteWithChildren,
-  AppSitesSiteIdManagementReviewsRoute: AppSitesSiteIdManagementReviewsRoute,
-  AppSitesSiteIdModelRoute: AppSitesSiteIdModelRoute,
-  AppSitesSiteIdMonitorRoute: AppSitesSiteIdMonitorRoute,
-  AppSitesSiteIdMvRoute: AppSitesSiteIdMvRoute,
-  AppSitesSiteIdOperationsRoute: AppSitesSiteIdOperationsRoute,
-  AppSitesSiteIdOpportunitiesRoute: AppSitesSiteIdOpportunitiesRoute,
-  AppSitesSiteIdOptimizationPlansRoute: AppSitesSiteIdOptimizationPlansRoute,
-  AppSitesSiteIdOptimizeRoute: AppSitesSiteIdOptimizeRoute,
-  AppSitesSiteIdOverviewRoute: AppSitesSiteIdOverviewRoute,
-  AppSitesSiteIdReportsRoute: AppSitesSiteIdReportsRoute,
-  AppSitesSiteIdRulesRoute: AppSitesSiteIdRulesRoute,
-  AppSitesSiteIdSettlementRoute: AppSitesSiteIdSettlementRoute,
-  AppSitesSiteIdStrategiesRoute: AppSitesSiteIdStrategiesRoute,
-  AppSitesSiteIdVerificationsRoute: AppSitesSiteIdVerificationsRoute,
-  AppSitesSiteIdWorkOrdersRoute: AppSitesSiteIdWorkOrdersRoute,
-  AppSitesSiteIdIndexRoute: AppSitesSiteIdIndexRoute,
-  AppSitesSiteIdOperationsControlRoute: AppSitesSiteIdOperationsControlRoute,
-  AppSitesSiteIdOperationsTrendsRoute: AppSitesSiteIdOperationsTrendsRoute,
-  AppSitesSiteIdStrategiesStrategyIdRoute:
-    AppSitesSiteIdStrategiesStrategyIdRoute,
-  AppSitesSiteIdWorkOrdersWorkOrderIdRoute:
-    AppSitesSiteIdWorkOrdersWorkOrderIdRoute,
-}
-
-const AppSitesSiteIdRouteWithChildren = AppSitesSiteIdRoute._addFileChildren(
-  AppSitesSiteIdRouteChildren,
-)
-
-interface AppSitesRouteChildren {
-  AppSitesSiteIdRoute: typeof AppSitesSiteIdRouteWithChildren
-  AppSitesIndexRoute: typeof AppSitesIndexRoute
-}
-
-const AppSitesRouteChildren: AppSitesRouteChildren = {
-  AppSitesSiteIdRoute: AppSitesSiteIdRouteWithChildren,
-  AppSitesIndexRoute: AppSitesIndexRoute,
-}
-
-const AppSitesRouteWithChildren = AppSitesRoute._addFileChildren(
-  AppSitesRouteChildren,
-)
-
 interface AppRouteChildren {
   AppSiteRoute: typeof AppSiteRouteWithChildren
   AppNotificationsRoute: typeof AppNotificationsRoute
-  AppSitesRoute: typeof AppSitesRouteWithChildren
   AppSystemRoute: typeof AppSystemRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppPortfolioOverviewRoute: typeof AppPortfolioOverviewRoute
   AppSettingsAccessRoute: typeof AppSettingsAccessRoute
   AppSettingsIntegrationsRoute: typeof AppSettingsIntegrationsRoute
   AppSettingsSitesRoute: typeof AppSettingsSitesRoute
@@ -1619,10 +527,8 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSiteRoute: AppSiteRouteWithChildren,
   AppNotificationsRoute: AppNotificationsRoute,
-  AppSitesRoute: AppSitesRouteWithChildren,
   AppSystemRoute: AppSystemRoute,
   AppIndexRoute: AppIndexRoute,
-  AppPortfolioOverviewRoute: AppPortfolioOverviewRoute,
   AppSettingsAccessRoute: AppSettingsAccessRoute,
   AppSettingsIntegrationsRoute: AppSettingsIntegrationsRoute,
   AppSettingsSitesRoute: AppSettingsSitesRoute,

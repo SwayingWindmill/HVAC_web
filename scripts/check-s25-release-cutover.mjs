@@ -54,7 +54,6 @@ const expectedSmoke = [
   's11:command-readback:check',
   's4:alarm:check',
   's16:notification:check',
-  'real-dashboard:test',
 ];
 assert(JSON.stringify(release.criticalSmoke) === JSON.stringify(expectedSmoke), 'critical smoke set drifted');
 for (const command of expectedSmoke) assert(typeof packageJSON.scripts?.[command] === 'string', `critical smoke command is missing: ${command}`);

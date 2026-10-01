@@ -26,8 +26,8 @@ function AppLayout() {
   useBlocker({
     enableBeforeUnload: false,
     shouldBlockFn: async ({ current, next }) => {
-      const currentSiteId = siteIdFromLocation(current.pathname, defaultStringifySearch(current.search));
-      const nextSiteId = siteIdFromLocation(next.pathname, defaultStringifySearch(next.search));
+      const currentSiteId = siteIdFromLocation(defaultStringifySearch(current.search));
+      const nextSiteId = siteIdFromLocation(defaultStringifySearch(next.search));
       if (!currentSiteId || !nextSiteId || currentSiteId === nextSiteId) return false;
 
       await runtime.requestSiteNavigation(`${next.pathname}${defaultStringifySearch(next.search)}`);

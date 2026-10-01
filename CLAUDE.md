@@ -57,7 +57,7 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 ## 前端
 
 - 页面只显示真实 owner 的数据；还没接入的，就明确显示"未接入"。示例数据只允许出现在 `HVAC_WEB_FRONTEND_REVIEW=true` 的评审构建里。
-- 全局工作区放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读取）；站点子页面放在 `/sites/$siteId/*`。
+- 站点范围的页面放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读取）；对象详情用页面内的侧栏打开，由 `?inspect=<id>` 指定，不另开详情路由。
 - 组件不直接 fetch，统一走 OpenAPI 生成的客户端加 feature 内的 query。URL 状态归 Router 管，服务端状态归 Query 管。
 - 面向运维人员的界面只显示业务事实，不显示 UUID、trace ID 或内部枚举。
 - UI 改动要在 1440px 宽度下用真实数据实际看过，不能拿构建通过代替。

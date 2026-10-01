@@ -25,7 +25,6 @@ const requiredFiles = [
   'docs/product/content-design.md',
   'docs/product/smart-energy-system-page-architecture-v3-research-backed.md',
   'docs/product/global-navigation-context-interaction-contract-v2.md',
-  'apps/hvac-web/src/app/workspace-catalog.ts',
   'docs/product/surface-catalog-final-review-2026-09-15.md',
   'docs/product/surface-specifications/01-enterprise-overview.md',
   'docs/product/surface-specifications/02-portfolio-benchmarking.md',

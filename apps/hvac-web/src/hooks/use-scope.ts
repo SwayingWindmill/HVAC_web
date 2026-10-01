@@ -31,7 +31,7 @@ export function useScope() {
   const snapshot = useShellSnapshot();
   const location = useLocation();
   const sites = snapshot.sites?.items ?? NO_SITES;
-  const siteId = siteIdFromLocation(location.pathname, location.searchStr) ?? snapshot.protectedScope?.siteId;
+  const siteId = siteIdFromLocation(location.searchStr) ?? snapshot.protectedScope?.siteId;
   const availableScopes = useMemo(() => sites.map(siteScope), [sites]);
   const currentScope = availableScopes.find((scope) => scope.siteId === siteId) ?? null;
 
