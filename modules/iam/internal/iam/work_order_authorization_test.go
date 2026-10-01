@@ -144,3 +144,38 @@ func TestEvaluateWorkOrderLifecycleAuthorizationRequiresExactResourceAndPreserve
 		}
 	}
 }
+
+// No product path maintains ownership targets, so nobody could take a work order.
+func TestEvaluateWorkOrderAuthorizationLetsWorkersAssignThemselves(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	permission := func(action workorderauth.Action) WorkOrderPermission {
+		return WorkOrderPermission{TenantID: workOrderTestTenantID, SiteID: workOrderTestSiteID, Action: action, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}
+	}
+	facts := WorkOrderAuthorizationFacts{
+		Principal:   PrincipalRecord{ID: workOrderTestPrincipalID, SubjectIssuer: workOrderTestIssuer, Subject: workOrderTestSubject, Status: FactStatusActive},
+		Memberships: []TenantMembership{{TenantID: workOrderTestTenantID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Permissions: []WorkOrderPermission{permission(workorderauth.ActionAssign), permission(workorderauth.ActionStart)},
+	}
+	self, other := workOrderTestPrincipalID, "principal:other"
+	decide := func(facts WorkOrderAuthorizationFacts, assignee *string) workorderauth.Decision {
+		store := newStaticWorkOrderAuthorizationStore("workOrder-policy-self", []WorkOrderAuthorizationFacts{facts})
+		decision, err := evaluateWorkOrderAuthorization(context.Background(), store, now, workOrderTestIssuer, workOrderTestSubject, workorderauth.DecisionRequest{
+			TenantID: workOrderTestTenantID, SiteID: workOrderTestSiteID, WorkOrderID: workOrderTestWorkOrderID,
+			AssigneeID: assignee, Action: workorderauth.ActionAssign,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decision
+	}
+	if decision := decide(facts, &self); !decision.Allowed {
+		t.Fatalf("a worker could not take the work order: %#v", decision)
+	}
+	if decision := decide(facts, &other); decision.Allowed {
+		t.Fatalf("an undeclared other principal was assignable: %#v", decision)
+	}
+	facts.Permissions = facts.Permissions[:1]
+	if decision := decide(facts, &self); decision.Allowed {
+		t.Fatalf("a principal who cannot start work took ownership: %#v", decision)
+	}
+}

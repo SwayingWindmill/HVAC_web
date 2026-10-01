@@ -38,29 +38,12 @@ export function alarmStatusLabel(alarm: Alarm): string {
   return `${condition} · ${alarm.acknowledgement ? '已确认' : '未确认'}`;
 }
 
-export function personLabel(principalId: string | undefined, myId: string): string {
-  if (!principalId) return '—';
-  return principalId === myId ? '我' : '其他人员';
-}
-
 export function formatDuration(from: string, to: string | undefined, now: number): string {
   const minutes = Math.max(0, Math.round(((to ? Date.parse(to) : now) - Date.parse(from)) / 60_000));
   if (minutes < 60) return `${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} 小时 ${minutes % 60} 分`;
   return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
-}
-
-export function formatTime(value: string | undefined, timezone: string): string {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: timezone,
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(value));
 }
 
 export function severityRank(severity: AlarmSeverity): number {
