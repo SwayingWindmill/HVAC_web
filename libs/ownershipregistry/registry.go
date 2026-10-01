@@ -380,8 +380,15 @@ func matches(template, actual []string) bool {
 		return false
 	}
 	for index := range template {
+		if actual[index] == "" {
+			return false
+		}
 		if isPlaceholder(template[index]) {
-			if actual[index] == "" {
+			continue
+		}
+		if verb, ok := customMethod(template[index]); ok {
+			resource, found := strings.CutSuffix(actual[index], ":"+verb)
+			if !found || resource == "" || strings.Contains(resource, ":") {
 				return false
 			}
 			continue
@@ -393,6 +400,16 @@ func matches(template, actual []string) bool {
 	return true
 }
 
+// customMethod reports the verb of a placeholder segment with a custom method suffix,
+// such as {workOrderId}:assign.
+func customMethod(segment string) (string, bool) {
+	end := strings.Index(segment, "}:")
+	if !strings.HasPrefix(segment, "{") || end < 2 || end+2 >= len(segment) {
+		return "", false
+	}
+	return segment[end+2:], true
+}
+
 func templatesOverlap(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -400,6 +417,14 @@ func templatesOverlap(left, right []string) bool {
 	for index := range left {
 		if isPlaceholder(left[index]) || isPlaceholder(right[index]) {
 			continue
+		}
+		leftVerb, leftCustom := customMethod(left[index])
+		rightVerb, rightCustom := customMethod(right[index])
+		if leftCustom || rightCustom {
+			if leftCustom && rightCustom && leftVerb == rightVerb {
+				continue
+			}
+			return false
 		}
 		if left[index] != right[index] {
 			return false

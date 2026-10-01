@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +121,31 @@ func TestReloadKeepsCurrentSnapshotWhenAuditCannotPersist(t *testing.T) {
 	}
 	if manager.Current().RegistryRevision() != 1 {
 		t.Fatal("failed reload replaced the authoritative snapshot")
+	}
+}
+
+// Custom-method routes ({id}:assign) never matched, so every Work Order assignment and
+// lifecycle request was answered 405 by the Gateway.
+func TestResolveCustomMethodRoutesOfTheProductRegistry(t *testing.T) {
+	raw, err := os.ReadFile("../../contracts/ownership/route-ownership.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ownershipregistry.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workOrder = "/api/v1/sites/018f3e00-1000-7000-8000-000000000001/work-orders/01a0f6bb-feae-7b79-a9d7-13fe0be13699"
+	for method, path := range map[string]string{
+		"POST": workOrder + ":assign",
+		"GET":  workOrder,
+	} {
+		decision, err := snapshot.Resolve(method, path, "")
+		if err != nil || decision.SelectedOwner != "work-order-service" {
+			t.Fatalf("%s %s resolved to %+v, %v", method, path, decision, err)
+		}
+	}
+	if decision, err := snapshot.Resolve("POST", workOrder+":complete", ""); err != nil || decision.PathTemplate != "/api/v1/sites/{siteId}/work-orders/{workOrderId}:complete" {
+		t.Fatalf("lifecycle route resolved to %+v, %v", decision, err)
 	}
 }
