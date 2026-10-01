@@ -37,35 +37,32 @@ test('package-lock changes compile and unit test without database or browser fan
   assert.deepEqual(classification.unitProfiles, ['web']);
   assert.deepEqual(classification.integrationProfiles, []);
   assert.deepEqual(classification.browserProfiles, []);
-  assert.equal(classification.broad, false);
 });
 
-test('HVAC Web changes select browser and web unit profiles on the correct runner platforms', () => {
-  const classification = runClassification(['apps/hvac-web/src/App.tsx']);
+test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
+  const classification = runClassification(['apps/hvac-web/src/app/router.ts']);
   assert.deepEqual(classification.unitProfiles, ['web']);
-  assert.deepEqual(classification.browserWindowsProfiles, ['rms']);
-  assert.deepEqual(classification.browserLinuxProfiles, ['s0', 's1', 's2']);
+  assert.deepEqual(classification.browserProfiles, ['platform', 'registry', 'telemetry', 'web']);
   assert.equal(classification.integrations, false);
 });
 
-test('Operations Workspace changes select dedicated unit and Linux browser profiles', () => {
-  const classification = runClassification(['apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts']);
+test('Operations Workspace changes select dedicated unit and browser profiles', () => {
+  const classification = runClassification(['apps/hvac-web/src/features/operations/OperationsInvestigation.tsx']);
   assert.ok(classification.unitProfiles.includes('web'));
   assert.ok(classification.unitProfiles.includes('operations-agent'));
-  assert.deepEqual(classification.browserWindowsProfiles, ['rms']);
-  assert.ok(classification.browserLinuxProfiles.includes('operations-agent'));
+  assert.deepEqual(classification.browserProfiles, ['operations-agent', 'platform', 'registry', 'telemetry', 'web']);
 });
 
-test('Realtime backend changes select the durable realtime PostgreSQL profile', () => {
+test('telemetry changes select telemetry unit and durable integration profiles', () => {
   const classification = runClassification(['modules/telemetry/internal/telemetry/realtime.go']);
-  assert.ok(classification.unitProfiles.includes('s2'));
-  assert.deepEqual(classification.integrationProfiles, ['s2-realtime']);
+  assert.deepEqual(classification.unitProfiles, ['telemetry']);
+  assert.deepEqual(classification.integrationProfiles, ['telemetry']);
   assert.equal(classification.broad, false);
 });
 
-test('domain module changes stay scoped to their affected profiles instead of broad fallback', () => {
+test('domain module changes stay scoped to product domains', () => {
   for (const [file, unitProfile, integrationProfile] of [
-    ['modules/iot/internal/adapter/runtime.go', 's2', 's2-baseline'],
+    ['modules/iot/internal/adapter/runtime.go', 'telemetry', 'telemetry'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {
@@ -76,7 +73,7 @@ test('domain module changes stay scoped to their affected profiles instead of br
   }
 });
 
-test('retired migration and cutover evidence does not trigger product gates', () => {
+test('retired migration evidence does not trigger product gates', () => {
   for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go', 'pocs/telemetry-shadow-comparator/internal/comparison/comparison.go']) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, []);
@@ -85,13 +82,12 @@ test('retired migration and cutover evidence does not trigger product gates', ()
   }
 });
 
-test('package, workflow, and central task-matrix changes fail closed to broad static, contract, and unit coverage only', () => {
+test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
   for (const file of [
     'package.json',
-    '.github/workflows/s2-realtime-backend.yml',
+    '.github/workflows/pr-gates.yml',
     'scripts/domain-task-matrix.mjs',
     'scripts/package-script-long-chain-baseline.json',
-    'scripts/run-capability-task.mjs',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
@@ -103,7 +99,7 @@ test('package, workflow, and central task-matrix changes fail closed to broad st
   }
 });
 
-test('unknown paths and automation scripts fail closed without launching database or browser matrices', () => {
+test('unknown paths and automation scripts fail closed without database or browser matrices', () => {
   for (const file of ['new-platform-area/owner.go', 'scripts/new-automation-wrapper.mjs']) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
@@ -115,103 +111,54 @@ test('unknown paths and automation scripts fail closed without launching databas
   }
 });
 
-test('integration plans use domain-specific durable fixtures', () => {
-  const plan = runPlan('integration', ['s2-realtime', 's3']);
-  assert.ok(plan.commands.includes('npm run s2:realtime:postgres'));
-  assert.ok(plan.commands.includes('npm run s3:postgres'));
-  assert.ok(!plan.commands.includes('npm run s2:postgres'));
+test('integration plans resolve through stable domain profiles', () => {
+  const plan = runPlan('integration', ['telemetry', 'command']);
+  assert.deepEqual(plan.commands, [
+    'node scripts/run-s2-telemetry-postgres-tests.mjs',
+    'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
+    'node scripts/run-s2-realtime-postgres-tests.mjs',
+    'node scripts/run-s2-telemetry-history-tests.mjs',
+    'node --experimental-strip-types scripts/run-s3-command-postgres-tests.ts',
+  ]);
 });
 
-test('Operations Agent changes select dedicated unit and PostgreSQL profiles', () => {
+test('Operations Agent changes select dedicated domain gates', () => {
   const classification = runClassification(['services/operations-agent-service/src/index.ts']);
   assert.deepEqual(classification.unitProfiles, ['operations-agent']);
   assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
-  assert.deepEqual(classification.browserLinuxProfiles, ['operations-agent']);
+  assert.deepEqual(classification.browserProfiles, ['operations-agent']);
   assert.equal(classification.broad, false);
 
-  assert.deepEqual(runPlan('unit', ['operations-agent']).commands, [
-    'npm --prefix services/operations-agent-service ci',
-    'npm run operations-agent-service:check',
-    'npm run operations-agent:benchmark:test',
-    'npm run operations-agent:gateway:check',
-    'npm run operations-workspace:test',
-    'npm run test:gateway',
-  ]);
-  assert.deepEqual(runPlan('integration', ['operations-agent']).commands, [
-    'npm --prefix services/operations-agent-service ci',
-    'npm run operations-agent-service:postgres',
-  ]);
   assert.deepEqual(runPlan('browser', ['operations-agent']).commands, [
     'npm run operations-workspace:browser',
   ]);
 });
 
-test('nightly regression preserves its schedule, manual trigger, and complete profile sets', async () => {
+test('nightly regression keeps the complete stable profile sets', async () => {
   const workflow = await readFile('.github/workflows/nightly-full-regression.yml', 'utf8');
   assert.ok(workflow.includes('schedule:'));
   assert.ok(workflow.includes('cron: "0 18 * * *"'));
-  assert.ok(workflow.includes('workflow_dispatch:'));
   for (const command of [
     '--gate=static',
     '--gate=contracts --profile-set=all',
     '--gate=unit --profile-set=all',
     '--gate=integration --profile-set=all',
-    '--gate=browser --profile-set=browser-windows',
-    '--gate=browser --profile-set=browser-linux',
+    '--gate=browser --profile-set=all',
   ]) {
     assert.ok(workflow.includes(command), `nightly coverage drifted: ${command}`);
   }
 });
 
-test('PR gate workflow always exposes the three stable required checks', async () => {
+test('PR workflow exposes only the stable required checks', async () => {
   const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
-  const pullRequestBlock = workflow.split('  pull_request:')[1]?.split('  workflow_dispatch:')[0] ?? '';
-  assert.ok(pullRequestBlock.includes('types:'));
-  assert.ok(!pullRequestBlock.includes('paths:'));
-  for (const check of [
-    'pr / static',
-    'pr / contracts',
-    'pr / affected-unit',
-  ]) {
+  for (const check of ['pr / static', 'pr / contracts', 'pr / affected-unit']) {
     assert.equal(workflow.split(`name: ${check}`).length - 1, 1, `required check name drifted: ${check}`);
   }
-  for (const [job, check] of [
-    ['contracts', 'pr / contracts'],
-    ['unit', 'pr / affected-unit'],
-  ]) {
-    const marker = `  ${job}:\n    name: ${check}`;
-    const start = workflow.indexOf(marker);
-    assert.notEqual(start, -1, `aggregate job is missing: ${job}`);
-    const tail = workflow.slice(start + marker.length);
-    const nextJobMatch = /\n  [a-z][a-z0-9_]*:\n/u.exec(tail);
-    const end = nextJobMatch ? start + marker.length + nextJobMatch.index : workflow.length;
-    const block = workflow.slice(start, end);
-    assert.ok(block.includes('if: ${{ always() }}'), `${job} must always report a result`);
-  }
-  assert.ok(!workflow.includes('pr / affected-integration'), 'database integration must not be a pull-request required check');
-  assert.ok(!workflow.includes('internal / affected integration'), 'PR workflow must not launch database integration suites');
-  assert.ok(!workflow.includes('pr / affected-browser'), 'browser regression must not be a pull-request required check');
-  assert.ok(!workflow.includes('internal / affected browser'), 'PR workflow must not launch browser certification');
+  assert.ok(!workflow.includes('pr / affected-integration'));
+  assert.ok(!workflow.includes('pr / affected-browser'));
 });
 
-test('legacy workflows delegate pull requests to PR Gates and do not fan out on root package manifests', async () => {
-  const workflowNames = (await readdir('.github/workflows'))
-    .filter((name) => /\.ya?ml$/u.test(name) && name !== 'pr-gates.yml');
-  for (const name of workflowNames) {
-    const workflow = await readFile(`.github/workflows/${name}`, 'utf8');
-    const triggerBlock = workflow.split(/^jobs:\s*$/mu)[0];
-    if (/^\s{2}pull_request:\s*$/mu.test(triggerBlock)) {
-      assert.ok(
-        /^\s{4}branches-ignore:\s*\["\*\*"\]\s*$/mu.test(triggerBlock),
-        `${name} must disable legacy pull-request execution in favor of PR Gates`,
-      );
-    }
-  }
-});
-
-test('formal S2 release certification is explicit rather than automatic on main', async () => {
-  const workflow = await readFile('.github/workflows/s2-telemetry-release.yml', 'utf8');
-  const triggerBlock = workflow.split(/^permissions:\s*$/mu)[0];
-  assert.ok(triggerBlock.includes('workflow_dispatch:'), 'release certification must keep an explicit dispatch entry point');
-  assert.ok(!/^\s{2}push:\s*$/mu.test(triggerBlock), 'release certification must not auto-run after ordinary main pushes');
+test('active workflow filenames no longer encode historical implementation stages', async () => {
+  const workflowNames = (await readdir('.github/workflows')).filter((name) => /\.ya?ml$/u.test(name));
+  assert.deepEqual(workflowNames.filter((name) => /^(?:s\d+|rms)-/u.test(name)), []);
 });

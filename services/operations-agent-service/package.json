@@ -14,12 +14,12 @@
     }
   },
   "scripts": {
-    "contracts": "node ../../scripts/generate-operations-agent-control-contracts.mjs --check",
+    "contracts": "node ../../scripts/generate-operations-agent-control-contracts.mjs --check && node ../../scripts/generate-operations-agent-session-contracts.mjs --check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "boundaries": "node ../../scripts/check-operations-agent-service-boundaries.mjs",
-    "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/business-records.test.mjs test/operations-investigation.test.mjs test/investigation-coordinator.test.mjs test/investigation-coordinator.acceptance.test.mjs test/langgraph-runtime.test.mjs test/owner-read-adapters.test.mjs test/night-energy-analysis.test.mjs test/finding-synthesis.test.mjs test/openai-finding-synthesizer.test.mjs test/finding-model-runtime.test.mjs test/run-resource-budget.test.mjs test/operations-audit.test.mjs test/operations-telemetry.test.mjs test/site-night-energy-investigation.test.mjs test/ag-ui-projection.test.mjs test/operations-agent-http.test.mjs",
-    "test:acceptance": "npm run build && node --test test/investigation-coordinator.acceptance.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --test ../../scripts/test-operations-agent-service-boundaries.mjs test/agent-contracts.test.ts test/agent-session-lifecycle.test.ts test/agent-session-service.test.ts test/agent-session-http.test.ts test/agent-session-event-stream.test.ts test/pi-runtime.test.ts test/pi-model-runtime.test.ts test/pi-tool-policy.test.ts test/pi-investigation-vertical.test.ts test/hvac-read-tools.test.ts test/business-records.test.ts test/operations-investigation.test.ts test/investigation-coordinator.test.ts test/investigation-coordinator.acceptance.test.ts test/langgraph-runtime.test.ts test/owner-read-adapters.test.ts test/night-energy-analysis.test.ts test/finding-synthesis.test.ts test/openai-finding-synthesizer.test.ts test/finding-model-runtime.test.ts test/run-resource-budget.test.ts test/operations-audit.test.ts test/operations-telemetry.test.ts test/site-night-energy-investigation.test.ts test/agent-event-projection.test.ts test/operations-agent-http.test.ts",
+    "test:acceptance": "npm run build && node --experimental-strip-types --test test/investigation-coordinator.acceptance.test.ts",
     "test:postgres": "node ../../scripts/run-operations-agent-postgres-tests.mjs",
     "migrate:operations": "node ../../scripts/run-operations-agent-migration.mjs operations",
     "migrate:checkpoints": "node ../../scripts/run-operations-agent-migration.mjs checkpoints",
@@ -29,6 +29,8 @@
     "node": ">=22.22.0"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.4",
+    "@earendil-works/pi-ai": "0.84.4",
     "@langchain/langgraph": "1.4.8",
     "openai": "6.49.0",
     "pg": "^8.22.0"

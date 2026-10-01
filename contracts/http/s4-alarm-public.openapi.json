@@ -84,6 +84,36 @@
           "default": { "$ref": "#/components/responses/Error" }
         }
       }
+    },
+    "/api/v1/alarms/{alarmId}/assign": {
+      "post": {
+        "operationId": "assignAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Assigns handling responsibility for an Alarm Incident. Assignment is orthogonal to the physical ACTIVE/CLEARED condition and requires optimistic concurrency plus a stable Idempotency-Key.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/RequiredIdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssignAlarmRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Current canonical Alarm Incident after assignment.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
     }
   },
   "components": {
@@ -141,6 +171,12 @@
         "name": "Idempotency-Key",
         "in": "header",
         "required": false,
+        "schema": { "type": "string", "minLength": 8, "maxLength": 128 }
+      },
+      "RequiredIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
         "schema": { "type": "string", "minLength": 8, "maxLength": 128 }
       }
     },
@@ -282,6 +318,16 @@
         "type": "object",
         "additionalProperties": false,
         "properties": { "comment": { "type": "string", "maxLength": 1000 } }
+      },
+      "AssignAlarmRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason", "assigneeId"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
       },
       "CursorMeta": {
         "allOf": [

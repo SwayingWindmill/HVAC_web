@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  loadRealAssetsCurrentState,
-  loadRealAssetsRegistry,
-  realAssetsCurrentStateQueryKey,
-} from '../apps/hvac-web/src/real/assets/data.ts';
-import { runRealAssetsProtectedRequest } from '../apps/hvac-web/src/real/assets/protected-request.ts';
-import { createRealAssetsTelemetryRuntime } from '../apps/hvac-web/src/real/assets/telemetry-runtime.ts';
+  loadAssetsCurrentState,
+  loadAssetsRegistry,
+  assetsCurrentStateQueryKey,
+} from '../apps/hvac-web/src/features/assets/data.ts';
+import { runAssetsProtectedRequest } from '../apps/hvac-web/src/features/assets/protected-request.ts';
+import { createAssetsTelemetryRuntime } from '../apps/hvac-web/src/features/assets/telemetry-runtime.ts';
 
 const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';
@@ -140,7 +140,7 @@ test('Registry loader reads one atomic Site Asset Model and preserves route-poli
       return platformResponse(model);
     },
   };
-  const result = await loadRealAssetsRegistry({ client, tenantId, siteId, signal });
+  const result = await loadAssetsRegistry({ client, tenantId, siteId, signal });
   assert.equal(result.assetModel.devices.length, 1);
   assert.equal(result.assetModel.telemetryPoints.length, 2);
   assert.equal(result.assetModel.counts.physicalSensors, 1);
@@ -155,12 +155,12 @@ test('Registry loader rejects scope drift and invisible relationship targets', a
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
+    loadAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
     /outside the visible Site model/,
   );
   client.getSiteAssetModel = async () => platformResponse(assetModel({ devices: [device(1, { siteId: id(1, 99) })] }));
   await assert.rejects(
-    loadRealAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
+    loadAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
     /crossed the Tenant or Site scope/,
   );
 });
@@ -172,7 +172,7 @@ test('Registry loader rejects count drift and Point references outside the atomi
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client: countDriftClient, tenantId, siteId, signal: new AbortController().signal }),
+    loadAssetsRegistry({ client: countDriftClient, tenantId, siteId, signal: new AbortController().signal }),
     /counts do not match/,
   );
 
@@ -183,7 +183,7 @@ test('Registry loader rejects count drift and Point references outside the atomi
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client: pointDriftClient, tenantId, siteId, signal: new AbortController().signal }),
+    loadAssetsRegistry({ client: pointDriftClient, tenantId, siteId, signal: new AbortController().signal }),
     /invisible Device Endpoint or Sensor/,
   );
 });
@@ -203,7 +203,7 @@ test('Current-state loader splits 200 Devices into two exact bounded batches', a
       };
     },
   };
-  const result = await loadRealAssetsCurrentState({
+  const result = await loadAssetsCurrentState({
     client, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal,
   });
   assert.equal(result.requestCount, 2);
@@ -240,7 +240,7 @@ test('Current-state loader selects every registered Telemetry Point key for each
     },
   };
 
-  await loadRealAssetsCurrentState({
+  await loadAssetsCurrentState({
     client,
     devices,
     telemetryPoints,
@@ -273,7 +273,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
       ],
     }),
   };
-  const partial = await loadRealAssetsCurrentState({
+  const partial = await loadAssetsCurrentState({
     client: partialClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
   });
   assert.equal(partial.partial, true);
@@ -289,7 +289,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
     }),
   };
   await assert.rejects(
-    loadRealAssetsCurrentState({
+    loadAssetsCurrentState({
       client: driftClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /scope or selected-key order drifted/,
@@ -305,7 +305,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
     }),
   };
   await assert.rejects(
-    loadRealAssetsCurrentState({
+    loadAssetsCurrentState({
       client: displayDriftClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /display-state evidence drifted/,
@@ -332,7 +332,7 @@ test('Current-state loader rejects route-policy revision drift across bounded ba
     },
   };
   await assert.rejects(
-    loadRealAssetsCurrentState({
+    loadAssetsCurrentState({
       client,
       devices,
       telemetryPoints: [],
@@ -349,7 +349,7 @@ test('Current-state loader rejects route-policy revision drift across bounded ba
 test('S2 runtime retains route-policy evidence and publishes material changes once', async () => {
   const revisions = ['12', '12', '13'];
   const changes = [];
-  const runtime = createRealAssetsTelemetryRuntime('', async () => new Response(
+  const runtime = createAssetsTelemetryRuntime('', async () => new Response(
     JSON.stringify({ schemaVersion: 1, items: [] }),
     {
       status: 200,
@@ -374,12 +374,12 @@ test('S2 runtime retains route-policy evidence and publishes material changes on
 test('current-state query keys isolate generation, Site, policy epoch and exact registered Point selection', () => {
   const devices = [device(1), device(2)];
   const points = [point(measuredPointId, 'TELEMETRY', { reportingDeviceId: devices[0].id, pointCode: 'chiller_power' })];
-  const base = realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 0);
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(5, tenantId, siteId, devices, points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, id(1, 99), devices, points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 1));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, [device(1, { revision: 99 }), device(2)], points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, [{ ...points[0], revision: 99 }], 0));
+  const base = assetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 0);
+  assert.notDeepEqual(base, assetsCurrentStateQueryKey(5, tenantId, siteId, devices, points, 0));
+  assert.notDeepEqual(base, assetsCurrentStateQueryKey(4, tenantId, id(1, 99), devices, points, 0));
+  assert.notDeepEqual(base, assetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 1));
+  assert.notDeepEqual(base, assetsCurrentStateQueryKey(4, tenantId, siteId, [device(1, { revision: 99 }), device(2)], points, 0));
+  assert.notDeepEqual(base, assetsCurrentStateQueryKey(4, tenantId, siteId, devices, [{ ...points[0], revision: 99 }], 0));
 });
 
 test('protected request returns only through the active Site generation commit guard', async () => {
@@ -396,7 +396,7 @@ test('protected request returns only through the active Site generation commit g
       return true;
     },
   };
-  const result = await runRealAssetsProtectedRequest(scopeGuard, queryController.signal, async (signal) => {
+  const result = await runAssetsProtectedRequest(scopeGuard, queryController.signal, async (signal) => {
     assert.equal(signal.aborted, false);
     return 'accepted';
   });
@@ -413,7 +413,7 @@ test('protected request propagates query cancellation into the in-flight operati
     signal: scopeController.signal,
     commit: () => true,
   };
-  const pending = runRealAssetsProtectedRequest(scopeGuard, queryController.signal, (signal) => new Promise((resolve, reject) => {
+  const pending = runAssetsProtectedRequest(scopeGuard, queryController.signal, (signal) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   }));
   queryController.abort(new DOMException('query cancelled', 'AbortError'));
@@ -434,7 +434,7 @@ test('protected request refuses commit when cancellation arrives before a resolv
     },
   };
   await assert.rejects(
-    runRealAssetsProtectedRequest(scopeGuard, queryController.signal, async () => {
+    runAssetsProtectedRequest(scopeGuard, queryController.signal, async () => {
       queryController.abort(new DOMException('query cancelled', 'AbortError'));
       return 'late';
     }),
@@ -451,7 +451,7 @@ test('protected request rejects a late response after the Site generation is rev
     commit: () => false,
   };
   await assert.rejects(
-    runRealAssetsProtectedRequest(scopeGuard, new AbortController().signal, async () => 'late'),
+    runAssetsProtectedRequest(scopeGuard, new AbortController().signal, async () => 'late'),
     (error) => error instanceof DOMException && error.name === 'AbortError',
   );
 });

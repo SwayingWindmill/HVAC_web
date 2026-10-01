@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -16,8 +15,7 @@ if (!modulePath || args.length === 0) {
 }
 
 const cwd = isAbsolute(modulePath) ? modulePath : resolve(root, modulePath);
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 await mkdir(goCacheDir, { recursive: true });
 

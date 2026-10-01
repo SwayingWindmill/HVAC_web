@@ -33,21 +33,21 @@ function evaluateCommonJs(compiled, requireFn = () => { throw new Error('unexpec
   return module.exports;
 }
 
-const policy = evaluateCommonJs(compile('apps/hvac-web/src/real/shell-policy.ts'));
-const siteRouting = evaluateCommonJs(compile('apps/hvac-web/src/real/site-routing.ts'));
-const protectedScope = evaluateCommonJs(compile('apps/hvac-web/src/real/protected-scope.ts'));
+const policy = evaluateCommonJs(compile('apps/hvac-web/src/app/shell-policy.ts'));
+const routerPaths = evaluateCommonJs(compile('apps/hvac-web/src/app/router-paths.ts'));
+const protectedScope = evaluateCommonJs(compile('apps/hvac-web/src/app/protected-scope.ts'));
 const realtimeStatus = evaluateCommonJs(
-  compile('apps/hvac-web/src/real/realtime-status.ts'),
+  compile('apps/hvac-web/src/app/realtime-status.ts'),
   (specifier) => {
-    if (specifier === './site-routing') return siteRouting;
+    if (specifier === './router-paths') return routerPaths;
     throw new Error(`unexpected require: ${specifier}`);
   },
 );
 const runtimeModule = evaluateCommonJs(
-  compile('apps/hvac-web/src/real/shell-runtime.ts'),
+  compile('apps/hvac-web/src/app/shell-runtime.ts'),
   (specifier) => {
     if (specifier === './shell-policy') return policy;
-    if (specifier === './site-routing') return siteRouting;
+    if (specifier === './router-paths') return routerPaths;
     if (specifier === './protected-scope') return protectedScope;
     if (specifier === './realtime-status') return realtimeStatus;
     throw new Error(`unexpected require: ${specifier}`);
@@ -173,32 +173,20 @@ function client(overrides = {}) {
   };
 }
 
-test('transient Real UI states converge on quiet reusable loading surfaces', () => {
-  const appSource = fs.readFileSync('apps/hvac-web/src/real/RealApp.tsx', 'utf8');
-  const siteShellSource = fs.readFileSync('apps/hvac-web/src/real/SiteScopedShell.tsx', 'utf8');
-  const assetsSource = fs.readFileSync('apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx', 'utf8');
+test('transient UI states converge on quiet reusable loading surfaces', () => {
+  const appHostSource = fs.readFileSync('apps/hvac-web/src/app/AppRuntimeHost.tsx', 'utf8');
+  const siteRouteSource = fs.readFileSync('apps/hvac-web/src/routes/_app.sites.$siteId.tsx', 'utf8');
 
-  assert.equal(fs.existsSync('apps/hvac-web/src/real/RealRouteLoading.tsx'), true);
-  assert.equal(fs.existsSync('apps/hvac-web/src/real/assets/RealAssetsLoadingSurface.tsx'), true);
-  const loginStateSource = appSource.match(/function LoginRequiredState[\s\S]*?function PrincipalUnavailableState/)?.[0];
+  assert.equal(fs.existsSync('apps/hvac-web/src/app/RouteLoading.tsx'), true);
+  const loginStateSource = appHostSource.match(/function LoginRequiredState[\s\S]*?function PrincipalUnavailableState/)?.[0];
   assert.ok(loginStateSource);
-  assert.ok(appSource.includes('RealRouteLoading'));
+  assert.ok(appHostSource.includes('RouteLoading'));
   assert.equal(loginStateSource.includes('服务器 Session 已撤销'), false);
-  assert.equal(loginStateSource.includes('RealRuntimeFacts'), false);
+  assert.equal(loginStateSource.includes('RuntimeFacts'), false);
 
-  assert.ok(siteShellSource.includes('RealRouteLoading'));
-  assert.ok(siteShellSource.includes('RealAssetsLoadingSurface'));
-  for (const obsoleteHeading of [
-    '正在读取授权 Site',
-    '正在激活受保护 Site scope',
-    '正在进入唯一授权 Site',
-  ]) {
-    assert.equal(siteShellSource.includes(obsoleteHeading), false, obsoleteHeading);
-  }
+  assert.match(siteRouteSource, /beforeLoad: \(\{ context, params \}\) => requireSite\(context\.runtime, params\.siteId\)/u);
+  assert.match(siteRouteSource, /component: Outlet/u);
 
-  assert.ok(assetsSource.includes('RealAssetsLoadingSurface'));
-  assert.equal(assetsSource.includes('正在读取授权 Site 原子 Asset Model'), false);
-  assert.equal(assetsSource.includes('<Tag color="processing">LOADING</Tag>'), false);
 });
 
 test('holds the shell in BOOTSTRAPPING until Principal bootstrap completes', async () => {
@@ -600,6 +588,9 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
   assert.equal(request.signal.aborted, true);
   assert.deepEqual(events, ['realtime:SITE_CHANGE', 'cache:SITE_CHANGE']);
   assert.deepEqual(env.navigations, [target]);
+  assert.equal(runtime.current().siteTransition, undefined);
+  assert.equal(runtime.current().protectedScope.state, 'idle');
+  assert.equal(runtime.current().protectedScope.siteId, undefined);
 });
 
 test('failed Site purge blocks navigation and exposes a fail-closed transition', async () => {

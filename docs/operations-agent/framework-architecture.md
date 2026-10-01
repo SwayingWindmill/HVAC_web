@@ -1,6 +1,6 @@
 # Operations Agent framework architecture
 
-Status: accepted design
+Status: superseded by ADR 0014 and `pi-agent-implementation-plan.md`
 
 Date: 2026-07-30
 

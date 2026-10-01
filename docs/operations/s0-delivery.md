@@ -10,33 +10,11 @@ The release engineer owns the deployment receipt, signed image digests, private 
 
 ## Local delivery
 
-From the repository root, install the root dependencies, ensure Docker is running, and execute:
-
-```bash
-npm run delivery:local
-```
-
-This one command validates `deploy/s0/local.env.example`, starts PostgreSQL, Redpanda, OpenTelemetry Collector and Prometheus, generates local-only PKI, then starts the OIDC test provider, IAM, Audit Ledger, Outbox Relay, the repository-owned Go Legacy compatibility fixture, Platform Gateway and HVAC Web. SIGINT or SIGTERM drains the child services and removes the isolated Docker volumes. The local `hvac-backend` directory is migration reference material only; it is excluded from Git, Docker build contexts, CI and release artifacts.
-
-Local and test profiles generate their own Session key and workload certificates. They require no production credential. `ALLOW_PRODUCTION_EGRESS=false`, an empty ThingsBoard URL and an empty webhook URL are mandatory, so the profile cannot intentionally contact production ThingsBoard or production webhooks.
+The historical S0 local-delivery topology has been retired. Do not use the former `delivery:local` or `dev:durable` commands. The canonical local/Phase 1 deployment is under `deploy/platform/phase1/` and is operated through the `deployment:phase1:*` tasks.
 
 ## Configuration contract
 
-`deploy/s0/local.env.example` and `deploy/s0/staging.env.example` are checked-in, credential-free contracts. Validate both with:
-
-```bash
-npm run delivery:validate
-```
-
-The validator requires an explicit environment, monotonic configuration revision, SPIFFE trust domain, OIDC issuer/client, service audiences, Kafka-compatible broker, PostgreSQL endpoint and OTLP endpoint. URLs may not embed credentials. Checked-in password, token, private-key or secret values are rejected.
-
-Staging templates under `deploy/s0/staging` contain only named placeholders. Private values and workload identity mounts conform to `deploy/s0/staging/bindings.schema.json` and are supplied from the release environment. Render them outside the source template directory:
-
-```bash
-npm run delivery:render -- --bindings=/secure/s0-staging-bindings.json --output=out/s0-staging
-```
-
-The renderer rejects unknown or missing bindings, refuses mutable image tags, requires every image to end in `@sha256:<digest>`, and fails when any placeholder remains. It writes a receipt containing names and file paths, never binding values. Apply only the rendered output after signature verification.
+`deploy/s0/local.env.example`, `deploy/s0/staging.env.example`, and the old staging renderer are retained only as certification-reference material. The former `delivery:validate`, `delivery:check`, and `delivery:render` task chain has been removed. Current deployment validation belongs to the Phase 1 deployment contract and its `deployment:phase1:*` checks.
 
 ## Probes and graceful shutdown
 

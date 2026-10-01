@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/s2-hvac-web-presence');
@@ -300,58 +301,72 @@ async function waitForCondition(client, expression, label) {
   throw new Error(`${label} did not become ready; last=${JSON.stringify(last)} diagnostic=${JSON.stringify(diagnostic)}`);
 }
 
-async function clickText(client, text, selector = 'button') {
-  return evaluate(client, `(() => {
-    const node = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
-      .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(text)});
-    if (!node) return false;
-    node.click();
+async function openAssetsFullDetail(client, deviceId) {
+  assert(await evaluate(client, `(() => {
+    const card = document.querySelector('[data-testid="real-assets-device-card"][data-device-id="${deviceId}"]');
+    if (!(card instanceof HTMLElement)) return false;
+    card.click();
     return true;
-  })()`);
-}
-
-async function selectAntOption(client, selectIndex, label) {
-  const opened = await evaluate(client, `(() => {
-    const target = Array.from(document.querySelectorAll('.ant-select'))[${selectIndex}];
-    if (!target) return false;
-    const selector = target.querySelector('.ant-select-selector');
-    selector?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    selector?.click();
-    return true;
-  })()`);
-  assert(opened, `Ant Select ${selectIndex} was not available`);
+  })()`), `Device card ${deviceId} was unavailable`);
   await waitForCondition(
     client,
-    `Array.from(document.querySelectorAll('.ant-select-item-option-content')).some((node) => node.textContent?.trim() === ${JSON.stringify(label)})`,
-    `Ant Select option ${label}`,
+    `document.querySelector('[data-testid="real-assets-device-quick"]')?.getAttribute('data-device-id') === ${JSON.stringify(deviceId)}`,
+    `Device quick inspector ${deviceId}`,
   );
   assert(await evaluate(client, `(() => {
-    const option = Array.from(document.querySelectorAll('.ant-select-item-option-content'))
-      .find((node) => node.textContent?.trim() === ${JSON.stringify(label)});
-    if (!option) return false;
-    option.parentElement?.click();
+    const button = document.querySelector('[data-testid="real-assets-quick-full-detail"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
     return true;
-  })()`), `Ant Select option ${label} could not be selected`);
+  })()`), `Device full detail action ${deviceId} was unavailable`);
+  await waitForCondition(
+    client,
+    `location.pathname.endsWith('/device/${deviceId}') && Boolean(document.querySelector('[data-testid="real-assets-device-detail"]'))`,
+    `Device full detail ${deviceId}`,
+  );
+}
+
+async function closeAssetsDetail(client) {
+  assert(await evaluate(client, `(() => {
+    const button = document.querySelector('[data-testid="real-assets-detail-close"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'Device detail close action was unavailable');
+  await waitForCondition(client, `!document.querySelector('[data-testid="real-assets-device-detail"]')`, 'Device detail close');
+}
+
+async function exposeAssetsRealtimeStatus(client) {
+  assert(await evaluate(client, `(() => {
+    const tab = document.querySelector('[data-testid="real-assets-detail-tab-connection"]');
+    if (!(tab instanceof HTMLElement)) return false;
+    tab.click();
+    return true;
+  })()`), 'Connection detail tab was unavailable');
+  await waitForCondition(
+    client,
+    `Array.from(document.querySelectorAll('.ant-collapse-header')).some((node) => node.textContent?.includes('技术信息'))`,
+    'Device technical information collapse',
+  );
+  await evaluate(client, `(() => {
+    if (document.querySelector('[data-testid="real-assets-device-realtime"]')) return true;
+    const header = Array.from(document.querySelectorAll('.ant-collapse-header')).find((node) => node.textContent?.includes('技术信息'));
+    if (!(header instanceof HTMLElement)) return false;
+    header.click();
+    return true;
+  })()`);
+  await waitForCondition(client, `Boolean(document.querySelector('[data-testid="real-assets-device-realtime"]'))`, 'Device realtime status');
 }
 
 async function stopBrowser(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
   const stopped = await Promise.race([once(child, 'exit').then(() => true), pause(1500).then(() => false)]);
-  if (!stopped && process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else if (!stopped) child.kill('SIGKILL');
+  if (!stopped) child.kill('SIGKILL');
+
 }
 
-const browserCandidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium',
-].filter(Boolean);
-const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
+const browserPath = resolveLinuxBrowserExecutable();
 const gatewayPort = await findAvailablePort();
 const debugPort = await findAvailablePort();
 const gatewayURL = `http://127.0.0.1:${gatewayPort}`;
@@ -370,7 +385,6 @@ try {
     fixture.server.once('error', rejectListen);
     fixture.server.listen(gatewayPort, '127.0.0.1', resolveListen);
   });
-  process.env.VITE_API_MODE = 'real';
   process.env.S0_GATEWAY_ONLY = 'true';
   viteServer = await createViteServer({
     root: fixtureRoot,
@@ -400,167 +414,34 @@ try {
   await cdpClient.send('Network.enable');
   await cdpClient.send('Page.enable');
   await cdpClient.send('Log.enable');
-  await cdpClient.send('Page.navigate', { url: `${webURL}/api/v1/auth/login?returnTo=%2F` });
-
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-registry-assets-page"]')) && document.body.innerText.includes('Alpha Main Site')`, 'Organization Alpha Assets page');
+  await cdpClient.send('Page.navigate', { url: `${webURL}/assets-realtime` });
   await waitForCondition(
     cdpClient,
-    `Array.from(document.querySelectorAll('[role="tab"]')).some((candidate) => candidate.textContent?.trim() === 'Device (2)' && candidate.getAttribute('aria-disabled') !== 'true')`,
-    'Device tab readiness',
-  );
-  assert(await clickText(cdpClient, 'Device (2)', '[role="tab"]'), 'Device tab was not available');
-  await waitForCondition(cdpClient, `document.body.innerText.includes('Presence batch 返回部分结果') && document.body.innerText.includes('Alpha AHU Sensor')`, 'partial Presence batch');
-  const partialState = await evaluate(cdpClient, `({
-    partial: Boolean(document.querySelector('[data-presence-batch-state="partial"]')),
-    online: Array.from(document.querySelectorAll('[data-device-display-state="ONLINE"]')).length,
-    unavailable: Array.from(document.querySelectorAll('[data-device-display-state="UNAVAILABLE"]')).length,
-    text: document.body.innerText,
-  })`);
-  assert(partialState.partial && partialState.online >= 1 && partialState.unavailable >= 1, 'partial batch did not render independent Device results');
-  assert(!partialState.text.includes('总部大楼') && !partialState.text.includes('冷水机组 #1'), 'real page displayed Mock business data');
-  assertions.push('two-device-partial-presence-batch');
-  stateEvidence.partialBatch = { onlineCells: partialState.online, unavailableCells: partialState.unavailable };
-
-  assert(await evaluate(cdpClient, `(() => {
-    const row = Array.from(document.querySelectorAll('tr')).find((candidate) => candidate.textContent?.includes('Alpha AHU Sensor'));
-    const button = Array.from(row?.querySelectorAll('button') ?? []).find((candidate) => candidate.textContent?.trim() === '详情');
-    if (!button) return false;
-    button.click();
-    return true;
-  })()`), 'Alpha AHU Sensor detail control was not available');
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-device-live-state="live"][data-device-display-state="STALE"]')) && document.body.innerText.includes('MISSING（不补零）') && document.body.innerText.includes('SUSPECT')`, 'initial exact-key Snapshot');
-  const initialDetail = await evaluate(cdpClient, `({
-    text: document.querySelector('[data-device-live-state="live"]')?.innerText ?? '',
-    audit: window.__S2_HVAC_WEB_CONTROL__.audit(),
-    cacheCount: window.__S2_HVAC_WEB_CONTROL__.telemetryCacheCount(),
-  })`);
-  assert(initialDetail.audit.opens.length === 1, 'Device detail did not open one TelemetryLiveClient session');
-  assert(JSON.stringify(initialDetail.audit.opens[0].keys) === JSON.stringify(['temperature', 'humidity', 'setpoint', 'power']), 'Device detail did not use exact keys');
-  assert(initialDetail.text.includes('22.5') && initialDetail.text.includes('STALE') && initialDetail.text.includes('SUSPECT') && initialDetail.cacheCount > 0, 'initial Last Known state was incomplete');
-  assertions.push('exact-key-last-known-rendering');
-  stateEvidence.initial = { displayState: 'STALE', missingNotZero: true, suspect: true, businessRevision: 41 };
-
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.setMode('live-update')`);
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-device-live-state="live"][data-device-display-state="ONLINE"]')) && document.body.innerText.includes('23.75') && document.body.innerText.includes('42')`, 'live update');
-  assertions.push('live-delta-shared-snapshot-model');
-  stateEvidence.liveUpdate = { displayState: 'ONLINE', value: 23.75, businessRevision: 42 };
-
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.setMode('reconnect')`);
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-transport-state="degraded"]')) && document.body.innerText.includes('23.75')`, 'reconnect Snapshot');
-  assertions.push('reconnect-no-mixed-current-state');
-  stateEvidence.reconnect = { transport: 'degraded', retainedRevision: 42 };
-
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.setMode('gap')`);
-  await waitForCondition(cdpClient, `document.body.innerText.includes('实时状态需要重新同步') && document.body.innerText.includes('23.75')`, 'gap recovery');
-  assertions.push('gap-requires-resynchronization');
-  stateEvidence.gap = { status: 'unavailable', reason: 'recovery-required', retainedRevision: 42 };
-
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.setMode('outage')`);
-  await waitForCondition(cdpClient, `document.body.innerText.includes('实时 transport 暂不可用') && document.body.innerText.includes('23.75')`, 'transport outage');
-  assertions.push('transport-outage-explicit-no-fallback');
-  stateEvidence.outage = { status: 'unavailable', retainedLastKnown: true };
-
-  const cachedBeforeRevocation = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.cachedDeviceIds()`);
-  await fetch(`${gatewayURL}/__fixture/revoke?deviceId=${encodeURIComponent(ids.deviceA1)}`);
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.setMode('revoke')`);
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-device-live-state="revoked"]'))`, 'revoked state');
-  const revokedAlert = await evaluate(cdpClient, `({ audit: window.__S2_HVAC_WEB_CONTROL__.audit(), text: document.querySelector('[data-device-live-state="revoked"]')?.innerText ?? '' })`);
-  assert(revokedAlert.audit.purgeCount >= 1 && revokedAlert.text.includes('已清除'), 'revocation did not purge live recovery state');
-  await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.refreshRegistry()`);
-  await waitForCondition(cdpClient, `!new URLSearchParams(location.search).has('device') && !document.body.innerText.includes('Alpha AHU Sensor')`, 'revoked Device removal');
-  const cachedAfterRevocation = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.cachedDeviceIds()`);
-  assert(cachedBeforeRevocation.includes(ids.deviceA1) && !cachedAfterRevocation.includes(ids.deviceA1), 'revocation retained the inaccessible Device in browser telemetry data');
-  assertions.push('revocation-purges-browser-state');
-  stateEvidence.revocation = { cachedBefore: cachedBeforeRevocation, cachedAfter: cachedAfterRevocation, purgeCount: revokedAlert.audit.purgeCount };
-
-  await selectAntOption(cdpClient, 1, 'Alpha Sibling Site');
-  await waitForCondition(cdpClient, `document.body.innerText.includes('Sibling Chiller Sensor') && Boolean(document.querySelector('[data-device-display-state="OFFLINE"]'))`, 'sibling Site');
-  const siblingState = await evaluate(cdpClient, `({ text: document.body.innerText, cacheCount: window.__S2_HVAC_WEB_CONTROL__.telemetryCacheCount(), audit: window.__S2_HVAC_WEB_CONTROL__.audit(), hasDeviceParam: new URLSearchParams(location.search).has('device') })`);
-  assert(!siblingState.text.includes('Alpha AHU Sensor') && !siblingState.hasDeviceParam, 'Site switch retained hidden Device state');
-  assert(siblingState.audit.purgeCount >= 2 && siblingState.cacheCount > 0, 'Site switch did not purge then install new Site cache');
-  assertions.push('sibling-site-switch-purges-hidden-device');
-
-  assert(await evaluate(cdpClient, `(() => {
-    const row = Array.from(document.querySelectorAll('tr')).find((candidate) => candidate.textContent?.includes('Sibling Chiller Sensor'));
-    const button = Array.from(row?.querySelectorAll('button') ?? []).find((candidate) => candidate.textContent?.trim() === '详情');
-    if (!button) return false;
-    button.click();
-    return true;
-  })()`), 'Sibling Chiller detail control was not available');
-  await waitForCondition(
-    cdpClient,
-    `Boolean(document.querySelector('[data-central-plant-profile="CHILLER"]')) && document.body.innerText.includes('冷水机组实时运行摘要') && document.body.innerText.includes('主机 COP') && document.body.innerText.includes('212.5 kW') && document.body.innerText.includes('1080 kW') && document.body.innerText.includes('6.7 °C')`,
-    'central-plant Chiller summary',
-  );
-  const chillerDetail = await evaluate(cdpClient, `({
-    text: document.querySelector('[data-central-plant-profile="CHILLER"]')?.innerText ?? '',
-    audit: window.__S2_HVAC_WEB_CONTROL__.audit(),
-  })`);
-  const expectedChillerKeys = [
-    'chiller.run_state',
-    'chiller.power',
-    'chiller.cop',
-    'chiller.cooling_capacity',
-    'chiller.compressor_load',
-    'chiller.leaving_chilled_water_temperature',
-    'chiller.entering_chilled_water_temperature',
-    'chiller.chilled_water_temperature_setpoint',
-    'chiller.entering_cooling_water_temperature',
-    'chiller.fault_code',
-  ];
-  const chillerOpen = chillerDetail.audit.opens.at(-1);
-  assert(JSON.stringify(chillerOpen?.keys) === JSON.stringify(expectedChillerKeys), 'Chiller detail did not request the central-plant exact keys');
-  assert(chillerDetail.text.includes('5.08') && chillerDetail.text.includes('STALE') && chillerDetail.text.includes('SUSPECT'), 'Chiller summary lost COP or quality state');
-  assertions.push('central-plant-chiller-exact-keys-and-summary');
-  stateEvidence.chiller = { cop: 5.08, powerKw: 212.5, coolingCapacityKw: 1080, quality: 'SUSPECT' };
-  assert(await evaluate(cdpClient, `(() => {
-    const close = document.querySelector('.ant-drawer-close');
-    if (!close) return false;
-    close.click();
-    return true;
-  })()`), 'Chiller detail close control was not available');
-  await waitForCondition(cdpClient, `!new URLSearchParams(location.search).has('device')`, 'Chiller detail close');
-
-  const cachedBeforeRouteChange = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.cachedDeviceIds()`);
-  const cachedAfterRouteChange = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.routeCohortChanged()`);
-  assert(cachedBeforeRouteChange.includes(ids.siblingDeviceA) && cachedAfterRouteChange.length === 0, 'route cohort change did not purge browser state synchronously');
-  assertions.push('route-cohort-change-purges-browser-state');
-
-  await selectAntOption(cdpClient, 0, 'Organization Beta');
-  await waitForCondition(cdpClient, `document.body.innerText.includes('Beta AHU Sensor') && Boolean(document.querySelector('[data-presence-batch-state="error"]'))`, 'second Organization fail-closed state');
-  const organizationBState = await evaluate(cdpClient, `({ text: document.body.innerText, cachedDeviceIds: window.__S2_HVAC_WEB_CONTROL__.cachedDeviceIds() })`);
-  assert(!organizationBState.text.includes('Alpha AHU Sensor') && !organizationBState.text.includes('Sibling Chiller Sensor'), 'Organization switch retained prior Organization state');
-  assert(organizationBState.text.includes('真实模式') && !organizationBState.cachedDeviceIds.some((deviceId) => deviceId.startsWith('018f6a00-3000-7000-8000-00000000000')), 'Organization mismatch retained prior telemetry data');
-  assertions.push('two-organization-dual-principal-fail-closed');
-
-  await cdpClient.send('Page.navigate', { url: `${webURL}/real-assets-v2` });
-  await waitForCondition(
-    cdpClient,
-    `Boolean(window.__REAL_ASSETS_REALTIME_CONTROL__)
+    `Boolean(window.__ASSETS_REALTIME_CONTROL__)
       && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-business-state') === 'READY'
-      && document.querySelectorAll('.real-assets__table tbody tr').length === 2`,
-    'Real Assets v2 realtime list',
+      && document.querySelectorAll('[data-testid="real-assets-device-card"]').length === 2`,
+    'Device Center realtime list',
   );
-  const realtimeListAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
-  assert(realtimeListAudit.opens.length === 0, 'Real Assets list opened an all-Device realtime subscription');
+  const realtimeListAudit = await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.audit()`);
+  assert(realtimeListAudit.opens.length === 0, 'Device Center list opened an all-Device realtime subscription');
 
-  assert(await evaluate(cdpClient, `(() => {
-    const row = document.querySelector('tr[data-device-id="${ids.deviceA1}"]');
-    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`), 'first realtime Device detail control was unavailable');
+  await openAssetsFullDetail(cdpClient, ids.deviceA1);
+  await waitForCondition(
+    cdpClient,
+    `window.__ASSETS_REALTIME_CONTROL__.audit().opens.length === 1
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('212.5 kW')`,
+    'Snapshot-first projected Device detail',
+  );
+  await exposeAssetsRealtimeStatus(cdpClient);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'
-      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'realtime'
-      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('212.5 kW')`,
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'realtime'`,
     'Snapshot-first exact live baseline',
   );
   const firstRealtimeDetail = await evaluate(cdpClient, `({
     pathname: location.pathname,
-    audit: window.__REAL_ASSETS_REALTIME_CONTROL__.audit(),
+    audit: window.__ASSETS_REALTIME_CONTROL__.audit(),
     realtime: {
       state: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state'),
       source: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source'),
@@ -571,77 +452,69 @@ try {
   assert(firstRealtimeDetail.audit.opens.length === 1, 'opening one Device did not create exactly one live session');
   assert(firstRealtimeDetail.audit.opens[0].deviceId === ids.deviceA1, 'first live session targeted the wrong Device');
   assert(JSON.stringify(firstRealtimeDetail.audit.opens[0].keys) === JSON.stringify([
-    'chiller.run_state', 'chiller.power', 'chiller.cop', 'chiller.cooling_capacity',
-  ]), 'first live session did not use exact critical detail keys');
+    'chiller.cooling_capacity', 'chiller.cop', 'chiller.power', 'chiller.run_state',
+  ]), 'first live session did not use exact registered Point keys');
   assert(firstRealtimeDetail.realtime.revision === '41' && firstRealtimeDetail.realtime.baseline === '40', 'Snapshot-first revision evidence was not observable');
 
-  assert(await evaluate(cdpClient, `(() => {
-    const row = document.querySelector('tr[data-device-id="${ids.deviceA2}"]');
-    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`), 'second realtime Device detail control was unavailable');
+  await closeAssetsDetail(cdpClient);
   await waitForCondition(
     cdpClient,
-    `location.pathname.endsWith('/${ids.deviceA2}')
-      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().opens.length === 2
-      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().closeCount >= 1`,
+    `window.__ASSETS_REALTIME_CONTROL__.audit().closeCount >= 1
+      && document.querySelectorAll('[data-testid="real-assets-device-card"]').length === 2`,
+    'first Device detail closed cleanly',
+  );
+  await openAssetsFullDetail(cdpClient, ids.deviceA2);
+  await waitForCondition(
+    cdpClient,
+    `window.__ASSETS_REALTIME_CONTROL__.audit().opens.length === 2
+      && window.__ASSETS_REALTIME_CONTROL__.audit().closeCount >= 1`,
     'Device switch closes and reopens exact live session',
   );
-  const switchedAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
+  const switchedAudit = await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.audit()`);
   assert(switchedAudit.opens[1].deviceId === ids.deviceA2, 'Device switch reopened the wrong live target');
 
-  assert(await evaluate(cdpClient, `(() => {
-    history.pushState(null, '', '/sites/${ids.siteA}/assets');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    return true;
-  })()`), 'realtime Device detail URL close could not be dispatched');
+  await closeAssetsDetail(cdpClient);
   await waitForCondition(
     cdpClient,
-    `!document.querySelector('[data-testid="real-assets-device-detail"]')
-      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().closeCount >= 2`,
+    `window.__ASSETS_REALTIME_CONTROL__.audit().closeCount >= 2
+      && document.querySelectorAll('[data-testid="real-assets-device-card"]').length === 2`,
     'Device detail close ends exact live session',
   );
 
-  assert(await evaluate(cdpClient, `(() => {
-    const row = document.querySelector('tr[data-device-id="${ids.deviceA2}"]');
-    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`), 'reopen realtime Device detail control was unavailable');
-  await waitForCondition(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit().opens.length === 3`, 'reopened exact live session');
+  await openAssetsFullDetail(cdpClient, ids.deviceA2);
+  await waitForCondition(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.audit().opens.length === 3`, 'reopened exact live session');
 
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    'continuous live projection',
+  );
+  await exposeAssetsRealtimeStatus(cdpClient);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'realtime'
-      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-revision') === '42'
-      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
-    'continuous live update',
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-revision') === '42'`,
+    'continuous live revision',
   );
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('reconnect')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('reconnect')`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'snapshot'
-      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('正在重连')
-      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('正在重连')`,
     'reconnect retains authoritative Snapshot',
   );
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('gap')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('gap')`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'unavailable'
-      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时连续性需要重新同步')
-      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时连续性需要重新同步')`,
     'revision gap retains Snapshot and requires recovery',
   );
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('outage')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('outage')`);
   await waitForCondition(
     cdpClient,
-    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时 transport 暂不可用')
-      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时 transport 暂不可用')`,
     'transport outage remains separate from current truth',
   );
   assert(await evaluate(cdpClient, `(() => {
@@ -657,31 +530,26 @@ try {
     'manual live baseline recovery',
   );
 
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('revoke')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('revoke')`);
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'revoked'
       && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'none'
-      && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')`,
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('业务版本不可用')`,
     'realtime revocation clears protected Snapshot',
   );
-  const revokedRealtimeAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
+  const revokedRealtimeAudit = await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.audit()`);
   assert(revokedRealtimeAudit.purgeCount >= 1 && revokedRealtimeAudit.closeCount >= 3, 'revocation did not purge and close live state');
-  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
+  await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
   await pause(200);
   assert(await evaluate(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'revoked'
-    && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')`), 'late live update wrote after revocation');
+    && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('业务版本不可用')`), 'late live update wrote after revocation');
 
-  await cdpClient.send('Page.navigate', { url: `${webURL}/real-assets-v2` });
-  await waitForCondition(cdpClient, `Boolean(window.__REAL_ASSETS_REALTIME_CONTROL__) && document.querySelectorAll('.real-assets__table tbody tr').length === 2`, 'reloaded realtime harness');
+  await cdpClient.send('Page.navigate', { url: `${webURL}/assets-realtime` });
+  await waitForCondition(cdpClient, `Boolean(window.__ASSETS_REALTIME_CONTROL__) && document.querySelectorAll('[data-testid="real-assets-device-card"]').length === 2`, 'reloaded Device Center harness');
   await cdpClient.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  assert(await evaluate(cdpClient, `(() => {
-    const row = document.querySelector('tr[data-device-id="${ids.deviceA1}"]');
-    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`), 'mobile realtime Device detail control was unavailable');
+  await openAssetsFullDetail(cdpClient, ids.deviceA1);
+  await exposeAssetsRealtimeStatus(cdpClient);
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'`, 'mobile realtime detail');
   const mobileRealtime = await evaluate(cdpClient, `(() => {
     const drawer = document.querySelector('[data-testid="real-assets-device-detail"]');
@@ -694,19 +562,19 @@ try {
     };
   })()`);
   assert(!mobileRealtime.documentOverflow && !mobileRealtime.drawerOverflow && !mobileRealtime.statusOverflow && mobileRealtime.focusedHeading, 'mobile realtime detail overflowed or lost focus');
-  const purgeOutcome = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.purgeScope()`);
+  const purgeOutcome = await evaluate(cdpClient, `window.__ASSETS_REALTIME_CONTROL__.purgeScope()`);
   await waitForCondition(
     cdpClient,
     `!document.querySelector('[data-testid="real-assets-device-detail"]')
-      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().purgeCount >= 1
-      && window.__REAL_ASSETS_REALTIME_CONTROL__.protectedScope().resourceCount === 0`,
+      && window.__ASSETS_REALTIME_CONTROL__.audit().purgeCount >= 1
+      && window.__ASSETS_REALTIME_CONTROL__.protectedScope().resourceCount === 0`,
     'ProtectedScope realtime purge',
   );
   assert(purgeOutcome.status === 'completed', 'ProtectedScope purge did not complete');
   await cdpClient.send('Emulation.clearDeviceMetricsOverride');
-  assertions.push('real-assets-v2-exact-device-realtime-lifecycle');
-  assertions.push('real-assets-v2-recovery-revocation-protected-purge');
-  stateEvidence.realAssetsRealtime = {
+  assertions.push('device-center-exact-point-realtime-lifecycle');
+  assertions.push('device-center-recovery-revocation-protected-purge');
+  stateEvidence.assetsRealtime = {
     listSubscriptionCount: realtimeListAudit.opens.length,
     exactKeys: firstRealtimeDetail.audit.opens[0].keys,
     snapshotFirst: true,
@@ -737,21 +605,12 @@ try {
   assert(accessibility.unnamedButtons.length === 0 && accessibility.unlabeledComboboxes.length === 0 && accessibility.duplicateIds.length === 0, `browser accessibility audit failed: ${JSON.stringify(accessibility)}`);
   assertions.push('browser-a11y-controls-labeled');
 
-  const batchRequests = fixture.requests.filter((entry) => entry.path === '/api/v1/telemetry/observation-snapshots:batchGet');
-  const targetSets = batchRequests.map((entry) => entry.body.requests.map((target) => target.deviceId).sort().join(','));
-  assert(batchRequests.length >= 3, `expected initial, post-revocation and sibling-Site Presence batches, got ${batchRequests.length}`);
-  assert(batchRequests.every((entry) => entry.method === 'POST' && entry.headers['x-csrf-token'] === csrfValue), 'Presence batch omitted CSRF or POST semantics');
-  assert(batchRequests.every((entry) => entry.body.requests.every((target) => Array.isArray(target.keys) && target.keys.length === 0)), 'visible list requested telemetry keys');
-  assert(targetSets.includes([ids.deviceA1, ids.deviceA2].sort().join(',')), 'initial visible Device batch was missing');
-  assert(targetSets.includes(ids.deviceA2), 'revoked Device was not removed from the next visible batch');
-  assert(targetSets.includes(ids.siblingDeviceA), 'sibling-Site visible batch was missing');
-  assert(!targetSets.some((set) => set.includes(ids.deviceB)), 'second Organization telemetry request crossed the acting-Organization boundary');
   const forbiddenHeaders = fixture.requests.filter((entry) => ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'authorization'].some((name) => name in entry.headers));
   const forbiddenRoutes = fixture.requests.filter((entry) => ['/ws/telemetry', '/socket.io', 'thingsboard', '/assets/tree', '/legacy'].some((marker) => entry.path.toLowerCase().includes(marker)));
   assert(forbiddenHeaders.length === 0, `browser sent forbidden authority headers: ${JSON.stringify(forbiddenHeaders)}`);
   assert(forbiddenRoutes.length === 0, `browser called forbidden fallback/direct routes: ${JSON.stringify(forbiddenRoutes)}`);
   assert(!fixture.requests.some((entry) => JSON.stringify(entry).includes('hvac_token')), 'browser sent a Legacy/local bearer token');
-  assertions.push('real-mode-network-no-fallback');
+  assertions.push('production-network-no-fallback');
 
   const severeBrowserEvents = cdpClient.events.filter((event) => event.method === 'Runtime.exceptionThrown' || (event.method === 'Log.entryAdded' && ['error', 'assert'].includes(event.params?.entry?.level)));
   assert(severeBrowserEvents.length === 0, `browser emitted severe runtime events: ${JSON.stringify(severeBrowserEvents.slice(-10))}`);
@@ -765,14 +624,13 @@ try {
   await new Promise((resolveClose) => fixture.server.close(() => resolveClose()));
   await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   const endedAt = new Date();
-  const batchRequests = fixture.requests.filter((entry) => entry.path === '/api/v1/telemetry/observation-snapshots:batchGet');
   const forbiddenHeaders = fixture.requests.filter((entry) => ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'authorization'].some((name) => name in entry.headers));
   const forbiddenRoutes = fixture.requests.filter((entry) => ['/ws/telemetry', '/socket.io', 'thingsboard', '/assets/tree', '/legacy'].some((marker) => entry.path.toLowerCase().includes(marker)));
   const shared = { schemaVersion: 1, ticket: 68, startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), durationMs: endedAt.getTime() - startedAt.getTime(), conclusion };
   const browserReport = {
     ...shared,
     browser: browserPath,
-    apiMode: 'real',
+    artifactMode: 'production',
     fixtures: ids,
     assertions,
     accessibility,
@@ -789,10 +647,6 @@ try {
     ...shared,
     requestCount: fixture.requests.length,
     routes: [...new Set(fixture.requests.map((entry) => `${entry.method} ${entry.path}`))].sort(),
-    presenceBatches: batchRequests.map((entry) => ({
-      targetCount: entry.body?.requests?.length ?? 0,
-      keySelections: entry.body?.requests?.map((target) => target.keys) ?? [],
-    })),
     zeroInvariants: {
       forbiddenAuthorityHeaders: forbiddenHeaders.length,
       legacyOrMockRoutes: forbiddenRoutes.length,

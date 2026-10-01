@@ -1,0 +1,251 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '@/app/protected-scope.ts';
+import type { AssetsDeviceRow } from './model.ts';
+import {
+  createAssetsRealtimeScope,
+  createAssetsRealtimeTarget,
+  listAssetsRealtimeKeys,
+  assetsRealtimeSubscriptionEligibility,
+  type AssetsRealtimeScope,
+  type AssetsRealtimeState,
+  validateAssetsRealtimeState,
+} from './realtime.ts';
+import { createBoundedRealtimePublisher } from './realtime-publisher.ts';
+import type {
+  AssetsTelemetryLiveSession,
+  AssetsTelemetryRuntime,
+} from './telemetry-runtime.ts';
+
+export type AssetsRealtimePhase =
+  | 'closed'
+  | 'not-authorized'
+  | 'not-configured'
+  | 'scope-too-large'
+  | 'opening'
+  | 'active'
+  | 'error'
+  | 'purged';
+
+export interface AssetsRealtimeResult {
+  readonly phase: AssetsRealtimePhase;
+  readonly state: AssetsRealtimeState | null;
+  readonly error: Error | null;
+  readonly refresh: () => void;
+}
+
+interface UseAssetsDeviceRealtimeInput {
+  readonly row: AssetsDeviceRow | null;
+  readonly allowed: boolean;
+  readonly protectedGeneration: number;
+  readonly authorizationEpoch: string;
+  readonly runtime: AssetsTelemetryRuntime;
+  readonly protectedRequestToken: () => ProtectedScopeRequestToken;
+  readonly registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  readonly onRevoked?: () => void;
+}
+
+interface RealtimeSnapshot {
+  phase: AssetsRealtimePhase;
+  state: AssetsRealtimeState | null;
+  error: Error | null;
+}
+
+const CLOSED: RealtimeSnapshot = { phase: 'closed', state: null, error: null };
+
+function errorValue(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function createScope(
+  row: AssetsDeviceRow | null,
+  protectedGeneration: number,
+): AssetsRealtimeScope | null {
+  if (!row || assetsRealtimeSubscriptionEligibility(row).state !== 'eligible') return null;
+  return createAssetsRealtimeScope(row, protectedGeneration);
+}
+
+export function useAssetsDeviceRealtime({
+  row,
+  allowed,
+  protectedGeneration,
+  authorizationEpoch,
+  runtime,
+  protectedRequestToken,
+  registerProtectedResource,
+  onRevoked,
+}: UseAssetsDeviceRealtimeInput): AssetsRealtimeResult {
+  const [retryEpoch, setRetryEpoch] = useState(0);
+  const [snapshot, setSnapshot] = useState<RealtimeSnapshot>(CLOSED);
+  const sessionRef = useRef<AssetsTelemetryLiveSession | null>(null);
+  const registryKeySignature = row ? listAssetsRealtimeKeys(row).join('|') : '';
+  const eligibility = useMemo(
+    () => row ? assetsRealtimeSubscriptionEligibility(row) : null,
+    [registryKeySignature, row?.device.id],
+  );
+  const scope = useMemo(
+    () => createScope(row, protectedGeneration),
+    [protectedGeneration, registryKeySignature, row?.device.id, row?.device.tenantId, row?.device.siteId],
+  );
+  const keySignature = scope?.keys.join('|') ?? '';
+
+  const refresh = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) {
+      setRetryEpoch((value) => value + 1);
+      return;
+    }
+    void session.refresh().catch((error: unknown) => {
+      setSnapshot((current) => ({ ...current, phase: 'error', error: errorValue(error) }));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!row) {
+      sessionRef.current = null;
+      setSnapshot(CLOSED);
+      return undefined;
+    }
+    if (!allowed) {
+      sessionRef.current = null;
+      setSnapshot({ phase: 'not-authorized', state: null, error: null });
+      return undefined;
+    }
+    if (eligibility?.state === 'too-many-points') {
+      sessionRef.current = null;
+      setSnapshot({ phase: 'scope-too-large', state: null, error: null });
+      return undefined;
+    }
+    if (!scope || keySignature.length === 0) {
+      sessionRef.current = null;
+      setSnapshot({ phase: 'not-configured', state: null, error: null });
+      return undefined;
+    }
+
+    let scopeGuard: ProtectedScopeRequestToken;
+    try {
+      scopeGuard = protectedRequestToken();
+      if (scopeGuard.siteId !== scope.siteId || scopeGuard.generation !== protectedGeneration) {
+        throw new DOMException('Protected Site scope is not current.', 'AbortError');
+      }
+    } catch (error) {
+      setSnapshot({ phase: 'error', state: null, error: errorValue(error) });
+      return undefined;
+    }
+
+    let active = true;
+    let purged = false;
+    let session: AssetsTelemetryLiveSession | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const controller = new AbortController();
+    const abortFromScope = () => {
+      if (!controller.signal.aborted) controller.abort(scopeGuard.signal.reason);
+    };
+    if (scopeGuard.signal.aborted) abortFromScope();
+    else scopeGuard.signal.addEventListener('abort', abortFromScope, { once: true });
+
+    const close = (purge: boolean) => {
+      if (!active && !purge) return;
+      active = false;
+      if (!controller.signal.aborted) controller.abort(new DOMException('Realtime detail closed.', 'AbortError'));
+      unsubscribe?.();
+      unsubscribe = null;
+      session?.close();
+      session = null;
+      if (sessionRef.current) sessionRef.current = null;
+      if (purge) runtime.live.purge();
+    };
+
+    const publisher = createBoundedRealtimePublisher<AssetsRealtimeState>(
+      (callback) => window.requestAnimationFrame(callback),
+      (handle) => window.cancelAnimationFrame(handle),
+      (nextState) => {
+        if (!active) return;
+        try {
+          validateAssetsRealtimeState(nextState, scope);
+        } catch (error) {
+          close(true);
+          scopeGuard.commit(() => setSnapshot({ phase: 'error', state: null, error: errorValue(error) }));
+          return;
+        }
+        const committed = scopeGuard.commit(() => {
+          setSnapshot({ phase: 'active', state: nextState, error: null });
+        });
+        if (!committed) {
+          close(false);
+          return;
+        }
+        if (nextState.status === 'revoked') {
+          runtime.live.purge();
+          onRevoked?.();
+        }
+      },
+    );
+
+    const resource: ProtectedScopeResource = {
+      id: `real-assets-realtime:${protectedGeneration}:${scope.deviceId}`,
+      kind: 'realtime',
+      purge: () => {
+        if (purged) return;
+        purged = true;
+        publisher.cancel();
+        close(true);
+        setSnapshot({ phase: 'purged', state: null, error: null });
+      },
+    };
+    const unregister = registerProtectedResource(resource);
+    setSnapshot({ phase: 'opening', state: null, error: null });
+
+    runtime.live.open([createAssetsRealtimeTarget(scope)], { signal: controller.signal }).then((opened) => {
+      if (!active || controller.signal.aborted) {
+        opened.close();
+        return;
+      }
+      if (!scopeGuard.commit(() => undefined)) {
+        opened.close();
+        close(false);
+        return;
+      }
+      session = opened;
+      sessionRef.current = opened;
+      const publish = () => {
+        const state = opened.getState(scope.clientSubscriptionId);
+        if (!state) {
+          publisher.cancel();
+          close(true);
+          scopeGuard.commit(() => setSnapshot({
+            phase: 'error', state: null, error: new Error('Realtime session omitted the exact subscription state'),
+          }));
+          return;
+        }
+        publisher.push(state);
+      };
+      publish();
+      unsubscribe = opened.subscribe(publish);
+    }).catch((error: unknown) => {
+      if (!active || controller.signal.aborted) return;
+      scopeGuard.commit(() => setSnapshot({ phase: 'error', state: null, error: errorValue(error) }));
+    });
+
+    return () => {
+      unregister();
+      publisher.cancel();
+      scopeGuard.signal.removeEventListener('abort', abortFromScope);
+      close(false);
+    };
+  }, [
+    allowed,
+    authorizationEpoch,
+    eligibility?.state,
+    keySignature,
+    onRevoked,
+    protectedGeneration,
+    protectedRequestToken,
+    registerProtectedResource,
+    retryEpoch,
+    row?.device.id,
+    runtime,
+    scope,
+  ]);
+
+  return { ...snapshot, refresh };
+}

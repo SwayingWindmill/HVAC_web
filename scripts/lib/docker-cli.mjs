@@ -12,9 +12,7 @@ const boundedDetail = (value) => String(value ?? '').trim().slice(0, 2000);
 const defaultPause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 export function dockerComposeInvocation(args) {
-  return process.platform === 'win32'
-    ? { command: 'docker-compose', args }
-    : { command: 'docker', args: ['compose', ...args] };
+  return { command: 'docker', args: ['compose', ...args] };
 }
 
 export function runDockerCompose(run, args, options) {

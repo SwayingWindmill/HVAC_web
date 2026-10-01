@@ -1,13 +1,13 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const outputRoot = resolve(root, 'out/s5-work-order-read-canary');
@@ -108,9 +108,8 @@ async function availablePort() { const socket=createTCPServer(); socket.listen(0
 async function cdp(url) { const socket=new WebSocket(url), pending=new Map(); let id=0; await once(socket,'open'); socket.on('message',(raw)=>{const message=JSON.parse(String(raw)); if(!message.id)return; const item=pending.get(message.id); if(!item)return; pending.delete(message.id); message.error?item.reject(new Error(message.error.message)):item.resolve(message.result);}); return {send(method,params={}){const commandId=++id; socket.send(JSON.stringify({id:commandId,method,params})); return new Promise((resolveCommand,rejectCommand)=>pending.set(commandId,{resolve:resolveCommand,reject:rejectCommand}));},close(){socket.close();}}; }
 async function evaluate(client, expression) { const response=await client.send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true}); if(response.exceptionDetails)throw new Error(response.exceptionDetails.text); return response.result.value; }
 async function wait(client, expression, label) { for(let attempt=0;attempt<300;attempt+=1){try{const value=await evaluate(client,expression);if(value)return value;}catch{} await pause(100);} throw new Error(`${label} did not become ready`); }
-async function stop(child){if(!child||child.exitCode!==null)return;child.kill('SIGTERM');const done=await Promise.race([once(child,'exit').then(()=>true),pause(1500).then(()=>false)]);if(!done&&process.platform==='win32')spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore'});else if(!done)child.kill('SIGKILL');}
-const candidates=[process.env.BROWSER_BINARY,process.env['PROGRAMFILES(X86)']?join(process.env['PROGRAMFILES(X86)'],'Microsoft','Edge','Application','msedge.exe'):null,process.env.PROGRAMFILES?join(process.env.PROGRAMFILES,'Microsoft','Edge','Application','msedge.exe'):null,'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe','C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe','/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium-browser','/usr/bin/chromium'].filter(Boolean);
-const browserPath=candidates.find((candidate)=>existsSync(candidate)); if(!browserPath)throw new Error('A CDP-compatible browser was not found');
+async function stop(child){if(!child||child.exitCode!==null)return;child.kill('SIGTERM');const done=await Promise.race([once(child,'exit').then(()=>true),pause(1500).then(()=>false)]);if(!done)child.kill('SIGKILL');}
+const browserPath=resolveLinuxBrowserExecutable();
 const port=await availablePort(), debugPort=await availablePort(); let browser,client,passed=false; const assertions=[];
 try{
   await mkdir(outputRoot,{recursive:true}); await mkdir(profileDir,{recursive:true}); await new Promise((resolveListen,rejectListen)=>{server.once('error',rejectListen);server.listen(port,'127.0.0.1',resolveListen);});

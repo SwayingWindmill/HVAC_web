@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -15,8 +14,7 @@ const compatibilityPath = resolve(root, 'contracts/telemetry/s2-baseline-compati
 const goOutputPath = resolve(root, 'modules/telemetry/pkg/telemetryapi/api.gen.go');
 const gatewayGoOutputPath = resolve(root, 'cmd/energy-api/internal/s2telemetryapi/api.gen.go');
 const tsOutputPath = resolve(root, 'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts');
-const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
-const gofmtBinary = process.env.GOFMT_BINARY ?? (process.platform === 'win32' && existsSync(windowsGofmtPath) ? windowsGofmtPath : 'gofmt');
+const gofmtBinary = process.env.GOFMT_BINARY ?? 'gofmt';
 
 const [openAPIText, eventText, toolingLockText, compatibilityText] = await Promise.all([
   readFile(openAPIPath, 'utf8'),

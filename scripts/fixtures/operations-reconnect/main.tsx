@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
-import type { ProtectedScopeResource } from '@/real/protected-scope';
-import { OperationsInvestigation } from '@/real/OperationsInvestigation';
-import '@/real/real-shell.css';
+import type { ProtectedScopeResource } from '@/app/protected-scope';
+import { OperationsInvestigation } from '@/features/operations/OperationsInvestigation';
+import '@/app/shell.css';
 
 const tenantId = '01910000-0000-7000-8000-000000000001';
 const site: Site = {

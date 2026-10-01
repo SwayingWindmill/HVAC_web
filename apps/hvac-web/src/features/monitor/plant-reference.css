@@ -1,0 +1,534 @@
+.hvac-plant-ref {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.hvac-plant-ref button,
+.hvac-plant-ref a {
+  font: inherit;
+}
+
+.hvac-plant-ref__breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: #667085;
+  font-size: 14px;
+}
+
+.hvac-plant-ref__breadcrumb [data-slot="button"] {
+  height: auto;
+  padding: 0;
+  color: #667085;
+  font-size: 14px;
+}
+
+.hvac-plant-ref__breadcrumb strong {
+  color: #20324d;
+  font-size: 15px;
+}
+
+.hvac-plant-ref [data-slot="card"] {
+  border-color: var(--border);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-header"] {
+  min-height: 38px;
+  padding-inline: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-header"] [data-slot="card-title"] {
+  padding-block: 9px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.hvac-plant-ref [data-slot="card"] > [data-slot="card-content"] {
+  padding: 10px 12px;
+}
+
+.hvac-plant-ref__kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hvac-plant-ref__kpi {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 76px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__kpi:hover,
+.hvac-plant-ref__operating-item:hover {
+  border-color: var(--border);
+  background: color-mix(in oklch, var(--muted) 58%, var(--background));
+}
+
+.hvac-plant-ref__kpi:focus-visible,
+.hvac-plant-ref__operating-item:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--primary) 60%, var(--border));
+  outline-offset: 2px;
+}
+
+.hvac-plant-ref__kpi-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--primary) 8%, var(--background));
+  color: var(--primary);
+  font-size: 16px;
+}
+
+.hvac-plant-ref__kpi.is-purple .hvac-plant-ref__kpi-icon { background: #f3f0ff; color: #6750c7; }
+.hvac-plant-ref__kpi.is-green .hvac-plant-ref__kpi-icon { background: color-mix(in oklch, var(--success) 10%, var(--background)); color: var(--success); }
+
+.hvac-plant-ref__kpi > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.hvac-plant-ref__kpi small,
+.hvac-plant-ref__operating-item small {
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__kpi strong {
+  overflow: hidden;
+  color: #101828;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__operating-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: 66px;
+  border: 1px solid #dce5f1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.hvac-plant-ref__operating-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border: 0;
+  border-right: 1px solid #e7edf5;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__operating-item:last-child { border-right: 0; }
+
+.hvac-plant-ref__operating-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #1677ff;
+  font-size: 22px;
+}
+
+.hvac-plant-ref__operating-item > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.hvac-plant-ref__operating-item strong {
+  overflow: hidden;
+  color: #174ea6;
+  font-size: 16px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__operating-item em {
+  overflow: hidden;
+  color: #98a2b3;
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(580px, .92fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.hvac-plant-ref__topology-card > [data-slot="card-content"] {
+  padding: 8px 12px 10px !important;
+}
+
+.hvac-plant-ref__topology {
+  position: relative;
+  min-height: 386px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.hvac-plant-ref__pipes {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.hvac-plant-ref__pipes path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hvac-plant-ref__pipes path.is-green { stroke: #18a957; }
+.hvac-plant-ref__pipes path.is-blue { stroke: #1677ff; }
+
+.hvac-plant-ref__topology-group {
+  position: absolute;
+  z-index: 1;
+  padding: 8px 10px;
+  border: 1px dashed #bfd0e8;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .97);
+}
+
+.hvac-plant-ref__topology-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+  margin-bottom: 4px;
+}
+
+.hvac-plant-ref__topology-group > header strong {
+  color: #20324d;
+  font-size: 12px;
+}
+
+.hvac-plant-ref__topology-group > header span {
+  color: #667085;
+  font-size: 11px;
+}
+
+.hvac-plant-ref__topology-group.is-tower { top: 8px; left: 2%; width: 43%; height: 112px; }
+.hvac-plant-ref__topology-group.is-cwp { top: 8px; right: 4%; width: 34%; height: 112px; }
+.hvac-plant-ref__topology-group.is-chiller { top: 146px; left: 2%; width: 92%; height: 144px; }
+.hvac-plant-ref__topology-group.is-chwp { top: 308px; left: 2%; width: 92%; height: 72px; }
+
+.hvac-plant-ref__aggregate-slots,
+.hvac-plant-ref__chiller-nodes,
+.hvac-plant-ref__pump-nodes {
+  display: flex;
+  align-items: end;
+  justify-content: space-evenly;
+  gap: 8px;
+  height: calc(100% - 24px);
+}
+
+.hvac-plant-ref__aggregate-slots button,
+.hvac-plant-ref__pump-nodes button {
+  display: grid;
+  min-width: 72px;
+  height: 100%;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: #344054;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__aggregate-slots img {
+  width: 62px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.hvac-plant-ref__aggregate-slots span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #667085;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__aggregate-slots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.hvac-plant-ref__aggregate-slots button.is-running i { background: #12b76a; }
+
+.hvac-plant-ref__chiller-nodes button {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-items: center;
+  width: min(31%, 210px);
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #dce5f1;
+  border-radius: 6px;
+  background: #fff;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__chiller-nodes button:hover,
+.hvac-plant-ref__pump-nodes button:hover,
+.hvac-plant-ref__aggregate-slots button:hover {
+  background: #f7fbff;
+}
+
+.hvac-plant-ref__chiller-nodes img {
+  grid-row: 1 / 4;
+  width: 76px;
+  height: 62px;
+  object-fit: contain;
+}
+
+.hvac-plant-ref__chiller-nodes span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hvac-plant-ref__chiller-nodes strong,
+.hvac-plant-ref__pump-nodes strong {
+  overflow: hidden;
+  color: #20324d;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__chiller-nodes small,
+.hvac-plant-ref__pump-nodes small {
+  color: #667085;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref__pump-nodes img {
+  width: 52px;
+  height: 38px;
+  object-fit: contain;
+}
+
+.hvac-plant-ref__header-pipe {
+  position: absolute;
+  z-index: 2;
+  bottom: 0;
+  height: 28px;
+  border: 1px solid #9bc3ff;
+  background: #f5f9ff;
+  color: #1677ff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__header-pipe.is-supply { left: 0; width: 50%; border-radius: 6px 0 0 6px; }
+.hvac-plant-ref__header-pipe.is-return { right: 0; width: 50%; border-radius: 0 6px 6px 0; }
+
+.hvac-plant-ref__right-stack {
+  display: grid;
+  grid-template-rows: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.hvac-plant-ref__right-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hvac-plant-ref__chiller-overview > [data-slot="card-content"] {
+  padding: 0 !important;
+}
+
+.hvac-plant-ref [data-slot="table"] {
+  font-size: 11px;
+}
+
+.hvac-plant-ref [data-slot="table-head"] {
+  padding: 7px 8px;
+  background: #fbfcfe;
+  color: #475467;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref [data-slot="table-cell"] {
+  padding: 7px 8px;
+  color: #344054;
+  white-space: nowrap;
+}
+
+.hvac-plant-ref [data-slot="table-container"] [data-slot="button"] {
+  height: auto;
+  padding: 0;
+  font-size: 11px;
+}
+
+.hvac-plant-ref__recommendations,
+.hvac-plant-ref__alarm-list {
+  display: grid;
+  gap: 0;
+}
+
+.hvac-plant-ref__recommendations button {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 6px 8px;
+  padding: 7px 2px;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  background: transparent;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__recommendations button:last-child { border-bottom: 0; }
+.hvac-plant-ref__recommendations i { width: 5px; height: 5px; margin-top: 6px; border-radius: 50%; background: #1677ff; }
+.hvac-plant-ref__recommendations span { font-size: 11px; line-height: 1.5; }
+.hvac-plant-ref__recommendations small { grid-column: 2; color: #98a2b3; font-size: 11px; }
+
+.hvac-plant-ref__alarm-list a {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #edf1f6;
+  color: inherit;
+}
+
+.hvac-plant-ref__alarm-list a:last-child { border-bottom: 0; }
+.hvac-plant-ref__alarm-list a > span:last-child { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.hvac-plant-ref__alarm-list strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.hvac-plant-ref__alarm-list small { flex: 0 0 auto; color: #98a2b3; font-size: 11px; }
+.hvac-plant-ref__empty-copy { display: grid; min-height: 90px; place-items: center; color: #98a2b3; font-size: 11px; text-align: center; }
+
+.hvac-plant-ref__bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.05fr) minmax(460px, 1.35fr) minmax(300px, .9fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.hvac-plant-ref__bottom-grid > [data-slot="card"] {
+  min-width: 0;
+}
+
+.hvac-plant-ref__bottom-grid > [data-slot="card"] > [data-slot="card-content"] {
+  min-height: 222px;
+}
+
+.hvac-plant-ref__mini-trend {
+  display: inline-grid;
+  min-width: 92px;
+  height: 24px;
+  place-items: center;
+  border-bottom: 1px dashed #d9e3f1;
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.hvac-plant-ref__efficiency-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.hvac-plant-ref__efficiency-grid button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  min-height: 88px;
+  padding: 10px;
+  border: 1px solid #e4eaf2;
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hvac-plant-ref__efficiency-grid button > svg {
+  grid-row: 1 / 4;
+  margin-top: 4px;
+  color: #2f80ed;
+  font-size: 20px;
+}
+
+.hvac-plant-ref__efficiency-grid span { color: #667085; font-size: 11px; }
+.hvac-plant-ref__efficiency-grid strong { color: #101828; font-size: 18px; line-height: 1.25; }
+.hvac-plant-ref__efficiency-grid small { color: #12a362; font-size: 11px; }
+
+@media (max-width: 1380px) {
+  .hvac-plant-ref__kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hvac-plant-ref__main-grid { grid-template-columns: 1fr; }
+  .hvac-plant-ref__right-stack { grid-template-rows: auto auto; }
+  .hvac-plant-ref__bottom-grid { grid-template-columns: 1fr 1fr; }
+  .hvac-plant-ref__bottom-grid > [data-slot="card"]:last-child { grid-column: 1 / -1; }
+}
+
+@media (max-width: 900px) {
+  .hvac-plant-ref__kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hvac-plant-ref__operating-strip { grid-template-columns: 1fr 1fr; }
+  .hvac-plant-ref__operating-item:nth-child(2) { border-right: 0; }
+  .hvac-plant-ref__operating-item:nth-child(-n+2) { border-bottom: 1px solid #e7edf5; }
+  .hvac-plant-ref__right-pair,
+  .hvac-plant-ref__bottom-grid { grid-template-columns: 1fr; }
+  .hvac-plant-ref__bottom-grid > [data-slot="card"]:last-child { grid-column: auto; }
+}

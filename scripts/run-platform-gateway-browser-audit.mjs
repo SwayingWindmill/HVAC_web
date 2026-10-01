@@ -5,6 +5,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const gatewayPort = Number(process.env.PLATFORM_GATEWAY_AUDIT_PORT ?? 18080);
@@ -16,16 +17,8 @@ const profileDir = join(tmpdir(), `platform-gateway-audit-${process.pid}`);
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-const edgeCandidates = [
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-].filter(Boolean);
-const edgePath = edgeCandidates.find((candidate) => existsSync(candidate));
-if (!edgePath) throw new Error('Microsoft Edge executable not found');
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const edgePath = resolveLinuxBrowserExecutable();
+const goBinary = process.env.GO_BINARY ?? 'go';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -47,10 +40,6 @@ async function waitForUrl(url, label, child) {
 
 async function stopProcess(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-    return;
-  }
   child.kill('SIGTERM');
   const stopped = await Promise.race([
     once(child, 'exit').then(() => true),

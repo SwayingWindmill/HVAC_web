@@ -29,7 +29,16 @@ SELECT
   :'tenant_id'::uuid,
   :'site_id'::uuid,
   p.id,
-  ARRAY['analytics.energy-series.read']::text[],
+  ARRAY[
+    'analytics.energy-series.read',
+    'telemetry.batch.read',
+    'telemetry.history.read',
+    'telemetry.recovery.checkpoint',
+    'telemetry.recovery.use',
+    'telemetry.resubscribe',
+    'telemetry.snapshot.read',
+    'telemetry.subscribe'
+  ]::text[],
   'ALLOW', now(), NULL, 1, now(), now()
 FROM iam.principals p
 WHERE p.external_issuer = :'admin_issuer'
@@ -101,7 +110,8 @@ SELECT ids.id, p.id, :'tenant_id'::uuid, :'site_id'::uuid, ids.action,
 FROM iam.principals p
 CROSS JOIN (VALUES
   ('01a006a0-0001-7000-8000-000000000001'::uuid, 'alarm:read'),
-  ('01a006a0-0002-7000-8000-000000000001'::uuid, 'alarm:ack')
+  ('01a006a0-0002-7000-8000-000000000001'::uuid, 'alarm:ack'),
+  ('01a006a0-0003-7000-8000-000000000001'::uuid, 'alarm:assign')
 ) AS ids(id, action)
 WHERE p.external_issuer = :'admin_issuer'
   AND p.external_subject = :'admin_subject'

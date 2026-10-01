@@ -2,7 +2,7 @@
 
 `DESIGN.md` at the repository root is the only authoritative product design guide.
 
-Files under this directory are **reference-only**. They may inform information density, hierarchy, navigation, motion restraint, and interaction polish, but they must not replace the泉来禾 brand palette, HVAC domain semantics, Ant Design component system, or the rules in the root guide.
+Files under this directory are **reference-only**. They may inform information density, hierarchy, navigation, motion restraint, and interaction polish, but they must not replace the泉来禾 product semantics, the current Shadcn Application System, or the rules in the root guide. They must not be combined with historical Ant Design / ProComponents page anatomy. Before using any reference, apply `docs/design-system/legacy-ui-quarantine.md`; quarantined screenshots and historical UI packages are not visual authority unless the user explicitly re-approves that specific reference.
 
 ## Linear
 

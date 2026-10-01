@@ -6,9 +6,9 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const errors = [];
 const [workspace, drawer, trends, runner, fixture, packageJSON, workflow] = await Promise.all([
-  read('apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx'),
-  read('apps/hvac-web/src/real/assets/DeviceDetailDrawer.tsx'),
-  read('apps/hvac-web/src/real/assets/DeviceHistoryTrends.tsx'),
+  read('apps/hvac-web/src/features/assets/AssetsWorkspace.tsx'),
+  read('apps/hvac-web/src/features/assets/DeviceDetailDrawer.tsx'),
+  read('apps/hvac-web/src/features/assets/DeviceHistoryTrends.tsx'),
   read('scripts/run-real-assets-certification.mjs'),
   read('scripts/fixtures/real-assets-certification/main.tsx'),
   read('package.json'),
@@ -18,12 +18,17 @@ const [workspace, drawer, trends, runner, fixture, packageJSON, workflow] = awai
 const requireText = (source, expected, label) => {
   if (!source.includes(expected)) errors.push(`${label} is missing ${expected}`);
 };
+const forbidText = (source, forbidden, label) => {
+  if (source.includes(forbidden)) errors.push(`${label} still contains obsolete ${forbidden}`);
+};
 
 requireText(workspace, 'data-total-device-count', 'Real Assets workspace');
 requireText(workspace, 'data-filtered-device-count', 'Real Assets workspace');
-requireText(workspace, 'data-testid="real-assets-list-all"', 'Real Assets workspace');
-requireText(workspace, 'data-testid="real-assets-hierarchy-equipment"', 'Real Assets workspace');
-requireText(drawer, "import('./DeviceHistoryTrends.tsx')", 'Device Drawer lazy history boundary');
+requireText(workspace, 'data-testid="real-assets-table-wrap"', 'Real Assets workspace');
+requireText(workspace, "useState<DeviceViewMode>('card')", 'Real Assets Device-first view default');
+forbidText(workspace, 'LedgerMode', 'Real Assets Device-first single-ledger contract');
+requireText(workspace, 'assetsDevicePath', 'Real Assets typed Device detail path');
+requireText(drawer, "import('./DeviceHistoryTrends')", 'Device Drawer lazy history boundary');
 requireText(trends, 'animation: false', 'history reduced-motion-safe chart');
 requireText(trends, 'aria: { enabled: true', 'history chart accessibility');
 requireText(runner, 'REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION', 'certification runner fixture revision binding');
@@ -32,7 +37,7 @@ requireText(runner, "completesS2Ticket71: false", 'certification scope boundary'
 requireText(runner, "snapshotBatchSizes", 'certification request evidence');
 requireText(runner, "oldScopeLeakDetected", 'certification scope evidence');
 requireText(fixture, "createProtectedScopeCoordinator", 'certification protected scope fixture');
-requireText(fixture, "createRealAssetsTelemetryRuntime", 'certification telemetry fixture');
+requireText(fixture, "createAssetsTelemetryRuntime", 'certification telemetry fixture');
 requireText(fixture, "maximumActive", 'certification subscription budget');
 requireText(packageJSON, '"real-assets:certify"', 'package certification command');
 requireText(workflow, 'npm run real-assets:certify', 'certification workflow');

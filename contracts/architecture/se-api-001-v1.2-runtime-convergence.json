@@ -17,8 +17,8 @@
     "alarmDomain": "SE-DOMAIN-ALARM-001 V1.0 CURRENT CANDIDATE"
   },
   "summary": {
-    "routesReviewed": 13,
-    "classificationAReadyToActivate": 3,
+    "routesReviewed": 14,
+    "classificationAReadyToActivate": 4,
     "classificationBReusableSubordinateShapeButRuntimeBlocked": 0,
     "classificationCSchemaOrSemanticDecisionStillRequired": 10,
     "runtimeContractOnlyRoutes": 10
@@ -161,6 +161,17 @@
       "sourceCoverage": [
         "SE-DOMAIN-ALARM-001 V1.0 freezes ACK as an acknowledgement fact independent from lifecycle state, with optional comment and optional Idempotency-Key.",
         "The same document freezes natural idempotency, no expectedVersion requirement, first-ack preservation and the BOLA-safe alarmId -> Site resolution rule."
+      ],
+      "blockingGaps": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/alarms/{alarmId}/assign",
+      "classification": "A",
+      "shapeSource": "contracts/http/s4-alarm-public.openapi.json",
+      "sourceCoverage": [
+        "Alarm assignment is an orthogonal handling-responsibility mutation over an ACTIVE Alarm and does not change physical ACTIVE/CLEARED condition.",
+        "The public mutation uses optimistic expectedVersion and a required Idempotency-Key while preserving the BOLA-safe alarmId -> Site resolution rule."
       ],
       "blockingGaps": []
     },

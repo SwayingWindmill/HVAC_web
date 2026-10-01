@@ -91,7 +91,30 @@ type historyRepositoryStub struct {
 	maxAttempts      int
 }
 
-func (repository *historyRepositoryStub) ClaimHistoryBatch(context.Context, int, time.Time, time.Duration) (HistoryBatch, error) {
+func TestHistoryRelayRunDrainsWithoutPollingDelay(t *testing.T) {
+	repo := &historyRepositoryStub{batch: HistoryBatch{LeaseID: "lease", Observations: []HistoryObservation{{ObservationID: "observation"}}}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 1, LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	passes := 0
+	relay.Run(ctx, time.Hour, func(published int, err error) {
+		if err != nil || published != 1 {
+			t.Fatalf("pass=%d err=%v", published, err)
+		}
+		passes++
+		if passes == 2 {
+			cancel()
+		}
+	})
+	if passes != 2 {
+		t.Fatalf("busy channel waited for poll interval; passes=%d", passes)
+	}
+}
+
+func (repository *historyRepositoryStub) ClaimHistoryBatch(context.Context, int, time.Time, time.Duration, int) (HistoryBatch, error) {
 	return repository.batch, repository.claimErr
 }
 

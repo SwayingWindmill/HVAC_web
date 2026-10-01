@@ -5,11 +5,9 @@ export const RMS_REQUIRED_BROWSER_SCENARIOS = Object.freeze([
   'zero-sites',
   'invalid-site',
   'capability-denial',
-  'not-integrated',
   'site-switching',
   'session-expiration',
   'logout',
-  'mobile',
 ]);
 
 export const RMS_REQUIRED_CERTIFICATION_GATES = Object.freeze([

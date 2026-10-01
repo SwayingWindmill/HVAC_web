@@ -1,6 +1,6 @@
 # Operations Agent runtime and modular architecture
 
-Status: accepted
+Status: superseded by ADR 0014
 
 The Operations Agent will be implemented as a separately deployable TypeScript service using LangGraph.js as its primary, replaceable execution runtime. The service will remain a modular monolith: project-owned Domain and Application modules define Operations Investigation behavior, while LangGraph.js, model providers, PostgreSQL checkpointing, AG-UI and platform service clients are adapters around those interfaces. This keeps Agent framework state separate from business authority and lets the platform replace the runtime without rewriting Investigation records or public contracts.
 

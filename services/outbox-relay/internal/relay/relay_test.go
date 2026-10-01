@@ -109,7 +109,7 @@ func fixtureRecord(now time.Time) sessionstore.OutboxRecord {
 		AggregateType:    "bff-session",
 		AggregateID:      "session-01",
 		AggregateVersion: 1,
-		OrganizationID:   "org-01",
+		TenantID:         "tenant-01",
 		Payload:          []byte("protobuf-payload"),
 		CreatedAt:        now,
 	}

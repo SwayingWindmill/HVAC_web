@@ -265,9 +265,9 @@ func decodePointRow(row pointRow) (telemetryhistorymodel.DeviceHistoryObservatio
 }
 
 func (client *Client) snapshotQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
-	return fmt.Sprintf(`WITH now64(3) AS snapshot_at
+	return fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
 SELECT
-  formatDateTime(snapshot_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
+  formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark
 FROM %s.%s
 WHERE tenant_id = toUUID('%s')
@@ -276,7 +276,7 @@ WHERE tenant_id = toUUID('%s')
   AND telemetry_key IN (%s)
   AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
   AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND projected_at < snapshot_at
+  AND projected_at < snapshot_cutoff
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL
   AND point_revision IS NOT NULL
@@ -290,8 +290,8 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
 	if cursor != nil {
 		cursorPredicate = fmt.Sprintf(`
   AND (telemetry_key > '%s'
-    OR (telemetry_key = '%s' AND sampled_at > parseDateTime64BestEffort('%s', 3, 'UTC'))
-    OR (telemetry_key = '%s' AND sampled_at = parseDateTime64BestEffort('%s', 3, 'UTC') AND toString(observation_id) > '%s'))`,
+    OR (telemetry_key = '%s' AND history_source.sampled_at > parseDateTime64BestEffort('%s', 3, 'UTC'))
+    OR (telemetry_key = '%s' AND history_source.sampled_at = parseDateTime64BestEffort('%s', 3, 'UTC') AND toString(observation_id) > '%s'))`,
 			cursor.LastTelemetryKey, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastObservationID)
 	}
 	return fmt.Sprintf(`SELECT
@@ -301,8 +301,8 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
   telemetry_key,
   assumeNotNull(point_type) AS point_type,
   assumeNotNull(point_revision) AS point_revision,
-  formatDateTime(sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
-  formatDateTime(received_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS received_at,
+  formatDateTime(history_source.sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
+  formatDateTime(history_source.received_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS received_at,
   acceptance_status,
   assumeNotNull(value_type) AS value_type,
   assumeNotNull(value_json) AS value_json,
@@ -312,13 +312,13 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
   toString(source_event_id) AS source_event_id,
   source_partition,
   source_offset
-FROM %s.%s
+FROM %s.%s AS history_source
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
   AND device_id = toUUID('%s')
   AND telemetry_key IN (%s)
-  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND history_source.sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND history_source.sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
   AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL
@@ -326,7 +326,7 @@ WHERE tenant_id = toUUID('%s')
   AND point_revision IS NOT NULL
   AND value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')
   AND value_json IS NOT NULL%s
-ORDER BY telemetry_key, sampled_at, toString(observation_id)
+ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)
 LIMIT %d
 FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), cursorPredicate, query.PageSize+1)
 }

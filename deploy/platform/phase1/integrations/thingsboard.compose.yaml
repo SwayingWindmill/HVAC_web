@@ -1,0 +1,39 @@
+name: ${THINGSBOARD_RECONCILER_PROJECT_NAME:-hvac-thingsboard}
+
+services:
+  thingsboard-reconciler:
+    build:
+      context: ../../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args:
+        SERVICE_PACKAGE: ./modules/iot/cmd/thingsboard-reconciler
+    image: ${THINGSBOARD_RECONCILER_IMAGE:-hvac/thingsboard-reconciler:0.1.0-dev}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      THINGSBOARD_BASE_URL: ${THINGSBOARD_BASE_URL:-http://thingsboard-ce:9090}
+      THINGSBOARD_USERNAME: ${TB_TENANT_ADMIN_EMAIL:?TB_TENANT_ADMIN_EMAIL is required}
+      THINGSBOARD_PASSWORD: ${TB_TENANT_ADMIN_PASSWORD:?TB_TENANT_ADMIN_PASSWORD is required}
+      THINGSBOARD_RECONCILER_CONFIG: /run/hvac/config/thingsboard-reconciler.json
+      TELEMETRY_RUNTIME_BASE_URL: ${TELEMETRY_RUNTIME_BASE_URL:-https://telemetry-runtime-service:8446}
+      TELEMETRY_RUNTIME_CA: /run/hvac/pki/ca.pem
+      TELEMETRY_RUNTIME_CERT: /run/hvac/pki/thingsboard-reconciler/tls.crt
+      TELEMETRY_RUNTIME_KEY: /run/hvac/pki/thingsboard-reconciler/tls.key
+      TELEMETRY_RUNTIME_SERVER_NAME: ${TELEMETRY_RUNTIME_SERVER_NAME:-telemetry-runtime-service}
+    volumes:
+      - ${THINGSBOARD_RECONCILER_CONFIG_FILE:?THINGSBOARD_RECONCILER_CONFIG_FILE is required}:/run/hvac/config/thingsboard-reconciler.json:ro
+      - ${INTERNAL_PKI_DIR:?INTERNAL_PKI_DIR is required}:/run/hvac/pki:ro
+    networks:
+      - application
+    cpus: ${THINGSBOARD_RECONCILER_CPUS:-0.25}
+    mem_limit: ${THINGSBOARD_RECONCILER_MEMORY_LIMIT:-128m}
+    mem_reservation: ${THINGSBOARD_RECONCILER_MEMORY_RESERVATION:-32m}
+
+networks:
+  application:
+    external: true
+    name: ${PHASE1_APPLICATION_NETWORK:-hvac-phase1-local_application}

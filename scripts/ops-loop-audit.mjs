@@ -4,18 +4,12 @@ import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const baseUrl = process.env.HVAC_AUDIT_BASE_URL ?? 'http://localhost:5173';
 const debugPort = 9341;
 const profileDir = join(tmpdir(), `hvac-ops-loop-${process.pid}`);
-const edgeCandidates = [
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-].filter(Boolean);
-const edgePath = edgeCandidates.find((candidate) => existsSync(candidate));
-if (!edgePath) throw new Error('Microsoft Edge executable not found');
+const edgePath = resolveLinuxBrowserExecutable();
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 await mkdir(profileDir, { recursive: true });

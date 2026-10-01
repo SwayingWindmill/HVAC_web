@@ -2,34 +2,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const workspaceRoot = process.cwd();
-const realBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'real');
-const demoBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'demo');
+const bundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist');
 const outputPath = path.join(workspaceRoot, 'out', 'rms-web-build', 'build-artifact-audit.json');
 const configuredBuildId = process.env.HVAC_WEB_BUILD_ID?.trim();
-const realBuildId = configuredBuildId || 'real-local';
-const demoBuildId = configuredBuildId || 'demo-local';
+const buildId = configuredBuildId || 'local';
 
-const realRequiredMarkers = [
-  'HVAC_WEB_REAL_GRAPH_V1',
-  'REAL MODE · AUTHORITATIVE SHELL',
-  realBuildId,
+const requiredMarkers = [
+  'HVAC_WEB_AUTHORITATIVE_GRAPH_V1',
+  'AUTHORITATIVE WEB SHELL',
+  buildId,
 ];
 
-const realForbiddenMarkers = [
+const forbiddenMarkers = [
   'DEMO MODE · 非权威演示数据',
   'HvacMockAgent',
   'mockAlarms',
   'mockSuggestions',
   'A-2093',
   'OPT-201',
-  '总部大楼',
-  '研发中心',
   'VITE_API_MODE',
-];
-
-const demoRequiredMarkers = [
-  'DEMO MODE · 非权威演示数据',
-  demoBuildId,
 ];
 
 function walk(directory) {
@@ -40,7 +31,7 @@ function walk(directory) {
   });
 }
 
-function auditBundle(bundleRoot, requiredMarkers, forbiddenMarkers = []) {
+function auditBundle() {
   if (!fs.existsSync(bundleRoot)) {
     return {
       bundleRoot: path.relative(workspaceRoot, bundleRoot).replace(/\\/g, '/'),
@@ -57,7 +48,9 @@ function auditBundle(bundleRoot, requiredMarkers, forbiddenMarkers = []) {
   const contents = files.map((filename) => ({ filename, text: fs.readFileSync(filename, 'utf8') }));
   const required = requiredMarkers.map((marker) => ({
     marker,
-    foundIn: contents.filter((item) => item.text.includes(marker)).map((item) => path.relative(workspaceRoot, item.filename).replace(/\\/g, '/')),
+    foundIn: contents
+      .filter((item) => item.text.includes(marker))
+      .map((item) => path.relative(workspaceRoot, item.filename).replace(/\\/g, '/')),
   }));
   const forbidden = forbiddenMarkers.flatMap((marker) => contents
     .filter((item) => item.text.includes(marker))
@@ -74,25 +67,26 @@ function auditBundle(bundleRoot, requiredMarkers, forbiddenMarkers = []) {
   };
 }
 
-const real = auditBundle(realBundleRoot, realRequiredMarkers, realForbiddenMarkers);
-const demo = auditBundle(demoBundleRoot, demoRequiredMarkers);
+const web = auditBundle();
 const report = {
-  schemaVersion: 1,
-  real,
-  demo,
-  passed: real.passed && demo.passed,
+  schemaVersion: 2,
+  artifact: 'AUTHORITATIVE_WEB',
+  web,
+  passed: web.passed,
 };
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`);
 
 if (!report.passed) {
-  for (const artifact of [real, demo]) {
-    if (artifact.error) console.error(`${artifact.bundleRoot}: ${artifact.error}`);
-    if (artifact.missingRequired.length > 0) console.error(`${artifact.bundleRoot} is missing marker(s): ${artifact.missingRequired.join(', ')}`);
-    for (const violation of artifact.forbidden) console.error(`Forbidden marker ${violation.marker} found in ${violation.file}`);
+  if (web.error) console.error(`${web.bundleRoot}: ${web.error}`);
+  if (web.missingRequired.length > 0) {
+    console.error(`${web.bundleRoot} is missing marker(s): ${web.missingRequired.join(', ')}`);
+  }
+  for (const violation of web.forbidden) {
+    console.error(`Forbidden marker ${violation.marker} found in ${violation.file}`);
   }
   process.exit(1);
 }
 
-console.log(`RMS build artifact audit passed: Real ${real.files.length} file(s), Demo ${demo.files.length} file(s).`);
+console.log(`RMS build artifact audit passed: ${web.files.length} authoritative Web file(s).`);

@@ -26,8 +26,10 @@ test('pins the patched React Router stack and its supported runtime', async () =
   assert.equal(packageJson.dependencies?.['react-dom'], '19.2.7');
   assert.equal(packageJson.dependencies?.['react-router'], '8.3.0');
   assert.equal(packageJson.dependencies?.['react-router-dom'], undefined);
-  assert.equal(packageJson.dependencies?.['@react-three/fiber'], '9.6.1');
-  assert.equal(packageJson.dependencies?.['@react-three/drei'], '10.7.7');
+  assert.equal(packageJson.dependencies?.['@react-three/fiber'], undefined);
+  assert.equal(packageJson.dependencies?.['@react-three/drei'], undefined);
+  assert.equal(packageJson.dependencies?.three, undefined);
+  assert.equal(packageJson.dependencies?.axios, undefined);
   assert.equal(packageJson.devDependencies?.['@types/node'], '22.20.1');
   assert.equal(packageJson.devDependencies?.['@types/react'], '19.2.17');
   assert.equal(packageJson.devDependencies?.['@types/react-dom'], '19.2.3');

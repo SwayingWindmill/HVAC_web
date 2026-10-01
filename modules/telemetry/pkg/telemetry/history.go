@@ -10,43 +10,44 @@ import (
 const historyInsertFailureCode = "CLICKHOUSE_INSERT_FAILED"
 
 type HistoryObservation struct {
-	ObservationID         string    `json:"observation_id"`
-	TenantID              *string   `json:"tenant_id"`
-	SiteID                *string   `json:"site_id"`
-	DeviceID              *string   `json:"device_id"`
-	PointID               *string   `json:"point_id"`
-	SensorID              *string   `json:"sensor_id"`
-	IntegrationInstanceID string    `json:"integration_instance_id"`
-	SourceEventID         string    `json:"source_event_id"`
-	SourcePartition       string    `json:"source_partition"`
-	SourceOffset          int64     `json:"source_offset"`
-	SourcePath            string    `json:"source_path"`
-	TelemetryKey          string    `json:"telemetry_key"`
-	PointType             *string   `json:"point_type"`
-	PointRevision         *int64    `json:"point_revision"`
-	CounterDecreaseMode   *string   `json:"counter_decrease_mode"`
-	CounterRolloverModulus *float64 `json:"counter_rollover_modulus"`
-	ValueType             *string   `json:"value_type"`
-	Unit                  *string   `json:"unit"`
-	ValueJSON             *string   `json:"value_json"`
-	ValueNumber           *float64  `json:"value_number"`
-	ValueString           *string   `json:"value_string"`
-	ValueBoolean          *uint8    `json:"value_boolean"`
-	SampledAt             time.Time `json:"sampled_at"`
-	ReceivedAt            time.Time `json:"received_at"`
-	AcceptanceStatus      string    `json:"acceptance_status"`
-	Quality               string    `json:"quality"`
-	QualityReasons        []string  `json:"quality_reasons"`
-	PayloadSHA256         string    `json:"payload_sha256"`
+	ObservationID          string    `json:"observation_id"`
+	TenantID               *string   `json:"tenant_id"`
+	SiteID                 *string   `json:"site_id"`
+	DeviceID               *string   `json:"device_id"`
+	PointID                *string   `json:"point_id"`
+	SensorID               *string   `json:"sensor_id"`
+	IntegrationInstanceID  string    `json:"integration_instance_id"`
+	SourceEventID          string    `json:"source_event_id"`
+	SourcePartition        string    `json:"source_partition"`
+	SourceOffset           int64     `json:"source_offset"`
+	SourcePath             string    `json:"source_path"`
+	TelemetryKey           string    `json:"telemetry_key"`
+	PointType              *string   `json:"point_type"`
+	PointRevision          *int64    `json:"point_revision"`
+	CounterDecreaseMode    *string   `json:"counter_decrease_mode"`
+	CounterRolloverModulus *float64  `json:"counter_rollover_modulus"`
+	ValueType              *string   `json:"value_type"`
+	Unit                   *string   `json:"unit"`
+	ValueJSON              *string   `json:"value_json"`
+	ValueNumber            *float64  `json:"value_number"`
+	ValueString            *string   `json:"value_string"`
+	ValueBoolean           *uint8    `json:"value_boolean"`
+	SampledAt              time.Time `json:"sampled_at"`
+	ReceivedAt             time.Time `json:"received_at"`
+	AcceptanceStatus       string    `json:"acceptance_status"`
+	Quality                string    `json:"quality"`
+	QualityReasons         []string  `json:"quality_reasons"`
+	PayloadSHA256          string    `json:"payload_sha256"`
 }
 
 type HistoryBatch struct {
 	LeaseID      string
+	BatchID      string
 	Observations []HistoryObservation
 }
 
 type HistoryRepository interface {
-	ClaimHistoryBatch(context.Context, int, time.Time, time.Duration) (HistoryBatch, error)
+	ClaimHistoryBatch(context.Context, int, time.Time, time.Duration, int) (HistoryBatch, error)
 	MarkHistoryBatchPublished(context.Context, string, time.Time) error
 	RetryHistoryBatch(context.Context, string, time.Time, string, int) error
 }
@@ -106,7 +107,7 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 		return 0, errors.New("history relay is nil")
 	}
 	now := relay.now().UTC()
-	batch, err := relay.repository.ClaimHistoryBatch(ctx, relay.batchSize, now, relay.leaseFor)
+	batch, err := relay.repository.ClaimHistoryBatch(ctx, relay.batchSize, now, relay.leaseFor, relay.maxAttempts)
 	if err != nil {
 		return 0, fmt.Errorf("claim telemetry history batch: %w", err)
 	}
@@ -117,14 +118,35 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 		return 0, errors.New("claimed telemetry history batch has no lease ID")
 	}
 	if err := relay.sink.InsertObservations(ctx, batch.Observations); err != nil {
-		retryAt := now.Add(relay.retryAfter)
+		retryAt := relay.now().UTC().Add(relay.retryAfter)
 		if retryErr := relay.repository.RetryHistoryBatch(ctx, batch.LeaseID, retryAt, historyInsertFailureCode, relay.maxAttempts); retryErr != nil {
 			return 0, errors.Join(fmt.Errorf("insert telemetry history: %w", err), fmt.Errorf("retry telemetry history batch: %w", retryErr))
 		}
 		return 0, fmt.Errorf("insert telemetry history: %w", err)
 	}
-	if err := relay.repository.MarkHistoryBatchPublished(ctx, batch.LeaseID, now); err != nil {
+	if err := relay.repository.MarkHistoryBatchPublished(ctx, batch.LeaseID, relay.now().UTC()); err != nil {
 		return 0, fmt.Errorf("mark telemetry history batch published: %w", err)
 	}
 	return len(batch.Observations), nil
+}
+
+// Run drains successful batches immediately; only an idle or failed pass waits.
+// The shared loop keeps the combined worker and standalone projector consistent.
+func (relay *HistoryRelay) Run(ctx context.Context, idleInterval time.Duration, report func(int, error)) {
+	for ctx.Err() == nil {
+		passContext, cancel := context.WithTimeout(ctx, min(15*time.Second, relay.leaseFor/2))
+		published, err := relay.RelayOnce(passContext)
+		cancel()
+		report(published, err)
+		if err == nil && published > 0 {
+			continue
+		}
+		timer := time.NewTimer(idleInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }

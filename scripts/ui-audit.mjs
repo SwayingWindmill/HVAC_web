@@ -4,6 +4,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const baseUrl = process.env.HVAC_AUDIT_BASE_URL ?? 'http://localhost:5173';
 const debugPort = Number(process.env.HVAC_UI_AUDIT_DEBUG_PORT ?? 9342);
@@ -92,14 +93,7 @@ const platformApiResponses = new Map([
   }],
 ]);
 
-const edgeCandidates = [
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-].filter(Boolean);
-const edgePath = edgeCandidates.find((candidate) => existsSync(candidate));
-if (!edgePath) throw new Error('Microsoft Edge executable not found');
+const edgePath = resolveLinuxBrowserExecutable();
 
 const ROUTES = [
   { path: '/dashboard', title: '智慧能源运营总览', roles: ['demo', 'ops', 'rd'] },

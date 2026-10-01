@@ -1,65 +1,8 @@
 BEGIN;
 SET LOCAL ROLE s1_core_migrator;
 
-CREATE POLICY energy_edges_settlement_lineage_scope ON core_registry.energy_edges
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY meter_bindings_settlement_lineage_scope ON core_registry.meter_bindings
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_boundaries_runtime_exec_scope ON core_registry.settlement_boundaries
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_boundary_edges_runtime_exec_scope ON core_registry.settlement_boundary_edges
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY tariffs_runtime_exec_scope ON core_registry.tariffs
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY tariff_versions_runtime_exec_scope ON core_registry.tariff_versions
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY tariff_periods_runtime_exec_scope ON core_registry.tariff_periods
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY tariff_assignments_runtime_exec_scope ON core_registry.tariff_assignments
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_metric_bindings_runtime_exec_scope ON core_registry.settlement_metric_bindings
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY metric_bindings_settlement_scope ON core_registry.metric_bindings
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY metric_versions_settlement_scope ON core_registry.metric_versions
-  FOR SELECT TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id());
-CREATE POLICY settlement_periods_runtime_exec_scope ON core_registry.settlement_periods
-  FOR ALL TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
-  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_snapshots_runtime_exec_scope ON core_registry.settlement_snapshots
-  FOR ALL TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
-  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_change_candidates_runtime_exec_scope ON core_registry.settlement_change_candidates
-  FOR ALL TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
-  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY settlement_revisions_runtime_exec_scope ON core_registry.settlement_revisions
-  FOR ALL TO settlement_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
-  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-
-GRANT SELECT ON core_registry.energy_edges, core_registry.meter_bindings,
-  core_registry.settlement_boundaries, core_registry.settlement_boundary_edges,
-  core_registry.tariffs, core_registry.tariff_versions, core_registry.tariff_periods,
-  core_registry.tariff_assignments, core_registry.settlement_metric_bindings,
-  core_registry.metric_bindings, core_registry.metric_versions TO settlement_runtime;
-GRANT SELECT, UPDATE ON core_registry.settlement_periods TO settlement_runtime;
-GRANT SELECT, INSERT ON core_registry.settlement_snapshots TO settlement_runtime;
-GRANT SELECT, INSERT, UPDATE ON core_registry.settlement_change_candidates TO settlement_runtime;
-GRANT SELECT, INSERT, UPDATE ON core_registry.settlement_revisions TO settlement_runtime;
+-- Settlement runtime access is owned by 009h-data-execution-runtimes.sql.
+-- This migration owns the S19 projection schema and projection-specific access only.
 
 ALTER TABLE core_registry.settlement_snapshots
   ADD COLUMN source_metric_revisions jsonb NOT NULL DEFAULT '{}'::jsonb,

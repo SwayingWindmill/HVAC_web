@@ -20,12 +20,18 @@ import { runtimeLanggraphModule } from '../runtime-langgraph/index.js';
 import { schedulingModule } from '../scheduling/index.js';
 import { toolsModule } from '../tools/index.js';
 import {
-  createOperationsAgUiEventStreamResponse,
-  transportAgUiModule,
-} from '../transport-ag-ui/index.js';
+  createAgentSessionEventStreamResponse,
+  createOperationsAgentEventStreamResponse,
+  transportEventsModule,
+} from '../transport-events/index.js';
 import {
+  createAgentSessionHttpHandler as createAgentSessionHttpTransportHandler,
   createOperationsAgentHttpHandler as createOperationsAgentHttpTransportHandler,
   transportHttpModule,
+  type AgentSessionHttpAuthorizationInput,
+  type AgentSessionHttpAuthorizer,
+  type AgentSessionHttpHandler,
+  type AgentSessionHttpOptions,
   type OperationsAgentHttpAuthorizationInput,
   type OperationsAgentHttpAuthorizer,
   type OperationsAgentHttpCoordinatorContext,
@@ -51,6 +57,10 @@ export type {
 };
 
 export type {
+  AgentSessionHttpAuthorizationInput,
+  AgentSessionHttpAuthorizer,
+  AgentSessionHttpHandler,
+  AgentSessionHttpOptions,
   OperationsAgentHttpAuthorizationInput,
   OperationsAgentHttpAuthorizer,
   OperationsAgentHttpCoordinatorContext,
@@ -58,12 +68,26 @@ export type {
   OperationsAgentHttpOptions,
 };
 
+export const createAgentSessionHttpHandler = (
+  options: Omit<AgentSessionHttpOptions, 'createEventStreamResponse'>,
+): AgentSessionHttpHandler => createAgentSessionHttpTransportHandler({
+  ...options,
+  createEventStreamResponse: createAgentSessionEventStreamResponse,
+});
+
 export const createOperationsAgentHttpHandler = (
   options: OperationsAgentHttpOptions,
 ): OperationsAgentHttpHandler => createOperationsAgentHttpTransportHandler({
   ...options,
-  createAgUiEventStreamResponse: createOperationsAgUiEventStreamResponse,
+  createAgentEventStreamResponse: createOperationsAgentEventStreamResponse,
 });
+
+export {
+  createProductionAgentSessionRuntime,
+  type ProductionAgentSessionOwnerConfig,
+  type ProductionAgentSessionRuntime,
+  type ProductionAgentSessionRuntimeOptions,
+} from './internal/agent-session-runtime.js';
 
 export {
   OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST_ENV,
@@ -91,7 +115,7 @@ export const bootstrapModule = Object.freeze({
     toolsModule.name,
     persistenceModule.name,
     transportHttpModule.name,
-    transportAgUiModule.name,
+    transportEventsModule.name,
     schedulingModule.name,
     observabilityModule.name,
   ],
@@ -105,7 +129,7 @@ export const operationsAgentServiceModules = Object.freeze([
   toolsModule,
   persistenceModule,
   transportHttpModule,
-  transportAgUiModule,
+  transportEventsModule,
   schedulingModule,
   observabilityModule,
   bootstrapModule,

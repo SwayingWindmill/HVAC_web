@@ -32,11 +32,11 @@ function evaluate(compiled, requireFn = () => { throw new Error('unexpected requ
   return module.exports;
 }
 
-const siteRouting = evaluate(compile('apps/hvac-web/src/real/site-routing.ts'));
+const routerPaths = evaluate(compile('apps/hvac-web/src/app/router-paths.ts'));
 const realtime = evaluate(
-  compile('apps/hvac-web/src/real/realtime-status.ts'),
+  compile('apps/hvac-web/src/app/realtime-status.ts'),
   (specifier) => {
-    if (specifier === './site-routing') return siteRouting;
+    if (specifier === './router-paths') return routerPaths;
     throw new Error(`unexpected require: ${specifier}`);
   },
 );

@@ -4,6 +4,8 @@
 审查日期：2026-08-25  
 范围：冻结 Operations、Energy Management、Administration 的低保真信息架构、上下文层级、真实数据状态和事实/建议/动作边界。不实现页面、不新增 API、不修改现有路由或部署。
 
+2026-08-31 修订（#367）：三个工作空间、Site scope、Energy/Administration owner 和真实数据边界不变；仅 `Operations / 资产与设备` 的内部信息架构由 [`device-first-real-assets-source-review.md`](./device-first-real-assets-source-review.md) 取代旧的 Asset/Device Endpoint/Point 同级台账方案。新的运行入口以 Device 为默认主对象，Asset 为第二主对象，Sensor/Point 作为对象内部组件/能力进入详情。
+
 ## 1. 冻结结论
 
 HVAC UI 采用三个业务工作空间，外加一个不属于业务工作空间的全屏 Presentation surface：
@@ -35,7 +37,7 @@ Presentation surface: Big Screen / 投屏
 | [`real/SiteScopedShell.tsx`](../../apps/hvac-web/src/real/SiteScopedShell.tsx) | Real 导航按 Site 构建，当前包含 Dashboard、Assets、Energy、Forecast、Control、Optimize、FDD、Alarms、Work Orders、AI、Cost、Settlement 和 Big Screen；有 Site chooser/switcher。 | 保留 Site 是必须上下文；重排为三个工作空间，不把每个能力继续平铺为同级菜单。 |
 | [`real/RealShellChrome.tsx`](../../apps/hvac-web/src/real/RealShellChrome.tsx) | Header 展示 Tenant、Site switcher、实时订阅状态、诊断信息和 logout；站点切换有未保存 draft 确认、purge、重建 protected scope。 | Adopt 现有 Shell；Workspace 切换不能绕过 Site scope、draft guard 或 realtime cleanup。 |
 | [`real/RealDashboard.tsx`](../../apps/hvac-web/src/real/RealDashboard.tsx) | Dashboard 使用 `SiteDashboardSummary`，展示实时功率、COP、今日能耗、节能、设备 Population、告警和行动入口；显式标记 `READY/PARTIAL/STALE/UNAVAILABLE` 等状态。 | Operations 首页继续作为运行事实入口；不把成本、优化和 AI 预留块伪装成已接入指标。 |
-| [`real/assets/RealAssetsWorkspace.tsx`](../../apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx) | 真实 Asset Model 有 Space → Asset → Device Endpoint → Sensor/Point 层级，提供树导航、Asset/Device/Point 台账、搜索、关注筛选、详情 Drawer 和当前状态。 | Adopt 资产层级和独立详情；Space/Asset 选择只改变资产上下文，不能自动变成 Energy Series 的 subject。 |
+| [`real/assets/RealAssetsWorkspace.tsx`](../../apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx)、[`real/assets/model.ts`](../../apps/hvac-web/src/real/assets/model.ts)、[`real/assets/detail.ts`](../../apps/hvac-web/src/real/assets/detail.ts) | 当前实现把完整 Registry topology 投影为 Space → Asset → Device → Sensor/Point 主树，提供 Asset/Device/Point 三种同级台账，并把 Presence、遥测状态、profile 配置等折叠成单轴 OperatingState；点击 Device 实际打开其第一个 Asset binding。 | **LOCAL-CHANGE / #367**：保留 Registry/S2 owner 与 Site protected scope，但改成 Device-first：主树止于 Device，主列表仅 Device/Asset，运行状态拆成独立事实轴，Device/Asset 都成为 typed detail target。Space/Asset 选择仍只改变 Operations 上下文，不能自动变成 Energy Series subject。 |
 | [`real/EnergyAnalytics.tsx`](../../apps/hvac-web/src/real/EnergyAnalytics.tsx)、[`real/energy-workspace.ts`](../../apps/hvac-web/src/real/energy-workspace.ts) | Energy 查询使用 Site、时区、quality policy、from/to；日/周/月/年是 UI 时间窗口，映射到 hour/day/month 查询粒度；页面显示 total、比较、quality、partial、stale、watermark 和 dataset revision。 | 保留窗口式分析；把“周/年”理解为日期窗口而不是新增 Backend granularity；Energy 页面必须继续消费固定查询合同。 |
 | [`api/energy-analytics.ts`](../../apps/hvac-web/src/api/energy-analytics.ts) | Zod schema 只允许 electricity、hour/day/month、IANA timezone、VALID_ONLY/VALID_AND_SUSPECT；响应无效时不使用缓存或推断值。 | 状态和查询约束进入 Energy Management 的共享 UI contract；不在页面层增加 Meter/Space/Asset 任意过滤。 |
 | [`real/RealSystemManagement.tsx`](../../apps/hvac-web/src/real/RealSystemManagement.tsx)、[`real/registry-admin/RegistryAdministration.tsx`](../../apps/hvac-web/src/real/registry-admin/RegistryAdministration.tsx) | System 页面已有治理概览、用户与角色、站点与租户、Registry 管理、数据接入、规则和审计 Tabs；Registry 已有 Site 选择、资源与绑定、Template Revision、Import/Export 和 dirty draft guard。 | Administration 以现有 System/Registry owner 为基础，新增 Meter/MeterBinding 管理，不另造 Energy Settings 页面。 |
@@ -84,7 +86,8 @@ Presentation surface: Big Screen / 投屏
 Operations
 ├─ 运行总览                         /sites/:siteId/dashboard
 ├─ 资产与设备                       /sites/:siteId/assets
-│  └─ Asset / Device / Sensor / Point 详情 Drawer 或详情页
+│  ├─ Device / Asset 主对象列表
+│  └─ Device / Asset typed detail；Sensor / Point 为详情内组件
 ├─ 告警                             /sites/:siteId/alarms
 ├─ FDD 诊断                          /sites/:siteId/fdd
 ├─ 工单                             /sites/:siteId/work-orders
@@ -117,18 +120,19 @@ Presentation surface
 └─ 运行大屏                         /sites/:siteId/bigscreen
 ```
 
-这里的路径是现有 Real route 的信息架构映射，不批准本票据内的 URL migration。实现时可以先保持现有 path，在 navigation manifest 中切换 workspace owner；旧 Demo `/dashboard`、`/assets`、`/energy` 等路径不是第二套业务合同。
+这里的工作空间路径仍以现有 Real route 为基础；#308 本身不批准跨工作空间 URL migration。#366 仅在既有 `/sites/:siteId/assets` owner 下批准 typed detail 子路径 `/asset/:assetId` 与 `/device/:deviceId`，并要求完成内部调用迁移后删除旧的 untyped Assets detail path。旧 Demo `/dashboard`、`/assets`、`/energy` 等路径不是第二套业务合同。
 
 ## 4. 上下文层级
 
-### 4.1 Tenant、Site、Space、Asset
+### 4.1 Tenant、Site、Space、Asset、Device
 
 | 层级 | UI 作用 | 当前数据依据 | 限制 |
 | --- | --- | --- | --- |
 | Tenant | 安全和权限根上下文，显示在可信 Shell 中 | Principal context、IAM capabilities | 不可由页面输入覆盖；不能跨 Tenant 组合数据。 |
 | Site | 当前阶段所有 Operations/Energy/Content 查询的必选 scope | Registry Site、SiteDashboardSummary、Energy Series | Site switch 触发 protected scope 清理；未授权 Site 不显示其存在原因。 |
 | Space | Asset Model 的层级导航和区域语境 | Real Assets 的 hierarchy tree、Space children | 当前不改变 Energy Series subject；不能因为 UI 有 Space tree 就请求 Space 能耗。 |
-| Asset | 设备/建筑实体的运行和详情入口 | Asset Model、Device Binding、Telemetry snapshot | 进入 Asset detail 后可读 Device/Sensor/Point 当前状态；Energy 仍使用已冻结 Site Query。 |
+| Asset | 可维护物理/业务资产的运行和详情入口 | Asset Model、Device Binding、Telemetry snapshot | Asset 与 Device 是独立详情对象；Sensor/Point 只作为其内部组件/能力显示。Energy 仍使用已冻结 Site Query。 |
+| Device | 可独立通信的运行对象与默认资产工作台主对象 | Registry Device、Device Binding、S2 Device Snapshot | Device 可直接 deep-link，包括未绑定 Asset 的 Device；Presence、Evaluation Availability、Telemetry Readiness/Freshness/Quality 与 Registry Lifecycle 分开显示。 |
 | Meter / Binding | Energy 来源解释、配置管理和处理 provenance | #307 Energy Content、Registry Meter/MeterBinding | Administration 管理；Energy Management 只读显示来源摘要，Processing 使用私有 resolver。 |
 
 ### 4.2 Energy 页面中的内容上下文
@@ -153,14 +157,16 @@ Operations 的首页是 `运行总览`，不是全平台 KPI 墙：
 ```text
 运行总览
 ├─ 关键运行事实：功率、COP、设备 Population、活动告警
-├─ 需要关注：离线/陈旧/未知设备、活动告警、FDD finding
+├─ 需要关注：离线、陈旧、缺失/不完整或质量退化设备、活动告警、FDD finding
 ├─ 快速入口：资产、告警、FDD、工单、AI 调查
 └─ 受治理动作：进入 Control Preview / Optimization Review
 ```
 
 页面只显示当前 `SiteDashboardSummary`、Asset Model、Alarm/FDD/Work Order read model 已返回的事实。优化推荐、AI 分析、FDD 结论显示为建议/证据对象，并带其来源窗口、revision、风险和下一步；它们不能直接改变设备状态。
 
-`资产与设备` 保留当前三栏骨架：左侧 Space/Asset hierarchy，中间可切换 Asset/Device Endpoint/Point 台账，右侧详情和实时状态。该页面是 Operations 的运行入口，不承担 MeterBinding 配置；Energy Meter 只在 Administration 管理，详情中可显示“关联计量来源”只读链接。
+`资产与设备` 采用 Device-first 的运行工作台：左侧是 Site/Space/Asset/Device operation navigation，树止于 Device；中间只保留 `设备` 与 `资产` 两个主对象视图，默认 `设备`，选择树节点只改变当前上下文/筛选，不隐式切换对象模式。Sensor 与 Point 不进入主导航，也不再作为同级 Point 台账；它们在 Device/Asset detail 中按组件/能力呈现。Device 与 Asset 都是可 deep-link 的 typed detail target，Device 不再通过第一个 Asset binding 间接打开详情。该页面仍不承担 MeterBinding 配置；Energy Meter 只在 Administration 管理，详情中可显示“关联计量来源”只读链接。
+
+Device 运行状态不再收敛成一个 `NORMAL/ATTENTION/OFFLINE/UNKNOWN`。页面独立表达 Registry Lifecycle、Presence Applicability、Device Presence、Evaluation Availability、Telemetry Readiness、Telemetry Freshness 和 Telemetry Quality；`Presence UNKNOWN` 或 `NOT_APPLICABLE` 本身不能把 fresh/good/complete telemetry 变成“需关注”。Frontend Device profile 只增强首选点位、标签、顺序和趋势，不决定 Device 基本可用性；无 profile 的 Device 仍从 Registry Points + S2 Current 得到通用展示。详细 source-level 裁决见 [`device-first-real-assets-source-review.md`](./device-first-real-assets-source-review.md)。
 
 `告警/FDD/工单/AI 调查` 保持对象分离：Alarm 是运行事件，FDD Finding 是带证据的诊断事实，Work Order 是执行治理对象，AI Investigation 是可审计调查过程。不能用一个“异常列表”吞掉这些不同生命周期。
 
@@ -241,18 +247,18 @@ Administration 还保留用户/角色、数据接入、规则和审计 Tabs。�
 
 ## 8. 对当前项目的直接修改要求
 
-这些是从源码冲突中得出的 LOCAL-CHANGE，不在本票据内实现：
+这些是从源码冲突中得出的 LOCAL-CHANGE；其中 `资产与设备` 已由 #366/#367 接管实现，其余仍不在原 #308 内实现：
 
 1. Real navigation 需要把当前平铺的 `site-forecast/site-cost/site-settlement/site-optimize` 归入 Energy Management，把 `site-control` 归入 Operations；`site-bigscreen` 保持 Presentation surface，不作为第四业务工作空间。
 2. 当前 Demo `AppShell`/`store/ui` 的角色和 demoMode 不能继续作为 Real IA；逐步迁移后删除 obsolete 的旧入口，不添加兼容双路由。
 3. `RegistryAdministration` 是 Administration 的正确 owner；Meter/MeterBinding 不应新建一个独立 Energy 页面或被塞进 Energy Series chart filter。
-4. Real Assets 的 Space/Asset hierarchy 继续做资产上下文；Energy 查询不因 UI 下钻而自动增加 Space/Asset subject。
+4. Real Assets 的 Operations navigation 改为 Site/Space/Asset/Device 并止于 Device；Device/Asset 是主对象，Sensor/Point 进入详情。Energy 查询仍不因任何 Assets UI 下钻而自动增加 Space/Asset/Device subject。
 5. 旧页面的 `forecast/cost/settlement` 必须继续使用 `NOT_INTEGRATED`/真实 read model 状态，直到对应 Backend 合同完成；不因 IA 规划而填充静态 KPI。
 6. UI 需要抽出一套共享状态呈现规则，使 `quality/partial/stale/watermark/datasetRevision`、Registry `revision/status` 和权限/不可用状态在三个工作空间一致，但不新增一个包揽所有领域的前端状态模型。
 
 ## 9. 后续边界
 
-本票据冻结信息架构，不实现 UI。下一步需要单独决定：
+本票据冻结三个工作空间的信息架构；2026-08-31 的 `资产与设备` 内部修订已由 #366 及其实现 tickets 接管。其余后续边界仍为：
 
 - #310：Energy Slice 真实实现规格、Schema、resolver、Fact projector 和最小验收门禁；
 - 未来 UI implementation ticket：只实现已有 API 的 Energy Content client、Administration Meter/Binding list/detail 和 Energy source summary；

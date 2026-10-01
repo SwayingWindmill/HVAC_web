@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	supplyTemperatureKey = "btu_meter.supply_water_temperature"
-	returnTemperatureKey = "btu_meter.return_water_temperature"
+	supplyTemperatureKey = "supply_water_temperature"
+	returnTemperatureKey = "return_water_temperature"
 	historyPageSize      = telemetryhistorymodel.MaximumHistoryPageSize
 )
 

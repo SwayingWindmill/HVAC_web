@@ -15,7 +15,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
-func TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce(t *testing.T) {
+func TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry(t *testing.T) {
 	runtimeURL, adminURL := postgresTestURLs(t)
 	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
 	clickHouseURL := os.Getenv("S2_CLICKHOUSE_HTTP_URL")
@@ -52,7 +52,7 @@ func TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce(t *testing.T) {
 	observedAt := time.Date(2026, 7, 29, 8, 0, 2, 0, time.UTC)
 	candidate := ingestCandidate(
 		"018f2e00-9300-7000-8000-000000000001", integrationA, partition, 1, SourcePathPoll,
-		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`24.75`), "NUMBER", "Cel",
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`24.75`), "NUMBER", "Cel",
 		observedAt.Add(-2*time.Second), observedAt,
 	)
 	receipt, err := store.AcceptObservation(ctx, candidate)
@@ -84,21 +84,18 @@ func TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
-		t.Fatalf("first projection=%d err=%v", projected, err)
+	batch, err := repository.ClaimHistoryBatch(ctx, 16, clock, 30*time.Second, 4)
+	if err != nil || len(batch.Observations) != 1 {
+		t.Fatalf("claim=%+v err=%v", batch, err)
 	}
+	if err := sink.InsertObservations(ctx, batch.Observations); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a process dying after ClickHouse succeeds but before PG acknowledgement.
 	assertClickHouseObservation(t, clickHouseURL, candidate.Position.EventID, "1\t24.75\tACCEPTED\tGOOD")
 	assertClickHouseHourly(t, clickHouseURL, "1\t24.75\t24.75\t24.75")
 
-	if _, err := admin.Exec(ctx, `
-UPDATE telemetry_runtime.telemetry_history_outbox
-SET delivery_state = 'PENDING', available_at = $2, published_at = NULL,
-    lease_id = NULL, leased_until = NULL, last_error_code = NULL
-WHERE event_id = $1::uuid
-`, receipt.ObservationID, clock.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	clock = clock.Add(2 * time.Second)
+	clock = clock.Add(31 * time.Second)
 	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
 		t.Fatalf("retry projection=%d err=%v", projected, err)
 	}
@@ -117,6 +114,67 @@ WHERE event_id = $1::uuid
 	if state != "PUBLISHED" || attempts != 2 {
 		t.Fatalf("history outbox state=%s attempts=%d", state, attempts)
 	}
+}
+
+func assertClickHouseObservation(t *testing.T, baseURL, sourceEventID, expected string) {
+	t.Helper()
+	query := fmt.Sprintf(`
+SELECT count(), any(value_number), any(acceptance_status), any(quality)
+FROM telemetry_history.observations
+WHERE source_event_id = toUUID('%s')
+FORMAT TSVRaw
+`, sourceEventID)
+	if actual := clickHouseQuery(t, baseURL, query); actual != expected {
+		t.Fatalf("ClickHouse observation=%q expected=%q", actual, expected)
+	}
+}
+
+func assertClickHouseHourly(t *testing.T, baseURL, expected string) {
+	t.Helper()
+	query := fmt.Sprintf(`
+SELECT sample_count, average_value, minimum_value, maximum_value
+FROM telemetry_history.numeric_hourly
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND device_id = toUUID('%s')
+  AND telemetry_key = 'zone.temperature'
+  AND hour = toDateTime('2026-07-29 08:00:00', 'UTC')
+FORMAT TSVRaw
+`, tenantA, siteA, deviceA)
+	if actual := clickHouseQuery(t, baseURL, query); actual != expected {
+		t.Fatalf("ClickHouse hourly=%q expected=%q", actual, expected)
+	}
+}
+
+func clickHouseQuery(t *testing.T, baseURL, query string) string {
+	t.Helper()
+	endpoint, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := endpoint.Query()
+	values.Set("query", query)
+	endpoint.RawQuery = values.Encode()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if username := os.Getenv("S2_CLICKHOUSE_USERNAME"); username != "" {
+		request.SetBasicAuth(username, os.Getenv("S2_CLICKHOUSE_PASSWORD"))
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		t.Fatalf("ClickHouse query returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func TestPostgresHistoricalReplayProjectsClickHouseWithoutCurrentMutation(t *testing.T) {
@@ -228,65 +286,4 @@ FORMAT TSVRaw
 	if afterLatestValue != latestValue || afterLatestRevision != latestRevision || afterSnapshotRevision != snapshotRevision || afterSnapshotSHA != snapshotSHA || afterPresenceSignals != presenceSignals {
 		t.Fatalf("Historical Replay mutated Current: latest=%s/%d -> %s/%d snapshot=%d/%s -> %d/%s presence=%d -> %d", latestValue, latestRevision, afterLatestValue, afterLatestRevision, snapshotRevision, snapshotSHA, afterSnapshotRevision, afterSnapshotSHA, presenceSignals, afterPresenceSignals)
 	}
-}
-
-func assertClickHouseObservation(t *testing.T, baseURL, sourceEventID, expected string) {
-	t.Helper()
-	query := fmt.Sprintf(`
-SELECT count(), any(value_number), any(acceptance_status), any(quality)
-FROM telemetry_history.observations
-WHERE source_event_id = toUUID('%s')
-FORMAT TSVRaw
-`, sourceEventID)
-	if actual := clickHouseQuery(t, baseURL, query); actual != expected {
-		t.Fatalf("ClickHouse observation=%q expected=%q", actual, expected)
-	}
-}
-
-func assertClickHouseHourly(t *testing.T, baseURL, expected string) {
-	t.Helper()
-	query := fmt.Sprintf(`
-SELECT sample_count, average_value, minimum_value, maximum_value
-FROM telemetry_history.numeric_hourly
-WHERE owning_organization_id = toUUID('%s')
-  AND site_id = toUUID('%s')
-  AND device_id = toUUID('%s')
-  AND telemetry_key = 'zone.temperature'
-  AND hour = toDateTime('2026-07-29 08:00:00', 'UTC')
-FORMAT TSVRaw
-`, orgA, siteA, deviceA)
-	if actual := clickHouseQuery(t, baseURL, query); actual != expected {
-		t.Fatalf("ClickHouse hourly=%q expected=%q", actual, expected)
-	}
-}
-
-func clickHouseQuery(t *testing.T, baseURL, query string) string {
-	t.Helper()
-	endpoint, err := url.Parse(baseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values := endpoint.Query()
-	values.Set("query", query)
-	endpoint.RawQuery = values.Encode()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if username := os.Getenv("S2_CLICKHOUSE_USERNAME"); username != "" {
-		request.SetBasicAuth(username, os.Getenv("S2_CLICKHOUSE_PASSWORD"))
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<10))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		t.Fatalf("ClickHouse query returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return strings.TrimSpace(string(body))
 }

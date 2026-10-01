@@ -4,7 +4,7 @@ This directory implements the Phase 1 deployment-side backup contract from `SE-A
 
 ## PostgreSQL
 
-When `PHASE1_POSTGRES_MODE=local`, the canonical Compose PostgreSQL service enables continuous WAL archiving to `POSTGRES_WAL_ARCHIVE_DIR`. A base backup is executed with:
+When `PHASE1_POSTGRES_MODE=local`, the canonical Compose PostgreSQL service supports continuous WAL archiving to `POSTGRES_WAL_ARCHIVE_DIR`, but archiving is enabled only when `POSTGRES_ARCHIVE_MODE=on`. Development and test environments default to `off`; staging/production must opt in only after the archive destination is writable, capacity-managed and independent from the PostgreSQL data volume. A base backup is executed with:
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres --profile backup run --rm postgres-backup

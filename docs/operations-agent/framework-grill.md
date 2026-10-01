@@ -1,6 +1,6 @@
 # AI Agents framework grilling log
 
-Status: accepted
+Status: historical decision log; runtime/framework conclusions superseded by ADR 0014
 
 Date: 2026-07-30
 

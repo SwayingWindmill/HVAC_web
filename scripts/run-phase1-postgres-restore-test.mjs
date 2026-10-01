@@ -29,16 +29,14 @@ async function findAvailablePort() {
   return address.port;
 }
 
-const dockerPath = process.platform === 'win32' ? 'docker.exe' : 'docker';
+const dockerPath = 'docker';
 run(dockerPath, ['version']);
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const imageProbe = spawnSync(dockerPath, ['image', 'inspect', postgresImage], { cwd: root, stdio: 'ignore', windowsHide: true });
 if (imageProbe.status !== 0) run(dockerPath, ['pull', postgresImage]);
 const port = await findAvailablePort();
 const env = { ...process.env, S2_POSTGRES_HOST_PORT: String(port) };
-const composeCommand = process.platform === 'win32' ? 'docker-compose.exe' : dockerPath;
-const composePrefix = process.platform === 'win32' ? [] : ['compose'];
-const compose = (args) => run(composeCommand, [...composePrefix, '-p', projectName, '-f', composePath, ...args], { env });
+const compose = (args) => run(dockerPath, ['compose', '-p', projectName, '-f', composePath, ...args], { env });
 const psql = (database, sql) => run(dockerPath, ['exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 
 async function waitForDatabase(database) {

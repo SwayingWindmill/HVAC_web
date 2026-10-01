@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 const (
@@ -107,6 +107,26 @@ func TestRegistryTelemetryPointCommandWriteInvariant(t *testing.T) {
 	}
 	if err := validateTelemetryPoint(point, registryTestSiteID); err != nil {
 		t.Fatalf("valid telemetry Point rejected: %v", err)
+	}
+	// Registry includes both nullable counter fields for every telemetry point.
+	raw, err := json.Marshal(point)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["counterDecreaseMode"] = nil
+	payload["counterRolloverModulus"] = nil
+	raw, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeCanonical[platformapi.TelemetryPoint](raw, func(value platformapi.TelemetryPoint) error {
+		return validateTelemetryPoint(value, registryTestSiteID)
+	}); err != nil {
+		t.Fatalf("Registry point with canonical counter fields rejected: %v", err)
 	}
 	point.Writable = true
 	if err := validateTelemetryPoint(point, registryTestSiteID); err == nil {

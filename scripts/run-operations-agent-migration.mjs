@@ -19,6 +19,22 @@ const targets = Object.freeze({
         root,
         'services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql',
       ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql',
+      ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql',
+      ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql',
+      ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/007_agent_input_response.sql',
+      ),
     ],
   },
   checkpoints: {

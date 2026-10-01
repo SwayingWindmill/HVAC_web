@@ -8,7 +8,7 @@ import {
   deriveRulePermissions,
   makeRuleNode,
   ruleDraftFingerprint,
-} from '../apps/hvac-web/src/real/rule-management/model.ts';
+} from '../apps/hvac-web/src/features/system/rule-management/model.ts';
 
 const tenantId = '01900000-0100-7000-8000-000000000001';
 const siteId = '01900000-0101-7000-8000-000000000001';
@@ -62,7 +62,7 @@ test('S21 keeps released revisions immutable and simulation effect-free by const
 test('Rule management is capability, CSRF and authoritative Site scoped with no browser fallback', () => {
   const gateway = fs.readFileSync('cmd/energy-api/internal/gateway/rules.go', 'utf8');
   const api = fs.readFileSync('apps/hvac-web/src/api/rules.ts', 'utf8');
-  const system = fs.readFileSync('apps/hvac-web/src/real/RealSystemManagement.tsx', 'utf8');
+  const system = fs.readFileSync('apps/hvac-web/src/features/system/SystemManagement.tsx', 'utf8');
   assert.match(gateway, /CapabilityRuleManage/);
   assert.match(gateway, /validateStateChange/);
   assert.match(gateway, /checkRuleSiteVisibility/);

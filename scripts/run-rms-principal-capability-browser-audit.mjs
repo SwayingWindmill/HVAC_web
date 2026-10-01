@@ -8,6 +8,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const requireFromScript = createRequire(import.meta.url);
@@ -167,7 +168,7 @@ async function stopProcess(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
   const stopped = await Promise.race([once(child, 'exit').then(() => true), pause(1500).then(() => false)]);
-  if (!stopped && process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  if (!stopped) child.kill('SIGKILL');
 }
 
 function createCdpClient(webSocketUrl) {
@@ -231,18 +232,7 @@ async function navigate(client, url) {
   if (result.errorText) throw new Error(`browser navigation failed for ${url}: ${result.errorText}`);
 }
 
-const browserCandidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
+const browserPath = resolveLinuxBrowserExecutable();
 
 const gatewayPort = await findAvailablePort();
 const webPort = await findAvailablePort();
@@ -263,7 +253,7 @@ try {
   viteProcess = spawn(process.execPath, [
     viteBinPath,
     'apps/hvac-web',
-    '--config', 'apps/hvac-web/vite.real.config.ts',
+    '--config', 'apps/hvac-web/vite.config.ts',
     '--host', '127.0.0.1',
     '--port', String(webPort),
     '--strictPort',

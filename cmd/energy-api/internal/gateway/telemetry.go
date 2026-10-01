@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 )
 
 const (
@@ -405,7 +405,15 @@ func (h *handler) signTelemetryContextGrant(caller telemetryCaller) (string, *te
 }
 
 func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Request, caller telemetryCaller, action telemetryauth.Action, targets []telemetryauth.Target) (telemetryAuthorization, *telemetryFailure) {
-	if h.identity == nil || h.telemetry == nil {
+	presenter := ""
+	if h.identity != nil {
+		presenter = h.identity.config.ExecutingWorkloadSPIFFE
+	}
+	return h.authorizeTelemetryForPresenter(ctx, publicRequest, caller, action, targets, presenter)
+}
+
+func (h *handler) authorizeTelemetryForPresenter(ctx context.Context, publicRequest *http.Request, caller telemetryCaller, action telemetryauth.Action, targets []telemetryauth.Target, presenterSPIFFE string) (telemetryAuthorization, *telemetryFailure) {
+	if h.identity == nil || h.telemetry == nil || strings.TrimSpace(presenterSPIFFE) == "" {
 		failure := telemetryAuthorizationUnavailable("Telemetry authorization is not configured.")
 		return telemetryAuthorization{}, &failure
 	}
@@ -440,7 +448,11 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 		failure := telemetryAuthorizationUnavailable("The Gateway could not sign the Telemetry authorization request.")
 		return telemetryAuthorization{}, &failure
 	}
-	decisionBody, err := json.Marshal(telemetryauth.DecisionRequest{TenantID: caller.tenantID, Action: action, Targets: targets})
+	decisionRequest := telemetryauth.DecisionRequest{TenantID: caller.tenantID, Action: action, Targets: targets}
+	if presenterSPIFFE != h.identity.config.ExecutingWorkloadSPIFFE {
+		decisionRequest.GrantPresenter = presenterSPIFFE
+	}
+	decisionBody, err := json.Marshal(decisionRequest)
 	if err != nil {
 		failure := telemetryAuthorizationUnavailable("The Gateway could not encode the Telemetry authorization request.")
 		return telemetryAuthorization{}, &failure
@@ -485,7 +497,7 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 	}
 	expectedDigest, _ := telemetryauth.ScopeDigest(action, caller.tenantID, canonicalTargets)
 	if !validateTelemetryDecision(decision.Decision, caller, action, canonicalTargets, expectedDigest) ||
-		!validateTelemetryGrantStructure(decision.DelegationGrant, h, publicRequest, caller, action, canonicalTargets, expectedDigest, parentTokenID, decision.Decision.PrincipalID, decision.Decision.PolicyRevision) {
+		!validateTelemetryGrantStructure(decision.DelegationGrant, h, publicRequest, caller, action, canonicalTargets, expectedDigest, parentTokenID, decision.Decision.PrincipalID, decision.Decision.PolicyRevision, presenterSPIFFE) {
 		failure := telemetryAuthorizationUnavailable("IAM returned a Telemetry decision outside the authenticated request boundary.")
 		return telemetryAuthorization{}, &failure
 	}
@@ -513,7 +525,7 @@ func validateTelemetryDecision(decision telemetryauth.Decision, caller telemetry
 	return true
 }
 
-func validateTelemetryGrantStructure(grant string, h *handler, publicRequest *http.Request, caller telemetryCaller, action telemetryauth.Action, targets []telemetryauth.Target, digest, parentTokenID, principalID, policyRevision string) bool {
+func validateTelemetryGrantStructure(grant string, h *handler, publicRequest *http.Request, caller telemetryCaller, action telemetryauth.Action, targets []telemetryauth.Target, digest, parentTokenID, principalID, policyRevision, presenterSPIFFE string) bool {
 	if len(grant) == 0 || len(grant) > telemetryauth.MaximumEncodedGrantSize {
 		return false
 	}
@@ -540,7 +552,7 @@ func validateTelemetryGrantStructure(grant string, h *handler, publicRequest *ht
 	}
 	now := h.now().UTC()
 	return claims.Version == telemetryauth.GrantVersion && claims.Issuer != "" &&
-		claims.Presenter == h.identity.config.ExecutingWorkloadSPIFFE && claims.Audience == h.telemetry.runtimeAudience &&
+		claims.Presenter == presenterSPIFFE && claims.Audience == h.telemetry.runtimeAudience &&
 		claims.PrincipalID == principalID && claims.Subject == caller.principal.Subject && claims.SubjectIssuer == caller.principal.Issuer &&
 		claims.TenantID == caller.tenantID && claims.Action == action && claims.ScopeDigest == digest &&
 		claims.TargetCount == len(targets) && claims.KeyCount == keyCount && claims.PolicyRevision == policyRevision &&

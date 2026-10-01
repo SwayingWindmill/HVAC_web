@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/operations-reconnect');
@@ -786,26 +787,10 @@ async function stopBrowser(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
   const stopped = await Promise.race([once(child, 'exit').then(() => true), pause(1500).then(() => false)]);
-  if (!stopped && process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else if (!stopped) {
-    child.kill('SIGKILL');
-  }
+  if (!stopped) child.kill('SIGKILL');
 }
 
-const browserCandidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
+const browserPath = resolveLinuxBrowserExecutable();
 
 const gatewayPort = await findAvailablePort();
 const debugPort = await findAvailablePort();
@@ -828,7 +813,7 @@ try {
     root: fixtureRoot,
     configFile: false,
     logLevel: 'error',
-    define: { __HVAC_WEB_BUILD_TARGET__: JSON.stringify('real') },
+    define: {},
     resolve: { alias: { '@': resolve(root, 'apps/hvac-web/src') } },
     server: {
       host: '127.0.0.1',

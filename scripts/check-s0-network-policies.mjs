@@ -5,8 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const root = resolve(process.cwd());
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const reportArgument = process.argv.find((value) => value.startsWith('--report='))?.slice('--report='.length);
 const reportPath = resolve(root, reportArgument ?? 'out/s0-security/network-policy-report.json');
 const workspace = join(tmpdir(), `hvac-s0-netpol-${process.pid}`);
@@ -14,7 +13,7 @@ const baseRoot = join(workspace, 'base');
 const overlayRoot = join(workspace, 'overlay');
 const renderedRoot = join(workspace, 'rendered');
 const binaryRoot = join(workspace, 'bin');
-const analyzerBinary = join(binaryRoot, process.platform === 'win32' ? 'netpolicy.exe' : 'netpolicy');
+const analyzerBinary = join(binaryRoot, 'netpolicy');
 const goCacheRoot = join(tmpdir(), 'hvac-go-build-cache');
 const KUSTOMIZE_VERSION = 'v5.7.1';
 const NETPOL_ANALYZER_VERSION = 'v1.4.4';

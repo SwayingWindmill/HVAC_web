@@ -24,7 +24,7 @@ Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。Applicati
 ## 目录
 
 ```text
-apps/hvac-web/        React + Vite Web，包含 Demo 与 Real 两种运行模式
+apps/hvac-web/        React + Vite Web，唯一权威浏览器产品入口
 cmd/                  Phase 1 canonical 长运行进程入口，只做启动与组合
 modules/              逻辑领域 Owner 与领域数据资产，不代表独立部署
 services/             尚待 RC-04 收敛的历史模块，以及明确独立的 workload
@@ -39,17 +39,28 @@ semantic/cube/        分析语义层
 tools/                模拟器和测试工具
 ```
 
-## Web 运行模式
+## Web 应用
 
-- Demo：使用演示数据和本地只读能力，入口为 `apps/hvac-web/src/demo/main.tsx`。
-- Real：使用受保护 Shell、站点范围、Platform Gateway API 和实时遥测，入口为 `apps/hvac-web/src/real/main.tsx`。
+主工作目录为 `E:\Code\HVAC_web`，WSL 中对应同一目录 `/mnt/e/Code/HVAC_web`。编辑使用当前目录，以下安装、开发和验证命令在 WSL 的该目录执行；不再使用 `/home/haozhang/code/HVAC_web` 副本。工具链约定见 `docs/architecture/frontend-js-toolchain-wsl.md`。
+
+本机已初始化的开发环境使用 `hvac-phase1-dev`，入口为 `https://localhost:8443`。启动命令、账号文件及验证结果见 [本地环境恢复记录](docs/architecture/local-development-recovery-2026-09-27.md)。
+
+浏览器端只有一个权威产品入口：`apps/hvac-web/src/app/main.tsx`。应用骨架位于 `src/app/`，领域页面位于 `src/features/`；它使用受保护 Shell、站点范围、Platform Gateway API 与实时遥测，仓库不再维护独立 Demo 应用或 Mock/Real 双运行模式。
 
 ```bash
-npm run dev:demo
-npm run dev:real
-npm run build:demo
-npm run build:real
+npm run dev
+npm run lint
+npm run build
+npm run preview
 ```
+
+本地浏览器审计、截图和临时工具产物不得长期堆在仓库根目录。需要收口本地工作区时运行：
+
+```bash
+npm run repo:clean:local
+```
+
+该命令只清理明确的本地临时产物、空工具适配目录和 Web 源码中的空目录，不删除 `out/` 认证证据、`.worktrees/`、业务源码或部署资产。
 
 ## 源码拓扑
 
@@ -128,7 +139,7 @@ npm run domain:run -- --domain=telemetry --layers=contracts,unit
 npm run domain:run -- --domain=command --layers=unit,integration
 ```
 
-支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`alarm`、`workorder`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合执行：`all` 覆盖某个 Gate 的全部 Profile，`browser-linux` 和 `browser-windows` 保持浏览器检查的运行平台边界；新增 Profile 未加入这些集合时矩阵会立即失败。
+支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`alarm`、`workorder`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合 `all` 覆盖某个 Gate 的全部 Profile；浏览器检查与其他项目命令一样只在 Linux/WSL 运行，不再维护 Windows/Linux 双平台 Profile。新增 Profile 未加入矩阵时初始化会立即失败。
 
 较长但仍需保留公共名称的能力检查也由同一矩阵维护。阶段性的 Runtime/Gateway Snapshot Gate 已退出 active CI；当前保留的是有真实合同、持久化、传输或业务行为价值的能力入口。可在不执行真实测试的情况下查看展开顺序：
 

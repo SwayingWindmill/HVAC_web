@@ -97,6 +97,52 @@ func TestIAMTelemetryDecisionIssuesExactNonTransitiveGrant(t *testing.T) {
 	}
 }
 
+func TestIAMTelemetryDecisionIssuesGrantForAllowedDelegatedPresenter(t *testing.T) {
+	const operationsPresenter = "spiffe://hvac.local/operations-agent-service"
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: telemetryHTTPFacts(harnessTime())}
+		config.AllowedTelemetryGrantPresenters = []string{operationsPresenter}
+		config.NewTelemetryGrantID = func() string { return "telemetry-operations-presenter-1" }
+	})
+	requestFor := func(presenter string) *httptest.ResponseRecorder {
+		payload, err := json.Marshal(telemetryauth.DecisionRequest{
+			TenantID:       iam.S1FixtureTenantAID,
+			Action:         telemetryauth.ActionSnapshotRead,
+			Targets:        []telemetryauth.Target{{DeviceID: telemetryDeviceID, Keys: []string{"zone.temperature"}}},
+			GrantPresenter: presenter,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := harness.request(t, iam.TelemetryDecisionPath, strings.NewReader(string(payload)), validIAMClaims(harness.now, "fixture-user", telemetryAuthorize), harness.gatewaySigner)
+		request.Header.Set("X-Request-ID", "request-telemetry-presenter")
+		recorder := httptest.NewRecorder()
+		harness.handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	allowed := requestFor(operationsPresenter)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("allowed presenter status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+	var response telemetryauth.DecisionResponse
+	if err := json.NewDecoder(allowed.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := telemetryauth.VerifyGrant(harness.iamSigner.Public(), response.DelegationGrant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Presenter != operationsPresenter || claims.Action != telemetryauth.ActionSnapshotRead {
+		t.Fatalf("delegated telemetry grant claims=%#v", claims)
+	}
+
+	rejected := requestFor("spiffe://hvac.local/untrusted-service")
+	if rejected.Code != http.StatusForbidden || !strings.Contains(rejected.Body.String(), "IAM_TELEMETRY_GRANT_PRESENTER_REJECTED") {
+		t.Fatalf("untrusted presenter status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+}
+
 func TestIAMTelemetryDecisionDeniesWithoutGrantAndFailsClosedOnDependency(t *testing.T) {
 	now := harnessTime()
 	deniedFacts := telemetryHTTPFacts(now)
@@ -152,12 +198,12 @@ func TestTelemetryRuntimeConsumesGrantOnceAndPollsRevocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	consumePayload, err := json.Marshal(map[string]any{
-		"delegationGrant":      decision.DelegationGrant,
-		"principalId":          claims.PrincipalID,
-		"sessionId":            claims.SessionID,
-		"tenantId": claims.TenantID,
-		"action":               claims.Action,
-		"targets":              []telemetryauth.Target{{DeviceID: telemetryDeviceID, Keys: []string{"zone.temperature"}}},
+		"delegationGrant": decision.DelegationGrant,
+		"principalId":     claims.PrincipalID,
+		"sessionId":       claims.SessionID,
+		"tenantId":        claims.TenantID,
+		"action":          claims.Action,
+		"targets":         []telemetryauth.Target{{DeviceID: telemetryDeviceID, Keys: []string{"zone.temperature"}}},
 	})
 	if err != nil {
 		t.Fatal(err)

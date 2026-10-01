@@ -281,6 +281,7 @@ services:
     environment:
       TELEMETRY_SERVICE_ADDR: :8446
       TELEMETRY_DIAGNOSTICS_ADDR: :19086
+      TELEMETRY_ALLOWED_SNAPSHOT_READER_SPIFFES: ${TELEMETRY_ALLOWED_SNAPSHOT_READER_SPIFFES:-spiffe://hvac.local/operations-agent-service}
       TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
       ANALYTICS_PROJECTION_ENABLED: "true"
       TELEMETRY_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
@@ -481,7 +482,7 @@ services:
       - -c
       - wal_level=replica
       - -c
-      - archive_mode=on
+      - archive_mode=${POSTGRES_ARCHIVE_MODE:-off}
       - -c
       - archive_timeout=60s
       - -c

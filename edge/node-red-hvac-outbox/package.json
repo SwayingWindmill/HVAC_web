@@ -1,0 +1,23 @@
+{
+  "name": "@hvac/edge-outbox",
+  "version": "1.0.2",
+  "description": "Durable single-node outbox for the HVAC EG8200 Node-RED runtime",
+  "license": "UNLICENSED",
+  "main": "nodes/hvac-outbox.js",
+  "files": [
+    "lib",
+    "nodes"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "node-red": {
+    "version": ">=4.0.0",
+    "nodes": {
+      "hvac-outbox": "nodes/hvac-outbox.js"
+    }
+  }
+}

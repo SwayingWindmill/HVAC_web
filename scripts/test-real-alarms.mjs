@@ -8,7 +8,8 @@ import {
   validateAlarmListScope,
   validateAlarmScope,
 } from '../apps/hvac-web/src/api/alarm-contract.ts';
-import { projectRealAlarm } from '../apps/hvac-web/src/real/real-alarms-projection.ts';
+import { projectAlarm } from '../apps/hvac-web/src/features/alarms/alarm-projection.ts';
+import { alarmLifecycleStages } from '../apps/hvac-web/src/features/alarms/alarm-center-model.ts';
 
 const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
@@ -100,12 +101,12 @@ test('Alarm list preserves empty collection semantics without fabrication', () =
 });
 
 test('ACK and suppression are orthogonal to the ACTIVE physical condition', () => {
-  const active = projectRealAlarm(alarmSchema.parse(alarm()));
+  const active = projectAlarm(alarmSchema.parse(alarm()));
   assert.equal(active.businessState, 'ACTIVE');
   assert.equal(active.canAcknowledge, true);
   assert.equal(active.canSuppress, true);
 
-  const acknowledged = projectRealAlarm(alarmSchema.parse(alarm({
+  const acknowledged = projectAlarm(alarmSchema.parse(alarm({
     acknowledgement: acknowledgement(),
     timeline: [
       timelineEntry(),
@@ -119,7 +120,7 @@ test('ACK and suppression are orthogonal to the ACTIVE physical condition', () =
   assert.equal(acknowledged.canSuppress, true);
 
   const activeSuppression = suppression();
-  const suppressed = projectRealAlarm(alarmSchema.parse(alarm({
+  const suppressed = projectAlarm(alarmSchema.parse(alarm({
     suppression: activeSuppression,
     timeline: [
       timelineEntry(),
@@ -135,7 +136,7 @@ test('ACK and suppression are orthogonal to the ACTIVE physical condition', () =
 
 test('recovery is CLEARED and has no operator reopen path', () => {
   const clearedAt = '2026-07-31T09:08:00Z';
-  const cleared = projectRealAlarm(alarmSchema.parse(alarm({
+  const cleared = projectAlarm(alarmSchema.parse(alarm({
     condition: 'CLEARED',
     clearedAt,
     timeline: [
@@ -154,6 +155,35 @@ test('recovery is CLEARED and has no operator reopen path', () => {
     version: 2,
     updatedAt: clearedAt,
   })));
+});
+
+test('five-stage lifecycle preserves handling facts and ends at authoritative recovery', () => {
+  const activeStages = alarmLifecycleStages(alarmSchema.parse(alarm()));
+  assert.deepEqual(activeStages.map((stage) => [stage.key, stage.state]), [
+    ['triggered', 'done'],
+    ['acknowledged', 'current'],
+    ['processing', 'pending'],
+    ['awaiting-recovery', 'pending'],
+    ['recovered', 'pending'],
+  ]);
+
+  const clearedAt = '2026-07-31T09:08:00Z';
+  const clearedWithoutOperatorFacts = alarmSchema.parse(alarm({
+    condition: 'CLEARED',
+    clearedAt,
+    timeline: [
+      timelineEntry(),
+      timelineEntry({ operation: 'CLEAR', condition: 'CLEARED', occurredAt: clearedAt, version: 2, reason: 'clear predicate matched' }),
+    ],
+    version: 2,
+    updatedAt: clearedAt,
+  }));
+  const clearedStages = alarmLifecycleStages(clearedWithoutOperatorFacts);
+  assert.equal(clearedStages.find((stage) => stage.key === 'acknowledged')?.state, 'pending');
+  assert.equal(clearedStages.find((stage) => stage.key === 'processing')?.state, 'pending');
+  assert.equal(clearedStages.find((stage) => stage.key === 'awaiting-recovery')?.state, 'done');
+  assert.equal(clearedStages.find((stage) => stage.key === 'recovered')?.state, 'done');
+  assert.equal(clearedStages.some((stage) => stage.key.includes('close')), false);
 });
 
 test('current severity may recover while peak severity preserves the incident maximum', () => {

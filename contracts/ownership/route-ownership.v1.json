@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 30,
+  "registryRevision": 33,
   "routes": [
     {
       "method": "GET",
@@ -282,9 +282,14 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -292,9 +297,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -302,9 +313,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -312,9 +329,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -322,9 +345,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -332,9 +361,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -342,9 +377,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -352,9 +393,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -362,9 +409,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -372,9 +425,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -382,9 +441,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -392,9 +457,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -402,9 +473,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "PATCH",
@@ -412,9 +489,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -422,9 +505,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -432,9 +521,14 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -442,9 +536,14 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -452,9 +551,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -462,9 +567,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -472,9 +583,15 @@
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -638,6 +755,24 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 2,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "alarm",
+        "principal",
+        "key"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/alarms/{alarmId}/assign",
+      "owner": "alarm-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
       "rollout": {
         "mode": "all"
       },
@@ -919,6 +1054,118 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}/events",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:run",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:cancel",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:submit-input",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/sites/{siteId}/work-orders",
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
@@ -1121,7 +1368,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1133,7 +1384,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1145,31 +1400,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t",
-      "owner": "fdd-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "all"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links",
-      "owner": "fdd-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "all"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1181,7 +1416,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1193,7 +1432,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1205,7 +1448,11 @@
         "mode": "all"
       },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1213,9 +1460,14 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1223,9 +1475,14 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1233,9 +1490,14 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1243,9 +1505,15 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1253,9 +1521,14 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1263,9 +1536,15 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1273,9 +1552,15 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "POST",
@@ -1283,9 +1568,15 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     },
     {
       "method": "GET",
@@ -1293,9 +1584,47 @@
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "rollout": { "mode": "all" },
+      "rollout": {
+        "mode": "all"
+      },
       "compatibilityMode": "native",
-      "allowedScopeDimensions": ["tenant", "site", "principal"]
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t",
+      "owner": "fdd-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links",
+      "owner": "fdd-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     }
   ]
 }

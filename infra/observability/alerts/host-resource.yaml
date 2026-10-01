@@ -27,3 +27,12 @@ groups:
         annotations:
           summary: Phase 1 host disk usage is above 90 percent
           description: "Filesystem {{ $labels.mountpoint }} has exceeded the deployment critical threshold."
+
+      - alert: Phase1HostDiskWillFillWithin24Hours
+        expr: predict_linear(node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"}[2h], 24 * 60 * 60) < 0 and node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} / node_filesystem_size_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} < 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Phase 1 host disk is projected to fill within 24 hours
+          description: "Filesystem {{ $labels.mountpoint }} is consuming free space fast enough to exhaust the disk within 24 hours if the recent trend continues."

@@ -9,7 +9,7 @@ import {
 const workspaceRoot = process.cwd();
 const outputPath = path.join(workspaceRoot, 'out', 'rms-web-build', 'real-dependency-graph.json');
 const graph = collectRealDependencyGraph({
-  entry: path.join(workspaceRoot, 'apps', 'hvac-web', 'src', 'real', 'main.tsx'),
+  entry: path.join(workspaceRoot, 'apps', 'hvac-web', 'src', 'app', 'main.tsx'),
   tsconfig: path.join(workspaceRoot, 'apps', 'hvac-web', 'tsconfig.json'),
   sourceRoot: path.join(workspaceRoot, 'apps', 'hvac-web', 'src'),
 });

@@ -19,6 +19,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 type fakeOperationsRateLimiter struct {
@@ -38,6 +39,7 @@ type operationsGatewayFixture struct {
 	handler          http.Handler
 	tenantID         string
 	siteID           string
+	deviceID         string
 	sessionID        string
 	gatewaySigner    *ecdsa.PrivateKey
 	counter          *fakeOperationsRateLimiter
@@ -62,6 +64,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 	fixture := &operationsGatewayFixture{
 		tenantID:      "018f3d00-0000-7000-8000-000000000001",
 		siteID:        "018f3e00-2000-7000-8000-000000000001",
+		deviceID:      "018f3e00-3000-7000-8000-000000000001",
 		gatewaySigner: commandTestSigner(t),
 		counter:       counter,
 		limiter:       limiter,
@@ -80,6 +83,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 			IAMHTTPClient: fixture.iamClient(t, now),
 		},
 		Analytics: &AnalyticsConfig{QueryAudience: "telemetry-query-service"},
+		Telemetry: &TelemetryConfig{RuntimeAudience: "telemetry-runtime-service"},
 		Operations: &OperationsAgentConfig{
 			BaseURL: "https://operations.example.test", Audience: "operations-agent-service",
 			WorkloadSPIFFEID: "spiffe://hvac.local/operations-agent-service",
@@ -166,6 +170,45 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			return telemetryJSONResponse(http.StatusOK, registryauth.DecisionResponse{
 				Decision: decision, DelegationGrant: commandUnsignedRegistryGrant(claims),
 			}), nil
+		case telemetryDecisionPath:
+			if len(parent.Actions) != 1 || parent.Actions[0] != "telemetry:authorize" {
+				t.Fatalf("unexpected Telemetry parent claims: %+v", parent)
+			}
+			var input telemetryauth.DecisionRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != telemetryauth.ActionSnapshotRead || input.GrantPresenter != "spiffe://hvac.local/operations-agent-service" {
+				t.Fatal("invalid Telemetry authorization request")
+			}
+			canonical, err := telemetryauth.CanonicalTargets(input.Targets)
+			if err != nil || len(canonical) != 1 {
+				t.Fatal("invalid Telemetry target selection")
+			}
+			allowed := !fixture.denySite.Load() && canonical[0].DeviceID == fixture.deviceID
+			decision := telemetryauth.Decision{
+				Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
+				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
+				Action: input.Action, PolicyRevision: "telemetry-access:1", DecidedAt: now.Format(time.RFC3339Nano),
+			}
+			if allowed {
+				decision.ReasonCode = telemetryauth.ReasonAllowExactScope
+				decision.ScopeDigest, _ = telemetryauth.ScopeDigest(input.Action, fixture.tenantID, canonical)
+				decision.Targets = []telemetryauth.AuthorizedTarget{{TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID, Keys: canonical[0].Keys}}
+			} else {
+				decision.ReasonCode = telemetryauth.ReasonResourceNotFound
+			}
+			claims := telemetryauth.GrantClaims{
+				Issuer: "spiffe://hvac.local/iam-service", Presenter: input.GrantPresenter, Audience: "telemetry-runtime-service",
+				PrincipalID: decision.PrincipalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
+				ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: "spiffe://hvac.local/platform-gateway"}},
+				Action:     input.Action, ScopeDigest: decision.ScopeDigest, TargetCount: len(canonical), KeyCount: len(canonical[0].Keys),
+				PolicyRevision: decision.PolicyRevision, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
+				RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action),
+				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-telemetry-1",
+			}
+			delegation := ""
+			if allowed {
+				delegation = unsignedTelemetryGrant(claims)
+			}
+			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: delegation}), nil
 		case analyticsDecisionPath:
 			if len(parent.Actions) != 1 || parent.Actions[0] != analyticsAuthorizeAction {
 				t.Fatalf("unexpected Analytics parent claims: %+v", parent)
@@ -993,8 +1036,32 @@ func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 		len(claims.Scopes) != 1 || claims.Scopes[0] != digest || claims.PolicyRevision != "analytics-policy-7" {
 		t.Fatalf("Energy grant is not exact: %+v digest=%s", claims, digest)
 	}
-	if fixture.iamCalls.Load() != 2 {
-		t.Fatalf("expected two exact IAM decisions, got %d", fixture.iamCalls.Load())
+	telemetryBody, err := json.Marshal(map[string]any{
+		"investigationId": "investigation-001",
+		"runId":           "run-001",
+		"request": map[string]any{
+			"requestId": "telemetry-current-001",
+			"tool":      "telemetry.current.getDeviceObservationSnapshot",
+			"input": map[string]any{
+				"siteId":    fixture.siteID,
+				"deviceId":  fixture.deviceID,
+				"pointKeys": []string{"condenserPressureKPa"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetryResponse := fixture.authorizeTool(t, string(telemetryBody), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if telemetryResponse.Code != http.StatusOK {
+		t.Fatalf("expected Telemetry authorization, got %d: %s", telemetryResponse.Code, telemetryResponse.Body.String())
+	}
+	var telemetryAuthorization operationsToolAuthorizationResponse
+	if err := json.Unmarshal(telemetryResponse.Body.Bytes(), &telemetryAuthorization); err != nil || telemetryAuthorization.DelegationGrant == "" || telemetryAuthorization.PolicyRevision != "telemetry-access:1" {
+		t.Fatalf("invalid Telemetry authorization response: %+v err=%v", telemetryAuthorization, err)
+	}
+	if fixture.iamCalls.Load() != 3 {
+		t.Fatalf("expected three exact IAM decisions, got %d", fixture.iamCalls.Load())
 	}
 }
 
@@ -1015,6 +1082,32 @@ func TestOperationsToolAuthorizationFailsClosedBeforeIAM(t *testing.T) {
 	wrongWorkload := fixture.authorizeTool(t, validBody, serviceGrant, "spiffe://hvac.local/other-service")
 	if wrongWorkload.Code != http.StatusUnauthorized {
 		t.Fatalf("expected workload rejection, got %d", wrongWorkload.Code)
+	}
+
+	otherSiteID := fixture.siteID[:len(fixture.siteID)-1] + "2"
+	crossSiteBody, err := json.Marshal(map[string]any{
+		"investigationId": "investigation-001",
+		"runId":           "run-001",
+		"request": map[string]any{
+			"requestId": "telemetry-cross-site-001",
+			"tool":      "telemetry.current.getDeviceObservationSnapshot",
+			"input": map[string]any{
+				"siteId":    otherSiteID,
+				"deviceId":  fixture.deviceID,
+				"pointKeys": []string{"condenserPressureKPa"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workloadID := fixture.handler.(*handler).operations.workloadSPIFFEID
+	crossSiteResponse := fixture.authorizeTool(t, string(crossSiteBody), serviceGrant, workloadID)
+	if crossSiteResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-Site Telemetry rejection before IAM, got %d: %s", crossSiteResponse.Code, crossSiteResponse.Body.String())
+	}
+	if fixture.iamCalls.Load() != 0 {
+		t.Fatalf("cross-Site Telemetry request reached IAM %d times", fixture.iamCalls.Load())
 	}
 
 	unknownInput := `{"investigationId":"investigation-001","runId":"run-001","request":{"requestId":"registry-site-001","tool":"registry.getSite","input":{"siteId":"` + fixture.siteID + `","payload":{"bypass":true}}}}`

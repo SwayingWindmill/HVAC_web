@@ -17,7 +17,10 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
-const gatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
+const (
+	gatewaySPIFFE    = "spiffe://hvac.local/platform-gateway"
+	operationsSPIFFE = "spiffe://hvac.local/operations-agent-service"
+)
 
 type fakeAuthorizer struct {
 	err     error
@@ -120,7 +123,12 @@ func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *t
 	latestCache := &fakeLatestCache{snapshots: map[string]telemetryapi.DeviceObservationSnapshot{
 		deviceA: snapshotFixture(deviceA, now, []string{"zone.humidity", "zone.temperature"}),
 	}}
-	handler := NewHandler(ServerConfig{Store: store, LatestCache: latestCache, Authorizer: authorizer, AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now }})
+	handler := NewHandler(ServerConfig{
+		Store: store, LatestCache: latestCache, Authorizer: authorizer,
+		AllowedGatewaySPIFFE:         gatewaySPIFFE,
+		AllowedSnapshotReaderSPIFFEs: []string{gatewaySPIFFE, operationsSPIFFE},
+		Now:                          func() time.Time { return now },
+	})
 
 	request := httptest.NewRequest(http.MethodGet, InternalDeviceSnapshotPrefix+deviceA+"/observation-snapshot?key=zone.humidity&key=zone.temperature", nil)
 	request.Header.Set("Authorization", "Bearer signed-grant")
@@ -144,6 +152,15 @@ func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *t
 		t.Fatalf("targets=%#v", authorizer.targets)
 	}
 
+	operationsRequest := httptest.NewRequest(http.MethodGet, InternalDeviceSnapshotPrefix+deviceA+"/observation-snapshot?key=zone.temperature", nil)
+	operationsRequest.Header.Set("Authorization", "Bearer operations-grant")
+	operationsRequest.TLS = verifiedTLSState(operationsSPIFFE)
+	operationsRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(operationsRecorder, operationsRequest)
+	if operationsRecorder.Code != http.StatusOK || authorizer.peer != operationsSPIFFE || authorizer.grant != "operations-grant" {
+		t.Fatalf("operations snapshot status=%d authorization=%#v body=%s", operationsRecorder.Code, authorizer, operationsRecorder.Body.String())
+	}
+
 	presenceRequest := httptest.NewRequest(http.MethodGet, InternalDeviceSnapshotPrefix+deviceA+"/observation-snapshot", nil)
 	presenceRequest.Header.Set("Authorization", "Bearer presence-grant")
 	presenceRequest.TLS = verifiedTLSState(gatewaySPIFFE)
@@ -159,7 +176,7 @@ func TestInternalSingleSnapshotRequiresGatewayIdentityAndPreservesSelection(t *t
 	if len(presenceSnapshot.Values) != 0 || presenceSnapshot.TelemetryReadiness != telemetryapi.TelemetryReadinessNotApplicable {
 		t.Fatalf("presence-only snapshot leaked telemetry values: %#v", presenceSnapshot)
 	}
-	if len(store.calls) != 0 || len(latestCache.calls) != 2 {
+	if len(store.calls) != 0 || len(latestCache.calls) != 3 {
 		t.Fatalf("current read used unexpected authority: store=%#v cache=%#v", store.calls, latestCache.calls)
 	}
 }

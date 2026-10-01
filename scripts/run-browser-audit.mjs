@@ -51,9 +51,7 @@ async function stopServer(server) {
     once(server, 'exit').then(() => true),
     pause(1200).then(() => false),
   ]);
-  if (!stopped && process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-  }
+  if (!stopped) server.kill('SIGKILL');
 }
 
 let server;

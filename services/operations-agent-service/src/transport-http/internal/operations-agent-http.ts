@@ -44,7 +44,7 @@ export interface OperationsAgentHttpOptions {
   readonly createCoordinator: (
     context: OperationsAgentHttpCoordinatorContext,
   ) => SiteNightEnergyInvestigationCoordinator;
-  readonly createAgUiEventStreamResponse?: (
+  readonly createAgentEventStreamResponse?: (
     view: SiteNightEnergyInvestigationView,
     requestedPosition?: string | null,
   ) => Response;
@@ -504,7 +504,7 @@ export const createOperationsAgentHttpHandler = (
           return problem(404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'The requested Investigation was not found.');
         }
         if (route.kind === 'STREAM') {
-          if (options.createAgUiEventStreamResponse === undefined) {
+          if (options.createAgentEventStreamResponse === undefined) {
             return problem(
               503,
               'OPERATIONS_AGENT_STREAM_UNAVAILABLE',
@@ -513,7 +513,7 @@ export const createOperationsAgentHttpHandler = (
             );
           }
           const requestedPosition = request.headers.get('Last-Event-ID');
-          return options.createAgUiEventStreamResponse(
+          return options.createAgentEventStreamResponse(
             await coordinator.get({ investigationId }),
             requestedPosition !== null && requestedPosition.length <= 128
               ? requestedPosition

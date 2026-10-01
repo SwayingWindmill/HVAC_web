@@ -5,7 +5,7 @@ import {
   canCommitImportPlan,
   makeRegistryMutationMeta,
   registryExportFileName,
-} from '../apps/hvac-web/src/real/registry-admin/model.ts';
+} from '../apps/hvac-web/src/features/system/registry-admin/model.ts';
 
 const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';

@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
-const maxConcurrentClickHouseInserts = 16
+const maxHistoryBatchBytes = 8 << 20
 
 var (
 	clickHouseIdentifierPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
@@ -38,11 +39,6 @@ type ClickHouseHistorySink struct {
 	username   string
 	password   string
 	httpClient *http.Client
-}
-
-type encodedHistoryObservation struct {
-	observationID string
-	body          []byte
 }
 
 func NewClickHouseHistorySink(config ClickHouseHistoryConfig) (*ClickHouseHistorySink, error) {
@@ -74,8 +70,12 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, obser
 	if len(observations) > 4096 {
 		return errors.New("ClickHouse history insert batch exceeds 4096 observations")
 	}
-	encoded := make([]encodedHistoryObservation, len(observations))
-	for index, observation := range observations {
+	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
+	// identical rows, order and block boundaries, including after a worker restart.
+	observations = slices.Clone(observations)
+	slices.SortFunc(observations, func(a, b HistoryObservation) int { return strings.Compare(a.ObservationID, b.ObservationID) })
+	var encoded bytes.Buffer
+	for _, observation := range observations {
 		if !uuidV7Pattern.MatchString(observation.ObservationID) {
 			return errors.New("ClickHouse history observation ID must be UUIDv7")
 		}
@@ -117,50 +117,34 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, obser
 		if err != nil {
 			return fmt.Errorf("encode ClickHouse history observation %s: %w", observation.ObservationID, err)
 		}
-		encoded[index] = encodedHistoryObservation{observationID: observation.ObservationID, body: append(body, '\n')}
+		if encoded.Len()+len(body)+1 > maxHistoryBatchBytes {
+			return errors.New("ClickHouse history insert exceeds 8 MiB")
+		}
+		encoded.Write(body)
+		encoded.WriteByte('\n')
 	}
-
-	insertContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	semaphore := make(chan struct{}, maxConcurrentClickHouseInserts)
-	var waitGroup sync.WaitGroup
-	var firstError error
-	var firstErrorOnce sync.Once
-	for _, item := range encoded {
-		item := item
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-insertContext.Done():
-				return
-			}
-			if err := sink.insertObservation(insertContext, item); err != nil {
-				firstErrorOnce.Do(func() {
-					firstError = err
-					cancel()
-				})
-			}
-		}()
-	}
-	waitGroup.Wait()
-	return firstError
+	return sink.insertBatch(ctx, encoded.Bytes())
 }
 
-func (sink *ClickHouseHistorySink) insertObservation(ctx context.Context, item encodedHistoryObservation) error {
+func (sink *ClickHouseHistorySink) insertBatch(ctx context.Context, body []byte) error {
+	token := fmt.Sprintf("%x", sha256.Sum256(body))
 	endpoint := *sink.baseURL
 	query := endpoint.Query()
 	query.Set("query", "INSERT INTO "+sink.database+"."+sink.table+" FORMAT JSONEachRow")
 	query.Set("date_time_input_format", "best_effort")
-	query.Set("insert_deduplication_token", item.observationID)
-	query.Set("async_insert", "1")
-	query.Set("wait_for_async_insert", "1")
-	query.Set("async_insert_deduplicate", "1")
+	query.Set("insert_deduplication_token", token)
+	query.Set("async_insert", "0")
+	query.Set("insert_deduplicate", "1")
+	query.Set("deduplicate_blocks_in_dependent_materialized_views", "1")
+	query.Set("materialized_views_ignore_errors", "0")
+	query.Set("input_format_parallel_parsing", "0")
+	query.Set("max_insert_block_size", "4096")
+	query.Set("min_insert_block_size_rows", "4096")
+	query.Set("min_insert_block_size_bytes", "8388608")
+
 	query.Set("wait_end_of_query", "1")
 	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(item.body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create ClickHouse history request: %w", err)
 	}
@@ -170,22 +154,22 @@ func (sink *ClickHouseHistorySink) insertObservation(ctx context.Context, item e
 	}
 	response, err := sink.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("insert ClickHouse history observation %s: %w", item.observationID, err)
+		return fmt.Errorf("insert ClickHouse history batch %s: %w", token, err)
 	}
 	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<10))
 	closeErr := response.Body.Close()
 	if readErr != nil {
-		return fmt.Errorf("read ClickHouse history response for %s: %w", item.observationID, readErr)
+		return fmt.Errorf("read ClickHouse history response for %s: %w", token, readErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close ClickHouse history response for %s: %w", item.observationID, closeErr)
+		return fmt.Errorf("close ClickHouse history response for %s: %w", token, closeErr)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message := strings.TrimSpace(string(responseBody))
 		if len(message) > 512 {
 			message = message[:512]
 		}
-		return fmt.Errorf("ClickHouse history insert returned %d for %s: %s", response.StatusCode, item.observationID, message)
+		return fmt.Errorf("ClickHouse history insert returned %d for %s: %s", response.StatusCode, token, message)
 	}
 	return nil
 }

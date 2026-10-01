@@ -78,34 +78,24 @@ func main() {
 	observabilityRuntime.MarkReady()
 	logger.Info("telemetry_history_projector_started", "poll_interval", pollInterval.String())
 
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
 	lastFailureLog := time.Time{}
-	for {
-		select {
-		case <-ctx.Done():
-			observabilityRuntime.MarkNotReady()
-			shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = diagnostics.Shutdown(shutdownContext)
-			shutdownCancel()
-			logger.Info("telemetry_history_projector_stopped")
+	relay.Run(ctx, pollInterval, func(published int, relayErr error) {
+		if relayErr != nil {
+			if time.Since(lastFailureLog) >= time.Second {
+				logger.Warn("telemetry_history_projection_failed", "error_code", "TELEMETRY_HISTORY_PROJECTION_FAILED")
+				lastFailureLog = time.Now()
+			}
 			return
-		case <-ticker.C:
-			relayContext, relayCancel := context.WithTimeout(ctx, 15*time.Second)
-			published, relayErr := relay.RelayOnce(relayContext)
-			relayCancel()
-			if relayErr != nil {
-				if time.Since(lastFailureLog) >= time.Second {
-					logger.Warn("telemetry_history_projection_failed", "error_code", "TELEMETRY_HISTORY_PROJECTION_FAILED")
-					lastFailureLog = time.Now()
-				}
-				continue
-			}
-			if published > 0 {
-				logger.Info("telemetry_history_batch_projected", "observation_count", published)
-			}
 		}
-	}
+		if published > 0 {
+			logger.Info("telemetry_history_batch_projected", "observation_count", published)
+		}
+	})
+	observabilityRuntime.MarkNotReady()
+	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = diagnostics.Shutdown(shutdownContext)
+	shutdownCancel()
+	logger.Info("telemetry_history_projector_stopped")
 }
 
 func envOr(name, fallback string) string {

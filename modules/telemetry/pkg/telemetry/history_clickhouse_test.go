@@ -1,10 +1,13 @@
 package telemetry
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,7 +15,65 @@ import (
 	"time"
 )
 
-func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *testing.T) {
+func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
+	var bodies [][]byte
+	var tokens []string
+	var mutex sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mutex.Lock()
+		bodies = append(bodies, body)
+		tokens = append(tokens, r.URL.Query().Get("insert_deduplication_token"))
+		mutex.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []HistoryObservation{
+		{ObservationID: "018f2e00-9100-7000-8000-000000000001", PayloadSHA256: strings.Repeat("a", 64)},
+		{ObservationID: "018f2e00-9100-7000-8000-000000000002", PayloadSHA256: strings.Repeat("b", 64)},
+	}
+	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(rows)
+	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	sameRetry := bytes.Equal(bodies[0], bodies[1]) && tokens[0] == tokens[1]
+	mutex.Unlock()
+	if !sameRetry {
+		t.Fatal("retry payload/token changed with RETURNING order")
+	}
+	if rows[0].ObservationID != "018f2e00-9100-7000-8000-000000000002" {
+		t.Fatal("sink mutated caller data")
+	}
+	rows[0].SourceOffset++
+	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	tokenReused := tokens[2] == tokens[1]
+	mutex.Unlock()
+	if tokenReused {
+		t.Fatal("different payload reused token")
+	}
+	rows[0].ValueString = stringPointer(strings.Repeat("x", maxHistoryBatchBytes))
+	if err := sink.InsertObservations(t.Context(), rows); err == nil {
+		t.Fatal("oversized request accepted")
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(bodies) != 3 {
+		t.Fatal("oversized request performed I/O")
+	}
+}
+
+func TestClickHouseHistorySinkWritesStableMicrobatch(t *testing.T) {
 	observationIDs := []string{
 		"018f2e00-9100-7000-8000-000000000001",
 		"018f2e00-9100-7000-8000-000000000002",
@@ -20,6 +81,7 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 	requests := make(map[string]url.Values, len(observationIDs))
 	rows := make(map[string]HistoryObservation, len(observationIDs))
 	var mutex sync.Mutex
+	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		username, password, ok := request.BasicAuth()
 		if !ok || username != "telemetry_history" || password != "[REDACTED_SECRET]" {
@@ -30,14 +92,21 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
 		}
-		var row HistoryObservation
-		if err := json.NewDecoder(request.Body).Decode(&row); err != nil {
-			http.Error(writer, "invalid row", http.StatusBadRequest)
-			return
-		}
 		mutex.Lock()
-		requests[row.ObservationID] = request.URL.Query()
-		rows[row.ObservationID] = row
+		requestCount++
+		decoder := json.NewDecoder(request.Body)
+		for {
+			var row HistoryObservation
+			if err := decoder.Decode(&row); err == io.EOF {
+				break
+			} else if err != nil {
+				mutex.Unlock()
+				http.Error(writer, "invalid row", http.StatusBadRequest)
+				return
+			}
+			requests[row.ObservationID] = request.URL.Query()
+			rows[row.ObservationID] = row
+		}
 		mutex.Unlock()
 		writer.WriteHeader(http.StatusNoContent)
 	}))
@@ -62,7 +131,7 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 			SiteID: stringPointer("018f2e00-1000-7000-8000-000000000001"), DeviceID: stringPointer("018f2e00-3000-7000-8000-000000000001"),
 			PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SensorID: stringPointer("018f2e00-3200-7000-8000-000000000001"),
 			IntegrationInstanceID: "018f2e00-6000-7000-8000-000000000001",
-			SourceEventID: "018f2e00-6200-7000-8000-000000000001", SourcePartition: "tb-a", SourceOffset: 10,
+			SourceEventID:         "018f2e00-6200-7000-8000-000000000001", SourcePartition: "tb-a", SourceOffset: 10,
 			SourcePath: "POLL", TelemetryKey: "chiller.power", PointType: stringPointer("TELEMETRY"), PointRevision: &pointRevision, ValueNumber: &number,
 			SampledAt: time.Date(2026, 7, 29, 7, 59, 58, 0, time.UTC), ReceivedAt: time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC),
 			AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64),
@@ -83,19 +152,28 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 	if len(requests) != 2 || len(rows) != 2 {
 		t.Fatalf("requests=%d rows=%d", len(requests), len(rows))
 	}
+	if requestCount != 1 {
+		t.Fatalf("microbatch used %d requests, want 1", requestCount)
+	}
 	for _, observationID := range observationIDs {
 		values, ok := requests[observationID]
 		if !ok {
 			t.Fatalf("missing request for %s", observationID)
 		}
-		if values.Get("insert_deduplication_token") != observationID {
+		if len(values.Get("insert_deduplication_token")) != 64 {
 			t.Fatalf("dedup token=%q", values.Get("insert_deduplication_token"))
+		}
+		if values.Get("deduplicate_blocks_in_dependent_materialized_views") != "1" || values.Get("materialized_views_ignore_errors") != "0" {
+			t.Fatalf("hourly recovery settings=%v", values)
 		}
 		if values.Get("date_time_input_format") != "best_effort" {
 			t.Fatalf("date time input format=%q", values.Get("date_time_input_format"))
 		}
-		if values.Get("async_insert") != "1" || values.Get("wait_for_async_insert") != "1" || values.Get("async_insert_deduplicate") != "1" {
-			t.Fatalf("async insert settings=%v", values)
+		if values.Get("async_insert") != "0" || values.Get("insert_deduplicate") != "1" {
+			t.Fatalf("synchronous deduplicated insert settings=%v", values)
+		}
+		if values.Has("wait_for_async_insert") || values.Has("async_insert_deduplicate") {
+			t.Fatalf("async-only insert settings must be absent: %v", values)
 		}
 		if query := values.Get("query"); query != "INSERT INTO telemetry_history.observations FORMAT JSONEachRow" {
 			t.Fatalf("query=%q", query)

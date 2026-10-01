@@ -13,8 +13,10 @@ CodeHVAC_web*_runnode_modules
 
 # build output
 dist/
+dist-frontend-review/
 build/
 out/
+apps/hvac-web/.cache/
 /platform-gateway
 /platform-gateway.exe
 
@@ -37,10 +39,22 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+.cursor/
+.claude/
+.opencode/
+opencode.json
+.codex/
+.pnpm-store/
+.agents/skills/**/agents/
+docs/*.zip
+docs/设备中心_相关页面_打包/
 
-# scratch: local test profiles and generated Go caches
+# scratch: local test/browser profiles, screenshots, and generated caches
 .ctmp*
 .chrome_tmp/
+/.tmp-*
+/CodeHVAC_web.tmp-*/
+/NUL
 sys_*.png
 bigscreen_*.png
 prototype/
@@ -53,9 +67,30 @@ vite.config.js
 vite.config.d.ts
 vite.config.*.timestamp-*.mjs
 
+# Impeccable local/runtime artifacts. Shared design contracts remain tracked.
+.impeccable/config.local.json
+.impeccable/hook.cache.json
+.impeccable/hook.pending.json
+.impeccable/*.png
+.impeccable/*.jpg
+.impeccable/review/
+.impeccable/questions/
+.impeccable/live/server.json
+.impeccable/live/sessions/
+.impeccable/live/previews/
+.impeccable/live/annotations/
+.impeccable/live/cache/
+.impeccable/live/manual-edit-apply-transaction.json
+.impeccable/live/manual-edit-events.jsonl
+.impeccable/live/manual-edit-evidence/
+.impeccable/live/pending-manual-edits.json
+.impeccable/live/deferred-svelte-component-accepts.json
+.impeccable/live/*.png
+
 # Independent checkouts/reference clones must live outside the product root.
 # These ignores are only a last-resort safety net against accidental commits.
 hvac-backend/
 .worktrees/
+worktrees/
 .clones/
 .scratch/

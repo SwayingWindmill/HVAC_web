@@ -79,8 +79,8 @@ for (const required of [
   'exhaustedDimension',
   'PAYLOAD_BYTES',
   'REQUIRED_NEXT',
-  'registry.getEquipmentEnergyBindings',
-  'analytics.energy.getEquipmentSeries',
+  'registry.getAssetEnergyBindings',
+  'analytics.getEnergySeries',
   'TOOL_EXECUTION_RECEIPT',
   'WAITING_FOR_OPERATOR_INPUT',
   'OPERATOR_INPUT_ACCEPTED',
@@ -101,7 +101,7 @@ for (const required of [
   if (!publicContract.includes(required)) failures.push(`Public OpenAPI is missing ${required}.`);
 }
 for (const required of [
-  'X-Acting-Organization-ID',
+  'X-Tenant-ID',
   'X-Delegation-Grant',
   'X-Route-Policy-Revision',
   'Cache-Control',
@@ -155,7 +155,7 @@ for (const required of [
   'UNTRUSTED_CONTENT_REJECTED',
   'RESOURCE_NOT_FOUND',
   'streamPattern',
-  'createAgUiEventStreamResponse',
+  'createAgentEventStreamResponse',
 ]) {
   if (!serviceHandler.includes(required)) failures.push(`Internal HTTP handler is missing ${required}.`);
 }
@@ -168,7 +168,7 @@ for (const required of [
   'ValidateDelegationAnyScope',
   'Content-Type',
   'context.WithTimeout',
-  'RateLimitPerMinute',
+  'RateLimiter',
   'validateOperationsSnapshot',
   'validateOperationsEventStream',
   'validateOperationsRecoveryHeaders',

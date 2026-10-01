@@ -10,8 +10,8 @@ services:
     tmpfs:
       - /tmp
     build:
-      context: ../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-mqtt-publisher }
     image: ${EG8200_SIMULATOR_IMAGE:-hvac/eg8200-simulator:0.1.0-dev}
     environment:
@@ -25,7 +25,7 @@ services:
       iot-service:
         condition: service_healthy
     volumes:
-      - ../../tools/eg8200-simulator/configs/central-plant.local.json:/run/hvac/config/plant.json:ro
+      - ${EG8200_PLANT_CONFIG_PATH:-../../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
       - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
       - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
       - ${EG8200_QUEUE_DIR:-../platform/phase1/runtime/data/eg8200}:/run/hvac/eg8200
@@ -85,9 +85,9 @@ services:
       args: { SERVICE_PACKAGE: ./modules/registry/cmd/atv630-template-release }
     image: ${ATV630_TEMPLATE_RELEASE_IMAGE:-hvac/atv630-template-release:0.1.0-dev}
     environment:
-      S1_CORE_DATABASE_URL: ${ATV630_REGISTRY_DATABASE_URL:?ATV630_REGISTRY_DATABASE_URL is required}
-      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:?ATV630_TEMPLATE_TENANT_ID is required}
-      ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: ${ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID:?ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID is required}
+      S1_CORE_DATABASE_URL: ${ATV630_REGISTRY_DATABASE_URL:-}
+      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:-}
+      ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: ${ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID:-}
       ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
     volumes:
       - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config
@@ -107,11 +107,11 @@ services:
       args: { SERVICE_PACKAGE: ./modules/iot/cmd/atv630-connectivity-session }
     image: ${ATV630_CONNECTIVITY_SESSION_IMAGE:-hvac/atv630-connectivity-session:0.1.0-dev}
     environment:
-      ATV630_CONNECTIVITY_DATABASE_URL: ${ATV630_CONNECTIVITY_DATABASE_URL:?ATV630_CONNECTIVITY_DATABASE_URL is required}
-      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:?ATV630_TEMPLATE_TENANT_ID is required}
-      ATV630_INTEGRATION_INSTANCE_ID: ${ATV630_INTEGRATION_INSTANCE_ID:?ATV630_INTEGRATION_INSTANCE_ID is required}
-      ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: ${ATV630_CONNECTIVITY_CREDENTIAL_REF_ID:?ATV630_CONNECTIVITY_CREDENTIAL_REF_ID is required}
-      ATV630_GATEWAY_EXTERNAL_ID: ${ATV630_GATEWAY_EXTERNAL_ID:?ATV630_GATEWAY_EXTERNAL_ID is required}
+      ATV630_CONNECTIVITY_DATABASE_URL: ${ATV630_CONNECTIVITY_DATABASE_URL:-}
+      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:-}
+      ATV630_INTEGRATION_INSTANCE_ID: ${ATV630_INTEGRATION_INSTANCE_ID:-}
+      ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: ${ATV630_CONNECTIVITY_CREDENTIAL_REF_ID:-}
+      ATV630_GATEWAY_EXTERNAL_ID: ${ATV630_GATEWAY_EXTERNAL_ID:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -58,7 +58,8 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, time.Now().UTC())
+	lastTick := time.Now().UTC()
+	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, lastTick)
 	atv630Server, err := simulator.NewVirtualATV630Server(*atv630ModbusAddress, plant)
 	if err != nil {
 		logger.Error("eg8200_atv630_modbus_invalid", "error", err.Error())
@@ -94,7 +95,7 @@ func main() {
 		logger.Error("eg8200_mqtt_publisher_invalid", "error", err.Error())
 		os.Exit(1)
 	}
-	diagnostics := edgeDiagnosticsServer(*diagnosticsAddress, publisher, telemetry)
+	diagnostics := edgeDiagnosticsServer(*diagnosticsAddress, publisher, telemetry, plant)
 	go func() {
 		logger.Info("eg8200_mqtt_diagnostics_started", "address", diagnostics.Addr)
 		if serveErr := diagnostics.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
@@ -155,7 +156,9 @@ func main() {
 	}
 
 	runEdgeCycleAndPublish := func() {
-		snapshot := plant.Tick(interval)
+		now := time.Now().UTC()
+		snapshot := plant.Tick(now.Sub(lastTick))
+		lastTick = now
 		edgeCycle := edgeRuntime.RunCycle(ctx, snapshot.ObservedAt)
 		for _, poll := range edgeCycle.PollResults {
 			if poll.Error != nil {
@@ -196,8 +199,9 @@ func main() {
 	}
 }
 
-func edgeDiagnosticsServer(address string, publisher *simulator.MQTTPublisher, telemetry *observability.Runtime) *http.Server {
+func edgeDiagnosticsServer(address string, publisher *simulator.MQTTPublisher, telemetry *observability.Runtime, plant *simulator.Plant) *http.Server {
 	mux := http.NewServeMux()
+	simulator.RegisterCHWPDisturbance(mux, plant)
 	metrics := telemetry.Metrics.Handler()
 	mux.HandleFunc("/metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {

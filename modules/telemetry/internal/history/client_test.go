@@ -87,7 +87,7 @@ func TestClickHouseHistoryClientPreservesTypedSameTimestampFactsAndStableCursorS
 	for _, marker := range []string{
 		"acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')",
 		"value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')",
-		"ORDER BY telemetry_key, sampled_at, toString(observation_id)",
+		"ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)",
 		"LIMIT 3",
 		"projected_at < parseDateTime64BestEffort('2026-08-19T01:10:00.000Z'",
 	} {
