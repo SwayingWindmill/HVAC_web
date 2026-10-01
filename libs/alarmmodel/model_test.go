@@ -212,3 +212,33 @@ func validAlarm(t *testing.T) Alarm {
 	}
 	return alarm
 }
+
+// An incident re-evaluated every few seconds grew a 1,235-entry timeline (~420 KB per
+// alarm) because every matching evaluation was recorded.
+func TestRepeatedOccurrenceDoesNotGrowTimeline(t *testing.T) {
+	alarm := validAlarm(t)
+	repeated := alarm
+	for index := 0; index < 5; index++ {
+		next, err := RecordOccurrence(repeated, OccurrenceInput{
+			Severity: alarm.CurrentSeverity, OccurredAt: fmt.Sprintf("2026-07-31T10:%02d:00Z", index), RuleRevision: "alarm-policy-10",
+			ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: fmt.Sprintf("repeat-%d", index),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		repeated = next
+	}
+	if len(repeated.Timeline) != len(alarm.Timeline) || repeated.Version != alarm.Version || repeated.OccurrenceCount != alarm.OccurrenceCount+5 {
+		t.Fatalf("repeated occurrences changed history: timeline=%d version=%d count=%d", len(repeated.Timeline), repeated.Version, repeated.OccurrenceCount)
+	}
+	escalated, err := RecordOccurrence(repeated, OccurrenceInput{
+		Severity: SeverityCritical, OccurredAt: "2026-07-31T11:00:00Z", RuleRevision: "alarm-policy-10",
+		ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: "escalate",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(escalated.Timeline) != len(alarm.Timeline)+1 || escalated.Version != alarm.Version+1 {
+		t.Fatalf("severity change was not recorded: timeline=%d version=%d", len(escalated.Timeline), escalated.Version)
+	}
+}

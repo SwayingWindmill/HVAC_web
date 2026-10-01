@@ -443,7 +443,7 @@ func insertIncident(ctx context.Context, tx pgx.Tx, alarm alarmmodel.Alarm) (boo
 }
 
 func persistUpdatedAlarm(ctx context.Context, tx pgx.Tx, current, updated alarmmodel.Alarm) error {
-	if updated.Version == current.Version {
+	if updated.Version == current.Version && updated.OccurrenceCount == current.OccurrenceCount {
 		return nil
 	}
 	evidenceJSON, _ := json.Marshal(updated.Evidence)
@@ -470,6 +470,9 @@ func persistUpdatedAlarm(ctx context.Context, tx pgx.Tx, current, updated alarmm
 	}
 	if command.RowsAffected() != 1 {
 		return alarmmodel.ErrVersionConflict
+	}
+	if updated.Version == current.Version {
+		return nil
 	}
 	return insertTimelineEntry(ctx, tx, updated, updated.Timeline[len(updated.Timeline)-1])
 }

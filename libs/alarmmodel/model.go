@@ -286,7 +286,6 @@ func RecordOccurrence(alarm Alarm, input OccurrenceInput) (Alarm, error) {
 		return Alarm{}, ErrInvalidOperation
 	}
 	result := cloneAlarm(alarm)
-	result.CurrentSeverity = input.Severity
 	if severityRank(input.Severity) > severityRank(result.PeakSeverity) {
 		result.PeakSeverity = input.Severity
 	}
@@ -295,8 +294,14 @@ func RecordOccurrence(alarm Alarm, input OccurrenceInput) (Alarm, error) {
 	result.LastOccurredAt = occurredAt
 	result.UpdatedAt = occurredAt
 	result.Evidence = mergeEvidence(result.Evidence, input.Evidence)
-	result.Version++
-	appendTimeline(&result, OperationPublish, "ALARM_OCCURRENCE", input.ActorType, input.ActorID, input.RuleRevision, input.CorrelationID, occurredAt, nil, nil)
+	// A repeated occurrence only advances the counters. The timeline (and the version
+	// clients use for optimistic concurrency) records severity changes, not every
+	// evaluation that still matches.
+	if input.Severity != alarm.CurrentSeverity {
+		result.CurrentSeverity = input.Severity
+		result.Version++
+		appendTimeline(&result, OperationPublish, "ALARM_SEVERITY_CHANGED", input.ActorType, input.ActorID, input.RuleRevision, input.CorrelationID, occurredAt, nil, nil)
+	}
 	return result, result.Validate()
 }
 
