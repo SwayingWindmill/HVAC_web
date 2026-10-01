@@ -61,6 +61,7 @@ hvac_s2|infra/telemetry/postgres/init/005-s2-realtime-backend.sql
 hvac_s2|infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql
 hvac_s2|infra/telemetry/postgres/init/007-historical-replay.sql
 hvac_s2|infra/telemetry/postgres/init/008-subscription-client-handle.sql
+hvac_s2|infra/telemetry/postgres/init/009-realtime-revocation-relay.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql

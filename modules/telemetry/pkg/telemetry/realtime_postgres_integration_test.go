@@ -31,13 +31,6 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 	}
 
 	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
-	if _, err := admin.Exec(ctx, `UPDATE telemetry_runtime.iam_scope_projections SET valid_until = $2, revoked_at = NULL, updated_at = $1 WHERE principal_id = $3::uuid AND device_id = $4::uuid AND action = 'SUBSCRIBE'`, now, now.Add(time.Hour), realtimeTestPrincipal, deviceA); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = admin.Exec(ctx, `UPDATE telemetry_runtime.iam_scope_projections SET valid_until = '2026-07-24T00:00:00Z', revoked_at = NULL, updated_at = '2026-07-23T00:00:00Z' WHERE principal_id = $1::uuid AND device_id = $2::uuid AND action = 'SUBSCRIBE'`, realtimeTestPrincipal, deviceA)
-	})
-
 	store, err := OpenPostgresStore(ctx, runtimeURL)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +49,7 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 	}
 	access := AccessContext{
 		PrincipalID: realtimeTestPrincipal, Subject: "subject-a", SubjectIssuer: "https://issuer.example.test",
-		SessionID: "session-a", TenantID: orgA, PolicyRevision: "telemetry-access:3",
+		SessionID: "session-a", TenantID: tenantA, PolicyRevision: "telemetry-access:3",
 	}
 	bootstrap, err := service.Bootstrap(ctx, access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
 		{ClientSubscriptionId: "postgres-zone", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},
@@ -84,13 +77,10 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 		t.Fatalf("publication did not reuse authoritative revision: %+v", publication)
 	}
 
-	if _, err := admin.Exec(ctx, `UPDATE telemetry_runtime.iam_scope_projections SET revoked_at = $1, updated_at = $1 WHERE principal_id = $2::uuid AND device_id = $3::uuid AND action = 'SUBSCRIBE'`, now.Add(time.Second), realtimeTestPrincipal, deviceA); err != nil {
-		t.Fatal(err)
+	if revoked, err := service.Revoke(ctx, realtimeTestPrincipal, deviceA, now.Add(-time.Second)); err != nil || revoked != 0 {
+		t.Fatalf("an IAM change before the subscription was authorized revoked it: count=%d err=%v", revoked, err)
 	}
-	if _, err := service.AuthorizeSubscribe(ctx, realtimeTestPrincipal, string(bootstrap.Subscriptions[0].Channel)); !errors.Is(err, ErrSubscriptionNotFound) {
-		t.Fatalf("revoked IAM projection remained subscribable: %v", err)
-	}
-	revoked, err := service.Revoke(ctx, realtimeTestPrincipal, deviceA)
+	revoked, err := service.Revoke(ctx, realtimeTestPrincipal, deviceA, now)
 	if err != nil || revoked != 1 || len(transport.Unsubscribes) != 1 {
 		t.Fatalf("revoke count=%d unsubscribes=%d err=%v", revoked, len(transport.Unsubscribes), err)
 	}
@@ -136,7 +126,7 @@ func TestPostgresRealtimeBootstrapAgainWithSameClientSubscriptionID(t *testing.T
 	}
 	access := AccessContext{
 		PrincipalID: realtimeTestPrincipal, Subject: "subject-a", SubjectIssuer: "https://issuer.example.test",
-		SessionID: "session-a", TenantID: orgA, PolicyRevision: "telemetry-access:3",
+		SessionID: "session-a", TenantID: tenantA, PolicyRevision: "telemetry-access:3",
 	}
 	request := telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
 		{ClientSubscriptionId: "page-device-a", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},

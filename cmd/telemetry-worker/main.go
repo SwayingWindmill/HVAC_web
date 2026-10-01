@@ -143,6 +143,17 @@ func main() {
 	if realtimeCancel != nil {
 		defer realtimeCancel()
 		go runRealtimeRelay(realtimeContext, realtimeService, logger)
+		revocationSource, err := telemetry.NewHTTPRevocationSource(requiredEnv("TELEMETRY_IAM_ENDPOINT"), iamClient)
+		if err != nil {
+			logger.Error("telemetry_revocation_source_invalid", "error_code", "TELEMETRY_REVOCATION_SOURCE_INVALID")
+			os.Exit(1)
+		}
+		revocationRelay, err := telemetry.NewRevocationRelay(revocationSource, store, realtimeService, time.Now)
+		if err != nil {
+			logger.Error("telemetry_revocation_relay_invalid", "error_code", "TELEMETRY_REVOCATION_RELAY_INVALID")
+			os.Exit(1)
+		}
+		go runRevocationRelay(realtimeContext, revocationRelay, logger)
 	}
 
 	alarmRelay, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
@@ -535,6 +546,31 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 			}
 			if published > 0 {
 				logger.Info("telemetry_realtime_relay_batch_published", "publication_count", published)
+			}
+		}
+	}
+}
+
+// runRevocationRelay applies IAM telemetry revocations to open realtime subscriptions.
+func runRevocationRelay(ctx context.Context, relay *telemetry.RevocationRelay, logger *slog.Logger) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	lastFailureLog := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			revoked, err := relay.RelayOnce(ctx)
+			if err != nil {
+				if time.Since(lastFailureLog) >= 30*time.Second {
+					logger.Warn("telemetry_revocation_relay_failed", "error_code", "TELEMETRY_REVOCATION_RELAY_FAILED")
+					lastFailureLog = time.Now()
+				}
+				continue
+			}
+			if revoked > 0 {
+				logger.Info("telemetry_realtime_subscriptions_revoked", "subscription_count", revoked)
 			}
 		}
 	}

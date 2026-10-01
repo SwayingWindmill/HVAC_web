@@ -28,10 +28,13 @@ const (
 	MaximumRealtimeSubscriptions = 100
 	MaximumRecoveryCheckpoints   = 100
 	MaximumSubscriptionTTL       = 5 * time.Minute
-	MaximumConnectionTokenTTL    = 5 * time.Minute
-	DefaultSubscriptionTTL       = MaximumSubscriptionTTL
-	DefaultConnectionTokenTTL    = MaximumConnectionTokenTTL
-	DefaultRecoveryCursorTTL     = 120 * time.Second
+	// The client renews its subscriptions when the connection token expires (checkpoint
+	// plus an IAM-consumed recovery grant), so the token must expire this long before
+	// the subscriptions it renews.
+	ConnectionRenewalWindow   = time.Minute
+	DefaultSubscriptionTTL    = MaximumSubscriptionTTL
+	DefaultConnectionTokenTTL = MaximumSubscriptionTTL - ConnectionRenewalWindow
+	DefaultRecoveryCursorTTL  = 120 * time.Second
 )
 
 var (
@@ -75,10 +78,10 @@ type RealtimeSubscription struct {
 }
 
 type CheckpointIdentity struct {
-	Subject              string
-	SubjectIssuer        string
-	SessionID            string
-	TenantID             string
+	Subject       string
+	SubjectIssuer string
+	SessionID     string
+	TenantID      string
 }
 
 type RecoveryCursorRecord struct {
@@ -115,7 +118,9 @@ type RealtimeRepository interface {
 	CurrentBusinessRevision(context.Context, string) (int64, error)
 	ClaimPendingPublications(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error)
 	MarkPublicationPublished(context.Context, string, string, time.Time) error
-	RevokeSubscriptions(context.Context, string, string, time.Time) ([]RealtimeSubscription, error)
+	// RevokeSubscriptions revokes active subscriptions of the principal and/or device
+	// that were last authorized at or before authorizedBefore.
+	RevokeSubscriptions(ctx context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error)
 }
 
 type RealtimeTransport interface {
@@ -154,30 +159,30 @@ type RealtimeService struct {
 }
 
 type recoveryCursorClaims struct {
-	Version              int      `json:"v"`
-	CursorID             string   `json:"cid"`
-	SubscriptionID       string   `json:"sid"`
-	PrincipalID          string   `json:"pid"`
-	Subject              string   `json:"sub"`
-	SubjectIssuer        string   `json:"iss"`
-	SessionID            string   `json:"session"`
-	TenantID             string   `json:"tenant"`
-	DeviceID             string   `json:"did"`
-	Keys                 []string `json:"keys"`
-	ScopeDigest          string   `json:"scope"`
-	BusinessRevision     int64    `json:"rev"`
-	TransportEpoch       string   `json:"epoch"`
-	TransportOffset      int64    `json:"offset"`
-	ExpiresAt            int64    `json:"exp"`
+	Version          int      `json:"v"`
+	CursorID         string   `json:"cid"`
+	SubscriptionID   string   `json:"sid"`
+	PrincipalID      string   `json:"pid"`
+	Subject          string   `json:"sub"`
+	SubjectIssuer    string   `json:"iss"`
+	SessionID        string   `json:"session"`
+	TenantID         string   `json:"tenant"`
+	DeviceID         string   `json:"did"`
+	Keys             []string `json:"keys"`
+	ScopeDigest      string   `json:"scope"`
+	BusinessRevision int64    `json:"rev"`
+	TransportEpoch   string   `json:"epoch"`
+	TransportOffset  int64    `json:"offset"`
+	ExpiresAt        int64    `json:"exp"`
 }
 
 type connectionClaims struct {
-	Subject              string `json:"sub"`
-	TenantID             string `json:"tenant"`
-	SessionID            string `json:"session"`
-	IssuedAt             int64  `json:"iat"`
-	ExpiresAt            int64  `json:"exp"`
-	TokenID              string `json:"jti"`
+	Subject   string `json:"sub"`
+	TenantID  string `json:"tenant"`
+	SessionID string `json:"session"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	TokenID   string `json:"jti"`
 }
 
 type DeviceObservationPublication = telemetryapi.DeviceObservationPublication
@@ -231,8 +236,8 @@ func NewRealtimeService(config RealtimeConfig) (*RealtimeService, error) {
 	if cursorTTL > DefaultRecoveryCursorTTL {
 		return nil, errors.New("recovery cursor TTL exceeds the S2 maximum")
 	}
-	if connectionTTL > subscriptionTTL {
-		return nil, errors.New("connection token TTL cannot exceed subscription TTL")
+	if connectionTTL > subscriptionTTL-ConnectionRenewalWindow {
+		return nil, errors.New("connection token TTL must leave the renewal window before subscriptions expire")
 	}
 	return &RealtimeService{
 		repository:         config.Repository,
@@ -470,21 +475,21 @@ func (service *RealtimeService) Checkpoint(ctx context.Context, access AccessCon
 		}
 		expiresAt := now.Add(service.recoveryCursorTTL)
 		claims := recoveryCursorClaims{
-			Version:              1,
-			CursorID:             cursorID,
-			SubscriptionID:       subscription.SubscriptionID,
-			PrincipalID:          subscription.PrincipalID,
-			Subject:              subscription.Subject,
-			SubjectIssuer:        subscription.SubjectIssuer,
-			SessionID:            subscription.SessionID,
-			TenantID:             subscription.TenantID,
-			DeviceID:             subscription.DeviceID,
-			Keys:                 append([]string(nil), subscription.Keys...),
-			ScopeDigest:          subscription.ScopeDigest,
-			BusinessRevision:     int64(checkpoint.BusinessRevision),
-			TransportEpoch:       checkpoint.TransportPosition.Epoch,
-			TransportOffset:      checkpoint.TransportPosition.Offset,
-			ExpiresAt:            expiresAt.Unix(),
+			Version:          1,
+			CursorID:         cursorID,
+			SubscriptionID:   subscription.SubscriptionID,
+			PrincipalID:      subscription.PrincipalID,
+			Subject:          subscription.Subject,
+			SubjectIssuer:    subscription.SubjectIssuer,
+			SessionID:        subscription.SessionID,
+			TenantID:         subscription.TenantID,
+			DeviceID:         subscription.DeviceID,
+			Keys:             append([]string(nil), subscription.Keys...),
+			ScopeDigest:      subscription.ScopeDigest,
+			BusinessRevision: int64(checkpoint.BusinessRevision),
+			TransportEpoch:   checkpoint.TransportPosition.Epoch,
+			TransportOffset:  checkpoint.TransportPosition.Offset,
+			ExpiresAt:        expiresAt.Unix(),
 		}
 		cursor, err := service.signCapability(claims)
 		if err != nil {
@@ -561,11 +566,13 @@ func (service *RealtimeService) RelayOnce(ctx context.Context, limit int) (int, 
 	return published, nil
 }
 
-func (service *RealtimeService) Revoke(ctx context.Context, principalID, deviceID string) (int, error) {
+// Revoke ends the subscriptions an IAM change at authorizedBefore invalidates and
+// unsubscribes their channels. Subscriptions authorized after the change stand.
+func (service *RealtimeService) Revoke(ctx context.Context, principalID, deviceID string, authorizedBefore time.Time) (int, error) {
 	if service == nil || service.repository == nil || service.transport == nil {
 		return 0, ErrRealtimeUnavailable
 	}
-	revoked, err := service.repository.RevokeSubscriptions(ctx, principalID, deviceID, service.now().UTC())
+	revoked, err := service.repository.RevokeSubscriptions(ctx, principalID, deviceID, authorizedBefore.UTC(), service.now().UTC())
 	if err != nil {
 		return 0, normalizeRealtimeRepositoryError(err)
 	}

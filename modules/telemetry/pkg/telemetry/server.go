@@ -636,7 +636,7 @@ func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)
 		return
 	}
-	revoked, err := h.realtime.Revoke(request.Context(), input.PrincipalID, input.DeviceID)
+	revoked, err := h.realtime.Revoke(request.Context(), input.PrincipalID, input.DeviceID, occurredAt)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REVOCATION_UNAVAILABLE", "Telemetry revocation is temporarily unavailable.", true)
 		return

@@ -112,31 +112,6 @@ WHERE principal_id = $1::uuid AND channel = $2 AND status = 'ACTIVE' AND expires
       AND binding.tenant_id = telemetry_subscriptions.tenant_id
       AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
   )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM jsonb_array_elements_text(
-      CASE WHEN jsonb_array_length(telemetry_subscriptions.keys) = 0
-           THEN '[""]'::jsonb ELSE telemetry_subscriptions.keys END
-    ) selected(key)
-    WHERE NOT EXISTS (
-      SELECT 1 FROM telemetry_runtime.iam_scope_projections projection
-      WHERE projection.principal_id = telemetry_subscriptions.principal_id
-        AND projection.tenant_id = telemetry_subscriptions.tenant_id
-        AND projection.device_id = telemetry_subscriptions.device_id
-        AND projection.action = 'SUBSCRIBE' AND projection.decision = 'ALLOW'
-        AND projection.revoked_at IS NULL AND projection.valid_until > $3
-        AND projection.telemetry_key IS NOT DISTINCT FROM NULLIF(selected.key, '')
-    )
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM telemetry_runtime.iam_scope_projections denial
-    WHERE denial.principal_id = telemetry_subscriptions.principal_id
-      AND denial.tenant_id = telemetry_subscriptions.tenant_id
-      AND denial.device_id = telemetry_subscriptions.device_id
-      AND denial.action = 'SUBSCRIBE' AND denial.decision = 'DENY'
-      AND denial.revoked_at IS NULL AND denial.valid_until > $3
-      AND (denial.telemetry_key IS NULL OR telemetry_subscriptions.keys ? denial.telemetry_key)
-  )
 `, principalID, channel, now)
 	return scanRealtimeSubscription(row)
 }
@@ -157,31 +132,6 @@ WHERE device_id = $1::uuid AND status = 'ACTIVE' AND expires_at > $2
     WHERE binding.device_id = telemetry_subscriptions.device_id
       AND binding.tenant_id = telemetry_subscriptions.tenant_id
       AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM jsonb_array_elements_text(
-      CASE WHEN jsonb_array_length(telemetry_subscriptions.keys) = 0
-           THEN '[""]'::jsonb ELSE telemetry_subscriptions.keys END
-    ) selected(key)
-    WHERE NOT EXISTS (
-      SELECT 1 FROM telemetry_runtime.iam_scope_projections projection
-      WHERE projection.principal_id = telemetry_subscriptions.principal_id
-        AND projection.tenant_id = telemetry_subscriptions.tenant_id
-        AND projection.device_id = telemetry_subscriptions.device_id
-        AND projection.action = 'SUBSCRIBE' AND projection.decision = 'ALLOW'
-        AND projection.revoked_at IS NULL AND projection.valid_until > $2
-        AND projection.telemetry_key IS NOT DISTINCT FROM NULLIF(selected.key, '')
-    )
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM telemetry_runtime.iam_scope_projections denial
-    WHERE denial.principal_id = telemetry_subscriptions.principal_id
-      AND denial.tenant_id = telemetry_subscriptions.tenant_id
-      AND denial.device_id = telemetry_subscriptions.device_id
-      AND denial.action = 'SUBSCRIBE' AND denial.decision = 'DENY'
-      AND denial.revoked_at IS NULL AND denial.valid_until > $2
-      AND (denial.telemetry_key IS NULL OR telemetry_subscriptions.keys ? denial.telemetry_key)
   )
 ORDER BY subscription_id
 `, deviceID, now)
@@ -418,7 +368,7 @@ WHERE event_id = $1::uuid AND delivery_state = 'PENDING' AND claim_owner = $2
 	return nil
 }
 
-func (store *PostgresStore) RevokeSubscriptions(ctx context.Context, principalID, deviceID string, now time.Time) ([]RealtimeSubscription, error) {
+func (store *PostgresStore) RevokeSubscriptions(ctx context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
 	if store == nil || store.pool == nil {
 		return nil, ErrRealtimeUnavailable
 	}
@@ -444,11 +394,12 @@ SET status = 'REVOKED', revoked_at = $3, updated_at = $3
 WHERE status = 'ACTIVE'
   AND ($1::uuid IS NULL OR principal_id = $1::uuid)
   AND ($2::uuid IS NULL OR device_id = $2::uuid)
+  AND updated_at <= $4
 RETURNING subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
           session_id, tenant_id::text, device_id::text, keys,
           scope_sha256, policy_revision_ref, channel, status,
           expires_at, revoked_at, created_at, updated_at
-`, principalArgument, deviceArgument, now)
+`, principalArgument, deviceArgument, now, authorizedBefore)
 	if err != nil {
 		return nil, fmt.Errorf("revoke realtime subscriptions: %w", err)
 	}
@@ -492,3 +443,63 @@ func snapshotTelemetryKeys(snapshot telemetryapi.DeviceObservationSnapshot) []st
 }
 
 var _ RealtimeRepository = (*PostgresStore)(nil)
+
+// RevocationCursors lists the tenants with open subscriptions and the last IAM
+// revocation fact applied for each.
+func (store *PostgresStore) RevocationCursors(ctx context.Context, now time.Time) ([]RevocationCursor, error) {
+	if store == nil || store.pool == nil {
+		return nil, ErrRealtimeUnavailable
+	}
+	rows, err := store.pool.Query(ctx, `
+SELECT tenant.tenant_id::text, COALESCE(cursor_record.last_sequence, 0)
+FROM (
+  SELECT DISTINCT tenant_id FROM telemetry_runtime.telemetry_subscriptions
+  WHERE status = 'ACTIVE' AND expires_at > $1
+) tenant
+LEFT JOIN telemetry_runtime.iam_revocation_cursors cursor_record USING (tenant_id)
+ORDER BY tenant.tenant_id
+`, now)
+	if err != nil {
+		return nil, fmt.Errorf("query IAM revocation cursors: %w", err)
+	}
+	defer rows.Close()
+	cursors := make([]RevocationCursor, 0)
+	for rows.Next() {
+		var cursor RevocationCursor
+		if err := rows.Scan(&cursor.TenantID, &cursor.AfterSequence); err != nil {
+			return nil, fmt.Errorf("scan IAM revocation cursor: %w", err)
+		}
+		cursors = append(cursors, cursor)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate IAM revocation cursors: %w", err)
+	}
+	return cursors, nil
+}
+
+func (store *PostgresStore) SaveRevocationCursor(ctx context.Context, tenantID string, sequence int64, now time.Time) error {
+	if store == nil || store.pool == nil {
+		return ErrRealtimeUnavailable
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin IAM revocation cursor transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
+		return fmt.Errorf("activate telemetry runtime database identity: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO telemetry_runtime.iam_revocation_cursors (tenant_id, last_sequence, updated_at)
+VALUES ($1::uuid, $2, $3)
+ON CONFLICT (tenant_id) DO UPDATE SET
+  last_sequence = GREATEST(telemetry_runtime.iam_revocation_cursors.last_sequence, EXCLUDED.last_sequence),
+  updated_at = EXCLUDED.updated_at
+`, tenantID, sequence, now); err != nil {
+		return fmt.Errorf("save IAM revocation cursor: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit IAM revocation cursor: %w", err)
+	}
+	return nil
+}

@@ -112,7 +112,7 @@ func TestRealtimeCheckpointRecoveryAndRevocation(t *testing.T) {
 		t.Fatalf("cross-session cursor reuse was not rejected: %v", err)
 	}
 
-	revoked, err := service.Revoke(context.Background(), access.PrincipalID, realtimeTestDevice1)
+	revoked, err := service.Revoke(context.Background(), access.PrincipalID, realtimeTestDevice1, now)
 	if err != nil || revoked != 1 || len(transport.Unsubscribes) != 1 {
 		t.Fatalf("revocation did not unsubscribe: count=%d transport=%+v err=%v", revoked, transport.Unsubscribes, err)
 	}
@@ -293,5 +293,30 @@ func realtimeTestSnapshot(now time.Time, revision int64) telemetryapi.DeviceObse
 			{Present: &telemetryapi.TelemetryPresentState{Key: "temperature", State: "PRESENT", Value: json.RawMessage(`21.5`), ValueType: "NUMBER", Unit: &unitC, SampledAt: instant(now), ReceivedAt: instant(now), Freshness: "FRESH", Quality: telemetryapi.TelemetryQualityGood, QualityReasons: []telemetryapi.QualityReasonCode{}, PolicyRevision: 3}},
 			{Present: &telemetryapi.TelemetryPresentState{Key: "humidity", State: "PRESENT", Value: json.RawMessage(`45`), ValueType: "NUMBER", Unit: &unitPercent, SampledAt: instant(now), ReceivedAt: instant(now), Freshness: "FRESH", Quality: telemetryapi.TelemetryQualityGood, QualityReasons: []telemetryapi.QualityReasonCode{}, PolicyRevision: 3}},
 		},
+	}
+}
+
+// Streams stopped after five minutes when the connection token and the subscriptions
+// expired together: renewal ran only after the subscriptions were gone.
+func TestRealtimeConnectionTokenExpiresBeforeSubscriptions(t *testing.T) {
+	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+	repository := NewMemoryRealtimeRepository()
+	service := newRealtimeTestService(t, repository, &RecordingRealtimeTransport{}, &now)
+	bootstrap, err := service.Bootstrap(context.Background(), realtimeTestAccess(), telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "zone-a", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	connectionExpiresAt, err := time.Parse(time.RFC3339Nano, string(bootstrap.ExpiresAt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := repository.ActiveSubscription(context.Background(), string(bootstrap.Subscriptions[0].SubscriptionId), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewalWindow := subscription.ExpiresAt.Sub(connectionExpiresAt); renewalWindow < ConnectionRenewalWindow {
+		t.Fatalf("connection token leaves only %s to renew subscriptions", renewalWindow)
 	}
 }
