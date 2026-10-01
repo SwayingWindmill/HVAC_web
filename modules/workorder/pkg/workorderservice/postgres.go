@@ -344,6 +344,7 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	if err != nil {
 		return workordermodel.WorkOrder{}, fmt.Errorf("read Work Order completion evidence: %w", err)
 	}
+	workOrder.CompletionEvidence = []workordermodel.EvidenceReference{}
 	for evidenceRows.Next() {
 		var reference workordermodel.EvidenceReference
 		var capturedAt time.Time
