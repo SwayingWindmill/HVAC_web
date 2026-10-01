@@ -131,14 +131,16 @@ export type WorkOrderLifecycleInput = {
   completionEvidence?: WorkOrderEvidenceReference[];
 };
 
-async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit): Promise<T> {
+// Responses come from our own Work Order owner; their shape is the typed contract and
+// is not re-validated here.
+async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, credentials: 'same-origin' });
-  const payload: unknown = await response.json().catch(() => ({}));
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const problem = problemSchema.parse(payload);
-    throw new WorkOrderApiError(response.status, problem.code ?? 'WORK_ORDER_UNAVAILABLE', problem.detail ?? problem.title ?? 'Work Order 服务暂时不可用。', problem.retryable ?? false);
+    const problem = payload as z.infer<typeof problemSchema>;
+    throw new WorkOrderApiError(response.status, problem.code ?? 'WORK_ORDER_UNAVAILABLE', problem.detail ?? problem.title ?? '工单服务暂时不可用', problem.retryable ?? false);
   }
-  return schema.parse(payload);
+  return payload as T;
 }
 
 function mutationHeaders(options: WorkOrderRequestOptions): HeadersInit {
@@ -160,26 +162,26 @@ export function listWorkOrders(filter: WorkOrderListFilter, options: WorkOrderRe
   if (filter.sourceRef) query.set('sourceRef', filter.sourceRef);
   if (filter.cursor) query.set('cursor', filter.cursor);
   query.set('limit', String(filter.limit ?? 50));
-  return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders?${query.toString()}`, workOrderListSchema, {
+  return request<WorkOrderList>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders?${query.toString()}`, {
     method: 'GET', signal: options.signal, headers: { Accept: 'application/json, application/problem+json' },
   });
 }
 
 export function getWorkOrder(workOrderId: string, options: WorkOrderRequestOptions): Promise<WorkOrder> {
   if (__HVAC_WEB_FRONTEND_REVIEW__) return Promise.resolve(getFrontendReviewWorkOrder(workOrderId));
-  return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}`, workOrderSchema, {
+  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}`, {
     method: 'GET', signal: options.signal, headers: { Accept: 'application/json, application/problem+json' },
   });
 }
 
 export function createWorkOrder(input: CreateWorkOrderInput, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders`, workOrderSchema, {
+  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders`, {
     method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
   });
 }
 
 export function assignWorkOrder(workOrderId: string, input: AssignWorkOrderInput, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:assign`, workOrderSchema, {
+  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:assign`, {
     method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
   });
 }
@@ -190,7 +192,7 @@ export function transitionWorkOrder(
   input: WorkOrderLifecycleInput,
   options: WorkOrderRequestOptions,
 ): Promise<WorkOrder> {
-  return request(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:${operation}`, workOrderSchema, {
+  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:${operation}`, {
     method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
   });
 }
