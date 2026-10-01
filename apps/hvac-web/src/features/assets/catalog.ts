@@ -54,7 +54,7 @@ const profile = (
 });
 
 export const REAL_ASSETS_DEVICE_PROFILES = Object.freeze([
-  profile('CHILLER', '冷水机组', ['CHILLER', 'WATER_COOLED_CHILLER'], [
+  profile('CHILLER', '冷水机组', ['CHILLER', 'WATER_COOLED_CHILLER', 'CHILLER_CONTROLLER'], [
     point('chiller.run_state', '运行状态', 10, { trendEligible: false }),
     point('chiller.power', '主机功率', 20, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
     point('chiller.cop', '主机 COP', 30, { precision: 2, trendEligible: true }),
@@ -72,7 +72,7 @@ export const REAL_ASSETS_DEVICE_PROFILES = Object.freeze([
     point('cwp.flow_rate', '冷却水流量', 30, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
     point('cwp.power', '水泵功率', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
   ]),
-  profile('COOLING_TOWER', '冷却塔', ['COOLING_TOWER', 'CT'], [
+  profile('COOLING_TOWER', '冷却塔', ['COOLING_TOWER', 'CT', 'COOLING_TOWER_CONTROLLER'], [
     point('cooling_tower.run_state', '运行状态', 10),
     point('cooling_tower.fan_speed', '风机转速', 20, { defaultUnit: '%', precision: 1, trendEligible: true }),
     point('cooling_tower.approach_temperature', '逼近温度', 30, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
@@ -89,6 +89,22 @@ export const REAL_ASSETS_DEVICE_PROFILES = Object.freeze([
     point('btu_meter.temperature_difference', '供回水温差', 20, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
     point('btu_meter.flow_rate', '冷冻水流量', 30, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
     point('btu_meter.accumulated_cooling_energy', '累计冷量', 40, { defaultUnit: 'kWh', precision: 1, trendEligible: true }),
+  ]),
+  // A pump controller serves either water loop; its source keys tell which one.
+  profile('PUMP', '水泵', ['PUMP_CONTROLLER'], [
+    point('chwp.run_state', '运行状态', 10),
+    point('cwp.run_state', '运行状态', 11),
+    point('chwp.frequency', '运行频率', 20, { defaultUnit: 'Hz', precision: 1, trendEligible: true }),
+    point('cwp.frequency', '运行频率', 21, { defaultUnit: 'Hz', precision: 1, trendEligible: true }),
+    point('chwp.flow_rate', '冷冻水流量', 30, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
+    point('cwp.flow_rate', '冷却水流量', 31, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
+    point('chwp.power', '水泵功率', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+    point('cwp.power', '水泵功率', 41, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+  ]),
+  profile('WEATHER_STATION', '气象站', ['WEATHER_STATION'], [
+    point('weather.ambient_dry_bulb_temperature', '室外干球温度', 10, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
+    point('weather.ambient_wet_bulb_temperature', '室外湿球温度', 20, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
+    point('weather.relative_humidity', '室外相对湿度', 30, { defaultUnit: '%RH', precision: 1, trendEligible: true }),
   ]),
   profile('GENERIC', '通用设备', ['GENERIC'], [
     point('temperature', '温度', 10, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),

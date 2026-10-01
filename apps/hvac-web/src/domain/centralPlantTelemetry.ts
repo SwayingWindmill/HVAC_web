@@ -1,12 +1,4 @@
-export type CentralPlantProfileKind =
-  | 'CHILLER'
-  | 'CHILLED_WATER_PUMP'
-  | 'COOLING_WATER_PUMP'
-  | 'COOLING_TOWER'
-  | 'HVAC_POWER_METER'
-  | 'BTU_METER'
-  | 'GENERIC';
-
+// Operator-facing vocabulary for central-plant telemetry, keyed by the Registry point source key.
 export interface TelemetryPointDefinition {
   key: string;
   label: string;
@@ -14,47 +6,23 @@ export interface TelemetryPointDefinition {
   precision?: number;
 }
 
-export interface DeviceTelemetryProfile {
-  kind: CentralPlantProfileKind;
-  title: string;
-  keys: readonly string[];
-  highlightKeys: readonly string[];
-}
-
-interface PresentTelemetryState {
-  key: string;
-  state: 'PRESENT';
-  value: unknown;
-  unit: string | null;
-  freshness: string;
-  quality: string;
-}
-
-interface MissingTelemetryState {
-  key: string;
-  state: 'MISSING';
-  freshness: 'MISSING';
-}
-
-export interface TelemetrySnapshotLike {
-  values: ReadonlyArray<PresentTelemetryState | MissingTelemetryState>;
-}
-
-export interface DeviceTelemetryHighlight {
-  key: string;
-  label: string;
-  displayValue: string;
-  unit: string | null;
-  state: 'PRESENT' | 'MISSING';
-  freshness: string;
-  quality: string | null;
-}
+// Display resolution follows what an operator reads from the quantity, not sensor noise.
+const PRECISION_BY_UNIT: Readonly<Record<string, number>> = {
+  Cel: 1,
+  '°C': 1,
+  kW: 1,
+  kWh: 0,
+  '%': 1,
+  '%RH': 0,
+  'm3/h': 0,
+  Hz: 1,
+};
 
 const point = (
   key: string,
   label: string,
   defaultUnit?: string,
-  precision = 3,
+  precision = defaultUnit ? PRECISION_BY_UNIT[defaultUnit] ?? 2 : 2,
 ): TelemetryPointDefinition => ({ key, label, defaultUnit, precision });
 
 const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze(Object.fromEntries([
@@ -102,7 +70,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
 
   point('hvac_meter.active_power', '中央空调总功率', 'kW'),
   point('hvac_meter.energy', '累计电量', 'kWh'),
-  point('hvac_meter.power_factor', '功率因数', undefined, 3),
+  point('hvac_meter.power_factor', '功率因数', undefined, 2),
   point('hvac_meter.frequency', '电网频率', 'Hz', 2),
 
   point('btu_meter.supply_water_temperature', '供水温度', 'Cel'),
@@ -117,139 +85,8 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('weather.relative_humidity', '室外相对湿度', '%RH'),
 ].map((definition) => [definition.key, definition])));
 
-const profile = (
-  kind: CentralPlantProfileKind,
-  title: string,
-  keys: readonly string[],
-  highlightKeys: readonly string[],
-): DeviceTelemetryProfile => Object.freeze({ kind, title, keys: Object.freeze([...keys]), highlightKeys: Object.freeze([...highlightKeys]) });
-
-const PROFILES: Readonly<Record<CentralPlantProfileKind, DeviceTelemetryProfile>> = Object.freeze({
-  CHILLER: profile('CHILLER', '冷水机组', [
-    'chiller.run_state',
-    'chiller.power',
-    'chiller.cop',
-    'chiller.cooling_capacity',
-    'chiller.compressor_load',
-    'chiller.load_limit',
-    'chiller.leaving_chilled_water_temperature',
-    'chiller.entering_chilled_water_temperature',
-    'chiller.chilled_water_temperature_setpoint',
-    'chiller.entering_cooling_water_temperature',
-    'chiller.fault_code',
-  ], [
-    'chiller.run_state',
-    'chiller.power',
-    'chiller.cop',
-    'chiller.cooling_capacity',
-  ]),
-  CHILLED_WATER_PUMP: profile('CHILLED_WATER_PUMP', '冷冻水泵', [
-    'chwp.run_state',
-    'chwp.frequency',
-    'chwp.speed',
-    'chwp.flow_rate',
-    'chwp.power',
-    'chwp.fault_code',
-  ], [
-    'chwp.run_state',
-    'chwp.frequency',
-    'chwp.flow_rate',
-    'chwp.power',
-  ]),
-  COOLING_WATER_PUMP: profile('COOLING_WATER_PUMP', '冷却水泵', [
-    'cwp.run_state',
-    'cwp.frequency',
-    'cwp.speed',
-    'cwp.flow_rate',
-    'cwp.power',
-    'cwp.fault_code',
-  ], [
-    'cwp.run_state',
-    'cwp.frequency',
-    'cwp.flow_rate',
-    'cwp.power',
-  ]),
-  COOLING_TOWER: profile('COOLING_TOWER', '冷却塔', [
-    'cooling_tower.run_state',
-    'cooling_tower.fan_speed',
-    'cooling_tower.entering_water_temperature',
-    'cooling_tower.leaving_water_temperature',
-    'cooling_tower.ambient_wet_bulb_temperature',
-    'cooling_tower.approach_temperature',
-    'cooling_tower.power',
-    'cooling_tower.fault_code',
-  ], [
-    'cooling_tower.run_state',
-    'cooling_tower.fan_speed',
-    'cooling_tower.approach_temperature',
-    'cooling_tower.power',
-  ]),
-  HVAC_POWER_METER: profile('HVAC_POWER_METER', '中央空调电表', [
-    'hvac_meter.active_power',
-    'hvac_meter.energy',
-    'hvac_meter.power_factor',
-    'hvac_meter.frequency',
-  ], [
-    'hvac_meter.active_power',
-    'hvac_meter.energy',
-    'hvac_meter.power_factor',
-    'hvac_meter.frequency',
-  ]),
-  BTU_METER: profile('BTU_METER', '冷量表', [
-    'btu_meter.supply_water_temperature',
-    'btu_meter.return_water_temperature',
-    'btu_meter.temperature_difference',
-    'btu_meter.flow_rate',
-    'btu_meter.instant_cooling_capacity',
-    'btu_meter.accumulated_cooling_energy',
-  ], [
-    'btu_meter.instant_cooling_capacity',
-    'btu_meter.temperature_difference',
-    'btu_meter.flow_rate',
-    'btu_meter.accumulated_cooling_energy',
-  ]),
-  GENERIC: profile('GENERIC', '设备遥测', [
-    'temperature',
-    'humidity',
-    'setpoint',
-    'power',
-  ], [
-    'temperature',
-    'humidity',
-    'setpoint',
-    'power',
-  ]),
-});
-
-const TYPE_ALIASES: Readonly<Record<string, CentralPlantProfileKind>> = Object.freeze({
-  GENERIC: 'GENERIC',
-  CHILLER: 'CHILLER',
-  WATER_COOLED_CHILLER: 'CHILLER',
-  CHILLED_WATER_PUMP: 'CHILLED_WATER_PUMP',
-  CHWP: 'CHILLED_WATER_PUMP',
-  COOLING_WATER_PUMP: 'COOLING_WATER_PUMP',
-  CWP: 'COOLING_WATER_PUMP',
-  COOLING_TOWER: 'COOLING_TOWER',
-  CT: 'COOLING_TOWER',
-  HVAC_POWER_METER: 'HVAC_POWER_METER',
-  POWER_METER: 'HVAC_POWER_METER',
-  ELECTRIC_METER: 'HVAC_POWER_METER',
-  BTU_METER: 'BTU_METER',
-  THERMAL_ENERGY_METER: 'BTU_METER',
-  COOLING_METER: 'BTU_METER',
-});
-
-function normalizedDeviceType(deviceType: string | null | undefined): string {
-  return (deviceType ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-}
-
-export function getDeviceTelemetryProfile(deviceType: string | null | undefined): DeviceTelemetryProfile {
-  const kind = TYPE_ALIASES[normalizedDeviceType(deviceType)] ?? 'GENERIC';
-  return PROFILES[kind];
-}
-
 export function telemetryPointDefinition(key: string): TelemetryPointDefinition {
-  return POINTS[key] ?? { key, label: key, precision: 3 };
+  return POINTS[key] ?? { key, label: key, precision: 2 };
 }
 
 function formatNumber(value: number, precision: number): string {
@@ -269,36 +106,4 @@ export function formatTelemetryUnit(unit: string | null | undefined): string | n
   if (unit === 'Cel') return '°C';
   if (unit === 'm3/h') return 'm³/h';
   return unit;
-}
-
-export function buildDeviceTelemetryHighlights(
-  deviceType: string | null | undefined,
-  snapshot: TelemetrySnapshotLike,
-): DeviceTelemetryHighlight[] {
-  const profileDefinition = getDeviceTelemetryProfile(deviceType);
-  const values = new Map(snapshot.values.map((state) => [state.key, state]));
-  return profileDefinition.highlightKeys.map((key) => {
-    const definition = telemetryPointDefinition(key);
-    const state = values.get(key);
-    if (!state || state.state === 'MISSING') {
-      return {
-        key,
-        label: definition.label,
-        displayValue: 'MISSING',
-        unit: null,
-        state: 'MISSING',
-        freshness: 'MISSING',
-        quality: null,
-      };
-    }
-    return {
-      key,
-      label: definition.label,
-      displayValue: formatTelemetryDisplayValue(state.value, definition.precision ?? 3),
-      unit: formatTelemetryUnit(state.unit ?? definition.defaultUnit),
-      state: 'PRESENT',
-      freshness: state.freshness,
-      quality: state.quality,
-    };
-  });
 }
