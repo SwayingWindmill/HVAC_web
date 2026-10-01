@@ -363,7 +363,7 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{PrincipalID: principal.PrincipalID, Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
 }
 
 func (h *handler) ListTenantContexts(writer http.ResponseWriter, request *http.Request) {

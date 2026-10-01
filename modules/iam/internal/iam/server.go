@@ -482,6 +482,7 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 	}
 	roles := effectivePrincipalRoles(roleFacts, claims.TenantID, h.now())
 	response := identitycontext.InternalPrincipalResponse{
+		PrincipalID: roleFacts.Principal.ID,
 		Principal: identitycontext.UserPrincipal{
 			Subject:     claims.Subject,
 			Issuer:      claims.SubjectIssuer,

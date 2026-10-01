@@ -61,6 +61,7 @@ type PrincipalContext struct {
 }
 
 type InternalPrincipalResponse struct {
+	PrincipalID   string                 `json:"principalId"`
 	Principal     UserPrincipal          `json:"principal"`
 	Context       PrincipalContext       `json:"context"`
 	Authorization EffectiveAuthorization `json:"authorization"`

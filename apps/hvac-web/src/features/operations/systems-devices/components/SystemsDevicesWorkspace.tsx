@@ -439,7 +439,7 @@ export function SystemsDevicesWorkspace() {
                     onClick={() =>
                       void navigate({
                         to: "/operations/alarms",
-                        search: { site: currentScope.siteId, device: selected.id },
+                        search: { site: currentScope.siteId },
                       })
                     }
                   >
