@@ -175,7 +175,7 @@ function client(overrides = {}) {
 
 test('transient UI states converge on quiet reusable loading surfaces', () => {
   const appHostSource = fs.readFileSync('apps/hvac-web/src/app/AppRuntimeHost.tsx', 'utf8');
-  const siteRouteSource = fs.readFileSync('apps/hvac-web/src/routes/_app.sites.$siteId.tsx', 'utf8');
+  const siteRouteSource = fs.readFileSync('apps/hvac-web/src/routes/_app._site.tsx', 'utf8');
 
   assert.equal(fs.existsSync('apps/hvac-web/src/app/RouteLoading.tsx'), true);
   const loginStateSource = appHostSource.match(/function LoginRequiredState[\s\S]*?function PrincipalUnavailableState/)?.[0];
@@ -184,7 +184,7 @@ test('transient UI states converge on quiet reusable loading surfaces', () => {
   assert.equal(loginStateSource.includes('服务器 Session 已撤销'), false);
   assert.equal(loginStateSource.includes('RuntimeFacts'), false);
 
-  assert.match(siteRouteSource, /beforeLoad: \(\{ context, params \}\) => requireSite\(context\.runtime, params\.siteId\)/u);
+  assert.match(siteRouteSource, /return requireSite\(context\.runtime, search\.site\)/u);
   assert.match(siteRouteSource, /component: Outlet/u);
 
 });
@@ -379,7 +379,7 @@ test('does not request Registry Sites without the effective site.list capability
     },
   }), env.value);
 
-  await runtime.bootstrap('/sites');
+  await runtime.bootstrap('/overview');
 
   assert.equal(runtime.current().state, 'READY');
   assert.equal(runtime.current().sites.state, 'forbidden');
@@ -398,7 +398,7 @@ test('completed Site discovery does not orphan a pending platform request', asyn
     listSites: async () => ({ data: siteCollection([registrySite()]) }),
   }), env.value);
 
-  void runtime.bootstrap('/sites');
+  void runtime.bootstrap('/overview');
   for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'available'; attempt += 1) {
     await Promise.resolve();
   }
@@ -417,7 +417,7 @@ test('Site discovery is not blocked by a pending platform status request', async
     listSites: async () => ({ data: siteCollection([registrySite()]) }),
   }), env.value);
 
-  const bootstrap = runtime.bootstrap('/sites');
+  const bootstrap = runtime.bootstrap('/overview');
   for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'available'; attempt += 1) {
     await Promise.resolve();
   }
@@ -446,7 +446,7 @@ test('discovers all authorized Sites through bounded cursor pagination', async (
     },
   }), env.value);
 
-  await runtime.bootstrap('/sites');
+  await runtime.bootstrap('/overview');
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].limit, 100);
@@ -463,7 +463,7 @@ test('an empty Registry collection becomes an explicit available zero-Site resul
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client(), env.value);
 
-  await runtime.bootstrap('/sites');
+  await runtime.bootstrap('/overview');
 
   assert.equal(runtime.current().sites.state, 'available');
   assert.equal(runtime.current().sites.items.length, 0);
@@ -482,7 +482,7 @@ test('rejects malformed, cross-Tenant, and duplicate Site discovery responses', 
       listSites: async () => ({ data: siteCollection(items) }),
     }), env.value);
 
-    await runtime.bootstrap('/sites');
+    await runtime.bootstrap('/overview');
 
     assert.equal(runtime.current().state, 'READY');
     assert.equal(runtime.current().sites.state, 'unavailable');
@@ -499,11 +499,11 @@ test('an authentication failure during Site discovery purges protected memory', 
     },
   }), env.value);
 
-  await runtime.bootstrap('/sites');
+  await runtime.bootstrap('/overview');
 
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
   assert.equal(runtime.current().principal, undefined);
-  assert.deepEqual(env.navigations, ['/api/v1/auth/login?returnTo=%2Fsites']);
+  assert.deepEqual(env.navigations, ['/api/v1/auth/login?returnTo=%2Foverview']);
 });
 
 test('late Site discovery cannot reset an in-flight logout', async () => {
@@ -515,7 +515,7 @@ test('late Site discovery cannot reset an in-flight logout', async () => {
     logout: () => pendingLogout.promise,
   }), env.value);
 
-  const bootstrap = runtime.bootstrap('/sites');
+  const bootstrap = runtime.bootstrap('/overview');
   for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'checking'; attempt += 1) {
     await Promise.resolve();
   }
@@ -540,18 +540,18 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   const runtime = runtimeModule.createShellRuntime(client({
     listSites: async () => ({ data: siteCollection([site]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${site.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${site.id}`);
   runtime.activateSiteScope(site.id);
   runtime.registerUnsavedDraft({ id: 'notes', label: 'Operator notes', isDirty: () => true });
   const request = runtime.protectedRequestToken();
 
-  const outcome = await runtime.requestSiteNavigation(`/sites/${site.id}/commands`);
+  const outcome = await runtime.requestSiteNavigation(`/operations/control?site=${site.id}`);
 
   assert.equal(outcome, 'navigated');
   assert.equal(request.signal.aborted, false);
   assert.equal(runtime.current().protectedScope.siteId, site.id);
   assert.equal(runtime.current().protectedScope.draftCount, 1);
-  assert.deepEqual(env.navigations, [`/sites/${site.id}/commands`]);
+  assert.deepEqual(env.navigations, [`/operations/control?site=${site.id}`]);
 });
 
 test('cross-Site navigation warns for drafts and purges before navigation', async () => {
@@ -562,7 +562,7 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
   const runtime = runtimeModule.createShellRuntime(client({
     listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${siteA.id}`);
   runtime.activateSiteScope(siteA.id);
   runtime.registerUnsavedDraft({ id: 'command-form', label: 'Unsaved command', isDirty: () => true });
   runtime.registerProtectedResource({
@@ -576,7 +576,7 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
     purge: (reason) => events.push(`cache:${reason}`),
   });
   const request = runtime.protectedRequestToken();
-  const target = `/sites/${siteB.id}/assets`;
+  const target = `/operations/systems-devices?site=${siteB.id}`;
 
   assert.equal(await runtime.requestSiteNavigation(target), 'confirmation-required');
   assert.equal(runtime.current().siteTransition.status, 'confirmation-required');
@@ -600,7 +600,7 @@ test('failed Site purge blocks navigation and exposes a fail-closed transition',
   const runtime = runtimeModule.createShellRuntime(client({
     listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${siteA.id}`);
   runtime.activateSiteScope(siteA.id);
   runtime.registerProtectedResource({
     id: 's2-session',
@@ -608,7 +608,7 @@ test('failed Site purge blocks navigation and exposes a fail-closed transition',
     purge: () => { throw new Error('close failed'); },
   });
 
-  const outcome = await runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+  const outcome = await runtime.requestSiteNavigation(`/operations/systems-devices?site=${siteB.id}`);
 
   assert.equal(outcome, 'failed');
   assert.equal(runtime.current().siteTransition.status, 'failed');
@@ -625,7 +625,7 @@ test('Session loss and logout completion invoke the same protected purge semanti
     const runtime = runtimeModule.createShellRuntime(client({
       listSites: async () => ({ data: siteCollection([site]) }),
     }), env.value);
-    await runtime.bootstrap(`/sites/${site.id}/assets`);
+    await runtime.bootstrap(`/operations/systems-devices?site=${site.id}`);
     runtime.activateSiteScope(site.id);
     const request = runtime.protectedRequestToken();
     runtime.registerProtectedResource({
@@ -657,7 +657,7 @@ test('material policy revision changes purge scope and rebootstrap the Principal
     },
     listSites: async () => ({ data: siteCollection([site]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${site.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${site.id}`);
   runtime.activateSiteScope(site.id);
   runtime.registerProtectedResource({
     id: 'selected-device',
@@ -681,7 +681,7 @@ test('Session loss interrupts a pending Site purge before target navigation', as
   const runtime = runtimeModule.createShellRuntime(client({
     listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${siteA.id}`);
   runtime.activateSiteScope(siteA.id);
   runtime.registerProtectedResource({
     id: 's2-session',
@@ -689,7 +689,7 @@ test('Session loss interrupts a pending Site purge before target navigation', as
     purge: () => pendingPurge.promise,
   });
 
-  const navigation = runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+  const navigation = runtime.requestSiteNavigation(`/operations/systems-devices?site=${siteB.id}`);
   assert.equal(runtime.current().siteTransition.status, 'purging');
 
   runtime.purge('SESSION_REVOKED', false);
@@ -708,7 +708,7 @@ test('realtime status is scoped to the active Site and clears before Site naviga
   const runtime = runtimeModule.createShellRuntime(client({
     listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
-  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  await runtime.bootstrap(`/operations/systems-devices?site=${siteA.id}`);
   runtime.activateSiteScope(siteA.id);
 
   assert.equal(runtime.current().realtime.state, 'idle');
@@ -728,7 +728,7 @@ test('realtime status is scoped to the active Site and clears before Site naviga
     kind: 'realtime',
     purge: () => pendingPurge.promise,
   });
-  const navigation = runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+  const navigation = runtime.requestSiteNavigation(`/operations/systems-devices?site=${siteB.id}`);
   assert.equal(runtime.current().realtime.state, 'idle');
   assert.equal(runtime.current().realtime.siteId, undefined);
   pendingPurge.resolve();

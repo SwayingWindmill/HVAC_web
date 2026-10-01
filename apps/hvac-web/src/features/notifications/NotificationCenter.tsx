@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
+import { Link } from '@tanstack/react-router';
 import { Check, RefreshCw } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
 import {
@@ -9,7 +10,7 @@ import {
   type NotificationInboxItem,
 } from '@/api/notifications';
 import type { ShellSnapshot } from '@/app/shell-runtime';
-import { siteRoute } from '@/app/router-paths';
+
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -262,7 +263,7 @@ export function NotificationCenter({ snapshot }: NotificationCenterProps) {
                 ))}
               </dl>
               {selected.status === 'UNREAD' ? <Button className="w-full" disabled={markingId === selected.inboxItemId} onClick={() => void markRead(selected)}><Check />标记已读</Button> : null}
-              {selectedSite ? <Button variant="outline" className="w-full" asChild><a href={siteRoute(selectedSite, 'alarms')}>查看该站点告警</a></Button> : null}
+              {selectedSite ? <Button variant="outline" className="w-full" asChild><Link to="/operations/alarms" search={{ site: selectedSite.id }}>查看该站点告警</Link></Button> : null}
             </div>
           ) : null}
         </SheetContent>

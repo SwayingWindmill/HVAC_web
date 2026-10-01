@@ -95,9 +95,18 @@ function formatNumber(value: number, precision: number): string {
   return value.toFixed(precision).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+// Equipment state values reported by plant controllers.
+const STATE_LABELS: Readonly<Record<string, string>> = {
+  RUNNING: '运行',
+  STOPPED: '停机',
+  STANDBY: '待机',
+  FAULT: '故障',
+};
+
 export function formatTelemetryDisplayValue(value: unknown, precision = 3): string {
   if (typeof value === 'number') return formatNumber(value, precision);
-  if (typeof value === 'string' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string') return value === '' ? '—' : STATE_LABELS[value] ?? value;
+  if (typeof value === 'boolean') return String(value);
   return JSON.stringify(value) ?? '—';
 }
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
+import { Fact } from '@/components/common/Fact';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -8,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
+import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import {
   acknowledgeAlarm,
   alarmDetailQuery,
@@ -35,15 +37,6 @@ const PRIORITY_BY_SEVERITY: Readonly<Record<AlarmSeverity, WorkOrderPriority>> =
   INFO: 'LOW',
 };
 
-function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5 text-sm">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="text-right">{children}</dd>
-    </div>
-  );
-}
-
 export function AlarmInspector({ alarmId, deviceNames, onClose }: {
   readonly alarmId: string | undefined;
   readonly deviceNames: ReadonlyMap<string, string>;
@@ -59,7 +52,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
 
   const detail = useQuery({ ...alarmDetailQuery(site.id, alarmId ?? ''), enabled: Boolean(alarmId) });
   const workOrders = useQuery({
-    queryKey: ['alarm-work-orders', site.id, alarmId],
+    queryKey: workOrderKeys.source(site.id, 'ALARM', alarmId ?? ''),
     queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ALARM', sourceRef: alarmId, limit: 20 }, { siteId: site.id, signal }),
     enabled: Boolean(alarmId) && capabilities.includes('work-order.list'),
   });
@@ -106,7 +99,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
               <dl className="divide-y rounded-lg border px-3">
                 <Fact label="设备">
                   {alarm.deviceId ? (
-                    <Link to="/sites/$siteId/devices/$deviceId" params={{ siteId: site.id, deviceId: alarm.deviceId }} className="hover:underline">
+                    <Link to="/operations/systems-devices" search={{ site: site.id, inspect: alarm.deviceId }} className="hover:underline">
                       {deviceName ?? '查看设备'}
                     </Link>
                   ) : '站点级'}
@@ -163,8 +156,8 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
                       {workOrders.data.items.map((workOrder) => (
                         <li key={workOrder.workOrderId} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
                           <Link
-                            to="/sites/$siteId/work-orders/$workOrderId"
-                            params={{ siteId: site.id, workOrderId: workOrder.workOrderId }}
+                            to="/operations/work-center"
+                            search={{ site: site.id, view: 'all', inspect: workOrder.workOrderId }}
                             className="truncate hover:underline"
                           >
                             {workOrder.title}
@@ -202,7 +195,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
                 description: alarm.summary,
               }}
               sourceReferences={[{ domain: 'ALARM', resourceId: alarm.alarmId, relationship: 'ORIGIN' }]}
-              onCreated={() => void queryClient.invalidateQueries({ queryKey: ['alarm-work-orders', site.id, alarm.alarmId] })}
+              onCreated={() => void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) })}
             />
           </>
         )}

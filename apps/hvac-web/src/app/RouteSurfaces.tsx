@@ -1,5 +1,4 @@
 import { Link } from '@tanstack/react-router';
-import type { Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
 import { RouteAccessError } from './route-access';
 import { useShellRuntime, useShellSnapshot } from './ShellRuntimeContext';
@@ -11,27 +10,6 @@ export function ForbiddenSurface() {
       <FocusHeading>访问被拒绝</FocusHeading>
       <p>当前 Principal 无权打开此页面。此状态不会泄露目标资源是否存在。</p>
       <Link className="real-shell-link-action" to="/">返回站点入口</Link>
-    </section>
-  );
-}
-
-export function SiteChooserSurface({ sites }: { sites: readonly Readonly<Site>[] }) {
-  return (
-    <section className="real-route-surface" data-testid="real-site-chooser" data-route-state="CHOOSE_SITE">
-      <p className="real-shell-eyebrow">CHOOSE SITE</p>
-      <FocusHeading>选择一个授权站点</FocusHeading>
-      <p>当前账号可进入多个站点。系统不会静默选择第一个站点。</p>
-      <ul className="real-site-chooser-list" aria-label="授权站点">
-        {sites.map((site) => (
-          <li key={site.id}>
-            <Link to="/sites/$siteId/overview" params={{ siteId: site.id }} data-site-id={site.id}>
-              <strong>{site.displayName}</strong>
-              <span>{site.code}</span>
-              <small>{site.timezone}</small>
-            </Link>
-          </li>
-        ))}
-      </ul>
     </section>
   );
 }
@@ -90,7 +68,13 @@ function SiteNotVisibleSurface() {
       <p className="real-shell-eyebrow">SITE NOT VISIBLE</p>
       <FocusHeading>站点不可见或不存在</FocusHeading>
       <p>系统无法在当前 Tenant 的授权站点集合中验证 URL 中的站点。</p>
-      {sites.length > 0 ? <SiteChooserSurface sites={sites} /> : null}
+      {sites.length > 0 ? (
+        <ul aria-label="授权站点">
+          {sites.map((site) => (
+            <li key={site.id}><Link to="/overview" search={{ site: site.id }}>{site.displayName}</Link></li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }

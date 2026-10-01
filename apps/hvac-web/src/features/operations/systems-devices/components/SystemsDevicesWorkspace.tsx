@@ -1,457 +1,248 @@
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { ChevronRight, RefreshCw, Search } from 'lucide-react';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { OPEN_STATUSES } from '@/features/work-orders/work-order-presentation';
+import { listView, workOrderKeys } from '@/features/work-orders/work-order-queries';
+import { cn } from '@/lib/utils';
 import {
-  operationsFlowQueryOptions,
-  useOperationsReset,
-} from "@/features/operations-flow/api/operations-flow";
-import {
-  ArrowLeftRight,
-  ArrowUpRight,
-  Building2,
-  Fan,
-  Flame,
-  FlaskConical,
-  Gauge,
-  Network,
-  RefreshCw,
-  Search,
-  Snowflake,
-  Waves,
-  Wind,
-  Zap,
-} from "lucide-react";
-import { DataTableBlock } from "@/blocks/data-table";
-import { useQuery } from "@tanstack/react-query";
-import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useWorkspaceScope } from "@/hooks/use-scope";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+  CATEGORY_ICONS,
+  deviceStatus,
+  formatClock,
+  LiveIndicator,
+  POWER_KEY,
+  ReadingValue,
+} from '../../realtime/device-presentation';
+import { PLANT_CATEGORY_LABELS, type PlantCategory, type PlantDevice } from '../../realtime/plant-model';
+import { useRealtimePlant } from '../../realtime/use-realtime-plant';
+import { boundAssetId, deviceLocation, needsAttention } from '../device-ledger';
+import { DeviceInspector } from './DeviceInspector';
 
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
+type StatusFilter = 'running' | 'stopped' | 'attention';
 
-import {
-  WorkspaceHeader,
-  MetricStrip,
-  WorkspaceQueryState,
-} from "@/components/analysis/workspace-parts";
-import type { ColumnDef } from "@tanstack/react-table";
-import type { DataTableFeatures } from "@/components/data-table/data-table-features";
-import { useDataTable } from "@/hooks/use-data-table";
-import { DataTable } from "@/components/data-table/data-table";
+const STATUS_FILTER_LABELS: Readonly<Record<StatusFilter, string>> = {
+  running: '运行',
+  stopped: '停机',
+  attention: '需关注',
+};
 
-import type { DeviceCategory, DeviceItem } from "../api/systems-devices-types";
-const deviceIcons = {
-  chiller: Snowflake,
-  pump: Waves,
-  tower: Fan,
-  ahu: Wind,
-  boiler: Flame,
-  transformer: Zap,
-  "heat-exchanger": ArrowLeftRight,
-  dosing: FlaskConical,
-} satisfies Record<DeviceCategory, typeof Snowflake>;
+const pageRoute = getRouteApi('/_app/_site/operations/systems-devices');
+
+function matchesStatus(device: PlantDevice, status: StatusFilter | undefined): boolean {
+  if (status === 'running') return device.runState === 'RUNNING';
+  if (status === 'stopped') return device.runState === 'STOPPED';
+  if (status === 'attention') return needsAttention(device);
+  return true;
+}
+
 export function SystemsDevicesWorkspace() {
-  const { currentScope } = useWorkspaceScope();
-  const search = useSearch({ from: "/_app/_site/operations/systems-devices" });
-  const navigate = useNavigate({ from: "/operations/systems-devices" });
-  const query = useQuery(operationsFlowQueryOptions(currentScope.id));
-  const reset = useOperationsReset(currentScope.id);
-  const all = query.data?.devices ?? [];
-  const items = all.filter(
-    (item) =>
-      (!search.q ||
-        (
-          item.name +
-          item.systemName +
-          item.spaceName +
-          item.specs.manufacturer
-        ).includes(search.q)) &&
-      (!search.status || item.status === search.status) &&
-      (!search.category || item.category === search.category),
-  );
-  const selected = items.find((item) => item.id === search.inspect);
-  const lens = search.lens ?? "system";
-  const columns: ColumnDef<DataTableFeatures, DeviceItem>[] = [
-    {
-      id: "name",
-      header: "设备",
-      cell: ({ row }) => {
-        const Icon = deviceIcons[row.original.category];
-        return (
-          <div className="flex items-center gap-3 py-2 font-medium">
-            <Icon className="size-5 shrink-0" aria-hidden="true" />
-            <div>
-              {row.original.name}
-              <p className="mt-1 text-xs font-normal text-muted-foreground">
-                {row.original.categoryLabel}
-              </p>
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      id: "context",
-      header:
-        lens === "system"
-          ? "所属系统"
-          : lens === "space"
-            ? "所在空间"
-            : "计量归属",
-      cell: ({ row }) =>
-        lens === "system"
-          ? row.original.systemName
-          : lens === "space"
-            ? row.original.spaceName
-            : row.original.meterName,
-    },
-    {
-      id: "status",
-      header: "当前状态",
-      cell: ({ row }) => (
-        <Badge
-          variant={row.original.status === "alarm" ? "destructive" : "outline"}
-        >
-          {row.original.statusLabel}
-        </Badge>
-      ),
-    },
-    {
-      id: "power",
-      header: "功率 · kW",
-      cell: ({ row }) => (
-        <span className="tabular-nums">
-          {row.original.powerKw.toLocaleString("zh-CN")}
-        </span>
-      ),
-    },
-    {
-      id: "alarms",
-      header: "当前告警",
-      cell: ({ row }) => row.original.activeAlarmsCount,
-    },
-    {
-      id: "owner",
-      header: "负责人",
-      cell: ({ row }) => row.original.specs.responsiblePerson,
-    },
-    {
-      id: "action",
-      header: "",
-      cell: ({ row }) => (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            void navigate({
-              search: (previous) => ({ ...previous, inspect: row.original.id }),
-            })
-          }
-        >
-          <ArrowUpRight aria-hidden="true" data-icon="inline-start" />
-          查看设备
-        </Button>
-      ),
-    },
-  ];
-  const table = useDataTable({
-    key: "device-inventory-review",
-    data: items,
-    columns,
-    paginate: false,
-    getRowId: (item) => item.id,
+  const search = pageRoute.useSearch();
+  const navigate = useNavigate({ from: '/operations/systems-devices' });
+  const { site, plant, mode, registry, current, currentUnavailable, refresh } = useRealtimePlant();
+  const { principal } = pageRoute.useRouteContext();
+  const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
+
+  // Open work orders raised against equipment, counted per Asset. Shares the work
+  // center's open view and its cache.
+  const workOrders = useQuery({
+    queryKey: workOrderKeys.view(site.id, OPEN_STATUSES),
+    queryFn: ({ signal }) => listView(site.id, OPEN_STATUSES, undefined, signal),
+    enabled: principal.authorization.capabilities.includes('work-order.list'),
   });
+  const openWorkOrdersByAsset = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const workOrder of workOrders.data ?? []) {
+      for (const source of workOrder.sourceReferences) {
+        if (source.domain === 'ASSET') counts.set(source.resourceId, (counts.get(source.resourceId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [workOrders.data]);
+
+  const query = search.q?.trim().toLowerCase() ?? '';
+  const groups = plant.groups
+    .filter((group) => !search.category || group.category === search.category)
+    .map((group) => ({
+      ...group,
+      devices: group.devices.filter((device) =>
+        matchesStatus(device, search.status)
+        && (!query || device.name.toLowerCase().includes(query) || deviceLocation(device).toLowerCase().includes(query))),
+    }))
+    .filter((group) => group.devices.length > 0);
+  const inspected = plant.devices.find((device) => device.deviceId === search.inspect);
+
+  const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; inspect?: string }) =>
+    void navigate({ search: (previous) => ({ ...previous, ...patch }) });
+
   return (
     <main className="mx-auto max-w-[1600px] space-y-5 p-6">
       <WorkspaceHeader
         title="系统与设备"
-        actions={
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={reset.isPending}
-              onClick={() => reset.mutate()}
-            >
-              重置模拟
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void query.refetch()}
-            >
-              <RefreshCw aria-hidden="true" data-icon="inline-start" />
-              刷新
+        actions={(
+          <div className="flex items-center gap-4">
+            <LiveIndicator mode={mode} />
+            <Button variant="outline" size="sm" onClick={refresh}>
+              <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
             </Button>
           </div>
-        }
+        )}
       />
-      <WorkspaceQueryState pending={query.isPending} error={query.error} />
-      {query.data && search.inspect && !selected && (
-        <div role="alert" className="rounded-lg border p-4 text-sm">
-          详情不存在或不属于当前结果
-          <Button
-            variant="link"
-            onClick={() =>
-              void navigate({
-                search: (previous) => ({ ...previous, inspect: undefined }),
-              })
-            }
-          >
-            返回列表
-          </Button>
-        </div>
-      )}
-      {query.data && (
+
+      {registry.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>设备台账暂不可用</AlertTitle>
+          <AlertDescription>{registry.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {currentUnavailable ? (
+        <Alert>
+          <AlertTitle>当前工况暂不可读</AlertTitle>
+          <AlertDescription>设备台账已加载，但当前观测值无法读取；运行状态与读数暂不显示。</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {loading ? <Skeleton className="h-96" /> : null}
+
+      {!loading && registry.isSuccess && plant.devices.length === 0 ? (
+        <Alert>
+          <AlertTitle>该站点尚未登记设备</AlertTitle>
+          <AlertDescription>在设备台账中登记设备与点位后，这里会列出它们的运行状态。</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {!loading && plant.devices.length > 0 ? (
         <>
           <MetricStrip
             items={[
-              { label: "设备总数", value: all.length },
-              {
-                label: "运行中",
-                value: all.filter((x) => x.status === "running").length,
-              },
-              {
-                label: "存在告警",
-                value: all.filter((x) => x.activeAlarmsCount > 0).length,
-              },
-              {
-                label: "离线设备",
-                value: all.filter((x) => x.status === "offline").length,
-              },
+              { label: '设备', value: plant.devices.length, unit: '台' },
+              { label: '在线', value: plant.onlineCount, unit: '台' },
+              { label: '运行', value: plant.devices.filter((device) => device.runState === 'RUNNING').length, unit: '台' },
+              { label: '需关注', value: plant.devices.filter(needsAttention).length, unit: '台' },
             ]}
           />
+
           <div className="flex flex-wrap items-center gap-3">
-            <InputGroup className="w-72">
-              <InputGroupAddon>
-                <Search aria-hidden="true" />
-              </InputGroupAddon>
+            <InputGroup className="w-64">
+              <InputGroupAddon><Search aria-hidden="true" /></InputGroupAddon>
               <InputGroupInput
                 aria-label="搜索设备"
-                placeholder="搜索设备、系统或位置"
-                value={search.q ?? ""}
-                onChange={(e) =>
-                  void navigate({
-                    search: (prev) => ({
-                      ...prev,
-                      q: e.target.value || undefined,
-                      inspect: undefined,
-                    }),
-                  })
-                }
+                placeholder="设备名称或位置"
+                value={search.q ?? ''}
+                onChange={(event) => setSearch({ q: event.target.value || undefined })}
               />
             </InputGroup>
             <Select
-              value={search.category ?? "all"}
-              onValueChange={(category) =>
-                void navigate({
-                  search: (prev) => ({
-                    ...prev,
-                    category: category === "all" ? undefined : category,
-                  }),
-                })
-              }
+              value={search.category ?? 'ALL'}
+              onValueChange={(value) => setSearch({ category: value === 'ALL' ? undefined : value as PlantCategory })}
             >
-              <SelectTrigger aria-label="设备类型" className="w-40">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-36" aria-label="设备类型"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部类型</SelectItem>
-                {[
-                  ...new Map(
-                    all.map((x) => [x.category, x.categoryLabel]),
-                  ).entries(),
-                ].map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
+                <SelectItem value="ALL">全部类型</SelectItem>
+                {plant.groups.map((group) => <SelectItem key={group.category} value={group.category}>{group.label}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select
-              value={search.status ?? "all"}
-              onValueChange={(status) =>
-                void navigate({
-                  search: (prev) => ({
-                    ...prev,
-                    status:
-                      status === "all"
-                        ? undefined
-                        : (status as
-                            "running" | "standby" | "alarm" | "offline"),
-                  }),
-                })
-              }
+              value={search.status ?? 'ALL'}
+              onValueChange={(value) => setSearch({ status: value === 'ALL' ? undefined : value as StatusFilter })}
             >
-              <SelectTrigger aria-label="设备状态" className="w-36">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-32" aria-label="运行状态"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="running">运行</SelectItem>
-                <SelectItem value="standby">待机</SelectItem>
-                <SelectItem value="alarm">告警</SelectItem>
-                <SelectItem value="offline">离线</SelectItem>
+                <SelectItem value="ALL">全部状态</SelectItem>
+                {(Object.keys(STATUS_FILTER_LABELS) as StatusFilter[]).map((status) => (
+                  <SelectItem key={status} value={status}>{STATUS_FILTER_LABELS[status]}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
-            <Tabs
-              className="ml-auto"
-              value={lens}
-              onValueChange={(lens) =>
-                void navigate({
-                  search: (prev) => ({
-                    ...prev,
-                    lens: lens as "system" | "space" | "meter",
-                  }),
-                })
-              }
-            >
-              <TabsList>
-                <TabsTrigger
-                  value="system"
-                  className="inline-flex items-center gap-2"
-                >
-                  <Network className="size-4" aria-hidden="true" />
-                  按系统
-                </TabsTrigger>
-                <TabsTrigger
-                  value="space"
-                  className="inline-flex items-center gap-2"
-                >
-                  <Building2 className="size-4" aria-hidden="true" />
-                  按空间
-                </TabsTrigger>
-                <TabsTrigger
-                  value="meter"
-                  className="inline-flex items-center gap-2"
-                >
-                  <Gauge className="size-4" aria-hidden="true" />
-                  按计量
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
           </div>
-          <DataTableBlock>
-            <DataTable table={table} />
-          </DataTableBlock>
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">设备</TableHead>
+                    <TableHead className="w-32">安装位置</TableHead>
+                    <TableHead className="w-32">状态</TableHead>
+                    <TableHead className="w-28 text-right">功率</TableHead>
+                    <TableHead className="w-32 text-right">点位正常</TableHead>
+                    <TableHead className="w-28 text-right">未完成工单</TableHead>
+                    <TableHead className="w-28 text-right">数据时间</TableHead>
+                    <TableHead className="w-8" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {groups.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">没有符合条件的设备</TableCell>
+                    </TableRow>
+                  ) : groups.flatMap((group) => {
+                    const Icon = CATEGORY_ICONS[group.category];
+                    return [
+                      <TableRow key={group.category} className="bg-muted/30 hover:bg-muted/30">
+                        <TableCell colSpan={8} className="py-1.5 pl-4">
+                          <span className="flex items-center gap-2 text-xs font-medium">
+                            {Icon ? <Icon className="size-3.5" aria-hidden="true" /> : null}
+                            {group.label}
+                            <span className="font-normal text-muted-foreground">{group.devices.length} 台</span>
+                          </span>
+                        </TableCell>
+                      </TableRow>,
+                      ...group.devices.map((device) => {
+                        const status = deviceStatus(device);
+                        const powerKey = POWER_KEY[device.category];
+                        const points = device.row.operational.points;
+                        const healthy = points.filter((point) => point.freshness === 'FRESH' && point.quality === 'GOOD').length;
+                        const assetId = boundAssetId(device);
+                        const openWorkOrders = assetId ? openWorkOrdersByAsset.get(assetId) ?? 0 : 0;
+                        return (
+                          <TableRow
+                            key={device.deviceId}
+                            className="cursor-pointer"
+                            data-state={search.inspect === device.deviceId ? 'selected' : undefined}
+                            onClick={() => setSearch({ inspect: device.deviceId })}
+                          >
+                            <TableCell className="pl-4 font-medium">{device.name}</TableCell>
+                            <TableCell>{deviceLocation(device)}</TableCell>
+                            <TableCell><StatusBadge tone={status.tone} label={status.label} /></TableCell>
+                            <TableCell className="text-right">
+                              {powerKey ? <ReadingValue reading={device.reading(powerKey)} /> : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className={cn('text-right tabular-nums', healthy < points.length && 'text-amber-600 dark:text-amber-400')}>
+                              {healthy} / {points.length}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {openWorkOrders > 0 ? openWorkOrders : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className={cn('text-right tabular-nums', device.hasStaleData && 'text-amber-600 dark:text-amber-400')}>
+                              {formatClock(device.latestSampleAt, site.timezone)}
+                            </TableCell>
+                            <TableCell><ChevronRight className="size-4 text-muted-foreground" aria-hidden="true" /></TableCell>
+                          </TableRow>
+                        );
+                      }),
+                    ];
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
-      )}
-      <Sheet
-        modal={false}
-        open={!!selected}
-        onOpenChange={(open) => {
-          if (!open)
-            void navigate({
-              search: (previous) => ({ ...previous, inspect: undefined }),
-            });
-        }}
-      >
-        <SheetContent
-          showOverlay={false}
-          className="w-[580px] sm:max-w-[580px] overflow-y-auto"
-        >
-          <SheetHeader>
-            <SheetTitle>{selected?.name}</SheetTitle>
-            <SheetDescription>
-              {selected?.systemName} · {selected?.spaceName}
-            </SheetDescription>
-          </SheetHeader>
-          {selected && (
-            <div className="space-y-5 p-6">
-              <MetricStrip
-                items={[
-                  { label: "当前功率", value: selected.powerKw, unit: "kW" },
-                  { label: "负荷率", value: selected.loadPercent, unit: "%" },
-                ]}
-              />
-              <Tabs defaultValue="identity" key={selected.id}>
-                <TabsList>
-                  <TabsTrigger
-                    value="identity"
-                    className="inline-flex items-center gap-2"
-                  >
-                    资产信息
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="operation"
-                    className="inline-flex items-center gap-2"
-                  >
-                    运行与告警
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="identity">
-                  <dl className="space-y-4 py-4">
-                    {[
-                      ["制造商", selected.specs.manufacturer],
-                      ["型号", selected.specs.model],
-                      ["额定功率", selected.specs.ratedPowerKw + " kW"],
-                      ["计量归属", selected.meterName],
-                      ["安装日期", selected.specs.installDate],
-                      ["下次保养", selected.specs.nextMaintenanceDate],
-                      ["负责人", selected.specs.responsiblePerson],
-                    ].map(([label, value]) => (
-                      <div
-                        key={label}
-                        className="flex justify-between gap-6 border-b pb-3 text-sm"
-                      >
-                        <dt>{label}</dt>
-                        <dd className="text-right font-medium">{value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </TabsContent>
-                <TabsContent value="operation" className="space-y-4 py-4">
-                  <Badge variant="outline">{selected.statusLabel}</Badge>
-                  {selected.supplyTemp !== undefined && (
-                    <p>
-                      供 / 回水温度 {selected.supplyTemp} /{" "}
-                      {selected.returnTemp} °C
-                    </p>
-                  )}
-                  {selected.cop !== undefined && <p>COP {selected.cop}</p>}
-                  {selected.activeAlarms?.map((alarm) => (
-                    <div key={alarm.id} className="rounded-lg border p-3">
-                      <p className="font-medium">{alarm.message}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {alarm.triggeredAt}
-                      </p>
-                    </div>
-                  ))}
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void navigate({
-                        to: "/operations/alarms",
-                        search: { site: currentScope.siteId },
-                      })
-                    }
-                  >
-                    <ArrowUpRight aria-hidden="true" data-icon="inline-start" />
-                    查看相关告警
-                  </Button>
-                </TabsContent>
-              </Tabs>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+      ) : null}
+
+      <DeviceInspector
+        device={inspected}
+        categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
+        onClose={() => setSearch({ inspect: undefined })}
+      />
     </main>
   );
 }

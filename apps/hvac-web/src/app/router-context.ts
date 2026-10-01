@@ -3,7 +3,6 @@ import type { Capability } from '@/api/generated/platformGateway.gen';
 import type { RealtimeStatusUpdate } from './realtime-status';
 import type { RuntimeConfig } from './runtime-config';
 import type { ShellRuntime } from './shell-runtime';
-import type { SiteRouteLeaf } from './router-paths';
 
 export type RouteScope = 'platform' | 'site';
 
@@ -13,7 +12,6 @@ export interface RouteNavigationMeta {
   readonly group?: 'operate' | 'management' | 'energy' | 'automation' | 'analysis' | 'system';
   readonly order: number;
   readonly primary?: boolean;
-  readonly siteLeaf?: SiteRouteLeaf;
 }
 
 export interface NavigationItem {
@@ -24,7 +22,6 @@ export interface NavigationItem {
   readonly group?: RouteNavigationMeta['group'];
   readonly degraded: boolean;
   readonly primary?: boolean;
-  readonly siteLeaf?: SiteRouteLeaf;
 }
 
 export interface HvacRouterContext {

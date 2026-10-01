@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
+import { Fact } from '@/components/common/Fact';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -12,9 +13,11 @@ import {
   workOrderErrorMessage,
   type WorkOrder,
 } from '@/api/work-orders';
+import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { STATUS_LABELS } from '../work-order-presentation';
-import { PriorityBadge, workOrderKeys } from './WorkCenterWorkspace';
+import { workOrderKeys } from '../work-order-queries';
+import { PriorityBadge } from './WorkCenterWorkspace';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -56,15 +59,6 @@ const OPERATION_LABELS: Readonly<Record<string, string>> = {
   REOPEN: '重新打开',
 };
 
-function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5 text-sm">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="text-right">{children}</dd>
-    </div>
-  );
-}
-
 export function WorkOrderInspector({ workOrderId, onClose }: {
   readonly workOrderId: string | undefined;
   readonly onClose: () => void;
@@ -73,6 +67,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<Transition | null>(null);
   const [note, setNote] = useState('');
+  const equipment = useSiteEquipment(site.id);
   const myId = principal.principalId;
   const capabilities = principal.authorization.capabilities;
   const options = { siteId: site.id, csrfToken: principal.session.csrfToken };
@@ -110,6 +105,8 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   const actions = workOrder && capabilities.includes('work-order.lifecycle') ? ACTIONS[workOrder.status] ?? [] : [];
   const pendingAction = actions.find((action) => action.transition === pending);
   const alarmSource = workOrder?.sourceReferences.find((source) => source.domain === 'ALARM');
+  const assetSource = workOrder?.sourceReferences.find((source) => source.domain === 'ASSET');
+  const sourceDevice = assetSource ? equipment.deviceByAsset.get(assetSource.resourceId) : undefined;
   const error = claim.error ?? transition.error;
   const tasksIncomplete = workOrder ? workOrder.tasks.completed < workOrder.tasks.total : false;
 
@@ -147,6 +144,10 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                   {alarmSource ? (
                     <Link to="/operations/alarms" search={{ site: site.id, view: 'all', inspect: alarmSource.resourceId }} className="hover:underline">
                       查看来源告警
+                    </Link>
+                  ) : sourceDevice ? (
+                    <Link to="/operations/systems-devices" search={{ site: site.id, inspect: sourceDevice.deviceId }} className="hover:underline">
+                      {sourceDevice.name}
                     </Link>
                   ) : '人工创建'}
                 </Fact>

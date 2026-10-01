@@ -114,6 +114,21 @@ try {
       report.assertions.goIntegration.includes('--- SKIP:')) {
     throw new Error('history integration tests must execute, not skip');
   }
+  report.assertions.queryClient = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=modules/telemetry',
+    'test', '-count=1', '-run', 'TestClickHouseHistoryClient', '-v', './internal/history/...',
+  ], {
+    env: {
+      ...process.env,
+      HISTORY_QUERY_CLICKHOUSE_TEST_URL: clickHouseURL,
+      HISTORY_QUERY_CLICKHOUSE_TEST_USERNAME: 'telemetry_query_history_reader',
+    },
+  });
+  if (!report.assertions.queryClient.includes('--- PASS: TestClickHouseHistoryClientAggregatesHourly') ||
+      report.assertions.queryClient.includes('--- SKIP:')) {
+    throw new Error('history query client integration tests must execute, not skip');
+  }
   report.assertions.outbox = psql(`
     SELECT delivery_state || '|' || attempts::text || '|' || (published_at IS NOT NULL)::text
     FROM telemetry_runtime.telemetry_history_outbox
