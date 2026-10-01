@@ -94,6 +94,19 @@ func TestWorkOrderValidateAcceptsAssetReferences(t *testing.T) {
 	}
 }
 
+func TestWorkOrderValidateAcceptsEquipmentWithoutAssetAlias(t *testing.T) {
+	item := validWorkOrder()
+	item.SourceReferences[0] = workordermodel.SourceReference{
+		Domain: workordermodel.SourceEquipment, ResourceID: "01910000-0005-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin,
+	}
+	if err := item.Validate(); err != nil {
+		t.Fatalf("Equipment reference was rejected: %v", err)
+	}
+	if item.SourceReferences[0].Domain != workordermodel.SourceEquipment || item.SourceReferences[0].Domain == workordermodel.SourceAsset {
+		t.Fatalf("Equipment source domain drifted to %q", item.SourceReferences[0].Domain)
+	}
+}
+
 func TestListResponseRejectsCrossScopeAndDuplicateItems(t *testing.T) {
 	item := validWorkOrder()
 	response := workordermodel.ListResponse{SchemaVersion: 1, Items: []workordermodel.WorkOrder{item}, HasMore: false}

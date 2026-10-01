@@ -84,7 +84,7 @@ for (const marker of ['AcceptanceOutOfOrder', 'ValueTypeNumber', 'ValueTypeStrin
 for (const marker of ['PointTypeTelemetry', 'PointTypeCounter', 'PointTypeState', 'AggregateGranularityDay', 'AggregateQualityValidOnly', 'AggregateQualityUsable', 'CounterAggregate', 'StateAggregate']) {
   assert(aggregateModel.includes(marker), `missing typed aggregate model marker ${marker}`);
 }
-for (const marker of ["acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')", "value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')", 'ORDER BY telemetry_key, sampled_at, toString(observation_id)', 'max(projected_at)', 'LastObservationID']) {
+for (const marker of ["acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')", "value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')", 'ORDER BY telemetry_key, history_source.sampled_at, toString(observation_id)', 'max(projected_at)', 'LastObservationID']) {
   assert(historyClient.includes(marker), `missing stable typed History query marker ${marker}`);
 }
 for (const marker of ['RESET_TO_ZERO', 'ROLLOVER', 'REVISION_BOUNDARY', 'UNIT_BOUNDARY', 'previous_quality', 'toStartOfDay', 'toStartOfMonth']) {

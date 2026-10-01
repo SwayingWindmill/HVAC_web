@@ -30,7 +30,9 @@ var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,12
 type Filter struct {
 	Status     workordermodel.Status
 	Priority   workordermodel.Priority
-	AssigneeID string
+	AssigneeID   string
+	SourceDomain workordermodel.SourceDomain
+	SourceRef    string
 	Cursor     string
 	Limit      int
 }
@@ -89,6 +91,7 @@ type MutationResult struct {
 type Store interface {
 	List(context.Context, string, string, Filter) (workordermodel.ListResponse, error)
 	Get(context.Context, string, string, string) (workordermodel.WorkOrder, error)
+
 	Create(context.Context, string, string, CreateMutation) (MutationResult, error)
 	Assign(context.Context, string, string, string, AssignmentMutation) (MutationResult, error)
 	Transition(context.Context, string, string, string, LifecycleMutation) (MutationResult, error)
@@ -132,7 +135,7 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	filter = normalizeFilter(filter)
-	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 {
+	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 || !validSourceFilter(filter) {
 		return workordermodel.ListResponse{}, ErrInvalidFilter
 	}
 	var position *cursorPosition
@@ -412,6 +415,7 @@ func trimmedOptional(value *string) *string {
 
 func normalizeFilter(filter Filter) Filter {
 	filter.AssigneeID = strings.TrimSpace(filter.AssigneeID)
+	filter.SourceRef = strings.TrimSpace(filter.SourceRef)
 	filter.Cursor = strings.TrimSpace(filter.Cursor)
 	if filter.Limit <= 0 || filter.Limit > 100 {
 		filter.Limit = 50
@@ -437,6 +441,24 @@ func validPriorityFilter(priority workordermodel.Priority) bool {
 	}
 }
 
+func validSourceFilter(filter Filter) bool {
+	if filter.SourceDomain == "" || filter.SourceRef == "" {
+		return filter.SourceDomain == "" && filter.SourceRef == ""
+	}
+	switch filter.SourceDomain {
+	case workordermodel.SourceManual, workordermodel.SourceAlarm, workordermodel.SourceAsset, workordermodel.SourceEquipment, workordermodel.SourceInvestigation, workordermodel.SourceExternal:
+	default:
+		return false
+	}
+	if len(filter.SourceRef) > 512 {
+		return false
+	}
+	if filter.SourceDomain != workordermodel.SourceManual && filter.SourceDomain != workordermodel.SourceExternal {
+		return workordermodel.IsUUIDv7(filter.SourceRef)
+	}
+	return true
+}
+
 func matchesFilter(workOrder workordermodel.WorkOrder, filter Filter) bool {
 	filter = normalizeFilter(filter)
 	if filter.Status != "" && workOrder.Status != filter.Status {
@@ -447,6 +469,18 @@ func matchesFilter(workOrder workordermodel.WorkOrder, filter Filter) bool {
 	}
 	if filter.AssigneeID != "" && (workOrder.AssigneeID == nil || *workOrder.AssigneeID != filter.AssigneeID) {
 		return false
+	}
+	if filter.SourceDomain != "" {
+		matched := false
+		for _, reference := range workOrder.SourceReferences {
+			if reference.Domain == filter.SourceDomain && reference.ResourceID == filter.SourceRef {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	return true
 }

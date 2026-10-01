@@ -19,6 +19,87 @@ const (
 	integrationB     = "018f2e00-6000-7000-8000-000000000002"
 )
 
+func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetIngestState(t, admin)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	baselineAt := time.Date(2026, 7, 24, 0, 0, 5, 0, time.UTC)
+	if _, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: deviceA}, baselineAt); err != nil {
+		t.Fatal(err)
+	}
+	liveAt := time.Date(2026, 7, 24, 0, 1, 2, 0, time.UTC)
+	live := ingestCandidate(
+		ingestEvent(201), integrationA, ingestPartitionA, 1, SourcePathWebhook,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`24.0`), "NUMBER", "Cel",
+		liveAt.Add(-2*time.Second), liveAt,
+	)
+	liveReceipt, err := store.AcceptObservation(ctx, live)
+	if err != nil || liveReceipt.Status != ObservationAccepted || liveReceipt.BusinessRevision != 2 {
+		t.Fatalf("live receipt=%#v err=%v", liveReceipt, err)
+	}
+
+	var latestValue, snapshotSHA string
+	var latestRevision, snapshotRevision, presenceSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text, business_revision FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid AND telemetry_key='zone.temperature'`, deviceA).Scan(&latestValue, &latestRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT business_revision, snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id=$1::uuid`, deviceA).Scan(&snapshotRevision, &snapshotSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id=$1::uuid`, deviceA).Scan(&presenceSignals); err != nil {
+		t.Fatal(err)
+	}
+
+	replay := ingestCandidate(
+		ingestEvent(202), integrationA, "tb-ticket-04-replay", 1, SourcePathHistoryReplay,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`21.5`), "NUMBER", "Cel",
+		time.Date(2026, 7, 23, 0, 10, 0, 0, time.UTC), liveAt.Add(time.Minute),
+	)
+	replayReceipt, err := store.AcceptHistoricalObservation(ctx, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayReceipt.Status != ObservationAccepted || replayReceipt.Quality != QualityGood || replayReceipt.BusinessRevision != 0 || replayReceipt.StateChanged || !replayReceipt.PositionAdvanced {
+		t.Fatalf("replay receipt=%#v", replayReceipt)
+	}
+	assertObservationRow(t, admin, replay.Position.EventID, "ACCEPTED", "GOOD", "HISTORY_REPLAY", true)
+	assertHistoryOutbox(t, admin, replay.Position.EventID, "ACCEPTED", "", siteA, deviceA, true)
+
+	duplicate, err := store.AcceptHistoricalObservation(ctx, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.Status != ObservationDuplicate || duplicate.ObservationID != replayReceipt.ObservationID || duplicate.BusinessRevision != 0 || duplicate.StateChanged {
+		t.Fatalf("replay duplicate=%#v", duplicate)
+	}
+
+	var afterLatestValue, afterSnapshotSHA string
+	var afterLatestRevision, afterSnapshotRevision, afterPresenceSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text, business_revision FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid AND telemetry_key='zone.temperature'`, deviceA).Scan(&afterLatestValue, &afterLatestRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT business_revision, snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id=$1::uuid`, deviceA).Scan(&afterSnapshotRevision, &afterSnapshotSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id=$1::uuid`, deviceA).Scan(&afterPresenceSignals); err != nil {
+		t.Fatal(err)
+	}
+	if afterLatestValue != latestValue || afterLatestRevision != latestRevision || afterSnapshotRevision != snapshotRevision || afterSnapshotSHA != snapshotSHA || afterPresenceSignals != presenceSignals {
+		t.Fatalf("Historical Replay mutated Current: latest=%s/%d -> %s/%d snapshot=%d/%s -> %d/%s presence=%d -> %d", latestValue, latestRevision, afterLatestValue, afterLatestRevision, snapshotRevision, snapshotSHA, afterSnapshotRevision, afterSnapshotSHA, presenceSignals, afterPresenceSignals)
+	}
+}
+
 func TestPostgresIngestEndToEnd(t *testing.T) {
 	runtimeURL, adminURL := postgresTestURLs(t)
 	ctx := t.Context()

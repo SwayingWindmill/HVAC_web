@@ -43,6 +43,8 @@ type ServerConfig struct {
 	AllowedSnapshotReaderSPIFFEs   []string
 	RuntimeAudience                string
 	ObservationAcceptor            ObservationAcceptor
+	HistoricalObservationAcceptor  HistoricalObservationAcceptor
+	AllowedHistoricalReplaySPIFFE  string
 	CoverageReporter               CoverageReporter
 	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
 	SourceAuthenticator            SourceAuthenticator
@@ -69,6 +71,8 @@ type handler struct {
 	allowedSnapshotReaderSPIFFEs   map[string]struct{}
 	runtimeAudience                string
 	observationAcceptor            ObservationAcceptor
+	historicalObservationAcceptor  HistoricalObservationAcceptor
+	allowedHistoricalReplaySPIFFE  string
 	coverageReporter               CoverageReporter
 	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
 	sourceAuthenticator            SourceAuthenticator
@@ -118,6 +122,8 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedSnapshotReaderSPIFFEs: allowedSnapshotReaderSPIFFEs,
 		runtimeAudience:              strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:          config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
+		historicalObservationAcceptor:  config.HistoricalObservationAcceptor,
+		allowedHistoricalReplaySPIFFE:  strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
 		sourceAuthenticator:            config.SourceAuthenticator,
 		realtime:                       config.Realtime,
@@ -149,6 +155,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer = captured
 	if request.URL.Path == InternalSourceObservationPath {
 		h.handleSourceObservation(writer, request)
+		return
+	}
+	if request.URL.Path == InternalHistoricalReplayObservationPath {
+		h.handleHistoricalReplayObservation(writer, request)
 		return
 	}
 	if request.URL.Path == InternalSourceCoveragePath {

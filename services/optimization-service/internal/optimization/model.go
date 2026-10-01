@@ -112,19 +112,21 @@ func (request Request) Validate() error {
 	if request.ValidFrom.IsZero() {
 		return errors.New("validFrom is required")
 	}
-	if !finitePositive(request.Baseline.DailyEnergyKWh) || !finiteNonNegative(request.Baseline.DailyCost) || !finite(request.Baseline.SupplyTempC) || !finite(request.Baseline.ZoneTempC) {
+	return validateHVACExecutionInputs(request.Baseline, request.Constraints, request.ResponseModel)
+}
+
+func validateHVACExecutionInputs(baseline HVACBaseline, constraints HVACConstraints, model HVACResponseModel) error {
+	if !finitePositive(baseline.DailyEnergyKWh) || !finiteNonNegative(baseline.DailyCost) || !finite(baseline.SupplyTempC) || !finite(baseline.ZoneTempC) {
 		return errors.New("HVAC baseline values are invalid")
 	}
-	constraints := request.Constraints
 	if !finite(constraints.SupplyTempMinC) || !finite(constraints.SupplyTempMaxC) || constraints.SupplyTempMinC >= constraints.SupplyTempMaxC ||
 		!finite(constraints.ZoneTempMinC) || !finite(constraints.ZoneTempMaxC) || constraints.ZoneTempMinC >= constraints.ZoneTempMaxC || !finitePositive(constraints.MaxSupplyTempStep) {
 		return errors.New("HVAC comfort/safety constraints are invalid")
 	}
-	if request.Baseline.SupplyTempC < constraints.SupplyTempMinC || request.Baseline.SupplyTempC > constraints.SupplyTempMaxC ||
-		request.Baseline.ZoneTempC < constraints.ZoneTempMinC || request.Baseline.ZoneTempC > constraints.ZoneTempMaxC {
+	if baseline.SupplyTempC < constraints.SupplyTempMinC || baseline.SupplyTempC > constraints.SupplyTempMaxC ||
+		baseline.ZoneTempC < constraints.ZoneTempMinC || baseline.ZoneTempC > constraints.ZoneTempMaxC {
 		return errors.New("HVAC baseline is already outside the frozen constraints")
 	}
-	model := request.ResponseModel
 	if !finite(model.DailyEnergyDeltaPerSupplyTempC) || !finite(model.ZoneTempDeltaPerSupplyTempC) || !finiteNonNegative(model.EnergyUncertaintyP90KWh) || !finiteNonNegative(model.ZoneTempUncertaintyP90C) {
 		return errors.New("HVAC response model coefficients or uncertainty are invalid")
 	}

@@ -34,11 +34,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	inputs, err := optimization.NewClickHouseInputReader(optimization.InputReaderConfig{
+		BaseURL:  requiredEnv("OPTIMIZATION_CLICKHOUSE_HTTP_URL"),
+		Username: envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
+		Password: os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	preparer, err := optimization.NewPreparer(publication, inputs, time.Now)
+	if err != nil {
+		log.Fatal(err)
+	}
 	service, err := optimization.NewDefaultService(publication, evaluations, time.Now)
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := optimization.NewHTTPHandler(service)
+	handler, err := optimization.NewHTTPHandler(service, preparer)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -128,13 +140,18 @@ func executeOptimizationJob(ctx context.Context, store *optimization.PostgresSto
 	if !started {
 		return
 	}
-	request, validationErr := optimization.ValidateOptimizationSchedulerJob(job)
+	reference, validationErr := optimization.ValidateOptimizationSchedulerJob(job)
 	if validationErr != nil {
 		_ = store.FailOptimizationJob(context.Background(), job, "OPTIMIZATION_JOB_INVALID", validationErr, false, time.Now().UTC())
 		return
 	}
 	jobCtx, cancelJob := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
 	defer cancelJob()
+	request, loadErr := store.LoadOptimizationRequest(jobCtx, job.TenantID, job.SiteID, reference)
+	if loadErr != nil {
+		_ = store.FailOptimizationJob(context.Background(), job, "OPTIMIZATION_INPUT_LOAD_FAILED", loadErr, false, time.Now().UTC())
+		return
+	}
 	leaseStop := make(chan struct{})
 	leaseDone := make(chan struct{})
 	go func() {

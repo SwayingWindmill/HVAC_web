@@ -11,6 +11,7 @@ import (
 )
 
 const mqttSourceSPIFFE = "spiffe://hvac.local/mqtt-telemetry-adapter"
+const replaySourceSPIFFE = "spiffe://hvac.local/historical-replay-runner"
 
 type fakeObservationAcceptor struct {
 	candidates []ObservationCandidate
@@ -19,6 +20,17 @@ type fakeObservationAcceptor struct {
 }
 
 func (fake *fakeObservationAcceptor) AcceptObservation(_ context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
+	fake.candidates = append(fake.candidates, candidate)
+	return fake.receipt, fake.err
+}
+
+type fakeHistoricalObservationAcceptor struct {
+	candidates []ObservationCandidate
+	receipt    ObservationReceipt
+	err        error
+}
+
+func (fake *fakeHistoricalObservationAcceptor) AcceptHistoricalObservation(_ context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
 	fake.candidates = append(fake.candidates, candidate)
 	return fake.receipt, fake.err
 }
@@ -78,6 +90,85 @@ func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 				t.Fatalf("candidate=%#v", candidate)
 			}
 		})
+	}
+}
+
+func TestHistoricalReplayRouteOwnsProvenanceAndEventIdentity(t *testing.T) {
+	now := time.Date(2026, 8, 28, 15, 30, 0, 0, time.UTC)
+	acceptor := &fakeHistoricalObservationAcceptor{receipt: ObservationReceipt{
+		ObservationID: eventA, Status: ObservationAccepted, Quality: QualityGood, DeviceID: deviceA, PositionAdvanced: true,
+	}}
+	handler := NewHandler(ServerConfig{
+		HistoricalObservationAcceptor: acceptor,
+		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
+		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
+		Now:                 func() time.Time { return now },
+	})
+	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
+
+	request := httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(replaySourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(acceptor.candidates) != 1 {
+		t.Fatalf("candidates=%#v", acceptor.candidates)
+	}
+	candidate := acceptor.candidates[0]
+	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.ExternalID != "tb-device-org-a-site-1" || candidate.ReceivedAt != now || candidate.Position.Offset != 7 {
+		t.Fatalf("candidate=%#v", candidate)
+	}
+	if !strings.HasPrefix(candidate.Position.Partition, "history-replay:01991f00-0000-7000-8000-000000000001:") || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
+		t.Fatalf("position=%#v", candidate.Position)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(replaySourceSPIFFE)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || len(acceptor.candidates) != 2 || acceptor.candidates[1].Position != candidate.Position {
+		t.Fatalf("second replay status=%d candidates=%#v", recorder.Code, acceptor.candidates)
+	}
+}
+
+func TestHistoricalReplayRequiresDedicatedWorkloadIdentity(t *testing.T) {
+	acceptor := &fakeHistoricalObservationAcceptor{}
+	handler := NewHandler(ServerConfig{
+		HistoricalObservationAcceptor: acceptor,
+		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
+		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
+	})
+	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
+	request := httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "TELEMETRY_SOURCE_IDENTITY_INVALID") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(acceptor.candidates) != 0 {
+		t.Fatalf("non-replay workload reached Historical Replay acceptance: %#v", acceptor.candidates)
+	}
+}
+
+func TestHistoricalReplayCannotEnterThroughLiveSourceRoute(t *testing.T) {
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor:  &fakeObservationAcceptor{},
+		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
+	})
+	body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}`
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(replaySourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TELEMETRY_SOURCE_REQUEST_INVALID") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

@@ -14,6 +14,13 @@ const SchemaVersion = 2
 
 const maximumSuppressionDuration = 30 * 24 * time.Hour
 
+// maximumEvidenceReferences bounds the supporting-evidence projection retained on
+// one incident. OccurrenceCount stays the authoritative count of matching
+// evaluations and the retained references are the most recent supporting facts;
+// an unbounded array let a single Alarm list response outgrow the public gateway
+// response bound while adding no operator-visible value.
+const maximumEvidenceReferences = 32
+
 var (
 	uuidV7Pattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	fingerprintPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -253,7 +260,7 @@ func NewIncident(input IncidentInput) (Alarm, error) {
 		SourceType: input.SourceType, SourceReference: strings.TrimSpace(input.SourceReference), RuleRevision: policyRevision,
 		Title: strings.TrimSpace(input.Title), Summary: strings.TrimSpace(input.Summary), Condition: ConditionActive,
 		CurrentSeverity: input.Severity, PeakSeverity: input.Severity, OccurrenceCount: 1,
-		FirstOccurredAt: occurredAt, LastOccurredAt: occurredAt, Evidence: cloneEvidence(input.Evidence), Links: links,
+		FirstOccurredAt: occurredAt, LastOccurredAt: occurredAt, Evidence: mergeEvidence(nil, input.Evidence), Links: links,
 		Version: 1, CreatedAt: occurredAt, UpdatedAt: occurredAt,
 	}
 	alarm.Timeline = []TimelineEntry{{Operation: OperationPublish, Condition: ConditionActive, Reason: "ALARM_PUBLISHED", ActorType: strings.TrimSpace(input.ActorType), ActorID: &actorID, CurrentSeverity: input.Severity, PolicyRevision: &policyRevision, CorrelationID: input.IncidentCorrelationID, OccurredAt: occurredAt, Version: 1}}
@@ -287,7 +294,7 @@ func RecordOccurrence(alarm Alarm, input OccurrenceInput) (Alarm, error) {
 	result.OccurrenceCount++
 	result.LastOccurredAt = occurredAt
 	result.UpdatedAt = occurredAt
-	result.Evidence = append(result.Evidence, cloneEvidence(input.Evidence)...)
+	result.Evidence = mergeEvidence(result.Evidence, input.Evidence)
 	result.Version++
 	appendTimeline(&result, OperationPublish, "ALARM_OCCURRENCE", input.ActorType, input.ActorID, input.RuleRevision, input.CorrelationID, occurredAt, nil, nil)
 	return result, result.Validate()
@@ -318,7 +325,7 @@ func ClearIncident(alarm Alarm, input ClearInput) (Alarm, error) {
 	result.Suppression = nil
 	result.RuleRevision = strings.TrimSpace(input.RuleRevision)
 	result.UpdatedAt = occurredAt
-	result.Evidence = append(result.Evidence, cloneEvidence(input.Evidence)...)
+	result.Evidence = mergeEvidence(result.Evidence, input.Evidence)
 	result.Version++
 	appendTimeline(&result, OperationClear, strings.TrimSpace(input.Reason), input.ActorType, input.ActorID, input.RuleRevision, input.CorrelationID, occurredAt, nil, nil)
 	return result, result.Validate()
@@ -689,6 +696,16 @@ func canonicalInstant(value string) (string, error) {
 
 func cloneEvidence(values []EvidenceReference) []EvidenceReference {
 	return append([]EvidenceReference{}, values...)
+}
+
+// mergeEvidence appends the newest supporting facts and keeps only the most
+// recent maximumEvidenceReferences of them.
+func mergeEvidence(existing, added []EvidenceReference) []EvidenceReference {
+	merged := append(cloneEvidence(existing), cloneEvidence(added)...)
+	if len(merged) > maximumEvidenceReferences {
+		merged = merged[len(merged)-maximumEvidenceReferences:]
+	}
+	return merged
 }
 
 func cloneString(value *string) *string {

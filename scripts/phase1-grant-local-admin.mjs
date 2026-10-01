@@ -29,7 +29,16 @@ SELECT
   :'tenant_id'::uuid,
   :'site_id'::uuid,
   p.id,
-  ARRAY['analytics.energy-series.read']::text[],
+  ARRAY[
+    'analytics.energy-series.read',
+    'telemetry.batch.read',
+    'telemetry.history.read',
+    'telemetry.recovery.checkpoint',
+    'telemetry.recovery.use',
+    'telemetry.resubscribe',
+    'telemetry.snapshot.read',
+    'telemetry.subscribe'
+  ]::text[],
   'ALLOW', now(), NULL, 1, now(), now()
 FROM iam.principals p
 WHERE p.external_issuer = :'admin_issuer'

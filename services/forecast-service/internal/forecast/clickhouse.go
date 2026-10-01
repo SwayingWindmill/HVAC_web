@@ -119,7 +119,7 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID s
  toString(model_version_id) AS model_version_id,model_version,toString(feature_set_version_id) AS feature_set_version_id,feature_set_version,toString(input_snapshot_id) AS input_snapshot_id,
  toString(topology_version_id) AS topology_version_id,formatDateTime(forecast_origin,'%%FT%%TZ','UTC') AS forecast_origin,formatDateTime(forecast_for,'%%FT%%TZ','UTC') AS forecast_for,
  horizon_minutes,value,unit,lower_bound,upper_bound,quantile,quality,formatDateTime(generated_at,'%%FT%%TZ','UTC') AS generated_at
- FROM %s.%s WHERE forecast_job_id=toUUID('%s') ORDER BY forecast_for FORMAT JSONEachRow`, sink.database, sink.table, forecastJobID))
+ FROM %s.%s AS fact WHERE fact.forecast_job_id=toUUID('%s') ORDER BY fact.forecast_for FORMAT JSONEachRow`, sink.database, sink.table, forecastJobID))
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

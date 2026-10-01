@@ -79,7 +79,7 @@ ON CONFLICT (tenant_id,site_id,id) DO NOTHING`, finding.ID, finding.TenantID, fi
 	return tx.Commit(ctx)
 }
 
-func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID string, limit int) ([]intelligencemodel.FDDFinding, error) {
+func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, err
@@ -92,13 +92,15 @@ func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID s
 COALESCE(model_deployment_revision_id::text,''),COALESCE(rule_revision_id,''),confidence,COALESCE(quality_blocker,''),COALESCE(alarm_id::text,''),COALESCE(work_order_id::text,''),created_at
 FROM core_registry.fdd_findings
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid
+  AND ($3='' OR alarm_id=$3::uuid)
+  AND ($4='' OR work_order_id=$4::uuid)
 ORDER BY evaluation_to DESC,created_at DESC
-LIMIT $3`, tenantID, siteID, limit)
+LIMIT $5`, tenantID, siteID, filter.AlarmID, filter.WorkOrderID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	findings := make([]intelligencemodel.FDDFinding, 0, limit)
+	findings := make([]intelligencemodel.FDDFinding, 0, filter.Limit)
 	for rows.Next() {
 		var finding intelligencemodel.FDDFinding
 		if err = rows.Scan(&finding.ID, &finding.TenantID, &finding.SiteID, &finding.AssetID, &finding.FindingType,

@@ -13,6 +13,14 @@ func TestDecodeConfigRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsPreviousSchemaAfterScenarioMigration(t *testing.T) {
+	config := testConfig()
+	config.SchemaVersion = 2
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported simulator config schemaVersion 2") {
+		t.Fatalf("expected previous simulator config schema rejection, got %v", err)
+	}
+}
+
 func TestPlantConfigRejectsDuplicateDeviceIDs(t *testing.T) {
 	config := testPlantConfig()
 	config.BTUMeterID = config.PowerMeterID

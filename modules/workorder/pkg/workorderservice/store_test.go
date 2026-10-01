@@ -20,6 +20,7 @@ func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
 	first := validWorkOrder(testWorkOrderID, testOrganizationID, testSiteID, "2026-08-01T02:00:00Z")
 	second := validWorkOrder("01910000-5000-7000-8000-000000000002", testOrganizationID, testSiteID, "2026-08-01T01:00:00Z")
 	third := validWorkOrder("01910000-5000-7000-8000-000000000003", testOrganizationID, testSiteID, "2026-08-01T00:00:00Z")
+	second.SourceReferences[0].ResourceID = "01910000-4000-7000-8000-000000000002"
 	assignee := "principal:operator-1"
 	second.AssigneeID = &assignee
 	second.Timeline[0].AssigneeID = &assignee
@@ -49,6 +50,13 @@ func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
 	}
 	if len(filtered.Items) != 1 || filtered.Items[0].WorkOrderID != second.WorkOrderID {
 		t.Fatalf("unexpected filtered result: %#v", filtered)
+	}
+	byAlarm, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{SourceDomain: workordermodel.SourceAlarm, SourceRef: second.SourceReferences[0].ResourceID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byAlarm.Items) != 1 || byAlarm.Items[0].WorkOrderID != second.WorkOrderID {
+		t.Fatalf("unexpected Alarm source result: %#v", byAlarm)
 	}
 }
 

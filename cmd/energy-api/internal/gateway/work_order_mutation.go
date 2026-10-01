@@ -129,6 +129,10 @@ func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, requ
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved."))
 		return
 	}
+	if failure := h.validateWorkOrderCreateProvenance(request, session, route, mutation); failure != nil {
+		h.writeWorkOrderFailure(writer, request, *failure)
+		return
+	}
 	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey, site.TenantID)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
@@ -170,6 +174,30 @@ func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, requ
 		writer.Header().Set("Idempotency-Replayed", "true")
 	}
 	writeJSON(writer, status, workOrder)
+}
+
+func (h *handler) validateWorkOrderCreateProvenance(request *http.Request, session bffSession, route publicWorkOrderRoute, mutation parsedPublicWorkOrderMutation) *workOrderFailure {
+	if route.kind != publicWorkOrderCollection || mutation.create == nil || len(mutation.create.SourceReferences) != 1 {
+		return nil
+	}
+	reference := mutation.create.SourceReferences[0]
+	if reference.Domain != workordermodel.SourceAlarm {
+		return nil
+	}
+	scope, failure := h.resolveAlarmScope(request, session, reference.ResourceID)
+	if failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			denied := workOrderDenied()
+			return &denied
+		}
+		unavailable := workOrderUnavailable("The authoritative Alarm source could not be resolved.")
+		return &unavailable
+	}
+	if scope.TenantID != session.TenantID || scope.SiteID != route.siteID {
+		denied := workOrderDenied()
+		return &denied
+	}
+	return nil
 }
 
 func (h *handler) workOrderMutationSession(writer http.ResponseWriter, request *http.Request) (bffSession, bool) {

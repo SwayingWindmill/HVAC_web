@@ -2,11 +2,14 @@ package telemetry
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,12 +18,13 @@ import (
 )
 
 const (
-	InternalSourceObservationPath   = "/internal/v1/telemetry/sources/observations:accept"
-	InternalSourceCoveragePath      = "/internal/v1/telemetry/sources/coverage:report"
-	InternalMQTTGatewayEvidencePath  = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
-	InternalMQTTPresenceEvidencePath = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
-	InternalMQTTRuntimeEventPath     = "/internal/v1/telemetry/sources/mqtt/events:accept"
-	maximumSourceObservationSize     = 96 << 10
+	InternalSourceObservationPath           = "/internal/v1/telemetry/sources/observations:accept"
+	InternalHistoricalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
+	InternalSourceCoveragePath              = "/internal/v1/telemetry/sources/coverage:report"
+	InternalMQTTGatewayEvidencePath         = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
+	InternalMQTTPresenceEvidencePath        = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
+	InternalMQTTRuntimeEventPath            = "/internal/v1/telemetry/sources/mqtt/events:accept"
+	maximumSourceObservationSize            = 96 << 10
 )
 
 type SourceAuthenticator interface {
@@ -113,6 +117,19 @@ type sourceObservationRequest struct {
 	SourcePosition        sourcePositionRequest `json:"sourcePosition"`
 }
 
+type historicalReplayObservationRequest struct {
+	IntegrationInstanceID string          `json:"integrationInstanceId"`
+	ReplayDatasetID       string          `json:"replayDatasetId"`
+	DeviceExternalID      string          `json:"deviceExternalId"`
+	TelemetryKey          string          `json:"telemetryKey"`
+	Value                 json.RawMessage `json:"value"`
+	ValueType             string          `json:"valueType"`
+	Unit                  *string         `json:"unit"`
+	WireQuality           uint8           `json:"wireQuality"`
+	SampledAt             string          `json:"sampledAt"`
+	Offset                int64           `json:"offset"`
+}
+
 func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *http.Request) {
 	peer, ok := h.trustedSourcePeer(writer, request)
 	if !ok {
@@ -158,14 +175,61 @@ func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *h
 	writeJSON(writer, http.StatusOK, receipt)
 }
 
+func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, request *http.Request) {
+	peer, ok := h.trustedSourcePeer(writer, request)
+	if !ok {
+		return
+	}
+	if h.allowedHistoricalReplaySPIFFE == "" {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_REPLAY_UNAVAILABLE", "The telemetry Historical Replay path is temporarily unavailable.", true)
+		return
+	}
+	if peer != h.allowedHistoricalReplaySPIFFE {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling workload identity is not authorized for Historical Replay.", false)
+		return
+	}
+	if h.historicalObservationAcceptor == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_REPLAY_UNAVAILABLE", "The telemetry Historical Replay path is temporarily unavailable.", true)
+		return
+	}
+	var input historicalReplayObservationRequest
+	if !decodeSourceRequest(writer, request, &input) {
+		return
+	}
+	candidate, err := normalizeHistoricalReplayObservation(input, h.now().UTC())
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_HISTORY_REPLAY_REQUEST_INVALID", "The Historical Replay observation request is invalid.", false)
+		return
+	}
+	if !h.sourceAuthenticator.AllowsSource(peer, candidate.IntegrationInstanceID) {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling replay workload identity is not trusted for this integration.", false)
+		return
+	}
+	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.IntegrationInstanceID).Allowed {
+		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The Historical Replay observation rate has been exceeded.", true)
+		return
+	}
+	receipt, err := h.historicalObservationAcceptor.AcceptHistoricalObservation(request.Context(), candidate)
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_REPLAY_UNAVAILABLE", "The telemetry Historical Replay path is temporarily unavailable.", true)
+		return
+	}
+	h.metrics.observeDataQuality(receipt)
+	writeJSON(writer, http.StatusOK, receipt)
+}
+
 func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
 	if err != nil || receivedAt.IsZero() {
 		return ObservationCandidate{}, errors.New("telemetry sampledAt is invalid")
 	}
+	sourcePath := safeSourcePath(input.SourcePath)
+	if sourcePath == SourcePathHistoryReplay {
+		return ObservationCandidate{}, errors.New("HISTORY_REPLAY requires the dedicated admission path")
+	}
 	candidate := ObservationCandidate{
 		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
-		SourcePath:            safeSourcePath(input.SourcePath),
+		SourcePath:            sourcePath,
 		ExternalEntityType:    strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)),
 		ExternalID:            strings.TrimSpace(input.ExternalID),
 		TelemetryKey:          strings.TrimSpace(input.TelemetryKey),
@@ -185,6 +249,57 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 		return ObservationCandidate{}, err
 	}
 	return candidate, nil
+}
+
+func normalizeHistoricalReplayObservation(input historicalReplayObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
+	datasetID := strings.ToLower(strings.TrimSpace(input.ReplayDatasetID))
+	deviceExternalID := strings.TrimSpace(input.DeviceExternalID)
+	if !uuidV7Pattern.MatchString(datasetID) || deviceExternalID == "" || len(deviceExternalID) > 512 || input.Offset < 0 || receivedAt.IsZero() {
+		return ObservationCandidate{}, errors.New("Historical Replay identity is invalid")
+	}
+	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
+	if err != nil {
+		return ObservationCandidate{}, errors.New("Historical Replay sampledAt is invalid")
+	}
+	deviceDigest := sha256.Sum256([]byte(deviceExternalID))
+	partition := "history-replay:" + datasetID + ":" + hex.EncodeToString(deviceDigest[:16])
+	eventID, err := deterministicHistoricalReplayEventID(datasetID, partition, input.Offset)
+	if err != nil {
+		return ObservationCandidate{}, err
+	}
+	candidate := ObservationCandidate{
+		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
+		SourcePath:            SourcePathHistoryReplay,
+		ExternalEntityType:    "DEVICE",
+		ExternalID:            deviceExternalID,
+		TelemetryKey:          strings.TrimSpace(input.TelemetryKey),
+		Value:                 append(json.RawMessage(nil), input.Value...),
+		ValueType:             strings.ToUpper(strings.TrimSpace(input.ValueType)),
+		Unit:                  cloneString(input.Unit),
+		WireQuality:           input.WireQuality,
+		SampledAt:             sampledAt.UTC(),
+		ReceivedAt:            receivedAt.UTC(),
+		Position:              SourcePosition{Partition: partition, Offset: input.Offset, EventID: eventID},
+	}
+	if err := validateObservationCandidate(candidate); err != nil {
+		return ObservationCandidate{}, err
+	}
+	return candidate, nil
+}
+
+func deterministicHistoricalReplayEventID(datasetID, partition string, offset int64) (string, error) {
+	datasetBytes, err := hex.DecodeString(strings.ReplaceAll(datasetID, "-", ""))
+	if err != nil || len(datasetBytes) != 16 {
+		return "", errors.New("Historical Replay dataset ID is invalid")
+	}
+	digest := sha256.Sum256([]byte(datasetID + "\x00" + partition + "\x00" + strconv.FormatInt(offset, 10)))
+	identifier := make([]byte, 16)
+	copy(identifier[:6], datasetBytes[:6])
+	copy(identifier[6:], digest[:10])
+	identifier[6] = (identifier[6] & 0x0f) | 0x70
+	identifier[8] = (identifier[8] & 0x3f) | 0x80
+	raw := hex.EncodeToString(identifier)
+	return raw[:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:], nil
 }
 
 type sourceCoverageRequest struct {

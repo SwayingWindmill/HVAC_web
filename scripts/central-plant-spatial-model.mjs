@@ -67,7 +67,7 @@ const sensorByDeviceSource = new Map([
   ['CT-01/ambientWetBulbTemperatureC', 'sensor-ct01-wet-bulb'],
 ]);
 
-const stateSources = new Set(['runState', 'businessRevision', 'faultCode']);
+const stateSources = new Set(['runState', 'faultCode']);
 const settingSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'loadLimitPct', 'frequencyHz', 'fanSpeedPct']);
 const counterSources = new Set(['energyKwh', 'accumulatedCoolingEnergyKwh']);
 
@@ -235,22 +235,16 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
     schemaVersion: 3,
     gatewayId: 'EG8200-COMMERCIAL-001',
     publishInterval: overrides.publishInterval ?? '5s',
-    plant: {
-      datasource: overrides.datasource ?? {
-        type: 'SCENARIO',
-        scenario: {
-          name: 'summer-design-day',
-          records: [
-            { offset: '0s', inputs: { ambientDryBulbC: 28, ambientWetBulbC: 24, loadFraction: 0.35 } },
-            { offset: '6h', inputs: { ambientDryBulbC: 29, ambientWetBulbC: 24.5, loadFraction: 0.40 } },
-            { offset: '9h', inputs: { ambientDryBulbC: 32, ambientWetBulbC: 25.5, loadFraction: 0.60 } },
-            { offset: '12h', inputs: { ambientDryBulbC: 35, ambientWetBulbC: 27, loadFraction: 0.85 } },
-            { offset: '15h', inputs: { ambientDryBulbC: 36, ambientWetBulbC: 28, loadFraction: 0.95 } },
-            { offset: '18h', inputs: { ambientDryBulbC: 33, ambientWetBulbC: 26.5, loadFraction: 0.75 } },
-            { offset: '22h', inputs: { ambientDryBulbC: 30, ambientWetBulbC: 25, loadFraction: 0.45 } },
-          ],
-        },
+    scenario: {
+      schemaVersion: 1,
+      mode: 'STATIC',
+      inputs: {
+        ambientDryBulbC: 34,
+        ambientWetBulbC: 27,
+        coolingLoadKw: 864,
       },
+    },
+    plant: {
       initialEnergyKwh: overrides.initialEnergyKwh ?? 0,
       chiller: { id: 'CHILLER-01', ratedCoolingCapacityKw: 1200, baseCop: 5.6, initialSetpointC: 7, initialLoadLimitPct: 100, initiallyRunning: true },
       chilledWaterPump: { id: 'CHWP-01', ratedPowerKw: 45, ratedFlowM3h: 220, initialFrequencyHz: 50, initiallyRunning: true },

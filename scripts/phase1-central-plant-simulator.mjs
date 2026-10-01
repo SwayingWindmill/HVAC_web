@@ -18,19 +18,11 @@ import {
   centralPlantEquipment,
   centralPlantSensors,
 } from './central-plant-spatial-model.mjs';
+import { applyRegistryRigToPoints, loadAcceptanceRig } from './lib/acceptance-rig.mjs';
 
 const repoRoot = path.resolve(process.env.PHASE1_REPO_ROOT || process.cwd());
-const phase1Dir = path.join(repoRoot, 'deploy', 'platform', 'phase1');
-const runtimeEnv = process.env.PHASE1_ENV_FILE || path.join(phase1Dir, 'environments', 'development.runtime.env');
-const phase1ComposeArgs = [
-  'compose',
-  '--project-name', 'hvac-phase1-local',
-  '--profile', 'local-postgres',
-  '--env-file', runtimeEnv,
-  '-f', path.join(phase1Dir, 'compose.yaml'),
-  '-f', path.join(phase1Dir, 'wsl.override.yaml'),
-];
-const runtimeRoot = path.join(phase1Dir, 'runtime');
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-postgres-1';
+const runtimeRoot = path.join(repoRoot, 'deploy', 'platform', 'phase1', 'runtime');
 const internalPkiDir = path.join(runtimeRoot, 'internal-pki');
 const simulatorPkiDir = path.join(internalPkiDir, 'eg8200-simulator');
 const simulatorQueueDir = path.join(runtimeRoot, 'data', 'eg8200');
@@ -66,8 +58,7 @@ function run(command, args, options = {}) {
 
 function psql(database, sql) {
   run('docker', [
-    ...phase1ComposeArgs,
-    'exec', '-T', 'postgres',
+    'exec', '-i', postgresContainer,
     'psql', '-U', 'postgres', '-d', database,
     '-v', 'ON_ERROR_STOP=1',
   ], { input: sql });
@@ -75,13 +66,12 @@ function psql(database, sql) {
 
 function psqlScalar(database, sql) {
   const result = spawnSync('docker', [
-    ...phase1ComposeArgs,
-    'exec', '-T', 'postgres',
+    'exec', '-i', postgresContainer,
     'psql', '-U', 'postgres', '-d', database,
     '-v', 'ON_ERROR_STOP=1', '-tA', '-c', sql,
   ], { cwd: repoRoot, encoding: 'utf8' });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`docker compose psql scalar exited with status ${result.status}: ${result.stderr}`);
+  if (result.status !== 0) throw new Error(`docker psql scalar exited with status ${result.status}: ${result.stderr}`);
   return result.stdout.trim();
 }
 
@@ -194,16 +184,15 @@ function buildS1Seed(points) {
       protocol: point.sourceProtocol ?? 'SIMULATED',
       address: point.sourceAddress ?? `${point.deviceId}:${point.sourceKey}`,
     };
-    const counterDecreaseMode = point.pointType === 'COUNTER' ? 'RESET_TO_ZERO' : null;
     return `(
       ${sqlLiteral(ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},
       ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(device.platformDeviceId)},
       ${point.sensorId ? sqlLiteral(ids.sensorIdByKey.get(point.sensorId)) : 'NULL'},
-      ${sqlLiteral(point.pointCode)}, ${sqlLiteral(point.sourceKey)}, ${sqlLiteral(point.name)},
+      ${sqlLiteral(point.pointCode)}, ${sqlLiteral(point.telemetryKey)}, ${sqlLiteral(point.name)},
       ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'},
       ${point.writable ? 'true' : 'false'}, ${durationMilliseconds(point.sampleInterval)}, ${durationMilliseconds(point.publishInterval)}, ${durationMilliseconds(point.staleAfter)},
-      ${counterDecreaseMode ? sqlLiteral(counterDecreaseMode) : 'NULL'}, NULL,
-      ${sqlJson(metadata)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL
+      ${sqlJson(metadata)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL,
+      ${point.pointType === 'COUNTER' ? sqlLiteral('RESET_TO_ZERO') : 'NULL'}, NULL
     )`;
   }).join(',\n');
 
@@ -263,9 +252,9 @@ INSERT INTO core_registry.sensor_space_bindings (id, tenant_id, site_id, sensor_
 ${sensorSpaceBindings}
 ON CONFLICT (id) DO UPDATE SET sensor_id=EXCLUDED.sensor_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
 
-INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, counter_decrease_mode, counter_rollover_modulus, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id) VALUES
+INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id, counter_decrease_mode, counter_rollover_modulus) VALUES
 ${telemetryPoints}
-ON CONFLICT (id) DO UPDATE SET reporting_device_id=EXCLUDED.reporting_device_id, sensor_id=EXCLUDED.sensor_id, point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, source_metadata=EXCLUDED.source_metadata, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) DO UPDATE SET reporting_device_id=EXCLUDED.reporting_device_id, sensor_id=EXCLUDED.sensor_id, point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, status='ACTIVE', updated_at=clock_timestamp();
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${pointSubjects}
@@ -309,7 +298,7 @@ SET tenant_id=EXCLUDED.tenant_id,
 COMMIT;`;
 }
 
-function buildConnectivitySeed() {
+function buildConnectivitySeed(rig) {
   const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
   const transportProfileId = localUUID(0x810000000001);
   const credentialRefId = localUUID(0x810000000002);
@@ -434,14 +423,14 @@ INSERT INTO connectivity.sessions (
   ${sqlLiteral(sessionId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
   ${sqlLiteral(credentialRefId)}, (SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(credentialRefId)}::uuid),
   'EG8200-COMMERCIAL-001', 'ACTIVE', clock_timestamp(),
-  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '24 hours'),
+  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '${(rig?.connectivity.sessionLifetimeHours ?? 24)} hours'),
   NULL, NULL, 1, clock_timestamp()
 )
 ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, credential_revision=EXCLUDED.credential_revision, status='ACTIVE', opened_at=EXCLUDED.opened_at, expires_at=EXCLUDED.expires_at, closed_at=NULL, close_reason=NULL, revision=connectivity.sessions.revision+1, updated_at=clock_timestamp();
 COMMIT;`;
 }
 
-function buildS2Seed(points) {
+function buildS2Seed(points, rig) {
   const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
   const ids = buildIdentities(points);
   const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
@@ -472,9 +461,13 @@ function buildS2Seed(points) {
 
   const freshness = points.map((point) => {
     const device = deviceByName.get(point.deviceId);
+    const expectedSeconds = Math.max(1, Math.round(durationMilliseconds(point.sampleInterval) / 1000));
+    // A configured policy must keep fresh_within_seconds >= the expected sample interval,
+    // so a Device the rig intentionally paces slowly cannot carry the fast window.
+    const freshWithinSeconds = Math.max(rig?.runtimeFreshness.freshWithinSeconds ?? 30, expectedSeconds);
     return `(
-      ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)}, 1, 30, true,
-      ${Math.max(1, Math.round(durationMilliseconds(point.sampleInterval) / 1000))},
+      ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)}, 1, ${freshWithinSeconds}, true,
+      ${expectedSeconds},
       ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, NULL, NULL, clock_timestamp()
     )`;
   }).join(',\n');
@@ -584,30 +577,43 @@ function runLocalAdminGrant() {
 }
 
 function startSimulatorService() {
-  const launcher = path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs');
-  run(process.execPath, [launcher, '--integration', 'build', 'iot-service']);
-  run(process.execPath, [launcher, '--integration', 'up', '-d', 'mqtt-broker', 'iot-service']);
-  run(process.execPath, [launcher, '--simulator-acceptance', 'build', 'eg8200-simulator']);
-  run(process.execPath, [launcher, '--simulator-acceptance', 'up', '-d', 'eg8200-simulator']);
+  run(process.execPath, [
+    path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
+    'up', '-d', '--build', 'iot-service',
+  ]);
+  run(process.execPath, [
+    path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
+    '--simulator-acceptance',
+    '--profile', 'simulator-acceptance',
+    'up', '-d', '--build', 'eg8200-simulator',
+  ]);
 }
 
 const pointContract = JSON.parse(readFileSync(pointContractPath, 'utf8'));
 const rawObservedPoints = buildCentralPlantSimulatorPoints(pointContract);
 const rawControlPoints = buildCentralPlantControlPoints(rawObservedPoints);
 const registryPoints = assignCentralPlantPointIds([...rawObservedPoints, ...rawControlPoints]);
-const observedPoints = registryPoints.filter((point) => point.pointType !== 'COMMAND');
-const controlPoints = registryPoints.filter((point) => point.pointType === 'COMMAND');
+
+// --rig applies the reviewed live-acceptance profile so the published cadence, the
+// Registry staleness contract, the runtime freshness policy and the MQTT session
+// lifetime come from one source instead of hand-edited runtime state.
+const rigArgument = process.argv.indexOf('--rig');
+const rigProfilePath = rigArgument >= 0 ? process.argv[rigArgument + 1] : undefined;
+const rig = rigProfilePath ? await loadAcceptanceRig(repoRoot, rigProfilePath) : undefined;
+const seededPoints = rig ? applyRegistryRigToPoints(rig, registryPoints) : registryPoints;
+const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMAND');
+const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
 ensureSimulatorCertificate();
 ensureFleetReleaseKeys();
-psql('hvac_s1', buildS1Seed(registryPoints));
-psql('hvac_s1', buildConnectivitySeed());
+psql('hvac_s1', buildS1Seed(seededPoints));
+psql('hvac_s1', buildConnectivitySeed(rig));
 const credentialRevision = Number(psqlScalar('hvac_s1', `SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(localUUID(0x810000000002))}::uuid`));
 if (!Number.isSafeInteger(credentialRevision) || credentialRevision < 1) throw new Error('simulator CredentialRef revision is invalid');
 writeSimulatorConfig(credentialRevision);
-psql('hvac_s2', buildS2Seed(observedPoints));
+psql('hvac_s2', buildS2Seed(observedPoints, rig));
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
 startSimulatorService();
 
-console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}`);
+console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}${rig ? `, rig=${rig.profile}` : ''}`);

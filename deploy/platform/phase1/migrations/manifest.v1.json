@@ -88,7 +88,8 @@
         "infra/telemetry/postgres/init/004b-s2-point-identity.sql",
         "infra/telemetry/postgres/init/004c-s2-counter-semantics.sql",
         "infra/telemetry/postgres/init/004d-s2-redis-latest.sql",
-        "infra/telemetry/postgres/init/005-s2-realtime-backend.sql"
+        "infra/telemetry/postgres/init/005-s2-realtime-backend.sql",
+        "infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql"
       ]
     },
     {
@@ -110,7 +111,8 @@
         "modules/alarm/migrations/004_s4_event_provenance.sql",
         "modules/alarm/migrations/005_s13_alarm_orthogonal.sql",
         "modules/alarm/migrations/006_s14_alarm_evaluator.sql",
-        "modules/alarm/migrations/007_s16_notification_outbox.sql"
+        "modules/alarm/migrations/007_s16_notification_outbox.sql",
+        "modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql"
       ]
     },
     {
@@ -120,7 +122,8 @@
         "modules/workorder/migrations/002_s5_work_order_create_assignment.sql",
         "modules/workorder/migrations/003_s5_work_order_lifecycle.sql",
         "modules/workorder/migrations/004_s5_tenant_scope.sql",
-        "modules/workorder/migrations/005_s19_alarm_links.sql"
+        "modules/workorder/migrations/005_s19_alarm_links.sql",
+        "modules/workorder/migrations/006_s26_equipment_source_domain.sql"
       ]
     }
   ],

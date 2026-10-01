@@ -9,10 +9,10 @@ function assert(condition, message) {
 }
 
 const migration = read('infra/connectivity/postgres/init/001-s09-connectivity.sql');
-const store = read('modules/iot/internal/connectivity/store.go');
-const processor = read('modules/iot/internal/adapter/processor.go');
+const store = read('modules/iot/pkg/connectivity/store.go');
+const processor = read('modules/iot/pkg/adapter/processor.go');
 const connector = read('modules/command/pkg/mqttconnector/connector.go');
-const config = read('modules/iot/internal/adapter/config.go');
+const config = read('modules/iot/pkg/adapter/config.go');
 const exampleConfig = read('modules/iot/configs/central-plant.local.example.json');
 const simulator = read('scripts/phase1-central-plant-simulator.mjs');
 const canonicalIoTCommandRuntimePath = 'cmd/iot-service/command_runtime.go';
