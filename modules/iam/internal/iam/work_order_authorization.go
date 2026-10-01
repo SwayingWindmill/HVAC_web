@@ -114,6 +114,11 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 			if targetID == nil {
 				continue
 			}
+			// Taking ownership oneself needs no ownership-target entry: whoever may start
+			// work on the site may own it.
+			if targetType == "PRINCIPAL" && *targetID == facts.Principal.ID && workOrderPermitted(facts, request, workorderauth.ActionStart, now) {
+				continue
+			}
 			targetAllowed := false
 			for _, target := range facts.Targets {
 				if target.Status != FactStatusActive || !factEffective(target.ValidFrom, target.ValidTo, now) ||
@@ -176,4 +181,19 @@ func cloneWorkOrderAuthorizationFacts(value WorkOrderAuthorizationFacts) WorkOrd
 	cloned.Permissions = append([]WorkOrderPermission(nil), value.Permissions...)
 	cloned.Targets = append([]WorkOrderOwnershipTarget(nil), value.Targets...)
 	return cloned
+}
+
+func workOrderPermitted(facts WorkOrderAuthorizationFacts, request workorderauth.DecisionRequest, action workorderauth.Action, now time.Time) bool {
+	allowed := false
+	for _, permission := range facts.Permissions {
+		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) ||
+			permission.TenantID != request.TenantID || permission.SiteID != request.SiteID || permission.Action != action {
+			continue
+		}
+		if permission.Effect == BindingEffectDeny {
+			return false
+		}
+		allowed = allowed || permission.Effect == BindingEffectAllow
+	}
+	return allowed
 }
