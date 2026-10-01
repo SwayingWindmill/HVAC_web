@@ -1,27 +1,13 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { useForm } from 'react-hook-form';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  createWorkOrder,
-  listWorkOrders,
-  workOrderErrorMessage,
-  type WorkOrderPriority,
-} from '@/api/work-orders';
+import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
+import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
+import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import {
   acknowledgeAlarm,
   alarmDetailQuery,
@@ -33,11 +19,10 @@ import {
 import {
   alarmStatusLabel,
   formatDuration,
-  formatTime,
   operationLabel,
-  personLabel,
   SEVERITY_LABELS,
 } from '../alarm-presentation';
+import { formatTime, personLabel } from '@/lib/operator-format';
 import { SeverityBadge } from './AlarmsWorkspace';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -50,103 +35,12 @@ const PRIORITY_BY_SEVERITY: Readonly<Record<AlarmSeverity, WorkOrderPriority>> =
   INFO: 'LOW',
 };
 
-const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
-  URGENT: '紧急',
-  HIGH: '高',
-  MEDIUM: '中',
-  LOW: '低',
-};
-
-const WORK_ORDER_STATUS_LABELS: Readonly<Record<string, string>> = {
-  DRAFT: '草稿',
-  OPEN: '待处理',
-  IN_PROGRESS: '处理中',
-  BLOCKED: '受阻',
-  COMPLETED: '已完成',
-  CANCELLED: '已取消',
-};
-
 function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5 text-sm">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
       <dd className="text-right">{children}</dd>
     </div>
-  );
-}
-
-interface WorkOrderForm {
-  title: string;
-  priority: WorkOrderPriority;
-  description: string;
-}
-
-function CreateWorkOrderDialog({ alarm, deviceName, open, onOpenChange }: {
-  readonly alarm: Alarm;
-  readonly deviceName: string | undefined;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-}) {
-  const { site, principal } = siteRoute.useRouteContext();
-  const queryClient = useQueryClient();
-  const form = useForm<WorkOrderForm>({
-    values: {
-      title: deviceName ? `${deviceName}：${alarm.title}` : alarm.title,
-      priority: PRIORITY_BY_SEVERITY[alarm.currentSeverity],
-      description: alarm.summary,
-    },
-  });
-  const create = useMutation({
-    mutationFn: (input: WorkOrderForm) => createWorkOrder({
-      title: input.title.trim(),
-      description: input.description.trim(),
-      priority: input.priority,
-      sourceReferences: [{ domain: 'ALARM', resourceId: alarm.alarmId, relationship: 'ORIGIN' }],
-      assigneeId: null,
-      teamId: null,
-      scheduledStart: null,
-      dueAt: null,
-    }, { siteId: site.id, csrfToken: principal.session.csrfToken }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['alarm-work-orders', site.id, alarm.alarmId] });
-      onOpenChange(false);
-    },
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>由告警创建工单</DialogTitle>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={form.handleSubmit((values) => create.mutate(values))}>
-          <div className="space-y-1.5">
-            <Label htmlFor="work-order-title">标题</Label>
-            <Input id="work-order-title" {...form.register('title', { required: true })} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>优先级</Label>
-            <Select value={form.watch('priority')} onValueChange={(value) => form.setValue('priority', value as WorkOrderPriority)}>
-              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {(Object.keys(PRIORITY_LABELS) as WorkOrderPriority[]).map((priority) => (
-                  <SelectItem key={priority} value={priority}>{PRIORITY_LABELS[priority]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="work-order-description">说明</Label>
-            <Textarea id="work-order-description" rows={4} {...form.register('description')} />
-          </div>
-          {create.isError ? <p className="text-sm text-destructive">{workOrderErrorMessage(create.error)}</p> : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="submit" disabled={create.isPending}>创建工单</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -275,7 +169,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
                           >
                             {workOrder.title}
                           </Link>
-                          <span className="shrink-0 text-xs text-muted-foreground">{WORK_ORDER_STATUS_LABELS[workOrder.status]}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{STATUS_LABELS[workOrder.status]}</span>
                         </li>
                       ))}
                     </ul>
@@ -298,7 +192,18 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
               </section>
             </div>
 
-            <CreateWorkOrderDialog alarm={alarm} deviceName={deviceName} open={creatingWorkOrder} onOpenChange={setCreatingWorkOrder} />
+            <CreateWorkOrderDialog
+              open={creatingWorkOrder}
+              onOpenChange={setCreatingWorkOrder}
+              title="由告警创建工单"
+              initial={{
+                title: deviceName ? `${deviceName}：${alarm.title}` : alarm.title,
+                priority: PRIORITY_BY_SEVERITY[alarm.currentSeverity],
+                description: alarm.summary,
+              }}
+              sourceReferences={[{ domain: 'ALARM', resourceId: alarm.alarmId, relationship: 'ORIGIN' }]}
+              onCreated={() => void queryClient.invalidateQueries({ queryKey: ['alarm-work-orders', site.id, alarm.alarmId] })}
+            />
           </>
         )}
       </SheetContent>

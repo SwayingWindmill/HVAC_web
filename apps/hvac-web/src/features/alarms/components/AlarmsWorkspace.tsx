@@ -16,13 +16,12 @@ import { alarmKeys, listAlarms, type Alarm, type AlarmListFilter, type AlarmSeve
 import {
   alarmStatusLabel,
   formatDuration,
-  formatTime,
-  personLabel,
   SEVERITY_CLASSES,
   SEVERITY_LABELS,
   SEVERITY_ORDER,
   severityRank,
 } from '../alarm-presentation';
+import { formatTime, personLabel } from '@/lib/operator-format';
 import { AlarmInspector } from './AlarmInspector';
 
 export type AlarmView = 'active' | 'unack' | 'cleared' | 'all';
