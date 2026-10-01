@@ -89,7 +89,9 @@
         "infra/telemetry/postgres/init/004c-s2-counter-semantics.sql",
         "infra/telemetry/postgres/init/004d-s2-redis-latest.sql",
         "infra/telemetry/postgres/init/005-s2-realtime-backend.sql",
-        "infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql"
+        "infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql",
+        "infra/telemetry/postgres/init/007-historical-replay.sql",
+        "infra/telemetry/postgres/init/008-subscription-client-handle.sql"
       ]
     },
     {
