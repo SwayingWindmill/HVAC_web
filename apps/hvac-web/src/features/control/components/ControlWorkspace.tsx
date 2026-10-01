@@ -3,7 +3,7 @@ import { DataTableBlock } from "@/blocks/data-table";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -47,14 +47,14 @@ const commandStates = {
   FAILED: "执行失败",
 };
 export function ControlWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/operations/control" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/operations/control" });
   const navigate = useNavigate({ from: "/operations/control" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["control-evidence-review", currentScope.id],
     queryFn: async () => {
-      if (!isWorkspaceExample || currentScope.id !== "site:site-01")
+      if (!isWorkspaceExample)
         throw new Error("控制执行与安全约束未接入");
       return controlService.getControlWorkspaceData();
     },

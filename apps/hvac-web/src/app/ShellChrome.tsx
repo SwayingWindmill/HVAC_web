@@ -138,6 +138,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
       >
         <AppHeader
           principalName={principal.principal.displayName}
+          principalSubject={principal.principal.subject}
           principalRole={principalRole}
           themeMode={themeMode}
           onThemeToggle={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}

@@ -14,7 +14,7 @@ import {
   YAxis,
   ZAxis,
 } from "recharts";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -40,17 +40,17 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { benchmarkingService } from "../api/benchmarking-service";
 import type { PeerBuildingRanking } from "../api/benchmarking-types";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 export function BenchmarkingWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/energy-analysis/benchmarking" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/energy-analysis/benchmarking" });
   const navigate = useNavigate({ from: "/energy-analysis/benchmarking" });
   const view = search.view ?? "peers";
   const [peerId, setPeerId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["benchmark-review", currentScope.id],
     queryFn: () => {
-      if (!example || currentScope.id !== "site:site-01")
+      if (!example)
         throw new Error("当前范围对标数据未接入");
       return benchmarkingService.getBenchmarkingAnalytics();
     },

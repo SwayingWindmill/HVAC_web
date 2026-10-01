@@ -22,9 +22,11 @@ interface UseSiteAssetsDataInput {
   readonly site: Readonly<Site>;
   readonly principal: CurrentPrincipalResponse;
   readonly runtime: HvacRouterContext['runtime'];
+  /** Re-read the current-state Snapshot on this interval; off by default. */
+  readonly currentRefetchIntervalMs?: number | false;
 }
 
-export function useSiteAssetsData({ site, principal, runtime }: UseSiteAssetsDataInput) {
+export function useSiteAssetsData({ site, principal, runtime, currentRefetchIntervalMs = false }: UseSiteAssetsDataInput) {
   const queryClient = useQueryClient();
   const platformClient = useMemo<Pick<PlatformGatewayClient, 'getSiteAssetModel'>>(() => createPlatformGatewayClient(), []);
   const telemetryRuntime = useMemo(() => createAssetsTelemetryRuntime(), []);
@@ -96,6 +98,7 @@ export function useSiteAssetsData({ site, principal, runtime }: UseSiteAssetsDat
     },
     enabled: currentEnabled,
     staleTime: 15_000,
+    refetchInterval: currentRefetchIntervalMs,
     retry: 1,
   });
 
@@ -128,6 +131,8 @@ export function useSiteAssetsData({ site, principal, runtime }: UseSiteAssetsDat
     currentPending,
     currentUnavailable,
     canReadCurrent,
+    protectedGeneration,
+    telemetryRuntime,
     refresh,
   } as const;
 }

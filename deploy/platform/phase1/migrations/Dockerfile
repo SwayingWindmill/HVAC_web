@@ -70,6 +70,8 @@ COPY infra/telemetry/postgres/init/004c-s2-counter-semantics.sql /opt/hvac/repo/
 COPY infra/telemetry/postgres/init/004d-s2-redis-latest.sql /opt/hvac/repo/infra/telemetry/postgres/init/004d-s2-redis-latest.sql
 COPY infra/telemetry/postgres/init/005-s2-realtime-backend.sql /opt/hvac/repo/infra/telemetry/postgres/init/005-s2-realtime-backend.sql
 COPY infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql /opt/hvac/repo/infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql
+COPY infra/telemetry/postgres/init/007-historical-replay.sql /opt/hvac/repo/infra/telemetry/postgres/init/007-historical-replay.sql
+COPY infra/telemetry/postgres/init/008-subscription-client-handle.sql /opt/hvac/repo/infra/telemetry/postgres/init/008-subscription-client-handle.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql

@@ -15,7 +15,7 @@ import {
 import { DataTableBlock } from "@/blocks/data-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -84,8 +84,8 @@ const displayTime = (time: string) =>
     ? new Date(time).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })
     : time;
 export function WorkCenterWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/operations/work-center" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/operations/work-center" });
   const navigate = useNavigate({ from: "/operations/work-center" });
   const query = useQuery(operationsFlowQueryOptions(currentScope.id));
   const action = useOperationsAction(currentScope.id);
@@ -492,7 +492,7 @@ export function WorkCenterWorkspace() {
                       onClick={() =>
                         void navigate({
                           to: "/operations/alarms",
-                          search: { scope: currentScope.id, inspect: alarm.id },
+                          search: { site: currentScope.siteId, inspect: alarm.id },
                         })
                       }
                     >
@@ -506,7 +506,7 @@ export function WorkCenterWorkspace() {
                     void navigate({
                       to: "/operations/systems-devices",
                       search: {
-                        scope: currentScope.id,
+                        site: currentScope.siteId,
                         inspect: selected.deviceId,
                       },
                     })

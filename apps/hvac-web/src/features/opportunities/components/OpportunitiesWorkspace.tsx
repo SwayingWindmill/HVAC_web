@@ -4,7 +4,7 @@ import { DataTableBlock } from "@/blocks/data-table";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -49,13 +49,13 @@ export const statusNames: Record<EcoOpportunity["status"], string> = {
   VERIFYING: "验证中",
   CLOSED: "已关闭",
 };
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 const number = (value: number) =>
   value.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
 
 export function OpportunitiesWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/optimization/opportunities" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/optimization/opportunities" });
   const navigate = useNavigate({ from: "/optimization/opportunities" });
   const query = useQuery(optimizationFlowQueryOptions(currentScope.id));
   const all = query.data?.opportunities ?? [];
@@ -485,7 +485,7 @@ export function OpportunitiesWorkspace() {
           void navigate({
             to: "/optimization/projects",
             search: {
-              scope: currentScope.id,
+              site: currentScope.siteId,
               opportunity: selected?.id,
               inspect: relatedProject?.id,
             },

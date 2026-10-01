@@ -224,7 +224,11 @@ function normalizeSiteNavigationTarget(
     const normalizedTarget = `${pathname}${resolved.search}${resolved.hash}`;
     if (pathname === '/' || pathname === '/sites') return { target: normalizedTarget };
     const segments = pathname.split('/').filter(Boolean);
-    if (segments[0] !== 'sites') return { target: normalizedTarget };
+    if (segments[0] !== 'sites') {
+      const siteParam = resolved.searchParams.get('site');
+      if (siteParam === null) return { target: normalizedTarget };
+      return isUUIDv7(siteParam) ? { target: normalizedTarget, siteId: siteParam } : undefined;
+    }
     if (!segments[1] || !isUUIDv7(segments[1])) return undefined;
     return { target: normalizedTarget, siteId: segments[1] };
   } catch {

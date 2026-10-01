@@ -124,6 +124,7 @@ function pointCodesByDevice(
   const visibleDeviceIds = new Set(devices.map((device) => device.id));
   const keysByDevice = new Map<string, string[]>();
   for (const point of telemetryPoints) {
+    if (point.status !== 'ACTIVE' || point.pointType === 'COMMAND') continue;
     if (!visibleDeviceIds.has(point.reportingDeviceId)) {
       throw new Error('Current-state Telemetry Point selection referenced an invisible Device Endpoint');
     }

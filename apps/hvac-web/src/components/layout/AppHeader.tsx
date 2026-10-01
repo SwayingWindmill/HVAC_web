@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from '@tanstack/react-router';
+import { useLocation, useMatches } from '@tanstack/react-router';
 import {
   Bell,
   ChevronDown,
@@ -31,39 +31,35 @@ import { Kbd } from '@/components/ui/kbd';
 import { Separator } from '@/components/ui/separator';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { CommandSearch } from './CommandSearch';
-import { MyWorkDrawer } from './MyWorkDrawer';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { APP_NAVIGATION_CONFIG } from './app-navigation';
+import { useShellNotifications } from './use-shell-notifications';
 
 interface AppHeaderProps {
-  readonly principalName?: string;
-  readonly principalRole?: string;
+  readonly principalName: string;
+  readonly principalSubject: string;
+  readonly principalRole: string;
   readonly themeMode: 'light' | 'dark';
   readonly onThemeToggle: () => void;
   readonly onNavigate: (target: string) => void;
   readonly onLogout?: () => void;
 }
 
-function resolveBreadcrumbs(pathname: string) {
+function resolveBreadcrumbs(pathname: string, routeTitle: string | undefined) {
   for (const group of APP_NAVIGATION_CONFIG) {
     for (const item of group.items) {
-      if (item.path === pathname || (item.path !== '/overview' && pathname.startsWith(item.path))) {
-        return {
-          group: group.label.split(' ')[0], // e.g. "运行管理"
-          page: item.title, // e.g. "系统与设备"
-        };
+      if (pathname === item.path || pathname.startsWith(`${item.path}/`)) {
+        return { group: group.label, page: item.title };
       }
     }
   }
-  return {
-    group: '智慧能源',
-    page: pathname === '/overview' || pathname === '/' ? '总览看板' : '工作台',
-  };
+  return { group: undefined, page: routeTitle };
 }
 
 export function AppHeader({
-  principalName = '张工 (能源总监)',
-  principalRole = '系统主管',
+  principalName,
+  principalSubject,
+  principalRole,
   themeMode,
   onThemeToggle,
   onNavigate,
@@ -73,7 +69,11 @@ export function AppHeader({
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
 
-  const breadcrumbs = resolveBreadcrumbs(location.pathname);
+  const routeTitle = useMatches({
+    select: (matches) => [...matches].reverse().find((match) => match.staticData?.title)?.staticData.title,
+  });
+  const breadcrumbs = resolveBreadcrumbs(location.pathname, routeTitle);
+  const { count: unreadNotifications } = useShellNotifications(true, principalSubject);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -100,19 +100,25 @@ export function AppHeader({
           <Separator orientation="vertical" className="hidden h-4 md:block" />
 
           {/* Breadcrumb: pure navigational path */}
-          <Breadcrumb className="hidden lg:block">
-            <BreadcrumbList className="text-xs">
-              <BreadcrumbItem>
-                <span className="text-muted-foreground">{breadcrumbs.group}</span>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage className="font-medium text-foreground">
-                  {breadcrumbs.page}
-                </BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
+          {breadcrumbs.page ? (
+            <Breadcrumb className="hidden lg:block">
+              <BreadcrumbList className="text-xs">
+                {breadcrumbs.group ? (
+                  <>
+                    <BreadcrumbItem>
+                      <span className="text-muted-foreground">{breadcrumbs.group}</span>
+                    </BreadcrumbItem>
+                    <BreadcrumbSeparator />
+                  </>
+                ) : null}
+                <BreadcrumbItem>
+                  <BreadcrumbPage className="font-medium text-foreground">
+                    {breadcrumbs.page}
+                  </BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
+          ) : null}
         </div>
 
         {/* Right: Search + My Work + Theme + User Menu */}
@@ -127,7 +133,7 @@ export function AppHeader({
           >
             <div className="flex items-center gap-1.5">
               <Search className="size-3.5" />
-              <span>搜索功能、设备、机会...</span>
+              <span>跳转到页面...</span>
             </div>
             <Kbd>⌘K</Kbd>
           </Button>
@@ -141,9 +147,6 @@ export function AppHeader({
           >
             <Search className="size-4" />
           </Button>
-
-          {/* My Work Quick Access Drawer */}
-          <MyWorkDrawer onNavigate={onNavigate} />
 
           {/* Theme Toggle */}
           <Button
@@ -165,11 +168,13 @@ export function AppHeader({
             variant="ghost"
             size="icon"
             className="relative size-8"
-            aria-label="通知中心"
-            onClick={() => onNavigate('/operations/alarms')}
+            aria-label={unreadNotifications > 0 ? `通知中心，${unreadNotifications} 条未读` : '通知中心'}
+            onClick={() => onNavigate('/notifications')}
           >
             <Bell className="size-4" />
-            <span className="absolute right-1 top-1 size-1.5 rounded-full bg-rose-500" />
+            {unreadNotifications > 0 ? (
+              <span className="absolute right-1 top-1 size-1.5 rounded-full bg-destructive" />
+            ) : null}
           </Button>
 
           <Separator orientation="vertical" className="h-4" />
@@ -184,7 +189,7 @@ export function AppHeader({
               >
                 <Avatar className="size-6 border border-border/60">
                   <AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">
-                    张
+                    {principalName.slice(0, 1)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="hidden min-w-0 text-left md:block">
@@ -207,7 +212,7 @@ export function AppHeader({
               <DropdownMenuGroup>
                 <DropdownMenuItem
                   className="cursor-pointer gap-2 text-xs"
-                  onSelect={() => onNavigate('/settings')}
+                  onSelect={() => onNavigate('/settings/access')}
                 >
                   <ShieldCheck className="size-3.5 text-muted-foreground" />
                   <span>权限与组织</span>

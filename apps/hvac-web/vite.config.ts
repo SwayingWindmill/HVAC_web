@@ -65,7 +65,13 @@ export default defineConfig(() => {
       https,
       hmr: auditDisableHMR ? false : undefined,
       proxy: {
-        '/api/v1': { target: platformGatewayTarget, changeOrigin: true },
+        '/api/v1': {
+          target: platformGatewayTarget,
+          changeOrigin: true,
+          // The dev server fronts the Gateway; the Gateway accepts state-changing
+          // requests only from its own public origin.
+          headers: { origin: new URL(platformGatewayTarget).origin },
+        },
       },
     },
     build: {

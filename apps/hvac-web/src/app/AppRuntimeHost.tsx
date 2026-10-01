@@ -89,7 +89,7 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
 export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig; queryClient: QueryClient }) {
   const observability = useObservability();
   const resources = useMemo(() => {
-    const client = (__HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV)
+    const client = __HVAC_WEB_FRONTEND_REVIEW__
       ? createFrontendReviewPlatformClient()
       : createPlatformGatewayClient();
     let routerNavigate: (target: string) => void = (target) => window.location.assign(target);

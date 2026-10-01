@@ -703,7 +703,7 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 		return commandCurrentState{}, &failure
 	}
 	var snapshot s2telemetryapi.DeviceObservationSnapshot
-	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0]) ||
+	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0], []string{feedbackKey}) ||
 		string(snapshot.TenantId) != device.TenantID || string(snapshot.SiteId) != device.SiteID || len(snapshot.Values) != 1 || snapshot.Values[0].Present == nil {
 		failure := commandUnavailable("Telemetry Runtime returned an invalid current-state projection.")
 		return commandCurrentState{}, &failure

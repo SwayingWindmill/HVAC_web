@@ -54,7 +54,7 @@ try {
   const output = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'Test(RedisLatestCacheNeverRegressesBusinessRevision|RebuildLatestCacheRestoresBusinessSnapshots)', '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', 'Test(RedisLatestCacheNeverRegressesBusinessRevision|RebuildLatestCacheRestoresBusinessSnapshots)', '-v', './pkg/telemetry/...',
   ], { env: { ...process.env, S2_TELEMETRY_LATEST_REDIS_TEST_URL: `redis://127.0.0.1:${port}/0` } });
 
   report.status = 'passed';

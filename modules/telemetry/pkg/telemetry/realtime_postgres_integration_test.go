@@ -98,3 +98,58 @@ func TestPostgresRealtimeOwnerRelayCurrentScopeAndRevocation(t *testing.T) {
 		t.Fatalf("owner-revoked channel remained subscribable: %v", err)
 	}
 }
+
+// A page reload or a second tab bootstraps again with the same client subscription id.
+func TestPostgresRealtimeBootstrapAgainWithSameClientSubscriptionID(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	for _, statement := range []string{
+		`DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE subscription_id IN (SELECT subscription_id FROM telemetry_runtime.telemetry_subscriptions WHERE device_id = $1::uuid)`,
+		`DELETE FROM telemetry_runtime.recovery_cursors WHERE subscription_id IN (SELECT subscription_id FROM telemetry_runtime.telemetry_subscriptions WHERE device_id = $1::uuid)`,
+		`DELETE FROM telemetry_runtime.telemetry_subscriptions WHERE device_id = $1::uuid`,
+	} {
+		if _, err := admin.Exec(ctx, statement, deviceA); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+	service, err := NewRealtimeService(RealtimeConfig{
+		Repository: store, Transport: &RecordingRealtimeTransport{},
+		PublicEndpoint:         "wss://realtime.example.test/connection/websocket",
+		CapabilityHMACKey:      []byte(strings.Repeat("c", 32)),
+		ConnectionTokenHMACKey: []byte(strings.Repeat("t", 32)),
+		Now:                    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := AccessContext{
+		PrincipalID: realtimeTestPrincipal, Subject: "subject-a", SubjectIssuer: "https://issuer.example.test",
+		SessionID: "session-a", TenantID: orgA, PolicyRevision: "telemetry-access:3",
+	}
+	request := telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "page-device-a", DeviceId: deviceA, Keys: []telemetryapi.TelemetryKey{"zone.temperature"}},
+	}}
+	first, err := service.Bootstrap(ctx, access, request)
+	if err != nil {
+		t.Fatalf("first bootstrap: %v", err)
+	}
+	second, err := service.Bootstrap(ctx, access, request)
+	if err != nil {
+		t.Fatalf("second bootstrap with the same client subscription id: %v", err)
+	}
+	if len(first.Subscriptions) != 1 || len(second.Subscriptions) != 1 || first.Subscriptions[0].Channel == second.Subscriptions[0].Channel {
+		t.Fatalf("bootstraps must create distinct subscriptions: first=%+v second=%+v", first.Subscriptions, second.Subscriptions)
+	}
+}

@@ -9,7 +9,6 @@ import type {
 } from '../../api/generated/platformGateway.gen.ts';
 import {
   formatTelemetryUnit,
-  getDeviceTelemetryProfile,
   telemetryPointDefinition,
 } from '../../domain/centralPlantTelemetry.ts';
 import {
@@ -189,7 +188,7 @@ export function assetsSpaceTypeLabel(value: string): string {
 }
 
 export function assetsAssetTypeLabel(value: string): string {
-  return localizedType(value, ASSET_TYPE_LABELS, getDeviceTelemetryProfile(value).title);
+  return localizedType(value, ASSET_TYPE_LABELS, '设备资产');
 }
 
 export function assetsDeviceTypeLabel(value: string): string {
@@ -209,8 +208,8 @@ export function assetsRegistryStatusLabel(value: string): string {
 }
 
 export function assetsTelemetryPointLabel(point: TelemetryPoint): string {
-  const definition = telemetryPointDefinition(point.pointCode);
-  return definition.label === point.pointCode ? point.displayName : definition.label;
+  const definition = telemetryPointDefinition(point.sourceKey);
+  return definition.label === point.sourceKey ? point.displayName : definition.label;
 }
 
 export function assetsTelemetryPointMeta(point: TelemetryPoint): string {

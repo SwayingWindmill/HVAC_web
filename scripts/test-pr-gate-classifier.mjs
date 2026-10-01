@@ -54,7 +54,7 @@ test('Operations Workspace changes select dedicated unit and browser profiles', 
 });
 
 test('telemetry changes select telemetry unit and durable integration profiles', () => {
-  const classification = runClassification(['modules/telemetry/internal/telemetry/realtime.go']);
+  const classification = runClassification(['modules/telemetry/pkg/telemetry/realtime.go']);
   assert.deepEqual(classification.unitProfiles, ['telemetry']);
   assert.deepEqual(classification.integrationProfiles, ['telemetry']);
   assert.equal(classification.broad, false);

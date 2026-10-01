@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 export const isWorkspaceExample =
-  __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+  __HVAC_WEB_FRONTEND_REVIEW__;
 export function WorkspaceHeader({
   title,
   actions,

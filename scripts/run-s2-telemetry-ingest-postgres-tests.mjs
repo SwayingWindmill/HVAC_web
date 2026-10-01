@@ -86,7 +86,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestPostgresIngestEndToEnd', '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', 'TestPostgresIngestEndToEnd', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,

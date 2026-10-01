@@ -1,3 +1,6 @@
+# Source is built and run on Linux; store and check out text with LF everywhere.
+* text=auto eol=lf
+
 deploy/s2/images/*.sh text eol=lf
 
 # Ancillary repository tooling is governed separately from product/runtime source.

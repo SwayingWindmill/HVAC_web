@@ -96,10 +96,10 @@ interface PointDisplayDefinition {
 }
 
 function presentationDefinition(point: TelemetryPoint): PointDisplayDefinition {
-  const domainDefinition = telemetryPointDefinition(point.pointCode);
+  const domainDefinition = telemetryPointDefinition(point.sourceKey);
   return {
     point,
-    label: domainDefinition.label === point.pointCode ? point.displayName : domainDefinition.label,
+    label: domainDefinition.label === point.sourceKey ? point.displayName : domainDefinition.label,
     defaultUnit: point.unit ?? domainDefinition.defaultUnit,
     precision: domainDefinition.precision,
   };

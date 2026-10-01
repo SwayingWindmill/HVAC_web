@@ -1,7 +1,7 @@
 import { Building2, Clock3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { CONSUMPTION_EXAMPLE_TARIFFS } from "@/features/energy-analysis/consumption/api/consumption-example";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,30 +29,21 @@ import {
   isWorkspaceExample,
 } from "@/components/analysis/workspace-parts";
 
-const siteProfiles: Record<
-  string,
-  { city: string; area: number; climate: string }
-> = {
-  "site:site-01": { city: "上海", area: 268000, climate: "夏热冬冷" },
-  "site:site-02": { city: "深圳", area: 185000, climate: "夏热冬暖" },
-  "site:site-03": { city: "北京", area: 142000, climate: "寒冷" },
-};
+const exampleSiteProfile = { city: "上海", area: 268000, climate: "夏热冬冷" };
 const tariff = CONSUMPTION_EXAMPLE_TARIFFS.map((item) => ({
   name: item.period,
   price: item.rate,
   hours: item.hoursDesc,
 }));
 export function ConfigurationWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/settings/" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/settings/" });
   const navigate = useNavigate({ from: "/settings/" });
   const query = useQuery({
     queryKey: ["configuration-review", currentScope.id],
     queryFn: async () => {
       if (!isWorkspaceExample) throw new Error("正式配置未接入");
-      if (currentScope.type !== "site")
-        throw new Error("请选择站点查看运行配置");
-      return siteProfiles[currentScope.id];
+      return exampleSiteProfile;
     },
     retry: false,
   });

@@ -13,7 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -45,12 +45,12 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createConsumptionExample } from "../api/consumption-example";
 import type { DailyConsumptionRecord } from "../api/consumption-types";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 const number = (value: number, digits = 1) =>
   value.toLocaleString("zh-CN", { maximumFractionDigits: digits });
 export function ConsumptionWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/energy-analysis/consumption" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/energy-analysis/consumption" });
   const navigate = useNavigate({ from: "/energy-analysis/consumption" });
   const period = search.period ?? "current-month",
     view = search.view ?? "energy";

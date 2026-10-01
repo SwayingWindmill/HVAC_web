@@ -1,6 +1,5 @@
 import { useLocation } from '@tanstack/react-router';
 import { Zap } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import {
   Sidebar,
   SidebarContent,
@@ -14,6 +13,7 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { useScope } from '@/hooks/use-scope';
 import {
   APP_NAVIGATION_CONFIG,
   isNavActive,
@@ -28,19 +28,19 @@ interface AppSidebarProps {
 function NavItem({
   item,
   currentPath,
-  searchStr,
+  siteQuery,
   onNavigate,
 }: {
   readonly item: AppNavigationItem;
   readonly currentPath: string;
-  readonly searchStr: string;
+  readonly siteQuery: string;
   readonly onNavigate: (target: string) => void;
 }) {
   const active = isNavActive(item.path, currentPath);
   const Icon = item.icon;
   const { setOpenMobile } = useSidebar();
 
-  const targetUrl = `${item.path}${searchStr}`;
+  const targetUrl = `${item.path}${siteQuery}`;
 
   return (
     <SidebarMenuItem>
@@ -61,14 +61,6 @@ function NavItem({
         >
           <Icon className="size-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{item.title}</span>
-          {item.badge ? (
-            <Badge
-              variant={active ? 'default' : 'secondary'}
-              className="ml-auto px-1.5 py-0 text-[10px] leading-4"
-            >
-              {item.badge}
-            </Badge>
-          ) : null}
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -81,7 +73,8 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const location = useLocation();
   const currentPath = location.pathname;
-  const searchStr = location.searchStr;
+  const { currentScope } = useScope();
+  const siteQuery = currentScope ? `?site=${currentScope.siteId}` : '';
 
   return (
     <Sidebar collapsible="icon" variant="inset" className="border-r border-border/60">
@@ -91,7 +84,7 @@ export function AppSidebar({
             <SidebarMenuButton
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground cursor-pointer"
-              onClick={() => onNavigate(`/overview${searchStr}`)}
+              onClick={() => onNavigate(`/overview${siteQuery}`)}
             >
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
                 <Zap className="size-4.5" />
@@ -122,7 +115,7 @@ export function AppSidebar({
                     key={item.id}
                     item={item}
                     currentPath={currentPath}
-                    searchStr={searchStr}
+                    siteQuery={siteQuery}
                     onNavigate={onNavigate}
                   />
                 ))}
