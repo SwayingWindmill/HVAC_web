@@ -2,17 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   REAL_ASSETS_HISTORY_RANGES,
-  buildRealAssetsTrendData,
-  createRealAssetsHistoryQuery,
-  formatRealAssetsHistoryInstant,
-  listRealAssetsTrendDefinitions,
-  loadRealAssetsHistory,
+  buildAssetsTrendData,
+  createAssetsHistoryQuery,
+  formatAssetsHistoryInstant,
+  listAssetsTrendDefinitions,
+  loadAssetsHistory,
   numericHistoryObservations,
-  realAssetsHistoryQueryKey,
-  realAssetsHistoryRevisionKey,
-  validateRealAssetsHistoryResponse,
-} from '../apps/hvac-web/src/real/assets/history.ts';
-import { resolveRealAssetsProfile } from '../apps/hvac-web/src/real/assets/catalog.ts';
+  assetsHistoryQueryKey,
+  assetsHistoryRevisionKey,
+  validateAssetsHistoryResponse,
+} from '../apps/hvac-web/src/features/assets/history.ts';
+import { resolveAssetsProfile } from '../apps/hvac-web/src/features/assets/catalog.ts';
 
 const tenantId = '01900000-0002-7000-8000-000000000002';
 const siteId = '01900000-0003-7000-8000-000000000003';
@@ -29,7 +29,7 @@ const sensorC = '01900000-0033-7000-8000-000000000033';
 const asOf = Date.parse('2026-07-31T04:00:00.000Z');
 
 function makeQuery(overrides = {}) {
-  return createRealAssetsHistoryQuery({
+  return createAssetsHistoryQuery({
     protectedGeneration: 7,
     sessionId: 'session-test-01',
     tenantId,
@@ -106,13 +106,13 @@ function makeResponse(query, overrides = {}) {
 test('history ranges and profile selection stay fixed and trendEligible-only', () => {
   assert.deepEqual(Object.keys(REAL_ASSETS_HISTORY_RANGES), ['1h', '6h', '24h']);
   assert.equal(REAL_ASSETS_HISTORY_RANGES['1h'].pageSize, 240);
-  const profile = resolveRealAssetsProfile('CHILLER');
-  assert.deepEqual(listRealAssetsTrendDefinitions(profile).map((definition) => definition.key), [
+  const profile = resolveAssetsProfile('CHILLER');
+  assert.deepEqual(listAssetsTrendDefinitions(profile).map((definition) => definition.key), [
     'chiller.power',
     'chiller.cop',
     'chiller.cooling_capacity',
   ]);
-  assert.deepEqual(listRealAssetsTrendDefinitions(resolveRealAssetsProfile('UNKNOWN_DEVICE')), []);
+  assert.deepEqual(listAssetsTrendDefinitions(resolveAssetsProfile('UNKNOWN_DEVICE')), []);
 });
 
 test('history query and cache key isolate protected scope, session, device, keys, range, RAW aggregation, timezone and policy evidence', () => {
@@ -120,13 +120,13 @@ test('history query and cache key isolate protected scope, session, device, keys
   assert.equal(query.from, '2026-07-31T03:00:00.000Z');
   assert.equal(query.to, '2026-07-31T04:00:00.000Z');
   assert.equal(query.pageSize, 240);
-  const key = realAssetsHistoryQueryKey(query);
+  const key = assetsHistoryQueryKey(query);
   for (const expected of [7, 'session-test-01', tenantId, siteId, deviceId, '1h', 'RAW', 'Asia/Tokyo', 'real-assets-critical-points:v1', 'registry:9|telemetry:2', 240]) {
     assert(key.includes(expected), `query key omitted ${expected}`);
   }
-  assert.notDeepEqual(key, realAssetsHistoryQueryKey(makeQuery({ sessionId: 'session-test-02' })));
-  assert.notDeepEqual(key, realAssetsHistoryQueryKey(makeQuery({ range: '6h' })));
-  assert.notDeepEqual(key, realAssetsHistoryQueryKey(makeQuery({ timezone: 'UTC' })));
+  assert.notDeepEqual(key, assetsHistoryQueryKey(makeQuery({ sessionId: 'session-test-02' })));
+  assert.notDeepEqual(key, assetsHistoryQueryKey(makeQuery({ range: '6h' })));
+  assert.notDeepEqual(key, assetsHistoryQueryKey(makeQuery({ timezone: 'UTC' })));
 });
 
 test('history loader sends only exact Device and profile keys and validates public response scope', async () => {
@@ -140,7 +140,7 @@ test('history loader sends only exact Device and profile keys and validates publ
     },
   };
   const controller = new AbortController();
-  const loaded = await loadRealAssetsHistory({ client, query, sessionCapability: 'session-capability-test', signal: controller.signal });
+  const loaded = await loadAssetsHistory({ client, query, sessionCapability: 'session-capability-test', signal: controller.signal });
   assert.equal(loaded, response);
   assert.deepEqual(requests[0].request, {
     deviceId,
@@ -156,26 +156,26 @@ test('history loader sends only exact Device and profile keys and validates publ
 test('history response rejects scope, stable-order, identity and count drift', () => {
   const query = makeQuery();
   const response = makeResponse(query);
-  assert.equal(validateRealAssetsHistoryResponse(response, query), response);
-  assert.throws(() => validateRealAssetsHistoryResponse({ ...response, siteId: '01900000-0099-7000-8000-000000000099' }, query), /resource scope/);
+  assert.equal(validateAssetsHistoryResponse(response, query), response);
+  assert.throws(() => validateAssetsHistoryResponse({ ...response, siteId: '01900000-0099-7000-8000-000000000099' }, query), /resource scope/);
   const invalidIdentity = {
     ...response,
     observations: [{ ...response.observations[0], pointId: 'not-a-point' }, ...response.observations.slice(1)],
   };
-  assert.throws(() => validateRealAssetsHistoryResponse(invalidIdentity, query), /Point identity/);
+  assert.throws(() => validateAssetsHistoryResponse(invalidIdentity, query), /Point identity/);
   const reversedSameKey = {
     ...response,
     observations: [response.observations[0], response.observations[2], response.observations[1]],
   };
-  assert.throws(() => validateRealAssetsHistoryResponse(reversedSameKey, query), /stable order/);
-  assert.throws(() => validateRealAssetsHistoryResponse({ ...response, metadata: { ...response.metadata, returnedObservations: 4 } }, query), /observation count/);
-  assert.throws(() => validateRealAssetsHistoryResponse({ ...response, observations: [{ ...response.observations[0], telemetryKey: 'unrequested.key' }, ...response.observations.slice(1)] }, query), /requested keys/);
+  assert.throws(() => validateAssetsHistoryResponse(reversedSameKey, query), /stable order/);
+  assert.throws(() => validateAssetsHistoryResponse({ ...response, metadata: { ...response.metadata, returnedObservations: 4 } }, query), /observation count/);
+  assert.throws(() => validateAssetsHistoryResponse({ ...response, observations: [{ ...response.observations[0], telemetryKey: 'unrequested.key' }, ...response.observations.slice(1)] }, query), /requested keys/);
 });
 
 test('trend model preserves valid zero, degraded quality and inserts null gaps without interpolation', () => {
   const query = makeQuery();
   const points = numericHistoryObservations(makeResponse(query), 'chiller.power');
-  const data = buildRealAssetsTrendData(points, '1h', query.pageSize);
+  const data = buildAssetsTrendData(points, '1h', query.pageSize);
   assert.equal(data[0].value, 0);
   assert.equal(data[0].quality, 'GOOD');
   assert.equal(data[0].pointId, pointA);
@@ -191,7 +191,7 @@ test('trend model breaks the line when Point, Sensor or Point revision identity 
     observation({ observationId: observationA, telemetryKey: 'chiller.power', sampledAt: '2026-07-31T03:05:00.000Z', value: 10 }),
     observation({ observationId: observationB, telemetryKey: 'chiller.power', sampledAt: '2026-07-31T03:05:10.000Z', value: 11, pointId: pointB, sensorId: sensorB, pointRevision: 4 }),
   ];
-  const data = buildRealAssetsTrendData(points, '1h', 240);
+  const data = buildAssetsTrendData(points, '1h', 240);
   assert.equal(data.length, 3);
   assert.equal(data[0].pointId, pointA);
   assert.equal(data[1].value, null);
@@ -203,7 +203,7 @@ test('trend model breaks the line when Point, Sensor or Point revision identity 
 test('projection cache identity includes real projection watermark and stable-page cursor, not pseudo dataset revision', () => {
   const query = makeQuery();
   const response = makeResponse(query);
-  const key = realAssetsHistoryRevisionKey(query, response);
+  const key = assetsHistoryRevisionKey(query, response);
   assert(key.includes('2026-07-31T03:50:00.000Z'));
   assert(key.includes('cursor-next'));
   assert(!key.includes('history-revision-17'));
@@ -226,16 +226,16 @@ test('typed non-numeric observations remain valid but do not enter numeric chart
     ...response.observations.slice(1),
   ];
   response.metadata.returnedObservations = response.observations.length;
-  assert.equal(validateRealAssetsHistoryResponse(response, query), response);
+  assert.equal(validateAssetsHistoryResponse(response, query), response);
   assert.equal(numericHistoryObservations(response, 'chiller.cop').length, 0);
   const invalidJson = {
     ...response,
     observations: [{ ...response.observations[0], valueType: 'JSON', value: 'AUTO' }, ...response.observations.slice(1)],
   };
-  assert.throws(() => validateRealAssetsHistoryResponse(invalidJson, query), /JSON value must be an object or array/);
+  assert.throws(() => validateAssetsHistoryResponse(invalidJson, query), /JSON value must be an object or array/);
 });
 
 test('history time formatting uses the Site IANA timezone instead of browser local time', () => {
-  const formatted = formatRealAssetsHistoryInstant('2026-07-31T04:00:00.000Z', 'Asia/Tokyo');
+  const formatted = formatAssetsHistoryInstant('2026-07-31T04:00:00.000Z', 'Asia/Tokyo');
   assert.match(formatted, /13:00:00/);
 });

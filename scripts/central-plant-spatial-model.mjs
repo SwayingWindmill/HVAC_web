@@ -232,13 +232,25 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
   const points = assignCentralPlantPointIds([...observedPoints, ...controlPoints]);
   const simulatorSubjectType = (value) => ({ EQUIPMENT: 'ASSET', AREA: 'SPACE' })[value] ?? value;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     gatewayId: 'EG8200-COMMERCIAL-001',
     publishInterval: overrides.publishInterval ?? '5s',
     plant: {
-      ambientDryBulbC: 34,
-      ambientWetBulbC: 27,
-      loadFraction: 0.72,
+      datasource: overrides.datasource ?? {
+        type: 'SCENARIO',
+        scenario: {
+          name: 'summer-design-day',
+          records: [
+            { offset: '0s', inputs: { ambientDryBulbC: 28, ambientWetBulbC: 24, loadFraction: 0.35 } },
+            { offset: '6h', inputs: { ambientDryBulbC: 29, ambientWetBulbC: 24.5, loadFraction: 0.40 } },
+            { offset: '9h', inputs: { ambientDryBulbC: 32, ambientWetBulbC: 25.5, loadFraction: 0.60 } },
+            { offset: '12h', inputs: { ambientDryBulbC: 35, ambientWetBulbC: 27, loadFraction: 0.85 } },
+            { offset: '15h', inputs: { ambientDryBulbC: 36, ambientWetBulbC: 28, loadFraction: 0.95 } },
+            { offset: '18h', inputs: { ambientDryBulbC: 33, ambientWetBulbC: 26.5, loadFraction: 0.75 } },
+            { offset: '22h', inputs: { ambientDryBulbC: 30, ambientWetBulbC: 25, loadFraction: 0.45 } },
+          ],
+        },
+      },
       initialEnergyKwh: overrides.initialEnergyKwh ?? 0,
       chiller: { id: 'CHILLER-01', ratedCoolingCapacityKw: 1200, baseCop: 5.6, initialSetpointC: 7, initialLoadLimitPct: 100, initiallyRunning: true },
       chilledWaterPump: { id: 'CHWP-01', ratedPowerKw: 45, ratedFlowM3h: 220, initialFrequencyHz: 50, initiallyRunning: true },

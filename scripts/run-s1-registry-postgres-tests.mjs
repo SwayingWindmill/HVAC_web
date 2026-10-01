@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -14,8 +13,7 @@ const composePath = resolve(root, 'infra/registry/compose.yaml');
 const projectName = `hvac-s1-registry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-registry-core/postgres-baseline.json');
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 async function findAvailablePort(requestedPort = 0) {

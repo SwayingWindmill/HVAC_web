@@ -1,6 +1,6 @@
 # Operations Agent implementation plan
 
-Status: accepted plan
+Status: superseded by `docs/operations-agent/pi-agent-implementation-plan.md`
 
 Date: 2026-07-31
 

@@ -22,8 +22,7 @@ import { buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } fr
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
 const root = resolve(process.cwd());
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 function joined(parts) {
@@ -79,8 +78,7 @@ function spawnService(label, command, args, env, _quiet = false) {
     env: { ...process.env, ...env },
     stdio: 'inherit',
     shell: false,
-    detached: process.platform !== 'win32',
-    windowsHide: true,
+    detached: true,
   });
   child.once('error', (error) => console.error(`${label} process error:`, error.message));
   return child;
@@ -88,10 +86,6 @@ function spawnService(label, command, args, env, _quiet = false) {
 
 async function stopProcess(child) {
   if (!child || processExited(child)) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    return;
-  }
   const exited = once(child, 'exit').then(() => true);
   try { process.kill(-child.pid, 'SIGTERM'); } catch {}
   const stopped = await Promise.race([exited, pause(2000).then(() => false)]);
@@ -918,6 +912,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
         'spiffe://hvac.local/mqtt-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
       }),
       TELEMETRY_IAM_ENDPOINT: iamURL,
+      TELEMETRY_ALLOWED_SNAPSHOT_READER_SPIFFES: 'spiffe://hvac.local/operations-agent-service',
       TELEMETRY_REALTIME_ENABLED: 'true',
       TELEMETRY_REALTIME_ENDPOINT: realtimeEndpoint,
       [['TELEMETRY', 'REALTIME', 'CAPABILITY', 'HMAC', 'KEY'].join('_')]: randomBytes(32).toString('base64url'),
@@ -1024,7 +1019,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     services.web = spawnService('HVAC Web Real', process.execPath, [
       resolve(localNodeModules, 'vite/bin/vite.js'),
       'apps/hvac-web',
-      '--config', 'apps/hvac-web/vite.real.config.ts',
+      '--config', 'apps/hvac-web/vite.config.ts',
       '--host', '127.0.0.1',
       '--port', String(ports.web),
       '--strictPort',
@@ -1033,7 +1028,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
       S0_GATEWAY_ONLY: 'true',
       VITE_TLS_CERT: paths.webCert,
       VITE_TLS_KEY: paths.webKey,
-      VITE_API_MODE: 'real',
       HVAC_WEB_BUILD_ID: 'central-plant-local',
       HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
       HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',

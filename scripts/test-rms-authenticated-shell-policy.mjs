@@ -5,7 +5,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-const sourcePath = path.resolve('apps/hvac-web/src/real/shell-policy.ts');
+const sourcePath = path.resolve('apps/hvac-web/src/app/shell-policy.ts');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const compiled = ts.transpileModule(source, {
   compilerOptions: {

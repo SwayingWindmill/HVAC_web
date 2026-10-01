@@ -16,7 +16,7 @@ export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
   'tools',
   'persistence',
   'transport-http',
-  'transport-ag-ui',
+  'transport-events',
   'scheduling',
   'observability',
   'bootstrap',

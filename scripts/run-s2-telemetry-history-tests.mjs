@@ -98,7 +98,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce', '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry|TestHistoryMicrobatch', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,
@@ -110,6 +110,10 @@ try {
       S2_CLICKHOUSE_PASSWORD: '',
     },
   });
+  if (!report.assertions.goIntegration.includes('--- PASS: TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry') ||
+      report.assertions.goIntegration.includes('--- SKIP:')) {
+    throw new Error('history integration tests must execute, not skip');
+  }
   report.assertions.outbox = psql(`
     SELECT delivery_state || '|' || attempts::text || '|' || (published_at IS NOT NULL)::text
     FROM telemetry_runtime.telemetry_history_outbox

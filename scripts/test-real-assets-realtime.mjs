@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveRealAssetsProfile } from '../apps/hvac-web/src/real/assets/catalog.ts';
-import { createBoundedRealtimePublisher } from '../apps/hvac-web/src/real/assets/realtime-publisher.ts';
+import { resolveAssetsProfile } from '../apps/hvac-web/src/features/assets/catalog.ts';
+import { createBoundedRealtimePublisher } from '../apps/hvac-web/src/features/assets/realtime-publisher.ts';
 import {
-  createRealAssetsRealtimeScope,
-  createRealAssetsRealtimeTarget,
-  describeRealAssetsRealtimeState,
-  listRealAssetsRealtimeKeys,
-  realAssetsRealtimeSubscriptionEligibility,
-  projectRealAssetsRealtimeRow,
-  validateRealAssetsRealtimeState,
-} from '../apps/hvac-web/src/real/assets/realtime.ts';
-import { selectRealAssetsRepresentativePoints } from '../apps/hvac-web/src/real/assets/model.ts';
-import { projectRealAssetsDeviceOperationalState } from '../apps/hvac-web/src/real/assets/operational-projection.ts';
+  createAssetsRealtimeScope,
+  createAssetsRealtimeTarget,
+  describeAssetsRealtimeState,
+  listAssetsRealtimeKeys,
+  assetsRealtimeSubscriptionEligibility,
+  projectAssetsRealtimeRow,
+  validateAssetsRealtimeState,
+} from '../apps/hvac-web/src/features/assets/realtime.ts';
+import { selectAssetsRepresentativePoints } from '../apps/hvac-web/src/features/assets/model.ts';
+import { projectAssetsDeviceOperationalState } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 
 const tenantId = '01900000-0001-7000-8000-000000000001';
 const siteId = '01900000-0002-7000-8000-000000000002';
@@ -84,14 +84,14 @@ function registryPoint(pointCode, index) {
 }
 
 function row(revision = 2, deviceType = 'CHILLER') {
-  const profile = resolveRealAssetsProfile(deviceType);
+  const profile = resolveAssetsProfile(deviceType);
   const device = {
     id: deviceId, tenantId: tenantId, siteId, code: 'CH-01', displayName: 'Chiller 01',
     deviceType, status: 'ACTIVE', revision: 5,
   };
   const telemetryPoints = values(revision).map((value, index) => registryPoint(value.key, index));
   const snapshotResult = { status: 'ok', snapshot: snapshot(revision) };
-  const operational = projectRealAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult });
+  const operational = projectAssetsDeviceOperationalState({ device, telemetryPoints, snapshotResult });
   return {
     device,
     profile,
@@ -101,12 +101,12 @@ function row(revision = 2, deviceType = 'CHILLER') {
     telemetryPoints,
     snapshotResult,
     operational,
-    representativePoints: selectRealAssetsRepresentativePoints(telemetryPoints, profile, operational.points),
+    representativePoints: selectAssetsRepresentativePoints(telemetryPoints, profile, operational.points),
   };
 }
 
 function liveState(status, revision = 3, overrides = {}) {
-  const scope = createRealAssetsRealtimeScope(row(), 7);
+  const scope = createAssetsRealtimeScope(row(), 7);
   const base = {
     status,
     clientSubscriptionId: scope.clientSubscriptionId,
@@ -123,19 +123,19 @@ function liveState(status, revision = 3, overrides = {}) {
 
 test('realtime scope follows active Registry Points rather than frontend profile configuration', () => {
   const visible = row();
-  assert.deepEqual(listRealAssetsRealtimeKeys(visible), [
+  assert.deepEqual(listAssetsRealtimeKeys(visible), [
     'chiller_cooling_capacity', 'chiller_cop', 'chiller_power', 'chiller_run_state',
   ]);
-  const scope = createRealAssetsRealtimeScope(visible, 7);
+  const scope = createAssetsRealtimeScope(visible, 7);
   assert.equal(scope.clientSubscriptionId, `real-assets-detail:7:${deviceId}`);
-  assert.deepEqual(createRealAssetsRealtimeTarget(scope), {
+  assert.deepEqual(createAssetsRealtimeTarget(scope), {
     clientSubscriptionId: scope.clientSubscriptionId,
     deviceId,
     keys: [...scope.keys],
   });
   const unprofiled = row(2, 'VENDOR_SPECIAL_CONTROLLER');
   assert.equal(unprofiled.profile.state, 'unconfigured');
-  assert.deepEqual(listRealAssetsRealtimeKeys(unprofiled), [...scope.keys]);
+  assert.deepEqual(listAssetsRealtimeKeys(unprofiled), [...scope.keys]);
 });
 
 test('realtime scope reports the public key limit before the hook can throw during render', () => {
@@ -148,7 +148,7 @@ test('realtime scope reports the public key limit before the hook can throw duri
       pointCode: `vendor.point_${String(index).padStart(2, '0')}`,
     })),
   };
-  assert.deepEqual(realAssetsRealtimeSubscriptionEligibility(crowded), {
+  assert.deepEqual(assetsRealtimeSubscriptionEligibility(crowded), {
     state: 'too-many-points',
     pointCount: 65,
     limit: 64,
@@ -157,35 +157,35 @@ test('realtime scope reports the public key limit before the hook can throw duri
 
 test('realtime state validation rejects Tenant, Site, Device and exact-key drift', () => {
   const visible = row();
-  const scope = createRealAssetsRealtimeScope(visible, 7);
+  const scope = createAssetsRealtimeScope(visible, 7);
   const state = liveState('live');
-  assert.equal(validateRealAssetsRealtimeState(state, scope), state);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, deviceId: otherDeviceId }, scope), /exact subscription scope/);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, keys: [...state.keys].reverse() }, scope), /exact subscription scope/);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { siteId: otherDeviceId }) }, scope), /authorized Tenant/);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { tenantId: otherDeviceId }) }, scope), /authorized Tenant/);
+  assert.equal(validateAssetsRealtimeState(state, scope), state);
+  assert.throws(() => validateAssetsRealtimeState({ ...state, deviceId: otherDeviceId }, scope), /exact subscription scope/);
+  assert.throws(() => validateAssetsRealtimeState({ ...state, keys: [...state.keys].reverse() }, scope), /exact subscription scope/);
+  assert.throws(() => validateAssetsRealtimeState({ ...state, snapshot: snapshot(3, { siteId: otherDeviceId }) }, scope), /authorized Tenant/);
+  assert.throws(() => validateAssetsRealtimeState({ ...state, snapshot: snapshot(3, { tenantId: otherDeviceId }) }, scope), /authorized Tenant/);
 });
 
 test('newer realtime Snapshot reprojects detail while valid zero and degraded quality remain explicit', () => {
-  const projection = projectRealAssetsRealtimeRow(row(2), liveState('live', 3));
+  const projection = projectAssetsRealtimeRow(row(2), liveState('live', 3));
   assert.equal(projection.source, 'realtime');
   assert.equal(projection.realtimeRevision, 3);
   assert.equal(projection.row.snapshotResult.snapshot.businessRevision, 3);
   assert.equal(projection.row.operational.points.find((point) => point.key === 'chiller_cop').quality, 'PARTIAL');
   assert.equal(projection.row.operational.telemetry.quality, 'DEGRADED');
-  const zeroProjection = projectRealAssetsRealtimeRow(row(1), liveState('live', 2));
+  const zeroProjection = projectAssetsRealtimeRow(row(1), liveState('live', 2));
   assert.equal(zeroProjection.row.operational.points.find((point) => point.key === 'chiller_power').displayValue, '0');
 });
 
 test('older realtime Snapshot never overwrites a newer current-query baseline', () => {
-  const projection = projectRealAssetsRealtimeRow(row(3), liveState('live', 2));
+  const projection = projectAssetsRealtimeRow(row(3), liveState('live', 2));
   assert.equal(projection.source, 'current-query');
   assert.equal(projection.realtimeOlderThanBaseline, true);
   assert.equal(projection.row.snapshotResult.snapshot.businessRevision, 3);
 });
 
 test('revocation suppresses previously authorized detail Snapshot', () => {
-  const projection = projectRealAssetsRealtimeRow(row(3), liveState('revoked'));
+  const projection = projectAssetsRealtimeRow(row(3), liveState('revoked'));
   assert.equal(projection.source, 'none');
   assert.equal(projection.suppressedByRevocation, true);
   assert.equal(projection.row.snapshotResult, undefined);
@@ -220,8 +220,8 @@ test('bounded publisher renders at most once per frame while publishing the late
 });
 
 test('transport presentation keeps Snapshot degradation separate from revocation', () => {
-  assert.equal(describeRealAssetsRealtimeState(liveState('live')).degraded, false);
-  assert.match(describeRealAssetsRealtimeState(liveState('snapshot')).label, /重连/);
-  assert.equal(describeRealAssetsRealtimeState(liveState('unavailable')).retryable, true);
-  assert.match(describeRealAssetsRealtimeState(liveState('revoked')).detail, /晚到 event/);
+  assert.equal(describeAssetsRealtimeState(liveState('live')).degraded, false);
+  assert.match(describeAssetsRealtimeState(liveState('snapshot')).label, /重连/);
+  assert.equal(describeAssetsRealtimeState(liveState('unavailable')).retryable, true);
+  assert.match(describeAssetsRealtimeState(liveState('revoked')).detail, /晚到 event/);
 });

@@ -102,35 +102,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  browser_windows:
-    name: nightly / browser (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.12"
-          cache-dependency-path: |
-            libs/*/go.mod
-            services/*/go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profile-set=browser-windows
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
-        with:
-          name: nightly-full-regression-browser-windows
-          path: out/**
-          if-no-files-found: warn
-          retention-days: 14
-
-  browser_linux:
-    name: nightly / browser (Linux)
+  browser:
+    name: nightly / browser
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -147,11 +120,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profile-set=browser-linux
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profile-set=all
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
-          name: nightly-full-regression-browser-linux
+          name: nightly-full-regression-browser
           path: out/**
           if-no-files-found: error
           retention-days: 14

@@ -1,21 +1,15 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const gatewayAddress = process.env.PLATFORM_GATEWAY_ADDR || '127.0.0.1:8080';
 const gatewayTarget = process.env.PLATFORM_GATEWAY_PROXY_TARGET || `http://${gatewayAddress}`;
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 let stopping = false;
 
 function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else {
-    child.kill('SIGTERM');
-  }
+  child.kill('SIGTERM');
 }
 
 const gateway = spawn(goBinary, ['run', './cmd/energy-api'], {

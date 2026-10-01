@@ -1,18 +1,5 @@
 {
   "schemaVersion": 1,
   "maximumInlineCommands": 4,
-  "scripts": {
-    "real-assets:certify": {
-      "mode": "explicit-operation",
-      "reason": "Explicit certification operation; keep orchestration visible at the package entry point."
-    },
-    "s2:telemetry-cutover": {
-      "mode": "explicit-operation",
-      "reason": "Explicit cutover operation; keep orchestration visible at the package entry point."
-    },
-    "s2:telemetry-release": {
-      "mode": "explicit-operation",
-      "reason": "Explicit release operation; keep orchestration visible at the package entry point."
-    }
-  }
+  "scripts": {}
 }

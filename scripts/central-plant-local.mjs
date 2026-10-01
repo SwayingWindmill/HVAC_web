@@ -15,6 +15,7 @@ import {
   centralPlantSensors,
 } from './central-plant-spatial-model.mjs';
 import { startCentralPlantLocalTopology } from './central-plant-local-topology.mjs';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -298,16 +299,7 @@ async function submitLogtoSignIn(client, logto) {
 }
 
 async function browserAudit(topology) {
-  const browserCandidates = [
-    process.env.BROWSER_BINARY,
-    process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-    process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium',
-  ].filter(Boolean);
-  const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
-  if (!browserPath) throw new Error('A CDP-compatible browser is required for the central plant smoke test');
+  const browserPath = resolveLinuxBrowserExecutable();
   const profileDirectory = join(tmpdir(), `central-plant-local-${process.pid}`);
   await mkdir(profileDirectory, { recursive: true });
   const debugPort = await findAvailablePort();
@@ -566,10 +558,7 @@ async function browserAudit(topology) {
     };
   } finally {
     client?.close();
-    if (browser.exitCode === null) {
-      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(browser.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-      else browser.kill('SIGTERM');
-    }
+    if (browser.exitCode === null) browser.kill('SIGTERM');
     await rm(profileDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }

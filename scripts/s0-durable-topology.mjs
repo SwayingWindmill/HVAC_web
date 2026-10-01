@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -17,8 +16,7 @@ const observabilityComposePath = resolve(root, 'infra/observability/compose.yaml
 const projectName = process.env.S0_DURABLE_COMPOSE_PROJECT ?? `hvac-s0-durable-${process.pid}-${randomBytes(3).toString('hex')}`;
 const postgresContainer = `${projectName}-postgres-1`;
 const redpandaContainer = `${projectName}-redpanda-1`;
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 let serviceStdio = 'inherit';
 const serviceProcessGroups = new WeakSet();
@@ -49,7 +47,7 @@ function processExited(child) {
 }
 
 function signalProcessTree(child, signal) {
-  if (process.platform !== 'win32' && serviceProcessGroups.has(child)) {
+  if (serviceProcessGroups.has(child)) {
     try {
       process.kill(-child.pid, signal);
     } catch (error) {
@@ -85,10 +83,10 @@ function spawnService(label, command, args, env) {
     cwd: root,
     stdio: serviceStdio,
     shell: false,
-    detached: process.platform !== 'win32',
+    detached: true,
     env: { ...process.env, ...env },
   });
-  if (process.platform !== 'win32') serviceProcessGroups.add(child);
+  serviceProcessGroups.add(child);
   child.once('error', (error) => console.error(`${label} process error:`, error));
   return child;
 }
@@ -183,20 +181,12 @@ async function startOTLPRecorder(port) {
 
 export async function stopProcess(child) {
   if (!child || processExited(child)) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    return;
-  }
   const stopped = await signalAndWait(child, 'SIGTERM');
   if (!stopped) await signalAndWait(child, 'SIGKILL');
 }
 
 export async function killProcess(child) {
   if (!child || processExited(child)) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    return;
-  }
   const stopped = await signalAndWait(child, 'SIGKILL');
   if (!stopped) throw new Error(`process group ${child.pid} did not stop after SIGKILL`);
 }

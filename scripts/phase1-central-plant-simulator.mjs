@@ -20,8 +20,17 @@ import {
 } from './central-plant-spatial-model.mjs';
 
 const repoRoot = path.resolve(process.env.PHASE1_REPO_ROOT || process.cwd());
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-postgres-1';
-const runtimeRoot = path.join(repoRoot, 'deploy', 'platform', 'phase1', 'runtime');
+const phase1Dir = path.join(repoRoot, 'deploy', 'platform', 'phase1');
+const runtimeEnv = process.env.PHASE1_ENV_FILE || path.join(phase1Dir, 'environments', 'development.runtime.env');
+const phase1ComposeArgs = [
+  'compose',
+  '--project-name', 'hvac-phase1-local',
+  '--profile', 'local-postgres',
+  '--env-file', runtimeEnv,
+  '-f', path.join(phase1Dir, 'compose.yaml'),
+  '-f', path.join(phase1Dir, 'wsl.override.yaml'),
+];
+const runtimeRoot = path.join(phase1Dir, 'runtime');
 const internalPkiDir = path.join(runtimeRoot, 'internal-pki');
 const simulatorPkiDir = path.join(internalPkiDir, 'eg8200-simulator');
 const simulatorQueueDir = path.join(runtimeRoot, 'data', 'eg8200');
@@ -57,7 +66,8 @@ function run(command, args, options = {}) {
 
 function psql(database, sql) {
   run('docker', [
-    'exec', '-i', postgresContainer,
+    ...phase1ComposeArgs,
+    'exec', '-T', 'postgres',
     'psql', '-U', 'postgres', '-d', database,
     '-v', 'ON_ERROR_STOP=1',
   ], { input: sql });
@@ -65,12 +75,13 @@ function psql(database, sql) {
 
 function psqlScalar(database, sql) {
   const result = spawnSync('docker', [
-    'exec', '-i', postgresContainer,
+    ...phase1ComposeArgs,
+    'exec', '-T', 'postgres',
     'psql', '-U', 'postgres', '-d', database,
     '-v', 'ON_ERROR_STOP=1', '-tA', '-c', sql,
   ], { cwd: repoRoot, encoding: 'utf8' });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`docker psql scalar exited with status ${result.status}: ${result.stderr}`);
+  if (result.status !== 0) throw new Error(`docker compose psql scalar exited with status ${result.status}: ${result.stderr}`);
   return result.stdout.trim();
 }
 
@@ -183,13 +194,15 @@ function buildS1Seed(points) {
       protocol: point.sourceProtocol ?? 'SIMULATED',
       address: point.sourceAddress ?? `${point.deviceId}:${point.sourceKey}`,
     };
+    const counterDecreaseMode = point.pointType === 'COUNTER' ? 'RESET_TO_ZERO' : null;
     return `(
       ${sqlLiteral(ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},
       ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(device.platformDeviceId)},
       ${point.sensorId ? sqlLiteral(ids.sensorIdByKey.get(point.sensorId)) : 'NULL'},
-      ${sqlLiteral(point.pointCode)}, ${sqlLiteral(point.telemetryKey)}, ${sqlLiteral(point.name)},
+      ${sqlLiteral(point.pointCode)}, ${sqlLiteral(point.sourceKey)}, ${sqlLiteral(point.name)},
       ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'},
       ${point.writable ? 'true' : 'false'}, ${durationMilliseconds(point.sampleInterval)}, ${durationMilliseconds(point.publishInterval)}, ${durationMilliseconds(point.staleAfter)},
+      ${counterDecreaseMode ? sqlLiteral(counterDecreaseMode) : 'NULL'}, NULL,
       ${sqlJson(metadata)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL
     )`;
   }).join(',\n');
@@ -250,9 +263,9 @@ INSERT INTO core_registry.sensor_space_bindings (id, tenant_id, site_id, sensor_
 ${sensorSpaceBindings}
 ON CONFLICT (id) DO UPDATE SET sensor_id=EXCLUDED.sensor_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
 
-INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id) VALUES
+INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, counter_decrease_mode, counter_rollover_modulus, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id) VALUES
 ${telemetryPoints}
-ON CONFLICT (id) DO UPDATE SET reporting_device_id=EXCLUDED.reporting_device_id, sensor_id=EXCLUDED.sensor_id, point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) DO UPDATE SET reporting_device_id=EXCLUDED.reporting_device_id, sensor_id=EXCLUDED.sensor_id, point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, source_metadata=EXCLUDED.source_metadata, status='ACTIVE', updated_at=clock_timestamp();
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${pointSubjects}
@@ -571,16 +584,11 @@ function runLocalAdminGrant() {
 }
 
 function startSimulatorService() {
-  run(process.execPath, [
-    path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    'up', '-d', '--build', 'iot-service',
-  ]);
-  run(process.execPath, [
-    path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    '--simulator-acceptance',
-    '--profile', 'simulator-acceptance',
-    'up', '-d', '--build', 'eg8200-simulator',
-  ]);
+  const launcher = path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs');
+  run(process.execPath, [launcher, '--integration', 'build', 'iot-service']);
+  run(process.execPath, [launcher, '--integration', 'up', '-d', 'mqtt-broker', 'iot-service']);
+  run(process.execPath, [launcher, '--simulator-acceptance', 'build', 'eg8200-simulator']);
+  run(process.execPath, [launcher, '--simulator-acceptance', 'up', '-d', 'eg8200-simulator']);
 }
 
 const pointContract = JSON.parse(readFileSync(pointContractPath, 'utf8'));

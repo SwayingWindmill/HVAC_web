@@ -12,6 +12,10 @@
       "env": {
         "CODEGRAPH_TELEMETRY": "0"
       }
+    },
+    "reui": {
+      "type": "http",
+      "url": "https://mcp.reui.io/api/mcp"
     }
   }
 }

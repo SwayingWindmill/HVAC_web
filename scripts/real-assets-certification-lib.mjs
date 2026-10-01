@@ -1,5 +1,5 @@
 export const REAL_ASSETS_CERTIFICATION_SCHEMA_VERSION = 1;
-export const REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION = 'real-assets-200-devices:v1';
+export const REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION = 'real-assets-200-devices:v2';
 export const REAL_ASSETS_CERTIFICATION_DEVICE_COUNT = 200;
 export const REAL_ASSETS_CERTIFICATION_ASSET_COUNT = 20;
 export const REAL_ASSETS_CERTIFICATION_SCENARIOS = Object.freeze([
@@ -34,7 +34,7 @@ export function buildCertificationInventory({ tenantId, siteId, count = REAL_ASS
       tenantId: tenantId,
       siteId,
       code: `PLANT-EQ-${String(index).padStart(2, '0')}`,
-      displayName: `Plant Asset ${String(index).padStart(2, '0')}`,
+      displayName: `冷站资产 ${String(index).padStart(2, '0')}`,
       assetType: index % 2 === 0 ? 'CHILLER' : 'PUMP_GROUP',
       status: 'ACTIVE',
       revision: index,
@@ -50,7 +50,9 @@ export function buildCertificationInventory({ tenantId, siteId, count = REAL_ASS
       tenantId: tenantId,
       siteId,
       code: `CERT-DEVICE-${String(index).padStart(3, '0')}`,
-      displayName: `Certification Device ${String(index).padStart(3, '0')} · ${scenario}`,
+      displayName: scenario === 'unknown-device-type'
+        ? `CTRL-${String(index).padStart(3, '0')} 未知控制器`
+        : `CH-${String(index).padStart(3, '0')} 冷水机组`,
       deviceType: scenario === 'unknown-device-type' ? 'VENDOR_UNKNOWN_CONTROLLER' : 'CHILLER',
       status: index % 47 === 0 ? 'INACTIVE' : 'ACTIVE',
       revision: 1000 + index,

@@ -43,7 +43,7 @@ const compose = await read('infra/durability/compose.yaml');
 includesAll(compose, ['ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e', 'S0_TOXIPROXY_POSTGRES_HOST_PORT'], 'Toxiproxy topology');
 assert(!compose.includes('S0_TOXIPROXY_LEGACY_HOST_PORT'), 'active Toxiproxy topology must not expose a Legacy port');
 const topology = await read('scripts/s0-durable-topology.mjs');
-includesAll(topology, ['setPostgresAvailable', 'setPlatformStatusRevision', 'killProcess', 'serviceProcessGroups', "process.kill(-child.pid, signal)", "detached: process.platform !== 'win32'", 's0_postgres'], 'failure-injection topology');
+includesAll(topology, ['setPostgresAvailable', 'setPlatformStatusRevision', 'killProcess', 'serviceProcessGroups', "process.kill(-child.pid, signal)", 'detached: true', 's0_postgres'], 'failure-injection topology');
 assert(!topology.toLowerCase().includes('legacy'), 'active durable topology must not start or configure Legacy');
 const browserAudit = await read('scripts/run-durable-session-browser-audit.mjs');
 includesAll(browserAudit, ['ROUTE_AUDIT_FAILED', 'setPlatformStatusRevision', 'staleRevisionRejected', 'stopAudit(true)', 'stopRelay(true)', 'Outbox backlog', 'AUDIT_RECORD_NOT_FOUND'], 'production-shaped failure matrix');

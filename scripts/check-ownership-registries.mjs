@@ -32,6 +32,7 @@ const canonicalOwners = new Map([
   ['GET /api/v1/alarms', 'alarm-service'],
   ['GET /api/v1/alarms/{alarmId}', 'alarm-service'],
   ['POST /api/v1/alarms/{alarmId}/ack', 'alarm-service'],
+  ['POST /api/v1/alarms/{alarmId}/assign', 'alarm-service'],
 ]);
 
 if (routeRegistry.registryVersion !== 1) errors.push('route registry version must be 1');

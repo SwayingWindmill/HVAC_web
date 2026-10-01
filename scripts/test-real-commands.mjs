@@ -7,8 +7,8 @@ import {
 } from '../apps/hvac-web/src/api/command-contract.ts';
 import {
   isTerminalCommandStatus,
-  projectRealCommand,
-} from '../apps/hvac-web/src/real/real-commands-projection.ts';
+  projectCommand,
+} from '../apps/hvac-web/src/features/control/command-projection.ts';
 
 const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
@@ -82,17 +82,17 @@ test('Real Command projection distinguishes approval, terminal success, and unkn
     approvalPolicy: 'SINGLE_APPROVER',
     requiredApprovalCount: 1,
   });
-  const approvalProjection = projectRealCommand(awaiting);
+  const approvalProjection = projectCommand(awaiting);
   assert.equal(approvalProjection.businessState, 'AWAITING_APPROVAL');
   assert.equal(approvalProjection.canApprove, true);
   assert.equal(approvalProjection.terminal, false);
 
   const succeeded = command({ status: 'SUCCEEDED' });
-  assert.equal(projectRealCommand(succeeded).businessState, 'SUCCEEDED');
+  assert.equal(projectCommand(succeeded).businessState, 'SUCCEEDED');
   assert.equal(isTerminalCommandStatus('SUCCEEDED'), true);
 
   const unknown = command({ status: 'OUTCOME_UNKNOWN' });
-  const unknownProjection = projectRealCommand(unknown);
+  const unknownProjection = projectCommand(unknown);
   assert.equal(unknownProjection.businessState, 'OUTCOME_UNKNOWN');
   assert.match(unknownProjection.outcomeWarning, /不会自动重发/);
 });

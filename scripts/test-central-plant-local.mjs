@@ -31,7 +31,7 @@ function pointMaps() {
 
 test('central plant v2 point contract generates the MQTT simulator graph', () => {
   assert.equal(centralPlantDevices.length, 7);
-  assert.equal(simulatorConfig.schemaVersion, 2);
+  assert.equal(simulatorConfig.schemaVersion, 3);
   assert.equal(simulatorConfig.gatewayId, 'EG8200-COMMERCIAL-001');
   assert.equal(buildCentralPlantSimulatorPoints(pointContract).length, 48);
   assert.equal(simulatorConfig.points.length, 65);

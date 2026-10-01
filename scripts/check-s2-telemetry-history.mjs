@@ -11,10 +11,10 @@ const [
   read('infra/telemetry/postgres/init/000-bootstrap-identities.sql'),
   read('infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql'),
   read('infra/telemetry/postgres/init/004-s2-telemetry-history-outbox.sql'),
-  read('modules/telemetry/internal/telemetry/ingest_store.go'),
-  read('modules/telemetry/internal/telemetry/history.go'),
-  read('modules/telemetry/internal/telemetry/history_postgres.go'),
-  read('modules/telemetry/internal/telemetry/history_clickhouse.go'),
+  read('modules/telemetry/pkg/telemetry/ingest_store.go'),
+  read('modules/telemetry/pkg/telemetry/history.go'),
+  read('modules/telemetry/pkg/telemetry/history_postgres.go'),
+  read('modules/telemetry/pkg/telemetry/history_clickhouse.go'),
   read('modules/telemetry/cmd/telemetry-history-projector/main.go'),
   read('infra/telemetry/clickhouse/init/001-telemetry-history.sql'),
   read('infra/telemetry/compose.yaml'),
@@ -49,13 +49,13 @@ assert(!ingestStore.toLowerCase().includes('clickhouse'), 'S2 ingest transaction
 for (const marker of ['ClaimHistoryBatch', 'MarkHistoryBatchPublished', 'RetryHistoryBatch', 'CLICKHOUSE_INSERT_FAILED']) {
   assert(relay.includes(marker), `missing history relay marker ${marker}`);
 }
-for (const marker of ['FOR UPDATE SKIP LOCKED', "delivery_state = 'IN_FLIGHT'", 'attempts = outbox.attempts + 1', "THEN 'DEAD' ELSE 'PENDING'"]) {
+for (const marker of ['pg_advisory_xact_lock', 'batch_id', 'FOR UPDATE SKIP LOCKED', "delivery_state = 'IN_FLIGHT'", 'attempts = attempts + 1', "THEN 'DEAD' ELSE 'PENDING'"]) {
   assert(repository.includes(marker), `missing PostgreSQL history repository marker ${marker}`);
 }
-for (const marker of ['insert_deduplication_token', 'async_insert', 'wait_for_async_insert', 'async_insert_deduplicate', 'JSONEachRow']) {
+for (const marker of ['insert_deduplication_token', 'async_insert', 'deduplicate_blocks_in_dependent_materialized_views', 'materialized_views_ignore_errors', 'JSONEachRow']) {
   assert(sink.includes(marker), `missing ClickHouse sink marker ${marker}`);
 }
-for (const marker of ['TELEMETRY_HISTORY_DATABASE_URL', 'TELEMETRY_CLICKHOUSE_HTTP_URL', 'telemetry-history-projector', 'RelayOnce']) {
+for (const marker of ['TELEMETRY_HISTORY_DATABASE_URL', 'TELEMETRY_CLICKHOUSE_HTTP_URL', 'telemetry-history-projector', 'relay.Run']) {
   assert(projector.includes(marker), `missing projector marker ${marker}`);
 }
 for (const marker of [
@@ -74,7 +74,7 @@ assert(compose.includes('clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d
 assert(compose.includes('./clickhouse/init:/docker-entrypoint-initdb.d:ro'), 'ClickHouse init must be mounted read-only');
 assert(integration.includes('pullDockerImageWithRetry'), 'history integration must use bounded immutable-image pull retries');
 assert(integration.includes("'--pull=never'"), 'history integration compose startup must not repull images');
-for (const marker of ['TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce', 'PUBLISHED|2|true', "'1|1|24.75'", "'1|24.75'"]) {
+for (const marker of ['TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry', 'PUBLISHED|2|true', "'1|1|24.75'", "'1|24.75'"]) {
   assert(integration.includes(marker), `missing ClickHouse integration evidence marker ${marker}`);
 }
 

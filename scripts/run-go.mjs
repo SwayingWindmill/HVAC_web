@@ -1,13 +1,11 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const args = process.argv.slice(2);
 const modulePattern = /^\.\/((?:cmd|libs|modules|services|tools)\/[^/]+)\/\.\.\.$/;

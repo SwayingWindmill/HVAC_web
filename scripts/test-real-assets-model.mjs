@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   listTelemetryKeys,
-  resolveRealAssetsProfile,
-} from '../apps/hvac-web/src/real/assets/catalog.ts';
+  resolveAssetsProfile,
+} from '../apps/hvac-web/src/features/assets/catalog.ts';
 import {
-  buildRealAssetsHierarchy,
-  buildRealAssetsPointRows,
-  buildRealAssetsRows,
+  buildAssetsHierarchy,
+  buildAssetsPointRows,
+  buildAssetsRows,
   resolveDeviceBinding,
-} from '../apps/hvac-web/src/real/assets/model.ts';
-import { projectRealAssetsDeviceOperationalState } from '../apps/hvac-web/src/real/assets/operational-projection.ts';
+} from '../apps/hvac-web/src/features/assets/model.ts';
+import { projectAssetsDeviceOperationalState } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 
 const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';
@@ -210,7 +210,7 @@ test('Device operational projection requires no presentation Profile for healthy
     sourceKey: 'vendor.temperature',
     displayName: 'Supply Temperature',
   };
-  const projection = projectRealAssetsDeviceOperationalState({
+  const projection = projectAssetsDeviceOperationalState({
     device: device({ deviceType: 'vendor-special-controller' }),
     telemetryPoints: [point],
     snapshotResult: {
@@ -235,7 +235,7 @@ test('Device operational projection requires no presentation Profile for healthy
 
 test('Device operational projection preserves not-applicable Presence and telemetry without creating attention', () => {
   const point = telemetryPoint('01900000-0007-7000-8000-000000000002', deviceId, null);
-  const projection = projectRealAssetsDeviceOperationalState({
+  const projection = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: [point],
     snapshotResult: {
@@ -264,7 +264,7 @@ test('Device operational projection preserves not-applicable Presence and teleme
 
 test('Device operational projection never presents a value as current when evaluation is unavailable', () => {
   const point = telemetryPoint('01900000-0007-7000-8000-000000000004', deviceId, null);
-  const projection = projectRealAssetsDeviceOperationalState({
+  const projection = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: [point],
     snapshotResult: {
@@ -289,7 +289,7 @@ test('Device operational projection never presents a value as current when evalu
   assert.equal(projection.attentionReasons.includes('PRESENCE_OFFLINE'), false);
 });
 
-const chillerProfile = resolveRealAssetsProfile('water cooled chiller');
+const chillerProfile = resolveAssetsProfile('water cooled chiller');
 const chillerKeys = listTelemetryKeys(chillerProfile);
 const chillerPoints = chillerKeys.map((key, index) => ({
   ...telemetryPoint(`01900000-0007-7000-8000-00000000001${index}`, deviceId, null),
@@ -307,13 +307,13 @@ test('catalog resolves aliases but does not silently fallback unknown Device typ
     'chiller.cop',
     'chiller.cooling_capacity',
   ]);
-  const unknown = resolveRealAssetsProfile('vendor-special-controller');
+  const unknown = resolveAssetsProfile('vendor-special-controller');
   assert.equal(unknown.state, 'unconfigured');
   assert.deepEqual(listTelemetryKeys(unknown), []);
 });
 
 test('operational projection preserves zero and keeps connection independent from stale telemetry', () => {
-  const healthy = projectRealAssetsDeviceOperationalState({
+  const healthy = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: chillerPoints,
     snapshotResult: { status: 'ok', snapshot: snapshot(goodValues) },
@@ -324,7 +324,7 @@ test('operational projection preserves zero and keeps connection independent fro
   assert.equal(healthy.points.find((point) => point.key === 'chiller.power').displayValue, '0');
 
   const staleValues = goodValues.map((value) => value.key === 'chiller.power' ? { ...value, freshness: 'STALE' } : value);
-  const stale = projectRealAssetsDeviceOperationalState({
+  const stale = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: chillerPoints,
     snapshotResult: {
@@ -336,7 +336,7 @@ test('operational projection preserves zero and keeps connection independent fro
   assert.equal(stale.telemetry.freshness, 'STALE');
   assert.ok(stale.attentionReasons.includes('TELEMETRY_STALE'));
 
-  const offline = projectRealAssetsDeviceOperationalState({
+  const offline = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: chillerPoints,
     snapshotResult: {
@@ -363,7 +363,7 @@ test('missing and degraded-quality Points remain independent attention evidence'
   };
   const values = goodValues.map((value) => value.key === 'chiller.cop' ? missing : value);
   values[0] = { ...values[0], quality: 'PARTIAL', qualityReasons: ['SOURCE_UNTRUSTED'] };
-  const projection = projectRealAssetsDeviceOperationalState({
+  const projection = projectAssetsDeviceOperationalState({
     device: device(),
     telemetryPoints: chillerPoints,
     snapshotResult: {
@@ -388,7 +388,7 @@ test('owner read failures map to unavailable Point evidence without inventing De
     traceId: '0123456789abcdef0123456789abcdef',
     retryable: false,
   });
-  const notVisible = projectRealAssetsDeviceOperationalState({
+  const notVisible = projectAssetsDeviceOperationalState({
     device: device(), telemetryPoints: chillerPoints,
     snapshotResult: { status: 'error', problem: problem('RESOURCE_NOT_FOUND') },
   });
@@ -396,7 +396,7 @@ test('owner read failures map to unavailable Point evidence without inventing De
   assert.deepEqual(notVisible.attentionReasons, ['CURRENT_STATE_NOT_VISIBLE']);
   assert.ok(notVisible.points.every((point) => point.state === 'UNAVAILABLE'));
 
-  const contractDrift = projectRealAssetsDeviceOperationalState({
+  const contractDrift = projectAssetsDeviceOperationalState({
     device: device(), telemetryPoints: chillerPoints,
     snapshotResult: { status: 'error', problem: problem('TELEMETRY_KEY_INVALID') },
   });
@@ -426,7 +426,7 @@ test('Device rows expose the independent operational projection for unprofiled R
     displayName: 'Temperature 1',
   };
   const model = siteAssetModel({ devices: [unprofiledDevice], telemetryPoints: [point] });
-  const row = buildRealAssetsRows({
+  const row = buildAssetsRows({
     assetModel: model,
     snapshots: new Map([[deviceId, {
       status: 'ok',
@@ -463,7 +463,7 @@ test('rows sort by Space, Asset and Device identity while preserving unbound end
       relationship('01900000-0004-7000-8000-000000000014', 'DEVICE', deviceB.id, 'ASSET', assetA.id),
     ],
   });
-  const rows = buildRealAssetsRows({ assetModel: model, snapshots: new Map(), now });
+  const rows = buildAssetsRows({ assetModel: model, snapshots: new Map(), now });
   assert.deepEqual(rows.map((row) => row.device.displayName), ['Device A', 'Device B', 'Unbound']);
   assert.equal(rows[0].space.state, 'bound');
   assert.equal(rows[2].registeredPointCount, 0);
@@ -494,7 +494,7 @@ test('Operations hierarchy stops at Device and keeps Sensor/Point inside detail'
     ],
   });
 
-  const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
+  const hierarchy = buildAssetsHierarchy(model, 'Test Site', now);
   const spaceNode = hierarchy.children[0];
   const assetNode = spaceNode.children[0];
   const deviceNode = assetNode.children.find((node) => node.kind === 'device');
@@ -546,12 +546,12 @@ test('Point projection keeps every registered Point available for entity detail'
     ],
   });
   const currentValues = points.map((point, index) => present(point.pointCode, index + 1, { unit: point.unit }));
-  const rows = buildRealAssetsRows({
+  const rows = buildAssetsRows({
     assetModel: model,
     snapshots: new Map([[endpoint.id, { status: 'ok', snapshot: snapshot(currentValues) }]]),
     now,
   });
-  const pointRows = buildRealAssetsPointRows({ assetModel: model, deviceRows: rows });
+  const pointRows = buildAssetsPointRows({ assetModel: model, deviceRows: rows });
 
   assert.equal(pointRows.length, 4);
   assert.deepEqual(pointRows.map((row) => row.point.id).sort(), points.map((point) => point.id).sort());
@@ -576,11 +576,11 @@ test('multi-Asset Device binding is represented under each Asset with unique hie
     ],
   });
 
-  const rows = buildRealAssetsRows({ assetModel: model, snapshots: new Map(), now });
+  const rows = buildAssetsRows({ assetModel: model, snapshots: new Map(), now });
   assert.equal(rows[0].binding.state, 'multi-bound');
   assert.equal(rows[0].space.state, 'bound');
 
-  const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
+  const hierarchy = buildAssetsHierarchy(model, 'Test Site', now);
   const assetNodes = hierarchy.children[0].children.filter((node) => node.kind === 'asset');
   assert.equal(assetNodes.length, 2);
   assert.deepEqual(assetNodes.map((node) => node.children[0].deviceIds), [[endpoint.id], [endpoint.id]]);

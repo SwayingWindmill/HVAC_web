@@ -101,7 +101,8 @@ SELECT ids.id, p.id, :'tenant_id'::uuid, :'site_id'::uuid, ids.action,
 FROM iam.principals p
 CROSS JOIN (VALUES
   ('01a006a0-0001-7000-8000-000000000001'::uuid, 'alarm:read'),
-  ('01a006a0-0002-7000-8000-000000000001'::uuid, 'alarm:ack')
+  ('01a006a0-0002-7000-8000-000000000001'::uuid, 'alarm:ack'),
+  ('01a006a0-0003-7000-8000-000000000001'::uuid, 'alarm:assign')
 ) AS ids(id, action)
 WHERE p.external_issuer = :'admin_issuer'
   AND p.external_subject = :'admin_subject'

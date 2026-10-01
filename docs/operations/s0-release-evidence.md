@@ -70,45 +70,18 @@ The bundle indexes rather than duplicates large upstream artifacts. It records h
 
 ## Commands
 
-Static assets and the architecture decision trace:
+The historical Ticket 08 evidence-bundle builder, image verifier and certification commands have been retired. This document is retained only as a certification reference; it is not an executable release workflow.
+
+The reusable rollout checks that remain operational are:
 
 ```bash
-npm run release:evidence-assets
+npm run platform:rollout:audit
+npm run platform:kubernetes:audit
 ```
 
-Deterministic availability model:
+`platform:rollout:audit` validates the deterministic rollout model. `platform:kubernetes:audit` exercises the Kubernetes rollout/rollback mechanics when Kind and `kubectl` are available. Neither command constructs or certifies the retired S0 evidence bundle.
 
-```bash
-npm run audit:s0-rollout -- --report=out/s0-release-evidence/rollout-model-report.json
-```
-
-Real Kubernetes rollout proof, after Kind and `kubectl` are available:
-
-```bash
-npm run audit:s0-kind-rollout
-```
-
-Build the final bundle from downloaded image and security artifacts:
-
-```bash
-npm run release:evidence:build
-```
-
-For an offline audit replay, supply a previously reviewed workflow summary while preserving the source run metadata:
-
-```bash
-npm run release:evidence:build -- \
-  --workflow-report=out/s0-release-replay/workflow-jobs.json \
-  --source-run-id=<run-id> \
-  --source-repository=<owner/repository> \
-  --source-sha=<commit> \
-  --source-ref=<refs/heads/main> \
-  --source-workflow=<workflow-name>
-```
-
-The normal staging renderer remains strict. The bundle builder invokes its explicit evidence-only mode so the exact redaction marker can be rendered into temporary manifests; the receipt records that mode, and binding values or rendered manifests are deleted rather than included in the bundle.
-
-The formal path is the `S0 Reproducible Delivery and Supply Chain` workflow. A release dispatch runs all clean-environment gates, builds and verifies seven images, performs the Kind rollout proof, verifies the image evidence again, renders staging with non-secret evidence bindings, and uploads `s0-release-evidence-bundle`.
+Historical bundle paths and attestation examples below describe the evidence produced during S0 and must not be treated as current release commands.
 
 ## Staging rolling update and rollback proof
 

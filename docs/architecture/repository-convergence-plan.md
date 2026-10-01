@@ -185,8 +185,8 @@ Notes:
 
 | Surface | Decision | Destination / rule | Rationale |
 | --- | --- | --- | --- |
-| `.worktrees/` | MOVE OUT | sibling root such as `E:\Code\HVAC_web-worktrees\` | Full repository copies dominate file count and corrupt code/search/test discovery. |
-| `.clones/` | MOVE OUT | shared reference root such as `E:\Code\references\` | Preserve source-first review, but keep upstream repositories outside the product tree. |
+| `.worktrees/` | MOVE OUT | sibling WSL ext4 root such as `~/code/HVAC_web-worktrees/` | Full repository copies dominate file count and corrupt code/search/test discovery. |
+| `.clones/` | MOVE OUT | shared WSL ext4 reference root such as `~/code/references/` | Preserve source-first review, but keep upstream repositories outside the product tree. |
 | `.scratch/` | MOVE OUT / DELETE | external scratch root; delete disposable snapshots | Scratch copies are not product source. |
 | `out/` | KEEP AS EPHEMERAL, PURGE | only current generated artifacts; no durable history | Must be safely disposable. Old PR/ticket logs, copied source, caches and evidence cannot accumulate indefinitely. |
 | `.ai-bridge/` | KEEP, SHRINK | fixed control-plane allowlist only | Current directory contains many one-off scripts/copies/logs that contradict its own README. |

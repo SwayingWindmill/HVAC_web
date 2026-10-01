@@ -243,14 +243,15 @@ try {
     stdio: 'inherit',
   });
   run(process.execPath, [
+    '--experimental-strip-types',
     '--test',
     '--test-concurrency=1',
-    'services/operations-agent-service/test/postgres-persistence.test.mjs',
-    'services/operations-agent-service/test/postgres-run-resource-budget.test.mjs',
-    'services/operations-agent-service/test/postgres-operations-audit.test.mjs',
-    'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
-    'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
-    'services/operations-agent-service/test/postgres-pi-agent-sessions.test.mjs',
+    'services/operations-agent-service/test/postgres-persistence.test.ts',
+    'services/operations-agent-service/test/postgres-run-resource-budget.test.ts',
+    'services/operations-agent-service/test/postgres-operations-audit.test.ts',
+    'services/operations-agent-service/test/postgres-langgraph-runtime.test.ts',
+    'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.ts',
+    'services/operations-agent-service/test/postgres-pi-agent-sessions.test.ts',
   ], {
     env: {
       ...process.env,

@@ -34,37 +34,34 @@ Shadcnblocks must not introduce a second Button / Badge / Dialog / Table primiti
 
 ## 2. Registry evidence
 
-Official documentation currently publishes the registry configuration:
+The Shadcnblocks vendor CLI page still documents the historical style-aware URL:
 
-```json
-{
-  "registries": {
-    "@shadcnblocks": "https://www.shadcnblocks.com/r/{style}/{name}"
-  }
-}
+```text
+https://www.shadcnblocks.com/r/{style}/{name}
 ```
 
-and documents installation with the official shadcn CLI:
+However, the current shadcn Registry Directory on 2026-09-24 publishes the canonical namespace as:
 
-```bash
-npx shadcn@latest add @shadcnblocks/hero1
+```text
+@shadcnblocks
+https://shadcnblocks.com/r/{name}.json
 ```
 
-Project verification on 2026-09-22:
+The project therefore follows the **current shadcn Registry Directory contract** for unauthenticated namespace discovery and records that canonical URL in `apps/hvac-web/components.json`.
 
-```bash
-npx shadcn@latest add @shadcnblocks/hero1 --dry-run
+This is not merely a documentation preference. Project CLI verification with shadcn `4.21.0` showed that the old explicit style-aware project mapping caused:
+
+```text
+shadcn search @shadcnblocks
+→ request to /r/radix-nova/registry
+→ registry item not found
 ```
 
-resolved successfully under the project's `radix-nova` configuration and proposed:
+After switching to the current directory URL, `npm run ui:shadcn -- search @shadcnblocks --limit 2` succeeded and discovered 4,171 items on 2026-09-24. Registry search/list now uses the same namespace behavior as the current shadcn CLI.
 
-- overwrite of the existing shadcn Badge and Button dependencies;
-- creation of the requested block source;
-- no runtime package framework.
+Shadcnblocks still follows the copy-and-own model. For a concrete block, inspect the exact item with `view` / `add --dry-run --diff` before adoption and reject unwanted primitive overwrites.
 
-Therefore Shadcnblocks follows the expected copy-and-own registry model.
-
-The registry does **not** currently expose the generic shadcn CLI registry search endpoint used by `shadcn search @registry -q ...`; discovery should therefore happen on the Shadcnblocks catalog/site, followed by exact-item `add --dry-run --diff` verification.
+If authenticated/pro access is later needed, re-check the vendor's then-current authenticated registry contract before adding headers. Secrets remain in environment/secrets management and never in repository source.
 
 ## 3. Licensing boundary
 

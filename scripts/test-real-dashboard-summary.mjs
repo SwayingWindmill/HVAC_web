@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { startSiteDashboardLive, siteDashboardSummaryEventsPath } from '../apps/hvac-web/src/api/site-dashboard-live.ts';
+import { selectDashboardAlarmCandidate } from '../apps/hvac-web/src/features/dashboard/dashboard-alarm-link.ts';
 
-const dashboard = fs.readFileSync('apps/hvac-web/src/real/RealDashboard.tsx', 'utf8');
-const productPages = fs.readFileSync('apps/hvac-web/src/real/RealProductPages.tsx', 'utf8');
+const dashboard = fs.readFileSync('apps/hvac-web/src/features/overview/Overview.tsx', 'utf8');
+const productPages = fs.readFileSync('apps/hvac-web/src/features/product/ProductPages.tsx', 'utf8');
 const api = fs.readFileSync('apps/hvac-web/src/api/site-dashboard.ts', 'utf8');
 const generated = fs.readFileSync('apps/hvac-web/src/api/generated/platformGateway.gen.ts', 'utf8');
 
@@ -19,11 +20,10 @@ test('Dashboard and BigScreen consume the same authorization-scoped SiteDashboar
   assert.match(generated, /getSiteDashboardSummary:/);
 });
 
-test('Real Dashboard no longer reconstructs Site truth from browser samples', () => {
+test('Real Dashboard keeps KPI truth in SiteDashboardSummary and only reads authoritative owner detail streams', () => {
   for (const forbidden of [
     'useRegistryDevices',
     'useVisibleDevicePresence',
-    'queryEnergySeries',
     'MAX_DASHBOARD_DEVICES',
     'MAX_REGISTRY_PAGES',
     'projectDashboardDevices',
@@ -33,6 +33,24 @@ test('Real Dashboard no longer reconstructs Site truth from browser samples', ()
   ]) {
     assert.equal(dashboard.includes(forbidden), false, `RealDashboard reintroduced ${forbidden}`);
   }
+  assert.match(dashboard, /slowMetrics\.cop/);
+  assert.match(dashboard, /fastMetrics\.currentPower/);
+  assert.match(dashboard, /readDashboardOverview\(/);
+  assert.match(dashboard, /listScopedAlarms\(/);
+  assert.equal(dashboard.includes('queryEnergySeries('), false);
+});
+
+test('Dashboard priority Alarm deep links never guess between ambiguous same-title Alarm records', () => {
+  const priority = { title: '冷冻水供水温度过高', severity: 'CRITICAL' };
+  const unique = { alarmId: 'alarm-1', title: priority.title, currentSeverity: 'MAJOR' };
+  assert.equal(selectDashboardAlarmCandidate(priority, [unique])?.alarmId, 'alarm-1');
+
+  const sameTitleDifferentSeverity = { alarmId: 'alarm-2', title: priority.title, currentSeverity: 'CRITICAL' };
+  assert.equal(selectDashboardAlarmCandidate(priority, [unique, sameTitleDifferentSeverity])?.alarmId, 'alarm-2');
+
+  const secondCritical = { alarmId: 'alarm-3', title: priority.title, currentSeverity: 'CRITICAL' };
+  assert.equal(selectDashboardAlarmCandidate(priority, [unique, sameTitleDifferentSeverity, secondCritical]), null);
+  assert.equal(selectDashboardAlarmCandidate(priority, [{ alarmId: 'alarm-4', title: '其他告警', currentSeverity: 'CRITICAL' }]), null);
 });
 
 test('BigScreen does not claim unconditional READY or fabricate Site KPI values', () => {
@@ -44,11 +62,12 @@ test('BigScreen does not claim unconditional READY or fabricate Site KPI values'
   assert.equal(productPages.includes('bigscreen-live-dot'), false);
 });
 
-test('partial population cannot become a browser-computed Site availability ratio', () => {
+test('Dashboard keeps connectivity and telemetry condition separate instead of rebuilding an overall device state', () => {
   assert.equal(dashboard.includes('online /'), false);
-  assert.match(dashboard, /availabilityPercent/);
-  assert.match(dashboard, /denominatorPolicy/);
-  assert.match(dashboard, /Population 不完整时不发布站点比例/);
+  assert.match(dashboard, /population\?\.availabilityPercent/);
+  assert.match(dashboard, /population\?\.stale/);
+  assert.equal(dashboard.includes('overview?.deviceStatus'), false);
+  assert.equal(dashboard.includes('population.offline + population.stale'), false);
 });
 
 test('dashboard live reconnect reconciles REST before reopening the delta stream', async () => {

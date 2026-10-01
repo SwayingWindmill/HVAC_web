@@ -307,3 +307,23 @@ Whether the physical or logical condition represented by an Alarm Incident is cu
 ## Delivery Intent
 
 A durable request to submit one governed payload to an external destination under an immutable business identity and destination policy. Delivery attempts, provider receipts, retries, dead-letter handling and replay are evidence about delivery; they never become the originating domain's business fact.
+
+## Virtual Central Plant
+
+A non-production-authoritative physical, environmental and field-protocol simulator used for development and acceptance. It may simulate exogenous conditions, equipment behavior, sensors and actuators, but it never authors Telemetry, Alarm, FDD, Forecast, Optimization, Notification or Work Order business facts.
+
+## Virtual Plant Scenario
+
+A non-business configuration that supplies explicit exogenous physical inputs to a Virtual Central Plant over time. A Virtual Plant Scenario is not Registry identity, Telemetry, runtime state or another business-domain fact.
+
+## Historical Replay
+
+A controlled historical runner that reuses authoritative physical/scenario logic to produce past-time observations for Telemetry-owned history. Historical Replay preserves historical Sampled At and truthful current Received At, and it never mutates current latest telemetry, Presence or Business Revision.
+
+## Historical Replay Dataset
+
+A stable non-business provenance scope for one deterministic Historical Replay sequence across retries or runner restarts. Its identity exists only to preserve replay ordering and idempotency; it is not Registry, Telemetry current state, Forecast, Optimization or another business-domain fact.
+
+## Vendor Template Certification
+
+Acceptance evidence that one immutable released Device Template revision has been validated against real vendor hardware and its authoritative protocol specification. Certification verifies the released mapping and behavior; it is not a mutable Template status and does not replace the released revision itself.

@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,8 +8,7 @@ import https from 'node:https';
 import tls from 'node:tls';
 
 const root = resolve(process.cwd());
-const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
-const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goBinary = process.env.GO_BINARY ?? 'go';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 function processExited(child) {
@@ -173,17 +171,6 @@ async function startTelemetryRuntimeFixture({ port, certPath, keyPath, caPath })
 
 export async function stopProcess(child) {
   if (!child || processExited(child)) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-    if (!processExited(child)) {
-      await Promise.race([
-        once(child, 'exit'),
-        pause(2000),
-      ]);
-    }
-    await pause(250);
-    return;
-  }
   child.kill('SIGTERM');
   const stopped = await Promise.race([
     once(child, 'exit').then(() => true),

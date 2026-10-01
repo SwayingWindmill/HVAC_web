@@ -401,7 +401,7 @@ The pinned Modbus TCP test is `@Disabled` upstream. It is used here only as sour
 
 - `go test ./...` in `libs/edgecontrol` — PASS;
 - `go test ./...` in `tools/eg8200-simulator` — PASS;
-- `cmd.exe /c node scripts/check-s3-target-runtime.mjs` — PASS (`files=18`, native MQTT, OpenEMS-informed Edge, production traffic remains `0`).
+- `node scripts/check-command-target-runtime.mjs` — PASS (`files=18`, native MQTT, OpenEMS-informed Edge, production traffic remains `0`).
 
 ## Review 004 — S11 governed MQTT command execution evidence
 
