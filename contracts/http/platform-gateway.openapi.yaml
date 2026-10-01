@@ -2247,12 +2247,17 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "principalId",
           "principal",
           "context",
           "authorization",
           "session"
         ],
         "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "Platform principal identity used for assignments, acknowledgements and audit actors."
+          },
           "principal": {
             "$ref": "#/components/schemas/UserPrincipal"
           },

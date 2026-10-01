@@ -197,7 +197,7 @@ const schemaRequirements = {
   PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt']],
   EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities'], ['capabilitySetVersion', 'policyRevision', 'capabilities']],
   SessionView: [['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
-  CurrentPrincipalResponse: [['principal', 'context', 'authorization', 'session'], ['principal', 'context', 'authorization', 'session']],
+  CurrentPrincipalResponse: [['principalId', 'principal', 'context', 'authorization', 'session'], ['principalId', 'principal', 'context', 'authorization', 'session']],
   SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId'], ['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
   AuditRecord: [[
     'ledgerSequence', 'messageId', 'schemaVersion', 'tenantId', 'aggregateType', 'aggregateId', 'aggregateVersion',
