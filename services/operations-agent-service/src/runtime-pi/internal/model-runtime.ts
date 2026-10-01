@@ -6,7 +6,7 @@ import {
   type ModelThinkingLevel,
   type Models,
 } from '@earendil-works/pi-ai';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
 
 import type {
   AgentEngine,
@@ -23,8 +23,8 @@ export const AGENT_MODEL_THINKING_LEVEL_ENV = 'AGENT_MODEL_THINKING_LEVEL' as co
 export const AGENT_MODEL_TIMEOUT_MS_ENV = 'AGENT_MODEL_TIMEOUT_MS' as const;
 export const AGENT_MODEL_MAX_OUTPUT_TOKENS_ENV = ['AGENT_MODEL_MAX_OUTPUT', 'TOKENS'].join('_');
 
-const PRODUCTION_PROVIDER_ID = 'openai' as const;
-const PRODUCTION_ACCESS_ENV = ['OPENAI', 'API', 'KEY'].join('_');
+const PRODUCTION_PROVIDER_ID = 'deepseek' as const;
+const PRODUCTION_ACCESS_ENV = ['DEEPSEEK', 'API', 'KEY'].join('_');
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = 'off';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 2_048;
@@ -265,7 +265,7 @@ const createConfiguredModels = (environment: PiModelEnvironment) => {
       fileExists: async () => false,
     },
   });
-  models.setProvider(openaiProvider());
+  models.setProvider(deepseekProvider());
   return models;
 };
 
