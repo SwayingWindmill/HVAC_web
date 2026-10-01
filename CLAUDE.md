@@ -51,7 +51,8 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 ## 数据库迁移
 
 - 迁移文件在 `infra/*/postgres/init/` 和各模块的 `migrations/` 下。新增迁移要同时登记到 `deploy/platform/phase1/migrations/` 里的三个文件：`manifest.v1.json`、`migration-list.tsv`、`Dockerfile`。
-- 已执行过的迁移不能修改：迁移器按 sha256 校验，内容变了会中止升级。改表结构就新增一个迁移。
+- 正式上线前：迁移文件可以直接修改，开发库出现迁移漂移就重建（数据由模拟器重新产生）。迁移器按 sha256 校验，已有库遇到被改过的迁移会中止。
+- 正式上线时冻结迁移：之后已执行的迁移一律不改，改表结构只能新增迁移，届时再加一条禁止修改已执行迁移的检查。
 
 ## 前端
 
