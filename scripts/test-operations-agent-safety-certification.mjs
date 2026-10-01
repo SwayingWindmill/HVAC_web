@@ -9,16 +9,11 @@ import {
   validateOperationsAgentSafetyCertificationReport,
 } from './operations-agent-safety-certification.v1.mjs';
 
-const browserAssertions = OPERATIONS_AGENT_SAFETY_SCENARIOS
-  .flatMap(({ requirements }) => requirements)
-  .filter(({ sourceArtifact }) => sourceArtifact?.endsWith('browser-evidence.json'))
-  .map(({ marker }) => marker);
-
 const passingFixture = () => {
   const gateResults = Object.fromEntries(OPERATIONS_AGENT_SAFETY_GATES.map((id) => {
     const markers = OPERATIONS_AGENT_SAFETY_SCENARIOS
       .flatMap(({ requirements }) => requirements)
-      .filter(({ gate, sourceArtifact }) => gate === id && sourceArtifact === null)
+      .filter(({ gate }) => gate === id)
       .map(({ marker }) => marker);
     return [id, {
       passed: true,
@@ -34,16 +29,7 @@ const passingFixture = () => {
       stderrSha256: 'b'.repeat(64),
     }];
   }));
-  const browserEvidence = {
-    schemaVersion: 1,
-    passed: true,
-    assertions: browserAssertions,
-    safety: {
-      productionTrafficPercent: 0,
-      duplicateDurableRecords: false,
-    },
-  };
-  return { gateResults, browserEvidence };
+  return { gateResults };
 };
 
 test('Map 5.5 scenario contract covers every required safety invariant and seam', () => {

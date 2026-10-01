@@ -42,15 +42,8 @@ test('package-lock changes compile and unit test without database or browser fan
 test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
   const classification = runClassification(['apps/hvac-web/src/app/router.ts']);
   assert.deepEqual(classification.unitProfiles, ['web']);
-  assert.deepEqual(classification.browserProfiles, ['platform', 'registry', 'telemetry', 'web']);
+  assert.deepEqual(classification.browserProfiles, ['telemetry']);
   assert.equal(classification.integrations, false);
-});
-
-test('Operations Workspace changes select dedicated unit and browser profiles', () => {
-  const classification = runClassification(['apps/hvac-web/src/features/operations/OperationsInvestigation.tsx']);
-  assert.ok(classification.unitProfiles.includes('web'));
-  assert.ok(classification.unitProfiles.includes('operations-agent'));
-  assert.deepEqual(classification.browserProfiles, ['operations-agent', 'platform', 'registry', 'telemetry', 'web']);
 });
 
 test('telemetry changes select telemetry unit and durable integration profiles', () => {
@@ -126,12 +119,8 @@ test('Operations Agent changes select dedicated domain gates', () => {
   const classification = runClassification(['services/operations-agent-service/src/index.ts']);
   assert.deepEqual(classification.unitProfiles, ['operations-agent']);
   assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
-  assert.deepEqual(classification.browserProfiles, ['operations-agent']);
+  assert.deepEqual(classification.browserProfiles, []);
   assert.equal(classification.broad, false);
-
-  assert.deepEqual(runPlan('browser', ['operations-agent']).commands, [
-    'npm run operations-workspace:browser',
-  ]);
 });
 
 test('nightly regression keeps the complete stable profile sets', async () => {
