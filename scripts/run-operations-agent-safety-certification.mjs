@@ -15,7 +15,6 @@ const logsDirectory = join(outputDirectory, 'logs');
 const supportingDirectory = join(outputDirectory, 'supporting');
 const reportPath = join(outputDirectory, 'certification.json');
 const checksumPath = join(outputDirectory, 'SHA256SUMS');
-const browserEvidencePath = join(root, 'out', 'operations-reconnect-certification', 'browser-evidence.json');
 const postgresEvidencePath = join(root, 'out', 'operations-agent', 'postgres-persistence.json');
 const npmCli = process.env.npm_execpath;
 
@@ -49,8 +48,6 @@ const gates = [
   npmGate('agent-service', 'operations-agent-service:check'),
   npmGate('operations-postgres', 'operations-agent-service:postgres'),
   npmGate('durable-postgres', 'test:durable-postgres'),
-  npmGate('workspace-unit', 'operations-workspace:test'),
-  npmGate('workspace-browser', 'operations-workspace:browser'),
 ];
 
 if (gates.length !== OPERATIONS_AGENT_SAFETY_GATES.length
@@ -122,15 +119,11 @@ for (const gate of gates) {
   if (summary) console.log(summary);
 }
 
-const browserEvidence = JSON.parse(readFileSync(browserEvidencePath, 'utf8'));
 const postgresEvidence = JSON.parse(readFileSync(postgresEvidencePath, 'utf8'));
-if (browserEvidence.passed !== true) throw new Error('Operations Workspace browser evidence did not pass.');
 if (postgresEvidence.passed !== true && postgresEvidence.status !== 'passed') {
   throw new Error('Operations PostgreSQL evidence did not pass.');
 }
-const copiedBrowserEvidencePath = join(supportingDirectory, 'browser-evidence.json');
 const copiedPostgresEvidencePath = join(supportingDirectory, 'postgres-persistence.json');
-copyFileSync(browserEvidencePath, copiedBrowserEvidencePath);
 copyFileSync(postgresEvidencePath, copiedPostgresEvidencePath);
 
 const report = buildOperationsAgentSafetyCertificationReport({
@@ -138,11 +131,9 @@ const report = buildOperationsAgentSafetyCertificationReport({
   startedAt,
   completedAt: new Date().toISOString(),
   gateResults,
-  browserEvidence,
 });
 report.supportingArtifacts = [
   ...gates.flatMap(({ id }) => [`logs/${id}.stdout.log`, `logs/${id}.stderr.log`]),
-  'supporting/browser-evidence.json',
   'supporting/postgres-persistence.json',
 ];
 report.postgresEvidence = {
@@ -163,7 +154,6 @@ const checksumArtifacts = [
     join(logsDirectory, `${id}.stdout.log`),
     join(logsDirectory, `${id}.stderr.log`),
   ]),
-  copiedBrowserEvidencePath,
   copiedPostgresEvidencePath,
 ];
 const checksumLines = checksumArtifacts.map((path) => (

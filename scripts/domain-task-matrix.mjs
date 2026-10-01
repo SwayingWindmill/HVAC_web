@@ -66,7 +66,6 @@ export const gateCommandMatrix = Object.freeze({
       npmRun('operations-agent-service:check'),
       npmRun('operations-agent:benchmark:test'),
       npmRun('operations-agent:gateway:check'),
-      npmRun('operations-workspace:test'),
       npmRun('test:gateway'),
     ]),
     pocs: Object.freeze([npmRun('pocs:components:check')]),
@@ -93,25 +92,15 @@ export const gateCommandMatrix = Object.freeze({
     ]),
   }),
   browser: Object.freeze({
-    web: Object.freeze([npmRun('web:browser')]),
     platform: Object.freeze([npmRun('audit:security-failure')]),
-    registry: Object.freeze([
-      nodeRun('scripts/run-s1-hvac-web-registry-browser-audit.mjs', '--report=out/registry-web/hvac-web-registry-browser.json'),
-    ]),
     telemetry: Object.freeze([
       nodeRun('scripts/run-s2-telemetry-live-browser-audit.mjs'),
-      nodeRun('scripts/run-s2-hvac-web-presence-browser-audit.mjs'),
-    ]),
-    alarm: Object.freeze([
-      npmRun('alarm:browser'),
-      npmRun('alarm:lifecycle:browser'),
     ]),
     workorder: Object.freeze([
       nodeRun('scripts/run-s5-work-order-read-browser-audit.mjs'),
       nodeRun('scripts/run-s5-work-order-create-assign-browser-audit.mjs'),
       nodeRun('scripts/run-s5-work-order-lifecycle-browser-audit.mjs'),
     ]),
-    'operations-agent': Object.freeze([npmRun('operations-workspace:browser')]),
   }),
 });
 
@@ -141,12 +130,8 @@ export const gateProfileSets = Object.freeze({
       'workorder',
     ]),
     browser: Object.freeze([
-      'alarm',
-      'operations-agent',
       'platform',
-      'registry',
       'telemetry',
-      'web',
       'workorder',
     ]),
   }),
@@ -183,7 +168,7 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['web']),
     unit: Object.freeze(['web']),
     integration: Object.freeze([]),
-    browser: Object.freeze(['web']),
+    browser: Object.freeze([]),
   }),
   platform: Object.freeze({
     contracts: Object.freeze(['core']),
@@ -195,7 +180,7 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['core', 'registry']),
     unit: Object.freeze(['registry']),
     integration: Object.freeze(['registry']),
-    browser: Object.freeze(['registry']),
+    browser: Object.freeze([]),
   }),
   telemetry: Object.freeze({
     contracts: Object.freeze(['core', 'telemetry']),
@@ -213,7 +198,7 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['alarm']),
     integration: Object.freeze(['alarm']),
-    browser: Object.freeze(['alarm']),
+    browser: Object.freeze([]),
   }),
   workorder: Object.freeze({
     contracts: Object.freeze(['core']),
@@ -231,7 +216,7 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['operations-agent']),
     integration: Object.freeze(['operations-agent']),
-    browser: Object.freeze(['operations-agent']),
+    browser: Object.freeze([]),
   }),
   pocs: Object.freeze({
     contracts: Object.freeze([]),

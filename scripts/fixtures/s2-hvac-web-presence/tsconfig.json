@@ -1,8 +1,0 @@
-{
-  "extends": "../../../apps/hvac-web/tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "tsBuildInfoFile": "../../../node_modules/.tmp/tsconfig.s2-hvac-web-presence.tsbuildinfo"
-  },
-  "include": ["harness.tsx", "support.ts"]
-}

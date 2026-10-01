@@ -67,6 +67,7 @@ function principalResponse() {
     roles: ['descriptive-role-only'],
   };
   return {
+    principalId: '018f3e00-2000-7000-8000-0000000000b2',
     principal,
     context: {
       initiatingPrincipal: principal,

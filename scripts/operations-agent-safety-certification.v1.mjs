@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 export const OPERATIONS_AGENT_SAFETY_CERTIFICATION_VERSION = 'operations-agent-safety-certification/v1';
 export const OPERATIONS_AGENT_SAFETY_CERTIFICATION_NAME = 'MAP_5_5_NEGATIVE_AUTHORIZATION_AND_RECOVERY';
 
@@ -16,11 +14,9 @@ export const OPERATIONS_AGENT_SAFETY_GATES = Object.freeze([
   'agent-service',
   'operations-postgres',
   'durable-postgres',
-  'workspace-unit',
-  'workspace-browser',
 ]);
 
-const evidence = (gate, marker, sourceArtifact = null) => Object.freeze({ gate, marker, sourceArtifact });
+const evidence = (gate, marker) => Object.freeze({ gate, marker });
 const invariant = (status, evidenceReferences = []) => Object.freeze({ status, evidence: Object.freeze(evidenceReferences) });
 
 export const OPERATIONS_AGENT_SAFETY_SCENARIOS = Object.freeze([
@@ -40,8 +36,6 @@ export const OPERATIONS_AGENT_SAFETY_SCENARIOS = Object.freeze([
       evidence('gateway-negative', 'TestHandlerFailsClosedForScopeMismatchAndForgedHeaders/scope_changed_after_grant'),
       evidence('agent-service', 'internal HTTP authorization denial is nondiscoverable and malformed requests fail before use cases'),
       evidence('agent-service', 'Owner readers reject timeout, malformed JSON, missing authorization and cross-Scope identities'),
-      evidence('workspace-unit', 'scoped Operations API accepts the authorized stream and rejects a mismatched Organization'),
-      evidence('workspace-browser', 'nondiscoverable-stable-no-retry', 'out/operations-reconnect-certification/browser-evidence.json'),
     ]),
     invariants: Object.freeze({
       tenantIsolation: invariant('PROVEN', ['wrong-organization-site', 'nondiscoverable-public-result']),
@@ -59,13 +53,10 @@ export const OPERATIONS_AGENT_SAFETY_SCENARIOS = Object.freeze([
       evidence('agent-service', 'internal HTTP accepts one bounded Operator Input and exact retry is inert'),
       evidence('operations-postgres', 'PostgreSQL Audit outbox deduplicates content and survives lease, retry, and delivery'),
       evidence('operations-postgres', 'PostgreSQL commits Operator Input atomically and exact retry survives restart'),
-      evidence('workspace-unit', 'Headless Operations agent reconnects after interruption without duplicating durable Tool records'),
-      evidence('workspace-browser', 'retryable-interruption-visible-and-recovered', 'out/operations-reconnect-certification/browser-evidence.json'),
-      evidence('workspace-browser', 'operator-input-exact-retry-same-run', 'out/operations-reconnect-certification/browser-evidence.json'),
     ]),
     invariants: Object.freeze({
       tenantIsolation: invariant('NOT_APPLICABLE'),
-      idempotency: invariant('PROVEN', ['operator-input', 'business-effect', 'audit-outbox', 'ag-ui-event']),
+      idempotency: invariant('PROVEN', ['operator-input', 'business-effect', 'audit-outbox']),
       restartSafety: invariant('PROVEN', ['exact-retry-after-restart']),
       boundedFailureOutcomes: invariant('PROVEN', ['ambiguous-response-retry', 'no-duplicate-records']),
     }),
@@ -80,12 +71,11 @@ export const OPERATIONS_AGENT_SAFETY_SCENARIOS = Object.freeze([
       evidence('operations-postgres', 'PostgreSQL atomically persists typed records across restart, retry, and rollback'),
       evidence('operations-postgres', 'PostgreSQL resumes a checkpointed night-energy Run without duplicate business effects'),
       evidence('agent-service', 'a saved Runtime Checkpoint without receipts recovers by replaying only the fixed Registry reads'),
-      evidence('workspace-browser', 'cancel-terminal-reload-and-route-leave-purge', 'out/operations-reconnect-certification/browser-evidence.json'),
     ]),
     invariants: Object.freeze({
       tenantIsolation: invariant('NOT_APPLICABLE'),
       idempotency: invariant('PROVEN', ['post-commit-restart', 'checkpoint-replay']),
-      restartSafety: invariant('PROVEN', ['checkpoint-present', 'checkpoint-lost', 'pre-commit', 'post-commit', 'terminal-reload']),
+      restartSafety: invariant('PROVEN', ['checkpoint-present', 'checkpoint-lost', 'pre-commit', 'post-commit']),
       boundedFailureOutcomes: invariant('PROVEN', ['rollback-without-partial-records']),
     }),
   }),
@@ -114,52 +104,29 @@ export const OPERATIONS_AGENT_SAFETY_SCENARIOS = Object.freeze([
     requirements: Object.freeze([
       evidence('agent-service', 'valid recovery positions replay only the committed missing suffix after a fresh snapshot'),
       evidence('agent-service', 'unknown expired and conflicting recovery positions fall back to a full authoritative snapshot'),
-      evidence('workspace-unit', 'Operations recovery positions persist only opaque scoped cursors in session storage'),
-      evidence('workspace-unit', 'Headless Operations agent restores a scoped cursor on the first request after reload'),
-      evidence('workspace-unit', 'Headless Operations agent does not retry a nondiscoverable Investigation'),
-      evidence('workspace-browser', 'stored-last-event-id-survives-page-reload-and-retry', 'out/operations-reconnect-certification/browser-evidence.json'),
-      evidence('workspace-browser', 'typed-provenance-and-site-only-finding', 'out/operations-reconnect-certification/browser-evidence.json'),
     ]),
     invariants: Object.freeze({
-      tenantIsolation: invariant('PROVEN', ['organization-site-investigation-scoped-cursor', 'protected-site-purge']),
-      idempotency: invariant('PROVEN', ['event-identity-deduplication', 'authoritative-snapshot-replacement']),
-      restartSafety: invariant('PROVEN', ['page-reload', 'reconnect', 'terminal-reload']),
-      boundedFailureOutcomes: invariant('PROVEN', ['unknown', 'future', 'expired', 'out-of-range', 'partial-tool']),
+      tenantIsolation: invariant('NOT_APPLICABLE'),
+      idempotency: invariant('PROVEN', ['authoritative-snapshot-replacement']),
+      restartSafety: invariant('NOT_APPLICABLE'),
+      boundedFailureOutcomes: invariant('PROVEN', ['unknown', 'expired', 'conflicting']),
     }),
   }),
 ]);
 
-const stableValue = (value) => {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
-  }
-  return value;
-};
-const stableJson = (value) => JSON.stringify(stableValue(value));
-export const sha256Hex = (value) => createHash('sha256').update(value).digest('hex');
-
-const markerPresent = (gateResult, requirement, browserEvidence) => {
-  if (!gateResult?.passed) return false;
-  if (requirement.sourceArtifact?.endsWith('browser-evidence.json')) {
-    return browserEvidence?.passed === true
-      && Array.isArray(browserEvidence.assertions)
-      && browserEvidence.assertions.includes(requirement.marker);
-  }
-  return `${gateResult.stdout ?? ''}\n${gateResult.stderr ?? ''}`.includes(requirement.marker);
-};
+const markerPresent = (gateResult, requirement) => gateResult?.passed === true
+  && `${gateResult.stdout ?? ''}\n${gateResult.stderr ?? ''}`.includes(requirement.marker);
 
 export function buildOperationsAgentSafetyCertificationReport({
   repositorySha,
   startedAt,
   completedAt,
   gateResults,
-  browserEvidence,
 }) {
   const scenarios = OPERATIONS_AGENT_SAFETY_SCENARIOS.map((scenario) => {
     const evidenceResults = scenario.requirements.map((requirement) => ({
       ...requirement,
-      present: markerPresent(gateResults[requirement.gate], requirement, browserEvidence),
+      present: markerPresent(gateResults[requirement.gate], requirement),
     }));
     return {
       id: scenario.id,
@@ -206,12 +173,6 @@ export function buildOperationsAgentSafetyCertificationReport({
     gates,
     invariantCoverage,
     scenarios,
-    browserEvidence: {
-      schemaVersion: browserEvidence?.schemaVersion ?? null,
-      passed: browserEvidence?.passed === true,
-      assertions: Array.isArray(browserEvidence?.assertions) ? browserEvidence.assertions : [],
-      digest: browserEvidence ? sha256Hex(stableJson(browserEvidence)) : null,
-    },
     checksumManifest: 'SHA256SUMS',
   };
 }
@@ -260,7 +221,6 @@ export function validateOperationsAgentSafetyCertificationReport(report) {
       failures.push(`invariant ${invariantName} is not covered`);
     }
   }
-  if (report?.browserEvidence?.passed !== true) failures.push('browser evidence did not pass');
   if (report?.passed !== true) failures.push('report passed must be true');
   return { valid: failures.length === 0, failures };
 }

@@ -76,12 +76,8 @@ test('gate profiles use product domains rather than implementation stage numbers
     'workorder',
   ]);
   assert.deepEqual(resolveGateProfileSet('browser', 'all'), [
-    'alarm',
-    'operations-agent',
     'platform',
-    'registry',
     'telemetry',
-    'web',
     'workorder',
   ]);
 
