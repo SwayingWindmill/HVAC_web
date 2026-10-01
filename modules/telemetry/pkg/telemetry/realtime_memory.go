@@ -12,7 +12,6 @@ import (
 type MemoryRealtimeRepository struct {
 	mu               sync.Mutex
 	subscriptions    map[string]RealtimeSubscription
-	clientIndex      map[string]string
 	cursors          map[string]RecoveryCursorRecord
 	currentRevisions map[string]int64
 	pending          []PendingPublication
@@ -30,7 +29,6 @@ type memoryRealtimeClaim struct {
 func NewMemoryRealtimeRepository() *MemoryRealtimeRepository {
 	return &MemoryRealtimeRepository{
 		subscriptions:    map[string]RealtimeSubscription{},
-		clientIndex:      map[string]string{},
 		cursors:          map[string]RecoveryCursorRecord{},
 		currentRevisions: map[string]int64{},
 		published:        map[string]time.Time{},
@@ -60,14 +58,10 @@ func (repository *MemoryRealtimeRepository) SaveSubscriptions(_ context.Context,
 			return ErrSubscriptionConflict
 		}
 		clientKeys[clientKey] = struct{}{}
-		if existingID, exists := repository.clientIndex[clientKey]; exists && existingID != subscription.SubscriptionID {
-			return ErrSubscriptionConflict
-		}
 	}
 	for _, subscription := range subscriptions {
 		copy := cloneSubscription(subscription)
 		repository.subscriptions[subscription.SubscriptionID] = copy
-		repository.clientIndex[subscription.PrincipalID+"\x00"+subscription.ClientSubscriptionID] = subscription.SubscriptionID
 	}
 	return nil
 }
@@ -222,7 +216,7 @@ func (repository *MemoryRealtimeRepository) MarkPublicationPublished(_ context.C
 	return nil
 }
 
-func (repository *MemoryRealtimeRepository) RevokeSubscriptions(_ context.Context, principalID, deviceID string, now time.Time) ([]RealtimeSubscription, error) {
+func (repository *MemoryRealtimeRepository) RevokeSubscriptions(_ context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.FailSave != nil {
@@ -230,7 +224,7 @@ func (repository *MemoryRealtimeRepository) RevokeSubscriptions(_ context.Contex
 	}
 	result := make([]RealtimeSubscription, 0)
 	for id, subscription := range repository.subscriptions {
-		if (principalID == "" || subscription.PrincipalID == principalID) && (deviceID == "" || subscription.DeviceID == deviceID) && subscription.Status == SubscriptionActive {
+		if (principalID == "" || subscription.PrincipalID == principalID) && (deviceID == "" || subscription.DeviceID == deviceID) && subscription.Status == SubscriptionActive && !subscription.UpdatedAt.After(authorizedBefore) {
 			copy := cloneSubscription(subscription)
 			result = append(result, copy)
 			subscription.Status = SubscriptionRevoked

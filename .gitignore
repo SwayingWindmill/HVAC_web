@@ -94,3 +94,11 @@ hvac-backend/
 worktrees/
 .clones/
 .scratch/
+
+# Binaries from running go build inside a main package directory
+/cmd/energy-api/energy-api
+/cmd/iot-service/iot-service
+/cmd/maintenance-worker/maintenance-worker
+/cmd/metric-worker/metric-worker
+/cmd/scheduler/scheduler
+/cmd/telemetry-worker/telemetry-worker

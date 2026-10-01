@@ -112,7 +112,7 @@ func TestRealtimeCheckpointRecoveryAndRevocation(t *testing.T) {
 		t.Fatalf("cross-session cursor reuse was not rejected: %v", err)
 	}
 
-	revoked, err := service.Revoke(context.Background(), access.PrincipalID, realtimeTestDevice1)
+	revoked, err := service.Revoke(context.Background(), access.PrincipalID, realtimeTestDevice1, now)
 	if err != nil || revoked != 1 || len(transport.Unsubscribes) != 1 {
 		t.Fatalf("revocation did not unsubscribe: count=%d transport=%+v err=%v", revoked, transport.Unsubscribes, err)
 	}

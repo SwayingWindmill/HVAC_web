@@ -98,27 +98,8 @@ try {
     },
   });
   report.assertions.goIntegration = testOutput;
-  if (realtimeMode) {
-    report.assertions.realtimeOwnerState = psql(`
-      SELECT s.status || '|' || (s.revoked_at IS NOT NULL)::text || '|'
-        || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o
-            WHERE o.device_id = s.device_id AND o.delivery_state = 'PUBLISHED')::text
-      FROM telemetry_runtime.telemetry_subscriptions s
-      WHERE s.client_subscription_id = 'postgres-zone'
-    `);
-    if (report.assertions.realtimeOwnerState !== 'REVOKED|true|1') {
-      throw new Error(`unexpected realtime owner state ${report.assertions.realtimeOwnerState}`);
-    }
-    report.assertions.currentScopeRecheck = psql(`
-      SELECT count(*)::text FROM telemetry_runtime.iam_scope_projections
-      WHERE principal_id = '018f2e00-2000-7000-8000-000000000001'
-        AND device_id = '018f2e00-3000-7000-8000-000000000001'
-        AND action = 'SUBSCRIBE' AND revoked_at IS NOT NULL
-    `);
-    if (report.assertions.currentScopeRecheck !== '1') {
-      throw new Error(`realtime IAM revocation evidence drifted: ${report.assertions.currentScopeRecheck}`);
-    }
-  } else {
+  // The Go realtime tests assert subscription, publication and revocation state.
+  if (!realtimeMode) {
     report.assertions.currentTransaction = psql(`
       SELECT s.business_revision::text || '|' || p.business_revision::text || '|'
         || s.evaluation_availability || '|'

@@ -115,7 +115,9 @@ type RealtimeRepository interface {
 	CurrentBusinessRevision(context.Context, string) (int64, error)
 	ClaimPendingPublications(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error)
 	MarkPublicationPublished(context.Context, string, string, time.Time) error
-	RevokeSubscriptions(context.Context, string, string, time.Time) ([]RealtimeSubscription, error)
+	// RevokeSubscriptions revokes active subscriptions of the principal and/or device
+	// that were last authorized at or before authorizedBefore.
+	RevokeSubscriptions(ctx context.Context, principalID, deviceID string, authorizedBefore, now time.Time) ([]RealtimeSubscription, error)
 }
 
 type RealtimeTransport interface {
@@ -561,11 +563,13 @@ func (service *RealtimeService) RelayOnce(ctx context.Context, limit int) (int, 
 	return published, nil
 }
 
-func (service *RealtimeService) Revoke(ctx context.Context, principalID, deviceID string) (int, error) {
+// Revoke ends the subscriptions an IAM change at authorizedBefore invalidates and
+// unsubscribes their channels. Subscriptions authorized after the change stand.
+func (service *RealtimeService) Revoke(ctx context.Context, principalID, deviceID string, authorizedBefore time.Time) (int, error) {
 	if service == nil || service.repository == nil || service.transport == nil {
 		return 0, ErrRealtimeUnavailable
 	}
-	revoked, err := service.repository.RevokeSubscriptions(ctx, principalID, deviceID, service.now().UTC())
+	revoked, err := service.repository.RevokeSubscriptions(ctx, principalID, deviceID, authorizedBefore.UTC(), service.now().UTC())
 	if err != nil {
 		return 0, normalizeRealtimeRepositoryError(err)
 	}
