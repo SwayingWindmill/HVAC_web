@@ -1,16 +1,6 @@
 import type { OverviewDashboardData, OverviewPeriod } from "./overview-types";
 // Explicit design fixture; never a fallback for failed production requests.
-const profiles: Record<
-  string,
-  { daily: number; rate: number; comfort: number; coverage: number }
-> = {
-  "site:site-01": { daily: 19826, rate: 12.7, comfort: 96.8, coverage: 98.5 },
-  "site:site-02": { daily: 13420, rate: 9.2, comfort: 98.1, coverage: 99.2 },
-  "site:site-03": { daily: 8620, rate: 16.4, comfort: 97.6, coverage: 97.8 },
-  "group:east": { daily: 74620, rate: 11.6, comfort: 97.2, coverage: 98.1 },
-  "group:south": { daily: 55200, rate: 10.8, comfort: 98.0, coverage: 98.8 },
-  portfolio: { daily: 182440, rate: 12.1, comfort: 97.4, coverage: 98.4 },
-};
+const profile = { daily: 19826, rate: 12.7, comfort: 96.8, coverage: 98.5 };
 const periods = {
   today: { count: 12, days: 1, dates: "2026.09.30 · 00:00–24:00" },
   week: { count: 7, days: 7, dates: "2026.09.24–09.30" },
@@ -18,11 +8,9 @@ const periods = {
   year: { count: 9, days: 273, dates: "2026.01.01–09.30" },
 } as const;
 export function createOverviewExample(
-  scopeId: string,
   scopeName: string,
   period: OverviewPeriod,
 ): OverviewDashboardData {
-  const profile = profiles[scopeId];
   const config = periods[period];
   const raw = Array.from({ length: config.count }, (_, i) => ({
     weight:

@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { EngineeringChart } from "@/components/analysis/EngineeringChart";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import { breakdownService } from "../api/breakdown-service";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
@@ -21,14 +21,14 @@ import type { DataTableFeatures } from "@/components/data-table/data-table-featu
 import type { SubmeteringPointRecord } from "../api/breakdown-types";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 export function BreakdownWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/energy-analysis/breakdown" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/energy-analysis/breakdown" });
   const navigate = useNavigate({ from: "/energy-analysis/breakdown" });
   const view = search.view ?? "flow";
   const query = useQuery({
     queryKey: ["breakdown-review", currentScope.id],
     queryFn: () => {
-      if (!example || currentScope.id !== "site:site-01")
+      if (!example)
         throw new Error("当前范围分项数据未接入");
       return breakdownService.getBreakdownAnalytics();
     },

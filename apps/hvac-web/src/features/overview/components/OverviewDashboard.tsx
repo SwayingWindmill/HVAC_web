@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CircleAlert } from "lucide-react";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,8 +41,8 @@ interface OverviewQuickDetail {
   readonly action: string;
 }
 export function OverviewDashboard() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/overview" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/overview" });
   const period = search.period ?? (isOverviewExample ? "month" : "today");
   const navigate = useNavigate({ from: "/overview" });
   const [detail, setDetail] = useState<OverviewQuickDetail | null>(null);
@@ -55,7 +55,7 @@ export function OverviewDashboard() {
     setDetail(null);
     void navigate({
       to: path,
-      search: () => ({ scope: currentScope.id, period }),
+      search: () => ({ site: currentScope.siteId, period }),
     });
   };
   const baselineDetail = () => {

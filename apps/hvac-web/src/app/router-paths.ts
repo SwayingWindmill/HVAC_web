@@ -72,3 +72,24 @@ export function siteIdFromPathname(pathname: string): string | undefined {
   if (segments[0] !== 'sites' || !segments[1] || !isUUIDv7(segments[1])) return undefined;
   return segments[1];
 }
+
+/**
+ * Site-scoped routes carry the Site either in the `/sites/:siteId` path or, for the
+ * global workspace entries, in the `site` search parameter.
+ */
+export function siteIdFromLocation(pathname: string, search: string): string | undefined {
+  const fromPath = siteIdFromPathname(pathname);
+  if (fromPath) return fromPath;
+  const fromSearch = new URLSearchParams(search).get('site');
+  return fromSearch && isUUIDv7(fromSearch) ? fromSearch : undefined;
+}
+
+/** The same workspace location re-targeted at another Site. Object selections are dropped. */
+export function workspaceLocationForSite(pathname: string, siteId: string): string {
+  if (!isUUIDv7(siteId)) throw new Error('Site identity must be a Registry UUIDv7.');
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments[0] === 'sites') {
+    return segments[2] ? `/sites/${siteId}/${segments[2]}` : `/sites/${siteId}`;
+  }
+  return `${pathname}?site=${siteId}`;
+}

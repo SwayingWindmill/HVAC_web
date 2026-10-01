@@ -3,7 +3,7 @@ import { ArrowUpRight, Kanban, List, RefreshCw, Search } from "lucide-react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import type { EnergySavingProject, ProjectStage } from "../api/project-types";
 import {
   Timeline,
@@ -51,8 +51,8 @@ const stages: Record<ProjectStage, string> = {
   COMPLETED: "完成",
 };
 export function ProjectsWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/optimization/projects" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/optimization/projects" });
   const navigate = useNavigate({ from: "/optimization/projects" });
   const query = useQuery(optimizationFlowQueryOptions(currentScope.id));
   const all = query.data?.projects ?? [];
@@ -330,7 +330,7 @@ export function ProjectsWorkspace() {
                       onClick={() =>
                         void navigate({
                           search: (previous) => ({
-                            scope: previous.scope,
+                            site: previous.site,
                             view: previous.view,
                           }),
                         })
@@ -428,7 +428,7 @@ export function ProjectsWorkspace() {
                         void navigate({
                           to: "/optimization/opportunities",
                           search: {
-                            scope: currentScope.id,
+                            site: currentScope.siteId,
                             inspect: origin.id,
                           },
                         })
@@ -446,7 +446,7 @@ export function ProjectsWorkspace() {
                         void navigate({
                           to: "/optimization/verification",
                           search: {
-                            scope: currentScope.id,
+                            site: currentScope.siteId,
                             project: project.id,
                             record: verification.id,
                           },
@@ -566,7 +566,7 @@ export function ProjectsWorkspace() {
                           void navigate({
                             to: "/optimization/verification",
                             search: {
-                              scope: currentScope.id,
+                              site: currentScope.siteId,
                               project: project.id,
                               record: verification?.id,
                             },

@@ -1,7 +1,7 @@
-import { Outlet, createFileRoute, useBlocker } from '@tanstack/react-router';
+import { Outlet, createFileRoute, defaultStringifySearch, useBlocker } from '@tanstack/react-router';
 import { ShellChrome } from '@/app/ShellChrome';
 import { requireCapabilities } from '@/app/route-access';
-import { siteIdFromPathname } from '@/app/router-paths';
+import { siteIdFromLocation } from '@/app/router-paths';
 import { RouteErrorSurface } from '@/app/RouteSurfaces';
 
 export const Route = createFileRoute('/_app')({
@@ -26,11 +26,11 @@ function AppLayout() {
   useBlocker({
     enableBeforeUnload: false,
     shouldBlockFn: async ({ current, next }) => {
-      const currentSiteId = siteIdFromPathname(current.pathname);
-      const nextSiteId = siteIdFromPathname(next.pathname);
+      const currentSiteId = siteIdFromLocation(current.pathname, defaultStringifySearch(current.search));
+      const nextSiteId = siteIdFromLocation(next.pathname, defaultStringifySearch(next.search));
       if (!currentSiteId || !nextSiteId || currentSiteId === nextSiteId) return false;
 
-      await runtime.requestSiteNavigation(next.pathname);
+      await runtime.requestSiteNavigation(`${next.pathname}${defaultStringifySearch(next.search)}`);
       return true;
     },
   });

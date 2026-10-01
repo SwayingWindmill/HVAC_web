@@ -7,7 +7,7 @@ import { ArrowUpRight, RefreshCw, Search } from "lucide-react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -89,8 +89,8 @@ const diagnosisLabels = {
   ROOT_CAUSE_CONFIRMED: "根因已确认",
 };
 export function AlarmsWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/operations/alarms" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/operations/alarms" });
   const navigate = useNavigate({ from: "/operations/alarms" });
   const query = useQuery(operationsFlowQueryOptions(currentScope.id));
   const action = useOperationsAction(currentScope.id);
@@ -476,7 +476,7 @@ export function AlarmsWorkspace() {
                     void navigate({
                       to: "/operations/systems-devices",
                       search: {
-                        scope: currentScope.id,
+                        site: currentScope.siteId,
                         inspect: selected.deviceId,
                       },
                     })
@@ -599,7 +599,7 @@ export function AlarmsWorkspace() {
                   void navigate({
                     to: "/operations/work-center",
                     search: {
-                      scope: currentScope.id,
+                      site: currentScope.siteId,
                       alarm: selected.id,
                       inspect: query.data?.works.find(
                         (work) => work.sourceAlarmCode === selected.code,

@@ -21,7 +21,7 @@ import {
 import { DataTableBlock } from "@/blocks/data-table";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -68,8 +68,8 @@ const deviceIcons = {
   dosing: FlaskConical,
 } satisfies Record<DeviceCategory, typeof Snowflake>;
 export function SystemsDevicesWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/operations/systems-devices" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/operations/systems-devices" });
   const navigate = useNavigate({ from: "/operations/systems-devices" });
   const query = useQuery(operationsFlowQueryOptions(currentScope.id));
   const reset = useOperationsReset(currentScope.id);
@@ -439,7 +439,7 @@ export function SystemsDevicesWorkspace() {
                     onClick={() =>
                       void navigate({
                         to: "/operations/alarms",
-                        search: { scope: currentScope.id, device: selected.id },
+                        search: { site: currentScope.siteId, device: selected.id },
                       })
                     }
                   >

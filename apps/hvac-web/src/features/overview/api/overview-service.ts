@@ -6,7 +6,7 @@ import {
   type OverviewPeriod,
 } from "./overview-types";
 export const isOverviewExample =
-  __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+  __HVAC_WEB_FRONTEND_REVIEW__;
 export class OverviewUnsupportedError extends Error {}
 export async function readEnergyOverview(
   scopeId: string,
@@ -15,7 +15,7 @@ export async function readEnergyOverview(
   signal?: AbortSignal,
 ): Promise<OverviewDashboardData> {
   if (isOverviewExample)
-    return createOverviewExample(scopeId, scopeName, period);
+    return createOverviewExample(scopeName, period);
   // Current owner contract has no historical aggregation parameter.
   if (!scopeId.startsWith("site:"))
     throw new OverviewUnsupportedError(

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { EngineeringChart } from "@/components/analysis/EngineeringChart";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import { demandService } from "../api/demand-service";
 import {
   Sheet,
@@ -29,15 +29,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 export function LoadDemandWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/energy-analysis/load-demand" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/energy-analysis/load-demand" });
   const navigate = useNavigate({ from: "/energy-analysis/load-demand" });
   const view = search.view ?? "profile";
   const [candidateId, setCandidateId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["demand-review", currentScope.id],
     queryFn: () => {
-      if (!example || currentScope.id !== "site:site-01")
+      if (!example)
         throw new Error("当前范围需量分析未接入");
       return demandService.getDemandAnalytics();
     },
@@ -290,7 +290,7 @@ export function LoadDemandWorkspace() {
                 onClick={() =>
                   void navigate({
                     to: "/operations/control",
-                    search: () => ({ scope: currentScope.id }),
+                    search: () => ({ site: currentScope.siteId }),
                   })
                 }
               >

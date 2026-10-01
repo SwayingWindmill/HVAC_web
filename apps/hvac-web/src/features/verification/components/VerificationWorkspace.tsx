@@ -11,7 +11,7 @@ import { ChartLegend, ChartLegendContent } from "@/components/ui/chart";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { useDataTable } from "@/hooks/use-data-table";
 import { DataTable } from "@/components/data-table/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -40,7 +40,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV;
+const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import type { MvProjectRecord } from "../api/verification-types";
 import {
   LineChart,
@@ -62,8 +62,8 @@ const statusNames = {
   ADJUSTMENT_REQUIRED: "需要调整",
 };
 export function VerificationWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/optimization/verification" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/optimization/verification" });
   const navigate = useNavigate({ from: "/optimization/verification" });
   const query = useQuery(optimizationFlowQueryOptions(currentScope.id));
   const all = query.data?.verifications ?? [];
@@ -291,7 +291,7 @@ export function VerificationWorkspace() {
                       void navigate({
                         to: "/optimization/projects",
                         search: {
-                          scope: currentScope.id,
+                          site: currentScope.siteId,
                           inspect: sourceProject.id,
                         },
                       })
@@ -607,7 +607,7 @@ export function VerificationWorkspace() {
                     onClick={() =>
                       void navigate({
                         to: "/optimization/projects",
-                        search: { scope: currentScope.id, inspect: origin.id },
+                        search: { site: currentScope.siteId, inspect: origin.id },
                       })
                     }
                   >

@@ -2,7 +2,7 @@ import { ArrowUpRight, CalendarDays, Download, FileChartColumn, FileCheck2, Refr
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { useScope } from "@/hooks/use-scope";
+import { useWorkspaceScope } from "@/hooks/use-scope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -68,14 +68,14 @@ const reports: ReportEntry[] = [
   },
 ];
 export function ReportsWorkspace() {
-  const { currentScope } = useScope();
-  const search = useSearch({ from: "/_app/reports" });
+  const { currentScope } = useWorkspaceScope();
+  const search = useSearch({ from: "/_app/_site/reports" });
   const navigate = useNavigate({ from: "/reports" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["report-register-review", currentScope.id],
     queryFn: async () => {
-      if (!isWorkspaceExample || currentScope.id !== "site:site-01")
+      if (!isWorkspaceExample)
         throw new Error("报告登记与正式文件未接入");
       return reports;
     },
@@ -196,7 +196,7 @@ export function ReportsWorkspace() {
                     {report.sections.map((section, i) => <li key={section} className="flex gap-3"><span className="tabular-nums">{String(i + 1).padStart(2, "0")}</span>{section}</li>)}
                   </ol>
                   <div className="mt-auto flex items-center justify-between gap-3 border-t pt-5">
-                    <Button variant="ghost" size="sm" onClick={() => void navigate({to: report.type === "energy" ? "/energy-analysis/consumption" : "/optimization/verification", search: {scope: currentScope.id}})}>查看分析来源<ArrowUpRight aria-hidden="true" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => void navigate({to: report.type === "energy" ? "/energy-analysis/consumption" : "/optimization/verification", search: {site: currentScope.siteId}})}>查看分析来源<ArrowUpRight aria-hidden="true" /></Button>
                     <Button variant="outline" size="sm" onClick={() => setSelectedId(report.id)}>查看报告<ArrowUpRight aria-hidden="true" /></Button>
                   </div>
                 </CardContent>
@@ -264,7 +264,7 @@ export function ReportsWorkspace() {
                   onClick={() =>
                     void navigate({
                       to: "/optimization/verification",
-                      search: { scope: currentScope.id },
+                      search: { site: currentScope.siteId },
                     })
                   }
                 >

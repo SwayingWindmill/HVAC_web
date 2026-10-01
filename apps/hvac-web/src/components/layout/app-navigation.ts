@@ -21,7 +21,6 @@ export interface AppNavSubItem {
   readonly id: string;
   readonly title: string;
   readonly path: string;
-  readonly badge?: string;
 }
 
 export interface AppNavigationGroup {
@@ -36,14 +35,13 @@ export interface AppNavigationItem {
   readonly title: string;
   readonly path: string;
   readonly icon: LucideIcon;
-  readonly badge?: string;
   readonly children?: readonly AppNavSubItem[];
 }
 
 export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   {
     id: 'overview-group',
-    label: '核心决策',
+    label: '总览',
     items: [
       {
         id: 'overview',
@@ -55,14 +53,13 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   },
   {
     id: 'energy-optimization',
-    label: '节能优化 (闭环主动脉)',
+    label: '节能优化',
     items: [
       {
         id: 'optimization-opportunities',
         title: '节能机会',
         path: '/optimization/opportunities',
         icon: Lightbulb,
-        badge: '8',
       },
       {
         id: 'optimization-projects',
@@ -80,7 +77,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   },
   {
     id: 'energy-analytics',
-    label: '能源分析 (洞察与对标)',
+    label: '能源分析',
     items: [
       {
         id: 'analytics-consumption',
@@ -110,7 +107,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   },
   {
     id: 'operations-management',
-    label: '运行管理 (现场与控制)',
+    label: '运行管理',
     items: [
       {
         id: 'operations-realtime',
@@ -129,7 +126,6 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
         title: '异常与告警',
         path: '/operations/alarms',
         icon: ShieldAlert,
-        badge: '2',
       },
       {
         id: 'operations-work-center',
@@ -147,7 +143,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   },
   {
     id: 'reports-and-config',
-    label: '交付与底座',
+    label: '报告与配置',
     items: [
       {
         id: 'reports',

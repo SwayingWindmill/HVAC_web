@@ -16,12 +16,9 @@ import {
 
 const storageKey = "hvac-operations-review-actions";
 const actionLogSchema = z.array(operationActionSchema);
-const requireSample = (scope: string) => {
-  if (
-    !(__HVAC_WEB_FRONTEND_REVIEW__ || import.meta.env.DEV) ||
-    scope !== "site:site-01"
-  )
-    throw new Error("当前范围没有运维模拟数据，请选择上海恒隆广场");
+// The operations review simulation exists only in the frontend-review build.
+const requireSample = (_scope: string) => {
+  if (!__HVAC_WEB_FRONTEND_REVIEW__) throw new Error("运维业务数据尚未接入");
 };
 const readLog = () => {
   const stored = sessionStorage.getItem(storageKey);
