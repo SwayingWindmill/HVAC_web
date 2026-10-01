@@ -43,9 +43,10 @@ type Target struct {
 }
 
 type DecisionRequest struct {
-	TenantID string   `json:"tenantId"`
-	Action   Action   `json:"action"`
-	Targets  []Target `json:"targets"`
+	TenantID       string   `json:"tenantId"`
+	Action         Action   `json:"action"`
+	Targets        []Target `json:"targets"`
+	GrantPresenter string   `json:"grantPresenter,omitempty"`
 }
 
 func (request DecisionRequest) Validate() error {
@@ -54,6 +55,9 @@ func (request DecisionRequest) Validate() error {
 	}
 	if !request.Action.Valid() {
 		return errors.New("telemetry action is invalid")
+	}
+	if request.GrantPresenter != "" && (len(request.GrantPresenter) > 512 || !strings.HasPrefix(request.GrantPresenter, "spiffe://")) {
+		return errors.New("telemetry grant presenter is invalid")
 	}
 	_, err := CanonicalTargets(request.Targets)
 	return err

@@ -25,7 +25,7 @@ func loadGeneratedCentralPlantConfig(t *testing.T) Config {
 
 func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	config := loadGeneratedCentralPlantConfig(t)
-	plant := NewPlant(config.Plant, time.Unix(2000, 0).UTC())
+	plant := mustNewPlant(t, config.Plant, time.Unix(2000, 0).UTC())
 	runtime := edgecontrol.NewRuntime()
 	capabilities, err := edgecontrol.NewStandardCapabilityRegistry()
 	if err != nil {

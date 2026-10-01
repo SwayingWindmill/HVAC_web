@@ -26,6 +26,14 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusForbidden, "IAM_TELEMETRY_CONTEXT_MISMATCH", "The Telemetry authorization context does not match the delegated Session.")
 		return http.StatusForbidden
 	}
+	grantPresenter := presenter
+	if input.GrantPresenter != "" {
+		if _, allowed := h.allowedTelemetryGrantPresenters[input.GrantPresenter]; !allowed {
+			writeProblem(writer, http.StatusForbidden, "IAM_TELEMETRY_GRANT_PRESENTER_REJECTED", "The requested Telemetry grant presenter is not trusted.")
+			return http.StatusForbidden
+		}
+		grantPresenter = input.GrantPresenter
+	}
 
 	now := h.now()
 	decision, err := evaluateTelemetryAuthorization(request.Context(), h.telemetryAuthorizationStore, now, inbound.SubjectIssuer, inbound.Subject, input)
@@ -58,11 +66,11 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 		}
 		targetCount, keyCount := telemetryDecisionCounts(decision)
 		grant, err := telemetryauth.SignGrant(h.telemetryGrantSigner, telemetryauth.GrantClaims{
-			Issuer: h.telemetryGrantIssuer, Presenter: presenter, Audience: h.telemetryGrantAudience,
+			Issuer: h.telemetryGrantIssuer, Presenter: grantPresenter, Audience: h.telemetryGrantAudience,
 			PrincipalID: decision.PrincipalID, SubjectIssuer: decision.SubjectIssuer, Subject: decision.Subject,
-			TenantID: decision.TenantID,
-			ActorChain:           []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: presenter}},
-			Action:               decision.Action, ScopeDigest: decision.ScopeDigest, TargetCount: targetCount, KeyCount: keyCount,
+			TenantID:   decision.TenantID,
+			ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: presenter}},
+			Action:     decision.Action, ScopeDigest: decision.ScopeDigest, TargetCount: targetCount, KeyCount: keyCount,
 			PolicyRevision: decision.PolicyRevision, SessionID: inbound.SessionID, ParentTokenID: inbound.TokenID,
 			RequestID: requestID, TraceID: observability.TraceID(request.Context()), Route: telemetryPublicRoute(decision.Action),
 			IssuedAt: now.Unix(), ExpiresAt: now.Add(h.telemetryGrantLifetime).Unix(), TokenID: grantID, Transitive: false,

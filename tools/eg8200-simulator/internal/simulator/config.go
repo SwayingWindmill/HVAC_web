@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const ConfigSchemaVersion = 2
+const ConfigSchemaVersion = 3
 
 type Config struct {
 	SchemaVersion   int                    `json:"schemaVersion"`
@@ -25,17 +25,15 @@ type Config struct {
 }
 
 type PlantConfig struct {
-	AmbientDryBulbC  float64            `json:"ambientDryBulbC"`
-	AmbientWetBulbC  float64            `json:"ambientWetBulbC"`
-	LoadFraction     float64            `json:"loadFraction"`
-	InitialEnergyKWh float64            `json:"initialEnergyKwh,omitempty"`
-	Chiller          ChillerConfig      `json:"chiller"`
-	ChilledWaterPump PumpConfig         `json:"chilledWaterPump"`
-	CoolingWaterPump PumpConfig         `json:"coolingWaterPump"`
-	CoolingTower     CoolingTowerConfig `json:"coolingTower"`
-	PowerMeterID     string             `json:"powerMeterId"`
-	BTUMeterID       string             `json:"btuMeterId"`
-	WeatherStationID string             `json:"weatherStationId"`
+	Datasource       PlantDatasourceConfig `json:"datasource"`
+	InitialEnergyKWh float64               `json:"initialEnergyKwh,omitempty"`
+	Chiller          ChillerConfig         `json:"chiller"`
+	ChilledWaterPump PumpConfig            `json:"chilledWaterPump"`
+	CoolingWaterPump PumpConfig            `json:"coolingWaterPump"`
+	CoolingTower     CoolingTowerConfig    `json:"coolingTower"`
+	PowerMeterID     string                `json:"powerMeterId"`
+	BTUMeterID       string                `json:"btuMeterId"`
+	WeatherStationID string                `json:"weatherStationId"`
 }
 
 type ChillerConfig struct {
@@ -100,11 +98,8 @@ func (config Config) Validate() error {
 }
 
 func (config PlantConfig) Validate() error {
-	if config.AmbientDryBulbC < -30 || config.AmbientDryBulbC > 60 || config.AmbientWetBulbC < -40 || config.AmbientWetBulbC > config.AmbientDryBulbC {
-		return errors.New("plant ambient conditions are invalid")
-	}
-	if config.LoadFraction < 0 || config.LoadFraction > 1.2 {
-		return errors.New("plant loadFraction must be between 0 and 1.2")
+	if err := config.Datasource.Validate(); err != nil {
+		return err
 	}
 	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
 		return errors.New("plant initialEnergyKwh must be a finite non-negative number")

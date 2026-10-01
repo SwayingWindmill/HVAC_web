@@ -1,27 +1,8 @@
 BEGIN;
 SET LOCAL ROLE s1_core_migrator;
 
--- Metric execution reads released definitions and owns only calculation-run state.
-CREATE POLICY metrics_metric_engine_scope ON core_registry.metrics
-  FOR SELECT TO metric_engine_runtime
-  USING (tenant_id = core_registry.current_tenant_id());
-CREATE POLICY metric_versions_metric_engine_scope ON core_registry.metric_versions
-  FOR SELECT TO metric_engine_runtime
-  USING (tenant_id = core_registry.current_tenant_id());
-CREATE POLICY metric_dependencies_metric_engine_scope ON core_registry.metric_dependencies
-  FOR SELECT TO metric_engine_runtime
-  USING (tenant_id = core_registry.current_tenant_id());
-CREATE POLICY metric_bindings_metric_engine_scope ON core_registry.metric_bindings
-  FOR SELECT TO metric_engine_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-CREATE POLICY metric_calculation_runs_metric_engine_scope ON core_registry.metric_calculation_runs
-  FOR ALL TO metric_engine_runtime
-  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id))
-  WITH CHECK (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
-
-GRANT SELECT ON core_registry.metrics, core_registry.metric_versions,
-  core_registry.metric_dependencies, core_registry.metric_bindings TO metric_engine_runtime;
-GRANT SELECT, INSERT, UPDATE ON core_registry.metric_calculation_runs TO metric_engine_runtime;
+-- Metric Engine access is owned by 009c-metric-model-v2.sql alongside the Metric schema.
+-- This migration adds only the later Settlement, Forecast, and Optimization runtimes.
 
 -- Settlement execution consumes released Metric results plus Tariff and Boundary
 -- definitions. Energy Edge and Meter Binding reads below are lineage/accounting-boundary

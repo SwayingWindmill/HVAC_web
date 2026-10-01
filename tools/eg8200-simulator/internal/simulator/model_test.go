@@ -8,9 +8,14 @@ import (
 
 func testPlantConfig() PlantConfig {
 	return PlantConfig{
-		AmbientDryBulbC:  34,
-		AmbientWetBulbC:  27,
-		LoadFraction:     0.72,
+		Datasource: PlantDatasourceConfig{
+			Type: PlantDatasourceStatic,
+			Static: &PlantInputs{
+				AmbientDryBulbC: 34,
+				AmbientWetBulbC: 27,
+				LoadFraction:    0.72,
+			},
+		},
 		Chiller:          ChillerConfig{ID: "CHILLER-01", RatedCoolingCapacityKW: 1200, BaseCOP: 5.6, InitialSetpointC: 7, InitialLoadLimitPct: 100, InitiallyRunning: true},
 		ChilledWaterPump: PumpConfig{ID: "CHWP-01", RatedPowerKW: 45, RatedFlowM3H: 220, InitialFrequencyHz: 50, InitiallyRunning: true},
 		CoolingWaterPump: PumpConfig{ID: "CWP-01", RatedPowerKW: 37, RatedFlowM3H: 260, InitialFrequencyHz: 50, InitiallyRunning: true},
@@ -21,8 +26,48 @@ func testPlantConfig() PlantConfig {
 	}
 }
 
+func mustNewPlant(t *testing.T, config PlantConfig, now time.Time) *Plant {
+	t.Helper()
+	plant, err := NewPlant(config, now)
+	if err != nil {
+		t.Fatalf("create plant: %v", err)
+	}
+	return plant
+}
+
+func TestPlantScenarioDatasourceAdvancesWeatherAndLoad(t *testing.T) {
+	config := testPlantConfig()
+	config.Datasource = PlantDatasourceConfig{
+		Type: PlantDatasourceScenario,
+		Scenario: &PlantScenarioConfig{
+			Name: "summer-design-day",
+			Records: []PlantScenarioRecord{
+				{Offset: "0s", Inputs: PlantInputs{AmbientDryBulbC: 30, AmbientWetBulbC: 24, LoadFraction: 0.45}},
+				{Offset: "1h", Inputs: PlantInputs{AmbientDryBulbC: 36, AmbientWetBulbC: 28, LoadFraction: 0.90}},
+			},
+		},
+	}
+	start := time.Date(2026, 8, 28, 8, 0, 0, 0, time.UTC)
+	plant := mustNewPlant(t, config, start)
+
+	morning := plant.Tick(30 * time.Minute)
+	peak := plant.Tick(30 * time.Minute)
+
+	if got := morning.Devices[config.WeatherStationID]["ambientDryBulbTemperatureC"]; got != 30.0 {
+		t.Fatalf("morning dry bulb mismatch: %v", got)
+	}
+	if got := peak.Devices[config.WeatherStationID]["ambientDryBulbTemperatureC"]; got != 36.0 {
+		t.Fatalf("peak dry bulb mismatch: %v", got)
+	}
+	morningCapacity := morning.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	peakCapacity := peak.Devices[config.Chiller.ID]["coolingCapacityKw"].(float64)
+	if peakCapacity <= morningCapacity {
+		t.Fatalf("peak load did not increase cooling output: morning=%.3f peak=%.3f", morningCapacity, peakCapacity)
+	}
+}
+
 func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
-	plant := NewPlant(testPlantConfig(), time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
+	plant := mustNewPlant(t, testPlantConfig(), time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
 	snapshot := plant.Tick(time.Minute)
 	chiller := snapshot.Devices["CHILLER-01"]
 	powerMeter := snapshot.Devices["METER-HVAC-TOTAL"]
@@ -45,7 +90,7 @@ func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
 func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
 	config := testPlantConfig()
 	config.InitialEnergyKWh = 1250000
-	plant := NewPlant(config, time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
+	plant := mustNewPlant(t, config, time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
 	before := plant.Snapshot().Devices[config.PowerMeterID]["energyKwh"].(float64)
 	if before != config.InitialEnergyKWh {
 		t.Fatalf("initial cumulative energy mismatch: got %.6f want %.6f", before, config.InitialEnergyKWh)
@@ -57,7 +102,7 @@ func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
 }
 
 func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
-	plant := NewPlant(testPlantConfig(), time.Now())
+	plant := mustNewPlant(t, testPlantConfig(), time.Now())
 	plant.Tick(time.Second)
 	fullPower := plant.Snapshot().Devices["CHWP-01"]["powerKw"].(float64)
 	result := plant.ApplyCommand(Command{DeviceID: "CHWP-01", Method: "setFrequency", Params: map[string]float64{"frequencyHz": 40}})
@@ -73,7 +118,7 @@ func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 }
 
 func TestChillerSetpointCommandIsValidatedAndRevisioned(t *testing.T) {
-	plant := NewPlant(testPlantConfig(), time.Now())
+	plant := mustNewPlant(t, testPlantConfig(), time.Now())
 	accepted := plant.ApplyCommand(Command{DeviceID: "CHILLER-01", Method: "setChilledWaterTemperatureSetpoint", Params: map[string]float64{"setpointC": 8.5}})
 	if !accepted.Success || accepted.AppliedValue != 8.5 || accepted.BusinessRevision != 2 {
 		t.Fatalf("unexpected accepted result: %#v", accepted)
@@ -88,7 +133,7 @@ func TestChillerSetpointCommandIsValidatedAndRevisioned(t *testing.T) {
 }
 
 func TestFaultedCoolingWaterPumpStopsCoolingProduction(t *testing.T) {
-	plant := NewPlant(testPlantConfig(), time.Now())
+	plant := mustNewPlant(t, testPlantConfig(), time.Now())
 	if !plant.SetFault("CWP-01", "DRIVE_TRIP") {
 		t.Fatal("expected fault injection to target CWP-01")
 	}
@@ -102,7 +147,7 @@ func TestFaultedCoolingWaterPumpStopsCoolingProduction(t *testing.T) {
 }
 
 func TestCommandRejectsUnexpectedParametersWithoutMutation(t *testing.T) {
-	plant := NewPlant(testPlantConfig(), time.Now())
+	plant := mustNewPlant(t, testPlantConfig(), time.Now())
 	result := plant.ApplyCommand(Command{
 		DeviceID: "CHWP-01",
 		Method:   "setFrequency",

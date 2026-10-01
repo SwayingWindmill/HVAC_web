@@ -42,83 +42,85 @@ const (
 )
 
 type Config struct {
-	AllowedWorkloadSPIFFE          string
-	CoreWorkloadSPIFFE             string
-	Audience                       string
-	Logger                         *slog.Logger
-	Observability                  *observability.Runtime
-	Now                            func() time.Time
-	AuthorizationStore             AuthorizationStore
-	PrincipalCapabilityResolver    PrincipalCapabilityResolver
-	TenantContextResolver          TenantContextResolver
-	AdminStore                     AdminStore
-	RegistryGrantSigner            crypto.Signer
-	RegistryGrantIssuer            string
-	RegistryGrantAudience          string
-	RegistryGrantLifetime          time.Duration
-	AllowedRegistryGrantPresenters []string
-	NewRegistryGrantID             func() string
-	RegistryAuditSink              RegistryDecisionAuditSink
-	RegistryGrantStatus            RegistryGrantStatusStore
-	TelemetryAuthorizationStore    TelemetryAuthorizationStore
-	TelemetryGrantSigner           crypto.Signer
-	TelemetryGrantIssuer           string
-	TelemetryGrantAudience         string
-	TelemetryGrantLifetime         time.Duration
-	NewTelemetryGrantID            func() string
-	TelemetryAuditSink             TelemetryDecisionAuditSink
-	TelemetryRuntimeSPIFFE         string
-	TelemetryGrantStore            TelemetryGrantStore
-	CommandAuthorizationStore      CommandAuthorizationStore
-	CommandGrantSigner             crypto.Signer
-	CommandGrantIssuer             string
-	CommandGrantAudience           string
-	CommandGrantLifetime           time.Duration
-	NewCommandGrantID              func() string
-	AlarmAuthorizationStore        AlarmAuthorizationStore
-	AlarmAuditSink                 AlarmDecisionAuditSink
-	WorkOrderAuthorizationStore    WorkOrderAuthorizationStore
-	WorkOrderAuditSink             WorkOrderDecisionAuditSink
+	AllowedWorkloadSPIFFE           string
+	CoreWorkloadSPIFFE              string
+	Audience                        string
+	Logger                          *slog.Logger
+	Observability                   *observability.Runtime
+	Now                             func() time.Time
+	AuthorizationStore              AuthorizationStore
+	PrincipalCapabilityResolver     PrincipalCapabilityResolver
+	TenantContextResolver           TenantContextResolver
+	AdminStore                      AdminStore
+	RegistryGrantSigner             crypto.Signer
+	RegistryGrantIssuer             string
+	RegistryGrantAudience           string
+	RegistryGrantLifetime           time.Duration
+	AllowedRegistryGrantPresenters  []string
+	NewRegistryGrantID              func() string
+	RegistryAuditSink               RegistryDecisionAuditSink
+	RegistryGrantStatus             RegistryGrantStatusStore
+	TelemetryAuthorizationStore     TelemetryAuthorizationStore
+	TelemetryGrantSigner            crypto.Signer
+	TelemetryGrantIssuer            string
+	TelemetryGrantAudience          string
+	TelemetryGrantLifetime          time.Duration
+	AllowedTelemetryGrantPresenters []string
+	NewTelemetryGrantID             func() string
+	TelemetryAuditSink              TelemetryDecisionAuditSink
+	TelemetryRuntimeSPIFFE          string
+	TelemetryGrantStore             TelemetryGrantStore
+	CommandAuthorizationStore       CommandAuthorizationStore
+	CommandGrantSigner              crypto.Signer
+	CommandGrantIssuer              string
+	CommandGrantAudience            string
+	CommandGrantLifetime            time.Duration
+	NewCommandGrantID               func() string
+	AlarmAuthorizationStore         AlarmAuthorizationStore
+	AlarmAuditSink                  AlarmDecisionAuditSink
+	WorkOrderAuthorizationStore     WorkOrderAuthorizationStore
+	WorkOrderAuditSink              WorkOrderDecisionAuditSink
 }
 
 type handler struct {
-	allowedWorkloadSPIFFE          string
-	coreWorkloadSPIFFE             string
-	audience                       string
-	logger                         *slog.Logger
-	observability                  *observability.Runtime
-	now                            func() time.Time
-	authorizationStore             AuthorizationStore
-	principalCapabilityResolver    PrincipalCapabilityResolver
-	tenantContextResolver          TenantContextResolver
-	adminStore                     AdminStore
-	registryGrantSigner            crypto.Signer
-	registryGrantIssuer            string
-	registryGrantAudience          string
-	registryGrantLifetime          time.Duration
-	allowedRegistryGrantPresenters map[string]struct{}
-	newRegistryGrantID             func() string
-	registryAuditSink              RegistryDecisionAuditSink
-	registryGrantStatus            RegistryGrantStatusStore
-	telemetryAuthorizationStore    TelemetryAuthorizationStore
-	telemetryGrantSigner           crypto.Signer
-	telemetryGrantIssuer           string
-	telemetryGrantAudience         string
-	telemetryGrantLifetime         time.Duration
-	newTelemetryGrantID            func() string
-	telemetryAuditSink             TelemetryDecisionAuditSink
-	telemetryRuntimeSPIFFE         string
-	telemetryGrantStore            TelemetryGrantStore
-	commandAuthorizationStore      CommandAuthorizationStore
-	commandGrantSigner             crypto.Signer
-	commandGrantIssuer             string
-	commandGrantAudience           string
-	commandGrantLifetime           time.Duration
-	newCommandGrantID              func() string
-	alarmAuthorizationStore        AlarmAuthorizationStore
-	alarmAuditSink                 AlarmDecisionAuditSink
-	workOrderAuthorizationStore    WorkOrderAuthorizationStore
-	workOrderAuditSink             WorkOrderDecisionAuditSink
+	allowedWorkloadSPIFFE           string
+	coreWorkloadSPIFFE              string
+	audience                        string
+	logger                          *slog.Logger
+	observability                   *observability.Runtime
+	now                             func() time.Time
+	authorizationStore              AuthorizationStore
+	principalCapabilityResolver     PrincipalCapabilityResolver
+	tenantContextResolver           TenantContextResolver
+	adminStore                      AdminStore
+	registryGrantSigner             crypto.Signer
+	registryGrantIssuer             string
+	registryGrantAudience           string
+	registryGrantLifetime           time.Duration
+	allowedRegistryGrantPresenters  map[string]struct{}
+	newRegistryGrantID              func() string
+	registryAuditSink               RegistryDecisionAuditSink
+	registryGrantStatus             RegistryGrantStatusStore
+	telemetryAuthorizationStore     TelemetryAuthorizationStore
+	telemetryGrantSigner            crypto.Signer
+	telemetryGrantIssuer            string
+	telemetryGrantAudience          string
+	telemetryGrantLifetime          time.Duration
+	allowedTelemetryGrantPresenters map[string]struct{}
+	newTelemetryGrantID             func() string
+	telemetryAuditSink              TelemetryDecisionAuditSink
+	telemetryRuntimeSPIFFE          string
+	telemetryGrantStore             TelemetryGrantStore
+	commandAuthorizationStore       CommandAuthorizationStore
+	commandGrantSigner              crypto.Signer
+	commandGrantIssuer              string
+	commandGrantAudience            string
+	commandGrantLifetime            time.Duration
+	newCommandGrantID               func() string
+	alarmAuthorizationStore         AlarmAuthorizationStore
+	alarmAuditSink                  AlarmDecisionAuditSink
+	workOrderAuthorizationStore     WorkOrderAuthorizationStore
+	workOrderAuditSink              WorkOrderDecisionAuditSink
 }
 
 func NewHandler(config Config) http.Handler {
@@ -211,6 +213,17 @@ func NewHandler(config Config) http.Handler {
 	if telemetryLifetime <= 0 || telemetryLifetime > telemetryauth.MaximumGrantLifetime {
 		telemetryLifetime = telemetryauth.MaximumGrantLifetime
 	}
+	allowedTelemetryGrantPresenters := map[string]struct{}{}
+	if presenter := strings.TrimSpace(config.AllowedWorkloadSPIFFE); presenter != "" {
+		allowedTelemetryGrantPresenters[presenter] = struct{}{}
+	}
+	for _, candidate := range config.AllowedTelemetryGrantPresenters {
+		presenter := strings.TrimSpace(candidate)
+		if presenter == "" || !strings.HasPrefix(presenter, "spiffe://") {
+			panic("IAM Telemetry grant presenter allowlist is invalid")
+		}
+		allowedTelemetryGrantPresenters[presenter] = struct{}{}
+	}
 	newTelemetryGrantID := config.NewTelemetryGrantID
 	if newTelemetryGrantID == nil {
 		newTelemetryGrantID = randomIdentifier
@@ -252,43 +265,44 @@ func NewHandler(config Config) http.Handler {
 		workOrderAuditSink = newLoggerWorkOrderDecisionAuditSink(logger)
 	}
 	return &handler{
-		allowedWorkloadSPIFFE:          config.AllowedWorkloadSPIFFE,
-		coreWorkloadSPIFFE:             config.CoreWorkloadSPIFFE,
-		audience:                       config.Audience,
-		logger:                         logger,
-		observability:                  telemetry,
-		now:                            now,
-		authorizationStore:             store,
-		principalCapabilityResolver:    principalCapabilityResolver,
-		tenantContextResolver:          tenantContextResolver,
-		adminStore:                     config.AdminStore,
-		registryGrantSigner:            config.RegistryGrantSigner,
-		registryGrantIssuer:            grantIssuer,
-		registryGrantAudience:          grantAudience,
-		registryGrantLifetime:          grantLifetime,
-		allowedRegistryGrantPresenters: allowedRegistryGrantPresenters,
-		newRegistryGrantID:             newGrantID,
-		registryAuditSink:              auditSink,
-		registryGrantStatus:            config.RegistryGrantStatus,
-		telemetryAuthorizationStore:    telemetryStore,
-		telemetryGrantSigner:           telemetrySigner,
-		telemetryGrantIssuer:           telemetryIssuer,
-		telemetryGrantAudience:         telemetryAudience,
-		telemetryGrantLifetime:         telemetryLifetime,
-		newTelemetryGrantID:            newTelemetryGrantID,
-		telemetryAuditSink:             telemetryAuditSink,
-		telemetryRuntimeSPIFFE:         config.TelemetryRuntimeSPIFFE,
-		telemetryGrantStore:            config.TelemetryGrantStore,
-		commandAuthorizationStore:      commandStore,
-		commandGrantSigner:             commandSigner,
-		commandGrantIssuer:             commandIssuer,
-		commandGrantAudience:           commandAudience,
-		commandGrantLifetime:           commandLifetime,
-		newCommandGrantID:              newCommandGrantID,
-		alarmAuthorizationStore:        alarmStore,
-		alarmAuditSink:                 alarmAuditSink,
-		workOrderAuthorizationStore:    workOrderStore,
-		workOrderAuditSink:             workOrderAuditSink,
+		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
+		coreWorkloadSPIFFE:              config.CoreWorkloadSPIFFE,
+		audience:                        config.Audience,
+		logger:                          logger,
+		observability:                   telemetry,
+		now:                             now,
+		authorizationStore:              store,
+		principalCapabilityResolver:     principalCapabilityResolver,
+		tenantContextResolver:           tenantContextResolver,
+		adminStore:                      config.AdminStore,
+		registryGrantSigner:             config.RegistryGrantSigner,
+		registryGrantIssuer:             grantIssuer,
+		registryGrantAudience:           grantAudience,
+		registryGrantLifetime:           grantLifetime,
+		allowedRegistryGrantPresenters:  allowedRegistryGrantPresenters,
+		newRegistryGrantID:              newGrantID,
+		registryAuditSink:               auditSink,
+		registryGrantStatus:             config.RegistryGrantStatus,
+		telemetryAuthorizationStore:     telemetryStore,
+		telemetryGrantSigner:            telemetrySigner,
+		telemetryGrantIssuer:            telemetryIssuer,
+		telemetryGrantAudience:          telemetryAudience,
+		telemetryGrantLifetime:          telemetryLifetime,
+		allowedTelemetryGrantPresenters: allowedTelemetryGrantPresenters,
+		newTelemetryGrantID:             newTelemetryGrantID,
+		telemetryAuditSink:              telemetryAuditSink,
+		telemetryRuntimeSPIFFE:          config.TelemetryRuntimeSPIFFE,
+		telemetryGrantStore:             config.TelemetryGrantStore,
+		commandAuthorizationStore:       commandStore,
+		commandGrantSigner:              commandSigner,
+		commandGrantIssuer:              commandIssuer,
+		commandGrantAudience:            commandAudience,
+		commandGrantLifetime:            commandLifetime,
+		newCommandGrantID:               newCommandGrantID,
+		alarmAuthorizationStore:         alarmStore,
+		alarmAuditSink:                  alarmAuditSink,
+		workOrderAuthorizationStore:     workOrderStore,
+		workOrderAuditSink:              workOrderAuditSink,
 	}
 }
 

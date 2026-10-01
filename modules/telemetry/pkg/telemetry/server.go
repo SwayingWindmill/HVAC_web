@@ -40,6 +40,7 @@ type ServerConfig struct {
 	LatestCache                    LatestCache
 	Authorizer                     GrantAuthorizer
 	AllowedGatewaySPIFFE           string
+	AllowedSnapshotReaderSPIFFEs   []string
 	RuntimeAudience                string
 	ObservationAcceptor            ObservationAcceptor
 	CoverageReporter               CoverageReporter
@@ -65,6 +66,7 @@ type handler struct {
 	latestCache                    LatestCache
 	authorizer                     GrantAuthorizer
 	allowedGatewaySPIFFE           string
+	allowedSnapshotReaderSPIFFEs   map[string]struct{}
 	runtimeAudience                string
 	observationAcceptor            ObservationAcceptor
 	coverageReporter               CoverageReporter
@@ -99,11 +101,23 @@ func NewHandler(config ServerConfig) http.Handler {
 			commandVerifierDeviceIDs[deviceID] = struct{}{}
 		}
 	}
+	allowedSnapshotReaderSPIFFEs := map[string]struct{}{}
+	if gateway := strings.TrimSpace(config.AllowedGatewaySPIFFE); gateway != "" {
+		allowedSnapshotReaderSPIFFEs[gateway] = struct{}{}
+	}
+	for _, candidate := range config.AllowedSnapshotReaderSPIFFEs {
+		reader := strings.TrimSpace(candidate)
+		if reader == "" || !strings.HasPrefix(reader, "spiffe://") {
+			panic("Telemetry snapshot reader SPIFFE allowlist is invalid")
+		}
+		allowedSnapshotReaderSPIFFEs[reader] = struct{}{}
+	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
-		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
-		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
-		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
+		allowedGatewaySPIFFE:         strings.TrimSpace(config.AllowedGatewaySPIFFE),
+		allowedSnapshotReaderSPIFFEs: allowedSnapshotReaderSPIFFEs,
+		runtimeAudience:              strings.TrimSpace(config.RuntimeAudience),
+		observationAcceptor:          config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
 		sourceAuthenticator:            config.SourceAuthenticator,
 		realtime:                       config.Realtime,
@@ -626,7 +640,8 @@ func (h *handler) authenticate(writer http.ResponseWriter, request *http.Request
 		return "", "", false
 	}
 	peer, ok := verifiedPeerSPIFFE(request)
-	if !ok || h.allowedGatewaySPIFFE == "" || peer != h.allowedGatewaySPIFFE {
+	_, allowedSnapshotReader := h.allowedSnapshotReaderSPIFFEs[peer]
+	if !ok || !allowedSnapshotReader {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return "", "", false
 	}

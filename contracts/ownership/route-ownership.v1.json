@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 31,
+  "registryRevision": 32,
   "routes": [
     {
       "method": "GET",
@@ -638,6 +638,24 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 2,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "alarm",
+        "principal",
+        "key"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/alarms/{alarmId}/assign",
+      "owner": "alarm-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
       "rollout": {
         "mode": "all"
       },

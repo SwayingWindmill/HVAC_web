@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "principalId": "01a00660-0001-7000-8000-000000000001",
+  "integrationInstanceId": "01a05400-0000-7000-8000-000000000001",
+  "sourceWorkloadSpiffe": "spiffe://hvac.local/thingsboard-reconciler",
+  "pollInterval": "10s",
+  "asset": {
+    "id": "01a05420-1000-7000-8000-000000000001",
+    "code": "thingsboard-sensor-monitoring",
+    "displayName": "ThingsBoard 传感器监测",
+    "assetType": "SENSOR_MONITORING"
+  },
+  "sources": [
+    {
+      "slot": 1,
+      "name": "temperature",
+      "externalId": "a09ffd90-9e09-11f1-ba1f-e3f1e4b14b1e",
+      "deviceId": "01a05410-1000-7000-8000-000000000001",
+      "deviceCode": "tb-temperature-source",
+      "deviceDisplayName": "ThingsBoard 温度聚合采集器",
+      "deviceType": "SENSOR_AGGREGATOR",
+      "assetBindingRole": "SENSOR",
+      "presence": {
+        "onlineWithinSeconds": 180,
+        "offlineAfterSeconds": 600,
+        "maxSourceLagSeconds": 600
+      },
+      "sensors": [
+        { "slot": 1, "code": "tb-temp-t01", "displayName": "温度传感器 T1", "sensorType": "TEMPERATURE" },
+        { "slot": 2, "code": "tb-temp-t02", "displayName": "温度传感器 T2", "sensorType": "TEMPERATURE" },
+        { "slot": 3, "code": "tb-temp-t03", "displayName": "冷冻水出水温度-A", "sensorType": "TEMPERATURE" },
+        { "slot": 4, "code": "tb-temp-t04", "displayName": "冷却水出水温度-A", "sensorType": "TEMPERATURE" },
+        { "slot": 5, "code": "tb-temp-t05", "displayName": "冷冻水出水温度-B", "sensorType": "TEMPERATURE" },
+        { "slot": 6, "code": "tb-temp-t06", "displayName": "冷却水出水温度-B", "sensorType": "TEMPERATURE" },
+        { "slot": 7, "code": "tb-temp-t07", "displayName": "冷冻水出水温度-C", "sensorType": "TEMPERATURE" },
+        { "slot": 8, "code": "tb-temp-t08", "displayName": "冷却水出水温度-C", "sensorType": "TEMPERATURE" },
+        { "slot": 9, "code": "tb-temp-t09", "displayName": "冷冻水出水温度-D", "sensorType": "TEMPERATURE" },
+        { "slot": 10, "code": "tb-temp-t10", "displayName": "冷却水出水温度-D", "sensorType": "TEMPERATURE" },
+        { "slot": 11, "code": "tb-temp-t11", "displayName": "室外冷却水回水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 12, "code": "tb-temp-t12", "displayName": "室外冷却水出水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 13, "code": "tb-temp-t13", "displayName": "冷却回水温度-A", "sensorType": "TEMPERATURE" },
+        { "slot": 14, "code": "tb-temp-t14", "displayName": "冷却回水温度-B", "sensorType": "TEMPERATURE" },
+        { "slot": 15, "code": "tb-temp-t15", "displayName": "室外环境温度", "sensorType": "TEMPERATURE" },
+        { "slot": 16, "code": "tb-temp-t16", "displayName": "总冷冻水回水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 17, "code": "tb-temp-t17", "displayName": "总冷冻水供水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 18, "code": "tb-temp-t18", "displayName": "总冷却水回水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 19, "code": "tb-temp-t19", "displayName": "总冷却水出水温度", "sensorType": "TEMPERATURE" },
+        { "slot": 20, "code": "tb-temp-t20", "displayName": "温度传感器 T20", "sensorType": "TEMPERATURE" }
+      ],
+      "points": [
+        { "slot": 1, "sensorSlot": 1, "sourceKey": "t1", "telemetryKey": "temperaturet01", "pointCode": "temperaturet01", "displayName": "温度传感器 T1", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 2, "sensorSlot": 2, "sourceKey": "t2", "telemetryKey": "temperaturet02", "pointCode": "temperaturet02", "displayName": "温度传感器 T2", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 3, "sensorSlot": 3, "sourceKey": "t3", "telemetryKey": "temperaturet03", "pointCode": "temperaturet03", "displayName": "冷冻水出水温度-A", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 4, "sensorSlot": 4, "sourceKey": "t4", "telemetryKey": "temperaturet04", "pointCode": "temperaturet04", "displayName": "冷却水出水温度-A", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 5, "sensorSlot": 5, "sourceKey": "t5", "telemetryKey": "temperaturet05", "pointCode": "temperaturet05", "displayName": "冷冻水出水温度-B", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 6, "sensorSlot": 6, "sourceKey": "t6", "telemetryKey": "temperaturet06", "pointCode": "temperaturet06", "displayName": "冷却水出水温度-B", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 7, "sensorSlot": 7, "sourceKey": "t7", "telemetryKey": "temperaturet07", "pointCode": "temperaturet07", "displayName": "冷冻水出水温度-C", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 8, "sensorSlot": 8, "sourceKey": "t8", "telemetryKey": "temperaturet08", "pointCode": "temperaturet08", "displayName": "冷却水出水温度-C", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 9, "sensorSlot": 9, "sourceKey": "t9", "telemetryKey": "temperaturet09", "pointCode": "temperaturet09", "displayName": "冷冻水出水温度-D", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 10, "sensorSlot": 10, "sourceKey": "t10", "telemetryKey": "temperaturet10", "pointCode": "temperaturet10", "displayName": "冷却水出水温度-D", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 11, "sensorSlot": 11, "sourceKey": "t11", "telemetryKey": "temperaturet11", "pointCode": "temperaturet11", "displayName": "室外冷却水回水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 12, "sensorSlot": 12, "sourceKey": "t12", "telemetryKey": "temperaturet12", "pointCode": "temperaturet12", "displayName": "室外冷却水出水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 13, "sensorSlot": 13, "sourceKey": "t13", "telemetryKey": "temperaturet13", "pointCode": "temperaturet13", "displayName": "冷却回水温度-A", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 14, "sensorSlot": 14, "sourceKey": "t14", "telemetryKey": "temperaturet14", "pointCode": "temperaturet14", "displayName": "冷却回水温度-B", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 15, "sensorSlot": 15, "sourceKey": "t15", "telemetryKey": "temperaturet15", "pointCode": "temperaturet15", "displayName": "室外环境温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 16, "sensorSlot": 16, "sourceKey": "t16", "telemetryKey": "temperaturet16", "pointCode": "temperaturet16", "displayName": "总冷冻水回水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 17, "sensorSlot": 17, "sourceKey": "t17", "telemetryKey": "temperaturet17", "pointCode": "temperaturet17", "displayName": "总冷冻水供水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 18, "sensorSlot": 18, "sourceKey": "t18", "telemetryKey": "temperaturet18", "pointCode": "temperaturet18", "displayName": "总冷却水回水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 19, "sensorSlot": 19, "sourceKey": "t19", "telemetryKey": "temperaturet19", "pointCode": "temperaturet19", "displayName": "总冷却水出水温度", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 },
+        { "slot": 20, "sensorSlot": 20, "sourceKey": "t20", "telemetryKey": "temperaturet20", "pointCode": "temperaturet20", "displayName": "温度传感器 T20", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "°C", "scale": 0.1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": -20, "maximumNumber": 80 }
+      ]
+    },
+    {
+      "slot": 2,
+      "name": "waterflow",
+      "externalId": "12298040-9e09-11f1-ba1f-e3f1e4b14b1e",
+      "deviceId": "01a05410-1000-7000-8000-000000000002",
+      "deviceCode": "tb-waterflow-source",
+      "deviceDisplayName": "ThingsBoard 流量聚合采集器",
+      "deviceType": "SENSOR_AGGREGATOR",
+      "assetBindingRole": "SENSOR",
+      "presence": {
+        "onlineWithinSeconds": 180,
+        "offlineAfterSeconds": 600,
+        "maxSourceLagSeconds": 600
+      },
+      "sensors": [
+        { "slot": 21, "code": "tb-waterflow-meter", "displayName": "总冷冻水流量计", "sensorType": "FLOW_METER" }
+      ],
+      "points": [
+        { "slot": 21, "sensorSlot": 21, "sourceKey": "flowMeter", "telemetryKey": "waterflowflowmeter", "pointCode": "waterflowflowmeter", "displayName": "总冷冻水流量", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "m3/h", "scale": 1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": 0, "maximumNumber": null },
+        { "slot": 22, "sensorSlot": 21, "sourceKey": "flowVelocity", "telemetryKey": "waterflowflowvelocity", "pointCode": "waterflowflowvelocity", "displayName": "总冷冻水流速", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "m/s", "scale": 1, "sampleIntervalMs": 60000, "staleAfterMs": 300000, "freshWithinSeconds": 180, "expectedSampleIntervalSeconds": 60, "minimumNumber": 0, "maximumNumber": null }
+      ]
+    },
+    {
+      "slot": 3,
+      "name": "ammeter",
+      "externalId": "c796f750-9e09-11f1-ba1f-e3f1e4b14b1e",
+      "deviceId": "01a05410-1000-7000-8000-000000000003",
+      "deviceCode": "tb-ammeter-source",
+      "deviceDisplayName": "ThingsBoard 电表聚合采集器",
+      "deviceType": "SENSOR_AGGREGATOR",
+      "assetBindingRole": "METER",
+      "presence": {
+        "onlineWithinSeconds": 900,
+        "offlineAfterSeconds": 86400,
+        "maxSourceLagSeconds": 604800
+      },
+      "sensors": [
+        { "slot": 22, "code": "tb-ammeter-total", "displayName": "总电表", "sensorType": "ENERGY_METER" }
+      ],
+      "points": [
+        { "slot": 23, "iamBindingSlot": 24, "sensorSlot": 22, "sourceKey": "powerTotal", "telemetryKey": "ammeterpowertotal", "pointCode": "ammeterpowertotal", "displayName": "总有功功率", "pointType": "TELEMETRY", "valueType": "NUMBER", "unit": "kW", "scale": 1, "sampleIntervalMs": 300000, "staleAfterMs": 86400000, "freshWithinSeconds": 900, "expectedSampleIntervalSeconds": 300, "minimumNumber": 0, "maximumNumber": null },
+        { "slot": 24, "iamBindingSlot": 23, "sensorSlot": 22, "sourceKey": "combinedActiveTotalElectricalEnergy", "telemetryKey": "ammeteractiveenergytotal", "pointCode": "ammeteractiveenergytotal", "displayName": "累计有功电能", "pointType": "COUNTER", "valueType": "NUMBER", "unit": "kWh", "scale": 1, "sampleIntervalMs": 300000, "staleAfterMs": 86400000, "freshWithinSeconds": 900, "expectedSampleIntervalSeconds": 300, "minimumNumber": 0, "maximumNumber": null }
+      ]
+    }
+  ]
+}

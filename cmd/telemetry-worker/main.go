@@ -157,8 +157,12 @@ func main() {
 		Handler: telemetry.NewHandler(telemetry.ServerConfig{
 			Store: store, LatestCache: latestCache, Authorizer: authorizer,
 			AllowedGatewaySPIFFE: envOr("TELEMETRY_ALLOWED_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			RuntimeAudience:      envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
-			ObservationAcceptor:  store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,
+			AllowedSnapshotReaderSPIFFEs: commaSeparated(envOr(
+				"TELEMETRY_ALLOWED_SNAPSHOT_READER_SPIFFES",
+				"spiffe://hvac.local/operations-agent-service",
+			)),
+			RuntimeAudience:     envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
+			ObservationAcceptor: store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,
 			Realtime:                       realtimeService,
 			AllowedCentrifugoSPIFFE:        envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
 			CentrifugoProxySecret:          strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),
@@ -315,30 +319,20 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, lo
 		return
 	}
 	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 250*time.Millisecond, 25*time.Millisecond, time.Minute)
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
 	lastFailureLog := time.Time{}
 	logger.Info("telemetry_history_projection_started", "poll_interval", pollInterval.String())
-	for {
-		select {
-		case <-ctx.Done():
+	relay.Run(ctx, pollInterval, func(published int, err error) {
+		if err != nil {
+			if time.Since(lastFailureLog) >= time.Second {
+				logger.Warn("telemetry_history_projection_failed", "error_code", "TELEMETRY_HISTORY_PROJECTION_FAILED")
+				lastFailureLog = time.Now()
+			}
 			return
-		case <-ticker.C:
-			relayContext, relayCancel := context.WithTimeout(ctx, 15*time.Second)
-			published, err := relay.RelayOnce(relayContext)
-			relayCancel()
-			if err != nil {
-				if time.Since(lastFailureLog) >= time.Second {
-					logger.Warn("telemetry_history_projection_failed", "error_code", "TELEMETRY_HISTORY_PROJECTION_FAILED")
-					lastFailureLog = time.Now()
-				}
-				continue
-			}
-			if published > 0 {
-				logger.Info("telemetry_history_batch_projected", "observation_count", published)
-			}
 		}
-	}
+		if published > 0 {
+			logger.Info("telemetry_history_batch_projected", "observation_count", published)
+		}
+	})
 }
 
 func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, context.Context, context.CancelFunc, error) {

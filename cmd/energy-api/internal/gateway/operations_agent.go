@@ -17,6 +17,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 const (
@@ -270,6 +271,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 	var siteID string
 	var registryAction registryauth.Action
 	var energyQuery analyticsmodel.EnergySeriesQuery
+	var telemetryTarget telemetryauth.Target
 	switch input.Request.Tool {
 	case "registry.getSite":
 		var registryInput struct {
@@ -295,6 +297,22 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID = energyQuery.SiteID
+	case "telemetry.current.getDeviceObservationSnapshot":
+		var telemetryInput struct {
+			SiteID    string   `json:"siteId"`
+			DeviceID  string   `json:"deviceId"`
+			PointKeys []string `json:"pointKeys"`
+		}
+		if decodeStrictOperationsJSON(input.Request.Input, &telemetryInput) != nil || !isLowerUUIDv7(telemetryInput.SiteID) || !isLowerUUIDv7(telemetryInput.DeviceID) {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Telemetry Snapshot request is invalid.", false, nil)
+			return
+		}
+		telemetryTarget = telemetryauth.Target{DeviceID: telemetryInput.DeviceID, Keys: telemetryInput.PointKeys}
+		if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{telemetryTarget}); err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Telemetry Snapshot selection is invalid.", false, nil)
+			return
+		}
+		siteID = telemetryInput.SiteID
 	default:
 		writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_UNSUPPORTED", "Tool unsupported", "The requested Logical Tool is not enabled for the night-energy slice.", false, nil)
 		return
@@ -319,6 +337,32 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	session := bffSession{Session: stored}
+	if input.Request.Tool == "telemetry.current.getDeviceObservationSnapshot" {
+		caller := telemetryCaller{
+			principal: session.Principal,
+			tenantID:  session.TenantID,
+			contextID: session.ID,
+			expiresAt: session.ExpiresAt,
+		}
+		authorization, failure := h.authorizeTelemetryForPresenter(
+			request.Context(), request, caller, telemetryauth.ActionSnapshotRead,
+			[]telemetryauth.Target{telemetryTarget}, h.operations.workloadSPIFFEID,
+		)
+		if failure != nil {
+			if failure.status == http.StatusNotFound || failure.status == http.StatusForbidden {
+				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
+			} else {
+				writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+			}
+			return
+		}
+		if len(authorization.targets) != 1 || authorization.targets[0].TenantID != claims.TenantID || authorization.targets[0].SiteID != siteID || authorization.targets[0].DeviceID != telemetryTarget.DeviceID {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
+			return
+		}
+		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: authorization.grant, PolicyRevision: authorization.policyRevision})
+		return
+	}
 	if input.Request.Tool == "analytics.getEnergySeries" {
 		if energyQuery.SiteID != siteID {
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)

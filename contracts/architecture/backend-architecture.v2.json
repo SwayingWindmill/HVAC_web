@@ -68,6 +68,7 @@
       "GET /api/v1/alarms",
       "GET /api/v1/alarms/{alarmId}",
       "POST /api/v1/alarms/{alarmId}/ack",
+      "POST /api/v1/alarms/{alarmId}/assign",
       "POST /api/v1/commands",
       "GET /api/v1/commands/{commandId}",
       "POST /api/v1/commands/{commandId}/approve",

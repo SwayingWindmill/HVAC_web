@@ -134,13 +134,11 @@ class DurableOutboxStore {
       await handle.close();
     }
     await rename(this.temporaryFile, this.file);
-    if (process.platform !== "win32") {
-      const directoryHandle = await open(this.directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
+    const directoryHandle = await open(this.directory, "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
     }
   }
 }

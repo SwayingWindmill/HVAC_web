@@ -87,6 +87,11 @@ services:
     volumes:
       - /:/host/root:ro
 
+  prometheus:
+    volumes:
+      - ./runtime/config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./runtime/internal-pki/ca.crt:/etc/prometheus/centrifugo-ca.crt:ro
+
 volumes:
   phase1_wsl_postgres_data:
   phase1_wsl_clickhouse_data:

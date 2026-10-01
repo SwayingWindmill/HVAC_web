@@ -4,6 +4,7 @@ SET LOCAL ROLE s2_telemetry_migrator;
 CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_history_outbox (
   event_id uuid PRIMARY KEY REFERENCES telemetry_runtime.source_observations(observation_id) ON DELETE CASCADE
     CHECK (telemetry_runtime.is_uuid_v7(event_id)),
+  batch_id uuid CHECK (batch_id IS NULL OR telemetry_runtime.is_uuid_v7(batch_id)),
   payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
   outbox_payload_sha256 text NOT NULL CHECK (outbox_payload_sha256 ~ '^[a-f0-9]{64}$'),
   delivery_state text NOT NULL CHECK (delivery_state IN ('PENDING', 'IN_FLIGHT', 'PUBLISHED', 'DEAD')),
@@ -25,6 +26,9 @@ CREATE INDEX IF NOT EXISTS telemetry_history_outbox_pending_idx
 CREATE INDEX IF NOT EXISTS telemetry_history_outbox_expired_lease_idx
   ON telemetry_runtime.telemetry_history_outbox (leased_until, event_id)
   WHERE delivery_state = 'IN_FLIGHT';
+CREATE INDEX IF NOT EXISTS telemetry_history_outbox_active_batch_idx
+  ON telemetry_runtime.telemetry_history_outbox (batch_id, delivery_state, event_id)
+  WHERE batch_id IS NOT NULL AND delivery_state IN ('PENDING', 'IN_FLIGHT', 'DEAD');
 
 ALTER TABLE telemetry_runtime.telemetry_history_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.telemetry_history_outbox FORCE ROW LEVEL SECURITY;
@@ -34,7 +38,7 @@ CREATE POLICY telemetry_history_outbox_migrator_all
   USING (true) WITH CHECK (true);
 CREATE POLICY telemetry_history_outbox_runtime_insert
   ON telemetry_runtime.telemetry_history_outbox FOR INSERT TO s2_telemetry_runtime
-  WITH CHECK (delivery_state = 'PENDING' AND attempts = 0 AND lease_id IS NULL AND leased_until IS NULL AND published_at IS NULL);
+  WITH CHECK (delivery_state = 'PENDING' AND batch_id IS NULL AND attempts = 0 AND lease_id IS NULL AND leased_until IS NULL AND published_at IS NULL);
 CREATE POLICY telemetry_history_outbox_history_select
   ON telemetry_runtime.telemetry_history_outbox FOR SELECT TO s2_telemetry_history
   USING (true);
@@ -44,7 +48,7 @@ CREATE POLICY telemetry_history_outbox_history_update
 
 GRANT INSERT ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_runtime;
 GRANT SELECT ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_history;
-GRANT UPDATE (delivery_state, available_at, attempts, last_error_code, lease_id, leased_until, published_at)
+GRANT UPDATE (batch_id, delivery_state, available_at, attempts, last_error_code, lease_id, leased_until, published_at)
   ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_history;
 REVOKE ALL ON telemetry_runtime.telemetry_history_outbox FROM PUBLIC;
 

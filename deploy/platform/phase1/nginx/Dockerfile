@@ -4,6 +4,8 @@ FROM ${WEB_BUILD_IMAGE} AS web-build
 ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src
 COPY package.json package-lock.json ./
+COPY apps/hvac-web/package.json ./apps/hvac-web/package.json
+COPY scripts/check-web-js-runtime.mjs ./scripts/check-web-js-runtime.mjs
 RUN npm ci --no-audit --no-fund --registry=${NPM_REGISTRY}
 COPY apps/hvac-web ./apps/hvac-web
 ARG HVAC_WEB_BUILD_ID=phase1-local
@@ -12,10 +14,10 @@ ARG HVAC_WEB_REALTIME_PROTOCOL=centrifugo-v1
 ENV HVAC_WEB_BUILD_ID=${HVAC_WEB_BUILD_ID}
 ENV HVAC_WEB_GATEWAY_BASE_PATH=${HVAC_WEB_GATEWAY_BASE_PATH}
 ENV HVAC_WEB_REALTIME_PROTOCOL=${HVAC_WEB_REALTIME_PROTOCOL}
-RUN npm run build:real
+RUN npm run build
 
 FROM ${NGINX_RUNTIME_IMAGE}
 COPY deploy/platform/phase1/nginx/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=web-build /src/apps/hvac-web/dist/real /usr/share/nginx/html
+COPY --from=web-build /src/apps/hvac-web/dist /usr/share/nginx/html
 EXPOSE 443
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD wget --no-check-certificate -qO- https://127.0.0.1/healthz || exit 1

@@ -91,7 +91,7 @@ The command must return no matches.
 ## Validate before applying
 
 ```bash
-npm run s3:target-runtime:check
+npm run command:target:check
 kubectl kustomize deploy/s3/target >/tmp/s3-target-template.yaml
 ```
 
@@ -100,7 +100,7 @@ kubectl kustomize deploy/s3/target >/tmp/s3-target-template.yaml
 Verify the operator context without reading Secret values:
 
 ```bash
-node scripts/check-s3-target-context.mjs \
+node scripts/check-command-target-context.mjs \
   --context=<approved-context> \
   --namespace=s3-certification
 ```
