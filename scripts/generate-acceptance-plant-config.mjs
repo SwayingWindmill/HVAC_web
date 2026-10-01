@@ -18,9 +18,18 @@ const config = structuredClone(base);
 config.publishInterval = profile.plant.publishInterval;
 config.points = applyRigToPoints(profile, base.points);
 
-for (const [section, values] of Object.entries(profile.plant.overrides ?? {})) {
-  config[section] = { ...(config[section] ?? {}), ...values };
+// Overrides are partial: merge objects recursively so overriding one field of a nested
+// component keeps the component's remaining configuration.
+function mergeOverride(target, override) {
+  const merged = { ...(target ?? {}) };
+  for (const [key, value] of Object.entries(override)) {
+    const isObject = value !== null && typeof value === 'object' && !Array.isArray(value);
+    merged[key] = isObject ? mergeOverride(merged[key], value) : value;
+  }
+  return merged;
 }
+
+Object.assign(config, mergeOverride(config, profile.plant.overrides ?? {}));
 
 const serialized = `${JSON.stringify(config, null, 2)}\n`;
 
