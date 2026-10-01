@@ -5,23 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { startS0AuthTopology, stopProcess } from './s0-auth-topology.mjs';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const debugPort = Number(process.env.S0_AUTH_DEBUG_PORT ?? 9355);
 const profileDir = join(tmpdir(), `s0-auth-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const edgeCandidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const edgePath = edgeCandidates.find((candidate) => existsSync(candidate));
-if (!edgePath) throw new Error('A CDP-compatible Edge, Chrome, or Chromium executable was not found');
+const edgePath = resolveLinuxBrowserExecutable();
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

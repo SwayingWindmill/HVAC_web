@@ -144,7 +144,7 @@ export function MonitorDeviceDrawer({
   const alarmContent = item.activeAlarms.length > 0 ? (
     <div className="hvac-monitor__drawer-alarm-list">
       {item.activeAlarms.map((alarm) => (
-        <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
+        <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
           <Badge variant="outline" className={alarmSeverityBadgeClass[alarm.currentSeverity]}>{alarmSeverityLabel[alarm.currentSeverity]}</Badge>
           <span><strong>{alarm.title}</strong><small>{alarm.summary}</small></span>
           <span aria-hidden="true">›</span>

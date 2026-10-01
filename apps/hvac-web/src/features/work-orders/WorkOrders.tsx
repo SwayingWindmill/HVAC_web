@@ -868,7 +868,7 @@ export function WorkOrders({ site, principal, registerProtectedResource }: WorkO
           <AlertTitle>当前账号无工单创建权限</AlertTitle>
           <AlertDescription>如需针对该告警发起工单，请联系管理员开通工单创建权限。</AlertDescription>
           <Button variant="outline" size="sm" className="mt-2" asChild>
-            <a href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(sourceAlarm)}`}>返回告警</a>
+            <a href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(sourceAlarm)}`}>返回告警</a>
           </Button>
         </Alert>
       ) : null}

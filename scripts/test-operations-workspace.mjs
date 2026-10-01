@@ -758,3 +758,92 @@ test('TanStack route exposes the Site-scoped Operations workspace', async () => 
   );
 
 });
+
+test("sample operations keep acknowledgement, maintenance and recovery independent", async () => {
+  const base = "apps/hvac-web/src/features/";
+  const [
+    { createOperationsState, applyOperation },
+    { getAlarms },
+    { getWorkOrders },
+    { systemsDevicesService },
+  ] = await Promise.all([
+    loadBundledModule(base + "operations-flow/api/operations-simulation.ts"),
+    loadBundledModule(base + "alarms/api/alarm-service.ts"),
+    loadBundledModule(base + "work-orders/api/work-order-service.ts"),
+    loadBundledModule(
+      base + "operations/systems-devices/api/systems-devices-service.ts",
+    ),
+  ]);
+  const state = createOperationsState(
+    await systemsDevicesService.getDevices(),
+    await getAlarms(),
+    await getWorkOrders(),
+  );
+  for (const a of state.alarms)
+    assert.ok(
+      state.devices.some((d) => d.id === a.deviceId),
+      a.deviceId,
+    );
+  for (const w of state.works)
+    assert.ok(
+      state.devices.some((d) => d.id === w.deviceId),
+      w.deviceId,
+    );
+  const at = "2026-10-01T08:00:00Z";
+  const work = state.works.find((w) => w.id === "wo-101");
+  const alarm = state.alarms.find((a) => a.code === work.sourceAlarmCode);
+  const ack = applyOperation(state, { type: "acknowledge", id: alarm.id, at });
+  assert.equal(ack.alarms.find((a) => a.id === alarm.id).state, alarm.state);
+  assert.deepEqual(ack.devices, state.devices);
+  assert.throws(() =>
+    applyOperation(state, { type: "complete", id: "wo-085", at }),
+  );
+  let next = state;
+  if (work.status === "OPEN")
+    next = applyOperation(next, { type: "assign", id: work.id, at });
+  assert.throws(() =>
+    applyOperation(next, { type: "complete", id: work.id, at }),
+  );
+  for (const task of work.checklist.filter((t) => !t.completed))
+    next = applyOperation(next, {
+      type: "task",
+      id: work.id,
+      taskId: task.id,
+      at,
+    });
+  next = applyOperation(next, { type: "complete", id: work.id, at });
+  assert.deepEqual(next.devices, state.devices);
+  assert.equal(next.alarms.find((a) => a.id === alarm.id).state, "VERIFYING");
+  next = applyOperation(next, {
+    type: "verify",
+    id: work.id,
+    condition: "persistent",
+    at,
+  });
+  assert.equal(next.recovery[work.id].status, "FAILED");
+  assert.equal(next.alarms.find((a) => a.id === alarm.id).state, "VERIFYING");
+  next = applyOperation(next, {
+    type: "verify",
+    id: work.id,
+    condition: "stable",
+    at,
+  });
+  assert.equal(next.recovery[work.id].status, "PASSED");
+  assert.equal(next.alarms.find((a) => a.id === alarm.id).state, "RESOLVED");
+  assert.equal(
+    next.alarms.find((a) => a.id === alarm.id).acknowledged,
+    alarm.acknowledged,
+  );
+  assert.equal(
+    next.devices.find((d) => d.id === work.deviceId).activeAlarmsCount,
+    0,
+  );
+  const unassigned = state.works.find((w) => w.id === "wo-098");
+  assert.equal(unassigned.assigneeName, undefined);
+  assert.equal(
+    applyOperation(state, { type: "assign", id: unassigned.id, at }).works.find(
+      (w) => w.id === unassigned.id,
+    ).assigneeName,
+    "前端评审员",
+  );
+});

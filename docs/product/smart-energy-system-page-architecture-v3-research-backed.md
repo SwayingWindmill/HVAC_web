@@ -278,56 +278,41 @@ ASHRAE Guideline 36 则明确把高性能 HVAC sequence、real-time FDD 和 func
 
 ## 3. 交互模式研究：Table 行点击后到底应该是什么
 
-### 3.1 不采用“所有 Table → modal Sheet”的规则
+### 3.1 研究结论：Desktop Detail 不应强制 modal，也不应压缩主任务区
 
-Microsoft 的 List/Details pattern 对 641px 以上宽度推荐 side-by-side list/details；窄屏才 stacked。
+Microsoft List/Details、Material Side Sheet 与 Atlassian Drawer 的共同启示不是“必须 split pane”，而是：详情需要保持上下文；modal drawer 不适合持续引用底层列表；复杂持续任务应进入独立页面。
 
-Material Side Sheet 明确区分：
-- Standard side sheet：与主内容共存；
-- Modal side sheet：带 scrim、阻塞主内容。
-
-Atlassian Drawer 文档明确警告：modal drawer 是 invasive，打开后底层 UI 不可交互；如果任务需要引用背后的内容，应选择新页面或 non-modal 方案。
+因此本项目统一采用 **Sheet 作为详情容器**，但 desktop 与 narrow 的 modality 不同：
+- Desktop：standard/non-modal right Sheet，无 scrim，不改变主工作区布局宽度；
+- Narrow：modal Sheet + overlay；
+- 复杂持续对象：Sheet 提供“打开完整详情”，进入 durable Route。
 
 来源：
 - https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/list-details
 - https://github.com/material-components/material-components-android/blob/master/docs/components/SideSheet.md
 - https://design-system-docs-bifrost.prod-east.frontend.public.atl-paas.net/components/drawer/usage
 
-### 3.2 本项目的正确模式
-
-桌面高频 Ledger：
+### 3.2 本项目的统一模式
 
 ```text
-Table
-+ non-modal Context Inspector
-```
-
-用户选下一行时 Inspector 原位更新，不需要关闭。
-
-窄屏：
-
-```text
-Table
-→ shadcn Sheet
-```
-
-复杂持久对象：
-
-```text
-Inspector
-→ Open full detail
+Ledger / list / object canvas
+→ row/object select
+→ right-side Detail Sheet
+→ optional Open full detail
 → Durable Route
 ```
+
+Desktop Sheet 为 non-modal/no-overlay；用户可以继续选择下一行，Sheet 原位更新，Ledger / canvas 不 reflow。Narrow 使用相同内容的 modal Sheet。
 
 因此实现规则应为：
 
 | 情况 | 默认交互 |
 | --- | --- |
-| 高频逐行扫描、比对 | Desktop split inspector |
-| 768px 左右及以下 | Sheet |
+| 高频逐行扫描、比对 | non-modal right Detail Sheet |
+| 768px 左右及以下 | modal Detail Sheet + overlay |
 | 小型阻塞式创建 / ACK / Assign | Dialog |
 | 不可逆 / 高风险确认 | AlertDialog |
-| 长生命周期、多步骤、多证据对象 | Route |
+| 长生命周期、多步骤、多证据对象 | Sheet → Durable Route |
 | 跨对象高级趋势调查 | Secondary durable analysis route |
 | 行内次要动作 | Dropdown menu |
 
@@ -350,10 +335,10 @@ Business Domain
 
 实施时必须遵守：
 
-- 每个新 Workspace 先明确它继承哪些旧 Surface，并逐项记录保留的页面 archetype、信息层级、Table / Detail / Inspector 语法、状态表达和专业动作；
+- 每个新 Workspace 先明确它继承哪些旧 Surface，并逐项记录保留的页面 archetype、信息层级、Table / Detail / Sheet 语法、状态表达和专业动作；
 - 已经 PROMOTED / BROWSER REVIEWED 的 Surface，其主工作区结构默认继承；不能因为多个 Surface 合并到一个 Workspace，就静默重新设计它的核心 Table、Detail 或调查流程；
 - 后续全站统一形成的设计系统改进可以叠加在旧 Surface 母体上，例如 `DataTableBlock + tablecn / TanStack`、统一 Toolbar、standalone Table、shadcn tokens 和新的 AppShell；这属于组件/交互语法升级，不等于推翻原业务页面结构；
-- 合并后的次级能力可以降为 Tab、contextual view、Inspector 或 durable detail，但其原有成熟信息层级和业务语义仍应被继承，而不是重新拼装成 generic Dashboard；
+- 合并后的次级能力可以降为 Tab、contextual view、Detail Sheet 或 durable detail，但其原有成熟信息层级和业务语义仍应被继承，而不是重新拼装成 generic Dashboard；
 - 如果新 Workspace 确实需要改变某个已验收 Surface 的核心形态，必须单独说明“为什么旧形态在新职责下不再成立”，并重新做显式视觉与交互评审；
 - 这里的“继承旧 Surface”特指本轮 36 Surface 体系中已完成、已评审的 shadcn 页面资产。被 `legacy-ui-quarantine` 隔离的更早 Ant / ProComponents / Control Desk 页面、旧截图和旧 CSS 仍然不是设计依据。
 
@@ -422,10 +407,10 @@ Site context：
 
 结构：
 - Device ledger 作为完整宽度主工作区；
-- Quick Preview 只显示 identity、独立当前状态、少量关键值、当前事项和“打开完整详情”；
-- desktop Preview 为 non-modal overlay，不通过 splitter 压缩 Ledger；窄屏使用 modal Sheet；
+- Detail Sheet 只显示 identity、独立当前状态、少量关键值、当前事项和“打开完整详情”；
+- desktop Detail Sheet 为 non-modal overlay，不压缩 Ledger；窄屏使用 modal Sheet；
 - point list、relationships、recent evidence、alarm / diagnosis / work 摘要以及 schedule / control context 进入 durable Device Detail；
-- 高级时序调查继续进入 secondary Trend Studio，不在 Preview 或 Device Detail 中复制完整趋势工作区。
+- 高级时序调查继续进入 secondary Trend Studio，不在 Detail Sheet 或 Device Detail 中复制完整趋势工作区。
 
 **吸收：** 06。
 **保留 hidden durable detail：** 07。
@@ -441,25 +426,23 @@ Site context：
 
 ### 5.4 告警与诊断
 
-**Primary job：** 从 authoritative condition 进入 evidence-backed diagnosis。
-
-内部保持两个明确视图：
-- 告警；
-- 诊断。
+**Primary job：** 以 Alarm 作为问题入口，在同一工作流中直接完成处置、诊断、证据核查与下一验证。
 
 **吸收：** 09、10。
 
 **设计继承规则：**
-- 09 / 10 继续作为这个 Workspace 的设计母体，而不是只保留字段和业务能力。合并只改变一级导航与共享上下文，不把两个 Surface 重做成同一种通用 Dashboard；
-- `告警` View 保留 09 的 active-first operator triage：告警负荷事实 → Active / History / Shelved / Performance 子视图 → standalone ledger → desktop 固定详情区 / narrow Sheet。ACK、Assign、Shelve 等处置事实与 physical condition 继续并行；
-- `诊断` View 保留 10 的 evidence-led investigation：finding queue → selected investigation → Verified Facts → Published Finding → Hypothesis / evidence → Next Verification → Work / Verification handoff。Finding、Hypothesis 与 confirmed Root Cause 不得在合并后被压平；
-- 两个 View 共享 Site / object / source trail，但不共享状态机；跨 View 跳转通过 `view=alarms|diagnostics` 与显式 Alarm/Finding identity 完成；
-- 36→10 不允许为了“视觉统一”把 09 的告警台账和 10 的调查工作台改成相同的卡片墙，也不允许再次出现 table 外层 Card + 重复标题。standalone `DataTableBlock`、shadcn Tabs/Sheet/Dialog 和必要的 detail section 是共同语法，业务层级仍由原 Surface 决定。
+- 09 / 10 继续作为这个 Workspace 的设计母体，而不是只保留字段和业务能力；
+- 09 提供主工作区骨架：active-first operator triage → 告警负荷事实 → Active / History / Shelved / Performance 内部视图 → standalone issue ledger → unified Detail Sheet；
+- 10 不再成为第二个平级 Tab，而是成为每个选中 Alarm 的 investigation context：Published Finding → evidence → quality blocker → hypothesis / root-cause status → Next Verification → Work / Device / Operations handoff；
+- Ledger 必须直接暴露 Diagnosis state（如 已诊断 / 证据受限 / 待诊断），使用户无需切换页面即可知道当前问题是否已有诊断依据；
+- Alarm 与 Finding 仍由不同 owner 管理：ACK / Assign / Clear 不改变 Finding，Finding / confidence 也不能改变 Alarm physical condition；
+- 无 Published Finding 时明确显示待诊断，不允许前端用规则文本或 AI 文案补造“可能根因”；
+- 36→10 不允许为了视觉统一把 09 / 10 退化成卡片墙，也不允许 table 外层 Card + 重复标题。共享的是 shadcn / DataTable / Sheet 语法，不是状态机。
 
-为什么可合并成一个一级 workspace：
-- 两者共享 site / object / time / severity / evidence context；
-- 用户频繁从 alarm 进入 diagnosis；
-- 但数据模型、状态和术语必须继续完全分离。
+为什么应融合成一条工作流：
+- 对运行人员而言，核心对象不是“Alarm 页面”和“Diagnosis 页面”，而是一个需要被理解并处理的问题；
+- Alarm 提供 authoritative symptom / condition，Diagnosis 为同一问题补充 Finding / evidence / verification；
+- 两者共享 site / object / time / evidence context，但领域状态和审计事实继续分离。
 
 为什么不与 Work Order 合并：
 - Clockworks、OpenBlue、Facilio 都把 diagnosis/fault 与 task/work lifecycle 分开；
@@ -542,7 +525,7 @@ Functional Verification 不再占 Sidebar 一个入口，但必须作为正式�
 成熟 BMS 普遍把即时 command / setpoint / override 放在设备、系统或 graphics 上下文。
 
 因此：
-- 即时控制入口放在运行 / 设备 Inspector；
+- 即时控制入口放在运行 / 设备 Detail Sheet 或 durable detail；
 - 高风险动作经过 preflight + confirmation；
 - 策略编辑、仿真、审批、版本、rollout 保留 durable Strategy Detail；
 - execution ledger 保留为自动化 workspace 的 audit view。
@@ -662,8 +645,8 @@ Data Quality 同时必须从所有业务数据状态 deep-link 进入对应 issu
 /sites/:siteId/operations?view=systems
 /sites/:siteId/operations?view=comfort
 
-/sites/:siteId/issues?view=alarms
-/sites/:siteId/issues?view=diagnostics
+/sites/:siteId/issues?alarmView=active
+/sites/:siteId/issues?selected=:alarmId
 
 /sites/:siteId/work?view=orders
 /sites/:siteId/work?view=verification

@@ -3,8 +3,9 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `09 告警中心`  
-> **Route intent：** `/sites/:siteId/issues?view=alarms`
+> **Route intent：** `/sites/:siteId/issues`
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
+> **Workspace 合并补充规范：** `09-10-issues-workspace-addendum-2026-09-24.md`。涉及 09/10 合并后的 IA、Task Modes、Investigation Sheet、Alarm Performance、Impact/Hypothesis/Root Cause/Verification 时，以该 Addendum 为最新裁决。  
 > **设计输入声明：** 本文件不参考当前项目已有 Alarm Center、旧告警列表、旧 Drawer、旧 Ant/ProComponents 页面或旧设计稿。当前代码只可在实施阶段作为真实 Alarm Definition / Alarm Occurrence / Alarm State / Handling / Ownership / Suppression / Evidence / Rule / Permission / Route contract 的候选证据来源。
 
 ---
@@ -408,13 +409,13 @@ Physical condition
 Canonical route：
 
 ```text
-/sites/:siteId/issues?view=alarms
+/sites/:siteId/issues
 ```
 
 推荐 Search Params：
 
 ```text
-view            // active | history | suppressed | performance
+alarmView       // active | history | suppressed | performance
 q
 priority
 class

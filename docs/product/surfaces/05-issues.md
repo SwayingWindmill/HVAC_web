@@ -2,134 +2,128 @@
 
 **Status: IMPLEMENTED / BROWSER-REVIEWED**
 **Primary route:** `/sites/$siteId/issues`
-**Workspace view state:** `?view=alarms|diagnostics`
 
 ## 1. Responsibility
 
-This workspace consolidates Surface 09 and Surface 10 at the navigation and context level only.
-
-It does **not** merge their domain models:
-
-- Alarm = authoritative abnormal condition + operator handling state.
-- Diagnosis = evidence-led finding / hypothesis / verification workflow.
-- ACK ≠ cleared.
-- Finding ≠ root cause.
-- Work created/completed ≠ alarm cleared or root cause confirmed.
-
-The shared workspace owns the handoff between the two tasks while preserving each Surface's original task composition.
-
-## 2. Design inheritance from the 36-Surface system
-
-The old Surface 09 and 10 implementations are design sources, not just capability inventories.
-
-### Alarm view inherits Surface 09
-
-- active-first operator triage;
-- compact alarm-load facts;
-- Active / History / Shelved / Performance local views;
-- standalone ledger, not Card-wrapped Table;
-- desktop fixed detail region;
-- narrow Sheet detail;
-- ACK / Assign actions stay explicit and separate from physical condition;
-- no synthetic risk / health score.
-
-### Diagnosis view inherits Surface 10
-
-- finding queue + selected investigation;
-- Verified Facts before interpretation;
-- published Finding remains distinct from Hypothesis;
-- evidence gaps and data-quality blockers remain visible;
-- Next Verification is a first-class section;
-- explicit handoff to Device / Alarm / Work;
-- no “AI root cause” shortcut.
-
-## 3. Shared workspace composition
+“告警与诊断”不是两个平级页面，也不是两个 Tab。主任务是一条连续的问题处理链：
 
 ```text
-Workspace Tabs
-├─ 告警
-│  ├─ operational facts
-│  ├─ Alarm local views
-│  ├─ standalone ledger
-│  └─ selected Alarm detail
-└─ 诊断
-   ├─ finding queue
-   └─ evidence-led investigation detail
+Alarm condition
+→ handling state
+→ affected object / current context
+→ published Finding / evidence
+→ hypothesis / root-cause status
+→ next verification
+→ Work / Device / Operations handoff
 ```
 
-Shared state is limited to context that is genuinely common:
+领域模型仍严格分离：Alarm 是权威异常条件与处置状态；Finding 是 rule/model/human investigation 发布的结构化诊断结果。ACK ≠ cleared，Finding ≠ confirmed Root Cause，confidence ≠ root-cause probability，Work complete ≠ issue verified。
 
-- site;
-- object / device identity;
-- source trail;
-- selected alarm / finding identity where applicable.
+## 2. 36 Surface 设计继承
 
-The two views do not share a status enum or lifecycle.
+Surface 09 提供主工作区骨架：active-first triage、告警负荷事实、当前活动/历史/已搁置/告警绩效、本体 Ledger、统一 Detail Sheet、ACK/Assign/Shelve。
 
-## 4. Route contract
+Surface 10 不再作为平级 Tab，而是进入每条 Alarm 的 investigation context，保留 Published Finding、source、evaluation window、evidence、quality blocker、Root Cause status、Next Verification 和 Work/Device/Operations handoff。没有 Finding 时显示“待诊断”，不能生成假根因。
 
-Canonical workspace route:
+## 3. Current composition
+
+```text
+Shell: 告警与诊断
+├─ Site / timezone / refresh
+├─ FactStrip
+│  ├─ 活动告警
+│  ├─ 未确认
+│  ├─ 未指派
+│  └─ 已搁置
+├─ Alarm-local views
+│  ├─ 当前活动
+│  ├─ 历史
+│  ├─ 已搁置
+│  └─ 告警绩效
+├─ standalone Issue Ledger
+│  ├─ 等级
+│  ├─ 告警 / 来源
+│  ├─ 物理状态
+│  ├─ 确认
+│  ├─ 诊断
+│  ├─ 负责人
+│  └─ lifecycle facts
+└─ Selected Issue Detail Sheet
+   ├─ Alarm facts
+   ├─ handling state
+   ├─ integrated Diagnosis
+   │  ├─ Finding / evidence
+   │  ├─ quality blocker
+   │  ├─ root-cause status
+   │  └─ next verification
+   ├─ evidence / handling history
+   ├─ ACK / Assign
+   └─ Operations / Device / Work exits
+```
+
+默认不自动打开详情。用户选择 Alarm 后打开右侧 Detail Sheet；desktop 为 non-modal/no-overlay，narrow 为 modal/overlay。
+
+## 4. Route / URL ownership
+
+Canonical route：
 
 ```text
 /sites/:siteId/issues
 ```
 
-Workspace state:
-
-```text
-view=alarms|diagnostics
-```
-
-Alarm-local state uses a separate key:
+Alarm-local state：
 
 ```text
 alarmView=active|history|suppressed|performance
+q
+severity
+ack
+owner
+sourceType
+selected
+source
+device
+deviceId
 ```
 
-This prevents the workspace `view` key from colliding with Surface 09's internal view state.
+`selected` 是当前 Alarm occurrence identity。Diagnosis 通过 Alarm ↔ Finding 显式关系加载，不再使用 `view=diagnostics`。旧 `view=alarms|diagnostics`、`/alarms`、`/diagnostics` 均不再是 runtime contract。
 
-Examples:
+## 5. Frontend-review contract
+
+Frontend review 必须提供互相关联的 Alarm + Finding 数据，不允许 Shell 使用 review data，而 Alarm/FDD 继续请求真实后端。Review 至少覆盖 active/unacknowledged、acknowledged/assigned、published diagnosis、evidence-quality blocker、cleared history，以及 Device→Asset→Space 的 registry relationship。
+
+## 6. Visual and semantic rules
+
+- 不显示顶层“告警 / 诊断”Tabs；
+- 不重复页面标题；
+- FactStrip 不回退成 KPI Card wall；
+- Ledger 不套额外 Card，并直接展示 `已诊断 / 证据受限 / 待诊断`；
+- desktop / narrow 使用同一 Detail Sheet 内容；desktop non-modal，narrow modal；
+- 禁止无 owner/证据的“智能排查建议”；
+- Finding 评分只能解释为 source result/confidence，不能写成根因概率；
+- 无 authoritative root-cause owner 时显示“尚未确认根因”。
+
+必须保持：
 
 ```text
-/sites/:siteId/issues?view=alarms&alarmView=active
-/sites/:siteId/issues?view=diagnostics&alarm=<alarmId>
+Alarm ≠ Finding
+Finding ≠ Root Cause
+ACK ≠ Clear
+Cleared ≠ Verified stable
+Correlation ≠ Causality
+AI suggestion ≠ Root Cause
+Work complete ≠ Root Cause verified
 ```
-
-## 5. Visual rules
-
-- No repeated page title inside the workspace body; Shell owns “告警与诊断”.
-- No generic KPI-card wall.
-- Alarm summary uses the shared `FactStrip`.
-- Table-like content remains standalone `DataTableBlock`.
-- A table must not be wrapped by an extra decorative Card.
-- Section Card usage is allowed only when it matches the original Surface hierarchy and carries a durable investigation unit.
-- Exception colors are reserved for abnormal/action-needed facts.
-- Narrow layouts must reduce visible ledger columns or use the existing Sheet pattern rather than forcing page-level horizontal scrolling.
-
-## 6. Current route migration
-
-Removed old primary routes:
-
-- `/sites/:siteId/alarms`
-- `/sites/:siteId/diagnostics`
-
-Current canonical route:
-
-- `/sites/:siteId/issues`
-
-Cross-workspace links have been changed to enter the correct peer view instead of navigating to the old separate routes.
 
 ## 7. Acceptance
 
-The workspace is acceptable only when:
-
-1. Sidebar still contains exactly 10 workspaces.
-2. “告警与诊断” owns the active navigation state for both views.
-3. Alarm and Diagnosis are restorable by URL.
-4. Surface 09 semantics remain intact.
-5. Surface 10 evidence hierarchy remains intact.
-6. No old `/alarms` or `/diagnostics` primary route remains in the generated route tree.
-7. No Ant Design DOM is rendered.
-8. Desktop and narrow layouts have no page-level horizontal overflow.
-9. Existing diagnostics browser review accepts the new Alarm handoff route.
-10. Build, typecheck, lint, design checks and changed-scope design audit pass.
+1. Sidebar 恰好 10 个 Workspace，active 为告警与诊断；
+2. 页面不存在顶层告警/诊断 Tabs；
+3. frontend-review 不停留在加载状态；
+4. Ledger 有真实 Alarm 行并包含诊断列；
+5. Detail Sheet 同时出现 Alarm facts 与 Diagnosis；
+6. Diagnosis 含 Finding/evidence/root-cause status/next verification；
+7. 无 Finding 时显示待诊断；
+8. desktop/narrow 默认均不自动打开详情；选择 Alarm 后打开 Sheet，desktop 不压缩 Ledger；
+9. desktop/narrow 无 page-level horizontal overflow；
+10. build/typecheck/lint/design/browser review 全通过。

@@ -1,14 +1,14 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const outputRoot = resolve(root, 'out/s5-work-order-create-assign');
@@ -388,30 +388,10 @@ async function stop(child) {
     once(child, 'exit').then(() => true),
     pause(1500).then(() => false),
   ]);
-  if (!done && process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else if (!done) {
-    child.kill('SIGKILL');
-  }
+  if (!done) child.kill('SIGKILL');
 }
 
-const candidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)']
-    ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-    : null,
-  process.env.PROGRAMFILES
-    ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-    : null,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const browserPath = candidates.find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
+const browserPath = resolveLinuxBrowserExecutable();
 
 const port = await availablePort();
 const debugPort = await availablePort();

@@ -394,7 +394,7 @@ export function PlantReferenceMonitorPage({
             >
               <div className="hvac-plant-ref__alarm-list">
                 {plantAlarms.length > 0 ? plantAlarms.slice(0, 3).map((alarm) => (
-                  <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(alarm.alarmId)}&source=plant-monitor`}>
+                  <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(alarm.alarmId)}&source=plant-monitor`}>
                     <Badge variant="outline" className={alarmSeverityBadgeClass[alarm.currentSeverity]}>{alarmSeverityLabel[alarm.currentSeverity]}</Badge>
                     <span><strong>{alarm.title}</strong><small>{formatTime(alarm.lastOccurredAt, site.timezone)}</small></span>
                   </a>

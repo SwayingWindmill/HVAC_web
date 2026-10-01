@@ -850,7 +850,7 @@ export function Overview({ site, principal }: OverviewProps) {
               {allPriorityItems.length > 3 ? (
                 <CardAction>
                   <Button variant="ghost" size="sm" asChild>
-                    <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'alarms', alarmView: 'active' }}>
+                    <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ alarmView: 'active' }}>
                       全部事项 ({allPriorityItems.length})<ArrowRight aria-hidden="true" />
                     </Link>
                   </Button>
@@ -886,7 +886,7 @@ export function Overview({ site, principal }: OverviewProps) {
                           <Link
                             to="/sites/$siteId/issues"
                             params={{ siteId: site.id }}
-                            search={{ selected: item.targetId, source: 'overview', view: 'alarms', alarmView: 'active' }}
+                            search={{ selected: item.targetId, source: 'overview', alarmView: 'active' }}
                           >
                             {content}
                           </Link>

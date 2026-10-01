@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { RouteLoading } from '@/app/RouteLoading';
 import { requireCapabilities } from '@/app/route-access';
-import { MeasurementVerificationWorkspace } from '@/features/mv/MeasurementVerificationWorkspace';
+import { VerificationWorkspace } from '@/features/verification/components/VerificationWorkspace';
 
 export const Route = createFileRoute('/_app/sites/$siteId/mv')({
   beforeLoad: ({ context }) => {
@@ -17,10 +17,9 @@ export const Route = createFileRoute('/_app/sites/$siteId/mv')({
 });
 
 function MVRoute() {
-  const { site } = Route.useRouteContext();
   return (
     <Suspense fallback={<RouteLoading label="正在加载节能量验证" />}>
-      <MeasurementVerificationWorkspace siteId={site.id} />
+      <VerificationWorkspace />
     </Suspense>
   );
 }

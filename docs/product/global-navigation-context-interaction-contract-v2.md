@@ -20,7 +20,7 @@ The selected hierarchy is:
 Capability
 → Workspace
 → Workspace View
-→ Context Inspector / Contextual Tool
+→ Detail Sheet / Contextual Tool
 → Durable Detail Route
 ```
 
@@ -82,7 +82,7 @@ A contextual panel is appropriate for selected-item details and supplementary ta
 
 - https://atlassian.design/components/panel/usage
 
-The product therefore does **not** define `Table row → modal Sheet` as the universal desktop interaction.
+The product now standardizes **selected-object detail as a right-side Sheet** across workspaces. This is a product consistency decision: the primary ledger/canvas keeps its full layout width, while durable or complex work continues on a dedicated Route. Desktop Sheets are non-modal/no-overlay; narrow Sheets are modal.
 
 ## 3. shadcn application foundation
 
@@ -196,8 +196,8 @@ Preferred implementation:
 Examples:
 
 ```text
-/issues?view=alarms
-/issues?view=diagnostics
+/issues?alarmView=active
+/issues?selected=:alarmId
 
 /work?view=orders
 /work?view=verification
@@ -239,57 +239,52 @@ The reusable layer owns:
 
 Do not replace the normal ledger path with ReUI Data Grid or Kibo Table.
 
-## 7. Desktop List → Detail contract
+## 7. List / Ledger → Detail Sheet contract
 
-For scan-heavy workspaces such as Devices, Alarms, Diagnostics, Work Orders, Opportunities and Executions:
+For selected-object details in scan-heavy workspaces such as Devices, Issues, Work Orders, Opportunities, Executions, Reports and Settings children:
 
 ```text
-Desktop
-┌──────────────────────────┬──────────────────────┐
-│ Ledger / list            │ Context Inspector    │
-│ selected row             │ selected object      │
-│ next row                 │ evidence / actions   │
-│ ...                      │ contextual links     │
-└──────────────────────────┴──────────────────────┘
+Ledger / list / object canvas
+→ select object
+→ right-side Detail Sheet
+→ optional “打开完整详情”
+→ durable detail Route
 ```
 
-Selection updates the inspector without navigation.
+The primary workspace must keep its original width. Selection must **not** create a permanent second column, Resizable split pane, or Card-based Inspector.
 
-Recommended implementation depends on the workspace responsibility:
+Desktop behavior:
+- official shadcn Sheet primitive;
+- right side;
+- non-modal;
+- no page overlay;
+- fixed sensible width, normally about 480–640 px;
+- selecting another row updates the same Sheet without closing it;
+- Sheet overlays the right edge instead of reflowing the Ledger/canvas;
+- selected identity may be URL-restorable; Sheet geometry is never business state.
 
-- use a split inspector with the official shadcn `ResizablePanelGroup` only when the detail truly needs persistent side-by-side space and the primary content remains usable after compression;
-- Device Ledger is the explicit exception: keep the ledger at full width and render a fixed-width non-modal Quick Preview over the right side on wide screens;
-- the Device Quick Preview uses the existing shadcn Sheet/Dialog primitive in non-modal mode without an overlay; narrow screens use the same content as a modal Sheet;
-- no Card wrapping around the entire table;
-- preview / splitter geometry is application layout, not business state.
+Sheet content rules:
+- `SheetTitle` + concise object context;
+- facts required for a quick decision;
+- current status / evidence / owner / next action where relevant;
+- only a small number of contextual actions;
+- no full-page DataTable inside Sheet;
+- no large tab hierarchy, long forms, full engineering point inventory, large evidence corpus, or multi-step workflow;
+- show `打开完整详情` only when a durable detail Route exists.
 
-Do not add a splitter merely because a row has details. The selected object may be URL-restorable, but panel pixels are not business state.
+Do not build desktop Split Inspector / ResizablePanel just because a row has detail. `Resizable` remains available for genuine analytical canvases whose two panes are both primary task surfaces, not for ordinary object details.
 
-Inspector width should have:
-- sensible default;
-- minimum width that preserves readable labels/actions;
-- maximum width that does not turn the ledger into a narrow strip.
+## 8. Narrow Detail Sheet contract
 
-Do not persist panel width unless a real product requirement exists.
-
-## 8. Narrow List → Detail contract
-
-When side-by-side detail is no longer usable:
+Narrow layouts use the same Sheet content, but switch to normal modal behavior:
 
 ```text
-Ledger
+Ledger / list
 → row select
-→ official shadcn Sheet
+→ modal shadcn Sheet + overlay
 ```
 
-Sheet is therefore the **responsive representation of the Context Inspector**, not the default desktop architecture.
-
-Sheet must contain:
-- SheetTitle;
-- short object context;
-- selected-item details;
-- at most a small number of contextual actions;
-- “打开完整详情” only when a durable detail actually exists.
+The information hierarchy and actions must remain the same as desktop; only modality and width change.
 
 ## 9. Dialog contract
 
@@ -355,15 +350,15 @@ Long-lived automation policy belongs to the Automation workspace.
 | Workspace | Main composition | Inspector | shadcn / approved source plan |
 | --- | --- | --- | --- |
 | 总览 | attention sections + ranked lists + restrained charts | only contextual drill-in where useful | Sidebar shell; shadcn Chart/Table; Shadcnblocks dashboard sections only as composition reference |
-| 运行 | system canvas / object list + contextual facts | split inspector | shadcn Tabs + Resizable; ECharts/X6 only when engineering relation requires it |
-| 设备 | tablecn ledger | non-modal Quick Preview; modal Sheet narrow | DataTableBlock + tablecn + shadcn Sheet primitive; Preview 不压缩 Ledger |
-| 告警与诊断 | peer views over shared site/time/object context | split inspector | Tabs + DataTableBlock; ReUI Timeline candidate for evidence/history |
-| 工单与验证 | work ledger / verification queue | split inspector | DataTableBlock; ReUI Timeline; Kibo file/dropzone candidate for attachments |
-| 能源与绩效 | shared Context Bar + analytical views | mostly inline analytical drill-down | Tabs + shadcn controls; ECharts; tablecn for contributor/bill ledgers |
-| 改进 | opportunity/project/action/M&V/review views | split inspector for list views | DataTableBlock; Timeline; Kibo Gantt only if real project scheduling requires it |
-| 自动化 | strategies / executions | split inspector | DataTableBlock; ReUI Timeline; Kibo Gantt/calendar only for real schedules |
-| 报告 | definitions + generated reports + scheduling | inspector for report metadata | tablecn; Kibo Editor/Calendar only if selected after source review |
-| 设置 | local side nav + focused settings surfaces | per-child inspector where helpful | shadcn local nav/Tabs/forms; ReUI Tree candidate for semantic hierarchy |
+| 运行 | system canvas / object list + contextual facts | Detail Sheet | shadcn Sheet for selected objects; ECharts/X6 only when engineering relation requires it |
+| 设备 | tablecn ledger | Detail Sheet → Device Detail Route | DataTableBlock + tablecn + shadcn Sheet; Sheet 不压缩 Ledger |
+| 告警与诊断 | Alarm-led issue ledger + integrated Diagnosis | Detail Sheet | FactStrip + DataTableBlock + Sheet; diagnosis/evidence lives inside selected issue context |
+| 工单与验证 | work ledger / verification queue | Detail Sheet → Work Order Detail Route | DataTableBlock; ReUI Timeline; Kibo file/dropzone candidate for attachments |
+| 能源与绩效 | shared Context Bar + analytical views | object detail uses Sheet; analytical evidence may stay inline | Tabs + shadcn controls; ECharts; tablecn for contributor/bill ledgers |
+| 改进 | opportunity/project/action/M&V/review views | Detail Sheet → durable project Route where needed | DataTableBlock; Timeline; Kibo Gantt only if real project scheduling requires it |
+| 自动化 | strategies / executions | Detail Sheet → Strategy Detail Route | DataTableBlock; ReUI Timeline; Kibo Gantt/calendar only for real schedules |
+| 报告 | definitions + generated reports + scheduling | Detail Sheet for report metadata | tablecn; Kibo Editor/Calendar only if selected after source review |
+| 设置 | local side nav + focused settings surfaces | Detail Sheet for selected records | shadcn local nav/Tabs/forms; ReUI Tree candidate for semantic hierarchy |
 
 ## 13. Surface placement
 

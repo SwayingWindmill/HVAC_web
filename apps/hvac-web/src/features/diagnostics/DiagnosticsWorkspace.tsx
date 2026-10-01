@@ -297,7 +297,7 @@ export function DiagnosticsWorkspace({
       {sourceContext ? (
         <div className="flex flex-col gap-2 rounded-md border bg-card p-3 text-xs sm:flex-row sm:items-center sm:justify-between" data-testid="diagnostics-source-context">
           <div className="flex min-w-0 items-center gap-2"><Link2 className="size-3.5 text-muted-foreground" /><span>来自告警 · {rows.some((row) => row.finding.alarmId === searchState.alarm) ? '已找到显式关联的诊断结果' : '当前没有显式关联的已发布诊断结果'}</span></div>
-          <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(searchState.alarm!)}&source=diagnostics`}>返回关联告警</a></Button>
+          <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(searchState.alarm!)}&source=diagnostics`}>返回关联告警</a></Button>
         </div>
       ) : null}
 
@@ -410,7 +410,7 @@ export function DiagnosticsWorkspace({
                   <div className="rounded-md border p-3"><span className="text-[11px] text-muted-foreground">关联设备</span><strong className="mt-1 block text-xs font-medium">{selected.deviceLabels.length > 0 ? selected.deviceLabels.slice(0, 3).join('、') : '暂无可展示关联设备'}</strong>{selected.deviceLabels.length > 3 ? <small className="mt-1 block text-[10px] text-muted-foreground">另有 {selected.deviceLabels.length - 3} 台</small> : null}{singleDeviceId ? <Button className="mt-2 px-0" variant="link" size="sm" asChild><a href={siteDeviceRoute(site, singleDeviceId)}>打开设备详情 <ArrowRight /></a></Button> : null}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {selectedFinding.alarmId ? <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?source=diagnostics&alarm=${encodeURIComponent(selectedFinding.alarmId)}`}>查看关联告警</a></Button> : <Badge variant="outline">未关联告警</Badge>}
+                  {selectedFinding.alarmId ? <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?source=diagnostics&selected=${encodeURIComponent(selectedFinding.alarmId)}`}>查看关联告警</a></Button> : <Badge variant="outline">未关联告警</Badge>}
                   {selectedFinding.workOrderId ? <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'work-orders')}?source=diagnostics&workOrder=${encodeURIComponent(selectedFinding.workOrderId)}`}><ClipboardList />查看关联工单</a></Button> : <Badge variant="outline">未关联工单</Badge>}
                 </div>
               </section>

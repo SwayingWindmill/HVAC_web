@@ -388,7 +388,7 @@ try {
   for (const internalId of [siteId, linkedAlarmId, linkedWorkOrderId, inventory.assets[0].id, certificationId(0x90, 1, '01940000')]) {
     assert(!desktop.allText.includes(internalId), `Diagnostics workspace leaked an internal identifier: ${internalId}`);
   }
-  assert(desktop.links.some((link) => link.text.includes('查看关联告警') && link.href?.includes('/issues?source=diagnostics&alarm=')), 'Diagnostics workspace lost the Alarm handoff');
+  assert(desktop.links.some((link) => link.text.includes('查看关联告警') && link.href?.includes('/issues?source=diagnostics&selected=')), 'Diagnostics workspace lost the Alarm handoff');
   assert(desktop.links.some((link) => link.text.includes('查看关联工单') && link.href?.includes('/work-orders?source=diagnostics&workOrder=')), 'Diagnostics workspace lost the Work Order handoff');
   assert(desktop.links.some((link) => link.text.includes('在设备中查看') && link.href?.includes('/devices?q=')), 'Diagnostics workspace lost the Devices handoff');
   await capture(cdp, 'diagnostics-desktop.png');

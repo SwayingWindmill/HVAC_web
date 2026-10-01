@@ -20,6 +20,7 @@ architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 - 当前 `shadcn/ui`：组件语法、Card / Tabs / Table / Command / Sheet / Dialog / Form 等交互与视觉基线。
 - `sadmann7/tablecn`：scan-heavy Data Table / ledger 的筛选、排序、分页、列控制与工具栏 grammar；本项目以 TanStack Table v9-native 实现吸收其 pattern，不维护第二套表格体系。
 - `ReUI`、`Kibo UI`、`Dice UI`：shadcn/ui 之上的复杂应用组件与组合来源。ReUI 偏 Frame / advanced Filters / Timeline / Kanban / Gantt / Event Calendar / Tree/Cascader；Kibo UI 偏 Gantt / Calendar / Editor / Dropzone 等功能型组件；Dice UI 偏 Sortable / Kanban / Editable / Selection Toolbar / Tour / Tags Input 等高级交互。它们是 copy-and-own source，不形成第二套 primitive framework。
+- `dashboardcn`：聚焦 Dashboard / analytics 的 copy-and-own source，优先用于真实 KPI、Sparkline、普通趋势图、Heatmap、Gauge、Sankey、Timeline 等数据展示组合；不得取代 tablecn operational ledger，也不得替代高密度 HVAC 工程分析中的 ECharts。
 - `Shadcnblocks`：应用级 Block / 页面组合候选来源，优先用于 Dashboard、Application Shell、Chart Group、复杂内容区等已经成熟的 shadcn 组合；不得取代官方 shadcn primitive，也不得绕过 tablecn 的 operational ledger 责任。只采用当前账号合法可访问、经过 source review 的条目。
 
 这次是直接重设计，不对上一版 Control Desk、旧 Ant Design / ProComponents 页面或历史截图做视觉兼容。
@@ -43,11 +44,12 @@ architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 9. `docs/design-system/shadcn-component-contract.md` 的组件选择与组合规则。
 10. `docs/architecture/shadcn-tablecn-reui-source-review-2026-09-20.md` 的 tablecn / ReUI 上游采用边界与兼容性证据。
 11. `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md` 的 Kibo UI / Dice UI 复杂组件采用边界与 source-first 规则。
-12. `docs/architecture/shadcnblocks-source-review-2026-09-22.md` 的 Shadcnblocks Block 采用、许可与 CLI 边界。
-13. `docs/design-system/legacy-ui-quarantine.md` 的历史 UI 隔离规则。
-14. 当前 shadcn/ui、satnaing/shadcn-admin、sadmann7/tablecn、ReUI、Kibo UI、Dice UI 与 Shadcnblocks 的成熟模式。
-14. 前端架构与状态所有权边界，以及 TanStack / Recharts / ECharts / X6 / G6 的真实能力边界。
-15. Impeccable / frontend-design / web-design-guidelines 的审查方法。
+12. `docs/architecture/dashboardcn-source-review-2026-09-24.md` 的 Dashboard / analytics 组件采用边界。
+13. `docs/architecture/shadcnblocks-source-review-2026-09-22.md` 的 Shadcnblocks Block 采用、许可与 CLI 边界。
+14. `docs/design-system/legacy-ui-quarantine.md` 的历史 UI 隔离规则。
+15. 当前 shadcn/ui、satnaing/shadcn-admin、sadmann7/tablecn、ReUI、Kibo UI、Dice UI、dashboardcn 与 Shadcnblocks 的成熟模式。
+16. 前端架构与状态所有权边界，以及 TanStack / Recharts / ECharts / X6 / G6 的真实能力边界。
+17. Impeccable / frontend-design / web-design-guidelines 的审查方法。
 
 **当前实现和历史参考图不在视觉权威链中。** 现有实现、旧菜单、旧路由、旧 Ant/ProComponents 页面、旧截图包、历史组件画廊和被 `legacy-ui-quarantine.md` 隔离的资料没有设计上的既得权。当前 36→10 Workspace 收敛有一个已经明确批准的例外：本轮 36 Surface 体系中已经完成并通过 PROMOTED / BROWSER REVIEWED 验收的 shadcn Surface（以 `surface-specifications` 和对应 visual-reframe 记录为准）是新 Workspace 的设计母体，必须继承其页面 archetype、Table/Detail/Inspector 结构、信息层级和状态语义，再叠加后期统一的 tablecn / DataTableBlock / AppShell 规范。更早 Ant / Control Desk 资产仍然只提取业务事实，必须丢弃其视觉结构。
 
@@ -74,7 +76,7 @@ WebSocket / realtime layer
 
 规则：
 
-- shadcn/ui 是 primitive authority；业务代码优先依赖项目自己的 `components/ui`。tablecn 是专业 Data Table / ledger source，ReUI / Kibo UI / Dice UI 是复杂应用组件 source，Shadcnblocks 是应用级 Block / composed-pattern source；全部采用 copy-and-own，不形成第二套 primitive framework。
+- shadcn/ui 是 primitive authority；业务代码优先依赖项目自己的 `components/ui`。tablecn 是专业 Data Table / ledger source，ReUI / Kibo UI / Dice UI 是复杂应用组件 source，dashboardcn 是聚焦数据展示与普通 analytics composition 的 source，Shadcnblocks 是应用级 Block / composed-pattern source；全部采用 copy-and-own，不形成第二套 primitive framework。
 - 本项目当前 shadcn registry 配置由 `apps/hvac-web/components.json` 决定；当前基线是 `radix-nova`。
 - 当前生产项目继续使用 Radix base，不因为 shadcn 对“新项目默认值”的调整而混入 Base UI API；Radix 组合使用 `asChild`，不使用 Base UI `render`。
 - ReUI / Dice UI 如同时提供 Radix / Base UI 实现，当前项目只允许采用 Radix flavor；Kibo UI 组件采用前必须核实其实际 primitive/headless dependencies，不能间接混入与当前 `radix-nova` 冲突的 Base UI composition。
@@ -112,7 +114,7 @@ shadcn/ui 是源码级组件系统，不是黑盒依赖。
 原则：
 
 - 默认先用 Tailwind + `components/ui` 表达页面，不为每个 Surface 新建大型专用视觉框架。
-- **Reuse before invention.** 新增任何通用交互、布局、导航、状态、表单、数据展示或图表组合前，按 `existing project → shadcn primitive/block → tablecn（表格任务）→ approved domain component → advanced application layer (ReUI / Kibo UI / Dice UI) → Shadcnblocks application block → small project composition` 顺序检查。复杂组件层内部按任务语义、a11y/keyboard、依赖重量、Radix 兼容性、源码质量选一个，不并行维护重复实现。只有这些能力无法满足业务任务、无障碍语义或 HVAC 专业工作流时，才允许自定义组件。
+- **Correctness first, source-first, then reuse.** 现有项目实现没有默认保留权。新增或重做任何通用交互、布局、导航、状态、表单、数据展示或图表组合时，先由 Surface Spec、成熟产品实践、任务语义与可访问性确定“正确的交互模型”，再同时审查 `existing project / shadcn primitive & official blocks / tablecn / approved domain component / ReUI / Kibo UI / Dice UI / dashboardcn / Shadcnblocks / other reviewed mature OSS` 等候选 source，按业务语义、a11y/keyboard、依赖重量、Radix 兼容性、源码质量和维护状态做 ADOPT / ADAPT / REPLACE / REJECT。现有组件如果只是历史遗留、职责错误或弱于成熟 source，应直接替换或删除；不得因为“项目里已经有”而固化错误。只有成熟 source 都无法正确表达任务时，才允许新增 project-owned composition 或 custom component。
 - **官方 shadcn Blocks 是应用级组合参考，不只是组件 API 参考。** Overview / Dashboard / Workspace 类页面优先研究当前官方 `dashboard-*`、`sidebar-*`、Data Table、Chart block 的完整构图，再根据能源业务改写；不得只换成 shadcn 组件却保留旧页面骨架。
 - **项目内正式区分 Component 与 Block。** `components/ui` 是 shadcn primitive，`components/data-table` 是可复用 DataTable 能力层；`blocks` 是应用级标准组合，只负责稳定的布局与交互 grammar，不吞业务数据、查询、columns 或 feature state。页面级表格的当前标准 Block 是 `@/blocks/data-table/DataTableBlock`，工单页作为 canonical reference。
 - 标准 Route Surface 允许并推荐 `Breadcrumb → Page Header → Title / Description / Local Actions → Surface Content`。Breadcrumb 表达层级，Page Header 的 `h1` 表达当前 Surface；全局 App Header 不再重复同一大标题，正文第一张 Card/Section 也不得再次用 route title 充当 section title。
@@ -130,8 +132,9 @@ shadcn/ui 是源码级组件系统，不是黑盒依赖。
 - **形式复用优先，但不能制造错误的可访问性或交互语义。** 如果某个 shadcn 组件在视觉形式上完全适合业务，可以优先复用；只有当其内建 ARIA role、键盘模型、状态机或交互预期会把业务含义表达错误时，才不直接使用该 primitive，而是复用其 visual grammar 或选择更中性的 shadcn 组合。例如 category share 可以复用 Progress 的视觉形式；若直接暴露 `progressbar` 会把“占比”误读成“任务完成度”，则隐藏该视觉 primitive 的辅助语义并由相邻文字完整表达事实，或直接选择更合适的 Chart composition。
 - Field 是表单 label / help / error 的统一组合语法；带 icon、结果数、unit、inline action 的搜索/输入使用 Input Group。
 - Tabs 用于同一任务的平级视图，不用作跨业务模块导航。
-- Dialog 用于短时模态任务；AlertDialog 用于明确的高后果确认；Sheet 只做真实临时辅助内容，不作为默认详情容器。
-- scan-heavy workspace 可使用同页 contextual inspector 保持空间记忆；durable complex detail 使用 Route。
+- Dialog 用于短时模态任务；AlertDialog 用于明确的高后果确认；**对象详情统一使用 shadcn Sheet，不再使用会压缩主工作区的 desktop Inspector / split pane。**
+- **全站详情交互固定为 `Ledger/List → Sheet quick detail → durable detail Route`。** Desktop 使用右侧 non-modal Sheet、无整页 overlay、不得导致主内容 reflow；窄屏使用同内容的 modal Sheet + overlay。Sheet 只保留快速判断所需事实与少量上下文动作；多 section/tab、大证据集、长表单、附件、工程点位、持续调查或跨会话任务进入 durable Route。
+- 分析画布中的证据栏、拓扑摘要、趋势游标详情若本身是当前分析任务的一部分，可以 inline；但“选中一个对象后出现的详情”不得伪装成分析侧栏，统一 Sheet。
 
 ## 5. shadcn-admin / tablecn / advanced application component layer 的角色
 
@@ -227,11 +230,31 @@ Dice UI 是复杂应用组件层的高级交互 source。
 - 不通过 Dice UI 重新引入一套 Dialog / Select / Button primitive family；
 - 与 ReUI/Kibo 重叠时按 task semantics、a11y/keyboard、dependency weight、Radix compatibility 与 source quality 选一个实现。
 
-### 5.6 复杂组件层共同规则
+### 5.6 dashboardcn
 
-`ReUI + Kibo UI + Dice UI` 是同一层的候选 source，不是三个必须同时存在的 runtime framework。
+dashboardcn 是聚焦 Dashboard / analytics 的数据展示与组合 source，不是新的页面模板体系。
 
-同一 capability 只保留一个项目实现。所有 production adoption 必须遵守 `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md` 与既有 source-first 规则，记录精确 tag/commit、源码、测试与 ADOPT/ADAPT/REJECT 结论。
+优先考虑：
+
+- authoritative KPI / Metric Value / Sparkline；
+- 普通 Trend / Bar / Composed Chart；
+- Heatmap；
+- 有真实范围/阈值语义的 Gauge / Segmented Meter；
+- 有真实流量或分配关系的 Sankey；
+- 告警、控制、验证、审计等时间顺序证据的 Timeline。
+
+规则：
+
+- dashboardcn Data Table 不取代 tablecn + TanStack Table v9 operational ledger；
+- Recharts/shadcn Chart 只承担普通应用级分析，高密度、多轴、dataZoom/brush 等 HVAC 工程分析继续使用 ECharts；
+- KPI 的“上升/下降好坏”、单位、精度和 locale 必须按 HVAC 业务语义适配，不继承示例默认值；
+- 不把页面做成无业务依据的“几张 KPI Card + 几张图”模板；采用前遵守 `docs/architecture/dashboardcn-source-review-2026-09-24.md`。
+
+### 5.7 复杂组件层共同规则
+
+`ReUI + Kibo UI + Dice UI` 是同一层的候选 source，不是三个必须同时存在的 runtime framework；dashboardcn 是相邻的 analytics composition source。
+
+同一 capability 只保留一个项目实现。高级交互类 production adoption 必须遵守 `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md`；analytics composition 必须遵守 `docs/architecture/dashboardcn-source-review-2026-09-24.md` 与既有 source-first 规则，记录精确 tag/commit、源码、测试与 ADOPT/ADAPT/REJECT 结论。
 
 我们学习和拥有的是成熟 Pattern / Source，而不是并行维护多个视觉世界。
 
@@ -565,7 +588,7 @@ Line Tabs: topology / anomaly / energy evidence
 Workspace Card
 ├── X6 engineering topology, or
 ├── measured energy evidence
-└── optional Context Inspector Card
+└── selected object → right-side Detail Sheet
 Supporting Evidence Cards
 ```
 
@@ -574,7 +597,7 @@ Supporting Evidence Cards
 - X6 只负责真实固定工程拓扑；
 - anomaly 保持空间记忆；
 - energy flow 不伪造流量/分配；
-- Inspector 展示业务事实，不泄漏 raw enum / UUID / trace；
+- 设备/对象选择后的详情使用 Sheet 展示业务事实，不泄漏 raw enum / UUID / trace；
 - 旧 Control Desk CSS 不作为视觉权威。
 
 ## 11. Device Center → Data Table First
@@ -585,7 +608,7 @@ Supporting Evidence Cards
 Breadcrumb + Page Header
 Search / filters / column controls
 Device Data Table
-Optional Quick Preview (no ledger reflow)
+Right-side Detail Sheet (no ledger reflow)
 ```
 
 主要列优先：
@@ -733,15 +756,16 @@ Current fact
 - **精进法则**：
   - **目标桌面视口下，核心台账必须实现零横向滚动**；
   - 采用 `table-fixed w-full`，并在 `TableHeader` 中为每一列显式分配百分比宽度（总和严格为 100%），如：等级 7%、告警标题 28%、状态 8%、确认 8%、负责人 9%、持续 10%、重复 6%、搁置 11%、最近变化 13%；
-  - 主文案列（告警标题、设备名称、关联空间）强制配合 `min-w-0 pr-2` 与 `truncate`，确保在全屏或双栏 Split 检查器打开时均自适应折叠，决不撑破视口。
+  - 主文案列（告警标题、设备名称、关联空间）强制配合 `min-w-0 pr-2` 与 `truncate`；详情 Sheet 覆盖在右侧而不改变台账宽度，核心 Ledger 不再为常驻 Split Inspector 让出列宽。
 
-### 20.3 机械等权平铺（Equal-weight Flattening）
-- **反面模式**：顶部 KPI 概况栏机械采用 5 等宽或 6 等宽卡片并排，将核心运行成果（当前总功率、系统 COP）、静态范围（工作区设备数）、异常告警（活动告警）和通信延迟等完全不同的概念按相同字号、相同尺寸一字排开。
-- **根因分析**：把 KPI 栏当成了后端 DTO 的简单 Grid 映射，违背了 ISA-101 工业态势感知的主次层次。
+### 20.3 机械 KPI 卡片平铺（Equal-weight KPI Card Wall）
+- **反面模式**：把系统运行做成 5～6 张独立 KPI Card 的通用 Dashboard，再把真正的过程状态、设备群和对象调查压到第二屏。
+- **根因分析**：把运行工作区误当成统计首页，而不是 ISA-101 风格的 situational-awareness workspace。
 - **精进法则**：
-  - 必须采用两级主次架构（Primary Hero Metrics vs. Supporting Context）；
-  - **主运行量**（当前功率、系统 COP）使用强视觉锚点：大号排版（如 30px / tracking-tight）、鲜明的语义强调色块图标（如绿色 Zap、蓝色趋势图）；
-  - **辅助上下文与数据质量**（设备群运行、活动告警、数据延迟）使用紧凑度量定义列表（`dl/dt/dd`）并列，并明确区分与标注统计口径（例如“当前工作区范围” vs “站点设备数据范围”）。
+  - **运行 Workspace 不使用 KPI Card Wall**。站点、时区、更新时间、功率、COP、设备群、告警和数据延迟采用紧凑 `FactStrip` / context facts 表达，不制造一排独立 Card；
+  - 视觉主角必须是 **当前过程事实 + 设备群**；选中对象后用右侧 Detail Sheet 补充详情，不能常驻压缩主工作区；
+  - `FactStrip` 只做快速扫读，不承载“正常/优秀/自动优化”等前端结论；异常才获得 warning / critical 视觉权重；
+  - Site Overview 可以按其独立 Surface 规范使用少量 Metric Card，但不能把该 Dashboard 语法复制到 Operations、Devices、Alarms 等任务型 Workspace。
 
 ### 20.4 低数据量断崖留白（The Wasteland Layout）
 - **反面模式**：当站点告警较少（仅 1～2 条）、或者外层 Card 固定高度过大（如固定 400px）而内部图表自身半径过小时，卡片内部出现大面积惨白断层，产生“系统卡死或数据未加载完”的劣质感。
@@ -756,7 +780,7 @@ Current fact
 - **精进法则**：
   - 坚决执行真实性原则：$Offline \neq Fault$、$Missing \neq Zero$、$Unknown \neq Healthy$；
   - 运行状态（Running/Stopped）、连接状态（Online/Offline）、数据新鲜度（Fresh/Stale）和数据质量（Good/Suspect）必须**四维严格独立解耦**；
-  - 针对异常或未知，必须提供具体业务归因（例如“通信离线”“点位配置需核查”“数据不完整”），并在侧边检查器中提供“进入诊断”“进入工单”等闭环行动入口。
+  - 针对异常或未知，必须提供具体业务归因（例如“通信离线”“点位配置需核查”“数据不完整”），并在详情 Sheet 中提供诊断、工单或完整详情 Route 等闭环行动入口。
 
 ### 20.6 色彩克制与视觉噪声控制（Noise & Palette Discipline）
 - **反面模式**：图表使用全黑柱条、或者页面堆砌大面积高饱和度的彩色卡片，导致操作员产生视觉疲劳，对真正的异常失去敏锐度。
@@ -766,52 +790,12 @@ Current fact
   - 彩色仅保留给**需要值班人员立即干预的异常与偏离**（Critical/Major/Minor 语义色）；
   - 统计图表使用品牌与主题色系的低刺激度阶梯色，并提供平滑过渡与 Hover 状态，保持工业级沉稳感。
 
-## 21. 站点总览与成熟大盘仪表板规范（Site Overview & Mature Dashboard Architecture）
+## 21. 节能运营总览（2026-09-30 当前方向）
 
-在 2026-09-18 针对 03 站点总览的系统化重构中，彻底摒弃了早期粗糙拼贴卡片墙设计，深度吸纳 `satnaing/shadcn-admin` 与 `shadcn/ui` 的经典工业仪表盘设计哲学，确立以下成熟大盘标准：
+用户本轮指定的首页是节能运营 Dashboard：基线 → 实际 → 节省 → 策略 → 舒适度 → 机会。
+以 `docs/product/surface-specifications/03-site-overview.md` 与 `docs/design-system/dashboard-layout-specification.md` 为本 Surface 当前合同；固定上游源和取舍见 `docs/architecture/energy-dashboard-source-review-2026-09-30.md`。
 
-### 21.1 经典三层立体韵律（Three-tier Visual Architecture）
-- **Tier 1: 顶层 4 联精细化度量卡片（Metric Stat Grid）**：
-  - 4 栏等高网格（`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4`）；
-  - 分工明确：
-    1. **实时运行功率**：秒级遥测，大字号 24px + 节降趋势与基准对比；
-    2. **综合运行能效 (COP)**：小时级聚合，保留两位有效数字 + 环比趋势与节能率；
-    3. **数据状态与在线可用**：严格使用系统权威分母（`125 / 175`），配备微型进度条与离线/未知/延迟三元统计标签；
-    4. **协同待办概要**：活动告警与工单汇聚，强视觉语义 Badge 标识。
-- **Tier 2: 中层 7:5 黄金分析层（Analytics Layer）**：
-  - 左侧 `7` 份：**24小时逐时负荷走势**（AreaChart 区域平滑曲线），采用极浅渐变填充与虚线基准对比，直观呈现全天能耗波峰波谷；
-  - 右侧 `5` 份：**分项用能构成**（Donut 甜甜圈图 + 分项排行），中心直接呈现总耗电量数值（如 `860 kWh`），下方清晰配列图例与多色彩条。
-- **Tier 3: 底层 7:5 运行与行动流（Operations & Action Flow）**：
-  - 左侧 `7` 份：**当前运行设备群工况表**，极简行内状态圆点指示（全部运行 vs 部分运行），直连 `系统运行` 工作台；
-  - 右侧 `5` 份：**优先处理协同流**，告警与工单统一按严重度/紧急度排序呈现，配备清晰的处置入口与时间差。
-
-### 21.2 告别“拼贴感”与网格对齐标准（Grid Precision & Cohesion）
-### 21.3 视觉真实审查暴露的典型缺陷与治理法则（Visual Review Lessons & Hardening）
-
-在真实的无头 Chrome 视口视觉评审（Headless Visual Review）中，曾客观暴露了以下六类极易被忽视的仪表板缺陷，已作为铁律固化到设计规范中：
-
-1. **容器拉伸腰斩切断（The Clipping Cut - 严禁）**：
-   - **现象**：右侧优先卡片因左侧表格高度被拉伸等高，但内部条目塞入过多，导致第 3 或第 4 条被卡片底部生硬腰斩切断，露出半截文字与按钮；
-   - **治理**：大盘总览卡的优先事项严禁机械列出 6～8 条，必须收敛至首屏黄金容量（**3 条**），超出部分在 Header Action 提供明确的「全部事项 (N) $\to$」导航，并在容器底部预留安全的内边距，绝不出现任何文字腰斩。
-
-2. **暖通物理走势与时区倒挂（Physical & Timezone Inversion - 严禁）**：
-   - **现象**：未结合站点本地时区（如 `Asia/Tokyo` UTC+9），直接按 UTC 0 点生成曲线，导致东京当地时间白天 11:00～15:00 负荷处于最低谷（38%），而半夜 20:00～03:00 处于满载高峰（95%），严重违背冷站日间工商业用能常识；
-   - **治理**：所有逐时走势图表必须在数据产生端与前端呈现端严格绑定站点本地时区（Site Local Timezone），呈现符合物理规律的形态：08:00 预冷爬坡、13:00～15:00 高温高辐射峰值、18:00 负荷骤降、夜间平稳维持在低底载（~35%）。
-
-3. **单图表孤悬惨白留白（The Donut Wasteland - 严禁）**：
-   - **现象**：在中等宽屏（560px 宽度卡片）中，孤零零居中放一个 280px 的甜甜圈图，左右留出上百像素的惨白荒漠，且下方图例仅有色块与名称，缺乏量化数值；
-   - **治理**：成熟仪表盘采用**双栏紧凑复合布局**（Donut + Ranked Breakdown）——左侧 190px 甜甜圈图，中心醒目标注总能耗（如 `860 kWh`）；右侧紧凑排列各分项排行榜，直观附带分类色标、Progress 进度条、量化用电量与占比百分比（如 `冷水机组 420 kWh (48.8%)`），瞬间充实信息密度。
-
-4. **KPI 卡片头部节奏断裂（Broken Header Rhythm - 严禁）**：
-   - **现象**：卡片 1、2 右上角为图标底座；卡片 3 右上角放文字 Badge，图标塞在标题里；卡片 4 右上角放数字 Badge，没有图标。4 张卡片头部高低错落，极度凌乱；
-   - **治理**：严格统一 shadcn-admin 标准卡片 Header 规范——右上角统一使用规范化的 `8x8` 浅灰圆角底座承载语义图标（Zap、Gauge、Database、TriangleAlert）；状态 Badge 与警示标签一律归置在 CardContent 数值行或次级辅助行中，保证 4 张卡片头部几何基线 100% 绝对一致。
-
-5. **表格横向空旷与列信息稀疏（Sparse Table Columns - 治理）**：
-   - **现象**：在 700px+ 宽度的设备群表格中仅放了“设备组”、“运行状态”、“当前功率” 3 列，列与列之间空隙过大，视觉空洞；
-   - **治理**：补充关键暖通运行事实——增加「负荷占比」列与微型进度条（例如“冷水机组 240 kW 占当前总负荷 47.6%”），让运行工况表不仅说明“谁在开”，更说明“谁耗能最多”，大幅提升运行调度价值。
-
-6. **工业数据工程精度（Precision Consistency - 细节）**：
-   - **现象**：能效指标 COP 显示为 `5.8`，缺少工业仪表的严肃感；
-   - **治理**：涉及 COP、系统能效比等高敏感系数，统一遵循工程惯例强制保留 2 位小数（`5.80`，`minDigits = 2`），并在格式化工具函数中严密保障。
-
-
+首页采用单一四项成果带（实际、节省、节能率、费用）、全宽双线基线图、策略/舒适度、机会/关注、短系统指标带。成果数字只汇总一次；舒适度集中到约束卡，基线方法进入图表详情。中性底色、克制细边框、清楚数字层级；绿色强调正节省，风险色仅表达真实风险，未知值不表现为成功。
+不保留旧六卡/四卡 KPI、Donut/Gauge、装饰火花线、图标入口墙、等高留白或待办/接入质量拼盘要求。其他 Surface 继续遵循其已批准合同。
+期间与范围要改变事实并保留 URL 上下文；详情使用非模态 Sheet；导出真实 CSV。示例明确标记，生产依赖现有事实 owner，未接入历史/核证不能以 UI 估算冒充。
+桌面渲染与交互已评审，详见本轮实施记录。该完成状态仅覆盖首页 UI 与当前 owner 能力边界。

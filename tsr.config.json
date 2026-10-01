@@ -1,0 +1,5 @@
+{
+  "routesDirectory": "./apps/hvac-web/src/routes",
+  "generatedRouteTree": "./apps/hvac-web/src/routeTree.gen.ts",
+  "routeFileIgnorePrefix": "-"
+}

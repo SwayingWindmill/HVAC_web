@@ -1,6 +1,7 @@
 import { matchSurface, surfacePath, type SurfaceId } from './surface-catalog';
 import {
   SURFACE_WORKSPACE_PLACEMENTS,
+  WORKSPACE_CATALOG,
   type WorkspaceId,
 } from './workspace-catalog';
 
@@ -61,8 +62,20 @@ export function workspaceEntryPath(
   return undefined;
 }
 
+function matchesRouteTemplate(pathname: string, template: string): boolean {
+  const actual = pathname.replace(/\/+$/u, '').split('/').filter(Boolean);
+  const expected = template.replace(/\/+$/u, '').split('/').filter(Boolean);
+  if (actual.length !== expected.length) return false;
+  return expected.every((segment, index) => segment.startsWith(':') || segment === actual[index]);
+}
+
 export function matchWorkspace(pathname: string): WorkspaceId | undefined {
   const surface = matchSurface(pathname);
-  if (!surface) return undefined;
-  return PRIMARY_WORKSPACE_BY_SURFACE.get(surface.id);
+  if (surface) return PRIMARY_WORKSPACE_BY_SURFACE.get(surface.id);
+
+  const secondaryWorkspace = WORKSPACE_CATALOG.find((workspace) => (
+    'secondary' in workspace.routePlan
+      && workspace.routePlan.secondary.some((template) => matchesRouteTemplate(pathname, template))
+  ));
+  return secondaryWorkspace?.id;
 }

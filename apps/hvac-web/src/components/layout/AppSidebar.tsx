@@ -1,12 +1,6 @@
-import { Check, ChevronsUpDown } from 'lucide-react';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { useLocation } from '@tanstack/react-router';
+import { Zap } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import {
   Sidebar,
   SidebarContent,
@@ -20,52 +14,61 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { navigationEntryIsActive, type AppNavigationEntry, type AppNavigationGroup } from './app-navigation';
-
-interface SiteOption {
-  readonly value: string;
-  readonly label: string;
-}
+import {
+  APP_NAVIGATION_CONFIG,
+  isNavActive,
+  type AppNavigationItem,
+} from './app-navigation';
 
 interface AppSidebarProps {
-  readonly title: string;
-  readonly pathname: string;
-  readonly groups: readonly AppNavigationGroup[];
-  readonly siteId?: string;
-  readonly siteLabel: string;
-  readonly siteOptions: readonly SiteOption[];
-  readonly onSiteChange: (siteId: string) => void;
+  readonly title?: string;
   readonly onNavigate: (target: string) => void;
 }
 
-function NavigationLink({
-  entry,
-  pathname,
+function NavItem({
+  item,
+  currentPath,
+  searchStr,
   onNavigate,
 }: {
-  readonly entry: AppNavigationEntry;
-  readonly pathname: string;
+  readonly item: AppNavigationItem;
+  readonly currentPath: string;
+  readonly searchStr: string;
   readonly onNavigate: (target: string) => void;
 }) {
-  const active = navigationEntryIsActive(entry, pathname);
-  const Icon = entry.icon;
+  const active = isNavActive(item.path, currentPath);
+  const Icon = item.icon;
   const { setOpenMobile } = useSidebar();
+
+  const targetUrl = `${item.path}${searchStr}`;
 
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={active} tooltip={entry.label}>
+      <SidebarMenuButton
+        asChild
+        isActive={active}
+        tooltip={item.title}
+        className="transition-colors hover:bg-sidebar-accent/80 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-medium"
+      >
         <a
-          href={entry.path}
-          data-workspace-id={entry.workspaceId}
+          href={targetUrl}
           aria-current={active ? 'page' : undefined}
           onClick={(event) => {
             event.preventDefault();
             setOpenMobile(false);
-            onNavigate(entry.path);
+            onNavigate(targetUrl);
           }}
         >
-          <Icon aria-hidden="true" />
-          <span>{entry.label}</span>
+          <Icon className="size-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{item.title}</span>
+          {item.badge ? (
+            <Badge
+              variant={active ? 'default' : 'secondary'}
+              className="ml-auto px-1.5 py-0 text-[10px] leading-4"
+            >
+              {item.badge}
+            </Badge>
+          ) : null}
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -73,66 +76,62 @@ function NavigationLink({
 }
 
 export function AppSidebar({
-  title,
-  pathname,
-  groups,
-  siteId,
-  siteLabel,
-  siteOptions,
-  onSiteChange,
+  title = '智慧能源 SaaS 平台',
   onNavigate,
 }: AppSidebarProps) {
+  const location = useLocation();
+  const currentPath = location.pathname;
+  const searchStr = location.searchStr;
+
   return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader>
+    <Sidebar collapsible="icon" variant="inset" className="border-r border-border/60">
+      <SidebarHeader className="border-b border-border/50 pb-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
-                  <span className="grid size-8 shrink-0 place-items-center rounded-md border border-sidebar-border bg-background">
-                    <img src="/quanlaihe-mark.svg" alt="" width="20" height="20" />
-                  </span>
-                  <span className="min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
-                    <strong className="block truncate text-sm font-semibold">{title}</strong>
-                    <small className="block truncate text-xs font-normal text-muted-foreground">{siteLabel}</small>
-                  </span>
-                  <ChevronsUpDown className="ml-auto size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" aria-hidden="true" />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="right" align="start" className="w-64">
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">切换站点</div>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  {siteOptions.map((site) => (
-                    <DropdownMenuItem key={site.value} onSelect={() => onSiteChange(site.value)}>
-                      <span className="min-w-0 flex-1 truncate">{site.label}</span>
-                      {site.value === siteId ? <Check className="size-4" aria-hidden="true" /> : null}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <SidebarMenuButton
+              size="lg"
+              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground cursor-pointer"
+              onClick={() => onNavigate(`/overview${searchStr}`)}
+            >
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
+                <Zap className="size-4.5" />
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col text-left leading-tight group-data-[collapsible=icon]:hidden">
+                <span className="truncate text-sm font-semibold tracking-tight text-foreground">
+                  {title}
+                </span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  Smart Energy Cloud
+                </span>
+              </div>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
-        <nav aria-label="主导航" className="contents">
-          {groups.map((group) => (
-            <SidebarGroup key={group.id}>
-              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {group.items.map((entry) => (
-                    <NavigationLink key={entry.id} entry={entry} pathname={pathname} onNavigate={onNavigate} />
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
-        </nav>
+      <SidebarContent className="px-2 py-2">
+        {APP_NAVIGATION_CONFIG.map((group) => (
+          <SidebarGroup key={group.id} className="py-1">
+            <SidebarGroupLabel className="text-[11px] tracking-wider text-muted-foreground/80 group-data-[collapsible=icon]:hidden">
+              {group.label}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => (
+                  <NavItem
+                    key={item.id}
+                    item={item}
+                    currentPath={currentPath}
+                    searchStr={searchStr}
+                    onNavigate={onNavigate}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
+
       <SidebarRail />
     </Sidebar>
   );

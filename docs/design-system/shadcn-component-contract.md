@@ -186,7 +186,8 @@ Rules:
 - extract reusable controls only after the same behavior appears in multiple real tables;
 - register only v9 features actually used;
 - scan-heavy domains such as Devices, Alarms and Work Orders default to a ledger/table rather than cards;
-- row click may open a contextual inspector when maintaining list spatial memory is important;
+- row click opens a right-side Detail Sheet for selected-object facts while preserving list spatial memory;
+- desktop Detail Sheet is non-modal/no-overlay and must not reflow the ledger; narrow uses the same content as a modal Sheet;
 - durable complex detail uses a Route.
 
 ### 6.2 ReUI Data Grid
@@ -214,17 +215,20 @@ References:
 
 - `docs/architecture/shadcn-tablecn-reui-source-review-2026-09-20.md`
 - `docs/architecture/kibo-diceui-advanced-components-source-review-2026-09-20.md`
+- `docs/architecture/dashboardcn-source-review-2026-09-24.md`
 
-ReUI, Kibo UI and Dice UI are approved copy-and-own sources above shadcn/ui for advanced application interactions. They do not replace the shadcn primitive authority.
+ReUI, Kibo UI and Dice UI are approved copy-and-own sources above shadcn/ui for advanced application interactions. dashboardcn is approved for focused dashboard/analytics presentation patterns. None replaces the shadcn primitive authority.
 
 Selection rules:
 
 - use ReUI for strong workspace/composition candidates such as Frame, advanced Filters, Timeline, Tree/Cascader and justified advanced Data Grid;
 - use Kibo UI for functionally rich components such as Gantt, Calendar, Editor, Dropzone and complex application blocks;
 - use Dice UI for advanced interaction components such as Sortable, Kanban, Editable, Selection Toolbar, Action Bar, Tour, Tags Input and similar accessibility-heavy controls;
+- use dashboardcn for authoritative KPI/Sparkline, ordinary dashboard charts, Heatmap, Gauge, Sankey, Timeline and comparable analytics compositions when they fit the Surface Specification;
 - use Radix variants for ReUI/Dice UI in the current `radix-nova` project;
 - inspect Kibo UI component dependencies before adoption to ensure primitive/headless compatibility;
-- ordinary operational ledgers remain tablecn + project TanStack Table v9;
+- ordinary operational ledgers remain tablecn + project TanStack Table v9; dashboardcn Data Table is not an alternate ledger family;
+- high-density/multi-axis/dataZoom/brush HVAC analysis remains Apache ECharts rather than dashboardcn/Recharts;
 - when two or more sources provide the same capability, select one implementation by task semantics, keyboard/a11y quality, dependency weight, Radix compatibility, source quality/tests and state ownership;
 - never preserve parallel generic implementations behind compatibility wrappers.
 
@@ -249,7 +253,7 @@ Do not use Tabs for:
 
 If tab state matters for deep links, the Route owns the URL/search param and passes the selected tab plus callback to the feature.
 
-## 8. Dialog, Alert Dialog, Sheet and contextual inspector
+## 8. Dialog, Alert Dialog and Detail Sheet
 
 References:
 
@@ -287,32 +291,26 @@ Use `AlertDialog` for consequential confirmation where the user should explicitl
 
 Do not use ordinary Dialog for a dangerous action just because it is already available.
 
-### Sheet
+### Detail Sheet
 
-Use Sheet for transient auxiliary content that benefits from remaining spatially attached to the page but does not deserve a durable route.
-
-Do not make Sheet the universal detail pattern. Every active Sheet must provide a `SheetTitle` (it may be visually hidden when the visible surface already supplies the heading); every active Dialog must provide a `DialogTitle` for the same accessibility reason.
-
-### Contextual inspector
-
-A same-page inspector is preferred over Sheet when the user is scanning a table/canvas and repeatedly opening neighboring records while preserving place memory. It must remain subordinate to the primary work surface.
-
-For wide scan-heavy workspaces, compose the official shadcn `ResizablePanelGroup` / `ResizablePanel` / `ResizableHandle` as the layout boundary:
+Selected-object detail uses the official shadcn `Sheet` across operational workspaces.
 
 ```text
-Ledger / list
-+ ResizableHandle
-+ Context Inspector
+Ledger / list / object canvas
+→ select object
+→ right-side Detail Sheet
+→ optional durable detail Route
 ```
 
 Rules:
 
-- the ledger remains the larger primary panel;
-- panel size is layout state and is not written to Router search params unless a real product requirement appears;
-- selection updates inspector content in place;
-- the resizable primitive owns sizing mechanics only; business selection/evidence/actions stay in the feature;
-- below the workspace's validated wide breakpoint, keep the ledger intact and represent the same inspector content with official shadcn `Sheet`;
-- do not keep desktop Resizable and modal Sheet active at the same breakpoint.
+- desktop: non-modal, no overlay, fixed sensible width, no ledger/canvas reflow;
+- narrow: modal Sheet + overlay using the same information hierarchy;
+- selection updates Sheet content in place so neighboring records can be scanned without losing list context;
+- every active Sheet provides a `SheetTitle` (visually hidden only when an equivalent visible heading already exists);
+- the Sheet contains quick-decision facts, current state/evidence/owner/next action and a small number of contextual actions;
+- long forms, deep tab hierarchies, large evidence sets, full point inventories and multi-step workflows belong on durable Routes;
+- `ResizablePanelGroup` is reserved for genuine analytical two-pane canvases where both panes are primary task surfaces, not ordinary object details.
 
 ### Durable detail
 
@@ -464,12 +462,12 @@ Responsive design changes composition, not merely scale.
 
 - summary grids collapse from 4 → 2 → 1 as appropriate;
 - page actions wrap or move below headings;
-- scan-heavy contextual inspectors use a wide-screen shadcn Resizable split only while both ledger and inspector remain readable; below that validated breakpoint the same inspector content moves to Sheet;
+- selected-object detail uses one responsive Sheet contract: desktop non-modal/no-overlay; narrow modal/overlay; the primary ledger/canvas keeps its width;
 - table secondary columns may be hidden based on task priority;
 - global Sidebar uses the current official shadcn Sidebar implementation: 16rem desktop width, fixed container + layout gap, icon collapse behavior and Provider cookie contract;
 - Vite AppShell reads `sidebar_state` at the integration boundary and passes it to `SidebarProvider.defaultOpen`; do not fork the primitive for persistence;
 - `SidebarInset` may receive `min-w-0` at the call site so the official `w-full flex-1` inset can shrink beside the fixed Sidebar without page-level overflow at the `md` boundary;
-- feature inspectors use official `Sheet`; widths wider than its default `sm:max-w-sm` are declared explicitly at the feature call site rather than by reintroducing a project `SheetBody` or modifying `sheet.tsx`;
+- feature Detail Sheets use official `Sheet`; widths wider than its default `sm:max-w-sm` are declared explicitly at the feature/shared-composition call site rather than by reintroducing a project `SheetBody`;
 - engineering canvas gets minimum usable dimensions and dedicated responsive handling.
 
 Do not shrink dense desktop dashboards until all content is technically visible but unreadable.
@@ -510,11 +508,11 @@ Concise authoritative summary Cards + operational sections. Avoid KPI walls.
 
 ### Device Center
 
-TanStack v9 Data Table first. Scope/search toolbar. Same-page inspector only for rapid scanning; durable detail Route.
+TanStack v9 Data Table first. Scope/search toolbar. Row opens Detail Sheet for rapid scanning; durable detail Route for full device investigation.
 
 ### Alarm Center
 
-Compact triage summary + filters + TanStack v9 ledger. Row opens contextual inspector. ACK/Assign uses Dialog. Consequential future actions use AlertDialog. History and rules remain truthful business work surfaces, not decorative dashboards.
+Compact triage summary + filters + TanStack v9 ledger. Row opens Detail Sheet containing Alarm facts and integrated Diagnosis. ACK/Assign uses Dialog. Consequential future actions use AlertDialog.
 
 ### Work Orders
 

@@ -1,13 +1,14 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createHTTPServer } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
+
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/agent-session-workspace');
@@ -67,7 +68,7 @@ function principal() {
       delegationExpiresAt: '2026-09-05T00:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 11,
+      capabilitySetVersion: 12,
       policyRevision: 'agent-session-policy-1',
       capabilities: ['site.read'],
     },
@@ -340,46 +341,12 @@ async function stopBrowser(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
   const stopped = await Promise.race([once(child, 'exit').then(() => true), pause(1500).then(() => false)]);
-  if (!stopped && process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else if (!stopped) {
-    child.kill('SIGKILL');
-  }
+  if (!stopped) child.kill('SIGKILL');
 }
 
-const browserCandidates = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  '/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
-const windowsBrowser = browserPath.toLowerCase().endsWith('.exe');
-const windowsInterop = windowsBrowser && process.platform !== 'win32';
-const windowsTemp = windowsInterop
-  ? String(spawnSync('cmd.exe', ['/c', 'echo', '%TEMP%'], { encoding: 'utf8' }).stdout ?? '').trim()
-  : '';
-const windowsProfileArgument = windowsInterop
-  ? `${windowsTemp}\\agent-session-workspace-browser-${process.pid}`
-  : '';
-const windowsProfileDir = windowsInterop
-  ? String(spawnSync('wslpath', ['-u', windowsProfileArgument], { encoding: 'utf8' }).stdout ?? '').trim()
-  : '';
-const profileDir = windowsInterop ? windowsProfileDir : linuxProfileDir;
-const profileArgument = windowsInterop ? windowsProfileArgument : profileDir;
-const windowsHost = windowsInterop
-  ? readFileSync('/etc/resolv.conf', 'utf8').match(/^nameserver\s+(\S+)/mu)?.[1]
-  : undefined;
-const debuggerHost = windowsInterop ? windowsHost : '127.0.0.1';
-if (!profileDir || !profileArgument || !debuggerHost) throw new Error('Browser runtime path/network resolution failed.');
+const browserPath = resolveLinuxBrowserExecutable();
+const profileDir = linuxProfileDir;
+const debuggerHost = '127.0.0.1';
 
 const gatewayPort = await findAvailablePort();
 const debugPort = await findAvailablePort();
@@ -423,7 +390,7 @@ try {
     '--no-default-browser-check',
     `--remote-debugging-port=${debugPort}`,
     '--remote-debugging-address=0.0.0.0',
-    `--user-data-dir=${profileArgument}`,
+    `--user-data-dir=${profileDir}`,
     'about:blank',
   ], { stdio: 'ignore' });
   for (let attempt = 0; attempt < 300; attempt += 1) {

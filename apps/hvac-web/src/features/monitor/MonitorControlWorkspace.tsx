@@ -10,7 +10,6 @@ import {
   Layers3,
   RadioTower,
   Thermometer,
-  X,
   Zap,
 } from 'lucide-react';
 import type { Alarm } from '@/api/alarms';
@@ -23,12 +22,12 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
+import { OperationalDetailSheet } from '@/shared/ui';
 import {
   alarmSeverityLabel,
   deviceStateLabel,
@@ -182,61 +181,62 @@ function DeviceInspector({ item, site, onClose }: { item: MonitorDevice; site: R
   const visiblePoints = item.state.points.filter((point) => point.state === 'PRESENT').slice(0, 6);
   const detailSearch = new URLSearchParams({ site: site.id });
   return (
-    <aside className="control-monitor-inspector w-full shrink-0 xl:w-[340px]" aria-label={`${item.device.displayName}上下文检查器`}>
-      <Card className="h-full shadow-none">
-        <CardHeader>
-          <CardTitle>{item.device.displayName}</CardTitle>
-          <CardDescription>{monitorDeviceKindLabel(item.kind)} · {item.device.code}</CardDescription>
-          <CardAction><Button variant="ghost" size="icon-sm" aria-label="关闭设备检查器" onClick={onClose}><X /></Button></CardAction>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <div className="grid grid-cols-2 overflow-hidden rounded-md border">
-            {[
-              ['运行', monitorRunStateLabel(runState)],
-              ['连接', deviceStateLabel(item.state)],
-              ['数据新鲜度', freshnessLabel(item.state.telemetry.freshness)],
-              ['数据质量', qualityLabel(item.state.telemetry.quality)],
-            ].map(([label, value], index) => (
-              <div key={label} className={cn('p-3', index % 2 === 1 && 'border-l', index >= 2 && 'border-t')}>
-                <span className="block text-[11px] text-muted-foreground">{label}</span>
-                <strong className="mt-1 block text-xs font-medium">{value}</strong>
+    <OperationalDetailSheet
+      open
+      onClose={onClose}
+      title={item.device.displayName}
+      subtitle={`${monitorDeviceKindLabel(item.kind)} · ${item.device.code}`}
+      size={520}
+      rootClassName="control-monitor-detail-sheet"
+      footer={(
+        <div className="grid w-full gap-2 sm:grid-cols-2">
+          <Button size="sm" asChild><a href={`/devices/${encodeURIComponent(item.device.id)}?${detailSearch.toString()}`}>打开完整详情 <ArrowUpRight /></a></Button>
+          <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?device=${encodeURIComponent(item.device.id)}&source=hvac-monitor`}>查看相关告警</a></Button>
+        </div>
+      )}
+    >
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 overflow-hidden rounded-md border">
+          {[
+            ['运行', monitorRunStateLabel(runState)],
+            ['连接', deviceStateLabel(item.state)],
+            ['数据新鲜度', freshnessLabel(item.state.telemetry.freshness)],
+            ['数据质量', qualityLabel(item.state.telemetry.quality)],
+          ].map(([label, value], index) => (
+            <div key={label} className={cn('p-3', index % 2 === 1 && 'border-l', index >= 2 && 'border-t')}>
+              <span className="block text-[11px] text-muted-foreground">{label}</span>
+              <strong className="mt-1 block text-xs font-medium">{value}</strong>
+            </div>
+          ))}
+        </div>
+
+        <section>
+          <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium">当前关键值</span><small className="text-[11px] text-muted-foreground">{item.state.telemetry.presentPointCount} 个可用测点</small></div>
+          <div className="divide-y rounded-md border">
+            {visiblePoints.length > 0 ? visiblePoints.map((point) => (
+              <div key={point.pointId} className="flex items-center gap-3 px-3 py-2.5">
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{point.label}</span>
+                <strong className="text-xs font-medium tabular-nums">{point.displayValue}{point.unit ? ` ${point.unit}` : ''}</strong>
+                <Badge variant="outline">{freshnessLabel(point.freshness)}</Badge>
               </div>
-            ))}
+            )) : <p className="p-3 text-xs text-muted-foreground">当前没有可展示的实时测点。</p>}
           </div>
+        </section>
 
-          <section>
-            <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium">当前关键值</span><small className="text-[11px] text-muted-foreground">{item.state.telemetry.presentPointCount} 个可用测点</small></div>
-            <div className="divide-y rounded-md border">
-              {visiblePoints.length > 0 ? visiblePoints.map((point) => (
-                <div key={point.pointId} className="flex items-center gap-3 px-3 py-2.5">
-                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{point.label}</span>
-                  <strong className="text-xs font-medium tabular-nums">{point.displayValue}{point.unit ? ` ${point.unit}` : ''}</strong>
-                  <Badge variant="outline">{freshnessLabel(point.freshness)}</Badge>
-                </div>
-              )) : <p className="p-3 text-xs text-muted-foreground">当前没有可展示的实时测点。</p>}
-            </div>
-          </section>
-
-          <section>
-            <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium">活动告警</span><small className="text-[11px] text-muted-foreground">{item.activeAlarms.length} 条</small></div>
-            <div className="space-y-1">
-              {item.activeAlarms.length > 0 ? item.activeAlarms.slice(0, 3).map((alarm) => (
-                <a key={alarm.alarmId} className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/50" href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
-                  <Badge variant={severityTone(alarm.currentSeverity) === 'critical' ? 'destructive' : 'outline'}>{alarmSeverityLabel[alarm.currentSeverity]}</Badge>
-                  <strong className="min-w-0 flex-1 truncate text-xs font-medium">{alarm.title}</strong>
-                  <ArrowUpRight className="size-3.5 text-muted-foreground" />
-                </a>
-              )) : <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">当前没有关联活动告警。</p>}
-            </div>
-          </section>
-
-          <div className="grid gap-2 border-t pt-4">
-            <Button size="sm" asChild><a href={`/devices/${encodeURIComponent(item.device.id)}?${detailSearch.toString()}`}>打开设备详情 <ArrowUpRight /></a></Button>
-            <Button variant="outline" size="sm" asChild><a href={`${siteRoute(site, 'alarms')}?device=${encodeURIComponent(item.device.id)}&source=hvac-monitor`}>查看相关告警</a></Button>
+        <section>
+          <div className="mb-2 flex items-center justify-between"><span className="text-xs font-medium">活动告警</span><small className="text-[11px] text-muted-foreground">{item.activeAlarms.length} 条</small></div>
+          <div className="space-y-1">
+            {item.activeAlarms.length > 0 ? item.activeAlarms.slice(0, 3).map((alarm) => (
+              <a key={alarm.alarmId} className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/50" href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
+                <Badge variant={severityTone(alarm.currentSeverity) === 'critical' ? 'destructive' : 'outline'}>{alarmSeverityLabel[alarm.currentSeverity]}</Badge>
+                <strong className="min-w-0 flex-1 truncate text-xs font-medium">{alarm.title}</strong>
+                <ArrowUpRight className="size-3.5 text-muted-foreground" />
+              </a>
+            )) : <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">当前没有关联活动告警。</p>}
           </div>
-        </CardContent>
-      </Card>
-    </aside>
+        </section>
+      </div>
+    </OperationalDetailSheet>
   );
 }
 
@@ -364,7 +364,7 @@ export function MonitorControlWorkspace({
           </CardHeader>
           <CardContent className="space-y-1">
             {sortedAlarms.length > 0 ? sortedAlarms.slice(0, 4).map((alarm) => (
-              <a key={alarm.alarmId} className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/50" href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
+              <a key={alarm.alarmId} className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/50" href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>
                 <Badge variant={severityTone(alarm.currentSeverity) === 'critical' ? 'destructive' : 'outline'}>{alarmSeverityLabel[alarm.currentSeverity]}</Badge>
                 <strong className="min-w-0 flex-1 truncate text-xs font-medium">{alarm.title}</strong>
                 <small className="text-[10px] text-muted-foreground tabular-nums">{formatInstant(alarm.lastOccurredAt, site.timezone)}</small>

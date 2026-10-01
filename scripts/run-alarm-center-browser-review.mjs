@@ -111,7 +111,7 @@ try {
   client = await cdpClient(page.webSocketDebuggerUrl);
   await client.send('Runtime.enable'); await client.send('Page.enable'); await client.send('Log.enable');
   await client.send('Emulation.setDeviceMetricsOverride', { width: 1672, height: 941, deviceScaleFactor: 1, mobile: false });
-  await client.send('Page.navigate', { url: webURL });
+  await client.send('Page.navigate', { url: `${webURL}/?queueMode=alarms` });
   await waitFor(client, `document.querySelector('[data-testid="alarm-center"]') && document.body.innerText.includes('CH-03 冷水机组出水温度偏高')`, 'Alarm Center');
   await pause(500);
 
@@ -133,8 +133,8 @@ try {
   assert(desktop.sidebar?.width >= 248 && desktop.sidebar?.width <= 264 && desktop.header?.height === 56, `Alarm Center lost shared shadcn shell geometry: ${JSON.stringify({ sidebar: desktop.sidebar, header: desktop.header })}`);
   assert(desktop.load?.top < 260 && desktop.ledger?.top < 520, 'Triage ledger is not visible early enough in the first viewport');
   assert(desktop.rows === 2, `Active ledger expected 2 rows, got ${desktop.rows}`);
-  assert(JSON.stringify(desktop.tabs) === JSON.stringify(['当前活动','历史','已搁置','告警绩效']), `Peer views drifted: ${JSON.stringify(desktop.tabs)}`);
-  for (const header of ['等级','告警 / 来源','物理状态','确认','负责人','持续','重复','搁置','最近变化']) assert(desktop.headers.includes(header), `Ledger lost column ${header}`);
+  assert(JSON.stringify(desktop.tabs) === JSON.stringify(['问题处置','告警分析']), `Task modes drifted: ${JSON.stringify(desktop.tabs)}`);
+  for (const header of ['等级','告警 / 来源','物理状态','确认','诊断','负责人','持续','重复','搁置','最近变化']) assert(desktop.headers.includes(header), `Ledger lost column ${header}`);
   assert(desktop.tableRegion === 'region' && desktop.ant === 0 && desktop.oldText.length === 0, `Ledger composition or semantics regressed: ${JSON.stringify(desktop)}`);
   for (const fact of ['活动告警','未确认','未指派','已搁置']) assert(desktop.text.includes(fact), `Load context lost ${fact}`);
   const desktopShot = await client.send('Page.captureScreenshot', { format:'png', captureBeyondViewport:false });
@@ -142,20 +142,30 @@ try {
 
   const rowKeyboard = await evaluate(client, `(() => { const row=document.querySelector('[data-testid="alarm-triage-ledger"] [data-slot="table-body"] [data-slot="table-row"]'); if (!(row instanceof HTMLElement)) return false; row.focus(); row.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); return true; })()`);
   assert(rowKeyboard, 'Could not keyboard-select Alarm row');
-  await waitFor(client, `document.querySelector('aside[aria-label="告警详情"] [data-testid="alarm-inspector-content"]') && location.search.includes('selected=')`, 'Desktop inspector');
-  const inspector = await evaluate(client, `(() => ({
-    text:document.querySelector('aside[aria-label="告警详情"]')?.textContent ?? '',
-    visible:Boolean(document.querySelector('aside[aria-label="告警详情"]')?.getClientRects().length),
-    sheetOverlay:Boolean(document.querySelector('[data-slot="sheet-overlay"]')),
-    internalIdVisible:/01910000-/.test(document.body.innerText),
-  }))()`);
-  assert(inspector.visible && !inspector.sheetOverlay, `Desktop Inspector incorrectly used modal Sheet: ${JSON.stringify(inspector)}`);
+  await waitFor(client, `document.querySelector('[data-testid="alarm-detail-sheet-content"]')?.closest('[data-slot="sheet-content"]') && location.search.includes('selected=')`, 'Desktop Detail Sheet');
+  const inspector = await evaluate(client, `(() => {
+    const sheet=document.querySelector('[data-testid="alarm-detail-sheet-content"]')?.closest('[data-slot="sheet-content"]');
+    const ledger=document.querySelector('[data-testid="alarm-triage-ledger"]');
+    return {
+      text:sheet?.textContent ?? '',
+      visible:Boolean(sheet?.getClientRects().length),
+      width:sheet instanceof HTMLElement ? Math.round(sheet.getBoundingClientRect().width) : 0,
+      ledgerWidth:ledger instanceof HTMLElement ? Math.round(ledger.getBoundingClientRect().width) : 0,
+      sheetOverlay:Boolean(document.querySelector('[data-slot="sheet-overlay"]')),
+      internalIdVisible:/01910000-/.test(document.body.innerText),
+    };
+  })()`);
+  assert(inspector.visible && !inspector.sheetOverlay, `Desktop Detail Sheet must be non-modal/no-overlay: ${JSON.stringify(inspector)}`);
+  assert(inspector.width >= 480 && inspector.width <= 640, `Desktop Detail Sheet width drifted: ${inspector.width}`);
+  assert(inspector.ledgerWidth === desktop.ledger?.width, `Opening Detail Sheet changed ledger width: ${JSON.stringify({ before: desktop.ledger?.width, after: inspector.ledgerWidth })}`);
   assert(!inspector.internalIdVisible, 'Alarm Center leaked internal UUID into operator text');
-  for (const item of ['首次发生','持续时间','确认状态','负责人','重复次数','来源','进入诊断','系统运行','设备详情','进入工单']) assert(inspector.text.includes(item), `Inspector lost ${item}`);
+  for (const item of ['当前告警','首次发生','持续时间','确认状态','负责人','诊断状态','诊断与原因排查','原因状态','下一验证','证据','状态与处置时间线','继续调查','查看趋势','系统运行','设备详情','进入工单']) assert(inspector.text.includes(item), `Detail Sheet lost ${item}`);
+  assert(!inspector.text.includes('原因已确认'), 'Detail Sheet promoted an unverified diagnosis into a confirmed cause.');
+  assert(!inspector.text.includes('进入诊断'), 'Diagnosis regressed to a peer-page handoff instead of staying inside the selected Alarm context.');
   const selectedShot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   await writeFile(join(outputRoot, '09-selected-desktop.png'), Buffer.from(selectedShot.data, 'base64'));
 
-  assert(await clickText(client, 'aside[aria-label="告警详情"] button', '确认告警'), 'ACK action unavailable');
+  assert(await clickText(client, '[data-slot="sheet-content"] button', '确认告警'), 'ACK action unavailable');
   await waitFor(client, `document.querySelector('[data-testid="alarm-ack-dialog"]')`, 'ACK dialog');
   const ackText = await evaluate(client, `document.querySelector('[data-testid="alarm-ack-dialog"]')?.textContent ?? ''`);
   assert(ackText.includes('不会改变告警的物理活动状态'), 'ACK dialog lost physical-state independence warning');
@@ -164,11 +174,11 @@ try {
   await pause(150);
 
   await client.send('Page.navigate',{url:`${webURL}/?alarmView=performance`});
-  await waitFor(client, `document.body.innerText.includes('当前没有可用的告警绩效统计')`, 'Performance empty state');
+  await waitFor(client, `document.body.innerText.includes('告警分析数据尚未接入')`, 'Analysis unavailable state');
   const performanceText = await evaluate(client, `document.body.innerText`);
-  assert(performanceText.includes('不使用前端阈值推算') && !performanceText.includes('10 alarms / 10 min'), 'Performance view invented ownerless alarm KPI');
+  assert(performanceText.includes('后端需要提供触发、确认、恢复、诊断覆盖') && !performanceText.includes('10 alarms / 10 min'), 'Analysis view invented ownerless alarm KPI');
 
-  await client.send('Page.navigate',{url:webURL});
+  await client.send('Page.navigate',{url:`${webURL}/?queueMode=alarms`});
   await waitFor(client, `document.querySelector('[data-testid="alarm-triage-ledger"] [data-slot="table-body"] [data-slot="table-row"]')`, 'Alarm ledger reset');
   await client.send('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:1,mobile:false});
   await pause(250);
@@ -177,10 +187,10 @@ try {
   const narrow = await evaluate(client, `(() => ({
     page:{scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth},
     sheet:Boolean(document.querySelector('[data-slot="sheet-content"]')?.getClientRects().length),
-    desktopInspector:Boolean(document.querySelector('aside[aria-label="告警详情"]')?.getClientRects().length),
+    overlay:Boolean(document.querySelector('[data-slot="sheet-overlay"]')?.getClientRects().length),
     tableContainer:(()=>{const n=document.querySelector('[aria-label="告警，可横向滚动"] [data-slot="table-container"]'); return n ? {scrollWidth:n.scrollWidth,clientWidth:n.clientWidth}:null;})(),
   }))()`);
-  assert(narrow.page.scrollWidth <= narrow.page.clientWidth && narrow.sheet && !narrow.desktopInspector, `Narrow layout failed: ${JSON.stringify(narrow)}`);
+  assert(narrow.page.scrollWidth <= narrow.page.clientWidth && narrow.sheet && narrow.overlay, `Narrow layout failed: ${JSON.stringify(narrow)}`);
   assert(narrow.tableContainer && narrow.tableContainer.scrollWidth >= narrow.tableContainer.clientWidth, 'Narrow table did not keep its own scroll region');
   await client.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
   await client.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
@@ -195,7 +205,16 @@ try {
   const reflow = await evaluate(client, `({scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth,ledger:Boolean(document.querySelector('[data-testid="alarm-triage-ledger"]'))})`);
   assert(reflow.scrollWidth <= reflow.clientWidth && reflow.ledger, `Alarm Center failed 320px reflow: ${JSON.stringify(reflow)}`);
 
-  const errors = client.events.filter((event)=>event.method==='Runtime.exceptionThrown'||(event.method==='Log.entryAdded'&&event.params?.entry?.level==='error')).map((event)=>event.params?.exceptionDetails?.exception?.description??event.params?.entry?.text??event.method);
+  const errors = client.events
+    .filter((event) => event.method === 'Runtime.exceptionThrown' || (event.method === 'Log.entryAdded' && event.params?.entry?.level === 'error'))
+    .filter((event) => {
+      const url = event.params?.entry?.url ?? '';
+      const expectedTargetContractMiss = url.includes('/api/v1/sites/')
+        && url.includes('/issues/')
+        && (url.endsWith('/investigation') || url.includes('/issues/performance'));
+      return !expectedTargetContractMiss;
+    })
+    .map((event) => event.params?.exceptionDetails?.exception?.description ?? event.params?.entry?.text ?? event.method);
   assert(errors.length===0,`Browser errors: ${errors.join(' | ')}`);
   console.log(JSON.stringify({ conclusion:'passed', webURL, screenshots:['out/alarm-center-review/09-active-desktop.png','out/alarm-center-review/09-active-narrow.png'], desktop, narrow, reflow },null,2));
 } finally {

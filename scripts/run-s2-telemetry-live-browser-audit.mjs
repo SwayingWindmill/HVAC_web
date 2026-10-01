@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createServer } from 'vite';
 import WebSocket from 'ws';
+import { resolveLinuxBrowserExecutable } from './lib/browser-runtime.mjs';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/s2-telemetry-live');
@@ -12,15 +13,7 @@ const outputPath = resolve(root, 'out/s2-telemetry-live-client/browser-live-clie
 const debugPort = Number(process.env.S2_LIVE_DEBUG_PORT ?? 9375);
 const profileDir = join(tmpdir(), `s2-live-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const browserPath = [
-  process.env.BROWSER_BINARY,
-  process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
-  join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium',
-].filter(Boolean).find((candidate) => existsSync(candidate));
-if (!browserPath) throw new Error('A CDP-compatible browser was not found');
+const browserPath = resolveLinuxBrowserExecutable();
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 

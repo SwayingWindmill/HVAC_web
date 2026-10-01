@@ -1,13 +1,10 @@
-import { Suspense } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute } from '@tanstack/react-router';
 import { fallback, zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
-import { RouteLoading } from '@/app/RouteLoading';
+
 import { requireCapabilities } from '@/app/route-access';
-import { IssuesWorkspace } from '@/features/issues/IssuesWorkspace';
 
 const issuesSearchSchema = z.object({
-  view: fallback(z.enum(['alarms', 'diagnostics']), 'alarms').optional(),
   alarmView: fallback(z.enum(['active', 'history', 'suppressed', 'performance']), 'active').optional(),
   q: z.string().optional(),
   severity: z.enum(['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO']).optional(),
@@ -18,8 +15,12 @@ const issuesSearchSchema = z.object({
   source: z.string().optional(),
   device: z.string().optional(),
   deviceId: z.string().optional(),
-  diagnosis: z.string().optional(),
-  alarm: z.string().optional(),
+  performancePeriod: z.enum(['7d', '30d', '90d']).optional(),
+  queueMode: z.enum(['problems', 'alarms']).optional(),
+  selectedIssue: z.string().optional(),
+  issueState: z.enum(['OPEN', 'INVESTIGATING', 'ACTION_PENDING', 'VERIFYING', 'RESOLVED']).optional(),
+  diagnosis: z.enum(['PENDING', 'PUBLISHED', 'EVIDENCE_LIMITED', 'ROOT_CAUSE_CONFIRMED']).optional(),
+  impact: z.enum(['quantified', 'high-risk']).optional(),
 });
 
 export const Route = createFileRoute('/_app/sites/$siteId/issues')({
@@ -33,30 +34,5 @@ export const Route = createFileRoute('/_app/sites/$siteId/issues')({
     requiredCapabilities: ['site.read'],
     navigation: { id: 'site-issues', label: '告警与诊断', group: 'management', order: 30, siteLeaf: 'issues' },
   },
-  component: IssuesRoute,
+  component: Outlet,
 });
-
-function IssuesRoute() {
-  const { site, principal, runtime } = Route.useRouteContext();
-  const searchState = Route.useSearch();
-  const navigate = Route.useNavigate();
-
-  return (
-    <section data-route-state="READY" data-site-id={site.id} data-site-route="issues" aria-label="告警与诊断">
-      <Suspense fallback={<RouteLoading label="正在加载告警与诊断" />}>
-        <IssuesWorkspace
-          site={site}
-          principal={principal}
-          runtime={runtime}
-          searchState={searchState}
-          onSearchChange={(patch) => {
-            void navigate({
-              search: (previous) => ({ ...previous, ...patch }),
-              replace: true,
-            });
-          }}
-        />
-      </Suspense>
-    </section>
-  );
-}

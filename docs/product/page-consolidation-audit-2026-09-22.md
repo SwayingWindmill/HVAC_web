@@ -44,7 +44,8 @@ Sidebar 只列 Primary Workspace，不列所有 Capability。
 | 运行 | 04 + 08 | 系统运行 / 空间环境 tabs | Comfort/IEQ 是运行与优化 guardrail，不必长期占一个一级页面 |
 | 趋势 | 05 | Analysis Workspace | 保持独立，跨对象、跨事件的时序调查需要稳定 URL |
 | 设备 | 06 + 07 quick inspect | Ledger + Sheet Inspector | 07 的完整详情 Route 仅用于持续调查 |
-| 事件与工作 | 09 + 10 + 11 + 13 | 告警 / 诊断 / 工单 / 验证 tabs | 共享同一异常处置闭环；保留对象间语义边界，不再占四个 Sidebar 项 |
+| 告警与诊断 | 09 + 10 | Alarm-led issue ledger + integrated Diagnosis | 一个问题从 Alarm 事实进入 Finding / evidence / next verification；不再用告警/诊断平级 Tabs |
+| 工单与验证 | 11 + 13 | 工单 / 验证 task views | 接收问题调查结果并执行整改与验证；与 Alarm/Finding 生命周期保持分离 |
 | 能源与绩效 | 14 + 15 + 16 + 17 + 18 + 19 + 20 | 用能 / 需量 / 能效 / 绩效方法 / 成本 / 碳 / 灵活性 capability tabs | 共享 period、comparison、baseline、meter lineage；按 capability 显示 tab |
 | 改进 | 21 + 22 + 23 + 24 + 30 | 机会 / 方案 / 行动计划 / M&V / 管理评审 | 对应持续改进闭环；复杂方案和 M&V 项目可进入 durable detail |
 | 控制与策略 | 25 + 26 + 28 | 即时控制 / 策略 / 执行记录 tabs | 27 策略详情保留 durable route，用于仿真、版本、审批、发布 |
@@ -158,20 +159,17 @@ Row → Sheet。
 Sheet 中提供“打开设备详情”。
 07 保留 hidden durable route。
 
-### B. 告警 09 / 诊断 10 / 工单 11 / 验证 13
+### B. 告警 09 / 诊断 10 与工单 11 / 验证 13
 
-合并为“事件与工作”工作台。
-
-建议 URL：
+最终不把四个 Surface 压成同一个 Tab 容器，而是形成两个相邻 Workspace：
 
 ```text
-/sites/:siteId/work?view=alarms
-/sites/:siteId/work?view=diagnostics
-/sites/:siteId/work?view=orders
-/sites/:siteId/work?view=verification
+/sites/:siteId/issues?alarmView=active
+/sites/:siteId/issues?selected=:alarmId
+/sites/:siteId/work-orders
 ```
 
-对象之间通过 sourceContext 串联，不通过四个一级导航来表达闭环。
+`告警与诊断` 以 Alarm 为问题入口，Diagnosis 直接进入所选 Alarm 的 investigation context；`工单与验证` 负责整改执行与验证。对象之间通过显式 Alarm / Finding / Work identity 与 sourceContext 串联，ACK / Clear / Finding / Root Cause / Work Complete 仍是不同事实。
 
 12 工单详情继续保留 durable route。
 

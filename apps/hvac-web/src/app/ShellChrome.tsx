@@ -1,10 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
-import { useLocation, useRouter } from '@tanstack/react-router';
-import type { Capability } from '@/api/generated/platformGateway.gen';
+import { useLocation } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppSidebar } from '@/components/layout/AppSidebar';
-import { buildAppNavigation } from '@/components/layout/app-navigation';
-import { useShellNotifications } from '@/components/layout/use-shell-notifications';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,9 +13,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { matchSurface, surfacePath, WIREFRAME_READY_SURFACE_IDS } from './surface-catalog';
-import { getWorkspace } from './workspace-catalog';
-import { matchWorkspace, workspaceEntryPath } from './workspace-route-manifest';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime-status';
 import { useAppTheme } from './ThemeGate';
 import type { ShellSnapshot } from './shell-runtime';
@@ -103,11 +97,9 @@ function principalRoleLabel(role: string | undefined): string {
 export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const runtime = useShellRuntime();
   const snapshot = useShellSnapshot();
-  const router = useRouter();
   const location = useLocation();
   const { resolvedMode: themeMode, setMode: setThemeMode } = useAppTheme();
   const principal = snapshot.principal!;
-  const pathname = location.pathname;
   const transition = snapshot.siteTransition;
   const protectedScope = snapshot.protectedScope;
   const activeSite = protectedScope?.siteId ? snapshot.sites?.items?.find((candidate) => candidate.id === protectedScope.siteId) : undefined;
@@ -115,43 +107,11 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const realtimePresentation = realtimeStatusPresentation(realtime);
   const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? '暂无活动站点' : '平台范围');
-  const capabilities = useMemo(() => new Set<string>(principal.authorization.capabilities), [principal.authorization.capabilities]);
-  const appNavigation = useMemo(() => buildAppNavigation({ siteId: activeSite?.id, capabilities }), [activeSite?.id, capabilities]);
-  const currentSurface = matchSurface(pathname);
-  const currentWorkspaceId = matchWorkspace(pathname);
-  const currentWorkspace = currentWorkspaceId ? getWorkspace(currentWorkspaceId) : undefined;
-  const currentWorkspaceEntry = currentWorkspaceId ? workspaceEntryPath(currentWorkspaceId, { siteId: activeSite?.id }) : undefined;
-  const pageTitle = currentWorkspace && currentWorkspaceEntry === pathname
-    ? currentWorkspace.label
-    : currentSurface?.title ?? currentWorkspace?.label ?? '智慧能源';
   const principalRole = principalRoleLabel(principal.principal.roles[0]);
-  const sites = snapshot.sites?.items ?? [];
-
   const defaultSidebarOpen = useMemo(sidebarDefaultOpen, []);
-
-  const notifications = useMemo(() => {
-    const platformState = snapshot.platform?.state ?? 'checking';
-    return Object.values(router.routesById).find((route) => {
-      if (route.fullPath !== '/notifications') return false;
-      const required = route.options.staticData?.requiredCapabilities ?? [];
-      if (!required.every((capability: Capability) => capabilities.has(capability))) return false;
-      return !route.options.staticData?.requiresPlatform || (platformState !== 'checking' && platformState !== 'unavailable');
-    });
-  }, [capabilities, router.routesById, snapshot.platform?.state]);
-  const notificationInbox = useShellNotifications(Boolean(notifications), principal.principal.subject);
 
   const navigate = (target: string) => {
     void runtime.requestSiteNavigation(target);
-  };
-
-  const changeSite = (siteId: string) => {
-    const site = sites.find((candidate) => candidate.id === siteId);
-    if (!site) return;
-    if (currentSurface?.scope === 'site' && WIREFRAME_READY_SURFACE_IDS.has(currentSurface.id)) {
-      navigate(`${surfacePath(currentSurface.id, { siteId: site.id })}${location.searchStr}`);
-      return;
-    }
-    navigate(surfacePath('03', { siteId: site.id }));
   };
 
   const retryHref = `${location.pathname}${location.searchStr}${location.hash}`;
@@ -159,13 +119,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar
-        title="泉来禾智慧能源"
-        pathname={pathname}
-        groups={appNavigation.groups}
-        siteId={activeSite?.id}
-        siteLabel={siteLabel}
-        siteOptions={sites.map((site) => ({ value: site.id, label: site.displayName }))}
-        onSiteChange={changeSite}
+        title="智慧能源 SaaS 平台"
         onNavigate={navigate}
       />
       <SidebarInset
@@ -183,22 +137,11 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         data-realtime-site={realtime.siteId}
       >
         <AppHeader
-          pageTitle={pageTitle}
-          pageTitleAsHeading={currentSurface?.pattern !== 'detail'}
-          scopeLabel={siteLabel}
-          navigation={appNavigation.entries}
           principalName={principal.principal.displayName}
           principalRole={principalRole}
           themeMode={themeMode}
-          submittingLogout={snapshot.logout?.status === 'submitting'}
-          notificationCount={notificationInbox.count}
-          notificationLabel={notifications ? '打开通知中心' : '当前账号无通知中心访问权限'}
-          notificationDisabled={!notifications}
-          realtimeLabel={realtimePresentation.label}
-          realtimeState={realtime.state}
-          onNavigate={navigate}
-          onNotificationOpen={() => { if (notifications) navigate('/notifications'); }}
           onThemeToggle={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+          onNavigate={navigate}
           onLogout={() => { void runtime.logout(); }}
         />
 

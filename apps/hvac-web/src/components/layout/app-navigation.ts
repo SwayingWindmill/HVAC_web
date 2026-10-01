@@ -1,85 +1,177 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
-  ChartNoAxesCombined,
-  ClipboardList,
+  Award,
+  BarChart3,
+  CalendarCheck2,
   FileText,
+  GitFork,
   LayoutDashboard,
   Lightbulb,
+  LineChart,
   ServerCog,
   Settings2,
   ShieldAlert,
+  Sparkles,
   Workflow,
+  Zap,
 } from 'lucide-react';
-import {
-  WORKSPACE_CATALOG,
-  type WorkspaceId,
-} from '@/app/workspace-catalog';
-import {
-  matchWorkspace,
-  workspaceEntryPath,
-} from '@/app/workspace-route-manifest';
 
-export interface AppNavigationEntry {
+export interface AppNavSubItem {
   readonly id: string;
-  readonly workspaceId: WorkspaceId;
-  readonly label: string;
+  readonly title: string;
   readonly path: string;
-  readonly group: 'workspace';
-  readonly icon: LucideIcon;
+  readonly badge?: string;
 }
 
 export interface AppNavigationGroup {
-  readonly id: 'workspace';
+  readonly id: string;
   readonly label: string;
-  readonly items: readonly AppNavigationEntry[];
+  readonly icon?: LucideIcon;
+  readonly items: readonly AppNavigationItem[];
 }
 
-const ICONS: Readonly<Record<WorkspaceId, LucideIcon>> = {
-  overview: LayoutDashboard,
-  operations: Activity,
-  devices: ServerCog,
-  issues: ShieldAlert,
-  work: ClipboardList,
-  performance: ChartNoAxesCombined,
-  improvements: Lightbulb,
-  automation: Workflow,
-  reports: FileText,
-  settings: Settings2,
-};
-
-export function buildAppNavigation({
-  siteId,
-}: {
-  readonly siteId?: string;
-  readonly capabilities: ReadonlySet<string>;
-}): {
-  readonly entries: readonly AppNavigationEntry[];
-  readonly groups: readonly AppNavigationGroup[];
-} {
-  const entries = WORKSPACE_CATALOG.flatMap<AppNavigationEntry>((workspace) => {
-    const path = workspaceEntryPath(workspace.id, { siteId });
-    if (!path) return [];
-    return [{
-      id: `workspace-${workspace.id}`,
-      workspaceId: workspace.id,
-      label: workspace.label,
-      path,
-      group: 'workspace',
-      icon: ICONS[workspace.id],
-    }];
-  });
-
-  return {
-    entries,
-    groups: [{
-      id: 'workspace',
-      label: '工作区',
-      items: entries,
-    }],
-  };
+export interface AppNavigationItem {
+  readonly id: string;
+  readonly title: string;
+  readonly path: string;
+  readonly icon: LucideIcon;
+  readonly badge?: string;
+  readonly children?: readonly AppNavSubItem[];
 }
 
-export function navigationEntryIsActive(entry: AppNavigationEntry, pathname: string): boolean {
-  return matchWorkspace(pathname) === entry.workspaceId;
+export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
+  {
+    id: 'overview-group',
+    label: '核心决策',
+    items: [
+      {
+        id: 'overview',
+        title: '总览看板',
+        path: '/overview',
+        icon: LayoutDashboard,
+      },
+    ],
+  },
+  {
+    id: 'energy-optimization',
+    label: '节能优化 (闭环主动脉)',
+    items: [
+      {
+        id: 'optimization-opportunities',
+        title: '节能机会',
+        path: '/optimization/opportunities',
+        icon: Lightbulb,
+        badge: '8',
+      },
+      {
+        id: 'optimization-projects',
+        title: '节能项目',
+        path: '/optimization/projects',
+        icon: Sparkles,
+      },
+      {
+        id: 'optimization-verification',
+        title: '节能验证 (M&V)',
+        path: '/optimization/verification',
+        icon: Award,
+      },
+    ],
+  },
+  {
+    id: 'energy-analytics',
+    label: '能源分析 (洞察与对标)',
+    items: [
+      {
+        id: 'analytics-consumption',
+        title: '能耗与成本',
+        path: '/energy-analysis/consumption',
+        icon: LineChart,
+      },
+      {
+        id: 'analytics-load-demand',
+        title: '负荷与需量',
+        path: '/energy-analysis/load-demand',
+        icon: Zap,
+      },
+      {
+        id: 'analytics-breakdown',
+        title: '分项与能流',
+        path: '/energy-analysis/breakdown',
+        icon: GitFork,
+      },
+      {
+        id: 'analytics-benchmarking',
+        title: '绩效与对标',
+        path: '/energy-analysis/benchmarking',
+        icon: BarChart3,
+      },
+    ],
+  },
+  {
+    id: 'operations-management',
+    label: '运行管理 (现场与控制)',
+    items: [
+      {
+        id: 'operations-realtime',
+        title: '实时运行',
+        path: '/operations/realtime',
+        icon: Activity,
+      },
+      {
+        id: 'operations-systems-devices',
+        title: '系统与设备',
+        path: '/operations/systems-devices',
+        icon: ServerCog,
+      },
+      {
+        id: 'operations-alarms',
+        title: '异常与告警',
+        path: '/operations/alarms',
+        icon: ShieldAlert,
+        badge: '2',
+      },
+      {
+        id: 'operations-work-center',
+        title: '工作中心',
+        path: '/operations/work-center',
+        icon: CalendarCheck2,
+      },
+      {
+        id: 'operations-control',
+        title: '策略与控制',
+        path: '/operations/control',
+        icon: Workflow,
+      },
+    ],
+  },
+  {
+    id: 'reports-and-config',
+    label: '交付与底座',
+    items: [
+      {
+        id: 'reports',
+        title: '报告中心',
+        path: '/reports',
+        icon: FileText,
+      },
+      {
+        id: 'settings',
+        title: '系统配置',
+        path: '/settings',
+        icon: Settings2,
+      },
+    ],
+  },
+];
+
+export function getFlattenedNavigationItems(): readonly AppNavigationItem[] {
+  return APP_NAVIGATION_CONFIG.flatMap((g) => g.items);
+}
+
+export function isNavActive(itemPath: string, currentPath: string): boolean {
+  if (itemPath === '/overview') {
+    return currentPath === '/' || currentPath === '/overview' || currentPath.startsWith('/overview');
+  }
+  return currentPath.startsWith(itemPath);
 }

@@ -215,7 +215,7 @@ export function TerminalReferenceMonitorPage({
       header: '告警',
       cell: ({ row }) => row.original.activeAlarms.length > 0 ? (
         <Button variant="link" className="h-auto p-0 font-semibold text-rose-600 dark:text-rose-400" asChild>
-          <a href={`${siteRoute(site, 'alarms')}?deviceId=${encodeURIComponent(row.original.device.id)}&device=${encodeURIComponent(row.original.device.displayName)}&source=terminal-monitor&alarm=${encodeURIComponent(row.original.activeAlarms[0]!.alarmId)}`}>
+          <a href={`${siteRoute(site, 'alarms')}?deviceId=${encodeURIComponent(row.original.device.id)}&device=${encodeURIComponent(row.original.device.displayName)}&source=terminal-monitor&selected=${encodeURIComponent(row.original.activeAlarms[0]!.alarmId)}`}>
             {row.original.activeAlarms.length}
           </a>
         </Button>
@@ -337,7 +337,7 @@ export function TerminalReferenceMonitorPage({
                 {terminalAlarmDevices.slice(0, 3).map((item) => {
                   const alarm = item.activeAlarms[0]!;
                   return (
-                    <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?deviceId=${encodeURIComponent(item.device.id)}&alarm=${encodeURIComponent(alarm.alarmId)}&source=terminal-monitor`}>
+                    <a key={alarm.alarmId} href={`${siteRoute(site, 'alarms')}?deviceId=${encodeURIComponent(item.device.id)}&selected=${encodeURIComponent(alarm.alarmId)}&source=terminal-monitor`}>
                       <Badge variant="outline" className={alarmSeverityBadgeClass[alarm.currentSeverity]}>{alarm.currentSeverity === 'CRITICAL' || alarm.currentSeverity === 'MAJOR' ? '异常' : '预警'}</Badge>
                       <span><strong>{alarm.title}</strong><small>{item.device.displayName}</small></span>
                     </a>

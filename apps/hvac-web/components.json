@@ -24,6 +24,9 @@
   "registries": {
     "@tablecn": "https://www.tablecn.com/r/{style}/{name}.json",
     "@reui": "https://reui.io/r/{style}/{name}.json",
-    "@shadcnblocks": "https://www.shadcnblocks.com/r/{style}/{name}"
+    "@diceui": "https://diceui.com/r/{style}/{name}.json",
+    "@kibo-ui": "https://www.kibo-ui.com/r/{name}.json",
+    "@dashboardcn": "https://dashboardcn.com/r/{name}.json",
+    "@shadcnblocks": "https://shadcnblocks.com/r/{name}.json"
   }
 }

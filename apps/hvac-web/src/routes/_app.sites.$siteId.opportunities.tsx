@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { RouteLoading } from '@/app/RouteLoading';
 import { requireCapabilities } from '@/app/route-access';
-import { OpportunitiesWorkspace } from '@/features/opportunities/OpportunitiesWorkspace';
+import { OpportunitiesWorkspace } from '@/features/opportunities/components/OpportunitiesWorkspace';
 
 export const Route = createFileRoute('/_app/sites/$siteId/opportunities')({
   beforeLoad: ({ context }) => {
@@ -17,10 +17,9 @@ export const Route = createFileRoute('/_app/sites/$siteId/opportunities')({
 });
 
 function OpportunitiesRoute() {
-  const { site, principal } = Route.useRouteContext();
   return (
     <Suspense fallback={<RouteLoading label="正在加载节能机会" />}>
-      <OpportunitiesWorkspace site={site} principal={principal} />
+      <OpportunitiesWorkspace />
     </Suspense>
   );
 }

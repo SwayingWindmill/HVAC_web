@@ -21,7 +21,7 @@ export type SurfacePlacementKind =
   | 'settings-child'
   | 'capability-view';
 
-export type WorkspaceInspectorMode = 'none' | 'split-inspector' | 'quick-preview';
+export type WorkspaceInspectorMode = 'none' | 'sheet';
 
 export interface WorkspaceRoutePlan {
   readonly portfolio?: string;
@@ -101,7 +101,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'comfort', label: '空间与环境', surfaceIds: ['08'], capability: 'comfort-ieq' },
     ],
     designSourceSurfaceIds: ['04', '05', '08', '25'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '理解 HVAC 当前如何运行，并在对象上下文中连续调查实时、历史、告警与控制事实。',
   },
   {
@@ -116,7 +116,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'ledger', label: '设备', surfaceIds: ['06'] },
     ],
     designSourceSurfaceIds: ['06', '07'],
-    inspector: 'quick-preview',
+    inspector: 'sheet',
     description: '扫描、筛选和比较设备；列表保持完整宽度，Quick Preview 只承担当前对象的快速判断，持续调查进入 durable detail。',
   },
   {
@@ -125,14 +125,14 @@ export const WORKSPACE_CATALOG = [
     scopes: ['site'],
     routePlan: {
       site: '/sites/:siteId/issues',
+      secondary: ['/sites/:siteId/issues/:issueId'],
     },
     views: [
-      { id: 'alarms', label: '告警', surfaceIds: ['09'] },
-      { id: 'diagnostics', label: '诊断', surfaceIds: ['10'] },
+      { id: 'issues', label: '问题处置', surfaceIds: ['09', '10'] },
     ],
     designSourceSurfaceIds: ['09', '10'],
-    inspector: 'split-inspector',
-    description: '从权威告警事实进入证据化诊断，同时保持 Alarm 与 Finding / Hypothesis 语义分离。',
+    inspector: 'sheet',
+    description: '默认按待处理问题归并相关告警；Sheet 用于快速判断，持续排查进入完整问题详情，原始告警始终保留可追溯。',
   },
   {
     id: 'work',
@@ -147,7 +147,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'verification', label: '验证', surfaceIds: ['13'] },
     ],
     designSourceSurfaceIds: ['11', '12', '13'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '管理执行责任、SLA 和下一动作，并在修正后验证系统是否恢复预期。',
   },
   {
@@ -189,7 +189,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'reviews', label: '管理评审', surfaceIds: ['30'] },
     ],
     designSourceSurfaceIds: ['21', '22', '23', '24', '30'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '把证据化机会转成受控改进，并持续追踪行动、验证收益和管理决策。',
   },
   {
@@ -205,7 +205,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'executions', label: '执行记录', surfaceIds: ['28'] },
     ],
     designSourceSurfaceIds: ['25', '26', '27', '28'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '管理长期自动化策略及其版本、审批和不可含糊的执行事实。',
   },
   {
@@ -219,7 +219,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'reports', label: '报告', surfaceIds: ['29'] },
     ],
     designSourceSurfaceIds: ['29'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '生成、计划、分发和追溯正式业务报告。',
   },
   {
@@ -239,7 +239,7 @@ export const WORKSPACE_CATALOG = [
       { id: 'access', label: '用户、权限与审计', surfaceIds: ['36'] },
     ],
     designSourceSurfaceIds: ['31', '32', '33', '34', '35', '36'],
-    inspector: 'split-inspector',
+    inspector: 'sheet',
     description: '集中管理系统结构、数据、规则、集成和授权，不与日常运营工作台平铺。',
   },
 ] as const satisfies readonly WorkspaceDefinition[];
@@ -253,8 +253,8 @@ export const SURFACE_WORKSPACE_PLACEMENTS = [
   { surfaceId: '06', kind: 'workspace-core', workspaceIds: ['devices'], viewId: 'ledger' },
   { surfaceId: '07', kind: 'durable-detail', workspaceIds: ['devices'] },
   { surfaceId: '08', kind: 'capability-view', workspaceIds: ['operations'], viewId: 'comfort' },
-  { surfaceId: '09', kind: 'workspace-view', workspaceIds: ['issues'], viewId: 'alarms' },
-  { surfaceId: '10', kind: 'workspace-view', workspaceIds: ['issues'], viewId: 'diagnostics' },
+  { surfaceId: '09', kind: 'workspace-core', workspaceIds: ['issues'], viewId: 'issues' },
+  { surfaceId: '10', kind: 'contextual-capability', workspaceIds: ['issues'], viewId: 'issues', note: 'Diagnosis lives inside the selected Alarm issue context; it is not a peer workspace tab.' },
   { surfaceId: '11', kind: 'workspace-view', workspaceIds: ['work'], viewId: 'orders' },
   { surfaceId: '12', kind: 'durable-detail', workspaceIds: ['work'] },
   { surfaceId: '13', kind: 'workspace-view', workspaceIds: ['work'], viewId: 'verification' },

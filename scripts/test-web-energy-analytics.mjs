@@ -1,5 +1,67 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createOverviewExample } from '../apps/hvac-web/src/features/overview/api/overview-example.ts';
+import { buildOverviewCsv } from '../apps/hvac-web/src/features/overview/api/overview-export.ts';
+import { createConsumptionExample } from '../apps/hvac-web/src/features/energy-analysis/consumption/api/consumption-example.ts';
+import { MOCK_OPPORTUNITIES } from '../apps/hvac-web/src/features/opportunities/api/opportunity-service.ts';
+import { MOCK_PROJECTS } from '../apps/hvac-web/src/features/projects/api/project-service.ts';
+import { MOCK_MV_PROJECTS } from '../apps/hvac-web/src/features/verification/api/verification-service.ts';
+
+test('saving workflow fixtures link existing owners and measure after commissioning in the planned boundary and period', () => {
+  for (const project of MOCK_PROJECTS) {
+    assert.ok(MOCK_OPPORTUNITIES.find(item => item.code === project.sourceOpportunityCode), project.title);
+  }
+  for (const record of MOCK_MV_PROJECTS) {
+    const project = MOCK_PROJECTS.find(item => item.code === record.sourceProjectCode);
+    assert.ok(project, record.projectName);
+    assert.equal(record.measurementBoundary, project.mvPlan.measurementBoundary);
+    assert.equal(record.reportingPeriod, project.mvPlan.reportingPeriod);
+    assert.equal(record.ipmvpOption, project.mvPlan.ipmvpOption);
+    const firstMonth = record.monthlyRecords[0].month + '-01';
+    assert.ok(project.milestones.slice(0, -1).every(item => item.status === 'DONE' && item.targetDate < firstMonth), project.title + ' must be commissioned before measurement');
+    assert.equal(project.stage === 'COMPLETED', record.status === 'CERTIFIED');
+    if (record.status === 'CERTIFIED') {
+      const reportEnd = record.reportingPeriod.match(/\d{4}-\d{2}-\d{2}/g)[1];
+      assert.ok(record.lastAuditDate >= reportEnd, 'review cannot certify future measurement data');
+    }
+    assert.equal(record.verifiedSavingsKWh, record.monthlyRecords.reduce((sum, month) => sum + month.adjustedBaselineKWh - month.rawActualKWh, 0));
+  }
+});
+
+test('consumption periods and scopes change facts while energy and costs reconcile across daily, tariff and subsystem views', () => {
+  const month = createConsumptionExample('current-month', 'site:site-01');
+  const lastMonth = createConsumptionExample('last-month', 'site:site-01');
+  const otherSite = createConsumptionExample('current-month', 'site:site-02');
+  assert.notEqual(month.summary.totalEnergyKWh, lastMonth.summary.totalEnergyKWh);
+  assert.notEqual(month.summary.totalEnergyKWh, otherSite.summary.totalEnergyKWh);
+  assert.equal(lastMonth.dailyRecords.length, 31);
+  assert.equal(month.summary.totalEnergyKWh, month.dailyRecords.reduce((sum, item) => sum + item.totalKWh, 0));
+  assert.equal(month.summary.totalEnergyKWh, month.touBreakdown.reduce((sum, item) => sum + item.energyKWh, 0));
+  assert.ok(Math.abs(month.summary.totalCostCNY - month.touBreakdown.reduce((sum, item) => sum + item.costCNY, 0)) < 0.01);
+  assert.ok(Math.abs(month.summary.totalCostCNY - month.subsystemCosts.reduce((sum, item) => sum + item.costCNY, 0)) < 0.01);
+});
+
+test('overview example periods change facts and keep aggregate energy consistent with the plotted buckets', () => {
+  const month = createOverviewExample('site:site-01', '示例站点', 'month');
+  const day = createOverviewExample('site:site-01', '示例站点', 'today');
+  const otherSite = createOverviewExample('site:site-02', '另一站点', 'month');
+  assert.equal(month.actualKWh, month.trendSeries.reduce((sum, point) => sum + point.actual, 0));
+  assert.equal(month.baselineKWh, month.trendSeries.reduce((sum, point) => sum + point.baseline, 0));
+  assert.equal(month.savingsKWh, month.baselineKWh - month.actualKWh);
+  assert.equal(month.savingsRate, month.savingsKWh / month.baselineKWh * 100);
+  assert.notEqual(month.actualKWh, day.actualKWh);
+  assert.notEqual(month.actualKWh, otherSite.actualKWh);
+  assert.equal(month.mode, 'example');
+});
+
+test('overview export identifies example/unverified results, preserves missing facts and neutralizes spreadsheet formulas', () => {
+  const sample = createOverviewExample('site:site-01', '=HYPERLINK("https://example.invalid")', 'month');
+  const csv = buildOverviewCsv({ ...sample, savingsCny: null });
+  assert.match(csv, /示例数据 · 非核证报告/);
+  assert.match(csv, /待验证/);
+  assert.match(csv, /"估算节约费用\(元\)","未提供"/);
+  assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.invalid""\)"/);
+});
 import {
   EnergyAnalyticsInvalidResponseError,
   EnergyAnalyticsRequestError,
@@ -17,7 +79,7 @@ import {
   energyWorkspaceSearch,
   parseEnergyWorkspaceSearch,
   shiftEnergyWorkspaceState,
-} from '../apps/hvac-web/src/real/energy-workspace.ts';
+} from '../apps/hvac-web/src/features/energy/workspace.ts';
 import {
   buildCumulativeEnergy,
   buildEnergyCsv,
@@ -25,7 +87,7 @@ import {
   buildWeekSlots,
   buildYearSlots,
   summarizeEnergyPoints,
-} from '../apps/hvac-web/src/real/energy-presentation.ts';
+} from '../apps/hvac-web/src/features/energy/presentation.ts';
 
 const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';

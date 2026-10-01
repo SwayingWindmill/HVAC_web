@@ -14,7 +14,6 @@ import {
   Droplets,
   Fan,
   Gauge,
-  Layers,
   Power,
   RadioTower,
   RefreshCw,
@@ -154,15 +153,12 @@ function Loading(_props: { readonly site: Readonly<Site> }) {
           <Skeleton key={i} className="h-24 rounded-lg" />
         ))}
       </div>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <Skeleton className="h-[560px] rounded-lg" />
-        <Skeleton className="h-[440px] rounded-lg" />
-      </div>
+      <Skeleton className="h-[560px] rounded-lg" />
     </Main>
   );
 }
 
-function OperationsInspector({
+function OperationsDetailSheetBody({
   selected,
   canReadAlarms,
   site,
@@ -263,7 +259,7 @@ function OperationsInspector({
               站点活动告警
             </div>
             <Button variant="ghost" size="xs" asChild className="h-7 text-xs gap-1">
-              <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'alarms' }}>
+              <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{}}>
                 查看<ArrowRight className="size-3" aria-hidden="true" />
               </Link>
             </Button>
@@ -286,7 +282,7 @@ function OperationsInspector({
           </Link>
         </Button>
         <Button variant="outline" size="sm" asChild className="gap-1.5">
-          <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{ view: 'diagnostics' }}>
+          <Link to="/sites/$siteId/issues" params={{ siteId: site.id }} search={{}}>
             <Stethoscope className="size-3.5 text-muted-foreground" aria-hidden="true" />
             诊断
           </Link>
@@ -304,14 +300,14 @@ function OperationsInspector({
 
 export function SystemOperations({ site, principal, searchState, onSearchChange }: SystemOperationsProps) {
   const selectedButtonRef = useRef<HTMLButtonElement>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [compactInspector, setCompactInspector] = useState(false);
+  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
+  const [compactDetailSheet, setCompactDetailSheet] = useState(false);
   const authorizationScope = `${principal.session.id}:${principal.authorization.policyRevision}`;
   const canReadAlarms = principal.authorization.capabilities.includes('alarm.list');
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1279px)');
-    const update = () => setCompactInspector(media.matches);
+    const update = () => setCompactDetailSheet(media.matches);
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
@@ -355,8 +351,8 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
 
   const selectGroup = useCallback((key: string) => {
     onSearchChange({ group: key });
-    if (compactInspector) setInspectorOpen(true);
-  }, [compactInspector, onSearchChange]);
+    setDetailSheetOpen(true);
+  }, [onSearchChange]);
 
   const refresh = () => {
     void summaryQuery.refetch();
@@ -457,7 +453,7 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
       />
 
       {/* Main Engineering Operations Workspace */}
-      <section className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]" aria-label="系统运行工作区">
+      <section className="min-w-0" aria-label="系统运行工作区">
         <section className="h-full min-w-0 overflow-hidden rounded-lg border bg-card">
           <div className="border-b px-4 py-3.5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -699,37 +695,19 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
           </div>
         </section>
 
-        {/* Desktop Inspector */}
-        <aside className="hidden h-full xl:block" aria-label="运行详情">
-          <section className="h-full overflow-hidden rounded-lg border bg-card">
-            <div className="border-b px-4 py-3.5">
-              <div className="flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-base font-semibold">
-                  <Layers className="size-4 text-primary" aria-hidden="true" />
-                  当前选择
-                </h2>
-                <Badge variant="secondary" className="text-xs font-normal">
-                  实时遥测
-                </Badge>
-              </div>
-            </div>
-            <div className="p-4">
-              <OperationsInspector
-                selected={selected}
-                canReadAlarms={canReadAlarms}
-                site={site}
-                totalPowerKW={currentTotalPower}
-              />
-            </div>
-          </section>
-        </aside>
       </section>
 
-      {/* Mobile / Narrow Sheet Inspector */}
-      <Sheet open={inspectorOpen && compactInspector} onOpenChange={setInspectorOpen}>
+      <Sheet modal={compactDetailSheet} open={detailSheetOpen} onOpenChange={setDetailSheetOpen}>
         <SheetContent
-          className="w-[min(520px,94vw)] sm:max-w-[520px]!"
+          className="w-[min(560px,94vw)] sm:max-w-[560px]!"
           aria-label="运行详情"
+          showOverlay={compactDetailSheet}
+          onOpenAutoFocus={(event) => {
+            if (!compactDetailSheet) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (!compactDetailSheet) event.preventDefault();
+          }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             selectedButtonRef.current?.focus({ preventScroll: true });
@@ -740,7 +718,7 @@ export function SystemOperations({ site, principal, searchState, onSearchChange 
             <SheetDescription>{selected ? groupState(selected) : '设备群'}</SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-4">
-            <OperationsInspector
+            <OperationsDetailSheetBody
               selected={selected}
               canReadAlarms={canReadAlarms}
               site={site}

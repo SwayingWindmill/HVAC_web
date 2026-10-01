@@ -53,6 +53,8 @@ function readSearchState(): AlarmCenterSearchState {
   const ack = params.get('ack');
   const owner = params.get('owner');
   const sourceType = params.get('sourceType');
+  const queueMode = params.get('queueMode');
+  const performancePeriod = params.get('performancePeriod');
   return {
     alarmView: alarmView === 'active' || alarmView === 'history' || alarmView === 'suppressed' || alarmView === 'performance' ? alarmView : undefined,
     q: params.get('q') || undefined,
@@ -64,6 +66,9 @@ function readSearchState(): AlarmCenterSearchState {
     source: params.get('source') || undefined,
     device: params.get('device') || undefined,
     deviceId: params.get('deviceId') || undefined,
+    performancePeriod: performancePeriod === '7d' || performancePeriod === '30d' || performancePeriod === '90d' ? performancePeriod : undefined,
+    queueMode: queueMode === 'problems' || queueMode === 'alarms' ? queueMode : undefined,
+    selectedIssue: params.get('selectedIssue') || undefined,
   };
 }
 
@@ -79,6 +84,9 @@ function writeSearchState(state: AlarmCenterSearchState): void {
   if (state.source) params.set('source', state.source);
   if (state.device) params.set('device', state.device);
   if (state.deviceId) params.set('deviceId', state.deviceId);
+  if (state.performancePeriod) params.set('performancePeriod', state.performancePeriod);
+  if (state.queueMode) params.set('queueMode', state.queueMode);
+  if (state.selectedIssue) params.set('selectedIssue', state.selectedIssue);
   const query = params.toString();
   globalThis.history.replaceState(null, '', query ? `/?${query}` : '/');
 }

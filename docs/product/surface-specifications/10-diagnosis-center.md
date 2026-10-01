@@ -3,8 +3,9 @@
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `10 诊断中心`  
-> **Route intent：** `/sites/:siteId/issues?view=diagnostics`
+> **Route intent：** `/sites/:siteId/issues?selected=:alarmId`（Diagnosis 作为所选 Alarm 的 investigation context）
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → 本文件 → `DESIGN.md`  
+> **Workspace 合并补充规范：** `09-10-issues-workspace-addendum-2026-09-24.md`。涉及 09/10 合并后的 IA、Task Modes、Investigation Sheet、Alarm Performance、Impact/Hypothesis/Root Cause/Verification 时，以该 Addendum 为最新裁决。  
 > **设计输入声明：** 本文件不参考当前项目已有 FDD 页面、旧诊断页、旧 AI 调查页、旧 Ant/ProComponents 页面或旧设计稿。当前代码只可在实施阶段作为真实 Alarm / AFDD Finding / Rule / Model / Evidence / Device / Work / Verification / Permission / Route contract 的候选证据来源。
 
 ---
@@ -437,28 +438,19 @@ Insufficient evidence / deferred
 Canonical route：
 
 ```text
-/sites/:siteId/issues?view=diagnostics
+/sites/:siteId/issues?selected=:alarmId
 ```
 
 推荐 Search Params：
 
 ```text
-view            // open | resolved | all
-q
-sourceType
-system
-asset
-severity
-status
-confidenceBand
-from
-to
-selected
-hypothesis
-owner
-sort
-page
-size
+selected        // authoritative Alarm occurrence identity
+source
+device
+deviceId
+
+// Diagnosis/Finding identity belongs to the selected issue context.
+// Finding / hypothesis filters are not promoted to a second workspace view.
 ```
 
 如果从 Alarm / Trend / Device / Comfort 进入，`selected` 与 source context 应能恢复调查。

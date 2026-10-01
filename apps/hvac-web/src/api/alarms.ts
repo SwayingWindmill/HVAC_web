@@ -17,6 +17,12 @@ import {
   type AlarmSeverity,
 } from './alarm-contract';
 import { alarmPaths } from './generated/platformGateway.gen';
+import {
+  acknowledgeFrontendReviewAlarm,
+  assignFrontendReviewAlarm,
+  getFrontendReviewAlarm,
+  listFrontendReviewAlarms,
+} from '@/app/frontend-review-issues-data';
 
 export {
   AlarmApiError,
@@ -191,6 +197,10 @@ export async function listScopedAlarms(
   filter: AlarmListFilter,
   options: ScopedAlarmRequestOptions,
 ): Promise<AlarmListResponse> {
+  if (typeof __HVAC_WEB_FRONTEND_REVIEW__ !== 'undefined' && __HVAC_WEB_FRONTEND_REVIEW__) {
+    const { tenantId, siteId } = validatedScope(options);
+    return alarmListResponseSchema.parse(listFrontendReviewAlarms(tenantId, siteId, filter));
+  }
   if (!ALARM_ROUTES_AVAILABLE) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 读取路由已登记，但尚未启用生产流量。');
   }
@@ -226,6 +236,12 @@ export async function getScopedAlarm(
   alarmId: string,
   options: ScopedAlarmRequestOptions,
 ): Promise<Alarm> {
+  if (typeof __HVAC_WEB_FRONTEND_REVIEW__ !== 'undefined' && __HVAC_WEB_FRONTEND_REVIEW__) {
+    const { tenantId, siteId } = validatedScope(options);
+    const alarm = getFrontendReviewAlarm(tenantId, siteId, alarmUUIDv7Schema.parse(alarmId));
+    if (!alarm) throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Alarm。');
+    return alarm;
+  }
   if (!ALARM_ROUTES_AVAILABLE) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 读取路由已登记，但尚未启用生产流量。');
   }
@@ -282,6 +298,12 @@ function alarmUUIDV7(value: string): string {
 }
 
 export async function acknowledgeScopedAlarm(alarmId: string, input: AlarmAcknowledgeInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
+  if (typeof __HVAC_WEB_FRONTEND_REVIEW__ !== 'undefined' && __HVAC_WEB_FRONTEND_REVIEW__) {
+    const { tenantId, siteId } = validatedScope(options);
+    const alarm = acknowledgeFrontendReviewAlarm(tenantId, siteId, alarmUUIDv7Schema.parse(alarmId), input.comment);
+    if (!alarm) throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Alarm。');
+    return alarm;
+  }
   if (!ALARM_PUBLIC_ROUTES_ENABLED) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm ACK 路由尚未启用。');
   }
@@ -301,6 +323,12 @@ export async function acknowledgeScopedAlarm(alarmId: string, input: AlarmAcknow
 }
 
 export async function assignScopedAlarm(alarmId: string, input: AlarmAssignInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
+  if (typeof __HVAC_WEB_FRONTEND_REVIEW__ !== 'undefined' && __HVAC_WEB_FRONTEND_REVIEW__) {
+    const { tenantId, siteId } = validatedScope(options);
+    const alarm = assignFrontendReviewAlarm(tenantId, siteId, alarmUUIDv7Schema.parse(alarmId), input.assigneeId, input.reason);
+    if (!alarm) throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Alarm。');
+    return alarm;
+  }
   if (!ALARM_PUBLIC_ROUTES_ENABLED) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 指派路由尚未启用。');
   }

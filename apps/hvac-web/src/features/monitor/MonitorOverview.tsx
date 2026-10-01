@@ -155,7 +155,7 @@ export function AnomalyView({ devices, zones, overview, alarms, selectedAlarmId,
           <p className="text-sm leading-6 text-muted-foreground">{alarm?.summary ?? '当前没有需要处理的活动异常。'}</p>
           {alarm ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="outline" asChild><a href={`${siteRoute(site, 'alarms')}?alarm=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>查看告警</a></Button>
+              <Button variant="outline" asChild><a href={`${siteRoute(site, 'alarms')}?selected=${encodeURIComponent(alarm.alarmId)}&source=hvac-monitor`}>查看告警</a></Button>
               <Button asChild><a href={`${siteRoute(site, 'work-orders')}?sourceAlarm=${encodeURIComponent(alarm.alarmId)}`}>生成工单</a></Button>
             </div>
           ) : null}

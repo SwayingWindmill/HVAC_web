@@ -4,7 +4,7 @@
 **Status:** SELECTED / ACTIVE  
 **Date:** 2026-09-20  
 **Scope:** `apps/hvac-web`  
-**UI stack:** shadcn/ui + tablecn + ReUI + Kibo UI + Dice UI + Tailwind CSS  
+**UI stack:** shadcn/ui + tablecn + ReUI + Kibo UI + Dice UI + dashboardcn + Shadcnblocks + Tailwind CSS  
 **State / data stack:** TanStack Router + Query + Table v9  
 **Visualization:** shadcn Chart + Recharts for ordinary charts; Apache ECharts for engineering analytics
 
@@ -58,7 +58,7 @@ Component libraries are implementation inputs, not product-information architect
 
 ## 3. Component architecture
 
-The project uses four complementary sources.
+The project uses complementary source layers with one shadcn/ui primitive authority.
 
 ### Layer 1 — shadcn/ui
 
@@ -164,7 +164,22 @@ Dice UI maintains Radix and Base UI source paths; the current project uses the *
 
 ReUI, Kibo UI and Dice UI are candidate source libraries, not parallel runtime frameworks. If several expose the same capability, choose one implementation by task semantics, accessibility/keyboard model, dependency weight, Radix compatibility, source quality/tests and state-model fit. Do not retain duplicate generic implementations.
 
-### Layer 4 — project domain components
+### Layer 4 — dashboard analytics composition
+
+dashboardcn is the focused source for ordinary dashboard/data-presentation compositions that sit above shadcn primitives but below HVAC-specific semantics.
+
+Preferred candidates include:
+
+- Sparkline / Metric Value / KPI Card when backed by authoritative data;
+- ordinary Trend / Bar / Composed charts;
+- Heatmap for two-dimensional intensity data;
+- Radial Gauge / Segmented Meter for genuinely bounded ranges or thresholds;
+- Sankey for real flow/allocation relationships;
+- Timeline for chronological audit/activity evidence.
+
+Its Data Table does not replace the project tablecn + TanStack Table v9 ledger. Its Recharts-based charts do not replace ECharts for engineering-grade HVAC analysis. Follow `docs/architecture/dashboardcn-source-review-2026-09-24.md` before production adoption.
+
+### Layer 5 — project domain components
 
 Create project-owned components only for stable HVAC / energy semantics or repeated composed product patterns.
 
@@ -180,23 +195,28 @@ Do not put domain rules into generic shadcn primitives.
 
 ---
 
-## 4. Component selection ladder
+## 4. Component source-selection process
 
-Before building a new UI pattern:
+Before building or preserving a UI pattern, determine the correct product interaction first. Existing project code is one candidate source, not the default winner.
 
 ```text
-1. Existing project component
-2. shadcn/ui primitive
-3. shadcn official block
-4. tablecn/project DataTable layer when tabular
-5. approved project domain component
-6. Advanced application component source: ReUI / Kibo UI / Dice UI
-7. Shadcnblocks application block / composed pattern
-8. small project-owned composition
-9. custom component only if the above cannot express the task
+1. Start from Surface Spec + business task + accessibility semantics.
+2. Review mature product patterns relevant to the task.
+3. Compare candidate sources in parallel:
+   - existing project implementation
+   - shadcn/ui primitives and official blocks
+   - tablecn/project DataTable layer for operational ledgers
+   - approved project domain components
+   - ReUI / Kibo UI / Dice UI
+   - dashboardcn for focused dashboard / analytics composition
+   - Shadcnblocks application blocks
+   - other mature OSS after source review
+4. Decide ADOPT / ADAPT / REPLACE / REJECT.
+5. Keep one canonical implementation in the project.
+6. Create a project-owned composition only when the reviewed sources cannot express the task correctly.
 ```
 
-Do not choose a richer library component merely because it looks more impressive. Choose it because the task needs its interaction model.
+Selection is based on task semantics, information architecture, accessibility/keyboard behavior, dependency weight, Radix compatibility, source quality, maintenance state and fit with the project's state model. Existing implementations have no grandfathered right to remain. Do not choose a richer library merely because it looks more impressive; equally, do not preserve a weaker project component merely because it already exists.
 
 ---
 
@@ -328,7 +348,7 @@ Optional compact summary
 Search / filters / view controls
 Data Table
 Pagination / result state
-Optional contextual inspector
+Selected row → right-side Detail Sheet
 ```
 
 Default for Devices, Alarms and Work Orders.

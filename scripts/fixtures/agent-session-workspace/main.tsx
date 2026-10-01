@@ -40,7 +40,7 @@ const principal: CurrentPrincipalResponse = {
     delegationExpiresAt: '2026-09-05T00:00:00.000Z',
   },
   authorization: {
-    capabilitySetVersion: 11,
+    capabilitySetVersion: 12,
     policyRevision: 'agent-session-policy-1',
     capabilities: ['site.read'],
   },

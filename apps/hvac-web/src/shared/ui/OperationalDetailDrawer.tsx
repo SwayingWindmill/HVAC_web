@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   Sheet,
   SheetContent,
@@ -17,7 +17,7 @@ export interface OperationalDetailTab {
   readonly disabled?: boolean;
 }
 
-export interface OperationalDetailDrawerProps {
+export interface OperationalDetailSheetProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly title: ReactNode;
@@ -31,9 +31,10 @@ export interface OperationalDetailDrawerProps {
   readonly footer?: ReactNode;
   readonly size?: number | string;
   readonly rootClassName?: string;
+  readonly onCloseAutoFocus?: ComponentProps<typeof SheetContent>['onCloseAutoFocus'];
 }
 
-export function OperationalDetailDrawer({
+export function OperationalDetailSheet({
   open,
   onClose,
   title,
@@ -47,15 +48,33 @@ export function OperationalDetailDrawer({
   footer,
   size = 560,
   rootClassName,
-}: OperationalDetailDrawerProps) {
+  onCloseAutoFocus,
+}: OperationalDetailSheetProps) {
   const width = typeof size === 'number' ? `${size}px` : size;
+  const [compactSheet, setCompactSheet] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1279px)');
+    const sync = () => setCompactSheet(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
 
   return (
-    <Sheet open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+    <Sheet modal={compactSheet} open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <SheetContent
         side="right"
         className={cn('sm:max-w-none!', rootClassName)}
         style={{ width, maxWidth: '92vw' }}
+        showOverlay={compactSheet}
+        onOpenAutoFocus={(event) => {
+          if (!compactSheet) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (!compactSheet) event.preventDefault();
+        }}
+        onCloseAutoFocus={onCloseAutoFocus}
       >
         <SheetHeader className="gap-3">
           <div className="flex min-w-0 items-start justify-between gap-4 pr-8">
@@ -94,3 +113,8 @@ export function OperationalDetailDrawer({
     </Sheet>
   );
 }
+
+/** @deprecated Use OperationalDetailSheet for selected-object details. */
+export const OperationalDetailDrawer = OperationalDetailSheet;
+/** @deprecated Use OperationalDetailSheetProps. */
+export type OperationalDetailDrawerProps = OperationalDetailSheetProps;

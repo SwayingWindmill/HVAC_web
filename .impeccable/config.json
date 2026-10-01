@@ -1,0 +1,16 @@
+{
+  "hook": {
+    "enabled": true,
+    "quiet": true
+  },
+  "detector": {
+    "ignoreFiles": [
+      "dist/**",
+      "out/**",
+      "node_modules/**",
+      ".worktrees/**",
+      ".tmp*/**",
+      "CodeHVAC_web.tmp-*/**"
+    ]
+  }
+}

@@ -55,7 +55,7 @@ function genericValueStates(updated: boolean): TelemetryKeyState[] {
     },
     {
       key: 'humidity', state: 'PRESENT', value: 46, valueType: 'NUMBER', unit: '%RH',
-      sampledAt, receivedAt: '2026-07-25T05:28:01.000Z', freshness: 'FRESH', quality: 'SUSPECT',
+      sampledAt, receivedAt: '2026-07-25T05:28:01.000Z', freshness: 'FRESH', quality: 'PARTIAL',
       qualityReasons: ['SOURCE_LAG_EXCEEDED'], policyRevision: 11,
     },
     {
@@ -78,7 +78,7 @@ function chillerValueStates(keys: readonly string[], updated: boolean): Telemetr
     valueType: 'STRING' | 'NUMBER',
     unit: string | null,
     freshness: 'FRESH' | 'STALE' = 'FRESH',
-    quality: 'GOOD' | 'SUSPECT' = 'GOOD',
+    quality: 'GOOD' | 'PARTIAL' = 'GOOD',
   ): TelemetryKeyState => ({
     key,
     state: 'PRESENT',
@@ -89,14 +89,14 @@ function chillerValueStates(keys: readonly string[], updated: boolean): Telemetr
     receivedAt: receivedTime,
     freshness,
     quality,
-    qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
+    qualityReasons: quality === 'PARTIAL' ? ['SOURCE_LAG_EXCEEDED'] : [],
     policyRevision,
   });
   const states = new Map<string, TelemetryKeyState>([
     ['chiller.run_state', present('chiller.run_state', 'RUNNING', 'STRING', null)],
     ['chiller.power', present('chiller.power', updated ? 220 : 212.5, 'NUMBER', 'kW')],
     ['chiller.cop', present('chiller.cop', updated ? 5.15 : 5.08, 'NUMBER', null)],
-    ['chiller.cooling_capacity', present('chiller.cooling_capacity', updated ? 1133 : 1080, 'NUMBER', 'kW', updated ? 'FRESH' : 'STALE', updated ? 'GOOD' : 'SUSPECT')],
+    ['chiller.cooling_capacity', present('chiller.cooling_capacity', updated ? 1133 : 1080, 'NUMBER', 'kW', updated ? 'FRESH' : 'STALE', updated ? 'GOOD' : 'PARTIAL')],
     ['chiller.compressor_load', present('chiller.compressor_load', updated ? 82 : 78, 'NUMBER', '%')],
     ['chiller.leaving_chilled_water_temperature', present('chiller.leaving_chilled_water_temperature', updated ? 6.5 : 6.7, 'NUMBER', 'Cel')],
     ['chiller.entering_chilled_water_temperature', present('chiller.entering_chilled_water_temperature', updated ? 12.3 : 12.1, 'NUMBER', 'Cel')],

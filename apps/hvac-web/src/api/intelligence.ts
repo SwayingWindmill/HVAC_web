@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createFrontendReviewFindings } from '@/app/frontend-review-issues-data';
 
 const uuidSchema = z.string().uuid();
 const finiteNumber = z.number().finite();
@@ -142,6 +143,9 @@ export function getSitePVForecast(siteId: string, signal?: AbortSignal) {
 }
 
 export async function listSiteFDDFindings(siteId: string, signal?: AbortSignal): Promise<FDDFinding[]> {
+  if (typeof __HVAC_WEB_FRONTEND_REVIEW__ !== 'undefined' && __HVAC_WEB_FRONTEND_REVIEW__) {
+    return createFrontendReviewFindings('01940000-0000-7000-8000-000000000001', siteId);
+  }
   const result = await getJSON(`/api/v1/sites/${encodeURIComponent(siteId)}/fdd/findings?limit=100`, fddListSchema, signal);
   return result?.items ?? [];
 }
