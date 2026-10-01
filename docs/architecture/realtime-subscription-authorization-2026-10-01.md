@@ -24,6 +24,10 @@ test fixture did. IAM's telemetry revocation facts (`iam.telemetry_revocation_fa
   unsubscribes their channels through the Centrifugo server API. The per-tenant cursor
   is stored in `telemetry_runtime.iam_revocation_cursors`. A fact never withdraws an
   authorization IAM issued after it, so replaying old facts is safe.
+- **Renewal window.** The client renews subscriptions when its connection token
+  expires. The token now expires `ConnectionRenewalWindow` (1 min) before the
+  subscriptions it renews (4 min vs 5 min); with equal lifetimes renewal always ran
+  after the subscriptions had expired and streams stopped after five minutes.
 
 ## Reference review — Centrifugo v6.8.1 (`c1246c5472ff9700868ee768e72de2911a3e4f2b`)
 
@@ -43,4 +47,5 @@ withdrawal. REJECT for now: subscribe-proxy `ExpireAt` with a sub-refresh proxy;
 
 Local stack with the running simulator: seven device subscriptions accepted, delta
 publications delivered, and a revocation fact inserted for the principal ended its open
-subscriptions within the 2 s relay interval.
+subscriptions within the 2 s relay interval. A 7-minute session renewed at 249 s and
+kept receiving publications throughout.
