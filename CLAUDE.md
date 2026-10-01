@@ -19,12 +19,14 @@
 ```bash
 npm -w @hvac/web run typecheck
 npm -w @hvac/web run build
+npm run web:e2e                                          # 前端浏览器测试：Playwright + 录制的网关数据，不需要后端
 (cd modules/telemetry && go vet ./... && go test ./...)   # go.work 多模块，按模块执行
 npm run deployment:phase1:check                          # 改了 compose 或迁移清单后
 node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集成测试，使用独立临时库
 ```
 
 - `routeTree.gen.ts` 由 Vite 插件生成；新增或移动 `routes/` 文件后，跑一次 dev 或 build 来更新它。
+- 浏览器测试在 `apps/hvac-web/e2e/`，接口数据来自 `e2e/fixtures/`（从本地环境录制、已脱敏），写操作由 `e2e/gateway.ts` 按 owner 的规则模拟。页面改了接口调用后，要同步更新测试桩。
 - 日志里的错误内容会被统一替换成 `[REDACTED]`；排查时直接调用对应的 Go 函数看真实错误。
 
 ## 本地环境

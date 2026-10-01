@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "id": "018f3e00-1000-7000-8000-000000000001",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "code": "central-plant",
+      "displayName": "中央机房",
+      "timezone": "Asia/Shanghai",
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-09-28T07:11:40.006Z",
+      "updatedAt": "2026-09-29T08:51:35.732Z"
+    }
+  ],
+  "nextCursor": null,
+  "hasMore": false
+}

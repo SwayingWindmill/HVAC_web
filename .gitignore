@@ -102,3 +102,6 @@ worktrees/
 /cmd/metric-worker/metric-worker
 /cmd/scheduler/scheduler
 /cmd/telemetry-worker/telemetry-worker
+apps/hvac-web/dist-e2e/
+apps/hvac-web/test-results/
+apps/hvac-web/playwright-report/

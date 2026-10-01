@@ -1,0 +1,10 @@
+{
+  "status": "ok",
+  "service": "platform-status",
+  "implementation": "go",
+  "version": "dev",
+  "checkedAt": "2026-10-01T15:30:03.03087929Z",
+  "routePolicyRevision": 33,
+  "routeRevision": 2,
+  "compatibilityMode": "native"
+}
