@@ -46,7 +46,7 @@ const (
 func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
 
-	single := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot?keys=humidity,temperature", nil)
+	single := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot?keys=temperature,humidity", nil)
 	fixture.authenticate(single)
 	singleRecorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(singleRecorder, single)
@@ -57,12 +57,12 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 	if err := json.NewDecoder(singleRecorder.Body).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Values) != 2 || snapshot.Values[0].Missing == nil || snapshot.Values[1].Missing == nil || snapshot.Values[0].Missing.Key != "humidity" || snapshot.Values[1].Missing.Key != "temperature" {
+	if len(snapshot.Values) != 2 || snapshot.Values[0].Missing == nil || snapshot.Values[1].Missing == nil || snapshot.Values[0].Missing.Key != "temperature" || snapshot.Values[1].Missing.Key != "humidity" {
 		t.Fatalf("single key order drifted: %#v", snapshot.Values)
 	}
 
 	batchInput := s2telemetryapi.BatchGetObservationSnapshotsRequest{Requests: []s2telemetryapi.ObservationSnapshotTarget{
-		{RequestId: "second", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"supplyTemp"}},
+		{RequestId: "second", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"supplyTemp", "returnTemp"}},
 		{RequestId: "first", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{}},
 	}}
 	body, _ := json.Marshal(batchInput)

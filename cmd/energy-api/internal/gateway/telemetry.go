@@ -142,7 +142,7 @@ func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, reque
 		return
 	}
 	var snapshot s2telemetryapi.DeviceObservationSnapshot
-	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0]) {
+	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0], keys) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid Snapshot response."))
 		return
 	}
@@ -690,7 +690,10 @@ func (h *handler) resolveTelemetryCheckpointTargets(ctx context.Context, publicR
 	return canonical, nil
 }
 
-func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.AuthorizedTarget) bool {
+// validateTelemetrySnapshot checks a Runtime Snapshot for the authorized Device.
+// Values follow the caller's requested key order; the authorized target holds the
+// same keys in canonical (sorted) order and is used only for scope identity.
+func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.AuthorizedTarget, requestedKeys []string) bool {
 	if snapshot.SchemaVersion != 1 || string(snapshot.TenantId) != target.TenantID || string(snapshot.SiteId) != target.SiteID || string(snapshot.DeviceId) != target.DeviceID || snapshot.BusinessRevision < 1 {
 		return false
 	}
@@ -698,7 +701,7 @@ func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot
 		return false
 	}
 	if !validEvaluationAvailability(snapshot.EvaluationAvailability) || len(snapshot.AvailabilityReasons) > 16 || !uniqueAvailabilityReasons(snapshot.AvailabilityReasons) ||
-		!validTelemetryReadiness(snapshot.TelemetryReadiness) || snapshot.DisplayState == nil || !validDisplayState(*snapshot.DisplayState) || !validPresenceSnapshot(snapshot.Presence) || len(snapshot.Values) != len(target.Keys) {
+		!validTelemetryReadiness(snapshot.TelemetryReadiness) || snapshot.DisplayState == nil || !validDisplayState(*snapshot.DisplayState) || !validPresenceSnapshot(snapshot.Presence) || len(snapshot.Values) != len(requestedKeys) {
 		return false
 	}
 	for index, state := range snapshot.Values {
@@ -717,7 +720,7 @@ func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot
 		default:
 			return false
 		}
-		if key != target.Keys[index] {
+		if key != requestedKeys[index] {
 			return false
 		}
 	}
@@ -867,7 +870,7 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 		}
 		switch {
 		case result.Success != nil && result.Failure == nil:
-			if result.Success.Status != "OK" || result.Success.RequestId != expected.RequestId || result.Success.DeviceId != expected.DeviceId || !validateTelemetrySnapshot(result.Success.Snapshot, authorized) {
+			if result.Success.Status != "OK" || result.Success.RequestId != expected.RequestId || result.Success.DeviceId != expected.DeviceId || !validateTelemetrySnapshot(result.Success.Snapshot, authorized, telemetryKeyStrings(expected.Keys)) {
 				return false
 			}
 		case result.Failure != nil && result.Success == nil:
@@ -880,6 +883,14 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 		}
 	}
 	return true
+}
+
+func telemetryKeyStrings(keys []s2telemetryapi.TelemetryKey) []string {
+	values := make([]string, len(keys))
+	for index, key := range keys {
+		values[index] = string(key)
+	}
+	return values
 }
 
 func authorizedTargetForDevice(targets []telemetryauth.AuthorizedTarget, deviceID string) (telemetryauth.AuthorizedTarget, bool) {
