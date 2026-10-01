@@ -11,7 +11,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
 
-func TestClickHouseHistoryClientQueriesTypedProjection(t *testing.T) {
+func integrationClient(t *testing.T) *Client {
+	t.Helper()
 	baseURL := strings.TrimSpace(os.Getenv("HISTORY_QUERY_CLICKHOUSE_TEST_URL"))
 	if baseURL == "" {
 		t.Skip("HISTORY_QUERY_CLICKHOUSE_TEST_URL is not configured")
@@ -27,6 +28,11 @@ func TestClickHouseHistoryClientQueriesTypedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return client
+}
+
+func TestClickHouseHistoryClientQueriesTypedProjection(t *testing.T) {
+	client := integrationClient(t)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
 		TenantID: "018f4f00-0100-7000-8000-000000000001",
 		SiteID:   "018f4f00-1000-7000-8000-000000000001",
@@ -47,5 +53,27 @@ func TestClickHouseHistoryClientQueriesTypedProjection(t *testing.T) {
 		if observation.TelemetryKey != "hvac_meter.energy" || observation.PointRevision < 1 || !observation.Acceptance.Valid() || !observation.ValueType.Valid() {
 			t.Fatalf("observation=%#v", observation)
 		}
+	}
+}
+
+func TestClickHouseHistoryClientAggregatesHourly(t *testing.T) {
+	client := integrationClient(t)
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID:      "018f4f00-0100-7000-8000-000000000001",
+		SiteID:        "018f4f00-1000-7000-8000-000000000001",
+		DeviceID:      "018f4f00-2000-7000-8000-000000000001",
+		Keys:          []string{"hvac_meter.energy"},
+		From:          time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+		Granularity:   telemetryhistorymodel.AggregateGranularityHour,
+		Timezone:      "UTC",
+		QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+	}
+	response, err := client.QueryDeviceHistoryAggregate(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.ValidateFor(query); err != nil {
+		t.Fatal(err)
 	}
 }

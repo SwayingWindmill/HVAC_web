@@ -302,9 +302,9 @@ func nextCalendarBoundary(value time.Time, granularity telemetryhistorymodel.Agg
 }
 
 func (client *Client) aggregateSnapshotQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery) string {
-	return fmt.Sprintf(`WITH now64(3) AS snapshot_at
+	return fmt.Sprintf(`WITH now64(3) AS snapshot_cutoff
 SELECT
-  formatDateTime(snapshot_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
+  formatDateTime(snapshot_cutoff, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
   if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark
 FROM %s.%s
 WHERE tenant_id = toUUID('%s')
@@ -313,7 +313,7 @@ WHERE tenant_id = toUUID('%s')
   AND telemetry_key IN (%s)
   AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
   AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND projected_at < snapshot_at
+  AND projected_at < snapshot_cutoff
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL
   AND point_type IN ('TELEMETRY', 'COUNTER', 'STATE')
