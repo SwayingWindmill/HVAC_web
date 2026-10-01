@@ -9,11 +9,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
-import { listWorkOrders, type WorkOrder, type WorkOrderPriority, type WorkOrderStatus } from '@/api/work-orders';
+import type { WorkOrder, WorkOrderPriority } from '@/api/work-orders';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { CreateWorkOrderDialog } from '../CreateWorkOrderDialog';
 import { OPEN_STATUSES, PRIORITY_CLASSES, PRIORITY_LABELS, STATUS_LABELS } from '../work-order-presentation';
+import { listView, workOrderKeys } from '../work-order-queries';
 import { WorkOrderInspector } from './WorkOrderInspector';
 
 export type WorkCenterView = 'open' | 'mine' | 'done' | 'all';
@@ -30,20 +31,6 @@ const REFRESH_MS = 15_000;
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/work-center');
-
-export const workOrderKeys = {
-  all: (siteId: string) => ['work-orders', siteId] as const,
-  view: (siteId: string, statuses: readonly WorkOrderStatus[], assigneeId?: string) =>
-    ['work-orders', siteId, 'view', statuses.join(','), assigneeId ?? ''] as const,
-};
-
-// The owner filters by one status at a time; a view is the union of its statuses.
-async function listView(siteId: string, statuses: readonly WorkOrderStatus[], assigneeId: string | undefined, signal: AbortSignal) {
-  const filters = statuses.length > 0 ? statuses.map((status) => ({ status })) : [{}];
-  const pages = await Promise.all(filters.map((filter) =>
-    listWorkOrders({ ...filter, assigneeId, limit: 100 }, { siteId, signal })));
-  return pages.flatMap((page) => page.items);
-}
 
 export function PriorityBadge({ priority }: { readonly priority: WorkOrderPriority }) {
   return (

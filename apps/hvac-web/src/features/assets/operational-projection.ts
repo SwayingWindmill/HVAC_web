@@ -237,7 +237,9 @@ function unavailableProjection(
 export function projectAssetsDeviceOperationalState(
   input: ProjectAssetsDeviceOperationalStateInput,
 ): AssetsDeviceOperationalProjection {
-  const { device, telemetryPoints, snapshotResult } = input;
+  const { device, snapshotResult } = input;
+  // Commands are written, never observed; only active observation points have a current value.
+  const telemetryPoints = input.telemetryPoints.filter((point) => point.status === 'ACTIVE' && point.pointType !== 'COMMAND');
   if (!snapshotResult) {
     return unavailableProjection(device, telemetryPoints, 'CURRENT_STATE_UNAVAILABLE');
   }
