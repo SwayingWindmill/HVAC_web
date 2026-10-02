@@ -98,8 +98,8 @@
   shadcn/ui + satnaing/shadcn-admin + tablecn + ReUI/Kibo UI/Dice UI + dashboardcn + Shadcnblocks selection grammar directly;
   do not preserve Control Desk v1, old Ant/ProComponents composition, old boxed Ant PageHeader,
   fixed-workspace, card-wall, Drawer/Splitter progression, or any other visual
-  compatibility layer. Next load the project skills: `.agents/skills/impeccable/SKILL.md` as the primary
-  product-interface workflow, `.agents/skills/frontend-design/SKILL.md` for visual
+  compatibility layer. Next load the skills: the `impeccable` Claude Code plugin (pbakaus/impeccable,
+  installed from its marketplace) as the primary product-interface workflow, `.agents/skills/frontend-design/SKILL.md` for visual
   craft, and `.agents/skills/web-design-guidelines/SKILL.md` for the final Web UX/a11y
   review. Within Impeccable, route the work deliberately: `critique` an incumbent
   surface, `shape` when information responsibility is wrong, `distill` before adding
