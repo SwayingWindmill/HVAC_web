@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomBytes, X509Certificate } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
@@ -530,7 +530,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
     mqttAdapterConfig: join(configDirectory, 'mqtt-adapter.json'),
     mqttGatewayConfig: join(configDirectory, 'mqtt-gateway.json'),
     mqttQueueDirectory: join(stateDirectory, 'mqtt-queue'),
-    fleetReleasePublicKey: join(pkiDirectory, 'edge-fleet-release-public-key.hex'),
     centrifugoConfig: join(configDirectory, 'centrifugo.json'),
     s1Seed: join(configDirectory, 's1-seed.sql'),
     s2Seed: join(configDirectory, 's2-seed.sql'),
@@ -705,7 +704,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     const s1Container = composeContainer(projects.s1, 'postgres');
     const s2Container = composeContainer(projects.s2, 'postgres');
     const clickHouseContainer = composeContainer(projects.s2, 'clickhouse');
-    await waitForContainer(() => dockerExec(s1Container, ['psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-c', `DO $migration$ BEGIN IF to_regclass('connectivity.edge_nodes') IS NULL OR NOT pg_has_role('s1_core_service', 's1_core_writer', 'MEMBER') THEN RAISE EXCEPTION 'S1 migrations incomplete'; END IF; END $migration$;`], { capture: true }), 'S1 PostgreSQL migrations');
+    await waitForContainer(() => dockerExec(s1Container, ['psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-c', `DO $migration$ BEGIN IF to_regclass('connectivity.integration_instances') IS NULL OR NOT pg_has_role('s1_core_service', 's1_core_writer', 'MEMBER') THEN RAISE EXCEPTION 'S1 migrations incomplete'; END IF; END $migration$;`], { capture: true }), 'S1 PostgreSQL migrations');
     await waitForContainer(() => dockerExec(s2Container, ['psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-c', `DO $migration$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='telemetry_runtime' AND table_name='telemetry_subscriptions' AND column_name='policy_revision_ref') THEN RAISE EXCEPTION 'S2 migrations incomplete'; END IF; END $migration$;`], { capture: true }), 'S2 PostgreSQL migrations');
     await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
     configureLocalDatabaseRoleCredentials(s1Container, s2Container);
@@ -766,7 +765,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       processingQueueCapacity: 1024,
     };
     const mqttGatewayConfig = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       tenantId: centralPlantIdentity.tenantId,
       siteId: centralPlantIdentity.siteId,
       brokerUrl: mqttBrokerURL,
@@ -778,13 +777,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
       queueDirectory: paths.mqttQueueDirectory,
       maximumQueueBytes: 536870912,
       credentialRevision: 1,
-      fleetReleaseKeyId: 'central-plant-local-ed25519-v1',
-      fleetReleasePublicKeyFile: paths.fleetReleasePublicKey,
       deviceExternalIdByDeviceId: Object.fromEntries(centralPlantDevices.map((device) => [device.name, device.platformDeviceId])),
     };
-    const { publicKey: fleetReleasePublicKey } = generateKeyPairSync('ed25519');
-    const fleetReleasePublicJWK = fleetReleasePublicKey.export({ format: 'jwk' });
-    await writePrivate(paths.fleetReleasePublicKey, `${Buffer.from(fleetReleasePublicJWK.x, 'base64url').toString('hex')}\n`);
     await writeFile(paths.mqttAdapterConfig, `${JSON.stringify(mqttAdapterConfig, null, 2)}\n`, 'utf8');
     await writeFile(paths.mqttGatewayConfig, `${JSON.stringify(mqttGatewayConfig, null, 2)}\n`, 'utf8');
 
