@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { loadAcceptanceRig } from './lib/acceptance-rig.mjs';
+import { localContainer } from './lib/local-environment.mjs';
 
 // Drift gate for the live acceptance rig. Criterion "the acceptance profile is explicit
 // and repeatable" only holds if the running stack still matches the reviewed profile;
@@ -7,8 +8,8 @@ import { loadAcceptanceRig } from './lib/acceptance-rig.mjs';
 // every input was reported STALE, or a session that expired mid-run.
 const root = process.cwd();
 const profile = await loadAcceptanceRig(root);
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-local-postgres-1';
-const brokerContainer = process.env.PHASE1_MQTT_CONTAINER || 'hvac-phase1-local-mqtt-broker-1';
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
+const brokerContainer = process.env.PHASE1_MQTT_CONTAINER || localContainer('mqtt-broker');
 
 const failures = [];
 const notes = [];

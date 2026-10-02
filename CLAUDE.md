@@ -31,13 +31,16 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 
 ## 本地环境
 
-- 运行中的环境：Compose 项目 `hvac-phase1-local`，地址 https://localhost:9443，使用私有 CA。另有一套 `hvac-phase1-dev`，地址 https://localhost:8443。
-- 前端开发服务器可以代理到 9443，需要设置三个环境变量：
-  - `PLATFORM_GATEWAY_PROXY_TARGET=https://localhost:9443`
-  - `NODE_EXTRA_CA_CERTS` 指向 `internal-pki/ca.crt`
-  - `VITE_TLS_CERT` / `VITE_TLS_KEY` 指向 `tls/public.*`
+- 本地环境只有一套：Compose 项目 `hvac-local`，地址 https://localhost:8443，使用私有 CA，包含设备接入、模拟器和智能层（`single-lite` 档位）。
+  - `npm run local:up`：从当前代码构建，并按顺序完成迁移、身份初始化、种子数据和启动；可以重复执行。
+  - `npm run local:down` 停止，`npm run local:ps` 查看状态。
+  - 运行时文件（证书、密钥、凭据、配置）在 `deploy/platform/phase1/runtime/local/`，管理员口令在其中的 `local-admin.credentials`。
+- 前端开发服务器可以代理到 8443，需要设置三个环境变量：
+  - `PLATFORM_GATEWAY_PROXY_TARGET=https://localhost:8443`
+  - `NODE_EXTRA_CA_CERTS` 指向 `runtime/local/internal-pki/ca.crt`
+  - `VITE_TLS_CERT` / `VITE_TLS_KEY` 指向 `runtime/local/tls/public.*`
 
-  这几个文件都在 `deploy/platform/phase1/runtime/live-chain-20261001/` 下。WebSocket 推送只允许 9443 同源，所以开发服务器下只能看到快照。
+  WebSocket 推送只允许 8443 同源，所以开发服务器下只能看到快照。
 - `deploy/platform/phase1/runtime/**` 里是密钥和凭据：不打印、不提交、不修改权限。
 - git push 用 Windows 侧的 git（WSL 访问 GitHub 有 TLS 问题）；`gh` 命令用 WSL 里已登录的那份。
 

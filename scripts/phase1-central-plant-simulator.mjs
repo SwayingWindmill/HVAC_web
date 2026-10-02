@@ -19,10 +19,10 @@ import {
   centralPlantSensors,
 } from './central-plant-spatial-model.mjs';
 import { applyRegistryRigToPoints, loadAcceptanceRig } from './lib/acceptance-rig.mjs';
+import { localContainer, repoRoot, runtimeDir } from './lib/local-environment.mjs';
 
-const repoRoot = path.resolve(process.env.PHASE1_REPO_ROOT || process.cwd());
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-postgres-1';
-const runtimeRoot = path.join(repoRoot, 'deploy', 'platform', 'phase1', 'runtime');
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
+const runtimeRoot = runtimeDir;
 const internalPkiDir = path.join(runtimeRoot, 'internal-pki');
 const simulatorPkiDir = path.join(internalPkiDir, 'eg8200-simulator');
 const simulatorQueueDir = path.join(runtimeRoot, 'data', 'eg8200');

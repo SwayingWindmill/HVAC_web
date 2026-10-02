@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const reconcilePath = process.env.PHASE1_IDENTITY_RECONCILE_FILE
-  || path.join(repoRoot, 'deploy', 'platform', 'phase1', 'runtime', 'identity-reconcile.json');
-const issuer = process.env.PHASE1_LOCAL_IDENTITY_ISSUER || 'https://localhost:8443/identity';
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-local-postgres-1';
+import { localContainer, localEnvFile, repoRoot, runtimePath } from './lib/local-environment.mjs';
+import { parseRuntimeEnvironment } from './phase1-deployment-tier.ts';
+
+const reconcilePath = process.env.PHASE1_IDENTITY_RECONCILE_FILE || runtimePath('identity-reconcile.json');
+const issuer = process.env.PHASE1_LOCAL_IDENTITY_ISSUER
+  || parseRuntimeEnvironment(readFileSync(localEnvFile, 'utf8')).IDENTITY_ISSUER;
+if (!issuer) throw new Error('IDENTITY_ISSUER is missing from the local runtime env');
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
 
 const reconcile = JSON.parse(readFileSync(reconcilePath, 'utf8'));
 const subject = reconcile.userId;

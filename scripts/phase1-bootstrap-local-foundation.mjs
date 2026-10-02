@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
 
 import { centralPlantIdentity, localUUID, sqlLiteral } from './central-plant-local-contract.mjs';
+import { localContainer } from './lib/local-environment.mjs';
 
-const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || 'hvac-phase1-local-postgres-1';
+const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
 const { tenantId, siteId } = centralPlantIdentity;
 const policyIDs = {
   registry: localUUID(0x900000000001),

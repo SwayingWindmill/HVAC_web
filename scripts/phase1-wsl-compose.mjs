@@ -1,15 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { centralPlantIdentity } from './central-plant-local-contract.mjs';
+import { localEnvFile, localProject, phase1Dir, repoRoot, runtimeDir, runtimePath } from './lib/local-environment.mjs';
 import { parseRuntimeEnvironment, resolveDeploymentTier } from './phase1-deployment-tier.ts';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const phase1Dir = path.join(repoRoot, 'deploy', 'platform', 'phase1');
-const runtimeEnv = process.env.PHASE1_ENV_FILE || path.join(phase1Dir, 'environments', 'development.runtime.env');
-const roleCredentials = process.env.PHASE1_DB_ROLE_CREDENTIALS_SQL || path.join(phase1Dir, 'runtime', 'db-role-credentials', 'roles.sql');
+const runtimeEnv = localEnvFile;
+const roleCredentials = process.env.PHASE1_DB_ROLE_CREDENTIALS_SQL || runtimePath('db-role-credentials', 'roles.sql');
 
 const roleCredentialSql = readFileSync(roleCredentials, 'utf8');
 const runtimeEnvText = readFileSync(runtimeEnv, 'utf8');
@@ -115,6 +113,7 @@ const env = {
   PHASE1_DATA_NETWORK_INTERNAL: externalState ? 'false' : 'true',
   PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
+  PHASE1_RUNTIME_DIR: runtimeDir,
   ...(sourceDeploy ? { HVAC_WEB_BUILD_ID: sourceRevision } : {}),
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
   IDENTITY_ADMIN_DATABASE_URL: databaseUrl('identity_admin', 'hvac_identity'),
@@ -132,14 +131,16 @@ const env = {
     ATV630_INTEGRATION_INSTANCE_ID: centralPlantIdentity.integrationInstanceId,
     ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: '01910000-0000-7000-8000-810000000002',
     ATV630_GATEWAY_EXTERNAL_ID: 'EG8200-COMMERCIAL-001',
-    PHASE1_RUNTIME_CONFIG_DIR: process.env.PHASE1_RUNTIME_CONFIG_DIR || path.join(phase1Dir, 'runtime', 'config'),
-    INTERNAL_PKI_DIR: process.env.INTERNAL_PKI_DIR || path.join(phase1Dir, 'runtime', 'internal-pki'),
-    ATV630_EDGE_QUEUE_DIR: process.env.ATV630_EDGE_QUEUE_DIR || path.join(phase1Dir, 'runtime', 'data', 'atv630-edge'),
+    PHASE1_RUNTIME_CONFIG_DIR: process.env.PHASE1_RUNTIME_CONFIG_DIR || runtimePath('config'),
+    INTERNAL_PKI_DIR: process.env.INTERNAL_PKI_DIR || runtimePath('internal-pki'),
+    ATV630_EDGE_QUEUE_DIR: process.env.ATV630_EDGE_QUEUE_DIR || runtimePath('data', 'atv630-edge'),
   } : {}),
   ...(intelligence ? {
     FORECAST_POSTGRES_DSN: databaseUrl('forecast_runtime', 'hvac_s1'),
     OPTIMIZATION_POSTGRES_DSN: databaseUrl('optimization_runtime', 'hvac_s1'),
     FDD_DATABASE_URL: databaseUrl('fdd_runtime', 'hvac_s1'),
+    OPERATIONS_AGENT_DATABASE_URL: databaseUrl('operations_agent_operations_runtime', 'hvac_operations_agent'),
+    OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL: databaseUrl('operations_agent_checkpoints_runtime', 'hvac_operations_agent'),
   } : {}),
 };
 
@@ -156,7 +157,7 @@ if (simulatorAcceptance || atv630ProtocolAcceptance) {
 
 const composeBaseArgs = [
   'compose',
-  '--project-name', 'hvac-phase1-local',
+  '--project-name', localProject,
   ...[
     ...deploymentTier.profiles,
     ...runtimeProfiles,

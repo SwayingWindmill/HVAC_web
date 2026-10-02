@@ -165,7 +165,8 @@ for (const tierId of ['demo', 'single-lite', 'single-full']) {
   const tier = (deploymentTiers.tiers ?? []).find((entry) => entry.id === tierId);
   assert(tier && Array.isArray(tier.profiles) && tier.profiles.length === 1, `deployment tier ${tierId} must declare exactly one observability profile`);
   try {
-    resolveDeploymentTier({ contract: deploymentTiers, compose, tierId, environment: tierId === 'demo' ? 'testing' : 'production', additionalProfiles: ['local-postgres', 'local-clickhouse', 'local-redis'] });
+    // A tier must fit with every profile it declares optional, not only its base profile.
+    resolveDeploymentTier({ contract: deploymentTiers, compose, tierId, environment: tierId === 'demo' ? 'testing' : 'production', additionalProfiles: ['local-postgres', 'local-clickhouse', 'local-redis', ...(tier.optionalProfiles ?? [])] });
   } catch (error) {
     assert(false, error.message);
   }
@@ -330,11 +331,11 @@ const identityAdminBlock = serviceBlocks.find(([, name]) => name === 'identity-a
 const identityMFAKeygenBlock = serviceBlocks.find(([, name]) => name === 'identity-mfa-keygen')?.[2] ?? '';
 const energyAPIBlock = serviceBlocks.find(([, name]) => name === 'energy-api')?.[2] ?? '';
 const iamCredentialKeygenBlock = serviceBlocks.find(([, name]) => name === 'iam-api-credential-keygen')?.[2] ?? '';
-assert(identityServiceBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityServiceBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro'), 'identity-service must use the dedicated MFA encryption key from a read-only runtime mount');
-assert(identityAdminBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityAdminBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro'), 'identity-admin must use the dedicated MFA encryption key from a read-only runtime mount');
-assert(identityMFAKeygenBlock.includes('IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key') && identityMFAKeygenBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity'), 'Phase 1 must provide the explicit MFA key bootstrap tool');
-assert(energyAPIBlock.includes('IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}') && energyAPIBlock.includes('IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper') && energyAPIBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro'), 'energy-api must use the least-privilege IAM admin DSN and a read-only external API Credential pepper');
-assert(iamCredentialKeygenBlock.includes('IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper') && iamCredentialKeygenBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam'), 'Phase 1 must provide the explicit API Credential pepper bootstrap tool');
+assert(identityServiceBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityServiceBlock.includes('${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro'), 'identity-service must use the dedicated MFA encryption key from a read-only runtime mount');
+assert(identityAdminBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityAdminBlock.includes('${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro'), 'identity-admin must use the dedicated MFA encryption key from a read-only runtime mount');
+assert(identityMFAKeygenBlock.includes('IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key') && identityMFAKeygenBlock.includes('${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity'), 'Phase 1 must provide the explicit MFA key bootstrap tool');
+assert(energyAPIBlock.includes('IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}') && energyAPIBlock.includes('IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper') && energyAPIBlock.includes('${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam:ro'), 'energy-api must use the least-privilege IAM admin DSN and a read-only external API Credential pepper');
+assert(iamCredentialKeygenBlock.includes('IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper') && iamCredentialKeygenBlock.includes('${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam'), 'Phase 1 must provide the explicit API Credential pepper bootstrap tool');
 for (const service of ['energy-api', 'identity-service', 'scheduler', 'maintenance', 'telemetry-worker', 'metric-worker', 'connectivity']) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('phase1-schema-preflight:') && block.includes('condition: service_completed_successfully'), `${service} must fail closed on Product/Schema preflight`);

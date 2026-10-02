@@ -41,7 +41,7 @@ services:
     ports:
       - "${HTTPS_PORT:-443}:443"
     volumes:
-      - ${PUBLIC_TLS_DIR:-./runtime/tls}:/run/hvac/tls:ro
+      - ${PUBLIC_TLS_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/tls}:/run/hvac/tls:ro
     networks: [public, application]
     cpus: ${NGINX_CPUS:-0.50}
     mem_limit: ${NGINX_MEMORY_LIMIT:-256m}
@@ -193,7 +193,7 @@ services:
         required: false
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
-      - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
+      - ${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450", "8452"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
@@ -232,7 +232,7 @@ services:
       phase1-schema-preflight:
         condition: service_completed_successfully
     volumes:
-      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
+      - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro
     expose: ["19095", "19085"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19085/health/ready"]
@@ -258,7 +258,7 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IDENTITY_SIGNING_KEY_OUT: /run/hvac/identity/signing-key.pem
     volumes:
-      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+      - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity
 
   identity-mfa-keygen:
     <<: *go-service
@@ -273,7 +273,7 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key
     volumes:
-      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+      - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity
 
   iam-api-credential-keygen:
     <<: *go-service
@@ -288,7 +288,7 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper
     volumes:
-      - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam
+      - ${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam
 
   identity-admin:
     <<: *go-service
@@ -311,7 +311,7 @@ services:
       IDENTITY_ISSUER: ${IDENTITY_ISSUER:-https://localhost:8443/identity}
       IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
     volumes:
-      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
+      - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro
     networks: [data]
 
   identity-reconciler:
@@ -585,7 +585,7 @@ services:
       phase1-schema-preflight:
         condition: service_completed_successfully
     volumes:
-      - ${FDD_RUNTIME_DIR:-./runtime/fdd}:/run/hvac/fdd:ro
+      - ${FDD_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/fdd}:/run/hvac/fdd:ro
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
@@ -677,7 +677,7 @@ services:
       AGENT_MODEL_ALLOWLIST: deepseek-v4-flash,deepseek-v4-pro
       AGENT_MODEL_TIMEOUT_MS: "60000"
     volumes:
-      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -718,8 +718,8 @@ services:
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
     volumes:
-      - ${POSTGRES_DATA_DIR:-./runtime/data/postgres}:/var/lib/postgresql/data
-      - ${POSTGRES_WAL_ARCHIVE_DIR:-./runtime/backups/postgres/wal}:/var/lib/postgresql/wal-archive
+      - ${POSTGRES_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/postgres}:/var/lib/postgresql/data
+      - ${POSTGRES_WAL_ARCHIVE_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/backups/postgres/wal}:/var/lib/postgresql/wal-archive
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-postgres} -d ${POSTGRES_DB:-hvac_s0}"]
@@ -752,7 +752,7 @@ services:
       PHASE1_RELEASE_REVISION: ${PHASE1_RELEASE_REVISION:-unversioned-local-run}
       PHASE1_DB_ROLE_CREDENTIALS_FILE: /run/hvac/db-role-credentials/roles.sql
     volumes:
-      - ${PHASE1_DB_ROLE_CREDENTIALS_SQL:-./runtime/db-role-credentials/roles.sql}:/run/hvac/db-role-credentials/roles.sql:ro
+      - ${PHASE1_DB_ROLE_CREDENTIALS_SQL:-${PHASE1_RUNTIME_DIR:-./runtime}/db-role-credentials/roles.sql}:/run/hvac/db-role-credentials/roles.sql:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -798,7 +798,7 @@ services:
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
     volumes:
       - ./backup/postgres-base-backup.sh:/usr/local/bin/postgres-base-backup:ro
-      - ${POSTGRES_BASE_BACKUP_DIR:-./runtime/backups/postgres/base}:/backup
+      - ${POSTGRES_BASE_BACKUP_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/backups/postgres/base}:/backup
     entrypoint: ["/bin/bash", "/usr/local/bin/postgres-base-backup"]
     networks: [data]
 
@@ -809,8 +809,8 @@ services:
     environment:
       CLICKHOUSE_SERVER_MEMORY_USAGE: ${CLICKHOUSE_SERVER_MEMORY_USAGE:-3221225472}
     volumes:
-      - ${CLICKHOUSE_DATA_DIR:-./runtime/data/clickhouse}:/var/lib/clickhouse
-      - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
+      - ${CLICKHOUSE_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/clickhouse}:/var/lib/clickhouse
+      - ${CLICKHOUSE_BACKUP_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/backups/clickhouse}:/var/lib/clickhouse/backups
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
       - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
       - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
@@ -873,7 +873,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
     volumes:
-      - ${REDIS_DATA_DIR:-./runtime/data/redis}:/data
+      - ${REDIS_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/redis}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -894,8 +894,8 @@ services:
     volumes:
       - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
-      - ${MQTT_PKI_DIR:-./runtime/mqtt-pki}:/mosquitto/config/pki:ro
-      - ${MQTT_DATA_DIR:-./runtime/data/mqtt}:/mosquitto/data
+      - ${MQTT_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-pki}:/mosquitto/config/pki:ro
+      - ${MQTT_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
     cpus: ${MQTT_CPUS:-0.75}
     mem_limit: ${MQTT_MEMORY_LIMIT:-256m}
@@ -914,7 +914,7 @@ services:
       CENTRIFUGO_ENGINE_REDIS_ADDRESS: ${CENTRIFUGO_ENGINE_REDIS_ADDRESS:-redis://redis:6379/0}
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
-      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       redis:
         condition: service_healthy
