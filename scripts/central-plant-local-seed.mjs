@@ -50,7 +50,7 @@ export function buildS1SeedSQL({
   gatewayExternalId,
   mqttGatewayCertificateFingerprint,
 }) {
-  const { tenantId, siteId, principalId, integrationInstanceId } = centralPlantIdentity;
+  const { tenantId, siteId, principalId, integrationInstanceId, gatewayDeviceId } = centralPlantIdentity;
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]`;
   const analytics = `ARRAY[${analyticsActions.map(sqlLiteral).join(',')}]`;
   const { spaceIdByKey, assetIdByKey, sensorIdByKey, pointIdByRef, nextID } = buildCentralPlantSpatialIdentities(spatialPoints);
@@ -63,7 +63,12 @@ export function buildS1SeedSQL({
 
   const spaceRows = centralPlantSpaces.map((space) => `(${sqlLiteral(spaceIdByKey.get(space.id))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${space.parentId ? sqlLiteral(spaceIdByKey.get(space.parentId)) : 'NULL'},${sqlLiteral(space.code)},${sqlLiteral(space.name)},${sqlLiteral(space.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const assetRows = centralPlantAssets.map((asset) => `(${sqlLiteral(assetIdByKey.get(asset.id))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(asset.code)},${sqlLiteral(asset.name)},${sqlLiteral(asset.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
-  const deviceRows = centralPlantDevices.map((device) => `(${sqlLiteral(device.platformDeviceId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(device.slug)},${sqlLiteral(device.name)},${sqlLiteral(device.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
+  const deviceRows = [
+    `(${sqlLiteral(gatewayDeviceId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},'eg8200-commercial-001','EG8200-COMMERCIAL-001','GATEWAY','ACTIVE',1,clock_timestamp(),clock_timestamp())`,
+    ...centralPlantDevices.map((device) => `(${sqlLiteral(device.platformDeviceId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(device.slug)},${sqlLiteral(device.name)},${sqlLiteral(device.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`),
+  ].join(',\n  ');
+  // Gateway messages name each Device behind the Gateway by its device name.
+  const sourceKeyRows = centralPlantDevices.map((device, index) => `(${sqlLiteral(localUUID(0x830000000001 + index))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(gatewayDeviceId)},${sqlLiteral(device.name)},${sqlLiteral(device.platformDeviceId)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const assetSpaceRows = centralPlantAssets.map((asset) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(assetIdByKey.get(asset.id))},${sqlLiteral(spaceIdByKey.get(asset.areaId))},'INSTALLED_IN','ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const deviceSpaceRows = centralPlantDeviceEndpoints.map((device) => `(${sqlLiteral(nextID())},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(device.platformDeviceId)},${sqlLiteral(spaceIdByKey.get(device.areaId))},'INSTALLED_IN','ACTIVE',clock_timestamp(),NULL,1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
   const deviceBindingRows = centralPlantDeviceEndpoints.flatMap((endpoint) => endpoint.equipmentIds.map((assetKey) => {
@@ -123,6 +128,9 @@ ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUD
 INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at) VALUES
   ${deviceRows}
 ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, display_name=EXCLUDED.display_name, device_type=EXCLUDED.device_type, status='ACTIVE', updated_at=clock_timestamp();
+INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES
+  ${sourceKeyRows}
+ON CONFLICT (id) DO UPDATE SET source_key=EXCLUDED.source_key, device_id=EXCLUDED.device_id, status='ACTIVE', updated_at=clock_timestamp();
 INSERT INTO connectivity.transport_profiles (id, tenant_id, protocol, broker_origin, topic_namespace, status, revision, created_at, updated_at)
 VALUES (${sqlLiteral(transportProfileId)},${sqlLiteral(tenantId)},'MQTT',${sqlLiteral(mqttBrokerURL)},'energy/v1','ACTIVE',1,clock_timestamp(),clock_timestamp())
 ON CONFLICT (tenant_id, id) DO UPDATE SET broker_origin=EXCLUDED.broker_origin, status='ACTIVE', updated_at=clock_timestamp();

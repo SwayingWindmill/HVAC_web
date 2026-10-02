@@ -73,7 +73,8 @@
         "infra/registry/postgres/init/013-s23-maintenance-retirement.sql",
         "infra/registry/postgres/init/014-s21-rule-management-capability.sql",
         "infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql",
-        "infra/registry/postgres/init/016-s24-alarm-assign-capability.sql"
+        "infra/registry/postgres/init/016-s24-alarm-assign-capability.sql",
+        "infra/registry/postgres/init/017-registry-read-port.sql"
       ]
     },
     {
