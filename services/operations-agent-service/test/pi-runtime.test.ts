@@ -64,7 +64,7 @@ const createRun = (modelRef) => Object.freeze({
 
 const siteContextTool = (execute) => Object.freeze({
   definition: Object.freeze({
-    name: 'site.get_context',
+    name: 'site_get_context',
     description: 'Read the current Site context.',
     inputSchema: Object.freeze({
       type: 'object',
@@ -123,7 +123,7 @@ test('Pi runtime telemetry emits bounded run, model, and Tool metadata without p
         {
           parts: [
             { type: 'thinking', text: 'private hidden reasoning text' },
-            { type: 'tool-call', id: 'read-site-context', name: 'site.get_context', arguments: {} },
+            { type: 'tool-call', id: 'read-site-context', name: 'site_get_context', arguments: {} },
           ],
           stopReason: 'toolUse',
         },
@@ -148,13 +148,13 @@ test('Pi runtime telemetry emits bounded run, model, and Tool metadata without p
   assert.equal(typeof modelCompleted.durationMs, 'number');
   assert.equal(typeof modelCompleted.inputTokens, 'number');
   assert.equal(typeof modelCompleted.outputTokens, 'number');
-  const toolStarted = telemetryEvents.find(({ type, toolName }) => type === 'tool.started' && toolName === 'site.get_context');
+  const toolStarted = telemetryEvents.find(({ type, toolName }) => type === 'tool.started' && toolName === 'site_get_context');
   assert.equal(toolStarted.activeToolCalls, 1);
   const serialized = JSON.stringify(telemetryEvents);
   assert.doesNotMatch(serialized, /Why was overnight energy behavior abnormal|private hidden reasoning text|private-owner-payload-value|expected overnight load/u);
 });
 
-test('Pi Agent executes the project Tool loop and terminates through investigation.complete', async () => {
+test('Pi Agent executes the project Tool loop and terminates through investigation_complete', async () => {
   let siteReads = 0;
   const { events, result } = await runEngine({
     scripted: {
@@ -162,7 +162,7 @@ test('Pi Agent executes the project Tool loop and terminates through investigati
         {
           parts: [
             { type: 'thinking', text: 'I should inspect the Site context before concluding.' },
-            { type: 'tool-call', id: 'read-site-context', name: 'site.get_context', arguments: {} },
+            { type: 'tool-call', id: 'read-site-context', name: 'site_get_context', arguments: {} },
           ],
           stopReason: 'toolUse',
         },
@@ -191,7 +191,7 @@ test('Pi Agent executes the project Tool loop and terminates through investigati
   assert.deepEqual(
     result.toolExecutions.map(({ toolName, status }) => [toolName, status]),
     [
-      ['site.get_context', 'COMPLETED'],
+      ['site_get_context', 'COMPLETED'],
       [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED'],
     ],
   );
@@ -213,7 +213,7 @@ test('a thrown project READ Tool is observed as a failed Tool execution, not val
     scripted: {
       responses: [
         {
-          parts: [{ type: 'tool-call', name: 'site.get_context', arguments: {} }],
+          parts: [{ type: 'tool-call', name: 'site_get_context', arguments: {} }],
           stopReason: 'toolUse',
         },
         {
@@ -231,7 +231,7 @@ test('a thrown project READ Tool is observed as a failed Tool execution, not val
     }),
   });
 
-  const readExecution = result.toolExecutions.find(({ toolName }) => toolName === 'site.get_context');
+  const readExecution = result.toolExecutions.find(({ toolName }) => toolName === 'site_get_context');
   assert.equal(readExecution?.status, 'FAILED');
   assert.equal(readExecution?.failureCode, 'TOOL_EXECUTION_FAILED');
   assert.equal(result.artifacts[0].kind, 'FINDING');

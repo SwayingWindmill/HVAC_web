@@ -27,8 +27,8 @@ export interface AgentEvidenceRef {
   readonly toolExecutionId: string;
 }
 
-export const INVESTIGATION_COMPLETE_TOOL_NAME = 'investigation.complete' as const;
-export const INVESTIGATION_REQUEST_INPUT_TOOL_NAME = 'investigation.request_input' as const;
+export const INVESTIGATION_COMPLETE_TOOL_NAME = 'investigation_complete' as const;
+export const INVESTIGATION_REQUEST_INPUT_TOOL_NAME = 'investigation_request_input' as const;
 
 const MAX_FINDING_SUMMARY_LENGTH = 2_000;
 const MAX_FINDING_EVIDENCE_REFS = 32;
@@ -178,7 +178,7 @@ const physicalExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)
 
 const assertNoPhysicalExecutionClaim = (summary: string): void => {
   if (physicalExecutionClaim.test(summary)) {
-    invalidTerminalArtifact('investigation.complete cannot claim physical execution by the Agent.');
+    invalidTerminalArtifact('investigation_complete cannot claim physical execution by the Agent.');
   }
 };
 
@@ -220,14 +220,14 @@ const parseEvidenceRef = (value: unknown): AgentEvidenceRef => {
 };
 
 export const parseInvestigationComplete = (value: unknown): InvestigationComplete => {
-  const record = asRecord(value, 'investigation.complete input');
+  const record = asRecord(value, 'investigation_complete input');
   assertExactKeys(record, ['outcome', 'summary', 'evidenceRefs', 'limitations', 'recommendedNext']);
 
   if (record.outcome !== 'SUPPORTED_FINDING' && record.outcome !== 'UNABLE_TO_CONCLUDE') {
-    return invalidTerminalArtifact('investigation.complete outcome is invalid.');
+    return invalidTerminalArtifact('investigation_complete outcome is invalid.');
   }
   if (!Array.isArray(record.evidenceRefs) || record.evidenceRefs.length > MAX_FINDING_EVIDENCE_REFS) {
-    return invalidTerminalArtifact('investigation.complete evidenceRefs must be a bounded array.');
+    return invalidTerminalArtifact('investigation_complete evidenceRefs must be a bounded array.');
   }
 
   const evidenceRefs = Object.freeze(record.evidenceRefs.map(parseEvidenceRef));
@@ -236,18 +236,18 @@ export const parseInvestigationComplete = (value: unknown): InvestigationComplet
   }
   const summary = boundedString(
     record.summary,
-    'investigation.complete summary',
+    'investigation_complete summary',
     MAX_FINDING_SUMMARY_LENGTH,
   );
   const limitations = stringList(
     record.limitations,
-    'investigation.complete limitations',
+    'investigation_complete limitations',
     MAX_FINDING_LIST_ITEMS,
     MAX_FINDING_LIST_ITEM_LENGTH,
   );
   const recommendedNext = stringList(
     record.recommendedNext,
-    'investigation.complete recommendedNext',
+    'investigation_complete recommendedNext',
     MAX_FINDING_LIST_ITEMS,
     MAX_FINDING_LIST_ITEM_LENGTH,
   );
@@ -274,7 +274,7 @@ const parseChoice = (value: unknown, index: number): InvestigationInputChoice =>
 };
 
 const parseInputResponse = (value: unknown): InvestigationInputResponse => {
-  const record = asRecord(value, 'investigation.request_input response');
+  const record = asRecord(value, 'investigation_request_input response');
   const kind = record.kind;
   if (kind === 'TEXT') {
     assertExactKeys(record, ['kind', 'maxLength']);
@@ -293,14 +293,14 @@ const parseInputResponse = (value: unknown): InvestigationInputResponse => {
       choices: Object.freeze(record.choices.map(parseChoice)),
     });
   }
-  return invalidTerminalArtifact('investigation.request_input response kind is invalid.');
+  return invalidTerminalArtifact('investigation_request_input response kind is invalid.');
 };
 
 export const parseInvestigationRequestInput = (value: unknown): InvestigationRequestInput => {
-  const record = asRecord(value, 'investigation.request_input input');
+  const record = asRecord(value, 'investigation_request_input input');
   assertExactKeys(record, ['prompt', 'response']);
   return Object.freeze({
-    prompt: nonEmptyString(record.prompt, 'investigation.request_input prompt'),
+    prompt: nonEmptyString(record.prompt, 'investigation_request_input prompt'),
     response: parseInputResponse(record.response),
   });
 };

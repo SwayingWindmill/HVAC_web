@@ -27,11 +27,11 @@ import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
-  'site.get_context',
-  'assets.list',
-  'telemetry.get_current',
-  'energy.query_series',
-  'energy.compare_periods',
+  'site_get_context',
+  'assets_list',
+  'telemetry_get_current',
+  'energy_query_series',
+  'energy_compare_periods',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -433,7 +433,7 @@ const readSite = async (
   };
   const request: RegistryReadRequest = {
     ...draft,
-    requestId: requestIdFor(context, 'site.get_context', draft),
+    requestId: requestIdFor(context, 'site_get_context', draft),
   };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
@@ -452,7 +452,7 @@ const readAssets = async (
   };
   const request: RegistryReadRequest = {
     ...draft,
-    requestId: requestIdFor(context, 'assets.list', draft),
+    requestId: requestIdFor(context, 'assets_list', draft),
   };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
@@ -476,7 +476,7 @@ const readTelemetry = async (
   };
   const request: DeviceTelemetryReadRequest = {
     ...draft,
-    requestId: requestIdFor(context, 'telemetry.get_current', draft),
+    requestId: requestIdFor(context, 'telemetry_get_current', draft),
   };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await telemetry.read({ request, context: ownerContext });
@@ -510,7 +510,7 @@ const readTelemetry = async (
 };
 
 const readEnergy = async (
-  semanticTool: Extract<HvacReadToolName, 'energy.query_series' | 'energy.compare_periods'>,
+  semanticTool: Extract<HvacReadToolName, 'energy_query_series' | 'energy_compare_periods'>,
   context: AgentRunContext,
   authorization: AuthorizationDecision,
   authorizer: ToolAuthorizationReader,
@@ -633,7 +633,7 @@ export const createHvacReadTools = ({
 
   const siteTool: AgentTool = Object.freeze({
     definition: toolDefinition(
-      'site.get_context',
+      'site_get_context',
       'Read authoritative context for the current Site. The Site scope is injected by the server.',
       emptyInputSchema,
       SITE_CAPABILITIES,
@@ -665,7 +665,7 @@ export const createHvacReadTools = ({
 
   const assetsTool: AgentTool = Object.freeze({
     definition: toolDefinition(
-      'assets.list',
+      'assets_list',
       'List bounded authoritative Assets for the current Site. Tenant and Site are injected by the server.',
       emptyInputSchema,
       ASSET_CAPABILITIES,
@@ -704,7 +704,7 @@ export const createHvacReadTools = ({
 
   const telemetryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
-      'telemetry.get_current',
+      'telemetry_get_current',
       'Read bounded current telemetry for one Device in the current Site. Tenant and Site are injected by the server.',
       telemetryInputSchema,
       TELEMETRY_CAPABILITIES,
@@ -723,7 +723,7 @@ export const createHvacReadTools = ({
 
   const energyQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
-      'energy.query_series',
+      'energy_query_series',
       'Query a bounded electricity energy series for the current Site using its authoritative timezone.',
       energyQueryInputSchema,
       ENERGY_CAPABILITIES,
@@ -734,7 +734,7 @@ export const createHvacReadTools = ({
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
         const result = await readEnergy(
-          'energy.query_series',
+          'energy_query_series',
           context,
           authorization,
           toolAuthorizationReader,
@@ -750,7 +750,7 @@ export const createHvacReadTools = ({
 
   const energyCompareTool: AgentTool = Object.freeze({
     definition: toolDefinition(
-      'energy.compare_periods',
+      'energy_compare_periods',
       'Compare two bounded electricity periods for the current Site without exposing raw infrastructure.',
       energyCompareInputSchema,
       ENERGY_CAPABILITIES,
@@ -762,7 +762,7 @@ export const createHvacReadTools = ({
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
         const [baselineSeries, currentSeries] = await Promise.all([
           readEnergy(
-            'energy.compare_periods',
+            'energy_compare_periods',
             context,
             authorization,
             toolAuthorizationReader,
@@ -772,7 +772,7 @@ export const createHvacReadTools = ({
             limits,
           ),
           readEnergy(
-            'energy.compare_periods',
+            'energy_compare_periods',
             context,
             authorization,
             toolAuthorizationReader,

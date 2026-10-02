@@ -274,7 +274,7 @@ const runScript = async (responses, tools = [], runBudget = budget, runtimeOptio
   return { events, result };
 };
 
-test('investigation.request_input creates one typed input request and cleanly waits for operator input', async () => {
+test('investigation_request_input creates one typed input request and cleanly waits for operator input', async () => {
   const request = Object.freeze({
     prompt: 'Which operating schedule should be treated as the expected overnight schedule?',
     response: Object.freeze({
@@ -340,7 +340,7 @@ test('a Run accepts exactly one terminal operation even when the model calls bot
   assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-terminal-second')?.status, 'FAILED');
 });
 
-test('investigation.complete rejects unsupported physical-execution claims in terminal narrative fields', async () => {
+test('investigation_complete rejects unsupported physical-execution claims in terminal narrative fields', async () => {
   const base = {
     outcome: 'UNABLE_TO_CONCLUDE',
     summary: 'The available evidence is incomplete.',
@@ -373,7 +373,7 @@ test('investigation.complete rejects unsupported physical-execution claims in te
   }
 });
 
-test('investigation.complete rejects unbounded summary, evidence, limitations, and recommended actions', async () => {
+test('investigation_complete rejects unbounded summary, evidence, limitations, and recommended actions', async () => {
   const evidence = Object.freeze({
     owner: 'ENERGY',
     resourceType: 'period-comparison',
@@ -408,12 +408,12 @@ test('investigation.complete rejects unbounded summary, evidence, limitations, a
 });
 
 test('SUPPORTED_FINDING evidence must reference a successful Tool execution from the same Run', async () => {
-  const energyTool = projectTool('energy.compare_periods', async () => ({
+  const energyTool = projectTool('energy_compare_periods', async () => ({
     comparison: { status: 'COMPARABLE', absoluteChangeKWh: 5, percentChange: 25 },
   }));
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'energy-read-1', name: 'energy.compare_periods', arguments: {} }],
+      parts: [{ type: 'tool-call', id: 'energy-read-1', name: 'energy_compare_periods', arguments: {} }],
       stopReason: 'toolUse',
     },
     {
@@ -444,10 +444,10 @@ test('SUPPORTED_FINDING evidence must reference a successful Tool execution from
 });
 
 test('model-call budget exhaustion stops the run before another model turn', async () => {
-  const siteTool = projectTool('site.get_context', async () => ({ siteId: context.siteId }));
+  const siteTool = projectTool('site_get_context', async () => ({ siteId: context.siteId }));
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'site-read-1', name: 'site.get_context', arguments: {} }],
+      parts: [{ type: 'tool-call', id: 'site-read-1', name: 'site_get_context', arguments: {} }],
       stopReason: 'toolUse',
     },
     {
@@ -506,12 +506,12 @@ test('Tool-call budget exhaustion stops the run before another model turn', asyn
 });
 
 test('output-token budget exhaustion stops the run before another model turn', async () => {
-  const siteTool = projectTool('site.get_context', async () => ({ siteId: context.siteId }));
+  const siteTool = projectTool('site_get_context', async () => ({ siteId: context.siteId }));
   const { result } = await runScript([
     {
       parts: [
         { type: 'text', text: 'This first turn intentionally contains enough visible text to exceed the tiny output token budget.' },
-        { type: 'tool-call', id: 'site-read-output-budget', name: 'site.get_context', arguments: {} },
+        { type: 'tool-call', id: 'site-read-output-budget', name: 'site_get_context', arguments: {} },
       ],
       stopReason: 'toolUse',
     },
@@ -564,14 +564,14 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
   const currentTo = '2026-08-02T01:00:00.000Z';
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'site-context-vertical', name: 'site.get_context', arguments: {} }],
+      parts: [{ type: 'tool-call', id: 'site-context-vertical', name: 'site_get_context', arguments: {} }],
       stopReason: 'toolUse',
     },
     {
       parts: [{
         type: 'tool-call',
         id: 'energy-compare-vertical',
-        name: 'energy.compare_periods',
+        name: 'energy_compare_periods',
         arguments: { baselineFrom, baselineTo, currentFrom, currentTo, granularity: 'hour' },
       }],
       stopReason: 'toolUse',
@@ -604,8 +604,8 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
   assert.deepEqual(
     result.toolExecutions.map(({ toolName, status }) => [toolName, status]),
     [
-      ['site.get_context', 'COMPLETED'],
-      ['energy.compare_periods', 'COMPLETED'],
+      ['site_get_context', 'COMPLETED'],
+      ['energy_compare_periods', 'COMPLETED'],
       [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED'],
     ],
   );
@@ -620,7 +620,7 @@ test('incomplete Energy evidence produces unable-to-conclude instead of a confir
       parts: [{
         type: 'tool-call',
         id: 'energy-incomplete-vertical',
-        name: 'energy.compare_periods',
+        name: 'energy_compare_periods',
         arguments: {
           baselineFrom: '2026-08-01T00:00:00.000Z',
           baselineTo: '2026-08-01T01:00:00.000Z',
@@ -665,7 +665,7 @@ test('stale current Telemetry remains partial evidence and produces unable-to-co
       parts: [{
         type: 'tool-call',
         id: 'telemetry-stale-vertical',
-        name: 'telemetry.get_current',
+        name: 'telemetry_get_current',
         arguments: {
           deviceId: telemetryDeviceId,
           pointKeys: ['condenserPressureKPa', 'leavingWaterTempC'],
@@ -711,7 +711,7 @@ test('malicious Owner text cannot grant a forbidden Tool or widen the trusted Si
   });
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'assets-malicious-vertical', name: 'assets.list', arguments: {} }],
+      parts: [{ type: 'tool-call', id: 'assets-malicious-vertical', name: 'assets_list', arguments: {} }],
       stopReason: 'toolUse',
     },
     {

@@ -164,7 +164,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the five capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site.get_context', 'assets.list', 'telemetry.get_current', 'energy.query_series', 'energy.compare_periods']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -174,13 +174,13 @@ test('HVAC catalog contains the five capability-filtered READ Tools', () => {
     deviceTelemetryReader: { read: async () => { throw new Error('not called'); } },
     energyAnalyticsReader: { read: async () => { throw new Error('not called'); } },
   });
-  assert.deepEqual(limited.map((tool) => tool.definition.name), ['site.get_context']);
+  assert.deepEqual(limited.map((tool) => tool.definition.name), ['site_get_context']);
   assert.equal(limited.every((tool) => tool.definition.executionMode === 'parallel' && tool.definition.replayPolicy === 'safe'), true);
 });
 
 test('model arguments cannot select trusted identity or infrastructure and direct invocation still rechecks capability', async () => {
   const harness = createHarness();
-  const siteTool = byName(harness.tools, 'site.get_context');
+  const siteTool = byName(harness.tools, 'site_get_context');
   const forbiddenFields = [
     'tenantId',
     'siteId',
@@ -201,7 +201,7 @@ test('model arguments cannot select trusted identity or infrastructure and direc
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
   await assert.rejects(
-    () => execute(byName(harness.tools, 'energy.query_series'), {
+    () => execute(byName(harness.tools, 'energy_query_series'), {
       from: '2026-08-01T00:00:00.000Z',
       to: '2026-08-01T01:00:00.000Z',
       tenantId: 'other-tenant',
@@ -209,7 +209,7 @@ test('model arguments cannot select trusted identity or infrastructure and direc
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
   await assert.rejects(
-    () => execute(byName(harness.tools, 'telemetry.get_current'), {
+    () => execute(byName(harness.tools, 'telemetry_get_current'), {
       deviceId,
       pointKeys: ['condenserPressureKPa'],
       siteId: 'other-site',
@@ -226,7 +226,7 @@ test('model arguments cannot select trusted identity or infrastructure and direc
   );
   await assert.rejects(
     () => execute(
-      byName(harness.tools, 'telemetry.get_current'),
+      byName(harness.tools, 'telemetry_get_current'),
       { deviceId, pointKeys: ['condenserPressureKPa'] },
       { ...context, capabilities: ['site.read'] },
     ),
@@ -237,8 +237,8 @@ test('model arguments cannot select trusted identity or infrastructure and direc
 
 test('site and asset Tools reauthorize then call Registry with trusted scope and bounded output', async () => {
   const harness = createHarness();
-  const siteResult = await execute(byName(harness.tools, 'site.get_context'), {});
-  const assetsResult = await execute(byName(harness.tools, 'assets.list'), {});
+  const siteResult = await execute(byName(harness.tools, 'site_get_context'), {});
+  const assetsResult = await execute(byName(harness.tools, 'assets_list'), {});
 
   assert.equal(harness.authorizationInputs.length, 2);
   assert.equal(harness.registryInputs.length, 2);
@@ -253,9 +253,9 @@ test('site and asset Tools reauthorize then call Registry with trusted scope and
   assert.deepEqual(assetsResult.assets.map(({ id }) => id), ['asset-1', 'asset-2']);
 });
 
-test('telemetry.get_current injects trusted Site scope and preserves stale and missing telemetry semantics', async () => {
+test('telemetry_get_current injects trusted Site scope and preserves stale and missing telemetry semantics', async () => {
   const harness = createHarness();
-  const result = await execute(byName(harness.tools, 'telemetry.get_current'), {
+  const result = await execute(byName(harness.tools, 'telemetry_get_current'), {
     deviceId,
     pointKeys: ['condenserPressureKPa', 'leavingWaterTempC'],
   });
@@ -289,7 +289,7 @@ test('telemetry.get_current injects trusted Site scope and preserves stale and m
   });
 });
 
-test('energy.query_series injects authoritative timezone and keeps partial data distinct from zero', async () => {
+test('energy_query_series injects authoritative timezone and keeps partial data distinct from zero', async () => {
   const from = '2026-08-01T00:00:00.000Z';
   const to = '2026-08-01T01:00:00.000Z';
   const harness = createHarness({
@@ -299,7 +299,7 @@ test('energy.query_series injects authoritative timezone and keeps partial data 
     },
   });
 
-  const result = await execute(byName(harness.tools, 'energy.query_series'), { from, to, granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { from, to, granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
   assert.equal(harness.energyInputs[0].request.input.tenantId, tenantId);
   assert.equal(harness.energyInputs[0].request.input.siteId, siteId);
   assert.equal(harness.energyInputs[0].request.input.timezone, 'America/Phoenix');
@@ -315,12 +315,12 @@ test('energy.query_series injects authoritative timezone and keeps partial data 
       return ownerResult(input.request, 'telemetry-query-service', 'energy-zero-1', 'GOOD', 'telemetry-query-service:energy-series/v1', payload);
     },
   });
-  const zero = await execute(byName(zeroHarness.tools, 'energy.query_series'), { from, to });
+  const zero = await execute(byName(zeroHarness.tools, 'energy_query_series'), { from, to });
   assert.equal(zero.totalKWh, 0);
   assert.equal(zero.completeness, 'COMPLETE');
 });
 
-test('energy.compare_periods executes independent Energy reads in parallel and returns bounded summaries', async () => {
+test('energy_compare_periods executes independent Energy reads in parallel and returns bounded summaries', async () => {
   const baselineFrom = '2026-08-01T00:00:00.000Z';
   const baselineTo = '2026-08-01T01:00:00.000Z';
   const currentFrom = '2026-08-02T00:00:00.000Z';
@@ -343,7 +343,7 @@ test('energy.compare_periods executes independent Energy reads in parallel and r
     },
   });
 
-  const result = await execute(byName(harness.tools, 'energy.compare_periods'), {
+  const result = await execute(byName(harness.tools, 'energy_compare_periods'), {
     baselineFrom,
     baselineTo,
     currentFrom,
@@ -363,7 +363,7 @@ test('Owner failures are stable Agent Tool failures rather than successful strin
   const harness = createHarness({ registryFailure: new OwnerReadError('OWNER_READ_UNAVAILABLE', 'secret upstream detail') });
 
   await assert.rejects(
-    () => execute(byName(harness.tools, 'site.get_context'), {}),
+    () => execute(byName(harness.tools, 'site_get_context'), {}),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_OWNER_UNAVAILABLE' && !error.message.includes('secret upstream detail'),
   );
 });

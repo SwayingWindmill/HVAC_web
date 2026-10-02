@@ -104,20 +104,20 @@ const finishResponse = Object.freeze({
 test('runtime removes unauthorized project Tools before constructing the Pi Agent', async () => {
   let calls = 0;
   const restricted = projectTool({
-    name: 'assets.list',
+    name: 'assets_list',
     requiredCapabilities: ['asset.list'],
     execute: async () => { calls += 1; return { unexpected: true }; },
   });
   const { result } = await run({
     tools: [restricted],
     responses: [
-      { parts: [{ type: 'tool-call', name: 'assets.list', arguments: {} }], stopReason: 'toolUse' },
+      { parts: [{ type: 'tool-call', name: 'assets_list', arguments: {} }], stopReason: 'toolUse' },
       finishResponse,
     ],
   });
 
   assert.equal(calls, 0);
-  const execution = result.toolExecutions.find(({ toolName }) => toolName === 'assets.list');
+  const execution = result.toolExecutions.find(({ toolName }) => toolName === 'assets_list');
   assert.equal(execution?.status, 'FAILED');
 });
 
@@ -188,7 +188,7 @@ test('project Tool concurrency budget rejects excess parallel execution without 
 
 test('AgentToolError code is preserved while sensitive Tool error text is never projected', async () => {
   const failing = projectTool({
-    name: 'site.get_context',
+    name: 'site_get_context',
     execute: async () => {
       throw new AgentToolError('TOOL_OWNER_UNAVAILABLE', 'secret owner hostname and credential fragment');
     },
@@ -196,12 +196,12 @@ test('AgentToolError code is preserved while sensitive Tool error text is never 
   const { events, result } = await run({
     tools: [failing],
     responses: [
-      { parts: [{ type: 'tool-call', name: 'site.get_context', arguments: {} }], stopReason: 'toolUse' },
+      { parts: [{ type: 'tool-call', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
       finishResponse,
     ],
   });
 
-  const execution = result.toolExecutions.find(({ toolName }) => toolName === 'site.get_context');
+  const execution = result.toolExecutions.find(({ toolName }) => toolName === 'site_get_context');
   assert.equal(execution?.failureCode, 'TOOL_OWNER_UNAVAILABLE');
   assert.equal(JSON.stringify(events).includes('secret owner hostname'), false);
 });

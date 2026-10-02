@@ -178,7 +178,7 @@ test('complete commits finalized records atomically and exact retry does not app
     id: 'tool-complete-1',
     sessionId: started.session.id,
     runId: terminalRun.id,
-    toolName: 'energy.compare_periods',
+    toolName: 'energy_compare_periods',
     argumentsDigest: 'abc123',
     status: 'COMPLETED',
     startedAt: 2_150,
