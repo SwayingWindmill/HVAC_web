@@ -53,12 +53,12 @@ const [spec, publication, ownership, activeSpecText, adr, context, packageJSON] 
 ]);
 
 assert(spec.openapi === '3.1.0', 'telemetry contract must use OpenAPI 3.1.0');
-assert(spec.info?.version === '1.0.0', 'expand-baseline telemetry contract version drifted');
+assert(spec.info?.version === '2.0.0', 'telemetry public contract version drifted');
 assert(spec['x-activation-status'] === 'expand-baseline', 'telemetry contract must be activated only as an expand baseline');
 assert(spec['x-public-owner'] === 'platform-gateway', 'Gateway must remain the public owner');
 assert(spec['x-upstream-owner'] === 'telemetry-runtime-service', 'Telemetry Runtime must remain the upstream business owner');
 assert(publication['x-activation-status'] === 'expand-baseline', 'publication contract must be activated only as an expand baseline');
-assert(ownership.activationStatus === 'expand-baseline', 'S2 ownership contract must be an expand baseline');
+assert(ownership.activationStatus === 'v2-active', 'S2 ownership contract must be the active v2 decision');
 assert(ownership.ownerService === spec['x-upstream-owner'], 'public contract owner must match the ownership decision');
 
 assert(JSON.stringify(spec.security) === JSON.stringify([{ BffSession: [] }, { WorkloadMTLS: [] }]), 'security alternatives must be BffSession and WorkloadMTLS');
@@ -74,6 +74,7 @@ const expectedOperations = {
   bootstrapTelemetrySubscriptions: ['post', '/api/v1/telemetry/subscriptions:bootstrap'],
   checkpointTelemetryRecoveryCursors: ['post', '/api/v1/telemetry/recovery-cursors:checkpoint'],
   queryDeviceHistory: ['post', '/api/v1/telemetry/device-series:query'],
+  queryDeviceHistoryAggregate: ['post', '/api/v1/telemetry/device-series:aggregate'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -81,7 +82,7 @@ for (const [operationId, [method, path]] of Object.entries(expectedOperations)) 
   assert(value?.method === method && value?.path === path, `${operationId} method/path drifted`);
   operations[operationId] = value.operation;
 }
-assert(Object.values(spec.paths ?? {}).reduce((count, item) => count + ['get', 'post', 'put', 'patch', 'delete'].filter((method) => item?.[method]).length, 0) === 5, 'S2 public surface must remain exactly five operations');
+assert(Object.values(spec.paths ?? {}).reduce((count, item) => count + ['get', 'post', 'put', 'patch', 'delete'].filter((method) => item?.[method]).length, 0) === Object.keys(expectedOperations).length, 'S2 public surface must be exactly the expected operations');
 assert(!Object.keys(spec.paths ?? {}).some((path) => path.endsWith('/presence') || path.endsWith('/telemetry/latest')), 'Presence/latest must not split into separate public resources');
 
 const invariants = spec['x-contract-invariants'] ?? [];
@@ -95,11 +96,13 @@ for (const invariant of [
   'stale-missing-and-upstream-unavailable-are-explicit-data-states',
   'publication-revisions-are-contiguous-per-device',
   'recovery-failure-loads-an-authoritative-snapshot',
-  'real-mode-never-falls-back-to-mock-or-thingsboard-read-through',
-  'device-history-public-requests-never-accept-organization-or-site-claims',
-  'device-history-authorization-binds-exact-device-keys-range-and-point-limit',
-  'device-history-is-numeric-accepted-observations-only',
-  'device-history-points-preserve-sampled-at-point-and-sensor-identity',
+  'real-mode-never-falls-back-to-mock-or-provider-read-through',
+  'device-history-public-requests-never-accept-tenant-or-site-claims',
+  'device-history-authorization-binds-exact-device-keys-range-page-or-aggregate-policy',
+  'device-history-preserves-number-string-boolean-json-and-valid-out-of-order-observations',
+  'device-history-cursors-bind-query-scope-and-a-fixed-projection-snapshot',
+  'device-history-observations-preserve-observation-point-sensor-source-position-and-point-revision',
+  'device-history-aggregation-is-point-type-aware-and-site-timezone-calendar-aware',
 ]) {
   assert(invariants.includes(invariant), `public contract invariant missing: ${invariant}`);
 }
@@ -112,9 +115,10 @@ assert(limits.maxSubscriptions === 100, 'subscription count limit drifted');
 assert(limits.maxSubscriptionKeySelections === 2048, 'subscription total-key limit drifted');
 assert(limits.maxCursorCheckpoints === 100, 'cursor checkpoint limit drifted');
 assert(limits.maxHistoryKeys === 8, 'history key limit drifted');
-assert(limits.maxHistoryPointsPerKey === 500, 'history per-key point limit drifted');
+assert(limits.maxHistoryPageSize === 500, 'history page size limit drifted');
 assert(limits.maxHistoryRangeHours === 24, 'history range limit drifted');
-assert(limits.maxHistoryResponsePoints === 4000, 'history total response limit drifted');
+assert(limits.maxHistoryAggregateRangeDays === 366, 'history aggregate range limit drifted');
+assert(limits.maxHistoryAggregateBuckets === 1000, 'history aggregate bucket limit drifted');
 assert(spec.components?.parameters?.TelemetryKeys?.required === false, 'single Snapshot keys must remain optional for Presence-only reads');
 assert(spec.components?.parameters?.TelemetryKeys?.schema?.maxItems === limits.maxKeysPerDevice, 'single Snapshot key limit disagrees with root limits');
 assert(spec.components?.parameters?.TelemetryKeys?.schema?.uniqueItems === true, 'single Snapshot keys must be unique');
@@ -126,15 +130,13 @@ assert(schemas.ObservationSnapshotTarget?.properties?.keys?.maxItems === limits.
 assert(schemas.SubscriptionBootstrapRequest?.properties?.subscriptions?.maxItems === limits.maxSubscriptions, 'bootstrap subscription limit drifted');
 assert(schemas.SubscriptionTargetRequest?.properties?.keys?.maxItems === limits.maxKeysPerDevice, 'subscription key limit drifted');
 assert(schemas.RecoveryCursorCheckpointRequest?.properties?.checkpoints?.maxItems === limits.maxCursorCheckpoints, 'checkpoint count limit drifted');
-assert(schemas.DeviceHistoryRequest?.properties?.keys?.maxItems === limits.maxHistoryKeys, 'history request key limit drifted');
-assert(schemas.DeviceHistoryRequest?.properties?.keys?.uniqueItems === true, 'history request keys must be unique');
-assert(schemas.DeviceHistoryRequest?.properties?.maxPointsPerKey?.maximum === limits.maxHistoryPointsPerKey, 'history per-key point limit disagrees with root limits');
-assert(schemas.DeviceHistoryResponse?.properties?.series?.maxItems === limits.maxHistoryKeys, 'history response series limit drifted');
-assert(schemas.DeviceHistorySeries?.properties?.points?.maxItems === limits.maxHistoryPointsPerKey, 'history series point limit drifted');
-assert(schemas.DeviceHistoryMetadata?.properties?.returnedPoints?.maximum === limits.maxHistoryResponsePoints, 'history total response limit drifted');
-assert(schemas.DeviceHistoryPoint?.required?.includes('pointId') && schemas.DeviceHistoryPoint?.required?.includes('sensorId'), 'history samples must require frozen Point/Sensor identity');
-assert(schemas.DeviceHistoryPoint?.properties?.pointId?.$ref === '#/components/schemas/UUIDv7', 'history Point identity must remain UUIDv7');
-assert(Array.isArray(schemas.DeviceHistoryPoint?.properties?.sensorId?.oneOf), 'history Sensor identity must remain explicitly nullable');
+for (const name of ['DeviceHistoryRequest', 'DeviceHistoryAggregateRequest']) {
+  assert(schemas[name]?.properties?.keys?.maxItems === limits.maxHistoryKeys, `${name} key limit drifted`);
+  assert(schemas[name]?.properties?.keys?.uniqueItems === true, `${name} keys must be unique`);
+}
+assert(schemas.DeviceHistoryRequest?.properties?.pageSize?.maximum === limits.maxHistoryPageSize, 'history page size disagrees with root limits');
+assert(schemas.DeviceHistoryResponse?.properties?.observations?.maxItems === limits.maxHistoryPageSize, 'history response observation limit drifted');
+assert(schemas.DeviceHistoryObservation?.required?.includes('pointId') && schemas.DeviceHistoryObservation?.required?.includes('sensorId'), 'history observations must carry Point/Sensor identity');
 
 const requestSchemaProperties = {
   ObservationSnapshotTarget: ['requestId', 'deviceId', 'keys'],
@@ -143,7 +145,8 @@ const requestSchemaProperties = {
   SubscriptionBootstrapRequest: ['subscriptions'],
   RecoveryCursorCheckpoint: ['subscriptionId', 'businessRevision', 'transportPosition'],
   RecoveryCursorCheckpointRequest: ['checkpoints'],
-  DeviceHistoryRequest: ['deviceId', 'keys', 'from', 'to', 'maxPointsPerKey'],
+  DeviceHistoryRequest: ['deviceId', 'keys', 'from', 'to', 'pageSize', 'cursor'],
+  DeviceHistoryAggregateRequest: ['deviceId', 'keys', 'from', 'to', 'granularity', 'timezone', 'qualityPolicy'],
 };
 for (const [name, allowedProperties] of Object.entries(requestSchemaProperties)) {
   const schema = schemas[name];
@@ -188,8 +191,8 @@ assert(exact(schemas.EvaluationAvailability.enum, ['AVAILABLE', 'UNAVAILABLE']),
 assert(exact(schemas.PresenceApplicability.enum, ['APPLICABLE', 'NOT_APPLICABLE']), 'Presence Applicability enum drifted');
 assert(exact(schemas.DevicePresenceState.enum, ['ONLINE', 'OFFLINE', 'UNKNOWN']), 'Device Presence enum drifted');
 assert(exact(schemas.TelemetryFreshness.enum, ['FRESH', 'STALE', 'MISSING']), 'Telemetry Freshness enum drifted');
-assert(exact(schemas.TelemetryQuality.enum, ['GOOD', 'SUSPECT']), 'Telemetry Quality enum drifted');
-assert(exact(schemas.DeviceHistoryQuality.enum, ['GOOD', 'SUSPECT']), 'Device History Quality enum drifted');
+assert(exact(schemas.TelemetryQuality.enum, ['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']), 'Telemetry Quality enum drifted');
+assert(exact(schemas.DeviceHistoryQuality.enum, ['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']), 'Device History Quality enum drifted');
 assert(exact(schemas.TelemetryReadiness.enum, ['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']), 'Telemetry Readiness enum drifted');
 assert(exact(schemas.DeviceDisplayState.enum, ['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE', null]), 'Device Display State enum drifted');
 

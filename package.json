@@ -139,6 +139,7 @@
     "pocs:components:check": "node scripts/check-platform-component-poc-assets.mjs && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river mod verify && node scripts/run-isolated-go.mjs --module=pocs/platform-components/river test ./...",
     "telemetry:contracts:generate": "node scripts/generate-s2-telemetry-contracts.mjs",
     "telemetry:contracts:check": "node scripts/generate-s2-telemetry-contracts.mjs --check",
+    "s2:public-contract:check": "node scripts/check-s2-telemetry-public-contract.mjs",
     "telemetry:integration": "node scripts/run-s2-telemetry-postgres-tests.mjs && node scripts/run-s2-telemetry-ingest-postgres-tests.mjs && node scripts/run-s2-realtime-postgres-tests.mjs && node scripts/run-s2-telemetry-history-tests.mjs",
     "telemetry:browser": "node scripts/run-s2-telemetry-live-browser-audit.mjs",
     "registry:check": "node scripts/check-s1-registry-baseline.mjs",
