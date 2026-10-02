@@ -81,7 +81,6 @@ test('design system gate rejects legacy Ant design authority language', async ()
     'docs/product/smart-energy-system-page-architecture-audit-v1.md',
     'docs/product/smart-energy-system-page-architecture-v1.md',
     'docs/product/product-information-architecture-v2.md',
-    '.agents/skills/impeccable/SKILL.md',
     '.agents/skills/frontend-design/SKILL.md',
     '.agents/skills/web-design-guidelines/SKILL.md',
   ];

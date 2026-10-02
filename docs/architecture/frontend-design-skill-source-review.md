@@ -26,10 +26,10 @@ Legacy Device Center, HVAC Monitor, Dashboard and Alarm reference packages are h
 
 - Upstream: https://github.com/pbakaus/impeccable
 - Reviewed skill: upstream `.agents/skills/impeccable/SKILL.md`
-- Reviewed public skill version: `4.1.2`
+- Reviewed public skill version: `4.1.2`; now consumed as the Claude Code plugin `impeccable@impeccable` `4.4.0`
 - Reviewed detector CLI: npm `impeccable@3.5.0`
 - License: Apache-2.0
-- Local skill: `.agents/skills/impeccable/SKILL.md`
+- Installed as: Claude Code plugin from the `pbakaus/impeccable` marketplace (no vendored copy)
 
 ### ADOPT
 
