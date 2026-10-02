@@ -529,6 +529,8 @@ services:
     networks:
       application:
         aliases: [operations-agent-service]
+      data: {}
+      model-egress: {}
     cpus: ${OPERATIONS_AGENT_CPUS:-1.00}
     mem_limit: ${OPERATIONS_AGENT_MEMORY_LIMIT:-512m}
     mem_reservation: ${OPERATIONS_AGENT_MEMORY_RESERVATION:-192m}
@@ -861,6 +863,8 @@ services:
 
 networks:
   public: {}
+  # Outbound access to the model provider; only the Operations Agent joins it.
+  model-egress: {}
   application:
     internal: true
   data:
