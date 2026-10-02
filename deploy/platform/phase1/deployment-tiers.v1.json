@@ -24,9 +24,9 @@
       "purpose": "Local or hosted MQTT connectivity is optional. Backend/UI and core data services do not require this profile."
     },
     "intelligence": {
-      "services": ["forecast-service", "optimization-service", "fdd-service"],
+      "services": ["forecast-service", "optimization-service", "fdd-service", "operations-agent-service"],
       "optional": true,
-      "purpose": "Forecast, optimization and FDD are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
+      "purpose": "Forecast, optimization, FDD and the Operations Agent (Ask AI) are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
     },
     "observability-core": {
       "services": ["prometheus", "node-exporter", "grafana"],

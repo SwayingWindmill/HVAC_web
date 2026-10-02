@@ -1,0 +1,7 @@
+*
+!services/operations-agent-service/package.json
+!services/operations-agent-service/package-lock.json
+!services/operations-agent-service/tsconfig.json
+!services/operations-agent-service/tsconfig.build.json
+!services/operations-agent-service/src/
+!services/operations-agent-service/src/**

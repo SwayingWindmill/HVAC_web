@@ -91,6 +91,13 @@ services:
       QUERY_CUBE_ENDPOINT: ${QUERY_CUBE_ENDPOINT:-http://cube:4000}
       PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
       LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
+      GATEWAY_INTERNAL_ADDR: :8452
+      GATEWAY_INTERNAL_CERT: /run/hvac/pki/gateway-internal/tls.crt
+      GATEWAY_INTERNAL_KEY: /run/hvac/pki/gateway-internal/tls.key
+      GATEWAY_INTERNAL_CLIENT_CA: /run/hvac/pki/ca.crt
+      OPERATIONS_AGENT_URL: https://operations-agent-service:8451
+      OPERATIONS_AGENT_SERVER_CA: /run/hvac/pki/ca.crt
+      OPERATIONS_AGENT_SERVER_NAME: operations-agent-service
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -103,7 +110,7 @@ services:
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
-    expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450"]
+    expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450", "8452"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
       interval: 10s
@@ -472,6 +479,59 @@ services:
     cpus: ${IOT_SERVICE_CPUS:-1.50}
     mem_limit: ${IOT_SERVICE_MEMORY_LIMIT:-512m}
     mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
+
+  operations-agent-service:
+    restart: unless-stopped
+    env_file:
+      - ${PHASE1_ENV_FILE:-./environments/development.runtime.env}
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging: *default-logging
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/operations-agent.Dockerfile
+    image: ${OPERATIONS_AGENT_IMAGE:-hvac/operations-agent-service:0.1.0-dev}
+    profiles: ["intelligence"]
+    environment:
+      AGENT_LISTEN_PORT: "8451"
+      AGENT_DIAGNOSTICS_PORT: "19095"
+      AGENT_TLS_CERT: /run/hvac/pki/operations-agent/tls.crt
+      AGENT_TLS_KEY: /run/hvac/pki/operations-agent/tls.key
+      AGENT_TLS_CA: /run/hvac/pki/ca.crt
+      AGENT_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
+      OPERATIONS_DATABASE_URL: ${OPERATIONS_AGENT_DATABASE_URL:-}
+      CHECKPOINTS_DATABASE_URL: ${OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL:-}
+      REGISTRY_URL: https://platform-core-service:18445
+      TELEMETRY_RUNTIME_URL: https://telemetry-runtime-service:8446
+      TELEMETRY_QUERY_URL: https://telemetry-query-service:18447
+      GATEWAY_INTERNAL_URL: https://platform-gateway:8452
+      AGENT_MODEL_PROVIDER: deepseek
+      AGENT_MODEL_ID: ${AGENT_MODEL_ID:-deepseek-v4-flash}
+      AGENT_MODEL_ALLOWLIST: deepseek-v4-flash,deepseek-v4-pro
+      AGENT_MODEL_TIMEOUT_MS: "60000"
+    volumes:
+      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      energy-api:
+        condition: service_healthy
+    expose: ["8451", "19095"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:19095/health/ready').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 15s
+    networks:
+      application:
+        aliases: [operations-agent-service]
+    cpus: ${OPERATIONS_AGENT_CPUS:-1.00}
+    mem_limit: ${OPERATIONS_AGENT_MEMORY_LIMIT:-512m}
+    mem_reservation: ${OPERATIONS_AGENT_MEMORY_RESERVATION:-192m}
 
   postgres:
     profiles: ["local-postgres"]

@@ -177,7 +177,7 @@ assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === 
 assert(JSON.stringify(runtimeInventory.classes?.defaultIdentityInfrastructure) === JSON.stringify(['identity-service']), 'runtime inventory must keep identity-service outside business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.localStatefulInfrastructure) === JSON.stringify(['postgres', 'clickhouse', 'redis']), 'runtime inventory must freeze local PostgreSQL, ClickHouse and Redis as placement-specific services');
 assert(JSON.stringify(runtimeInventory.classes?.optionalIntegration) === JSON.stringify(['iot-service', 'mqtt-broker']), 'runtime inventory must freeze optional IoT/MQTT integration');
-assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service']), 'runtime inventory must freeze all optional intelligence services');
+assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service']), 'runtime inventory must freeze all optional intelligence services');
 assert(runtimeInventory.semantics?.maintenanceDecision === 'KEEP_AS_SUPPORTING_WORKER' && runtimeInventory.semantics?.identityDecision === 'SEPARATE_INFRASTRUCTURE' && runtimeInventory.semantics?.integrationDecision === 'OPTIONAL_PROFILE' && runtimeInventory.semantics?.postgresPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.clickhousePlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.redisPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.intelligenceDecision === 'OPTIONAL_PROFILE', 'runtime inventory decisions must preserve maintenance, identity, PostgreSQL/ClickHouse/Redis placement, integration and intelligence boundaries');
 const canonicalSourceEntrypoints = {
   'energy-api': 'cmd/energy-api',
@@ -308,7 +308,7 @@ for (const [service, expectedProfiles] of Object.entries(profileExpectations)) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`profiles: ["${expectedProfiles.join('", "')}"]`), `${service} must be gated to profiles ${expectedProfiles.join(', ')}`);
 }
-for (const service of ['forecast-service', 'optimization-service', 'fdd-service']) {
+for (const service of ['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service']) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('profiles: ["intelligence"]'), `${service} must be an explicit optional intelligence profile service`);
 }
