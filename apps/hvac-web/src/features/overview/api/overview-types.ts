@@ -5,6 +5,16 @@ export const OVERVIEW_PERIODS = {
   year: "本年",
 } as const;
 export type OverviewPeriod = keyof typeof OVERVIEW_PERIODS;
+/** A figure the owner either provides or says why it cannot. */
+export interface OverviewMetric {
+  readonly value: number | null;
+  /** Shown in place of the number when there is none, e.g. 未接入. */
+  readonly absence: string | null;
+}
+export const knownMetric = (value: number): OverviewMetric => ({
+  value,
+  absence: null,
+});
 export interface EnergyTrendPoint {
   readonly time: string;
   readonly actual: number | null;
@@ -35,11 +45,11 @@ export interface OverviewDashboardData {
   readonly period: OverviewPeriod;
   readonly dateRange: string;
   readonly asOf: string;
-  readonly actualKWh: number | null;
+  readonly actualKWh: OverviewMetric;
   readonly baselineKWh: number | null;
-  readonly savingsKWh: number | null;
-  readonly savingsRate: number | null;
-  readonly savingsCny: number | null;
+  readonly savingsKWh: OverviewMetric;
+  readonly savingsRate: OverviewMetric;
+  readonly savingsCny: OverviewMetric;
   readonly baselineMethod: string | null;
   readonly trendUnit: "kW" | "kWh";
   readonly trendSeries: readonly EnergyTrendPoint[];
@@ -57,7 +67,7 @@ export interface OverviewDashboardData {
   readonly systems: readonly {
     readonly name: string;
     readonly metric: string;
-    readonly value: number | null;
+    readonly value: OverviewMetric;
     readonly unit: string;
     readonly reference: string;
   }[];

@@ -1,4 +1,6 @@
-import type { OverviewDashboardData } from "./overview-types";
+import type { OverviewDashboardData, OverviewMetric } from "./overview-types";
+
+const cell = (metric: OverviewMetric) => metric.value ?? metric.absence;
 
 export function buildOverviewCsv(data: OverviewDashboardData) {
   const rows: (string | number | null)[][] = [
@@ -11,11 +13,11 @@ export function buildOverviewCsv(data: OverviewDashboardData) {
     ["范围", data.scopeName],
     ["期间", data.dateRange],
     ["截至时间", data.asOf],
-    ["实际用电(kWh)", data.actualKWh],
+    ["实际用电(kWh)", cell(data.actualKWh)],
     ["基线用电(kWh)", data.baselineKWh],
-    ["节省电量(kWh)", data.savingsKWh],
-    ["节能率(%)", data.savingsRate],
-    ["估算节约费用(元)", data.savingsCny],
+    ["节省电量(kWh)", cell(data.savingsKWh)],
+    ["节能率(%)", cell(data.savingsRate)],
+    ["估算节约费用(元)", cell(data.savingsCny)],
     ["舒适合规率(%)", data.comfort.rate],
     ["舒适数据覆盖率(%)", data.comfort.coverage],
     ["基线方法", data.baselineMethod],

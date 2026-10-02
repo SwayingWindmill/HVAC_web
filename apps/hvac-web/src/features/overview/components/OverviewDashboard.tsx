@@ -317,12 +317,18 @@ export function OverviewDashboard() {
                         {system.metric}
                       </span>
                     </div>
-                    <p className="mt-2 text-xl font-semibold tabular-nums">
-                      {number(system.value, 2)}{" "}
-                      <span className="text-xs font-normal text-muted-foreground">
-                        {system.unit}
-                      </span>
-                    </p>
+                    {system.value.absence === null ? (
+                      <p className="mt-2 text-xl font-semibold tabular-nums">
+                        {number(system.value.value, 2)}{" "}
+                        <span className="text-xs font-normal text-muted-foreground">
+                          {system.unit}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="mt-2 text-base font-medium leading-7 text-muted-foreground">
+                        {system.value.absence}
+                      </p>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {system.reference}
                     </p>
