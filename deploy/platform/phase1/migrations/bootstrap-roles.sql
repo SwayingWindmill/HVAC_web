@@ -66,6 +66,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's5_work_order_writer') THEN CREATE ROLE s5_work_order_writer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's5_work_order_service') THEN CREATE ROLE s5_work_order_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's5_work_order_mutation_service') THEN CREATE ROLE s5_work_order_mutation_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'operations_agent_operations_migrator') THEN CREATE ROLE operations_agent_operations_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'operations_agent_operations_runtime') THEN CREATE ROLE operations_agent_operations_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'operations_agent_checkpoints_migrator') THEN CREATE ROLE operations_agent_checkpoints_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'operations_agent_checkpoints_runtime') THEN CREATE ROLE operations_agent_checkpoints_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
 END
 $$;
 
@@ -163,3 +168,8 @@ REVOKE ALL ON SCHEMA work_order_runtime FROM PUBLIC;
 GRANT s5_work_order_runtime TO s5_work_order_service;
 GRANT s5_work_order_writer TO s5_work_order_mutation_service;
 GRANT CONNECT ON DATABASE hvac_s5 TO s5_work_order_service, s5_work_order_mutation_service;
+
+\connect hvac_operations_agent
+REVOKE CONNECT ON DATABASE hvac_operations_agent FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CONNECT ON DATABASE hvac_operations_agent TO operations_agent_operations_runtime, operations_agent_checkpoints_runtime;

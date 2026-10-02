@@ -94,6 +94,15 @@ COPY modules/workorder/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/modules
 COPY modules/workorder/migrations/005_s19_alarm_links.sql /opt/hvac/repo/modules/workorder/migrations/005_s19_alarm_links.sql
 COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/repo/modules/workorder/migrations/006_s26_equipment_source_domain.sql
 
+COPY services/operations-agent-service/migrations/operations/001_agent_operations.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_operations.sql
+COPY services/operations-agent-service/migrations/operations/002_typed_business_records.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_typed_business_records.sql
+COPY services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql
+COPY services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql
+COPY services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql
+COPY services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql
+COPY services/operations-agent-service/migrations/operations/007_agent_input_response.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/007_agent_input_response.sql
+COPY services/operations-agent-service/migrations/checkpoints/001_agent_checkpoints.sql /opt/hvac/repo/services/operations-agent-service/migrations/checkpoints/001_agent_checkpoints.sql
+
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]

@@ -385,9 +385,12 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		TelemetryGrantAudience:      envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 		TelemetryRuntimeSPIFFE:      envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
 		TelemetryGrantStore:         telemetryGrantStore,
-		CommandGrantSigner:          signer,
-		CommandGrantIssuer:          iamSPIFFEID,
-		CommandGrantAudience:        envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
+		AllowedTelemetryGrantPresenters: []string{
+			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		},
+		CommandGrantSigner:   signer,
+		CommandGrantIssuer:   iamSPIFFEID,
+		CommandGrantAudience: envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
 	}
 	server := &http.Server{
 		Addr:    envOr("IAM_SERVICE_ADDR", "127.0.0.1:8444"),

@@ -861,6 +861,12 @@ func (recorder *statusRecorder) Flush() {
 	flusher.Flush()
 }
 
+// Unwrap lets http.ResponseController reach the connection, e.g. to lift the write
+// deadline for event streams.
+func (recorder *statusRecorder) Unwrap() http.ResponseWriter {
+	return recorder.ResponseWriter
+}
+
 func (recorder *statusRecorder) WriteHeader(status int) {
 	if recorder.wroteHeader {
 		return

@@ -186,7 +186,7 @@ const runtimeServices = [
   'scheduler',
   'maintenance',
   ...(integration ? ['iot-service'] : []),
-  ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service'] : []),
+  ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service'] : []),
 ];
 
 if (sourceDeploy) {

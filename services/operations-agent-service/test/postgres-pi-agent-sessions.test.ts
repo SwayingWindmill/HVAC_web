@@ -121,7 +121,7 @@ test('PostgreSQL Pi Session state survives restart without checkpoint or partial
     id: 'pi-tool-postgres-1',
     sessionId: sessionDescriptor.id,
     runId: firstRun.id,
-    toolName: 'energy.compare_periods',
+    toolName: 'energy_compare_periods',
     argumentsDigest: 'digest-energy-periods-v1',
     status: 'COMPLETED',
     startedAt: 10_120,
@@ -226,7 +226,7 @@ test('PostgreSQL Pi Session state survives restart without checkpoint or partial
     operatorMessage: thirdOperator,
   });
   assert.equal(thirdStarted.session.activeRunId, thirdRun.id);
-  assert.deepEqual(thirdStarted.toolExecutions.map(({ toolName }) => toolName), ['energy.compare_periods']);
+  assert.deepEqual(thirdStarted.toolExecutions.map(({ toolName }) => toolName), ['energy_compare_periods']);
 
   const cancelled = await lifecycle.cancel({
     sessionId: sessionDescriptor.id,

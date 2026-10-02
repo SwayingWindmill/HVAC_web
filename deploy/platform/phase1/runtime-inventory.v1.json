@@ -45,7 +45,8 @@
     "optionalIntelligence": [
       "forecast-service",
       "optimization-service",
-      "fdd-service"
+      "fdd-service",
+      "operations-agent-service"
     ],
     "requiredStartupOneShot": [
       "phase1-schema-preflight"
