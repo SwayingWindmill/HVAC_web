@@ -9,9 +9,9 @@ services:
       QUERY_CUBE_ENDPOINT: http://cube:4000
       COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
     volumes:
-      - ./runtime/internal-pki:/run/hvac/pki:ro
-      - ./runtime/secrets:/run/hvac/secrets:ro
-      - ./runtime/tls:/run/hvac/public-tls:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/secrets:/run/hvac/secrets:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/tls:/run/hvac/public-tls:ro
       - ./config/command-runtime-cohorts.local.json:/run/hvac/phase1-config/command-runtime-cohorts.local.json:ro
       - ../../../contracts/ownership/route-ownership.v1.json:/run/hvac/config/route-ownership.v1.json:ro
 
@@ -36,16 +36,18 @@ services:
   telemetry-worker:
     environment:
       ANALYTICS_PROJECTION_ENABLED: "false"
+      TELEMETRY_ALARM_CA: /run/hvac/pki/ca.crt
       TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
     volumes:
-      - ./runtime/internal-pki:/run/hvac/pki:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
 
   connectivity:
     environment:
       COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
+      MQTT_TELEMETRY_ADAPTER_CONFIG: /run/hvac/config/mqtt-adapter.json
     volumes:
-      - ./runtime/internal-pki:/run/hvac/pki:ro
-      - ./runtime/config:/run/hvac/config:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/config:/run/hvac/config:ro
       - ./config/command-edge-bindings.local.json:/run/hvac/phase1-config/command-edge-bindings.local.json:ro
     depends_on:
       energy-api:
@@ -57,20 +59,20 @@ services:
 
   centrifugo:
     volumes:
-      - ./runtime/config/centrifugo.json:/centrifugo/centrifugo.json:ro
-      - ./runtime/internal-pki:/run/hvac/pki:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/config/centrifugo.json:/centrifugo/centrifugo.json:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
 
   postgres:
     volumes:
       - phase1_wsl_postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-      - ./runtime/backups/postgres/base:/backups/base
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/backups/postgres/base:/backups/base
 
   clickhouse:
     volumes:
       - phase1_wsl_clickhouse_data:/var/lib/clickhouse
       - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
-      - ./runtime/backups/clickhouse:/backups
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/backups/clickhouse:/backups
 
   redis:
     volumes:
@@ -80,7 +82,7 @@ services:
     volumes:
       - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
-      - ./runtime/mqtt-pki:/mosquitto/certs:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-pki:/mosquitto/certs:ro
       - phase1_wsl_mqtt_data:/mosquitto/data
 
   node-exporter:
@@ -88,9 +90,11 @@ services:
       - /:/host/root:ro
 
   prometheus:
+    # Runtime config and the CA are group-readable by the service group 65532.
+    group_add: ["65532"]
     volumes:
-      - ./runtime/config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
-      - ./runtime/internal-pki/ca.crt:/etc/prometheus/centrifugo-ca.crt:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki/ca.crt:/etc/prometheus/centrifugo-ca.crt:ro
 
 volumes:
   phase1_wsl_postgres_data:

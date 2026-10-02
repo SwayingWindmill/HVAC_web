@@ -3,18 +3,18 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+import { localEnvFile, runtimePath } from './lib/local-environment.mjs';
 import { parseRuntimeEnvironment } from './phase1-deployment-tier.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const phase1Dir = path.join(repoRoot, 'deploy', 'platform', 'phase1');
 const runtimeEnv = path.resolve(
-  process.env.PHASE1_ENV_FILE || path.join(phase1Dir, 'environments', 'development.runtime.env'),
+  localEnvFile,
 );
 const bootstrapFile = path.resolve(
-  process.env.PHASE1_IDENTITY_BOOTSTRAP_FILE || path.join(phase1Dir, 'runtime', 'identity-user-bootstrap.json'),
+  process.env.PHASE1_IDENTITY_BOOTSTRAP_FILE || runtimePath('identity-user-bootstrap.json'),
 );
 const credentialsFile = path.resolve(
-  process.env.PHASE1_LOCAL_ADMIN_CREDENTIALS_FILE || path.join(phase1Dir, 'runtime', 'local-admin.credentials'),
+  process.env.PHASE1_LOCAL_ADMIN_CREDENTIALS_FILE || runtimePath('local-admin.credentials'),
 );
 
 if (!existsSync(runtimeEnv)) throw new Error(`Phase 1 runtime environment file not found: ${runtimeEnv}`);

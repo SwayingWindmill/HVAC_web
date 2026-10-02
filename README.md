@@ -43,7 +43,7 @@ tools/                模拟器和测试工具
 
 主工作目录为 `E:\Code\HVAC_web`，WSL 中对应同一目录 `/mnt/e/Code/HVAC_web`。编辑使用当前目录，以下安装、开发和验证命令在 WSL 的该目录执行；不再使用 `/home/haozhang/code/HVAC_web` 副本。工具链约定见 `docs/architecture/frontend-js-toolchain-wsl.md`。
 
-本机已初始化的开发环境使用 `hvac-phase1-dev`，入口为 `https://localhost:8443`。启动命令、账号文件及验证结果见 [本地环境恢复记录](docs/architecture/local-development-recovery-2026-09-27.md)。
+本地环境是 Compose 项目 `hvac-local`，入口为 `https://localhost:8443`。在 WSL 中执行 `npm run local:up`，即可从当前代码构建并完成迁移、身份初始化、模拟器种子和启动；管理员口令在 `deploy/platform/phase1/runtime/local/local-admin.credentials`。
 
 浏览器端只有一个权威产品入口：`apps/hvac-web/src/app/main.tsx`。应用骨架位于 `src/app/`，领域页面位于 `src/features/`；它使用受保护 Shell、站点范围、Platform Gateway API 与实时遥测，仓库不再维护独立 Demo 应用或 Mock/Real 双运行模式。
 

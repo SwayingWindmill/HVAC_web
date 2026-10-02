@@ -5,7 +5,8 @@ root=/opt/hvac
 manifest="${root}/migrations/migration-list.tsv"
 product="hvac-web"
 product_version="${PHASE1_PRODUCT_VERSION:-0.1.0}"
-databases=(hvac_identity hvac_s0 hvac_s1 hvac_s2 hvac_s3 hvac_s4 hvac_s5)
+# Every database that has a migration, in manifest order.
+mapfile -t databases < <(cut -d'|' -f1 "${manifest}" | awk 'NF && !seen[$0]++')
 
 export PGHOST="${PGHOST:-postgres}"
 export PGPORT="${PGPORT:-5432}"

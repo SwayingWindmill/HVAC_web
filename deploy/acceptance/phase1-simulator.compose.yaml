@@ -26,9 +26,9 @@ services:
         condition: service_healthy
     volumes:
       - ${EG8200_PLANT_CONFIG_PATH:-../../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
-      - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
-      - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
-      - ${EG8200_QUEUE_DIR:-../platform/phase1/runtime/data/eg8200}:/run/hvac/eg8200
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${EG8200_QUEUE_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/data/eg8200}:/run/hvac/eg8200
     expose: ["1502", "19095"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19095/health/ready"]
@@ -90,7 +90,7 @@ services:
       ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: ${ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID:-}
       ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
     volumes:
-      - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config
     depends_on:
       postgres:
         condition: service_healthy
@@ -151,9 +151,9 @@ services:
         condition: service_healthy
     volumes:
       - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
-      - ${PHASE1_RUNTIME_CONFIG_DIR:-../platform/phase1/runtime/config}:/run/hvac/runtime-config:ro
-      - ${INTERNAL_PKI_DIR:-../platform/phase1/runtime/internal-pki}:/run/hvac/pki:ro
-      - ${ATV630_EDGE_QUEUE_DIR:-../platform/phase1/runtime/data/atv630-edge}:/run/hvac/eg8200
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${ATV630_EDGE_QUEUE_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/data/atv630-edge}:/run/hvac/eg8200
     ports:
       - "127.0.0.1:${ATV630_EDGE_DIAGNOSTICS_PORT:-19097}:19097"
     healthcheck:
