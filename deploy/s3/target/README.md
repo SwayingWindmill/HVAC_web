@@ -49,14 +49,14 @@ docker build -f deploy/s0/images/go-service.Dockerfile \
 
 # IoT Service (command dispatch + reported-state verification)
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE_PACKAGE=./cmd/iot-service \
-  -t <registry>/iot-service:<new-sha> .
+  --build-arg SERVICE_PACKAGE=./cmd/connectivity \
+  -t <registry>/connectivity:<new-sha> .
 
 docker build -f deploy/s3/images/command-migrator.Dockerfile \
   -t <registry>/command-migrator:<new-sha> .
 ```
 
-This target package is historical S3 certification material, not current Phase1 deployment authority. The former `s3-command-certification` workflow was retired after Command runtime convergence into `energy-api` and `iot-service`; its preserved workflow is under `docs/evidence/retired-workflows/` for audit history only.
+This target package is historical S3 certification material, not current Phase1 deployment authority. The former `s3-command-certification` workflow was retired after Command runtime convergence into `energy-api` and `connectivity`; its preserved workflow is under `docs/evidence/retired-workflows/` for audit history only.
 
 Current deployable images must come from the canonical Phase1 build/release path. Do not recreate the retired four-image Command Service / Dispatcher / Verifier topology or treat an old `s3-target-image-manifest` as current runtime authority.
 

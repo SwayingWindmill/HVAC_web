@@ -31,7 +31,7 @@
       "cube"
     ],
     "optionalIntegration": [
-      "iot-service",
+      "connectivity",
       "mqtt-broker"
     ],
     "profiledObservabilityInfrastructure": [
@@ -88,7 +88,7 @@
   },
   "sourceEntrypoints": {
     "energy-api": "cmd/energy-api",
-    "iot-service": "cmd/iot-service",
+    "connectivity": "cmd/connectivity",
     "telemetry-worker": "cmd/telemetry-worker",
     "metric-worker": "cmd/metric-worker",
     "scheduler": "cmd/scheduler",
@@ -97,7 +97,7 @@
   "semantics": {
     "businessDeployableDefinition": "Long-running product processes that own Phase 1 business request, telemetry processing, or metric execution responsibility.",
     "integrationDecision": "OPTIONAL_PROFILE",
-    "integrationReason": "IoT connectivity and MQTT are deployment-specific integration capabilities. Backend/UI production must be able to run without a local MQTT broker or iot-service.",
+    "integrationReason": "IoT connectivity and MQTT are deployment-specific integration capabilities. Backend/UI production must be able to run without a local MQTT broker or connectivity.",
     "postgresPlacementDecision": "LOCAL_OR_EXTERNAL",
     "postgresPlacementReason": "Stage 1 enables the local-postgres profile by default. Stage 2 can omit that profile and point migration, preflight and application DSNs at an external PostgreSQL endpoint without changing application topology.",
     "clickhousePlacementDecision": "LOCAL_OR_EXTERNAL",

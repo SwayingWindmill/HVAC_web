@@ -135,7 +135,7 @@ try {
   const adapterBinary = join(binDir, 'mqtt-telemetry-adapter');
   const publisherBinary = join(binDir, 'eg8200-mqtt-publisher');
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', pkiGenerator, './tools/s0-auth-fixture/cmd/generate-central-plant-pki']);
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', adapterBinary, './cmd/iot-service']);
+  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', adapterBinary, './cmd/connectivity']);
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher']);
   run(pkiGenerator, [pkiDir]);
 

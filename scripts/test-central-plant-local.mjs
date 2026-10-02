@@ -90,7 +90,7 @@ test('central plant local runtime uses MQTT only', () => {
     '${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}',
   ]) assert.ok(mqttCompose.includes(marker));
   for (const marker of [
-    './cmd/iot-service',
+    './cmd/connectivity',
     './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher',
     "'spiffe://hvac.local/mqtt-telemetry-adapter'",
     "'energy/v1/+/+/+/telemetry'",
@@ -99,8 +99,6 @@ test('central plant local runtime uses MQTT only', () => {
     "'energy/v1/+/+/+/heartbeat'",
     'mqttGatewayConfig',
     'credentialRevision: 1',
-    "fleetReleaseKeyId: 'central-plant-local-ed25519-v1'",
-    'fleetReleasePublicKeyFile: paths.fleetReleasePublicKey',
     'EG8200 MQTT Publisher',
     'MQTT Telemetry Adapter',
     'configureLocalDatabaseRoleCredentials',

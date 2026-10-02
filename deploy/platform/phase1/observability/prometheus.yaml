@@ -22,9 +22,9 @@ scrape_configs:
     static_configs:
       - targets: ["metric-worker:19090"]
 
-  - job_name: iot-service
+  - job_name: connectivity
     static_configs:
-      - targets: ["iot-service:19094"]
+      - targets: ["connectivity:19094"]
 
   - job_name: host
     static_configs:

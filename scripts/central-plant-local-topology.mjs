@@ -457,7 +457,7 @@ function buildGoBinaries(paths, goCache, quiet) {
     [paths.queryBinary, './modules/telemetry/cmd/telemetry-query-owner'],
     [paths.gatewayBinary, './cmd/energy-api'],
     [paths.publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher'],
-    [paths.mqttAdapterBinary, './cmd/iot-service'],
+    [paths.mqttAdapterBinary, './cmd/connectivity'],
   ];
   for (const [output, source] of builds) {
     run(goBinary, ['build', '-trimpath', '-buildvcs=false', '-o', output, source], {

@@ -80,7 +80,7 @@ Follow this order unless an incident-specific reason is recorded in the drill ev
 7. Start Redis as an empty/rebuildable store if necessary.
 8. Restore/start ClickHouse and verify a real write.
 9. Start `energy-api`.
-10. Start `iot-service`.
+10. Start `connectivity`.
 11. Start `telemetry-worker`.
 12. Start `metric-worker`.
 13. Start Realtime and `scheduler`.

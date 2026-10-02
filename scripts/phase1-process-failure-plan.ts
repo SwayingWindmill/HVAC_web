@@ -7,18 +7,18 @@ const expectedTargets = [
   "scheduler",
   "telemetry-worker",
   "metric-worker",
-  "iot-service",
+  "connectivity",
 ];
 const expectedRecoveryProbes = {
   postgres: ["postgres", "energy-api", "scheduler"],
   redis: ["redis", "energy-api"],
-  "mqtt-broker": ["iot-service"],
+  "mqtt-broker": ["connectivity"],
   clickhouse: ["clickhouse", "telemetry-worker"],
   "energy-api": ["energy-api"],
   scheduler: ["scheduler"],
   "telemetry-worker": ["telemetry-worker"],
   "metric-worker": ["metric-worker"],
-  "iot-service": ["iot-service"],
+  "connectivity": ["connectivity"],
 };
 
 export function buildProcessFailurePlan(manifest, { environment }) {

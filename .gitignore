@@ -97,7 +97,7 @@ worktrees/
 
 # Binaries from running go build inside a main package directory
 /cmd/energy-api/energy-api
-/cmd/iot-service/iot-service
+/cmd/connectivity/connectivity
 /cmd/maintenance-worker/maintenance-worker
 /cmd/metric-worker/metric-worker
 /cmd/scheduler/scheduler

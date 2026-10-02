@@ -19,7 +19,7 @@
       "purpose": "Stage 1 local Redis implementation. The launcher enables this profile unless PHASE1_REDIS_MODE=external."
     },
     "integration": {
-      "services": ["iot-service", "mqtt-broker"],
+      "services": ["connectivity", "mqtt-broker"],
       "optional": true,
       "purpose": "Local or hosted MQTT connectivity is optional. Backend/UI and core data services do not require this profile."
     },
@@ -82,7 +82,7 @@
         "TELEMETRY_WORKER_CPUS": "1",
         "TELEMETRY_WORKER_MEMORY_LIMIT": "640m",
         "METRIC_WORKER_CPUS": "0.5",
-        "IOT_SERVICE_CPUS": "0.75",
+        "CONNECTIVITY_CPUS": "0.75",
         "POSTGRES_CPUS": "1",
         "POSTGRES_MEMORY_LIMIT": "768m",
         "CLICKHOUSE_CPUS": "1.5",

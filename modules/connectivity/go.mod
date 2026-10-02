@@ -1,4 +1,4 @@
-module github.com/quanlaihe/hvac-web/modules/iot
+module github.com/quanlaihe/hvac-web/modules/connectivity
 
 go 1.25.12
 
