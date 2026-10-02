@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 )
 
 type mqttQoSPublisher interface {
@@ -22,27 +21,27 @@ type mqttEvidenceRecord struct {
 }
 
 type mqttEvidenceSpool struct {
-	buffer *edgefleet.OfflineBuffer
+	buffer *OfflineBuffer
 	flush  sync.Mutex
 }
 
 func newMQTTEvidenceSpool(directory string, capacityBytes int64) (*mqttEvidenceSpool, error) {
-	buffer, err := edgefleet.OpenOfflineBuffer(directory, capacityBytes)
+	buffer, err := OpenOfflineBuffer(directory, capacityBytes)
 	if err != nil {
 		return nil, err
 	}
 	return &mqttEvidenceSpool{buffer: buffer}, nil
 }
 
-func (spool *mqttEvidenceSpool) Enqueue(id string, class edgefleet.EvidenceClass, topic string, payload []byte) (edgefleet.OfflineAdmission, error) {
+func (spool *mqttEvidenceSpool) Enqueue(id string, class EvidenceClass, topic string, payload []byte) (OfflineAdmission, error) {
 	if spool == nil || spool.buffer == nil || strings.TrimSpace(id) == "" || strings.TrimSpace(topic) == "" || len(payload) == 0 {
-		return edgefleet.OfflineAdmission{}, errors.New("MQTT evidence spool item is invalid")
+		return OfflineAdmission{}, errors.New("MQTT evidence spool item is invalid")
 	}
 	record, err := json.Marshal(mqttEvidenceRecord{Topic: strings.TrimSpace(topic), Payload: append([]byte(nil), payload...)})
 	if err != nil {
-		return edgefleet.OfflineAdmission{}, fmt.Errorf("encode MQTT evidence spool record: %w", err)
+		return OfflineAdmission{}, fmt.Errorf("encode MQTT evidence spool record: %w", err)
 	}
-	return spool.buffer.Admit(edgefleet.OfflineItem{ID: strings.TrimSpace(id), Class: class, Payload: record})
+	return spool.buffer.Admit(OfflineItem{ID: strings.TrimSpace(id), Class: class, Payload: record})
 }
 
 func (spool *mqttEvidenceSpool) Flush(ctx context.Context, publisher mqttQoSPublisher) error {
@@ -66,9 +65,9 @@ func (spool *mqttEvidenceSpool) Flush(ctx context.Context, publisher mqttQoSPubl
 	return nil
 }
 
-func (spool *mqttEvidenceSpool) State() edgefleet.CapacityState {
+func (spool *mqttEvidenceSpool) State() CapacityState {
 	if spool == nil || spool.buffer == nil {
-		return edgefleet.CapacityReadOnlySafety
+		return CapacityReadOnlySafety
 	}
 	return spool.buffer.State()
 }

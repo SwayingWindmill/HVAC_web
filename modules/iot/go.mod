@@ -6,7 +6,6 @@ require (
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
-	github.com/quanlaihe/hvac-web/libs/edgefleet v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 )
 
@@ -14,7 +13,6 @@ replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observabi
 
 replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
 
-replace github.com/quanlaihe/hvac-web/libs/edgefleet => ../../libs/edgefleet
 
 require (
 	github.com/gorilla/websocket v1.5.3 // indirect

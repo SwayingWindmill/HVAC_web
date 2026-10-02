@@ -14,7 +14,6 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
-	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 )
 
 const mqttCommandSchemaVersion = "2.0"
@@ -174,7 +173,7 @@ func (handler *edgeCommandHandler) Handle(received paho.PublishReceived) (bool, 
 	if err != nil {
 		return true, err
 	}
-	if _, err := handler.spool.Enqueue(reply.MessageID, edgefleet.EvidenceControl, handler.replyTopic, payload); err != nil {
+	if _, err := handler.spool.Enqueue(reply.MessageID, EvidenceControl, handler.replyTopic, payload); err != nil {
 		return true, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -228,7 +227,7 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		handler.mu.Unlock()
 		return edgeFailed(base, "EDGE_OUTCOME_UNKNOWN")
 	}
-	if handler.spool.State() == edgefleet.CapacityReadOnlySafety {
+	if handler.spool.State() == CapacityReadOnlySafety {
 		handler.mu.Unlock()
 		return edgeRejected(base, "EDGE_CAPACITY_READ_ONLY")
 	}

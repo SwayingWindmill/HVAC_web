@@ -1,4 +1,4 @@
-package edgefleet
+package simulator
 
 import (
 	"encoding/json"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 )
+
+var ErrOfflineCapacity = errors.New("offline buffer capacity exhausted")
 
 type EvidenceClass string
 
