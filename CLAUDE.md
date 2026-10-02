@@ -66,5 +66,19 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 
 ## Git
 
-- `main` 是唯一主干，受保护，必须走 PR。每项改动开一个分支，用 Conventional Commits，提交说明里写清楚原因。
+- `main` 是唯一主干，只通过 PR 合并，不直接推送。每项改动开一个分支，用 Conventional Commits，提交说明里写清楚原因。
 - 文本文件统一 LF（见 `.gitattributes`）；不提交构建产物和二进制。
+
+## Agent skills
+
+### Issue tracker
+
+需求、PRD 和任务都记在 GitHub Issues，用 `gh` 操作。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用五个默认分诊标签（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单一上下文：根目录 `CONTEXT.md` 加 `docs/adr/`。见 `docs/agents/domain.md`。
