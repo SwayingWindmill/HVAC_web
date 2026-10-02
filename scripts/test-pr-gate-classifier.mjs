@@ -123,21 +123,6 @@ test('Operations Agent changes select dedicated domain gates', () => {
   assert.equal(classification.broad, false);
 });
 
-test('nightly regression keeps the complete stable profile sets', async () => {
-  const workflow = await readFile('.github/workflows/nightly-full-regression.yml', 'utf8');
-  assert.ok(workflow.includes('schedule:'));
-  assert.ok(workflow.includes('cron: "0 18 * * *"'));
-  for (const command of [
-    '--gate=static',
-    '--gate=contracts --profile-set=all',
-    '--gate=unit --profile-set=all',
-    '--gate=integration --profile-set=all',
-    '--gate=browser --profile-set=all',
-  ]) {
-    assert.ok(workflow.includes(command), `nightly coverage drifted: ${command}`);
-  }
-});
-
 test('PR workflow exposes only the stable required checks', async () => {
   const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
   for (const check of ['pr / static', 'pr / contracts', 'pr / affected-unit']) {

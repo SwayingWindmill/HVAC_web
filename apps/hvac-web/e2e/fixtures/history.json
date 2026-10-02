@@ -1,0 +1,1733 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "deviceId": "018f3e00-4000-7000-8000-000000000001",
+  "buckets": [
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 830.6477441860466,
+        "minimum": 26.443,
+        "maximum": 864,
+        "first": 26.443,
+        "last": 864,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 589.0571,
+        "minimum": 37.378,
+        "maximum": 826.451,
+        "first": 37.378,
+        "last": 826.451,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 863.2102155172413,
+        "minimum": 837.367,
+        "maximum": 864,
+        "first": 837.367,
+        "last": 864,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cooling_capacity",
+      "pointId": "01910000-0000-7000-8000-00000000001b",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 864,
+        "minimum": 864,
+        "maximum": 864,
+        "first": 864,
+        "last": 864,
+        "sampleCount": 60
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.534302325581397,
+        "minimum": 4.715,
+        "maximum": 5.548,
+        "first": 4.715,
+        "last": 5.548,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548706896551712,
+        "minimum": 5.548,
+        "maximum": 5.549,
+        "first": 5.548,
+        "last": 5.549,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.549000000000005,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.4338999999999995,
+        "minimum": 4.7379999999999995,
+        "maximum": 5.547,
+        "first": 4.7379999999999995,
+        "last": 5.547,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548051724137931,
+        "minimum": 5.548,
+        "maximum": 5.549,
+        "first": 5.548,
+        "last": 5.549,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548999999999989,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548999999999989,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548999999999989,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548999999999989,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.548999999999989,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": null,
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 5.549000000000004,
+        "minimum": 5.549,
+        "maximum": 5.549,
+        "first": 5.549,
+        "last": 5.549,
+        "sampleCount": 60
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.643127906976751,
+        "minimum": 8.241,
+        "maximum": 13.422,
+        "first": 8.241,
+        "last": 12.628,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.627999999999991,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 10.6177,
+        "minimum": 8.339,
+        "maximum": 11.098,
+        "first": 8.339,
+        "last": 10.99,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 11.80113793103448,
+        "minimum": 10.377,
+        "maximum": 12.628,
+        "first": 10.929,
+        "last": 12.628,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.62799999999999,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000016",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 12.627999999999991,
+        "minimum": 12.628,
+        "maximum": 12.628,
+        "first": 12.628,
+        "last": 12.628,
+        "sampleCount": 60
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.714941860465096,
+        "minimum": 30.7,
+        "maximum": 30.993,
+        "first": 30.993,
+        "last": 30.7,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.700000000000024,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.818099999999998,
+        "minimum": 30.729,
+        "maximum": 30.99,
+        "first": 30.99,
+        "last": 30.729,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.70082758620684,
+        "minimum": 30.7,
+        "maximum": 30.722,
+        "first": 30.722,
+        "last": 30.7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.69999999999994,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "entering_cooling_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000018",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 30.700000000000014,
+        "minimum": 30.7,
+        "maximum": 30.7,
+        "first": 30.7,
+        "last": 30.7,
+        "sampleCount": 60
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7.232290697674417,
+        "minimum": 7,
+        "maximum": 8.742,
+        "first": 8.069,
+        "last": 7,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 8.2117,
+        "minimum": 7.759,
+        "maximum": 8.564,
+        "first": 8.096,
+        "last": 7.759,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7.038008620689654,
+        "minimum": 7,
+        "maximum": 7.656,
+        "first": 7.656,
+        "last": 7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "leaving_chilled_water_temperature",
+      "pointId": "01910000-0000-7000-8000-000000000015",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "Cel",
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 7,
+        "minimum": 7,
+        "maximum": 7,
+        "first": 7,
+        "last": 7,
+        "sampleCount": 60
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T04:00:00Z",
+      "periodEnd": "2026-10-01T05:00:00Z",
+      "quality": {
+        "good": 86,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 149.75990697674442,
+        "minimum": 5.608,
+        "maximum": 155.718,
+        "first": 5.608,
+        "last": 155.718,
+        "sampleCount": 86
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T05:00:00Z",
+      "periodEnd": "2026-10-01T06:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T06:00:00Z",
+      "periodEnd": "2026-10-01T07:00:00Z",
+      "quality": {
+        "good": 42,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.7179999999999,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 42
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T08:00:00Z",
+      "periodEnd": "2026-10-01T09:00:00Z",
+      "quality": {
+        "good": 10,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 106.6337,
+        "minimum": 7.888,
+        "maximum": 148.985,
+        "first": 7.888,
+        "last": 148.985,
+        "sampleCount": 10
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T09:00:00Z",
+      "periodEnd": "2026-10-01T10:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.5766465517245,
+        "minimum": 150.945,
+        "maximum": 155.718,
+        "first": 150.945,
+        "last": 155.718,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T10:00:00Z",
+      "periodEnd": "2026-10-01T11:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T11:00:00Z",
+      "periodEnd": "2026-10-01T12:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T12:00:00Z",
+      "periodEnd": "2026-10-01T13:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T13:00:00Z",
+      "periodEnd": "2026-10-01T14:00:00Z",
+      "quality": {
+        "good": 116,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 116
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T14:00:00Z",
+      "periodEnd": "2026-10-01T15:00:00Z",
+      "quality": {
+        "good": 117,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71800000000036,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 117
+      }
+    },
+    {
+      "telemetryKey": "power",
+      "pointId": "01910000-0000-7000-8000-00000000001c",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-01T15:00:00Z",
+      "periodEnd": "2026-10-01T16:00:00Z",
+      "quality": {
+        "good": 60,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 155.71799999999993,
+        "minimum": 155.718,
+        "maximum": 155.718,
+        "first": 155.718,
+        "last": 155.718,
+        "sampleCount": 60
+      }
+    }
+  ],
+  "metadata": {
+    "requestedFrom": "2026-09-30T16:00:00Z",
+    "requestedTo": "2026-10-01T16:00:00Z",
+    "granularity": "HOUR",
+    "timezone": "Asia/Shanghai",
+    "qualityPolicy": "USABLE",
+    "projectionWatermark": "2026-10-01T15:30:24.787Z",
+    "returnedBuckets": 66
+  }
+}

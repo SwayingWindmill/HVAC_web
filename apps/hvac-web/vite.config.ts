@@ -18,7 +18,6 @@ function manualChunks(id: string) {
 
   const normalized = id.replace(/\\/g, '/');
 
-  if (/node_modules\/@copilotkit\//.test(normalized)) return 'vendor-copilotkit';
   if (/node_modules\/@antv\/g6\//.test(normalized)) return 'vendor-g6';
   if (/node_modules\/@antv\/(?:x6|x6-react-shape)\//.test(normalized)) return 'vendor-x6';
   if (/node_modules\/(react|react-dom|scheduler)\//.test(normalized)) return 'vendor-react';

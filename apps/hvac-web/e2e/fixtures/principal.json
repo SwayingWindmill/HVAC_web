@@ -1,0 +1,61 @@
+{
+  "principalId": "018f3e00-2000-7000-8000-000000000001",
+  "principal": {
+    "subject": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+    "issuer": "https://hvac.example/identity",
+    "displayName": "值班工程师",
+    "email": "operator@example.invalid",
+    "roles": [
+      "operator"
+    ]
+  },
+  "context": {
+    "initiatingPrincipal": {
+      "subject": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+      "issuer": "https://hvac.example/identity",
+      "displayName": "值班工程师",
+      "email": "operator@example.invalid",
+      "roles": [
+        "operator"
+      ]
+    },
+    "executingServicePrincipal": {
+      "service": "platform-gateway",
+      "spiffeId": "spiffe://hvac.local/platform-gateway"
+    },
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "audience": "iam-service",
+    "policyRevision": "registry-read:1",
+    "delegationExpiresAt": "2099-01-01T00:00:00Z"
+  },
+  "authorization": {
+    "capabilitySetVersion": 12,
+    "policyRevision": "capability-v6:0f8546a43226e4f7d8c5af27f98e7fd15f5b077cf5664ea3f5baf53d28be7710",
+    "capabilities": [
+      "site.list",
+      "site.read",
+      "asset.list",
+      "asset.read",
+      "device.list",
+      "device.read",
+      "telemetry.snapshot.read",
+      "telemetry.batch.read",
+      "telemetry.history.read",
+      "alarm.list",
+      "alarm.read",
+      "work-order.list",
+      "work-order.read",
+      "work-order.create",
+      "work-order.assign",
+      "work-order.lifecycle"
+    ]
+  },
+  "session": {
+    "id": "e2e-session",
+    "expiresAt": "2099-01-01T00:00:00Z",
+    "idleTimeoutMs": 3600000,
+    "csrfToken": "e2e-csrf-token",
+    "revocationObjectiveMs": 1000,
+    "lastAuditMessageId": "e2e-audit"
+  }
+}

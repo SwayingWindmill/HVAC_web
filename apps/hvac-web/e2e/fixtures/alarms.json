@@ -1,0 +1,144 @@
+[
+  {
+    "schemaVersion": 2,
+    "alarmId": "01a0ec45-7ab5-7e9c-aa96-927ee5e050f2",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "alarmType": "CHILLED_WATER_RETURN_TOO_COLD",
+    "fingerprint": "efcb5026b555f43873f56b738fcf6e2197f3df90967b1ecd1be148b1d2b92985",
+    "incidentCorrelationId": "01a0ec45-7ab5-792a-9ba1-8e8ed980c208",
+    "sourceType": "SITE_RULE",
+    "sourceReference": "alarm-policy:central-plant-return-water",
+    "ruleRevision": "01910000-b000-7000-8000-00000000000a",
+    "title": "冷冻水回水温度过低",
+    "summary": "冷机运行且负荷不少于 360 kW 时，回水温度持续 5 分钟不高于 10.5°C。",
+    "condition": "ACTIVE",
+    "currentSeverity": "MAJOR",
+    "peakSeverity": "MAJOR",
+    "occurrenceCount": 1,
+    "firstOccurredAt": "2026-09-29T08:26:11.509666Z",
+    "lastOccurredAt": "2026-09-29T08:26:11.509666Z",
+    "clearedAt": null,
+    "evidence": [
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0ec48-3ed4-7862-b3bb-a34dcbaba62d#flow_rate",
+        "capturedAt": "2026-09-29T08:29:11.376Z"
+      },
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0ec48-3ed4-7862-b3bb-a34dcbaba62d#frequency",
+        "capturedAt": "2026-09-29T08:29:11.376Z"
+      },
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0ec48-3ed4-7862-b3bb-a34dcbaba62d#power",
+        "capturedAt": "2026-09-29T08:29:11.376Z"
+      }
+    ],
+    "links": [],
+    "timeline": [
+      {
+        "operation": "PUBLISH",
+        "condition": "ACTIVE",
+        "reason": "ALARM_PUBLISHED",
+        "actorType": "WORKLOAD",
+        "actorId": "alarm-evaluator",
+        "currentSeverity": "MAJOR",
+        "policyRevision": "01910000-b000-7000-8000-00000000000a",
+        "correlationId": "01a0ec45-7ab5-792a-9ba1-8e8ed980c208",
+        "occurredAt": "2026-09-29T08:26:11.509666Z",
+        "version": 1
+      }
+    ],
+    "version": 2,
+    "createdAt": "2026-09-29T08:26:11.509666Z",
+    "updatedAt": "2026-09-29T08:32:42.768758Z",
+    "acknowledgement": null
+  },
+  {
+    "schemaVersion": 2,
+    "alarmId": "01a0f6bb-6743-7a45-8552-e42c9b3a647d",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "alarmType": "CHILLED_WATER_RETURN_TOO_COLD",
+    "fingerprint": "efcb5026b555f43873f56b738fcf6e2197f3df90967b1ecd1be148b1d2b92985",
+    "incidentCorrelationId": "01a0f6bb-6743-700e-9d7a-65e5b0ecd278",
+    "sourceType": "SITE_RULE",
+    "sourceReference": "alarm-policy:central-plant-return-water",
+    "ruleRevision": "01910000-b000-7000-8000-00000000000a",
+    "title": "冷冻水回水温度过低",
+    "summary": "冷机运行且负荷不少于 360 kW 时，回水温度持续 5 分钟不高于 10.5°C。",
+    "condition": "CLEARED",
+    "currentSeverity": "MAJOR",
+    "peakSeverity": "MAJOR",
+    "acknowledgement": {
+      "acknowledgedAt": "2026-10-01T09:11:50.211674Z",
+      "acknowledgedBy": "018f3e00-2000-7000-8000-000000000001",
+      "comment": "值班人员已到冷站核查"
+    },
+    "occurrenceCount": 1,
+    "firstOccurredAt": "2026-10-01T09:11:11.939145Z",
+    "lastOccurredAt": "2026-10-01T09:11:11.939145Z",
+    "clearedAt": "2026-10-01T09:23:05.208402Z",
+    "evidence": [
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0f6bf-36c5-71f7-a83f-8bf315773feb#flow_rate",
+        "capturedAt": "2026-10-01T09:15:19.529Z"
+      },
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0f6bf-36c5-71f7-a83f-8bf315773feb#frequency",
+        "capturedAt": "2026-10-01T09:15:19.529Z"
+      },
+      {
+        "kind": "telemetry-device-snapshot",
+        "reference": "01a0f6bf-36c5-71f7-a83f-8bf315773feb#power",
+        "capturedAt": "2026-10-01T09:15:19.529Z"
+      }
+    ],
+    "links": [],
+    "timeline": [
+      {
+        "operation": "PUBLISH",
+        "condition": "ACTIVE",
+        "reason": "ALARM_PUBLISHED",
+        "actorType": "WORKLOAD",
+        "actorId": "alarm-evaluator",
+        "currentSeverity": "MAJOR",
+        "policyRevision": "01910000-b000-7000-8000-00000000000a",
+        "correlationId": "01a0f6bb-6743-700e-9d7a-65e5b0ecd278",
+        "occurredAt": "2026-10-01T09:11:11.939145Z",
+        "version": 1
+      },
+      {
+        "operation": "ACKNOWLEDGE",
+        "condition": "ACTIVE",
+        "reason": "值班人员已到冷站核查",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "currentSeverity": "MAJOR",
+        "policyRevision": "alarm-access:1/iam:1",
+        "correlationId": "alarm-587fca01-9b43-4080-aa8c-b60ff03925ff",
+        "occurredAt": "2026-10-01T09:11:50.211674Z",
+        "version": 2
+      },
+      {
+        "operation": "CLEAR",
+        "condition": "CLEARED",
+        "reason": "CLEAR_PREDICATE_MATCHED",
+        "actorType": "WORKLOAD",
+        "actorId": "alarm-evaluator",
+        "currentSeverity": "MAJOR",
+        "policyRevision": "01910000-b000-7000-8000-00000000000a",
+        "correlationId": "01a0f6c6-4866-70bc-a17d-a50c08b014ec",
+        "occurredAt": "2026-10-01T09:23:05.208402Z",
+        "version": 3
+      }
+    ],
+    "version": 3,
+    "createdAt": "2026-10-01T09:11:11.939145Z",
+    "updatedAt": "2026-10-01T09:23:05.208402Z"
+  }
+]

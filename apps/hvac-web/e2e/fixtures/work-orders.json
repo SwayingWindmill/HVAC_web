@@ -1,0 +1,169 @@
+[
+  {
+    "schemaVersion": 1,
+    "workOrderId": "01a0f7cd-4a64-7602-9a44-51dc14d78d1a",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "title": "CT-01：风机皮带检查",
+    "description": "风机振动偏大，检查皮带张紧度并调整",
+    "priority": "MEDIUM",
+    "status": "OPEN",
+    "sourceReferences": [
+      {
+        "domain": "ASSET",
+        "resourceId": "01910000-0000-7000-8000-000000000008",
+        "relationship": "ORIGIN"
+      }
+    ],
+    "tasks": {
+      "total": 0,
+      "completed": 0,
+      "blocked": 0
+    },
+    "noteCount": 0,
+    "attachmentCount": 0,
+    "completionEvidence": [],
+    "timeline": [
+      {
+        "operation": "CREATE",
+        "toStatus": "OPEN",
+        "reason": "WORK_ORDER_CREATED",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-f9b0d84a-dd94-4491-a619-ac9ba60449fd",
+        "occurredAt": "2026-10-01T14:10:21.412914Z",
+        "version": 1
+      }
+    ],
+    "version": 1,
+    "createdAt": "2026-10-01T14:10:21.412914Z",
+    "updatedAt": "2026-10-01T14:10:21.412914Z"
+  },
+  {
+    "schemaVersion": 1,
+    "workOrderId": "01a0f6dd-3b7f-7c9a-a37a-e8a2f1e71979",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "title": "冷却塔 CT-01 布水器季度检查",
+    "description": "检查布水器喷嘴是否堵塞并清理，记录填料状况",
+    "priority": "MEDIUM",
+    "status": "OPEN",
+    "sourceReferences": [
+      {
+        "domain": "MANUAL",
+        "resourceId": "018f3e00-2000-7000-8000-000000000001",
+        "relationship": "ORIGIN"
+      }
+    ],
+    "tasks": {
+      "total": 0,
+      "completed": 0,
+      "blocked": 0
+    },
+    "noteCount": 0,
+    "attachmentCount": 0,
+    "completionEvidence": [],
+    "timeline": [
+      {
+        "operation": "CREATE",
+        "toStatus": "OPEN",
+        "reason": "WORK_ORDER_CREATED",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-9ea456cc-84cf-46a6-ac54-ef81856585c4",
+        "occurredAt": "2026-10-01T09:48:08.959345Z",
+        "version": 1
+      }
+    ],
+    "version": 1,
+    "createdAt": "2026-10-01T09:48:08.959345Z",
+    "updatedAt": "2026-10-01T09:48:08.959345Z"
+  },
+  {
+    "schemaVersion": 1,
+    "workOrderId": "01a0f6bb-feae-7b79-a9d7-13fe0be13699",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "title": "冷冻水回水温度过低",
+    "description": "冷机运行且负荷不少于 360 kW 时，回水温度持续 5 分钟不高于 10.5°C。",
+    "priority": "HIGH",
+    "status": "COMPLETED",
+    "sourceReferences": [
+      {
+        "domain": "ALARM",
+        "resourceId": "01a0f6bb-6743-7a45-8552-e42c9b3a647d",
+        "relationship": "ORIGIN"
+      }
+    ],
+    "assigneeId": "018f3e00-2000-7000-8000-000000000001",
+    "tasks": {
+      "total": 0,
+      "completed": 0,
+      "blocked": 0
+    },
+    "noteCount": 0,
+    "attachmentCount": 0,
+    "completionEvidence": [
+      {
+        "kind": "OPERATOR_NOTE",
+        "reference": "已核查冷冻水泵频率，扰动解除后回水温度恢复正常",
+        "capturedAt": "2026-10-01T09:44:12.596Z"
+      }
+    ],
+    "timeline": [
+      {
+        "operation": "CREATE",
+        "toStatus": "OPEN",
+        "reason": "WORK_ORDER_CREATED",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-cb2fa173-3aac-4bca-b10a-725f383b3818",
+        "occurredAt": "2026-10-01T09:11:50.702582Z",
+        "version": 1
+      },
+      {
+        "operation": "ASSIGN",
+        "fromStatus": "OPEN",
+        "toStatus": "OPEN",
+        "reason": "认领处理",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "assigneeId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-373de984-5609-4c5f-b05a-3b1ba6befc89",
+        "occurredAt": "2026-10-01T09:41:41.617564Z",
+        "version": 2
+      },
+      {
+        "operation": "START",
+        "fromStatus": "OPEN",
+        "toStatus": "IN_PROGRESS",
+        "reason": "开始处理",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-c2799b14-b4a1-45a9-a19a-8c6f905d14d2",
+        "occurredAt": "2026-10-01T09:43:02.45869Z",
+        "version": 3
+      },
+      {
+        "operation": "COMPLETE",
+        "fromStatus": "IN_PROGRESS",
+        "toStatus": "COMPLETED",
+        "reason": "已核查冷冻水泵频率，扰动解除后回水温度恢复正常",
+        "actorType": "PRINCIPAL",
+        "actorId": "018f3e00-2000-7000-8000-000000000001",
+        "policyRevision": "work-order-access:1/iam:1",
+        "correlationId": "work-order-c2861442-2dc0-49c0-aff5-86cc39d49201",
+        "occurredAt": "2026-10-01T09:44:12.838983Z",
+        "version": 4
+      }
+    ],
+    "version": 4,
+    "createdAt": "2026-10-01T09:11:50.702582Z",
+    "updatedAt": "2026-10-01T09:44:12.838983Z"
+  }
+]

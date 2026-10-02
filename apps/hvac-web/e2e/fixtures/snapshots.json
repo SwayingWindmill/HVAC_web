@@ -1,0 +1,794 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "requestId": "assets-0-0-018f3e00-4000-7000-8000-000000000006",
+      "deviceId": "018f3e00-4000-7000-8000-000000000006",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000006",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 85251,
+        "evaluatedAt": "2026-10-01T15:29:54.112Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:29:52.380Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:29:52.380Z",
+            "evaluatedAt": "2026-10-01T15:29:54.112Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "accumulated_cooling_energy",
+            "state": "PRESENT",
+            "value": 5665.706302,
+            "valueType": "NUMBER",
+            "unit": "kWh",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.661Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "flow_rate",
+            "state": "PRESENT",
+            "value": 132,
+            "valueType": "NUMBER",
+            "unit": "m3/h",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.743Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "instant_cooling_capacity",
+            "state": "PRESENT",
+            "value": 864,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.830Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "return_water_temperature",
+            "state": "PRESENT",
+            "value": 12.628,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.921Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "supply_water_temperature",
+            "state": "PRESENT",
+            "value": 7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:54.017Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "temperature_difference",
+            "state": "PRESENT",
+            "value": 5.628,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:54.112Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-1-018f3e00-4000-7000-8000-000000000001",
+      "deviceId": "018f3e00-4000-7000-8000-000000000001",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000001",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 137555,
+        "evaluatedAt": "2026-10-01T15:29:53.544Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:29:52.380Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:29:52.380Z",
+            "evaluatedAt": "2026-10-01T15:29:53.544Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "chilled_water_temperature_setpoint",
+            "state": "PRESENT",
+            "value": 7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.416Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "compressor_load",
+            "state": "PRESENT",
+            "value": 72,
+            "valueType": "NUMBER",
+            "unit": "%",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.527Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "cooling_capacity",
+            "state": "PRESENT",
+            "value": 864,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.635Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "cop",
+            "state": "PRESENT",
+            "value": 5.549,
+            "valueType": "NUMBER",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.741Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "entering_chilled_water_temperature",
+            "state": "PRESENT",
+            "value": 12.628,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.853Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "entering_cooling_water_temperature",
+            "state": "PRESENT",
+            "value": 30.7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:52.969Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "fault_code",
+            "state": "PRESENT",
+            "value": "",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.080Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "leaving_chilled_water_temperature",
+            "state": "PRESENT",
+            "value": 7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.197Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "load_limit",
+            "state": "PRESENT",
+            "value": 100,
+            "valueType": "NUMBER",
+            "unit": "%",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.313Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "power",
+            "state": "PRESENT",
+            "value": 155.718,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.427Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "run_state",
+            "state": "PRESENT",
+            "value": "RUNNING",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.544Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-2-018f3e00-4000-7000-8000-000000000002",
+      "deviceId": "018f3e00-4000-7000-8000-000000000002",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000002",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 55289,
+        "evaluatedAt": "2026-10-01T15:25:20.023Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:25:17.939Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:25:17.939Z",
+            "evaluatedAt": "2026-10-01T15:25:20.023Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "fault_code",
+            "state": "PRESENT",
+            "value": "",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:19.659Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "flow_rate",
+            "state": "PRESENT",
+            "value": 132,
+            "valueType": "NUMBER",
+            "unit": "m3/h",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:19.736Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "frequency",
+            "state": "PRESENT",
+            "value": 30,
+            "valueType": "NUMBER",
+            "unit": "Hz",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:19.800Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "power",
+            "state": "PRESENT",
+            "value": 9.72,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:19.875Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "run_state",
+            "state": "PRESENT",
+            "value": "RUNNING",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:19.949Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "speed",
+            "state": "PRESENT",
+            "value": 60,
+            "valueType": "NUMBER",
+            "unit": "%",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.023Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-3-018f3e00-4000-7000-8000-000000000004",
+      "deviceId": "018f3e00-4000-7000-8000-000000000004",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000004",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 80175,
+        "evaluatedAt": "2026-10-01T15:25:21.188Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:25:17.939Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:25:17.939Z",
+            "evaluatedAt": "2026-10-01T15:25:21.188Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "ambient_wet_bulb_temperature",
+            "state": "PRESENT",
+            "value": 27,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.514Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "approach_temperature",
+            "state": "PRESENT",
+            "value": 3.7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.607Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "entering_water_temperature",
+            "state": "PRESENT",
+            "value": 34.072,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.712Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "fan_speed",
+            "state": "PRESENT",
+            "value": 80,
+            "valueType": "NUMBER",
+            "unit": "%",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.800Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "fault_code",
+            "state": "PRESENT",
+            "value": "",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.890Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "leaving_water_temperature",
+            "state": "PRESENT",
+            "value": 30.7,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.990Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "power",
+            "state": "PRESENT",
+            "value": 9.472,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.095Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "run_state",
+            "state": "PRESENT",
+            "value": "RUNNING",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.188Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-4-018f3e00-4000-7000-8000-000000000003",
+      "deviceId": "018f3e00-4000-7000-8000-000000000003",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000003",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 55306,
+        "evaluatedAt": "2026-10-01T15:25:20.447Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:25:17.939Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:25:17.939Z",
+            "evaluatedAt": "2026-10-01T15:25:20.447Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "fault_code",
+            "state": "PRESENT",
+            "value": "",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.098Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "flow_rate",
+            "state": "PRESENT",
+            "value": 260,
+            "valueType": "NUMBER",
+            "unit": "m3/h",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.172Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "frequency",
+            "state": "PRESENT",
+            "value": 50,
+            "valueType": "NUMBER",
+            "unit": "Hz",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.238Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "power",
+            "state": "PRESENT",
+            "value": 37,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.306Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "run_state",
+            "state": "PRESENT",
+            "value": "RUNNING",
+            "valueType": "STRING",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.378Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "speed",
+            "state": "PRESENT",
+            "value": 100,
+            "valueType": "NUMBER",
+            "unit": "%",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:20.447Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-5-018f3e00-4000-7000-8000-000000000005",
+      "deviceId": "018f3e00-4000-7000-8000-000000000005",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000005",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 49406,
+        "evaluatedAt": "2026-10-01T15:25:21.499Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:25:17.939Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:25:17.939Z",
+            "evaluatedAt": "2026-10-01T15:25:21.499Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "active_power",
+            "state": "PRESENT",
+            "value": 211.91,
+            "valueType": "NUMBER",
+            "unit": "kW",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.288Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "energy",
+            "state": "PRESENT",
+            "value": 1390.356792,
+            "valueType": "NUMBER",
+            "unit": "kWh",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.367Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "frequency",
+            "state": "PRESENT",
+            "value": 50,
+            "valueType": "NUMBER",
+            "unit": "Hz",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.436Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "power_factor",
+            "state": "PRESENT",
+            "value": 0.93,
+            "valueType": "NUMBER",
+            "unit": null,
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:21.499Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-6-018f3e00-4000-7000-8000-000000000007",
+      "deviceId": "018f3e00-4000-7000-8000-000000000007",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000007",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 37076,
+        "evaluatedAt": "2026-10-01T15:25:22.303Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:25:17.939Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:25:17.939Z",
+            "evaluatedAt": "2026-10-01T15:25:22.303Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "ambient_dry_bulb_temperature",
+            "state": "PRESENT",
+            "value": 34,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:22.205Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "ambient_wet_bulb_temperature",
+            "state": "PRESENT",
+            "value": 27,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:22.255Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          },
+          {
+            "key": "relative_humidity",
+            "state": "PRESENT",
+            "value": 65,
+            "valueType": "NUMBER",
+            "unit": "%RH",
+            "sampledAt": "2026-10-01T15:25:17.939Z",
+            "receivedAt": "2026-10-01T15:25:22.303Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    }
+  ]
+}
