@@ -1,4 +1,4 @@
-import { createPublicKey, verify, type KeyObject } from 'node:crypto';
+import { X509Certificate, verify, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer, type ServerOptions } from 'node:https';
@@ -172,7 +172,8 @@ const main = async () => {
       energyAnalytics: owner('TELEMETRY_QUERY_URL'),
       gatewayToolAuthorization: owner('GATEWAY_INTERNAL_URL'),
     },
-    authorizer: createGrantAuthorizer(createPublicKey(readFileSync(required('AGENT_DELEGATION_PUBLIC_KEY')))),
+    // The Gateway signs delegations with its workload key.
+    authorizer: createGrantAuthorizer(new X509Certificate(readFileSync(required('AGENT_GATEWAY_DELEGATION_CERT'))).publicKey),
     budget: BUDGET,
   });
 

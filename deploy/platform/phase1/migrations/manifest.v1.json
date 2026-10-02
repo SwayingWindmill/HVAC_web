@@ -128,6 +128,19 @@
         "modules/workorder/migrations/005_s19_alarm_links.sql",
         "modules/workorder/migrations/006_s26_equipment_source_domain.sql"
       ]
+    },
+    {
+      "name": "hvac_operations_agent",
+      "migrations": [
+        "services/operations-agent-service/migrations/operations/001_agent_operations.sql",
+        "services/operations-agent-service/migrations/operations/002_typed_business_records.sql",
+        "services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql",
+        "services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql",
+        "services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql",
+        "services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql",
+        "services/operations-agent-service/migrations/operations/007_agent_input_response.sql",
+        "services/operations-agent-service/migrations/checkpoints/001_agent_checkpoints.sql"
+      ]
     }
   ],
   "excludedSources": [
@@ -175,6 +188,8 @@
     "s5_work_order_service",
     "s5_work_order_mutation_service",
     "outbound_delivery_runtime",
-    "s16_notification_service"
+    "s16_notification_service",
+    "operations_agent_operations_runtime",
+    "operations_agent_checkpoints_runtime"
   ]
 }

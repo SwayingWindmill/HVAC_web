@@ -81,3 +81,11 @@ hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql
 hvac_s5|modules/workorder/migrations/004_s5_tenant_scope.sql
 hvac_s5|modules/workorder/migrations/005_s19_alarm_links.sql
 hvac_s5|modules/workorder/migrations/006_s26_equipment_source_domain.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/001_agent_operations.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/002_typed_business_records.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/007_agent_input_response.sql
+hvac_operations_agent|services/operations-agent-service/migrations/checkpoints/001_agent_checkpoints.sql
