@@ -6,7 +6,7 @@ services:
       context: ../../../..
       dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
       args:
-        SERVICE_PACKAGE: ./modules/iot/cmd/thingsboard-reconciler
+        SERVICE_PACKAGE: ./modules/connectivity/cmd/thingsboard-reconciler
     image: ${THINGSBOARD_RECONCILER_IMAGE:-hvac/thingsboard-reconciler:0.1.0-dev}
     restart: unless-stopped
     read_only: true

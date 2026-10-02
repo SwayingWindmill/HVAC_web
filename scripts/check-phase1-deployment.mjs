@@ -62,7 +62,7 @@ const paths = {
   maintenanceMain: 'cmd/maintenance-worker/main.go',
   telemetryRuntimeMain: 'cmd/telemetry-worker/main.go',
   metricMain: 'cmd/metric-worker/main.go',
-  iotRuntime: 'modules/iot/pkg/adapter/runtime.go',
+  iotRuntime: 'modules/connectivity/pkg/adapter/runtime.go',
   thingsboardSourceReview: 'docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md',
 };
 
@@ -155,7 +155,7 @@ assert(baseline.runtimeInventory?.contract === paths.runtimeInventory && baselin
 assert(JSON.stringify(baseline.runtimeInventory?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'telemetry-worker', 'metric-worker']), 'baseline must freeze the three default business deployables');
 assert(JSON.stringify(baseline.runtimeInventory?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'baseline must classify scheduler and maintenance as supporting workloads');
 assert(JSON.stringify(baseline.runtimeInventory?.localStatefulInfrastructure) === JSON.stringify(['postgres', 'clickhouse', 'redis']), 'baseline must classify local PostgreSQL, ClickHouse and Redis separately from external state');
-assert(JSON.stringify(baseline.runtimeInventory?.optionalIntegration) === JSON.stringify(['iot-service', 'mqtt-broker']), 'baseline must classify IoT/MQTT as optional integration');
+assert(JSON.stringify(baseline.runtimeInventory?.optionalIntegration) === JSON.stringify(['connectivity', 'mqtt-broker']), 'baseline must classify IoT/MQTT as optional integration');
 assert(JSON.stringify(baseline.runtimeInventory?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service']), 'baseline must classify Forecast/Optimization/FDD as optional intelligence');
 assert(baseline.availabilityTier?.contract === paths.availabilityTier && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false && baseline.availabilityTier?.numericAvailabilitySloAllowed === false, 'baseline must pin SINGLE_NODE_RECOVERABLE and forbid unmeasured numeric SLO claims');
 assert(baseline.recovery?.attainmentContract === paths.recoveryAttainment && baseline.recovery?.numericAvailabilitySloClaimForbiddenWithoutEvidence === true, 'baseline must pin the recovery attainment contract');
@@ -170,18 +170,18 @@ for (const tierId of ['demo', 'single-lite', 'single-full']) {
     assert(false, error.message);
   }
 }
-assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse', 'cube']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['iot-service', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes');
+assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse', 'cube']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['connectivity', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 3 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes');
 assert(runtimeInventory.schemaVersion === 1 && runtimeInventory.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT' && runtimeInventory.canonicalCompose === paths.compose, 'runtime inventory identity must be versioned and point to the canonical Compose');
 assert(JSON.stringify(runtimeInventory.classes?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'telemetry-worker', 'metric-worker']), 'runtime inventory must freeze the three default business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'runtime inventory must freeze scheduler and maintenance as supporting workloads');
 assert(JSON.stringify(runtimeInventory.classes?.defaultIdentityInfrastructure) === JSON.stringify(['identity-service']), 'runtime inventory must keep identity-service outside business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.localStatefulInfrastructure) === JSON.stringify(['postgres', 'clickhouse', 'redis']), 'runtime inventory must freeze local PostgreSQL, ClickHouse and Redis as placement-specific services');
-assert(JSON.stringify(runtimeInventory.classes?.optionalIntegration) === JSON.stringify(['iot-service', 'mqtt-broker']), 'runtime inventory must freeze optional IoT/MQTT integration');
+assert(JSON.stringify(runtimeInventory.classes?.optionalIntegration) === JSON.stringify(['connectivity', 'mqtt-broker']), 'runtime inventory must freeze optional IoT/MQTT integration');
 assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service']), 'runtime inventory must freeze all optional intelligence services');
 assert(runtimeInventory.semantics?.maintenanceDecision === 'KEEP_AS_SUPPORTING_WORKER' && runtimeInventory.semantics?.identityDecision === 'SEPARATE_INFRASTRUCTURE' && runtimeInventory.semantics?.integrationDecision === 'OPTIONAL_PROFILE' && runtimeInventory.semantics?.postgresPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.clickhousePlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.redisPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.intelligenceDecision === 'OPTIONAL_PROFILE', 'runtime inventory decisions must preserve maintenance, identity, PostgreSQL/ClickHouse/Redis placement, integration and intelligence boundaries');
 const canonicalSourceEntrypoints = {
   'energy-api': 'cmd/energy-api',
-  'iot-service': 'cmd/iot-service',
+  'connectivity': 'cmd/connectivity',
   'telemetry-worker': 'cmd/telemetry-worker',
   'metric-worker': 'cmd/metric-worker',
   scheduler: 'cmd/scheduler',
@@ -230,7 +230,7 @@ const requiredServices = [
   'identity-service',
   'scheduler',
   'maintenance',
-  'iot-service',
+  'connectivity',
   'telemetry-worker',
   'metric-worker',
   'postgres',
@@ -251,7 +251,7 @@ const profileExpectations = {
   clickhouse: ['local-clickhouse'],
   cube: ['local-clickhouse'],
   redis: ['local-redis'],
-  'iot-service': ['integration'],
+  'connectivity': ['integration'],
   'mqtt-broker': ['integration'],
   'otel-collector': ['observability-logs', 'observability-full'],
   prometheus: ['observability-core', 'observability-logs', 'observability-full'],
@@ -335,7 +335,7 @@ assert(identityAdminBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/
 assert(identityMFAKeygenBlock.includes('IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key') && identityMFAKeygenBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity'), 'Phase 1 must provide the explicit MFA key bootstrap tool');
 assert(energyAPIBlock.includes('IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}') && energyAPIBlock.includes('IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper') && energyAPIBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro'), 'energy-api must use the least-privilege IAM admin DSN and a read-only external API Credential pepper');
 assert(iamCredentialKeygenBlock.includes('IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper') && iamCredentialKeygenBlock.includes('${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam'), 'Phase 1 must provide the explicit API Credential pepper bootstrap tool');
-for (const service of ['energy-api', 'identity-service', 'scheduler', 'maintenance', 'telemetry-worker', 'metric-worker', 'iot-service']) {
+for (const service of ['energy-api', 'identity-service', 'scheduler', 'maintenance', 'telemetry-worker', 'metric-worker', 'connectivity']) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('phase1-schema-preflight:') && block.includes('condition: service_completed_successfully'), `${service} must fail closed on Product/Schema preflight`);
 }
@@ -347,7 +347,7 @@ assert(compose.includes('max-size: ${DOCKER_LOG_MAX_SIZE:-20m}') && compose.incl
 for (const marker of ['POSTGRES_DATA_DIR', 'CLICKHOUSE_DATA_DIR', 'REDIS_DATA_DIR', 'MQTT_DATA_DIR']) {
   assert(compose.includes(marker), `canonical Compose must expose configurable host data path ${marker}`);
 }
-for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], ['maintenance', '19093'], ['telemetry-worker', '19086'], ['metric-worker', '19090'], ['iot-service', '19094']]) {
+for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], ['maintenance', '19093'], ['telemetry-worker', '19086'], ['metric-worker', '19090'], ['connectivity', '19094']]) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`/healthcheck", "http://127.0.0.1:${port}/health/ready`), `${service} must have a Compose readiness healthcheck`);
   assert(block.includes('cpus:') && block.includes('mem_limit:') && block.includes('mem_reservation:'), `${service} must have CPU/memory limits and reservations`);
@@ -359,7 +359,7 @@ assert(runtimeSources.schedulerMain.includes('telemetry.SetDependencies(observab
 assert(runtimeSources.maintenanceMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "postgres"') && runtimeSources.maintenanceMain.includes('Check: store.Ping'), 'maintenance supporting worker readiness must track PostgreSQL');
 assert(runtimeSources.telemetryRuntimeMain.includes('observabilityRuntime.SetDependencies'), 'telemetry-worker readiness must track its required stores through live dependencies');
 assert(runtimeSources.metricMain.includes('telemetry.SetDependencies(observability.Dependency{Name: "metric-runtime"') && runtimeSources.metricMain.includes('Check: runtime.Ping'), 'metric-worker readiness must track its required stores');
-assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'iot-service readiness must track live MQTT connection/subscription state');
+assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'connectivity readiness must track live MQTT connection/subscription state');
 assert(!runtimeSources.operationsGateway.includes('rateWindows') && !runtimeSources.operationsGateway.includes('RateLimitPerMinute') && runtimeSources.operationsGateway.includes('rateLimiter.Allow'), 'Operations Agent high-risk limit must not use an in-process authoritative map');
 
 for (const dataService of ['postgres', 'clickhouse', 'redis']) {
@@ -428,7 +428,7 @@ const releaseImageVariables = [
   'HVAC_WEB_IMAGE',
   'ENERGY_API_IMAGE',
   'SCHEDULER_IMAGE',
-  'IOT_SERVICE_IMAGE',
+  'CONNECTIVITY_IMAGE',
   'TELEMETRY_WORKER_IMAGE',
   'METRIC_WORKER_IMAGE',
   'PHASE1_MIGRATOR_IMAGE',
@@ -446,7 +446,7 @@ for (const forbidden of ['localhost', '127.0.0.1', 'demo', 'fixture', 'oidc-test
 assert(envs.production.includes('PUBLIC_ORIGIN=https://app.energy.example.com'), 'production must have an explicit HTTPS public origin contract');
 assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production must use its own MQTT namespace');
 
-assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('iot-service:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
+assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('connectivity:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning and 90% critical thresholds');
 assert(hostAlerts.includes('Phase1HostDiskWillFillWithin24Hours') && hostAlerts.includes('predict_linear('), 'host disk alerts must warn on projected rapid exhaustion before the static threshold is reached');

@@ -40,7 +40,7 @@ services:
     volumes:
       - ./runtime/internal-pki:/run/hvac/pki:ro
 
-  iot-service:
+  connectivity:
     environment:
       COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
     volumes:

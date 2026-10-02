@@ -108,12 +108,12 @@ const commandService = await readFile(resolve(root, 'modules/command/pkg/command
 invariant(commandService.includes('strings.HasSuffix(raw, "/approve")'), 'Command Service must route canonical /approve');
 invariant(!commandService.includes('strings.HasSuffix(raw, ":approve")'), 'Command Service production route must not parse legacy :approve');
 
-const mqttConfig = await readFile(resolve(root, 'modules/iot/pkg/adapter/config.go'), 'utf8');
+const mqttConfig = await readFile(resolve(root, 'modules/connectivity/pkg/adapter/config.go'), 'utf8');
 for (const messageType of ['telemetry', 'state', 'event', 'heartbeat']) {
   invariant(mqttConfig.includes(`energy/v1/+/+/+/${messageType}`), `MQTT uplink subscription is missing ${messageType}`);
 }
 invariant(!mqttConfig.includes('energy/v1/+/+/+/#'), 'MQTT uplink adapter must not subscribe to command/reply through #');
-const mqttProcessor = await readFile(resolve(root, 'modules/iot/pkg/adapter/processor.go'), 'utf8');
+const mqttProcessor = await readFile(resolve(root, 'modules/connectivity/pkg/adapter/processor.go'), 'utf8');
 invariant(mqttProcessor.includes('MessageTypeState') && mqttProcessor.includes('MessageTypeEvent') && mqttProcessor.includes('MessageTypeHeartbeat'), 'MQTT V2.1.2 message family is incomplete');
 invariant(mqttProcessor.includes('SOURCE_ACTIVITY'), 'MQTT wire activity must publish Presence evidence');
 
@@ -165,8 +165,8 @@ invariant(compose.includes('METRIC_WORKER_MODE: worker'), 'Phase1 metric-worker 
 invariant(!compose.includes('\n  command-verifier:'), 'Phase1 must not deploy command-verifier as a standalone process');
 invariant(!compose.includes('\n  command-dispatcher:'), 'Phase1 must not deploy command-dispatcher as a standalone process');
 invariant(!compose.includes('\n  mqtt-telemetry-adapter:'), 'Phase1 must not deploy mqtt-telemetry-adapter as a standalone process');
-invariant(compose.includes('\n  iot-service:'), 'Phase1 must deploy the converged iot-service process');
-invariant(compose.includes('COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"'), 'Phase1 iot-service must own Command dispatch and verification in-process');
+invariant(compose.includes('\n  connectivity:'), 'Phase1 must deploy the converged connectivity process');
+invariant(compose.includes('COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"'), 'Phase1 connectivity must own Command dispatch and verification in-process');
 invariant(compose.includes('\n  energy-api:'), 'Phase1 must deploy the converged energy-api process');
 invariant(compose.includes('\n  identity-service:'), 'Phase1 must deploy platform-owned Identity Infrastructure separately from business deployables');
 invariant(!compose.includes('\n  platform-gateway:'), 'Phase1 must not deploy platform-gateway as a standalone process');

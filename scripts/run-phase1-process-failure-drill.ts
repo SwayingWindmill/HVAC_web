@@ -117,7 +117,7 @@ const activeReadinessUrls = {
   scheduler: "http://127.0.0.1:19092/health/ready",
   "telemetry-worker": "http://127.0.0.1:19086/health/ready",
   "metric-worker": "http://127.0.0.1:19090/health/ready",
-  "iot-service": "http://127.0.0.1:19094/health/ready",
+  "connectivity": "http://127.0.0.1:19094/health/ready",
 };
 
 function activeReadinessPassed(target) {
@@ -161,7 +161,7 @@ for (const step of plan) {
   composeCommand(["kill", "--signal", step.killSignal, step.target]);
   if (step.target === "mqtt-broker") {
     await waitForReadinessFailure(
-      "iot-service",
+      "connectivity",
       Math.min(deadline, Date.now() + 60_000),
     );
   }

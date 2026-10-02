@@ -41,7 +41,7 @@
       "component": "eg8200-simulator",
       "productionState": "ABSENT",
       "retainedState": "EXPLICIT_ACCEPTANCE_OVERLAY_ONLY",
-      "replacementOwner": "real-edge-through-iot-service",
+      "replacementOwner": "real-edge-through-connectivity",
       "evidence": [
         "deploy/platform/phase1/compose.yaml",
         "deploy/acceptance/phase1-simulator.compose.yaml"

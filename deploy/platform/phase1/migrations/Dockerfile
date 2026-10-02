@@ -56,7 +56,6 @@ COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt
 COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/hvac/repo/services/rule-runtime-service/migrations/002_s21_rule_management.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
-COPY infra/connectivity/postgres/init/003-s12-edge-fleet.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-s12-edge-fleet.sql
 COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
 COPY infra/registry/postgres/init/016-s24-alarm-assign-capability.sql /opt/hvac/repo/infra/registry/postgres/init/016-s24-alarm-assign-capability.sql
 COPY infra/registry/postgres/init/017-registry-read-port.sql /opt/hvac/repo/infra/registry/postgres/init/017-registry-read-port.sql

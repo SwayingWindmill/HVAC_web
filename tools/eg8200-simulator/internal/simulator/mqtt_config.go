@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const MQTTGatewayConfigSchemaVersion = 2
+const MQTTGatewayConfigSchemaVersion = 3
 
 var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
@@ -27,8 +27,6 @@ type MQTTGatewayConfig struct {
 	QueueDirectory             string            `json:"queueDirectory"`
 	MaximumQueueBytes          int64             `json:"maximumQueueBytes"`
 	CredentialRevision         uint64            `json:"credentialRevision"`
-	FleetReleaseKeyID          string            `json:"fleetReleaseKeyId"`
-	FleetReleasePublicKeyFile  string            `json:"fleetReleasePublicKeyFile"`
 	DeviceExternalIDByDeviceID map[string]string `json:"deviceExternalIdByDeviceId"`
 }
 
@@ -61,14 +59,12 @@ func (config MQTTGatewayConfig) Validate() error {
 		return errors.New("MQTT gateway brokerUrl must be a tls:// origin")
 	}
 	for name, value := range map[string]string{
-		"clientId":                  config.ClientID,
-		"caFile":                    config.CAFile,
-		"certFile":                  config.CertFile,
-		"keyFile":                   config.KeyFile,
-		"serverName":                config.ServerName,
-		"queueDirectory":            config.QueueDirectory,
-		"fleetReleaseKeyId":         config.FleetReleaseKeyID,
-		"fleetReleasePublicKeyFile": config.FleetReleasePublicKeyFile,
+		"clientId":       config.ClientID,
+		"caFile":         config.CAFile,
+		"certFile":       config.CertFile,
+		"keyFile":        config.KeyFile,
+		"serverName":     config.ServerName,
+		"queueDirectory": config.QueueDirectory,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("MQTT gateway %s is required", name)

@@ -17,7 +17,7 @@ const modules = [
   './libs/commandmodel/...',
   './libs/workloadtls/...',
   './modules/command/...',
-  './cmd/iot-service/...',
+  './cmd/connectivity/...',
   './modules/telemetry/...',
 ];
 const commands = [
@@ -25,7 +25,7 @@ const commands = [
   [process.execPath, ['scripts/run-go.mjs', 'test', ...modules]],
   [process.execPath, ['scripts/run-go.mjs', 'vet', ...modules]],
   [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-owner', './modules/command/cmd/command-owner']],
-  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/iot-service', './cmd/iot-service']],
+  [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/connectivity', './cmd/connectivity']],
   [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/telemetry-worker', './cmd/telemetry-worker']],
 ];
 

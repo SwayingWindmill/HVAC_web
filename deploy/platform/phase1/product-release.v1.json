@@ -52,13 +52,6 @@
     "evidenceSha256": "5793936f69ed6ad06b0c24b189d342285fb9ecd7f70fdcabeb8ce84be661c308",
     "runtimeFallbackAllowed": false
   },
-  "edgeRelease": {
-    "schemaAuthority": "infra/connectivity/postgres/init/003-s12-edge-fleet.sql",
-    "schemaAuthoritySha256": "7b193d911acf38718a4fc0cfb038042122401478691cb35f773800ec9456ac5a",
-    "desiredObservedReconciliationRequired": true,
-    "rollbackAuthority": "previous-signed-edge-release",
-    "privateSigningKeyPersistenceAllowed": false
-  },
   "projectionRecovery": {
     "postgresAuthority": "backup-and-restore",
     "redisAuthority": "rebuild-from-authoritative-postgres-and-owner-events",
@@ -76,8 +69,7 @@
   "rollbackEvidence": [
     "scripts/run-phase1-postgres-restore-test.mjs",
     "scripts/run-s1-registry-postgres-tests.mjs",
-    "scripts/run-s25-redis-rebuild-test.mjs",
-    "scripts/check-s12-edge-fleet.mjs"
+    "scripts/run-s25-redis-rebuild-test.mjs"
   ],
   "migrationState": {
     "states": ["APPLYING", "APPLIED", "FAILED"],

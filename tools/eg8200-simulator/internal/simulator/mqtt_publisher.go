@@ -20,7 +20,6 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/quanlaihe/hvac-web/libs/edgefleet"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -60,7 +59,6 @@ type MQTTPublisher struct {
 	pointByKey     map[string]PointConfig
 	manager        *autopaho.ConnectionManager
 	commandHandler *edgeCommandHandler
-	fleetHandler   *edgeFleetHandler
 	evidenceSpool  *mqttEvidenceSpool
 	commandTopic   string
 	metrics        *observability.Registry
@@ -95,10 +93,6 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		return nil, err
 	}
 	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.GatewayID, evidenceSpool)
-	if err != nil {
-		return nil, err
-	}
-	fleetHandler, err := newEdgeFleetHandler(config, plantConfig.GatewayID, edgeRuntime, evidenceSpool)
 	if err != nil {
 		return nil, err
 	}
@@ -137,20 +131,9 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 				defer cancel()
 				if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{
 					{Topic: commandTopic, QoS: 1},
-					{Topic: fleetHandler.DownlinkTopic(), QoS: 1},
 				}}); err != nil {
 					return
 				}
-				handshake, err := fleetHandler.HandshakeEnvelope()
-				if err != nil {
-					return
-				}
-				publishContext, publishCancel := context.WithTimeout(ctx, 5*time.Second)
-				if _, err := manager.Publish(publishContext, &paho.Publish{QoS: 1, Retain: false, Topic: fleetHandler.UplinkTopic(), Payload: handshake}); err != nil {
-					publishCancel()
-					return
-				}
-				publishCancel()
 				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
 				_ = evidenceSpool.Flush(flushContext, manager)
@@ -158,7 +141,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID:          strings.TrimSpace(config.ClientID),
-			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle, fleetHandler.Handle},
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
 		},
 	})
 	if err != nil {
@@ -174,7 +157,6 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		pointByKey:     pointByKey,
 		manager:        manager,
 		commandHandler: commandHandler,
-		fleetHandler:   fleetHandler,
 		evidenceSpool:  evidenceSpool,
 		commandTopic:   "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command",
 		metrics:        metrics,
@@ -235,9 +217,9 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 		return fmt.Errorf("encode MQTT telemetry envelope: %w", err)
 	}
 	topic := "energy/v1/" + publisher.config.TenantID + "/" + publisher.config.SiteID + "/" + publisher.gatewayID + "/telemetry"
-	admission, err := publisher.evidenceSpool.Enqueue(envelope.MessageID, edgefleet.EvidenceTelemetryNormal, topic, payload)
+	admission, err := publisher.evidenceSpool.Enqueue(envelope.MessageID, EvidenceTelemetryNormal, topic, payload)
 	if err != nil {
-		if publisher.metrics != nil && errors.Is(err, edgefleet.ErrOfflineCapacity) {
+		if publisher.metrics != nil && errors.Is(err, ErrOfflineCapacity) {
 			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_limit_rejections_total", "Edge MQTT publishes rejected because the persistent queue reached its configured byte limit.", nil, 1)
 		}
 		return err
@@ -247,7 +229,7 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_bytes", "Bytes currently retained in the Edge persistent MQTT queue.", nil, float64(queueBytes))
 		_ = publisher.metrics.SetGauge("hvac_edge_mqtt_queue_utilization_ratio", "Persistent MQTT queue utilization ratio.", nil, float64(queueBytes)/float64(publisher.config.MaximumQueueBytes))
 		if len(admission.ShedIDs) > 0 {
-			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_shed_total", "Lower-priority Edge MQTT evidence shed under offline capacity pressure.", map[string]string{"class": string(edgefleet.EvidenceTelemetryNormal)}, float64(len(admission.ShedIDs)))
+			_ = publisher.metrics.AddCounter("hvac_edge_mqtt_queue_shed_total", "Lower-priority Edge MQTT evidence shed under offline capacity pressure.", map[string]string{"class": string(EvidenceTelemetryNormal)}, float64(len(admission.ShedIDs)))
 		}
 	}
 	outcome = "queued"

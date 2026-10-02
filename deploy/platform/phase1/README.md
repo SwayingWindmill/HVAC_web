@@ -25,7 +25,7 @@ Local PostgreSQL, ClickHouse, Redis, Grafana, Loki, Tempo, Prometheus and all Go
 
 ## Runtime inventory
 
-`runtime-inventory.v1.json` is the machine-readable classification of every service in the canonical Compose. The default business deployables are `energy-api`, `telemetry-worker` and `metric-worker`. `scheduler` and `maintenance` are default supporting workloads; `identity-service` is Identity Infrastructure. `iot-service` plus `mqtt-broker` are optional and run only through the `integration` profile. Forecast, Optimization and FDD remain optional through the `intelligence` profile. Migration, schema preflight, identity bootstrap/admin/reconciliation and backup containers are one-shot operator actions rather than long-running product services.
+`runtime-inventory.v1.json` is the machine-readable classification of every service in the canonical Compose. The default business deployables are `energy-api`, `telemetry-worker` and `metric-worker`. `scheduler` and `maintenance` are default supporting workloads; `identity-service` is Identity Infrastructure. `connectivity` plus `mqtt-broker` are optional and run only through the `integration` profile. Forecast, Optimization and FDD remain optional through the `intelligence` profile. Migration, schema preflight, identity bootstrap/admin/reconciliation and backup containers are one-shot operator actions rather than long-running product services.
 
 Any Compose service added or removed without updating this inventory is deployment drift and must fail `npm run deployment:phase1:check`.
 
@@ -89,11 +89,11 @@ npm run deployment:phase1:wsl -- config --quiet
 # Local source deployment: rebuild the current checkout's Web + first-party runtime images, then start them.
 npm run deployment:phase1:wsl -- --source-deploy up -d
 
-# Add local MQTT + iot-service only when this deployment needs Integration.
+# Add local MQTT + connectivity only when this deployment needs Integration.
 npm run deployment:phase1:wsl -- --source-deploy --integration up -d
 ```
 
-Use `--source-deploy` for the local WSL product deployment so the Web bundle and first-party runtime binaries come from the same Git revision. It sets the Web build identity to the current revision before building. `PHASE1_GO_BUILD_IMAGE`, `PHASE1_GO_RUNTIME_IMAGE`, `PHASE1_GO_PROXY`, `PHASE1_WEB_BUILD_IMAGE`, `PHASE1_NGINX_RUNTIME_IMAGE`, and `PHASE1_NPM_REGISTRY` may override build sources for the local network without changing the checked-in production defaults. `PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed. `--simulator-acceptance` implies `--integration` because the simulator depends on the local MQTT/iot-service path.
+Use `--source-deploy` for the local WSL product deployment so the Web bundle and first-party runtime binaries come from the same Git revision. It sets the Web build identity to the current revision before building. `PHASE1_GO_BUILD_IMAGE`, `PHASE1_GO_RUNTIME_IMAGE`, `PHASE1_GO_PROXY`, `PHASE1_WEB_BUILD_IMAGE`, `PHASE1_NGINX_RUNTIME_IMAGE`, and `PHASE1_NPM_REGISTRY` may override build sources for the local network without changing the checked-in production defaults. `PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed. `--simulator-acceptance` implies `--integration` because the simulator depends on the local MQTT/connectivity path.
 
 ## Startup prerequisites
 
@@ -184,7 +184,7 @@ observability-full  = logs + Tempo
 local-postgres      = Stage 1 local PostgreSQL placement
 local-clickhouse    = Stage 1 local ClickHouse placement
 local-redis         = Stage 1 local Redis placement
-integration         = iot-service + mqtt-broker
+integration         = connectivity + mqtt-broker
 intelligence        = forecast-service + optimization-service + fdd-service
 ```
 

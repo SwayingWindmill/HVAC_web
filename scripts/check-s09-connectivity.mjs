@@ -9,13 +9,13 @@ function assert(condition, message) {
 }
 
 const migration = read('infra/connectivity/postgres/init/001-s09-connectivity.sql');
-const store = read('modules/iot/pkg/connectivity/store.go');
-const processor = read('modules/iot/pkg/adapter/processor.go');
+const store = read('modules/connectivity/pkg/connectivity/store.go');
+const processor = read('modules/connectivity/pkg/adapter/processor.go');
 const connector = read('modules/command/pkg/mqttconnector/connector.go');
-const config = read('modules/iot/pkg/adapter/config.go');
-const exampleConfig = read('modules/iot/configs/central-plant.local.example.json');
+const config = read('modules/connectivity/pkg/adapter/config.go');
+const exampleConfig = read('modules/connectivity/configs/central-plant.local.example.json');
 const simulator = read('scripts/phase1-central-plant-simulator.mjs');
-const canonicalIoTCommandRuntimePath = 'cmd/iot-service/command_runtime.go';
+const canonicalIoTCommandRuntimePath = 'cmd/connectivity/command_runtime.go';
 
 for (const table of [
   'transport_profiles',
@@ -62,6 +62,6 @@ assert(!exampleConfig.includes('gatewayScopes'), 'static Gateway scope authority
 assert(!exampleConfig.includes('brokerUrl') && config.includes('BrokerURL') && config.includes('json:"-"'), 'Broker origin must come only from the durable TransportProfile');
 assert(simulator.includes('buildConnectivitySeed()'), 'local simulator must seed Connectivity owner state');
 assert(simulator.includes('certificate.fingerprint256') && !simulator.includes('privateKey:'), 'local Connectivity seed must use certificate fingerprint/SecretRef, not private key material');
-assert(existsSync(canonicalIoTCommandRuntimePath), 'canonical iot-service command runtime wiring is missing');
+assert(existsSync(canonicalIoTCommandRuntimePath), 'canonical connectivity command runtime wiring is missing');
 
 console.log('S09 Connectivity/session/credential architecture check passed.');

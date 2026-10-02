@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { createHash, generateKeyPairSync, X509Certificate } from 'node:crypto';
+import { X509Certificate } from 'node:crypto';
 import path from 'node:path';
 
 import {
@@ -28,9 +28,6 @@ const simulatorPkiDir = path.join(internalPkiDir, 'eg8200-simulator');
 const simulatorQueueDir = path.join(runtimeRoot, 'data', 'eg8200');
 const runtimeConfigDir = path.join(runtimeRoot, 'config');
 const mqttConfigPath = path.join(runtimeConfigDir, 'eg8200-mqtt.json');
-const fleetReleaseKeyId = 'local-edge-release-key-1';
-const fleetReleasePrivateKeyPath = path.join(simulatorPkiDir, 'edge-release-ed25519.pem');
-const fleetReleasePublicKeyPath = path.join(runtimeConfigDir, 'edge-release-public-key.hex');
 const pointContractPath = path.join(repoRoot, 'contracts', 'registry', 'central-plant-device-points.v2.json');
 const reconciliationPath = path.join(runtimeRoot, 'identity-reconcile.json');
 
@@ -303,13 +300,8 @@ function buildConnectivitySeed(rig) {
   const transportProfileId = localUUID(0x810000000001);
   const credentialRefId = localUUID(0x810000000002);
   const sessionId = localUUID(0x810000000003);
-  const edgeNodeId = localUUID(0x810000000004);
-  const edgeEnrollmentId = localUUID(0x810000000005);
-  const edgeIdentityBindingId = localUUID(0x810000000006);
   const certificate = new X509Certificate(readFileSync(path.join(simulatorPkiDir, 'tls.crt')));
   const certificateFingerprint = certificate.fingerprint256.replaceAll(':', '').toLowerCase();
-  const hardwareIdentityHash = createHash('sha256').update(`EG8200-COMMERCIAL-001|${certificateFingerprint}`).digest('hex');
-  const enrollmentChallengeHash = createHash('sha256').update(`LOCAL-CONSUMED-ENROLLMENT|${edgeNodeId}`).digest('hex');
   const certificateValidFrom = new Date(certificate.validFrom).toISOString();
   const certificateValidUntil = new Date(certificate.validTo).toISOString();
   const deviceBindings = centralPlantDevices.map((device, index) => `(
@@ -374,43 +366,6 @@ ON CONFLICT (id) DO UPDATE SET
     ELSE connectivity.credential_refs.revision
   END,
   updated_at=clock_timestamp();
-
-INSERT INTO connectivity.edge_nodes (
-  id, tenant_id, site_id, integration_instance_id, edge_external_id, hardware_identity_sha256,
-  status, revision, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(edgeNodeId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
-  'EG8200-COMMERCIAL-001', ${sqlLiteral(hardwareIdentityHash)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET hardware_identity_sha256=EXCLUDED.hardware_identity_sha256, status='ACTIVE', revision=connectivity.edge_nodes.revision+1, updated_at=clock_timestamp();
-
-INSERT INTO connectivity.edge_enrollments (
-  id, tenant_id, edge_node_id, hardware_identity_sha256, challenge_hash_sha256,
-  expires_at, consumed_at, credential_ref_id, revision, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(edgeEnrollmentId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(edgeNodeId)},
-  ${sqlLiteral(hardwareIdentityHash)}, ${sqlLiteral(enrollmentChallengeHash)},
-  clock_timestamp() + interval '1 hour', clock_timestamp(), ${sqlLiteral(credentialRefId)}, 1, clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET hardware_identity_sha256=EXCLUDED.hardware_identity_sha256, challenge_hash_sha256=EXCLUDED.challenge_hash_sha256,
-  expires_at=GREATEST(connectivity.edge_enrollments.expires_at, clock_timestamp() + interval '1 hour'), consumed_at=COALESCE(connectivity.edge_enrollments.consumed_at, clock_timestamp()),
-  credential_ref_id=EXCLUDED.credential_ref_id, revision=connectivity.edge_enrollments.revision+1, updated_at=clock_timestamp();
-
-UPDATE connectivity.edge_identity_bindings
-SET status='ROTATED', valid_until=clock_timestamp()
-WHERE tenant_id=${sqlLiteral(tenantId)}::uuid AND edge_node_id=${sqlLiteral(edgeNodeId)}::uuid AND status='ACTIVE' AND id<>${sqlLiteral(edgeIdentityBindingId)}::uuid;
-
-INSERT INTO connectivity.edge_identity_bindings (
-  id, tenant_id, edge_node_id, credential_ref_id, identity_revision, valid_from, valid_until, status, created_at
-) VALUES (
-  ${sqlLiteral(edgeIdentityBindingId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(edgeNodeId)}, ${sqlLiteral(credentialRefId)},
-  1, clock_timestamp(), NULL, 'ACTIVE', clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, valid_until=NULL, status='ACTIVE';
-
-INSERT INTO connectivity.edge_delivery_cursors (edge_node_id, tenant_id, committed_cursor, retained_floor, revision, updated_at)
-VALUES (${sqlLiteral(edgeNodeId)}, ${sqlLiteral(tenantId)}, 0, 0, 1, clock_timestamp())
-ON CONFLICT (edge_node_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, updated_at=clock_timestamp();
 
 UPDATE connectivity.sessions
 SET status='CLOSED', closed_at=clock_timestamp(), close_reason='LOCAL_BOOTSTRAP_REPLACED', revision=revision+1, updated_at=clock_timestamp()
@@ -531,28 +486,11 @@ function ensureSimulatorCertificate() {
   rmSync(extPath, { force: true });
 }
 
-function ensureFleetReleaseKeys() {
-  mkdirSync(simulatorPkiDir, { recursive: true, mode: 0o700 });
-  mkdirSync(runtimeConfigDir, { recursive: true });
-  const privateReady = existsSync(fleetReleasePrivateKeyPath) && readFileSync(fleetReleasePrivateKeyPath, 'utf8').includes('PRIVATE KEY');
-  const publicReady = existsSync(fleetReleasePublicKeyPath) && /^[a-f0-9]{64}\n?$/.test(readFileSync(fleetReleasePublicKeyPath, 'utf8'));
-  if (privateReady && publicReady) return;
-  rmSync(fleetReleasePrivateKeyPath, { force: true });
-  rmSync(fleetReleasePublicKeyPath, { force: true });
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const publicJwk = publicKey.export({ format: 'jwk' });
-  if (!publicJwk.x) throw new Error('Ed25519 public key JWK is missing x');
-  writeFileSync(fleetReleasePrivateKeyPath, privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 });
-  writeFileSync(fleetReleasePublicKeyPath, `${Buffer.from(publicJwk.x, 'base64url').toString('hex')}\n`, { mode: 0o644 });
-  chmodSync(fleetReleasePrivateKeyPath, 0o600);
-  chmodSync(fleetReleasePublicKeyPath, 0o644);
-}
-
 function writeSimulatorConfig(credentialRevision) {
   mkdirSync(runtimeConfigDir, { recursive: true });
   mkdirSync(simulatorQueueDir, { recursive: true });
   const config = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tenantId: centralPlantIdentity.tenantId,
     siteId: centralPlantIdentity.siteId,
     brokerUrl: 'tls://mqtt-broker:8883',
@@ -564,8 +502,6 @@ function writeSimulatorConfig(credentialRevision) {
     queueDirectory: '/run/hvac/eg8200',
     maximumQueueBytes: 64 * 1024 * 1024,
     credentialRevision,
-    fleetReleaseKeyId,
-    fleetReleasePublicKeyFile: '/run/hvac/runtime-config/edge-release-public-key.hex',
     deviceExternalIdByDeviceId: Object.fromEntries(centralPlantDevices.map((device) => [device.name, device.platformDeviceId])),
   };
   writeFileSync(mqttConfigPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
@@ -579,7 +515,7 @@ function runLocalAdminGrant() {
 function startSimulatorService() {
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    'up', '-d', '--build', 'iot-service',
+    'up', '-d', '--build', 'connectivity',
   ]);
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
@@ -605,7 +541,6 @@ const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMA
 const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
 ensureSimulatorCertificate();
-ensureFleetReleaseKeys();
 psql('hvac_s1', buildS1Seed(seededPoints));
 psql('hvac_s1', buildConnectivitySeed(rig));
 const credentialRevision = Number(psqlScalar('hvac_s1', `SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(localUUID(0x810000000002))}::uuid`));

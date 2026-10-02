@@ -58,7 +58,7 @@
     "start-redis",
     "restore-or-start-clickhouse",
     "start-energy-api",
-    "start-iot-service",
+    "start-connectivity",
     "start-telemetry-worker",
     "start-metric-worker",
     "start-realtime-and-scheduler",

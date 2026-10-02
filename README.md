@@ -67,7 +67,7 @@ npm run repo:clean:local
 ### Canonical executable：`cmd/`
 
 - `energy-api/`：公共 API/BFF 与 Phase 1 内嵌业务 Owner 的默认运行入口。
-- `iot-service/`：MQTT 上行、命令执行/验证和 Edge Fleet 的默认运行入口。
+- `connectivity/`：MQTT 上行、命令执行/验证和 Edge Fleet 的默认运行入口。
 - `telemetry-worker/`：Telemetry ingest、Latest/History 与 Energy projection 的默认运行入口。
 - `metric-worker/`：Metric 执行与结果投影入口。
 - `scheduler/`：耐久任务调度协调入口。
@@ -86,7 +86,7 @@ npm run repo:clean:local
 - `energy/`：Energy Processing、MeterBinding 解析、canonical Counter Delta 到 Energy Fact 的投影与 rebuild/correction；默认由 `cmd/telemetry-worker` 组合执行，并保留 `energy-projector` 作为显式构建入口。
 - `scheduler/`：耐久任务的扫描、Claim 协调和调度统计；默认运行于 `cmd/scheduler`。
 - `maintenance/`：证书到期扫描、Dead Job 处置和 Tenant Retirement 等运维作业；默认运行于 `cmd/maintenance-worker`。
-- `iot/`：MQTT ingress、连接状态、Edge Fleet 同步/OTA 传输侧和 `iot-service` 的协议执行面；默认运行于 `cmd/iot-service`。
+- `iot/`：MQTT ingress、连接状态、Edge Fleet 同步/OTA 传输侧和 `connectivity` 的协议执行面；默认运行于 `cmd/connectivity`。
 
 `modules/*/cmd/*-owner` 只用于显式 owner-split / 同版本故障域验证；默认 Phase 1 仍由 `energy-api` 内嵌这些 Owner。Domain Module 不等于独立 Deployable。
 

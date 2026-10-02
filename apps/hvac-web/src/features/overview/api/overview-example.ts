@@ -1,4 +1,8 @@
-import type { OverviewDashboardData, OverviewPeriod } from "./overview-types";
+import {
+  knownMetric,
+  type OverviewDashboardData,
+  type OverviewPeriod,
+} from "./overview-types";
 // Explicit design fixture; never a fallback for failed production requests.
 const profile = { daily: 19826, rate: 12.7, comfort: 96.8, coverage: 98.5 };
 const periods = {
@@ -46,11 +50,11 @@ export function createOverviewExample(
     period,
     dateRange: config.dates,
     asOf: "2026-09-30T16:00:00+08:00",
-    actualKWh,
+    actualKWh: knownMetric(actualKWh),
     baselineKWh,
-    savingsKWh,
-    savingsRate: (savingsKWh / baselineKWh) * 100,
-    savingsCny: Math.round(savingsKWh * 0.843),
+    savingsKWh: knownMetric(savingsKWh),
+    savingsRate: knownMetric((savingsKWh / baselineKWh) * 100),
+    savingsCny: knownMetric(Math.round(savingsKWh * 0.843)),
     baselineMethod: "天气与运营时长调整",
     trendUnit: "kWh",
     trendSeries,
@@ -126,21 +130,21 @@ export function createOverviewExample(
       {
         name: "冷站",
         metric: "综合 COP",
-        value: 5.42,
+        value: knownMetric(5.42),
         unit: "",
         reference: "设计基准 5.0",
       },
       {
         name: "输配",
         metric: "输送能效比",
-        value: 32.4,
+        value: knownMetric(32.4),
         unit: "",
         reference: "设计基准 30.0",
       },
       {
         name: "空气系统",
         metric: "单位风量功率",
-        value: 0.42,
+        value: knownMetric(0.42),
         unit: "W/(m³/h)",
         reference: "设计基准 0.50",
       },

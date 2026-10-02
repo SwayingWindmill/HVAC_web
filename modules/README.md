@@ -9,13 +9,13 @@ Current migrated modules:
 - `workorder/` — Work Order runtime/lifecycle implementation, PostgreSQL migrations/testdata and the explicit `work-order-owner` owner-split entrypoint.
 - `registry/` — Tenant/Site, Space/Asset and Device/Product/Point registry ownership, private read/write boundary and the explicit `registry-owner` owner-split entrypoint.
 - `iam/` — Principal/capability authorization, tenant/site policy, delegation and reconciliation ownership with the explicit `iam-owner` owner-split entrypoint.
-- `command/` — Cloud command intent/governance/approval authority, durable command migrations, IoT dispatch/reported-state verification and MQTT execution packages, plus the explicit `command-owner` owner-split entrypoint. Phase 1 executes the IoT-side packages through `cmd/iot-service`.
+- `command/` — Cloud command intent/governance/approval authority, durable command migrations, IoT dispatch/reported-state verification and MQTT execution packages, plus the explicit `command-owner` owner-split entrypoint. Phase 1 executes the IoT-side packages through `cmd/connectivity`.
 - `telemetry/` — Telemetry ingest/current-state/history/query ownership, generated Telemetry API, bounded analytics query adapters, the `telemetry-query-owner` owner-split entrypoint and history projector. Default runtime executes through `cmd/telemetry-worker`.
 - `metric/` — Metric version/binding/calculation/result/publication and durable Metric job execution. Default runtime executes through `cmd/metric-worker`.
 - `energy/` — Energy Processing ownership: MeterBinding resolution, canonical Counter Delta to Energy Fact projection, rebuild/correction evidence and the explicit `energy-projector` build entrypoint. Default Phase 1 execution is composed into `cmd/telemetry-worker`.
 - `scheduler/` — Durable schedule scanning, claim coordination and scheduler statistics. Default runtime executes through `cmd/scheduler`.
 - `maintenance/` — Operational maintenance jobs such as certificate expiry scans, dead-job disposition and tenant retirement. Default runtime executes through `cmd/maintenance-worker`; `maintenance-admin` remains an explicit admin entrypoint inside the same module.
-- `iot/` — MQTT ingress, connectivity/Edge Fleet state and IoT protocol execution used by the canonical `cmd/iot-service` composition root. Telemetry and Command authority remain in their own modules.
+- `iot/` — MQTT ingress, connectivity/Edge Fleet state and IoT protocol execution used by the canonical `cmd/connectivity` composition root. Telemetry and Command authority remain in their own modules.
 
 ## Rules
 
