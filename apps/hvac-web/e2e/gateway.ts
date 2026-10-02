@@ -51,6 +51,7 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/dashboard-summary`) return { body: fixture('dashboard-summary.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: fixture('snapshots.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
 
