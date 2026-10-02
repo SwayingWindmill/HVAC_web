@@ -18,10 +18,10 @@ const (
 func TestEvaluateCanonicalPresenceFreshnessAndQuality(t *testing.T) {
 	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
 	base := DeviceFacts{
-		DeviceID:             deviceA,
-		TenantID: tenantA,
-		SiteID:               siteA,
-		Applicability:        telemetryapi.PresenceApplicabilityApplicable,
+		DeviceID:      deviceA,
+		TenantID:      tenantA,
+		SiteID:        siteA,
+		Applicability: telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy: &PresencePolicy{
 			Revision: 2, OnlineWithin: time.Minute, OfflineAfter: 3 * time.Minute,
 		},

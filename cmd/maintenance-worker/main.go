@@ -38,11 +38,11 @@ func main() {
 		workerID = "maintenance-service:" + hostname
 	}
 	worker := &maintenance.Worker{
-		Store: store,
-		WorkerID: workerID,
-		Batch: integerEnv("MAINTENANCE_CLAIM_BATCH", 10, 1, 100),
+		Store:         store,
+		WorkerID:      workerID,
+		Batch:         integerEnv("MAINTENANCE_CLAIM_BATCH", 10, 1, 100),
 		LeaseDuration: durationEnv("MAINTENANCE_LEASE_DURATION", 30*time.Second, 5*time.Second, 10*time.Minute),
-		Logger: logger,
+		Logger:        logger,
 	}
 	scanInterval := durationEnv("MAINTENANCE_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
 

@@ -79,9 +79,9 @@ type localDeviceCatalog struct {
 type localDeviceProjection struct {
 	TenantID string `json:"tenantId"`
 	SiteID   string `json:"siteId"`
-	DeviceID       string `json:"deviceId"`
-	Name           string `json:"name"`
-	Type           string `json:"type"`
+	DeviceID string `json:"deviceId"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
 }
 
 type localDeviceProjectionCatalog struct {
@@ -123,11 +123,11 @@ type internalCreateCommandRequest struct {
 }
 
 type internalApproveCommandRequest struct {
-	TenantID string `json:"tenantId"`
-	SiteID   string `json:"siteId"`
-	DeviceID       string `json:"deviceId"`
-	PrincipalID    string `json:"principalId"`
-	ApproverRole   string `json:"approverRole"`
+	TenantID     string `json:"tenantId"`
+	SiteID       string `json:"siteId"`
+	DeviceID     string `json:"deviceId"`
+	PrincipalID  string `json:"principalId"`
+	ApproverRole string `json:"approverRole"`
 }
 
 type commandProjection struct {
@@ -322,7 +322,7 @@ func (g *gateway) principal(writer http.ResponseWriter, _ *http.Request) {
 		"context": map[string]any{
 			"initiatingPrincipal":       principal,
 			"executingServicePrincipal": map[string]string{"service": "platform-gateway", "spiffeId": g.config.gatewaySPIFFE},
-			"tenantId":                   g.config.tenantID, "audience": "iam-service", "policyRevision": g.config.policyRevision,
+			"tenantId":                  g.config.tenantID, "audience": "iam-service", "policyRevision": g.config.policyRevision,
 			"delegationExpiresAt": expires.Format(time.RFC3339Nano),
 		},
 		"session": map[string]any{
@@ -338,9 +338,9 @@ func (g *gateway) localDevices(writer http.ResponseWriter, _ *http.Request) {
 		devices = append(devices, localDeviceProjection{
 			TenantID: device.TenantID,
 			SiteID:   device.SiteID,
-			DeviceID:       device.DeviceID,
-			Name:           device.Name,
-			Type:           device.Type,
+			DeviceID: device.DeviceID,
+			Name:     device.Name,
+			Type:     device.Type,
 		})
 	}
 	writeJSON(writer, http.StatusOK, localDeviceProjectionCatalog{SchemaVersion: 1, Devices: devices})
@@ -414,8 +414,8 @@ func (g *gateway) getCommand(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 	g.proxyJSON(writer, request, http.MethodGet, "/internal/v1/commands/"+url.PathEscape(commandID), nil, map[string]string{
-		"X-Command-Read-Context":   delegation,
-		"X-Tenant-ID": g.config.tenantID,
+		"X-Command-Read-Context": delegation,
+		"X-Tenant-ID":            g.config.tenantID,
 	})
 }
 
@@ -451,11 +451,11 @@ func (g *gateway) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	upstream := internalApproveCommandRequest{
-		TenantID: g.config.tenantID,
-		SiteID:   g.config.siteID,
-		DeviceID:       projection.DeviceID,
-		PrincipalID:    g.config.approverID,
-		ApproverRole:   "s3-local-independent-approver",
+		TenantID:     g.config.tenantID,
+		SiteID:       g.config.siteID,
+		DeviceID:     projection.DeviceID,
+		PrincipalID:  g.config.approverID,
+		ApproverRole: "s3-local-independent-approver",
 	}
 	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands/"+url.PathEscape(commandID)+"/approve", upstream, map[string]string{"X-Command-Grant": grant})
 }
@@ -547,22 +547,22 @@ func (g *gateway) signReadDelegation(commandID string) (string, error) {
 		return "", err
 	}
 	return identitycontext.SignDelegation(g.config.delegationSigner, identitycontext.DelegationClaims{
-		Issuer:               g.config.gatewaySPIFFE,
-		Subject:              g.config.principalID,
-		SubjectIssuer:        "https://s3-local.invalid",
-		DisplayName:          "S3 Local Operator",
-		Email:                "s3-local@example.invalid",
-		Roles:                []string{"ops"},
-		ExecutingService:     g.config.gatewaySPIFFE,
-		Audience:             g.config.commandAudience,
-		TenantID:             g.config.tenantID,
-		Actions:              []string{"command:read"},
-		Scopes:               []string{"tenant:" + g.config.tenantID, "command:" + commandID},
-		PolicyRevision:       g.config.policyRevision,
-		SessionID:            "s3-local-session",
-		IssuedAt:             now.Unix(),
-		ExpiresAt:            now.Add(30 * time.Second).Unix(),
-		TokenID:              tokenID,
+		Issuer:           g.config.gatewaySPIFFE,
+		Subject:          g.config.principalID,
+		SubjectIssuer:    "https://s3-local.invalid",
+		DisplayName:      "S3 Local Operator",
+		Email:            "s3-local@example.invalid",
+		Roles:            []string{"ops"},
+		ExecutingService: g.config.gatewaySPIFFE,
+		Audience:         g.config.commandAudience,
+		TenantID:         g.config.tenantID,
+		Actions:          []string{"command:read"},
+		Scopes:           []string{"tenant:" + g.config.tenantID, "command:" + commandID},
+		PolicyRevision:   g.config.policyRevision,
+		SessionID:        "s3-local-session",
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        now.Add(30 * time.Second).Unix(),
+		TokenID:          tokenID,
 	})
 }
 

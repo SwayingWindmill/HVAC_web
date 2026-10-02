@@ -26,7 +26,7 @@ func (store *commandReportedStateStore) EvaluateAndRead(_ context.Context, targe
 	sampledAt := telemetryapi.Instant(evaluatedAt.Add(time.Second).Format(time.RFC3339Nano))
 	return SnapshotCommit{Snapshot: telemetryapi.DeviceObservationSnapshot{
 		SchemaVersion: 1,
-		TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(deviceA),
+		TenantId:      telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(deviceA),
 		BusinessRevision: 9, EvaluatedAt: telemetryapi.Instant(evaluatedAt.Format(time.RFC3339Nano)),
 		EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		Presence:               telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state},

@@ -155,4 +155,3 @@ func TestDirectAlarmAdapterResolvesAndExecutes(t *testing.T) {
 		t.Fatal("empty ack response")
 	}
 }
-

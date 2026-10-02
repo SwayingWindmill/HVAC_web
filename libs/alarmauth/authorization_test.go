@@ -4,8 +4,8 @@ import "testing"
 
 const (
 	testTenantID = "01910000-0000-7000-8000-000000000001"
-	testSiteID         = "01910000-0001-7000-8000-000000000001"
-	testAlarmID        = "01910000-1000-7000-8000-000000000001"
+	testSiteID   = "01910000-0001-7000-8000-000000000001"
+	testAlarmID  = "01910000-1000-7000-8000-000000000001"
 )
 
 func TestDecisionRequestRequiresReadAndAckShape(t *testing.T) {

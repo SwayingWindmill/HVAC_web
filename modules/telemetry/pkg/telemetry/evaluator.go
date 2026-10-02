@@ -47,17 +47,17 @@ type LatestObservation struct {
 }
 
 type DeviceFacts struct {
-	DeviceID      string
-	TenantID      string
-	SiteID        string
-	Applicability        telemetryapi.PresenceApplicability
-	PresencePolicy       *PresencePolicy
-	Coverage             Coverage
-	PresenceSignals      []PresenceSignal
-	LastKnownPresence    *telemetryapi.LastKnownPresence
-	FreshnessPolicies    map[string]FreshnessPolicy
-	Latest               map[string]LatestObservation
-	RejectedKeys         map[string]bool
+	DeviceID          string
+	TenantID          string
+	SiteID            string
+	Applicability     telemetryapi.PresenceApplicability
+	PresencePolicy    *PresencePolicy
+	Coverage          Coverage
+	PresenceSignals   []PresenceSignal
+	LastKnownPresence *telemetryapi.LastKnownPresence
+	FreshnessPolicies map[string]FreshnessPolicy
+	Latest            map[string]LatestObservation
+	RejectedKeys      map[string]bool
 }
 
 type CanonicalEvaluation struct {

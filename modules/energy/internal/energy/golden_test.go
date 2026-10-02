@@ -14,15 +14,15 @@ type phase1GoldenDataset struct {
 }
 
 type phase1GoldenCase struct {
-	Name                   string     `json:"name"`
-	TransitionType         string     `json:"transitionType"`
-	DeltaValueKWh          *float64   `json:"deltaValueKWh"`
-	CurrentQuality         string     `json:"currentQuality"`
-	CurrentQualityReasons  []string   `json:"currentQualityReasons"`
-	ExpectFact             bool       `json:"expectFact"`
-	ExpectedEnergyKWh      float64    `json:"expectedEnergyKWh"`
-	ExpectedQuality        string     `json:"expectedQuality"`
-	ExpectedQualityReasons []string   `json:"expectedQualityReasons"`
+	Name                   string   `json:"name"`
+	TransitionType         string   `json:"transitionType"`
+	DeltaValueKWh          *float64 `json:"deltaValueKWh"`
+	CurrentQuality         string   `json:"currentQuality"`
+	CurrentQualityReasons  []string `json:"currentQualityReasons"`
+	ExpectFact             bool     `json:"expectFact"`
+	ExpectedEnergyKWh      float64  `json:"expectedEnergyKWh"`
+	ExpectedQuality        string   `json:"expectedQuality"`
+	ExpectedQualityReasons []string `json:"expectedQualityReasons"`
 }
 
 func TestPhase1EnergyGoldenDataset(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
+	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 )
 
 type routingRuntime struct {

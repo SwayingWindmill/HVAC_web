@@ -21,29 +21,29 @@ type TelemetryGrantStore interface {
 }
 
 type telemetryGrantConsumeRequest struct {
-	DelegationGrant      string                 `json:"delegationGrant"`
-	PrincipalID          string                 `json:"principalId"`
-	SessionID            string                 `json:"sessionId"`
-	TenantID string                 `json:"tenantId"`
-	Action               telemetryauth.Action   `json:"action"`
-	Targets              []telemetryauth.Target `json:"targets"`
+	DelegationGrant string                 `json:"delegationGrant"`
+	PrincipalID     string                 `json:"principalId"`
+	SessionID       string                 `json:"sessionId"`
+	TenantID        string                 `json:"tenantId"`
+	Action          telemetryauth.Action   `json:"action"`
+	Targets         []telemetryauth.Target `json:"targets"`
 }
 
 type telemetryGrantAcceptance struct {
-	TokenID              string               `json:"tokenId"`
-	PrincipalID          string               `json:"principalId"`
-	SessionID            string               `json:"sessionId"`
-	TenantID string               `json:"tenantId"`
-	Action               telemetryauth.Action `json:"action"`
-	ScopeDigest          string               `json:"scopeDigest"`
-	PolicyRevision       string               `json:"policyRevision"`
-	ExpiresAt            int64                `json:"expiresAt"`
+	TokenID        string               `json:"tokenId"`
+	PrincipalID    string               `json:"principalId"`
+	SessionID      string               `json:"sessionId"`
+	TenantID       string               `json:"tenantId"`
+	Action         telemetryauth.Action `json:"action"`
+	ScopeDigest    string               `json:"scopeDigest"`
+	PolicyRevision string               `json:"policyRevision"`
+	ExpiresAt      int64                `json:"expiresAt"`
 }
 
 type telemetryRevocationPollRequest struct {
-	TenantID string `json:"tenantId"`
-	AfterSequence        int64  `json:"afterSequence"`
-	Limit                int    `json:"limit"`
+	TenantID      string `json:"tenantId"`
+	AfterSequence int64  `json:"afterSequence"`
+	Limit         int    `json:"limit"`
 }
 
 type telemetryRevocationPollResponse struct {

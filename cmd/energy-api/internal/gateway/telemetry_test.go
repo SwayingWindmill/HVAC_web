@@ -23,12 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 )
 
 const (

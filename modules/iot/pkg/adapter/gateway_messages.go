@@ -83,12 +83,12 @@ type HeartbeatPayload struct {
 	CPUPercent       *float64 `json:"cpuPercent,omitempty"`
 	MemoryPercent    *float64 `json:"memoryPercent,omitempty"`
 	DiskPercent      *float64 `json:"diskPercent,omitempty"`
-	Temperature     *float64 `json:"temperature,omitempty"`
-	SoftwareVersion string   `json:"softwareVersion,omitempty"`
-	ConfigVersion   string   `json:"configVersion,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	SoftwareVersion  string   `json:"softwareVersion,omitempty"`
+	ConfigVersion    string   `json:"configVersion,omitempty"`
 	ConnectedDevices []string `json:"connectedDevices,omitempty"`
 	OfflineDevices   []string `json:"offlineDevices,omitempty"`
-	PendingMessages *uint64  `json:"pendingMessages,omitempty"`
+	PendingMessages  *uint64  `json:"pendingMessages,omitempty"`
 }
 
 type EventEnvelope struct {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -19,7 +20,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 )
 
 const (

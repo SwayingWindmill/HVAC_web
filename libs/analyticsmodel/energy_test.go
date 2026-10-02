@@ -12,14 +12,14 @@ const (
 
 func TestEnergySeriesQueryValidatesProductBoundary(t *testing.T) {
 	query := EnergySeriesQuery{
-		TenantID:       testTenantID,
-		SiteID:         testSiteID,
-		EnergyType:     EnergyTypeElectricity,
-		Granularity:    GranularityDay,
-		Timezone:       "Asia/Shanghai",
-		From:           time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-		To:             time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
-		QualityPolicy:  QualityPolicyValidAndSuspect,
+		TenantID:      testTenantID,
+		SiteID:        testSiteID,
+		EnergyType:    EnergyTypeElectricity,
+		Granularity:   GranularityDay,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		QualityPolicy: QualityPolicyValidAndSuspect,
 	}
 	if err := query.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -28,14 +28,14 @@ func TestEnergySeriesQueryValidatesProductBoundary(t *testing.T) {
 
 func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 	valid := EnergySeriesQuery{
-		TenantID:       testTenantID,
-		SiteID:         testSiteID,
-		EnergyType:     EnergyTypeElectricity,
-		Granularity:    GranularityDay,
-		Timezone:       "Asia/Shanghai",
-		From:           time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		To:             time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
-		QualityPolicy:  QualityPolicyValidOnly,
+		TenantID:      testTenantID,
+		SiteID:        testSiteID,
+		EnergyType:    EnergyTypeElectricity,
+		Granularity:   GranularityDay,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		QualityPolicy: QualityPolicyValidOnly,
 	}
 	tests := []struct {
 		name   string
@@ -64,14 +64,14 @@ func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 
 func TestEnergySeriesScopeDigestBindsTenantSiteAndQueryKind(t *testing.T) {
 	query := EnergySeriesQuery{
-		TenantID:       testTenantID,
-		SiteID:         testSiteID,
-		EnergyType:     EnergyTypeElectricity,
-		Granularity:    GranularityHour,
-		Timezone:       "Asia/Shanghai",
-		From:           time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-		To:             time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
-		QualityPolicy:  QualityPolicyValidOnly,
+		TenantID:      testTenantID,
+		SiteID:        testSiteID,
+		EnergyType:    EnergyTypeElectricity,
+		Granularity:   GranularityHour,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+		QualityPolicy: QualityPolicyValidOnly,
 	}
 	digest, err := query.ScopeDigest()
 	if err != nil {

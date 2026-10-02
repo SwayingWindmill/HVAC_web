@@ -8,20 +8,20 @@ import (
 )
 
 type TelemetryDecisionAudit struct {
-	PrincipalID          string
-	TenantID string
-	Action               telemetryauth.Action
-	Allowed              bool
-	TargetCount          int
-	KeyCount             int
-	ScopeDigest          string
-	PolicyRevision       string
-	ReasonCode           telemetryauth.ReasonCode
-	GrantSigned          bool
-	DeliveryCode         string
-	RequestID            string
-	TraceID              string
-	OccurredAt           string
+	PrincipalID    string
+	TenantID       string
+	Action         telemetryauth.Action
+	Allowed        bool
+	TargetCount    int
+	KeyCount       int
+	ScopeDigest    string
+	PolicyRevision string
+	ReasonCode     telemetryauth.ReasonCode
+	GrantSigned    bool
+	DeliveryCode   string
+	RequestID      string
+	TraceID        string
+	OccurredAt     string
 }
 
 type TelemetryDecisionAuditSink interface {

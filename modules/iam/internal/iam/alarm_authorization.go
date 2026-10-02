@@ -8,13 +8,13 @@ import (
 )
 
 type AlarmPermission struct {
-	TenantID string
-	SiteID   string
-	Action         alarmauth.Action
-	Effect         BindingEffect
-	Status         FactStatus
-	ValidFrom      time.Time
-	ValidTo        *time.Time
+	TenantID  string
+	SiteID    string
+	Action    alarmauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type AlarmAuthorizationFacts struct {

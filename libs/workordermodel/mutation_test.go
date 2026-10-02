@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	mutationTenantID = "01930000-0000-7000-8000-000000000001"
-	mutationSiteID         = "01930000-0001-7000-8000-000000000001"
-	mutationWorkOrderID    = "01930000-1000-7000-8000-000000000001"
-	mutationAlarmID        = "01930000-2000-7000-8000-000000000001"
+	mutationTenantID    = "01930000-0000-7000-8000-000000000001"
+	mutationSiteID      = "01930000-0001-7000-8000-000000000001"
+	mutationWorkOrderID = "01930000-1000-7000-8000-000000000001"
+	mutationAlarmID     = "01930000-2000-7000-8000-000000000001"
 )
 
 func TestCreateBuildsServerOwnedOpenProjection(t *testing.T) {

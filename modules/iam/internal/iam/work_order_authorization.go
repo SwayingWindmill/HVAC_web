@@ -8,24 +8,24 @@ import (
 )
 
 type WorkOrderPermission struct {
-	TenantID string
-	SiteID   string
-	Action         workorderauth.Action
-	Effect         BindingEffect
-	Status         FactStatus
-	ValidFrom      time.Time
-	ValidTo        *time.Time
+	TenantID  string
+	SiteID    string
+	Action    workorderauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type WorkOrderOwnershipTarget struct {
-	TenantID string
-	SiteID   string
-	TargetType     string
-	TargetID       string
-	Effect         BindingEffect
-	Status         FactStatus
-	ValidFrom      time.Time
-	ValidTo        *time.Time
+	TenantID   string
+	SiteID     string
+	TargetType string
+	TargetID   string
+	Effect     BindingEffect
+	Status     FactStatus
+	ValidFrom  time.Time
+	ValidTo    *time.Time
 }
 
 type WorkOrderAuthorizationFacts struct {

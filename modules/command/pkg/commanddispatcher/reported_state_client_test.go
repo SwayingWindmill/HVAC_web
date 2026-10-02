@@ -19,9 +19,9 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"schemaVersion":  1,
-			"evidenceId":     "s2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"tenantId": "org-1", "siteId": "site-1", "deviceId": "device-1",
+			"schemaVersion": 1,
+			"evidenceId":    "s2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"tenantId":      "org-1", "siteId": "site-1", "deviceId": "device-1",
 			"evaluationAvailability": "AVAILABLE", "presence": "ONLINE", "readiness": "CURRENT",
 			"freshness": "FRESH", "quality": "GOOD", "businessRevision": 19,
 			"reportedValue": map[string]any{"number": 22.5}, "observedAt": observedAt, "reportedStateKey": "zone.temperature_setpoint",

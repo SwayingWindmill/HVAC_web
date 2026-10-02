@@ -18,7 +18,7 @@ func TestPostgresATV630ReleaseCandidatePublishesImmutableDeviceTemplate(t *testi
 	references := map[string]string{
 		"embeddedEthernetManual":  "EAV64327 v03",
 		"communicationParameters": "EAV64332 v4.6 (2026-05-01)",
-		"protocolConformance":      "HVAC_web#339 production Bridge + ATV630 DeviceAdapter + Virtual ATV630 real TCP",
+		"protocolConformance":     "HVAC_web#339 production Bridge + ATV630 DeviceAdapter + Virtual ATV630 real TCP",
 	}
 	payload := map[string]any{
 		"schemaVersion":     1,

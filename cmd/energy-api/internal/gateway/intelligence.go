@@ -20,8 +20,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
-
-
 )
 
 const (

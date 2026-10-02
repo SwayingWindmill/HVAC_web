@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/oidctest"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/testpki"
 	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 )
 
 const authFixtureTenantID = "018f3d00-0000-7000-8000-000000000001"

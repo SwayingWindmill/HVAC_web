@@ -31,13 +31,13 @@ type RuntimeConfig struct {
 }
 
 type Runtime struct {
-	Service        string
-	Tracer         *Tracer
-	Metrics        *Registry
-	async          *AsyncExporter
-	dependencies   []Dependency
-	ready          atomic.Bool
-	started        time.Time
+	Service      string
+	Tracer       *Tracer
+	Metrics      *Registry
+	async        *AsyncExporter
+	dependencies []Dependency
+	ready        atomic.Bool
+	started      time.Time
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -52,9 +52,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	return &Runtime{
 		Service: config.Service,
 		Tracer:  NewTracer(config.Service, async),
-		Metrics:        NewRegistry(),
-		async:          async,
-		started:        time.Now().UTC(),
+		Metrics: NewRegistry(),
+		async:   async,
+		started: time.Now().UTC(),
 	}
 }
 

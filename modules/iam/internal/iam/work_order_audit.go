@@ -8,19 +8,19 @@ import (
 )
 
 type WorkOrderDecisionAudit struct {
-	PrincipalID          string
-	TenantID string
-	SiteID               string
-	WorkOrderID          string
-	AssigneeID           *string
-	TeamID               *string
-	Action               workorderauth.Action
-	Allowed              bool
-	PolicyRevision       string
-	ReasonCode           workorderauth.ReasonCode
-	RequestID            string
-	TraceID              string
-	OccurredAt           string
+	PrincipalID    string
+	TenantID       string
+	SiteID         string
+	WorkOrderID    string
+	AssigneeID     *string
+	TeamID         *string
+	Action         workorderauth.Action
+	Allowed        bool
+	PolicyRevision string
+	ReasonCode     workorderauth.ReasonCode
+	RequestID      string
+	TraceID        string
+	OccurredAt     string
 }
 
 type WorkOrderDecisionAuditSink interface {

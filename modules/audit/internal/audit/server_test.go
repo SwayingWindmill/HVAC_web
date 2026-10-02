@@ -20,7 +20,7 @@ func TestAuditQueryRequiresWorkloadAndTenantScopedDelegation(t *testing.T) {
 	harness := newAuditHarness(t)
 	record := audit.Record{
 		LedgerSequence: 1, MessageID: "message-01", SchemaVersion: 1,
-		TenantID: "tenant-01",
+		TenantID:      "tenant-01",
 		AggregateType: "bff-session", AggregateID: "session-01", AggregateVersion: 1,
 		OccurredAt: harness.now, InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test",
 		ExecutingService: "platform-gateway", ExecutingSPIFFEID: harness.spiffeID,

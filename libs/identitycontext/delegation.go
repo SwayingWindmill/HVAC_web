@@ -31,24 +31,24 @@ type ServicePrincipal struct {
 }
 
 type DelegationClaims struct {
-	Version              int      `json:"version"`
-	Issuer               string   `json:"issuer"`
-	Subject              string   `json:"subject"`
-	SubjectIssuer        string   `json:"subjectIssuer"`
-	PrincipalID          string   `json:"principalId,omitempty"`
-	DisplayName          string   `json:"displayName"`
-	Email                string   `json:"email"`
-	Roles                []string `json:"roles"`
-	ExecutingService     string   `json:"executingService"`
-	Audience             string   `json:"audience"`
-	TenantID             string   `json:"tenantId"`
-	Actions              []string `json:"actions"`
-	Scopes               []string `json:"scopes"`
-	PolicyRevision       string   `json:"policyRevision"`
-	SessionID            string   `json:"sessionId"`
-	IssuedAt             int64    `json:"issuedAt"`
-	ExpiresAt            int64    `json:"expiresAt"`
-	TokenID              string   `json:"tokenId"`
+	Version          int      `json:"version"`
+	Issuer           string   `json:"issuer"`
+	Subject          string   `json:"subject"`
+	SubjectIssuer    string   `json:"subjectIssuer"`
+	PrincipalID      string   `json:"principalId,omitempty"`
+	DisplayName      string   `json:"displayName"`
+	Email            string   `json:"email"`
+	Roles            []string `json:"roles"`
+	ExecutingService string   `json:"executingService"`
+	Audience         string   `json:"audience"`
+	TenantID         string   `json:"tenantId"`
+	Actions          []string `json:"actions"`
+	Scopes           []string `json:"scopes"`
+	PolicyRevision   string   `json:"policyRevision"`
+	SessionID        string   `json:"sessionId"`
+	IssuedAt         int64    `json:"issuedAt"`
+	ExpiresAt        int64    `json:"expiresAt"`
+	TokenID          string   `json:"tokenId"`
 }
 
 type PrincipalContext struct {

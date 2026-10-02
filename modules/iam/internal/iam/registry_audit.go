@@ -8,18 +8,18 @@ import (
 )
 
 type RegistryDecisionAudit struct {
-	PrincipalID          string
-	TenantID string
-	Action               registryauth.Action
-	Allowed              bool
-	AllowedSiteIDs       []string
-	DeniedSiteIDs        []string
-	PolicyRevision         string
-	ReasonCode             registryauth.ReasonCode
-	GrantSigned            bool
-	DeliveryCode           string
-	TraceID                string
-	OccurredAt             string
+	PrincipalID    string
+	TenantID       string
+	Action         registryauth.Action
+	Allowed        bool
+	AllowedSiteIDs []string
+	DeniedSiteIDs  []string
+	PolicyRevision string
+	ReasonCode     registryauth.ReasonCode
+	GrantSigned    bool
+	DeliveryCode   string
+	TraceID        string
+	OccurredAt     string
 }
 
 type RegistryDecisionAuditSink interface {

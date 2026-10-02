@@ -18,16 +18,16 @@ const cursorVersion = 1
 type cursorCodec struct{ secret []byte }
 
 type cursorPayload struct {
-	Version        int                     `json:"version"`
-	TenantID string                  `json:"tenantId"`
-	SiteID         string                  `json:"siteId"`
-	Status         workordermodel.Status   `json:"status,omitempty"`
-	Priority       workordermodel.Priority `json:"priority,omitempty"`
-	AssigneeID     string                  `json:"assigneeId,omitempty"`
-	SourceDomain   workordermodel.SourceDomain `json:"sourceDomain,omitempty"`
-	SourceRef      string                  `json:"sourceRef,omitempty"`
-	UpdatedAt      string                  `json:"updatedAt"`
-	WorkOrderID    string                  `json:"workOrderId"`
+	Version      int                         `json:"version"`
+	TenantID     string                      `json:"tenantId"`
+	SiteID       string                      `json:"siteId"`
+	Status       workordermodel.Status       `json:"status,omitempty"`
+	Priority     workordermodel.Priority     `json:"priority,omitempty"`
+	AssigneeID   string                      `json:"assigneeId,omitempty"`
+	SourceDomain workordermodel.SourceDomain `json:"sourceDomain,omitempty"`
+	SourceRef    string                      `json:"sourceRef,omitempty"`
+	UpdatedAt    string                      `json:"updatedAt"`
+	WorkOrderID  string                      `json:"workOrderId"`
 }
 
 type cursorPosition struct {

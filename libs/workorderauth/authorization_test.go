@@ -3,9 +3,9 @@ package workorderauth
 import "testing"
 
 const (
-	testTenantID = "01910000-0000-7000-8000-000000000001"
-	testSiteID         = "01910000-0001-7000-8000-000000000001"
-	testWorkOrderID    = "01910000-5000-7000-8000-000000000001"
+	testTenantID    = "01910000-0000-7000-8000-000000000001"
+	testSiteID      = "01910000-0001-7000-8000-000000000001"
+	testWorkOrderID = "01910000-5000-7000-8000-000000000001"
 )
 
 func TestDecisionRequestRequiresExactScopeForAction(t *testing.T) {
@@ -18,7 +18,7 @@ func TestDecisionRequestRequiresExactScopeForAction(t *testing.T) {
 		"list with Work Order":      {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, WorkOrderID: testWorkOrderID, Action: ActionList}, false},
 		"detail without Work Order": {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: ActionRead}, false},
 		"unsupported action":        {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: "work-order:write"}, false},
-		"invalid Tenant":      {DecisionRequest{TenantID: "organization", SiteID: testSiteID, Action: ActionList}, false},
+		"invalid Tenant":            {DecisionRequest{TenantID: "organization", SiteID: testSiteID, Action: ActionList}, false},
 		"invalid Site":              {DecisionRequest{TenantID: testTenantID, SiteID: "site", Action: ActionList}, false},
 	}
 	for name, test := range tests {

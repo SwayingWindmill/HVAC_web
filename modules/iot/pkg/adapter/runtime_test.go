@@ -188,7 +188,7 @@ func newProcessingTestRuntime(t *testing.T, client RuntimeClient, capacity int) 
 			CAFile:       "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local",
 			KeepAliveSeconds: 30, SessionExpirySeconds: 3600, ConnectTimeoutSeconds: 5,
 		},
-		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		TelemetryRuntime:  TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
 		RuntimeGatewayIDs: []string{runtimeGatewayA, runtimeGatewayB}, ProcessingQueueCapacity: capacity,
 	}
 	runtime, err := NewRuntime(config, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())

@@ -133,11 +133,11 @@ LIMIT 1000`)
 	}
 	defer rows.Close()
 	type dead struct {
-		jobID      string
-		tenantID   string
-		jobType    string
-		errorCode  string
-		completed  time.Time
+		jobID     string
+		tenantID  string
+		jobType   string
+		errorCode string
+		completed time.Time
 	}
 	var jobs []dead
 	for rows.Next() {
