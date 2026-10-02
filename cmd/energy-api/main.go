@@ -176,6 +176,18 @@ func main() {
 			logger.Error("gateway_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
+	internal, err := loadGatewayInternalServer(handler)
+	if err != nil {
+		logger.Error("gateway_internal_config_invalid", "error_code", "GATEWAY_INTERNAL_CONFIG_INVALID")
+		os.Exit(1)
+	}
+	if internal != nil {
+		go func() {
+			if err := internal.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("gateway_internal_failed", "error_code", "GATEWAY_INTERNAL_SERVE_FAILED")
+			}
+		}()
+	}
 
 	shutdownSignal := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
@@ -189,6 +201,9 @@ func main() {
 			logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED")
 		}
 		embeddedServices.Shutdown(ctx)
+		if internal != nil {
+			_ = internal.Shutdown(ctx)
+		}
 		_ = diagnostics.Shutdown(ctx)
 		_ = telemetry.Shutdown(ctx)
 	}()
@@ -359,6 +374,44 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		AuditHTTPClient: auditClient,
 		OIDCHTTPClient:  oidcClient,
 	}, &certificate, closeStore, nil
+}
+
+// loadGatewayInternalServer serves the routes other workloads call on the Gateway (the
+// Operations Agent's Tool authorization) on a listener that requires a verified workload
+// certificate. Browser traffic stays on the public listener.
+func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
+	address := strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_ADDR"))
+	if address == "" {
+		return nil, nil
+	}
+	certificate, err := tls.LoadX509KeyPair(os.Getenv("GATEWAY_INTERNAL_CERT"), os.Getenv("GATEWAY_INTERNAL_KEY"))
+	if err != nil {
+		return nil, err
+	}
+	clientCAs, err := loadCertPool(os.Getenv("GATEWAY_INTERNAL_CLIENT_CA"), "Gateway internal client CA")
+	if err != nil {
+		return nil, err
+	}
+	return &http.Server{
+		Addr: address,
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != gateway.InternalOperationsToolAuthorizationPath {
+				http.NotFound(writer, request)
+				return
+			}
+			handler.ServeHTTP(writer, request)
+		}),
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{certificate},
+			ClientCAs:    clientCAs,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+		},
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}, nil
 }
 
 func loadGatewayServerTLSConfig() (*tls.Config, bool, error) {

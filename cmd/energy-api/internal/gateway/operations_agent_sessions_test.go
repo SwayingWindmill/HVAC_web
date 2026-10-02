@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func agentSessionSnapshotFixture() map[string]any {
@@ -171,5 +173,35 @@ func TestSanitizeAgentSessionProblemRejectsProviderOrCredentialFields(t *testing
 	}
 	if _, err := sanitizeAgentSessionProblem(valid, http.StatusBadRequest); err == nil {
 		t.Fatal("Agent Session problem with mismatched HTTP status was accepted")
+	}
+}
+
+func TestAgentSessionEventStreamOutlivesTheServerWriteTimeout(t *testing.T) {
+	snapshot := "event: session.snapshot\ndata: " + string(agentSessionEventFixture("session.snapshot", map[string]any{"snapshot": agentSessionSnapshotFixture()}, nil)) + "\n\n"
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		upstream, feed := io.Pipe()
+		go func() {
+			_, _ = feed.Write([]byte(snapshot))
+			time.Sleep(300 * time.Millisecond)
+			_, _ = feed.Write([]byte(snapshot))
+			_ = feed.Close()
+		}()
+		_, _ = forwardAgentSessionEventStream(&statusRecorder{ResponseWriter: writer, status: http.StatusOK}, upstream)
+	}))
+	server.Config.WriteTimeout = 100 * time.Millisecond
+	server.Start()
+	defer server.Close()
+
+	response, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("stream was cut off: %v", err)
+	}
+	if got := strings.Count(string(body), "event: session.snapshot"); got != 2 {
+		t.Fatalf("expected both events after the write timeout, got %d", got)
 	}
 }

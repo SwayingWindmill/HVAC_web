@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -63,7 +64,7 @@ func matchPublicAgentSessionRoute(path string) (publicAgentSessionRoute, bool) {
 			kind: "STREAM", template: PublicAgentSessionEventsPathTemplate,
 			siteID: siteID, sessionID: sessionID,
 			internalPath: internalBase + "/" + url.PathEscape(sessionID) + "/events",
-			method: http.MethodGet,
+			method:       http.MethodGet,
 		}, true
 	}
 	if len(parts) != 4 || parts[3] == "" {
@@ -91,7 +92,7 @@ func matchPublicAgentSessionRoute(path string) (publicAgentSessionRoute, bool) {
 	return publicAgentSessionRoute{
 		kind: kind, template: template, siteID: siteID, sessionID: sessionID,
 		internalPath: internalBase + "/" + url.PathEscape(sessionID) + suffix,
-		method: method, mutation: mutation,
+		method:       method, mutation: mutation,
 	}, true
 }
 
@@ -701,6 +702,9 @@ func forwardAgentSessionEventStream(writer http.ResponseWriter, body io.Reader) 
 			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			writer.Header().Set("Cache-Control", "no-store, no-transform")
 			writer.Header().Set("X-Accel-Buffering", "no")
+			// The server write timeout bounds ordinary responses; an Agent answer streams
+			// for as long as the Run lasts.
+			_ = http.NewResponseController(writer).SetWriteDeadline(time.Time{})
 			writer.WriteHeader(http.StatusOK)
 			started = true
 		}
