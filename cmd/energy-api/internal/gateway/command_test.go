@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -23,8 +25,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 )
 
 func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {

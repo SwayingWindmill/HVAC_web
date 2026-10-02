@@ -60,14 +60,14 @@ func (value QualityPolicy) Valid() bool {
 }
 
 type EnergySeriesQuery struct {
-	TenantID       string        `json:"tenantId"`
-	SiteID         string        `json:"siteId"`
-	EnergyType     EnergyType    `json:"energyType"`
-	Granularity    Granularity   `json:"granularity"`
-	Timezone       string        `json:"timezone"`
-	From           time.Time     `json:"from"`
-	To             time.Time     `json:"to"`
-	QualityPolicy  QualityPolicy `json:"qualityPolicy"`
+	TenantID      string        `json:"tenantId"`
+	SiteID        string        `json:"siteId"`
+	EnergyType    EnergyType    `json:"energyType"`
+	Granularity   Granularity   `json:"granularity"`
+	Timezone      string        `json:"timezone"`
+	From          time.Time     `json:"from"`
+	To            time.Time     `json:"to"`
+	QualityPolicy QualityPolicy `json:"qualityPolicy"`
 }
 
 func (query EnergySeriesQuery) Validate() error {
@@ -106,15 +106,15 @@ func (query EnergySeriesQuery) ScopeDigest() (string, error) {
 		return "", err
 	}
 	payload, err := json.Marshal(struct {
-		Action         string        `json:"action"`
-		TenantID       string        `json:"tenantId"`
-		SiteID         string        `json:"siteId"`
-		EnergyType     EnergyType    `json:"energyType"`
-		Granularity    Granularity   `json:"granularity"`
-		Timezone       string        `json:"timezone"`
-		From           string        `json:"from"`
-		To             string        `json:"to"`
-		QualityPolicy  QualityPolicy `json:"qualityPolicy"`
+		Action        string        `json:"action"`
+		TenantID      string        `json:"tenantId"`
+		SiteID        string        `json:"siteId"`
+		EnergyType    EnergyType    `json:"energyType"`
+		Granularity   Granularity   `json:"granularity"`
+		Timezone      string        `json:"timezone"`
+		From          string        `json:"from"`
+		To            string        `json:"to"`
+		QualityPolicy QualityPolicy `json:"qualityPolicy"`
 	}{
 		Action: EnergySeriesAction, TenantID: query.TenantID, SiteID: query.SiteID,
 		EnergyType: query.EnergyType, Granularity: query.Granularity, Timezone: query.Timezone,

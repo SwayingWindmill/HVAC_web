@@ -9,13 +9,13 @@ import (
 )
 
 const (
-	alarmTestIssuer         = "https://issuer.example"
-	alarmTestSubject        = "subject-alarm"
-	alarmTestPrincipalID    = "principal-alarm"
-	alarmTestTenantID = "01910000-0000-7000-8000-000000000001"
-	alarmTestSiteID         = "01910000-0001-7000-8000-000000000001"
-	alarmTestOtherSiteID    = "01910000-0002-7000-8000-000000000001"
-	alarmTestAlarmID        = "01910000-1000-7000-8000-000000000001"
+	alarmTestIssuer      = "https://issuer.example"
+	alarmTestSubject     = "subject-alarm"
+	alarmTestPrincipalID = "principal-alarm"
+	alarmTestTenantID    = "01910000-0000-7000-8000-000000000001"
+	alarmTestSiteID      = "01910000-0001-7000-8000-000000000001"
+	alarmTestOtherSiteID = "01910000-0002-7000-8000-000000000001"
+	alarmTestAlarmID     = "01910000-1000-7000-8000-000000000001"
 )
 
 func TestEvaluateAlarmAuthorizationAllowsExactSiteAction(t *testing.T) {

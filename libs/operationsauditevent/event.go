@@ -40,7 +40,7 @@ type EventV1 struct {
 	SchemaVersion           int               `json:"schemaVersion"`
 	MessageType             string            `json:"messageType"`
 	Producer                string            `json:"producer"`
-	TenantID                 string            `json:"tenantId"`
+	TenantID                string            `json:"tenantId"`
 	SiteID                  string            `json:"siteId"`
 	InvestigationID         *string           `json:"investigationId"`
 	RunID                   *string           `json:"runId"`

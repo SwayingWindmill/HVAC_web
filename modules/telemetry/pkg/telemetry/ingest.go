@@ -59,14 +59,14 @@ const (
 type QuarantineReason string
 
 const (
-	QuarantineMappingNotFound       QuarantineReason = "MAPPING_NOT_FOUND"
-	QuarantineMappingConflict       QuarantineReason = "MAPPING_CONFLICT"
-	QuarantineMappingQuarantined    QuarantineReason = "MAPPING_QUARANTINED"
-	QuarantineMappingRetired        QuarantineReason = "MAPPING_RETIRED"
-	QuarantinePointMappingNotFound  QuarantineReason = "POINT_MAPPING_NOT_FOUND"
-	QuarantinePointMappingConflict  QuarantineReason = "POINT_MAPPING_CONFLICT"
+	QuarantineMappingNotFound         QuarantineReason = "MAPPING_NOT_FOUND"
+	QuarantineMappingConflict         QuarantineReason = "MAPPING_CONFLICT"
+	QuarantineMappingQuarantined      QuarantineReason = "MAPPING_QUARANTINED"
+	QuarantineMappingRetired          QuarantineReason = "MAPPING_RETIRED"
+	QuarantinePointMappingNotFound    QuarantineReason = "POINT_MAPPING_NOT_FOUND"
+	QuarantinePointMappingConflict    QuarantineReason = "POINT_MAPPING_CONFLICT"
 	QuarantinePointMappingQuarantined QuarantineReason = "POINT_MAPPING_QUARANTINED"
-	QuarantinePolicyNotConfigured   QuarantineReason = "POLICY_NOT_CONFIGURED"
+	QuarantinePolicyNotConfigured     QuarantineReason = "POLICY_NOT_CONFIGURED"
 )
 
 type SourcePosition struct {
@@ -108,21 +108,21 @@ type RuntimeBinding struct {
 }
 
 type RuntimePointBinding struct {
-	TenantID                string
-	SiteID                  string
-	PointID                 string
-	SensorID                *string
-	DeviceID                string
-	TelemetryKey            string
-	PointType               string
-	ValueType               string
-	Unit                    *string
-	CounterDecreaseMode     *string
-	CounterRolloverModulus  *float64
-	Status                  string
-	PointRevision           int64
-	ValidFrom               time.Time
-	ValidTo                 *time.Time
+	TenantID               string
+	SiteID                 string
+	PointID                string
+	SensorID               *string
+	DeviceID               string
+	TelemetryKey           string
+	PointType              string
+	ValueType              string
+	Unit                   *string
+	CounterDecreaseMode    *string
+	CounterRolloverModulus *float64
+	Status                 string
+	PointRevision          int64
+	ValidFrom              time.Time
+	ValidTo                *time.Time
 }
 
 type ObservationPolicy struct {

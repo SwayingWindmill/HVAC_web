@@ -22,13 +22,13 @@ var (
 )
 
 type AccessContext struct {
-	TokenID              string
-	PrincipalID          string
-	Subject              string
-	SubjectIssuer        string
-	SessionID            string
-	TenantID string
-	PolicyRevision       string
+	TokenID        string
+	PrincipalID    string
+	Subject        string
+	SubjectIssuer  string
+	SessionID      string
+	TenantID       string
+	PolicyRevision string
 }
 
 type GrantAuthorizer interface {
@@ -45,23 +45,23 @@ type HTTPGrantAuthorizer struct {
 }
 
 type grantConsumeRequest struct {
-	DelegationGrant      string                 `json:"delegationGrant"`
-	PrincipalID          string                 `json:"principalId"`
-	SessionID            string                 `json:"sessionId"`
-	TenantID string                 `json:"tenantId"`
-	Action               telemetryauth.Action   `json:"action"`
-	Targets              []telemetryauth.Target `json:"targets"`
+	DelegationGrant string                 `json:"delegationGrant"`
+	PrincipalID     string                 `json:"principalId"`
+	SessionID       string                 `json:"sessionId"`
+	TenantID        string                 `json:"tenantId"`
+	Action          telemetryauth.Action   `json:"action"`
+	Targets         []telemetryauth.Target `json:"targets"`
 }
 
 type grantAcceptance struct {
-	TokenID              string               `json:"tokenId"`
-	PrincipalID          string               `json:"principalId"`
-	SessionID            string               `json:"sessionId"`
-	TenantID string               `json:"tenantId"`
-	Action               telemetryauth.Action `json:"action"`
-	ScopeDigest          string               `json:"scopeDigest"`
-	PolicyRevision       string               `json:"policyRevision"`
-	ExpiresAt            int64                `json:"expiresAt"`
+	TokenID        string               `json:"tokenId"`
+	PrincipalID    string               `json:"principalId"`
+	SessionID      string               `json:"sessionId"`
+	TenantID       string               `json:"tenantId"`
+	Action         telemetryauth.Action `json:"action"`
+	ScopeDigest    string               `json:"scopeDigest"`
+	PolicyRevision string               `json:"policyRevision"`
+	ExpiresAt      int64                `json:"expiresAt"`
 }
 
 func NewHTTPGrantAuthorizer(endpoint string, client *http.Client, publicKey crypto.PublicKey, issuer, audience string) (*HTTPGrantAuthorizer, error) {

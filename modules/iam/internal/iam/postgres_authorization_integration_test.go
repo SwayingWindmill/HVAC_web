@@ -36,9 +36,9 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	defer store.Close()
 
 	owner, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer:        postgresFixtureIssuer,
-		Subject:              "owner-a",
-		TenantID: postgresTenantAID,
+		SubjectIssuer: postgresFixtureIssuer,
+		Subject:       "owner-a",
+		TenantID:      postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +66,9 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	}
 
 	delegated, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer:        postgresFixtureIssuer,
-		Subject:              "delegated",
-		TenantID: postgresTenantAID,
+		SubjectIssuer: postgresFixtureIssuer,
+		Subject:       "delegated",
+		TenantID:      postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,9 +82,9 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	}
 
 	wrongIssuer, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer:        "https://other-issuer.example.test/oidc",
-		Subject:              "owner-a",
-		TenantID: postgresTenantAID,
+		SubjectIssuer: "https://other-issuer.example.test/oidc",
+		Subject:       "owner-a",
+		TenantID:      postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,10 +150,10 @@ func TestPostgresTelemetryAuthorizationLoadsExactDeviceAndKeyFacts(t *testing.T)
 	}
 	defer store.Close()
 	facts, err := store.LookupTelemetryAuthorization(ctx, iam.TelemetryAuthorizationLookup{
-		SubjectIssuer:        postgresFixtureIssuer,
-		Subject:              "delegated",
-		TenantID: postgresTenantAID,
-		Targets:              []telemetryauth.Target{{DeviceID: "018f1e00-4000-7000-8000-000000000001", Keys: []string{"fan.speed", "zone.temperature"}}},
+		SubjectIssuer: postgresFixtureIssuer,
+		Subject:       "delegated",
+		TenantID:      postgresTenantAID,
+		Targets:       []telemetryauth.Target{{DeviceID: "018f1e00-4000-7000-8000-000000000001", Keys: []string{"fan.speed", "zone.temperature"}}},
 	})
 	if err != nil {
 		t.Fatal(err)

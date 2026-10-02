@@ -31,6 +31,7 @@ const { currentPrincipalResponseSchema } = module.exports;
 
 function principalResponse(overrides = {}) {
   return {
+    principalId: '01900000-0000-7000-8000-000000000101',
     principal: {
       subject: 'fixture-user',
       issuer: 'https://issuer.example.test',
@@ -56,7 +57,7 @@ function principalResponse(overrides = {}) {
       delegationExpiresAt: '2026-07-28T00:00:00Z',
     },
     authorization: {
-      capabilitySetVersion: 7,
+      capabilitySetVersion: 12,
       policyRevision: 'registry-read:7',
       capabilities: ['site.list', 'site.read', 'work-order.list', 'work-order.read'],
     },
@@ -86,7 +87,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 7,
+      capabilitySetVersion: 12,
       policyRevision: 'registry-read:7',
       capabilities: ['site.read', 'site.read'],
     },
@@ -94,7 +95,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 7,
+      capabilitySetVersion: 12,
       policyRevision: 'registry-read:7',
       capabilities: ['role.admin'],
     },

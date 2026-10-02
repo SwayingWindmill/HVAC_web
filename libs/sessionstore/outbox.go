@@ -22,7 +22,7 @@ type OutboxRecord struct {
 	AggregateType    string
 	AggregateID      string
 	AggregateVersion uint64
-	TenantID   string
+	TenantID         string
 	CorrelationID    string
 	CausationID      string
 	TraceID          string

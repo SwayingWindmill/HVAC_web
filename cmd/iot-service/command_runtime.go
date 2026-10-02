@@ -14,8 +14,8 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commanddispatcher"
-	"github.com/quanlaihe/hvac-web/modules/command/pkg/mqttconnector"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/mqttconnector"
 	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
 )
 

@@ -28,13 +28,13 @@ var (
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
 
 type Filter struct {
-	Status     workordermodel.Status
-	Priority   workordermodel.Priority
+	Status       workordermodel.Status
+	Priority     workordermodel.Priority
 	AssigneeID   string
 	SourceDomain workordermodel.SourceDomain
 	SourceRef    string
-	Cursor     string
-	Limit      int
+	Cursor       string
+	Limit        int
 }
 
 type CreateMutation struct {

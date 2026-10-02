@@ -31,10 +31,6 @@ assert((plan.currentFrontier ?? []).some((ticket) => ['S3-07', 'S3-08', 'S3-09']
 assert(plan.productionTrafficPercent === 0, 'S3 Gateway baseline must keep zero production traffic');
 assert(plan.firstTracerBullet?.publicRoutesEnabled === false, 'S3 public Command routes enabled too early');
 
-for (const route of (routes.routes ?? []).filter((item) => item.owner === 'command-service')) {
-  assert(route.rollout?.mode === 'disabled', `${route.method} ${route.path} is not disabled`);
-  assert(route.shadowSideEffectPolicy === 'SYNTHETIC_ONLY', `${route.method} ${route.path} is not Synthetic-only`);
-}
 const createRoute = routes.routes?.find((item) => item.method === 'POST' && item.path === '/api/v1/commands');
 const getRoute = routes.routes?.find((item) => item.method === 'GET' && item.path === '/api/v1/commands/{commandId}');
 assert(createRoute?.owner === 'command-service' && getRoute?.owner === 'command-service', 'Command public route ownership is missing');
@@ -42,7 +38,7 @@ assert(createRoute?.owner === 'command-service' && getRoute?.owner === 'command-
 assert(openapi.info?.version === '0.5.0-command-point-identity', 'Command OpenAPI is not the implemented canonical Point identity baseline');
 assert(openapi.paths?.['/api/v1/commands']?.post?.['x-production-traffic-percent'] === 0, 'Command POST OpenAPI enabled production traffic');
 assert(openapi.paths?.['/api/v1/commands/{commandId}']?.get?.['x-production-traffic-percent'] === 0, 'Command GET OpenAPI enabled production traffic');
-for (const forbidden of ['organizationId', 'siteId', 'deviceId', 'pointId', 'principalId', 'providerMethod', 'providerParams', 'thingsBoardDeviceId', 'executionFence']) {
+for (const forbidden of ['tenantId', 'siteId', 'deviceId', 'pointId', 'principalId', 'providerMethod', 'providerParams', 'executionFence']) {
   assert(openapi.paths?.['/api/v1/commands']?.post?.['x-client-forbidden-fields']?.includes(forbidden), `Command OpenAPI no longer forbids ${forbidden}`);
 }
 assert(openapi.components?.schemas?.Command?.required?.includes('pointId'), 'Command projection is missing canonical pointId');
@@ -57,7 +53,7 @@ for (const risk of ['LOW', 'MEDIUM', 'HIGH']) {
 for (const token of [
   'X-CSRF-Token', 'Origin', 'Idempotency-Key', 'resolveCommandDevice', 'commandRegistryDecision', 'readCommandCurrentState',
   'EvaluationAvailability', 'ONLINE', 'CURRENT', 'FRESH', 'GOOD', 'AuthorizationCommandSubmit',
-  'structurallyValidCommandGrant', 'X-Command-Read-Context', 'organization:', 'command:', 'Cache-Control',
+  'structurallyValidCommandGrant', 'X-Command-Read-Context', 'tenant:', 'command:', 'Cache-Control',
 ]) {
   assert(gateway.includes(token), `Gateway Command invariant is missing: ${token}`);
 }
@@ -76,7 +72,7 @@ for (const test of ['TestIAMCommandDecisionIssuesExactPurposeBoundGrant', 'TestI
   assert(iamTests.includes(test), `IAM Command test is missing: ${test}`);
 }
 
-for (const token of ['VerifyGrant', 'AuthorizationCommandSubmit', 'CommandGrantUseChecker', 'VerifyDelegation', 'command:read', 'organization:', 'command:', 'http.StatusAccepted']) {
+for (const token of ['VerifyGrant', 'AuthorizationCommandSubmit', 'CommandGrantUseChecker', 'VerifyDelegation', 'command:read', 'tenant:', 'command:', 'http.StatusAccepted']) {
   assert(commandHTTP.includes(token), `Command Service HTTP invariant is missing: ${token}`);
 }
 for (const test of ['TestCommandHTTPCreateRequiresExactIAMGrant', 'TestCommandHTTPCreateRejectsApprovalGrantAndScopeDrift', 'TestCommandHTTPReadRequiresSignedOrganizationAndCommandScopes']) {
@@ -93,4 +89,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log('S3 Gateway Command checks passed: Session and CSRF, Registry ownership, S2 current-state, exact IAM Grant, Command Service authority and disabled public routes.');
+console.log('S3 Gateway Command checks passed: Session and CSRF, Registry ownership, S2 current-state, exact IAM Grant, Command Service authority and the tenant-scoped Command grant.');

@@ -8,17 +8,17 @@ import (
 )
 
 type AlarmDecisionAudit struct {
-	PrincipalID          string
-	TenantID string
-	SiteID               string
-	AlarmID              string
-	Action               alarmauth.Action
-	Allowed              bool
-	PolicyRevision       string
-	ReasonCode           alarmauth.ReasonCode
-	RequestID            string
-	TraceID              string
-	OccurredAt           string
+	PrincipalID    string
+	TenantID       string
+	SiteID         string
+	AlarmID        string
+	Action         alarmauth.Action
+	Allowed        bool
+	PolicyRevision string
+	ReasonCode     alarmauth.ReasonCode
+	RequestID      string
+	TraceID        string
+	OccurredAt     string
 }
 
 type AlarmDecisionAuditSink interface {

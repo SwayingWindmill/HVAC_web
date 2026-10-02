@@ -11,7 +11,7 @@ import (
 
 type cronSpec struct {
 	minute, hour, dayOfMonth, month, dayOfWeek fieldSet
-	domWildcard, dowWildcard                  bool
+	domWildcard, dowWildcard                   bool
 }
 
 type fieldSet map[int]struct{}

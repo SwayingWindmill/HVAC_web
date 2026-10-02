@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 )
 
 func TestSameDashboardSessionRejectsScopeDrift(t *testing.T) {

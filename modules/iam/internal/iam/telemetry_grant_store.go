@@ -15,17 +15,17 @@ import (
 const telemetryGrantRuntimeDatabaseRole = "s2_iam_grant_runtime"
 
 type TelemetryRevocationFact struct {
-	Sequence             int64  `json:"sequence"`
-	PrincipalID          string `json:"principalId"`
-	TenantID string `json:"tenantId"`
-	SourceType           string `json:"sourceType"`
-	SourceID             string `json:"sourceId,omitempty"`
-	DeviceID             string `json:"deviceId,omitempty"`
-	TelemetryKey         string `json:"telemetryKey,omitempty"`
-	Action               string `json:"action,omitempty"`
-	PolicyRevision       string `json:"policyRevision"`
-	ReasonCode           string `json:"reasonCode"`
-	OccurredAt           string `json:"occurredAt"`
+	Sequence       int64  `json:"sequence"`
+	PrincipalID    string `json:"principalId"`
+	TenantID       string `json:"tenantId"`
+	SourceType     string `json:"sourceType"`
+	SourceID       string `json:"sourceId,omitempty"`
+	DeviceID       string `json:"deviceId,omitempty"`
+	TelemetryKey   string `json:"telemetryKey,omitempty"`
+	Action         string `json:"action,omitempty"`
+	PolicyRevision string `json:"policyRevision"`
+	ReasonCode     string `json:"reasonCode"`
+	OccurredAt     string `json:"occurredAt"`
 }
 
 type PostgresTelemetryGrantStore struct {

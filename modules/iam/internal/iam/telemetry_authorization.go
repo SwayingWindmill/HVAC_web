@@ -17,25 +17,25 @@ type TelemetryDevice struct {
 }
 
 type TelemetryScopeBinding struct {
-	TenantID string
-	SiteID               string
-	DeviceID             string
-	Actions              []telemetryauth.Action
-	Effect               BindingEffect
-	Status               FactStatus
-	ValidFrom            time.Time
-	ValidTo              *time.Time
+	TenantID  string
+	SiteID    string
+	DeviceID  string
+	Actions   []telemetryauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type TelemetryKeyBinding struct {
-	TenantID string
-	DeviceID             string
-	Key                  string
-	Actions              []telemetryauth.Action
-	Effect               BindingEffect
-	Status               FactStatus
-	ValidFrom            time.Time
-	ValidTo              *time.Time
+	TenantID  string
+	DeviceID  string
+	Key       string
+	Actions   []telemetryauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type TelemetryAuthorizationFacts struct {
@@ -52,10 +52,10 @@ type TelemetryAuthorizationFacts struct {
 }
 
 type TelemetryAuthorizationLookup struct {
-	SubjectIssuer        string
-	Subject              string
-	TenantID string
-	Targets              []telemetryauth.Target
+	SubjectIssuer string
+	Subject       string
+	TenantID      string
+	Targets       []telemetryauth.Target
 }
 
 type TelemetryAuthorizationStore interface {

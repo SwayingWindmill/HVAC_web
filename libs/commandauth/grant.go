@@ -30,7 +30,7 @@ type GrantClaims struct {
 	GrantID                     string                            `json:"grantId"`
 	Purpose                     commandmodel.AuthorizationPurpose `json:"purpose"`
 	PrincipalID                 string                            `json:"principalId"`
-	TenantID              string                            `json:"tenantId"`
+	TenantID                    string                            `json:"tenantId"`
 	SiteID                      string                            `json:"siteId"`
 	DeviceID                    string                            `json:"deviceId"`
 	Capability                  commandmodel.Capability           `json:"capability"`
@@ -58,7 +58,7 @@ type Validation struct {
 	Audience           string
 	Purpose            commandmodel.AuthorizationPurpose
 	PrincipalID        string
-	TenantID     string
+	TenantID           string
 	SiteID             string
 	DeviceID           string
 	Capability         commandmodel.Capability
@@ -171,7 +171,7 @@ func Snapshot(claims GrantClaims) commandmodel.AuthorizationSnapshot {
 		PolicyRevision:              claims.PolicyRevision,
 		Purpose:                     claims.Purpose,
 		PrincipalID:                 claims.PrincipalID,
-		TenantID:              claims.TenantID,
+		TenantID:                    claims.TenantID,
 		SiteID:                      claims.SiteID,
 		DeviceID:                    claims.DeviceID,
 		Capability:                  claims.Capability,

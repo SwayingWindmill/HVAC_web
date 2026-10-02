@@ -109,7 +109,7 @@ type TimelineEvent struct {
 type WorkOrder struct {
 	SchemaVersion      int                 `json:"schemaVersion"`
 	WorkOrderID        string              `json:"workOrderId"`
-	TenantID     string              `json:"tenantId"`
+	TenantID           string              `json:"tenantId"`
 	SiteID             string              `json:"siteId"`
 	Title              string              `json:"title"`
 	Description        string              `json:"description"`
@@ -139,7 +139,7 @@ type ListResponse struct {
 
 type CreateInput struct {
 	WorkOrderID      string
-	TenantID   string
+	TenantID         string
 	SiteID           string
 	Title            string
 	Description      string

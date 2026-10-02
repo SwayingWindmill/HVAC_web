@@ -101,8 +101,8 @@ func TestHistoricalReplayRouteOwnsProvenanceAndEventIdentity(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		HistoricalObservationAcceptor: acceptor,
 		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
-		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
-		Now:                 func() time.Time { return now },
+		SourceAuthenticator:           NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
+		Now:                           func() time.Time { return now },
 	})
 	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
 
@@ -140,7 +140,7 @@ func TestHistoricalReplayRequiresDedicatedWorkloadIdentity(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		HistoricalObservationAcceptor: acceptor,
 		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
-		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
+		SourceAuthenticator:           NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
 	})
 	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
 	request := httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
@@ -158,7 +158,7 @@ func TestHistoricalReplayRequiresDedicatedWorkloadIdentity(t *testing.T) {
 
 func TestHistoricalReplayCannotEnterThroughLiveSourceRoute(t *testing.T) {
 	handler := NewHandler(ServerConfig{
-		ObservationAcceptor:  &fakeObservationAcceptor{},
+		ObservationAcceptor: &fakeObservationAcceptor{},
 		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
 	})
 	body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}`

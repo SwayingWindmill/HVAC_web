@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	analyticsTestSite         = "018f1e00-1000-7000-8000-000000000001"
-	analyticsOtherSite        = "018f1e00-1000-7000-8000-000000000002"
+	analyticsTestSite  = "018f1e00-1000-7000-8000-000000000001"
+	analyticsOtherSite = "018f1e00-1000-7000-8000-000000000002"
 )
 
 func TestEvaluateAnalyticsAuthorizationRequiresExactSiteScope(t *testing.T) {
@@ -45,11 +45,11 @@ func TestEvaluateAnalyticsAuthorizationDoesNotTreatTenantRoleAsSiteProof(t *test
 	facts := analyticsAuthorizationFacts(now)
 	facts.SiteBindings = nil
 	facts.RoleBindings = []RoleBinding{{
-		TenantID: S1FixtureTenantAID,
-		Actions:        []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
-		Effect:         BindingEffectAllow,
-		Status:         FactStatusActive,
-		ValidFrom:      now.Add(-time.Hour),
+		TenantID:  S1FixtureTenantAID,
+		Actions:   []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
+		Effect:    BindingEffectAllow,
+		Status:    FactStatusActive,
+		ValidFrom: now.Add(-time.Hour),
 	}}
 	store := newStaticAuthorizationStore("analytics-policy-site-proof", []AuthorizationFacts{facts})
 	decision, err := evaluateAnalyticsAuthorization(context.Background(), store, now, facts.Principal.SubjectIssuer, facts.Principal.Subject, analyticsmodel.AuthorizationDecisionRequest{
@@ -67,11 +67,11 @@ func TestEvaluateAnalyticsAuthorizationExplicitDenyWins(t *testing.T) {
 	now := time.Date(2026, 7, 30, 1, 0, 0, 0, time.UTC)
 	facts := analyticsAuthorizationFacts(now)
 	facts.ExplicitDenies = []ExplicitDeny{{
-		TenantID: S1FixtureTenantAID,
-		SiteID:               analyticsTestSite,
-		Actions:              []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
-		Status:               FactStatusActive,
-		ValidFrom:            now.Add(-time.Hour),
+		TenantID:  S1FixtureTenantAID,
+		SiteID:    analyticsTestSite,
+		Actions:   []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
+		Status:    FactStatusActive,
+		ValidFrom: now.Add(-time.Hour),
 	}}
 	store := newStaticAuthorizationStore("analytics-policy-2", []AuthorizationFacts{facts})
 	decision, err := evaluateAnalyticsAuthorization(context.Background(), store, now, facts.Principal.SubjectIssuer, facts.Principal.Subject, analyticsmodel.AuthorizationDecisionRequest{
@@ -100,12 +100,12 @@ func analyticsAuthorizationFacts(now time.Time) AuthorizationFacts {
 		Principal:   PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: "https://issuer.example.test", Subject: "energy-user", Status: FactStatusActive},
 		Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		SiteBindings: []SiteBinding{{
-			TenantID: S1FixtureTenantAID,
-			SiteID:               analyticsTestSite,
-			Actions:              []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
-			Effect:               BindingEffectAllow,
-			Status:               FactStatusActive,
-			ValidFrom:            now.Add(-time.Hour),
+			TenantID:  S1FixtureTenantAID,
+			SiteID:    analyticsTestSite,
+			Actions:   []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)},
+			Effect:    BindingEffectAllow,
+			Status:    FactStatusActive,
+			ValidFrom: now.Add(-time.Hour),
 		}},
 	}
 }

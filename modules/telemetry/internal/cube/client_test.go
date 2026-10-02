@@ -234,14 +234,14 @@ func validCubeEnergyQuery() analyticsmodel.EnergySeriesQuery {
 		panic(err)
 	}
 	return analyticsmodel.EnergySeriesQuery{
-		TenantID:       testCubeTenantID,
-		SiteID:         testCubeSiteID,
-		EnergyType:     analyticsmodel.EnergyTypeElectricity,
-		Granularity:    analyticsmodel.GranularityDay,
-		Timezone:       "Asia/Shanghai",
-		From:           time.Date(2026, 7, 1, 0, 0, 0, 0, location).UTC(),
-		To:             time.Date(2026, 7, 3, 0, 0, 0, 0, location).UTC(),
-		QualityPolicy:  analyticsmodel.QualityPolicyValidOnly,
+		TenantID:      testCubeTenantID,
+		SiteID:        testCubeSiteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityDay,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 7, 1, 0, 0, 0, 0, location).UTC(),
+		To:            time.Date(2026, 7, 3, 0, 0, 0, 0, location).UTC(),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 	}
 }
 

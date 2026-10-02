@@ -22,18 +22,18 @@ const (
 	WorkOrderListAction          = "work-order:list"
 	WorkOrderReadAction          = "work-order:read"
 
-	WorkOrderCreateAction        = "work-order:create"
-	WorkOrderAssignAction        = "work-order:assign"
-	WorkOrderPlanAction          = "work-order:plan"
-	WorkOrderStartAction         = "work-order:start"
-	WorkOrderBlockAction         = "work-order:block"
-	WorkOrderResumeAction        = "work-order:resume"
-	WorkOrderCompleteAction      = "work-order:complete"
-	WorkOrderCancelAction        = "work-order:cancel"
-	WorkOrderReopenAction        = "work-order:reopen"
-	DefaultGatewaySPIFFEID       = "spiffe://hvac.local/platform-gateway"
-	DefaultAudience              = "work-order-service"
-	maximumMutationBodyBytes     = 32 * 1024
+	WorkOrderCreateAction    = "work-order:create"
+	WorkOrderAssignAction    = "work-order:assign"
+	WorkOrderPlanAction      = "work-order:plan"
+	WorkOrderStartAction     = "work-order:start"
+	WorkOrderBlockAction     = "work-order:block"
+	WorkOrderResumeAction    = "work-order:resume"
+	WorkOrderCompleteAction  = "work-order:complete"
+	WorkOrderCancelAction    = "work-order:cancel"
+	WorkOrderReopenAction    = "work-order:reopen"
+	DefaultGatewaySPIFFEID   = "spiffe://hvac.local/platform-gateway"
+	DefaultAudience          = "work-order-service"
+	maximumMutationBodyBytes = 32 * 1024
 )
 
 type HTTPConfig struct {

@@ -20,11 +20,11 @@ const (
 
 // ActorChainV1 keeps the initiating user and executing workload distinct.
 type ActorChainV1 struct {
-	InitiatingSubject    string
-	InitiatingIssuer     string
-	ExecutingService     string
-	ExecutingSPIFFEID    string
-	TenantID string
+	InitiatingSubject string
+	InitiatingIssuer  string
+	ExecutingService  string
+	ExecutingSPIFFEID string
+	TenantID          string
 }
 
 // SessionAuditEventV1 is the repository-owned representation of
@@ -35,7 +35,7 @@ type SessionAuditEventV1 struct {
 	SchemaVersion     uint32
 	MessageType       string
 	Producer          string
-	TenantID    string
+	TenantID          string
 	PartitionKey      string
 	AggregateType     string
 	AggregateID       string

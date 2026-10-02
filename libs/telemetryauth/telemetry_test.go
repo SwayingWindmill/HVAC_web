@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	tenantID             = "018f1d00-0000-7000-8000-000000000001"
-	deviceID             = "018f1e00-4000-7000-8000-000000000001"
-	siblingDeviceID      = "018f1e00-4000-7000-8000-000000000003"
+	tenantID        = "018f1d00-0000-7000-8000-000000000001"
+	deviceID        = "018f1e00-4000-7000-8000-000000000001"
+	siblingDeviceID = "018f1e00-4000-7000-8000-000000000003"
 )
 
 func TestScopeDigestIsOrderIndependentButExact(t *testing.T) {

@@ -23,8 +23,8 @@ func TestIAMWorkOrderDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	claims.TenantID = iam.S1FixtureTenantAID
 	input := workorderauth.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
-		SiteID:               iam.S1FixtureOwnerASite1ID,
-		Action:               workorderauth.ActionList,
+		SiteID:   iam.S1FixtureOwnerASite1ID,
+		Action:   workorderauth.ActionList,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -53,8 +53,8 @@ func TestIAMWorkOrderDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	claims.TenantID = iam.S1FixtureTenantAID
 	input := workorderauth.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
-		SiteID:               "01910000-0002-7000-8000-000000000001",
-		Action:               workorderauth.ActionList,
+		SiteID:   "01910000-0002-7000-8000-000000000001",
+		Action:   workorderauth.ActionList,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -80,9 +80,9 @@ func TestIAMWorkOrderDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *te
 	claims.TenantID = iam.S1FixtureTenantAID
 	expandedBody := map[string]any{
 		"tenantId": iam.S1FixtureTenantAID,
-		"siteId":               iam.S1FixtureOwnerASite1ID,
-		"action":               "work-order:list",
-		"roles":                []string{"admin"},
+		"siteId":   iam.S1FixtureOwnerASite1ID,
+		"action":   "work-order:list",
+		"roles":    []string{"admin"},
 	}
 	encodedExpandedBody, _ := json.Marshal(expandedBody)
 	request := harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(encodedExpandedBody)), claims, harness.gatewaySigner)

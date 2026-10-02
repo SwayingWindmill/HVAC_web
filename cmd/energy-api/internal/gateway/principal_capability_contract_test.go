@@ -3,8 +3,8 @@ package gateway_test
 import (
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {

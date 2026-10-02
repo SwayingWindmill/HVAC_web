@@ -23,8 +23,8 @@ func TestIAMAlarmDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	claims.TenantID = iam.S1FixtureTenantAID
 	input := alarmauth.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
-		SiteID:               iam.S1FixtureOwnerASite1ID,
-		Action:               alarmauth.ActionRead,
+		SiteID:   iam.S1FixtureOwnerASite1ID,
+		Action:   alarmauth.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -53,8 +53,8 @@ func TestIAMAlarmDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	claims.TenantID = iam.S1FixtureTenantAID
 	input := alarmauth.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
-		SiteID:               "01910000-0002-7000-8000-000000000001",
-		Action:               alarmauth.ActionRead,
+		SiteID:   "01910000-0002-7000-8000-000000000001",
+		Action:   alarmauth.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
