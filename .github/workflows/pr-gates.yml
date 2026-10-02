@@ -54,6 +54,10 @@ jobs:
           node-version: "22.22.0"
           cache: npm
           cache-dependency-path: package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache: false
       - run: npm ci
       - run: node scripts/run-pr-gate.mjs --gate=static
       - run: npm run --silent pr:gates:test

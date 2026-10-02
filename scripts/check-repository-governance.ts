@@ -265,6 +265,16 @@ export const checkJavascriptToolingGovernance = (root = repositoryRoot) => {
   }
 };
 
+// Go sources are formatted by gofmt, so diffs carry only real changes.
+const findGoFormatViolations = (root, trackedFiles) => {
+  const goFiles = trackedFiles.map(normalizePath).filter((path) => path.endsWith('.go') && existsSync(join(root, path)));
+  if (goFiles.length === 0) return [];
+  const unformatted = execFileSync('gofmt', ['-l', ...goFiles], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+    .split('\n')
+    .filter(Boolean);
+  return unformatted.map((path) => `${path}: not gofmt-formatted (run gofmt -w ${path})`);
+};
+
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const longChainBaseline = JSON.parse(readFileSync(join(root, longChainBaselinePath), 'utf8'));
@@ -285,6 +295,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
       reactVersion: packageJson.dependencies?.react ?? '',
     }),
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
+    ...findGoFormatViolations(root, trackedFiles),
   ];
 
   if (violations.length > 0) {

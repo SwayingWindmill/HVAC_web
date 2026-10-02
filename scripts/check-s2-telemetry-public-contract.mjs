@@ -316,6 +316,6 @@ for (const phrase of [
 for (const term of ['## Telemetry Key Selection', '## Subscription Bootstrap', '## Observation Delta']) {
   assert(context.includes(term), `CONTEXT.md is missing domain term: ${term}`);
 }
-assert(packageJSON.scripts?.['s2:public-contract:check'] === 'node scripts/check-s2-telemetry-public-contract.mjs', 's2:public-contract:check is not wired');
+assert(packageJSON.scripts?.['telemetry:public-contract:check'] === 'node scripts/check-s2-telemetry-public-contract.mjs', 'telemetry:public-contract:check is not wired');
 
 console.log('S2 public telemetry contract passed: coherent Snapshot, bounded batches, exact subscription scope and Snapshot-authoritative recovery.');
