@@ -3,6 +3,7 @@ export const centralPlantIdentity = Object.freeze({
   siteId: '018f3e00-1000-7000-8000-000000000001',
   principalId: '018f3e00-2000-7000-8000-000000000001',
   integrationInstanceId: '018f3e00-0000-7000-8000-000000000101',
+  gatewayDeviceId: '018f3e00-4000-7000-8000-000000000100',
 });
 
 export const centralPlantDevices = Object.freeze([

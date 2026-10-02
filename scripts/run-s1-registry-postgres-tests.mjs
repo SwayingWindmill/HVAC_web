@@ -88,6 +88,45 @@ function expectEqual(actual, expected, label) {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
+// ADR 0016: Connectivity reads Registry only through the read-port views.
+function assertRegistryReadPort() {
+  const tenantA = '018f1d00-0000-7000-8000-000000000001';
+  const tenantB = '018f1d00-0000-7000-8000-000000000002';
+  const gatewayA = '018f1e00-4000-7000-8000-000000000002';
+  const gatewayB = '018f1e00-4100-7000-8000-000000000003';
+  const meterA = '018f1e00-4100-7000-8000-000000000001';
+  const asConnectivity = (tenantID, query) => `
+    SET LOCAL ROLE connectivity_runtime;
+    SELECT set_config('app.tenant_id', '${tenantID}', true);
+    ${query};
+    RESET ROLE;`;
+  const output = psql(`
+    BEGIN;
+    INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at) VALUES
+      ('${meterA}', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', 'meter-a', 'Meter A', 'HVAC_POWER_METER', 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4100-7000-8000-000000000002', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', 'meter-retired', 'Retired meter', 'HVAC_POWER_METER', 'RETIRED', 1, now(), now()),
+      ('${gatewayB}', '${tenantB}', '018f1e00-1000-7000-8000-000000000003', 'gateway-b', 'Gateway B', 'GATEWAY', 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4100-7000-8000-000000000004', '${tenantB}', '018f1e00-1000-7000-8000-000000000003', 'controller-b2', 'Controller B2', 'CONTROLLER', 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4100-7000-8000-000000000005', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', 'meter-unkeyed', 'Unkeyed meter', 'HVAC_POWER_METER', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES
+      ('018f1e00-4200-7000-8000-000000000001', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', '${gatewayA}', 'meter-1', '${meterA}', 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4200-7000-8000-000000000002', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', '${gatewayA}', 'meter-old', '018f1e00-4100-7000-8000-000000000002', 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4200-7000-8000-000000000003', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', '${gatewayA}', 'meter-gone', '018f1e00-4100-7000-8000-000000000005', 'RETIRED', 1, now(), now()),
+      ('018f1e00-4200-7000-8000-000000000004', '${tenantB}', '018f1e00-1000-7000-8000-000000000003', '${gatewayB}', 'ctrl-b', '018f1e00-4100-7000-8000-000000000004', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, point_code, source_key, display_name, point_type, value_type, unit, sample_interval_ms, publish_interval_ms, stale_after_ms, status, revision, created_at, updated_at) VALUES
+      ('018f1e00-4300-7000-8000-000000000001', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', '${meterA}', 'active_power', 'P_TOTAL', 'Active power', 'TELEMETRY', 'NUMBER', 'kW', 1000, 5000, 30000, 'ACTIVE', 1, now(), now()),
+      ('018f1e00-4300-7000-8000-000000000002', '${tenantA}', '018f1e00-1000-7000-8000-000000000002', '${meterA}', 'old_power', 'P_OLD', 'Old power', 'TELEMETRY', 'NUMBER', 'kW', 1000, 5000, 30000, 'RETIRED', 1, now(), now());
+    ${asConnectivity('', `SELECT count(*) FILTER (WHERE gateway_id IN ('${gatewayA}', '${gatewayB}'))::text || '|' || count(*) FILTER (WHERE gateway_id = '${meterA}')::text FROM core_registry.gateway_directory_v1`)}
+    ${asConnectivity(tenantA, `SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '-') FROM core_registry.gateway_device_source_keys_v1 WHERE gateway_id IN ('${gatewayA}', '${gatewayB}')`)}
+    ${asConnectivity(tenantB, `SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '-') FROM core_registry.gateway_device_source_keys_v1 WHERE gateway_id IN ('${gatewayA}', '${gatewayB}')`)}
+    ${asConnectivity(tenantA, `SELECT coalesce(string_agg(source_key || ':' || point_code || ':' || unit, ',' ORDER BY source_key), '-') FROM core_registry.point_bindings_v1 WHERE device_id = '${meterA}'`)}
+    ${asConnectivity(tenantB, `SELECT coalesce(string_agg(source_key, ','), '-') FROM core_registry.point_bindings_v1 WHERE device_id = '${meterA}'`)}
+    ROLLBACK;
+  `).split('\n').filter((line) => line !== '' && line !== tenantA && line !== tenantB);
+  expectEqual(output.join(' '), '2|0 meter-1 ctrl-b P_TOTAL:active_power:kW -', 'Registry read port views');
+  psql(`BEGIN; SET LOCAL ROLE connectivity_runtime; SELECT count(*) FROM core_registry.devices; ROLLBACK;`, { expectFailure: true });
+}
+
 function seedIAMIntegrationFixtures() {
   psql(`
     INSERT INTO iam.policies (id, tenant_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
@@ -238,6 +277,7 @@ try {
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
   seedIAMIntegrationFixtures();
+  assertRegistryReadPort();
 
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
@@ -665,7 +705,7 @@ try {
       grace_period_seconds, status, locked_at, revision, created_at, updated_at
     ) VALUES (
       '${settlementPeriodId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${settlementBoundaryId}',
-      '2026-07-31T16:00:00Z', '2026-08-31T16:00:00Z', 'Asia/Shanghai', 7200, 'CALCULATING', NULL, 1, now(), now()
+      '2026-07-31T16:00:00Z', '2026-08-31T16:00:00Z', 'Asia/Shanghai', 7200, 'CALCULATING', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
     );
     SELECT
       (SELECT status FROM core_registry.settlement_boundaries WHERE id = '${settlementBoundaryId}') || '|'

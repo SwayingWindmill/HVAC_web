@@ -49,6 +49,7 @@ hvac_s1|infra/registry/postgres/init/014-s21-rule-management-capability.sql
 hvac_s1|infra/connectivity/postgres/init/003-s12-edge-fleet.sql
 hvac_s1|infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
 hvac_s1|infra/registry/postgres/init/016-s24-alarm-assign-capability.sql
+hvac_s1|infra/registry/postgres/init/017-registry-read-port.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
