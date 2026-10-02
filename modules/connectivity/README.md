@@ -63,7 +63,7 @@ The EG8200 MQTT publisher uses Paho's persistent file queue. It can continue que
 Adapter example:
 
 ```text
-modules/iot/configs/central-plant.local.example.json
+modules/connectivity/configs/central-plant.local.example.json
 ```
 
 Gateway publisher example:

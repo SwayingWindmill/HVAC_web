@@ -28,10 +28,10 @@ test("staging process failure plan covers every Phase 1 single point and owner p
       "scheduler",
       "telemetry-worker",
       "metric-worker",
-      "iot-service",
+      "connectivity",
     ],
   );
-  assert.match(runner, /"iot-service": "http:\/\/127\.0\.0\.1:19094\/health\/ready"/);
+  assert.match(runner, /"connectivity": "http:\/\/127\.0\.0\.1:19094\/health\/ready"/);
   assert.match(runner, /activeReadinessPassed\(target\)/);
   assert.match(runner, /waitForReadinessFailure/);
   assert.ok(plan.every((step) => step.killSignal === "SIGKILL"));
@@ -39,7 +39,7 @@ test("staging process failure plan covers every Phase 1 single point and owner p
   assert.ok(plan.every((step) => step.recoveryProbeServices.length > 0));
   assert.deepEqual(
     plan.find((step) => step.target === "mqtt-broker").recoveryProbeServices,
-    ["iot-service"],
+    ["connectivity"],
   );
 });
 

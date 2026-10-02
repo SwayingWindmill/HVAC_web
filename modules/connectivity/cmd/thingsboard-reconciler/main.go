@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/modules/iot/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 const maximumThingsBoardResponseBytes = 2 << 20

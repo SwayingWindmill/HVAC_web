@@ -2,7 +2,7 @@ go 1.25.12
 
 use (
 	./cmd/energy-api
-	./cmd/iot-service
+	./cmd/connectivity
 	./cmd/maintenance-worker
 	./cmd/metric-worker
 	./cmd/scheduler
@@ -44,7 +44,7 @@ use (
 	./services/outbound-delivery-service
 	./services/notification-service
 	./services/rule-runtime-service
-	./modules/iot
+	./modules/connectivity
 	./modules/metric
 	./modules/maintenance
 	./modules/scheduler

@@ -453,14 +453,14 @@ services:
     mem_limit: ${FDD_SERVICE_MEMORY_LIMIT:-256m}
     mem_reservation: ${FDD_SERVICE_MEMORY_RESERVATION:-96m}
 
-  iot-service:
+  connectivity:
     <<: *go-service
     profiles: ["integration"]
     build:
       context: ../../..
       dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./cmd/iot-service }
-    image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
+      args: { SERVICE_PACKAGE: ./cmd/connectivity }
+    image: ${CONNECTIVITY_IMAGE:-hvac/connectivity:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
@@ -476,9 +476,9 @@ services:
       retries: 12
       start_period: 10s
     networks: [application, mqtt, data]
-    cpus: ${IOT_SERVICE_CPUS:-1.50}
-    mem_limit: ${IOT_SERVICE_MEMORY_LIMIT:-512m}
-    mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
+    cpus: ${CONNECTIVITY_CPUS:-1.50}
+    mem_limit: ${CONNECTIVITY_MEMORY_LIMIT:-512m}
+    mem_reservation: ${CONNECTIVITY_MEMORY_RESERVATION:-192m}
 
   operations-agent-service:
     restart: unless-stopped

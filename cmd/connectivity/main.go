@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/iot/pkg/adapter"
-	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
 
 type moduleHealth struct {

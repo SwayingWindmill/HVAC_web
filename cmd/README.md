@@ -5,7 +5,7 @@
 Current entrypoints:
 
 - `energy-api`
-- `iot-service`
+- `connectivity`
 - `telemetry-worker`
 - `metric-worker`
 - `scheduler`

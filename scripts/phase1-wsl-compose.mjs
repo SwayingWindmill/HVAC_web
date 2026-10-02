@@ -185,7 +185,7 @@ const runtimeServices = [
   'metric-worker',
   'scheduler',
   'maintenance',
-  ...(integration ? ['iot-service'] : []),
+  ...(integration ? ['connectivity'] : []),
   ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service'] : []),
 ];
 

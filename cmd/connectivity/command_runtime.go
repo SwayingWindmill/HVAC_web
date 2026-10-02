@@ -16,7 +16,7 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commanddispatcher"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/mqttconnector"
-	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
 
 const commandOwnershipLease = 30 * time.Second
@@ -90,14 +90,14 @@ func loadInProcessCommandRuntime(ctx context.Context, store *connectivity.Store,
 		return nil, err
 	}
 
-	ownershipOwnerID := envOr("MQTT_COMMAND_OWNER_ID", hostnameOr("iot-service-command-owner"))
+	ownershipOwnerID := envOr("MQTT_COMMAND_OWNER_ID", hostnameOr("connectivity-command-owner"))
 	ownership, err := store.ClaimConnectorOwnership(ctx, integration.ID, ownershipOwnerID, commandOwnershipLease)
 	if err != nil {
 		return nil, fmt.Errorf("claim MQTT command connector ownership: %w", err)
 	}
 	connector, err := mqttconnector.New(ctx, mqttconnector.Config{
 		BrokerURL:             integration.BrokerOrigin,
-		ClientID:              envOr("MQTT_COMMAND_CLIENT_ID", hostnameOr("iot-service-command-dispatcher")),
+		ClientID:              envOr("MQTT_COMMAND_CLIENT_ID", hostnameOr("connectivity-command-dispatcher")),
 		CAFile:                mustCommandEnv("MQTT_COMMAND_CA"),
 		CertFile:              mustCommandEnv("MQTT_COMMAND_CERT"),
 		KeyFile:               mustCommandEnv("MQTT_COMMAND_KEY"),
@@ -141,8 +141,8 @@ func loadInProcessCommandRuntime(ctx context.Context, store *connectivity.Store,
 		return nil, err
 	}
 
-	dispatcherWorkerID := envOr("COMMAND_DISPATCHER_WORKER_ID", hostnameOr("iot-service-command-dispatcher"))
-	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("iot-service-command-verifier"))
+	dispatcherWorkerID := envOr("COMMAND_DISPATCHER_WORKER_ID", hostnameOr("connectivity-command-dispatcher"))
+	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("connectivity-command-verifier"))
 	return &inProcessCommandRuntime{
 		tenantID:         integration.TenantID,
 		integrationID:    integration.ID,

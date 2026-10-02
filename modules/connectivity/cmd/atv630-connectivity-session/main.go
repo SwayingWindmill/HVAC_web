@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/modules/iot/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
 
 func main() {

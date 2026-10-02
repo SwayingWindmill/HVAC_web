@@ -22,7 +22,7 @@
       "id": "mqtt-process",
       "target": "mqtt-broker",
       "maximumRecoverySeconds": 1800,
-      "recoveryProbeServices": ["iot-service"]
+      "recoveryProbeServices": ["connectivity"]
     },
     {
       "id": "clickhouse-process",
@@ -55,10 +55,10 @@
       "recoveryProbeServices": ["metric-worker"]
     },
     {
-      "id": "iot-service-process",
-      "target": "iot-service",
+      "id": "connectivity-process",
+      "target": "connectivity",
       "maximumRecoverySeconds": 300,
-      "recoveryProbeServices": ["iot-service"]
+      "recoveryProbeServices": ["connectivity"]
     }
   ],
   "repositoryRegressionValidation": {

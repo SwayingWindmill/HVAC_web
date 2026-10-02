@@ -515,7 +515,7 @@ function runLocalAdminGrant() {
 function startSimulatorService() {
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    'up', '-d', '--build', 'iot-service',
+    'up', '-d', '--build', 'connectivity',
   ]);
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),

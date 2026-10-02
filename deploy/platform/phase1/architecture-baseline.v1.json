@@ -182,7 +182,7 @@
     "defaultSupportingWorkloads": ["scheduler", "maintenance"],
     "defaultIdentityInfrastructure": ["identity-service"],
     "localStatefulInfrastructure": ["postgres", "clickhouse", "redis"],
-    "optionalIntegration": ["iot-service", "mqtt-broker"],
+    "optionalIntegration": ["connectivity", "mqtt-broker"],
     "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service"],
     "allComposeServicesClassified": true
   },
