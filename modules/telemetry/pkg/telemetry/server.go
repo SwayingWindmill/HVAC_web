@@ -45,9 +45,8 @@ type ServerConfig struct {
 	ObservationAcceptor            ObservationAcceptor
 	HistoricalObservationAcceptor  HistoricalObservationAcceptor
 	AllowedHistoricalReplaySPIFFE  string
-	CoverageReporter               CoverageReporter
 	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
-	SourceAuthenticator            SourceAuthenticator
+	AllowedSourceSPIFFE            string
 	Realtime                       *RealtimeService
 	AllowedCentrifugoSPIFFE        string
 	CentrifugoProxySecret          string
@@ -73,9 +72,8 @@ type handler struct {
 	observationAcceptor            ObservationAcceptor
 	historicalObservationAcceptor  HistoricalObservationAcceptor
 	allowedHistoricalReplaySPIFFE  string
-	coverageReporter               CoverageReporter
 	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
-	sourceAuthenticator            SourceAuthenticator
+	allowedSourceSPIFFE            string
 	realtime                       *RealtimeService
 	allowedCentrifugoSPIFFE        string
 	centrifugoProxySecret          string
@@ -118,14 +116,14 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
-		allowedGatewaySPIFFE:         strings.TrimSpace(config.AllowedGatewaySPIFFE),
-		allowedSnapshotReaderSPIFFEs: allowedSnapshotReaderSPIFFEs,
-		runtimeAudience:              strings.TrimSpace(config.RuntimeAudience),
-		observationAcceptor:          config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
+		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
+		allowedSnapshotReaderSPIFFEs:   allowedSnapshotReaderSPIFFEs,
+		runtimeAudience:                strings.TrimSpace(config.RuntimeAudience),
+		observationAcceptor:            config.ObservationAcceptor,
 		historicalObservationAcceptor:  config.HistoricalObservationAcceptor,
 		allowedHistoricalReplaySPIFFE:  strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
-		sourceAuthenticator:            config.SourceAuthenticator,
+		allowedSourceSPIFFE:            strings.TrimSpace(config.AllowedSourceSPIFFE),
 		realtime:                       config.Realtime,
 		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
 		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
@@ -159,10 +157,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalHistoricalReplayObservationPath {
 		h.handleHistoricalReplayObservation(writer, request)
-		return
-	}
-	if request.URL.Path == InternalSourceCoveragePath {
-		h.handleSourceCoverage(writer, request)
 		return
 	}
 	if request.URL.Path == InternalMQTTGatewayEvidencePath {

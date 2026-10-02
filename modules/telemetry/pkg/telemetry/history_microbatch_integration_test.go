@@ -46,7 +46,7 @@ func TestHistoryMicrobatchLeaseRetryAndDeadBoundary(t *testing.T) {
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_observations WHERE source_partition=$1`, partition)
 	}()
 	for i := 1; i <= 3; i++ {
-		candidate := ingestCandidate(fmt.Sprintf("018f2e00-9400-7000-8000-%012d", i), integrationA, partition, int64(i), SourcePathPoll, "mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`25.0`), "NUMBER", "Cel", now.Add(time.Duration(i)*time.Second), now.Add(time.Duration(i)*time.Second))
+		candidate := ingestCandidate(fmt.Sprintf("018f2e00-9400-7000-8000-%012d", i), sourceA, partition, int64(i), SourcePathPoll, "mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`25.0`), "NUMBER", "Cel", now.Add(time.Duration(i)*time.Second), now.Add(time.Duration(i)*time.Second))
 		if _, err := store.AcceptObservation(ctx, candidate); err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 	revision := int64(1)
 	for i := range rows {
 		value := float64(10 + 20*i)
-		rows[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-9500-7000-8000-%012d", i), TenantID: stringPointer(tenantA), SiteID: stringPointer(siteA), DeviceID: stringPointer(deviceA), PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), IntegrationInstanceID: integrationA, SourceEventID: fmt.Sprintf("018f2e00-9600-7000-8000-%012d", i), SourcePartition: "microbatch-mv", SourceOffset: int64(i), SourcePath: "POLL", TelemetryKey: "temperature", PointType: stringPointer("TELEMETRY"), PointRevision: &revision, ValueType: stringPointer("NUMBER"), ValueNumber: &value, SampledAt: time.Date(2026, 7+time.Month(i), 1, 0, 0, 0, 0, time.UTC), ReceivedAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64)}
+		rows[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-9500-7000-8000-%012d", i), TenantID: stringPointer(tenantA), SiteID: stringPointer(siteA), DeviceID: stringPointer(deviceA), PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SourceID: sourceA, SourceEventID: fmt.Sprintf("018f2e00-9600-7000-8000-%012d", i), SourcePartition: "microbatch-mv", SourceOffset: int64(i), SourcePath: "POLL", TelemetryKey: "temperature", PointType: stringPointer("TELEMETRY"), PointRevision: &revision, ValueType: stringPointer("NUMBER"), ValueNumber: &value, SampledAt: time.Date(2026, 7+time.Month(i), 1, 0, 0, 0, 0, time.UTC), ReceivedAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64)}
 	}
 	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_hourly ADD CONSTRAINT injected_failure CHECK 0`)
 	if err := sink.InsertObservations(t.Context(), rows); err == nil {

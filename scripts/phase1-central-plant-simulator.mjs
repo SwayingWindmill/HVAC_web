@@ -403,28 +403,13 @@ COMMIT;`;
 }
 
 function buildS2Seed(points, rig) {
-  const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
-  const ids = buildIdentities(points);
+  const { tenantId, siteId } = centralPlantIdentity;
   const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
 
-  const deviceBindings = centralPlantDevices.map((device) => `(
-    ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
-    ${sqlLiteral(integrationInstanceId)}, 'DEVICE', ${sqlLiteral(device.platformDeviceId)},
-    'ACTIVE', 1, 1, clock_timestamp(), NULL, clock_timestamp(), 'APPLICABLE'
+  // Telemetry learns each Point from the identity Connectivity resolves on the first observation.
+  const devices = centralPlantDevices.map((device) => `(
+    ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, 'APPLICABLE', clock_timestamp()
   )`).join(',\n');
-
-  const pointBindings = points.map((point, index) => {
-    const device = deviceByName.get(point.deviceId);
-    return `(
-      ${sqlLiteral(localUUID(0x600000000000 + index + 1))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
-      ${sqlLiteral(ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`))},
-      ${point.sensorId ? sqlLiteral(ids.sensorIdByKey.get(point.sensorId)) : 'NULL'},
-      ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)},
-      ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'},
-      ${point.pointType === 'COUNTER' ? sqlLiteral('RESET_TO_ZERO') : 'NULL'}, NULL,
-      'ACTIVE', 1, 1, '2000-01-01T00:00:00Z', NULL, clock_timestamp()
-    )`;
-  }).join(',\n');
 
   const presence = centralPlantDevices.map((device) => `(
     ${sqlLiteral(device.platformDeviceId)}, 1, 30, 120, true, ARRAY['SOURCE_ACTIVITY']::text[], 60,
@@ -450,13 +435,9 @@ function buildS2Seed(points, rig) {
 
   return `BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
-INSERT INTO telemetry_runtime.registry_device_bindings (device_id, tenant_id, site_id, integration_instance_id, external_entity_type, external_id, binding_status, binding_revision, source_registry_revision, valid_from, valid_to, updated_at, presence_applicability) VALUES
-${deviceBindings}
-ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, integration_instance_id=EXCLUDED.integration_instance_id, external_entity_type=EXCLUDED.external_entity_type, external_id=EXCLUDED.external_id, binding_status='ACTIVE', valid_to=NULL, presence_applicability='APPLICABLE', updated_at=clock_timestamp();
-
-INSERT INTO telemetry_runtime.registry_point_bindings (projection_id, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus, binding_status, point_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
-${pointBindings}
-ON CONFLICT (projection_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, point_id=EXCLUDED.point_id, sensor_id=EXCLUDED.sensor_id, device_id=EXCLUDED.device_id, telemetry_key=EXCLUDED.telemetry_key, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, binding_status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at) VALUES
+${devices}
+ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, presence_applicability='APPLICABLE', updated_at=clock_timestamp();
 
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
 ${presence}

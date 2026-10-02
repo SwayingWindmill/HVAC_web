@@ -121,7 +121,7 @@ func historyObservation(observationID, eventID, tenantID, siteID, deviceID, part
 		"device_id":               deviceID,
 		"point_id":                "018f4f00-2100-7000-8000-000000000001",
 		"sensor_id":               "018f4f00-2200-7000-8000-000000000001",
-		"integration_instance_id": "018f4f00-5000-7000-8000-000000000001",
+		"source_id":               "gateway-a",
 		"source_event_id":         eventID,
 		"source_partition":        partition,
 		"source_offset":           offset,

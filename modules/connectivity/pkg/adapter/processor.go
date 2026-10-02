@@ -21,18 +21,21 @@ type ProcessingResult struct {
 	Rejected      int
 }
 
-type BindingAuthorizer interface {
+// IdentityResolver authorizes a Gateway and resolves what its messages name: a child
+// Device ("" when unregistered) and a Device's Point by Point Code (nil when unregistered).
+type IdentityResolver interface {
 	AuthorizeGateway(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayExternalID string) error
-	AuthorizeGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) error
+	ResolveGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) (string, error)
+	ResolvePoint(ctx context.Context, deviceID, pointCode string) (*ResolvedPoint, error)
 }
 
 type Processor struct {
 	integrationInstanceID string
-	bindings              BindingAuthorizer
+	bindings              IdentityResolver
 	runtime               RuntimeClient
 }
 
-func NewProcessor(integrationInstanceID string, bindings BindingAuthorizer, runtime RuntimeClient) (*Processor, error) {
+func NewProcessor(integrationInstanceID string, bindings IdentityResolver, runtime RuntimeClient) (*Processor, error) {
 	integrationInstanceID = strings.TrimSpace(integrationInstanceID)
 	if !uuidV7Pattern.MatchString(integrationInstanceID) || bindings == nil || runtime == nil {
 		return nil, errors.New("MQTT telemetry processor dependencies are invalid")
@@ -62,11 +65,15 @@ func (processor *Processor) Process(ctx context.Context, topic string, payload [
 	}
 }
 
-func (processor *Processor) authorizeChild(ctx context.Context, scope TopicScope, externalDeviceID string) error {
-	if err := processor.bindings.AuthorizeGatewayChild(ctx, processor.integrationInstanceID, scope.GatewayID, strings.TrimSpace(externalDeviceID)); err != nil {
-		return permanentMessage(errors.New("MQTT child Device is not pre-registered in an active GatewayChildBinding"))
+func (processor *Processor) resolveChild(ctx context.Context, scope TopicScope, externalDeviceID string) (*ResolvedDevice, error) {
+	deviceID, err := processor.bindings.ResolveGatewayChild(ctx, processor.integrationInstanceID, scope.GatewayID, strings.TrimSpace(externalDeviceID))
+	if err != nil {
+		return nil, fmt.Errorf("resolve MQTT child Device %s: %w", externalDeviceID, err)
 	}
-	return nil
+	if deviceID == "" {
+		return nil, nil
+	}
+	return &ResolvedDevice{TenantID: scope.TenantID, SiteID: scope.SiteID, DeviceID: deviceID}, nil
 }
 
 func (processor *Processor) processTelemetry(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
@@ -76,7 +83,8 @@ func (processor *Processor) processTelemetry(ctx context.Context, scope TopicSco
 	}
 	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeTelemetry, Replay: envelope.Replay}
 	for _, device := range envelope.Payload.Devices {
-		if err := processor.authorizeChild(ctx, scope, device.DeviceID); err != nil {
+		resolved, err := processor.resolveChild(ctx, scope, device.DeviceID)
+		if err != nil {
 			return ProcessingResult{}, err
 		}
 		for _, point := range device.Points {
@@ -89,9 +97,15 @@ func (processor *Processor) processTelemetry(ctx context.Context, scope TopicSco
 			if typeErr != nil {
 				return ProcessingResult{}, permanentMessage(typeErr)
 			}
+			var resolvedPoint *ResolvedPoint
+			if resolved != nil {
+				if resolvedPoint, err = processor.bindings.ResolvePoint(ctx, resolved.DeviceID, strings.TrimSpace(point.Code)); err != nil {
+					return ProcessingResult{}, fmt.Errorf("resolve MQTT point %s/%s: %w", device.DeviceID, point.Code, err)
+				}
+			}
 			observation := Observation{
-				IntegrationInstanceID: processor.integrationInstanceID,
-				SourcePath:            "PUSH", ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(device.DeviceID), TelemetryKey: strings.TrimSpace(point.Code),
+				SourceID: scope.GatewayID, Device: resolved, Point: resolvedPoint,
+				SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(device.DeviceID), TelemetryKey: strings.TrimSpace(point.Code),
 				Value: point.Value, ValueType: valueType, Unit: point.Unit, WireQuality: point.Quality, SampledAt: unixMillisRFC3339(device.DeviceTimestamp),
 				SourcePosition: SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
 			}
@@ -124,14 +138,9 @@ func (processor *Processor) processState(ctx context.Context, scope TopicScope, 
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
-	for _, device := range envelope.Payload.Devices {
-		if err := processor.authorizeChild(ctx, scope, device.DeviceID); err != nil {
-			return ProcessingResult{}, err
-		}
-	}
 	rawPayload, _ := json.Marshal(envelope.Payload)
 	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
-		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
+		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
 		MessageID: envelope.MessageID, EvidenceType: "STATE", ObservedAt: unixMillisRFC3339(envelope.Timestamp), Sequence: int64(envelope.Sequence), Payload: rawPayload,
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT state evidence: %w", err)
@@ -141,10 +150,13 @@ func (processor *Processor) processState(ctx context.Context, scope TopicScope, 
 		if device.Online == nil || !*device.Online {
 			continue
 		}
-		if err = processor.emitSourceActivity(ctx, envelope.MessageID, envelope.Timestamp, device.DeviceID, "state"); err != nil {
+		emitted, err := processor.emitSourceActivity(ctx, scope, envelope.MessageID, envelope.Timestamp, device.DeviceID, "state")
+		if err != nil {
 			return ProcessingResult{}, err
 		}
-		result.EvidenceCount++
+		if emitted {
+			result.EvidenceCount++
+		}
 	}
 	return result, nil
 }
@@ -154,24 +166,22 @@ func (processor *Processor) processHeartbeat(ctx context.Context, scope TopicSco
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
-	for _, deviceID := range envelope.Payload.ConnectedDevices {
-		if err := processor.authorizeChild(ctx, scope, deviceID); err != nil {
-			return ProcessingResult{}, err
-		}
-	}
 	rawPayload, _ := json.Marshal(envelope.Payload)
 	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
-		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
+		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
 		MessageID: envelope.MessageID, EvidenceType: "HEARTBEAT", ObservedAt: unixMillisRFC3339(envelope.Timestamp), Sequence: int64(envelope.Sequence), Payload: rawPayload,
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT heartbeat evidence: %w", err)
 	}
 	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeHeartbeat, EvidenceCount: 1}
 	for _, deviceID := range envelope.Payload.ConnectedDevices {
-		if err = processor.emitSourceActivity(ctx, envelope.MessageID, envelope.Timestamp, deviceID, "heartbeat"); err != nil {
+		emitted, err := processor.emitSourceActivity(ctx, scope, envelope.MessageID, envelope.Timestamp, deviceID, "heartbeat")
+		if err != nil {
 			return ProcessingResult{}, err
 		}
-		result.EvidenceCount++
+		if emitted {
+			result.EvidenceCount++
+		}
 	}
 	return result, nil
 }
@@ -181,13 +191,8 @@ func (processor *Processor) processEvent(ctx context.Context, scope TopicScope, 
 	if err != nil {
 		return ProcessingResult{}, permanentMessage(err)
 	}
-	if strings.EqualFold(strings.TrimSpace(envelope.Payload.SourceType), "DEVICE") {
-		if err := processor.authorizeChild(ctx, scope, envelope.Payload.SourceID); err != nil {
-			return ProcessingResult{}, err
-		}
-	}
 	if err = processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
-		IntegrationInstanceID: processor.integrationInstanceID, TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
+		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
 		MessageID: envelope.MessageID, Sequence: int64(envelope.Sequence), EventType: strings.TrimSpace(envelope.Payload.EventType),
 		SourceType: strings.TrimSpace(envelope.Payload.SourceType), SourceID: strings.TrimSpace(envelope.Payload.SourceID), EventTime: unixMillisRFC3339(envelope.Payload.EventTime),
 		Severity: strings.ToUpper(strings.TrimSpace(envelope.Payload.Severity)), Data: append(json.RawMessage(nil), envelope.Payload.Data...),
@@ -197,17 +202,22 @@ func (processor *Processor) processEvent(ctx context.Context, scope TopicScope, 
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent, EvidenceCount: 1}, nil
 }
 
-func (processor *Processor) emitSourceActivity(ctx context.Context, messageID string, observedAt int64, deviceID, discriminator string) error {
-	sourceEventID, err := deterministicEvidenceEventID(messageID, observedAt, discriminator+":"+strings.TrimSpace(deviceID))
+// emitSourceActivity reports Presence for a registered child Device; an unregistered one
+// has no Presence to report.
+func (processor *Processor) emitSourceActivity(ctx context.Context, scope TopicScope, messageID string, observedAt int64, externalDeviceID, discriminator string) (bool, error) {
+	device, err := processor.resolveChild(ctx, scope, externalDeviceID)
+	if err != nil || device == nil {
+		return false, err
+	}
+	sourceEventID, err := deterministicEvidenceEventID(messageID, observedAt, discriminator+":"+strings.TrimSpace(externalDeviceID))
 	if err != nil {
-		return permanentMessage(err)
+		return false, permanentMessage(err)
 	}
 	_, err = processor.runtime.AcceptPresenceEvidence(ctx, PresenceEvidence{
-		IntegrationInstanceID: processor.integrationInstanceID, ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(deviceID),
-		SignalType: "SOURCE_ACTIVITY", ObservedAt: unixMillisRFC3339(observedAt), SourceEventID: sourceEventID,
+		DeviceID: device.DeviceID, SignalType: "SOURCE_ACTIVITY", ObservedAt: unixMillisRFC3339(observedAt), SourceEventID: sourceEventID,
 	})
 	if err != nil {
-		return fmt.Errorf("accept MQTT Presence evidence for device %s: %w", deviceID, err)
+		return false, fmt.Errorf("accept MQTT Presence evidence for device %s: %w", externalDeviceID, err)
 	}
-	return nil
+	return true, nil
 }

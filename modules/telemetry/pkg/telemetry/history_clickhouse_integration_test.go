@@ -51,7 +51,7 @@ func TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry(t *testing.T) 
 	}
 	observedAt := time.Date(2026, 7, 29, 8, 0, 2, 0, time.UTC)
 	candidate := ingestCandidate(
-		"018f2e00-9300-7000-8000-000000000001", integrationA, partition, 1, SourcePathPoll,
+		"018f2e00-9300-7000-8000-000000000001", sourceA, partition, 1, SourcePathPoll,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`24.75`), "NUMBER", "Cel",
 		observedAt.Add(-2*time.Second), observedAt,
 	)
@@ -227,7 +227,7 @@ func TestPostgresHistoricalReplayProjectsClickHouseWithoutCurrentMutation(t *tes
 
 	receivedAt := baselineAt.Add(time.Minute)
 	replay := ingestCandidate(
-		"018f2e00-9300-7000-8000-000000000002", integrationA, partition, 1, SourcePathHistoryReplay,
+		"018f2e00-9300-7000-8000-000000000002", sourceA, partition, 1, SourcePathHistoryReplay,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`21.5`), "NUMBER", "Cel",
 		time.Date(2026, 7, 23, 0, 10, 0, 0, time.UTC), receivedAt,
 	)

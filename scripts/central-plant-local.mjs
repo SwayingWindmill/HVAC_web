@@ -52,15 +52,17 @@ function clickHouseQuery(container, sql) {
 }
 
 function queryPersistedSummary(topology) {
-  const integration = centralPlantIdentity.integrationInstanceId;
+  const tenant = centralPlantIdentity.tenantId;
+  // Telemetry keys a Gateway's observations by the Gateway it came from.
+  const source = 'EG8200-COMMERCIAL-001';
   const sql = `SELECT json_build_object(
-    'acceptedObservations', (SELECT count(*) FROM telemetry_runtime.source_observations WHERE integration_instance_id='${integration}'::uuid AND acceptance_status='ACCEPTED'),
-    'deviceCount', (SELECT count(DISTINCT device_id) FROM telemetry_runtime.source_observations WHERE integration_instance_id='${integration}'::uuid AND acceptance_status='ACCEPTED'),
-    'latestPointCount', (SELECT count(*) FROM telemetry_runtime.latest_accepted_telemetry l JOIN telemetry_runtime.registry_device_bindings b USING (device_id) WHERE b.integration_instance_id='${integration}'::uuid),
-    'snapshotCount', (SELECT count(*) FROM telemetry_runtime.device_observation_snapshots s JOIN telemetry_runtime.registry_device_bindings b USING (device_id) WHERE b.integration_instance_id='${integration}'::uuid),
-    'publishedPublicationCount', (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o JOIN telemetry_runtime.registry_device_bindings b USING (device_id) WHERE b.integration_instance_id='${integration}'::uuid AND o.delivery_state='PUBLISHED'),
-    'pendingPublicationCount', (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o JOIN telemetry_runtime.registry_device_bindings b USING (device_id) WHERE b.integration_instance_id='${integration}'::uuid AND o.delivery_state='PENDING'),
-    'quarantineCount', (SELECT count(*) FROM telemetry_runtime.ingest_quarantine WHERE integration_instance_id='${integration}'::uuid AND resolved_at IS NULL)
+    'acceptedObservations', (SELECT count(*) FROM telemetry_runtime.source_observations WHERE source_id='${source}' AND acceptance_status='ACCEPTED'),
+    'deviceCount', (SELECT count(DISTINCT device_id) FROM telemetry_runtime.source_observations WHERE source_id='${source}' AND acceptance_status='ACCEPTED'),
+    'latestPointCount', (SELECT count(*) FROM telemetry_runtime.latest_accepted_telemetry l JOIN telemetry_runtime.devices d USING (device_id) WHERE d.tenant_id='${tenant}'::uuid),
+    'snapshotCount', (SELECT count(*) FROM telemetry_runtime.device_observation_snapshots s JOIN telemetry_runtime.devices d USING (device_id) WHERE d.tenant_id='${tenant}'::uuid),
+    'publishedPublicationCount', (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o JOIN telemetry_runtime.devices d USING (device_id) WHERE d.tenant_id='${tenant}'::uuid AND o.delivery_state='PUBLISHED'),
+    'pendingPublicationCount', (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o JOIN telemetry_runtime.devices d USING (device_id) WHERE d.tenant_id='${tenant}'::uuid AND o.delivery_state='PENDING'),
+    'quarantineCount', (SELECT count(*) FROM telemetry_runtime.ingest_quarantine WHERE source_id='${source}' AND resolved_at IS NULL)
   )::text;`;
   return JSON.parse(dockerQuery(topology.database.s2Container, sql));
 }

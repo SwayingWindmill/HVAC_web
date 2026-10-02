@@ -84,8 +84,6 @@ func (metrics *s2Metrics) observeRequest(path string, status int, elapsed time.D
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
 			metrics.observeIngest(outcome, reason)
 		}
-	case path == InternalSourceCoveragePath:
-		_ = metrics.registry.AddCounter("hvac_s2_presence_evaluations_total", "S2 Presence coverage evaluations.", map[string]string{"outcome": outcome, "reason_family": reason}, 1)
 	case path == InternalBatchSnapshotPath:
 		metrics.observeSnapshotRequest("batch", outcome, elapsed)
 	case strings.HasPrefix(path, InternalDeviceSnapshotPrefix) && strings.HasSuffix(path, "/observation-snapshot"):

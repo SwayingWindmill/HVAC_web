@@ -9,35 +9,34 @@ import (
 
 const (
 	ingestTenantA = "018f2d00-0000-7000-8000-000000000001"
-	integrationA  = "018f2e00-6000-7000-8000-000000000001"
+	sourceA       = "EG8200-COMMERCIAL-001"
 	eventA        = "018f2e00-8000-7000-8000-000000000011"
 )
 
-func TestEvaluateObservationFailsClosedOnMapping(t *testing.T) {
+func TestEvaluateObservationFailsClosedOnIdentity(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
 	candidate := validObservationCandidate(now)
 
 	tests := []struct {
 		name       string
-		bindings   []RuntimeBinding
-		status     ObservationStatus
+		mutate     func(*ObservationFacts)
 		quarantine QuarantineReason
+		device     string
 	}{
-		{name: "missing", status: ObservationQuarantined, quarantine: QuarantineMappingNotFound},
-		{name: "quarantined", bindings: []RuntimeBinding{bindingWithStatus("QUARANTINED")}, status: ObservationQuarantined, quarantine: QuarantineMappingQuarantined},
-		{name: "retired", bindings: []RuntimeBinding{bindingWithStatus("RETIRED")}, status: ObservationQuarantined, quarantine: QuarantineMappingRetired},
-		{name: "future validity", bindings: []RuntimeBinding{bindingValidBetween("ACTIVE", now.Add(time.Second), nil)}, status: ObservationQuarantined, quarantine: QuarantineMappingNotFound},
-		{name: "expired validity", bindings: []RuntimeBinding{bindingValidBetween("ACTIVE", now.Add(-time.Hour), ptrTime(now))}, status: ObservationQuarantined, quarantine: QuarantineMappingRetired},
-		{name: "conflicting active", bindings: []RuntimeBinding{bindingWithStatus("ACTIVE"), bindingWithStatus("ACTIVE")}, status: ObservationQuarantined, quarantine: QuarantineMappingConflict},
+		{name: "unregistered Device", mutate: func(f *ObservationFacts) { f.Device, f.Point = nil, nil }, quarantine: QuarantineMappingNotFound},
+		{name: "Device known in another scope", mutate: func(f *ObservationFacts) { f.DeviceConflict = true }, quarantine: QuarantineMappingConflict},
+		{name: "unregistered Point", mutate: func(f *ObservationFacts) { f.Point = nil }, quarantine: QuarantinePointMappingNotFound, device: deviceA},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			decision := EvaluateObservation(candidate, ObservationFacts{Bindings: test.bindings}, now)
-			if decision.Status != test.status || decision.QuarantineReason != test.quarantine {
+			facts := validObservationFacts()
+			test.mutate(&facts)
+			decision := EvaluateObservation(candidate, facts, now)
+			if decision.Status != ObservationQuarantined || decision.QuarantineReason != test.quarantine || decision.DeviceID != test.device {
 				t.Fatalf("decision=%#v", decision)
 			}
-			if decision.DeviceID != "" || decision.ReplaceLatest || decision.ReevaluateSnapshot {
-				t.Fatalf("mapping failure leaked or mutated Device state: %#v", decision)
+			if decision.PointID != "" || decision.ReplaceLatest || decision.ReevaluateSnapshot {
+				t.Fatalf("identity failure mutated Device state: %#v", decision)
 			}
 			if !decision.AdvancePosition {
 				t.Fatal("new quarantined source position must be receipted")
@@ -166,16 +165,16 @@ func assertObservationDecision(t *testing.T, decision ObservationDecision, statu
 func validObservationCandidate(now time.Time) ObservationCandidate {
 	unit := "Cel"
 	return ObservationCandidate{
-		IntegrationInstanceID: integrationA,
-		SourcePath:            SourcePathWebhook,
-		ExternalEntityType:    "DEVICE",
-		ExternalID:            "tb-device-org-a-site-1",
-		TelemetryKey:          "zone.temperature",
-		Value:                 json.RawMessage(`23.5`),
-		ValueType:             "NUMBER",
-		Unit:                  &unit,
-		SampledAt:             now.Add(-5 * time.Second),
-		ReceivedAt:            now,
+		SourceID:           sourceA,
+		SourcePath:         SourcePathWebhook,
+		ExternalEntityType: "DEVICE",
+		ExternalID:         "CHILLER-01",
+		TelemetryKey:       "zone.temperature",
+		Value:              json.RawMessage(`23.5`),
+		ValueType:          "NUMBER",
+		Unit:               &unit,
+		SampledAt:          now.Add(-5 * time.Second),
+		ReceivedAt:         now,
 		Position: SourcePosition{
 			Partition: "tb-telemetry-0",
 			Offset:    100,
@@ -189,12 +188,11 @@ func validObservationFacts() ObservationFacts {
 	sensorID := "018f2e00-3200-7000-8000-000000000001"
 	minimum, maximum := -50.0, 100.0
 	return ObservationFacts{
-		Bindings: []RuntimeBinding{bindingWithStatus("ACTIVE")},
-		PointBindings: []RuntimePointBinding{{
-			TenantID: ingestTenantA, SiteID: siteA,
-			PointID: "018f2e00-3100-7000-8000-000000000001", SensorID: &sensorID, DeviceID: deviceA,
-			TelemetryKey: "zone.temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Status: "ACTIVE", PointRevision: 1,
-		}},
+		Device: &ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA},
+		Point: &ResolvedPoint{
+			PointID: "018f2e00-3100-7000-8000-000000000001", SensorID: &sensorID,
+			PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, PointRevision: 1,
+		},
 		Policy: &ObservationPolicy{
 			Revision:           5,
 			ValueType:          "NUMBER",
@@ -213,10 +211,10 @@ func TestCounterSemanticsAreSnapshottedIntoHistory(t *testing.T) {
 	facts := validObservationFacts()
 	mode := "ROLLOVER"
 	modulus := 10000.0
-	facts.PointBindings[0].PointType = "COUNTER"
-	facts.PointBindings[0].CounterDecreaseMode = &mode
-	facts.PointBindings[0].CounterRolloverModulus = &modulus
-	facts.PointBindings[0].PointRevision = 7
+	facts.Point.PointType = "COUNTER"
+	facts.Point.CounterDecreaseMode = &mode
+	facts.Point.CounterRolloverModulus = &modulus
+	facts.Point.PointRevision = 7
 
 	decision := EvaluateObservation(candidate, facts, now)
 	if decision.Status != ObservationAccepted || decision.PointType != "COUNTER" || decision.PointRevision != 7 {
@@ -240,23 +238,5 @@ func TestCounterSemanticsAreSnapshottedIntoHistory(t *testing.T) {
 	}
 	if observation.CounterDecreaseMode == nil || *observation.CounterDecreaseMode != mode || observation.CounterRolloverModulus == nil || *observation.CounterRolloverModulus != modulus {
 		t.Fatalf("history counter semantics=%#v", observation)
-	}
-}
-
-func bindingWithStatus(status string) RuntimeBinding {
-	return bindingValidBetween(status, time.Time{}, nil)
-}
-
-func bindingValidBetween(status string, validFrom time.Time, validTo *time.Time) RuntimeBinding {
-	return RuntimeBinding{
-		TenantID:              ingestTenantA,
-		DeviceID:              deviceA,
-		SiteID:                siteA,
-		IntegrationInstanceID: integrationA,
-		ExternalEntityType:    "DEVICE",
-		ExternalID:            "tb-device-org-a-site-1",
-		Status:                status,
-		ValidFrom:             validFrom,
-		ValidTo:               validTo,
 	}
 }

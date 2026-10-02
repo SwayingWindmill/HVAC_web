@@ -1,11 +1,6 @@
 BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
 
--- Realtime subscriptions are authorized by IAM consuming the single-use subscribe grant
--- at bootstrap. The per-key IAM projection never had a producer and denied every
--- subscription; the subscription row is the authorization record.
-DROP TABLE IF EXISTS telemetry_runtime.iam_scope_projections;
-
 -- Last IAM telemetry revocation fact applied per tenant.
 CREATE TABLE IF NOT EXISTS telemetry_runtime.iam_revocation_cursors (
   tenant_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),

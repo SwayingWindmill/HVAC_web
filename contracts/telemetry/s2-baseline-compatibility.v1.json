@@ -149,33 +149,23 @@
   "postgres": {
     "schema": "telemetry_runtime",
     "tables": {
-      "registry_device_bindings": [
+      "devices": [
         "device_id",
         "tenant_id",
         "site_id",
-        "integration_instance_id",
-        "external_entity_type",
-        "external_id",
-        "binding_status",
-        "binding_revision",
-        "source_registry_revision",
-        "valid_from",
-        "valid_to",
         "updated_at"
       ],
-      "iam_scope_projections": [
-        "projection_id",
-        "tenant_id",
-        "principal_id",
-        "site_id",
+      "points": [
         "device_id",
         "telemetry_key",
-        "action",
-        "decision",
-        "policy_revision",
-        "source_event_id",
-        "valid_until",
-        "revoked_at",
+        "tenant_id",
+        "site_id",
+        "point_id",
+        "sensor_id",
+        "point_type",
+        "value_type",
+        "unit",
+        "point_revision",
         "updated_at"
       ],
       "presence_policies": [
@@ -195,7 +185,7 @@
         "updated_at"
       ],
       "source_positions": [
-        "integration_instance_id",
+        "source_id",
         "source_partition",
         "source_offset",
         "source_event_id",
@@ -204,7 +194,7 @@
       ],
       "source_observations": [
         "observation_id",
-        "integration_instance_id",
+        "source_id",
         "source_event_id",
         "source_partition",
         "source_offset",
@@ -222,7 +212,7 @@
       ],
       "ingest_quarantine": [
         "quarantine_id",
-        "integration_instance_id",
+        "source_id",
         "external_entity_type",
         "external_id",
         "device_id",

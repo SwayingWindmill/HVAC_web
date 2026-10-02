@@ -1,7 +1,7 @@
 BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
 
-ALTER TABLE telemetry_runtime.registry_device_bindings
+ALTER TABLE telemetry_runtime.devices
   ADD COLUMN IF NOT EXISTS presence_applicability text NOT NULL DEFAULT 'APPLICABLE'
   CHECK (presence_applicability IN ('APPLICABLE', 'NOT_APPLICABLE'));
 
@@ -32,7 +32,7 @@ ALTER TABLE telemetry_runtime.device_observation_snapshots
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_signals (
   signal_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(signal_id)),
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid NOT NULL REFERENCES telemetry_runtime.devices(device_id),
   signal_type text NOT NULL CHECK (signal_type IN ('SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT')),
   observed_at timestamptz NOT NULL,
   received_at timestamptz NOT NULL,
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS presence_signals_device_observed_idx
   WHERE accepted;
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.observation_coverage (
-  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.devices(device_id),
   available boolean NOT NULL,
   continuous_since timestamptz,
   reason_code text CHECK (reason_code IS NULL OR reason_code IN ('SOURCE_UNAVAILABLE', 'OBSERVATION_COVERAGE_GAP', 'POLICY_UNAVAILABLE', 'OWNER_DEPENDENCY_UNAVAILABLE')),

@@ -179,14 +179,14 @@ func loadDeviceFacts(ctx context.Context, tx pgx.Tx, deviceID string) (DeviceFac
 	var applicability string
 	err := tx.QueryRow(ctx, `
 SELECT device_id::text, tenant_id::text, site_id::text, presence_applicability
-FROM telemetry_runtime.registry_device_bindings
-WHERE device_id = $1::uuid AND binding_status = 'ACTIVE' AND valid_to IS NULL
+FROM telemetry_runtime.devices
+WHERE device_id = $1::uuid
 `, deviceID).Scan(&facts.DeviceID, &facts.TenantID, &facts.SiteID, &applicability)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DeviceFacts{}, ErrDeviceNotFound
 	}
 	if err != nil {
-		return DeviceFacts{}, fmt.Errorf("load telemetry device binding: %w", err)
+		return DeviceFacts{}, fmt.Errorf("load telemetry Device: %w", err)
 	}
 	facts.Applicability = telemetryapi.PresenceApplicability(applicability)
 

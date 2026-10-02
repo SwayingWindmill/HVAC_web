@@ -98,12 +98,12 @@ try {
   report.assertions.authoritativeState = psql(`
     SELECT s.business_revision::text || '|'
       || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o WHERE o.device_id = s.device_id AND o.subscription_id IS NULL)::text || '|'
-      || (SELECT source_offset FROM telemetry_runtime.source_positions WHERE integration_instance_id = '018f2e00-6000-7000-8000-000000000001'::uuid AND source_partition = 'tb-ticket-04-a')::text || '|'
+      || (SELECT source_offset FROM telemetry_runtime.source_positions WHERE source_id = 'EG8200-COMMERCIAL-001' AND source_partition = 'tb-ticket-04-a')::text || '|'
       || (SELECT value::text FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = s.device_id AND telemetry_key = 'zone.temperature')
     FROM telemetry_runtime.device_observation_snapshots s
     WHERE s.device_id = '018f2e00-3000-7000-8000-000000000001'::uuid
   `);
-  if (report.assertions.authoritativeState !== '8|8|6|26.0') {
+  if (report.assertions.authoritativeState !== '6|6|6|26.0') {
     throw new Error(`unexpected ingest authoritative state ${report.assertions.authoritativeState}`);
   }
   report.assertions.deliveryEvidence = psql(`
@@ -136,7 +136,7 @@ try {
       || count(*) FILTER (WHERE delivery_state = 'PENDING')::text || '|'
       || count(*) FILTER (WHERE payload ->> 'acceptance_status' <> 'ACCEPTED'
                            AND COALESCE(payload ->> 'value_json', payload ->> 'value_number', payload ->> 'value_string', payload ->> 'value_boolean') IS NOT NULL)::text || '|'
-      || count(*) FILTER (WHERE payload ->> 'owning_organization_id' IS NOT NULL
+      || count(*) FILTER (WHERE payload ->> 'tenant_id' IS NOT NULL
                            AND payload ->> 'site_id' IS NOT NULL
                            AND payload ->> 'device_id' IS NOT NULL)::text
     FROM telemetry_runtime.telemetry_history_outbox
@@ -145,32 +145,14 @@ try {
   if (report.assertions.historyOutbox !== '9|9|0|8') {
     throw new Error(`unexpected history outbox state ${report.assertions.historyOutbox}`);
   }
-  report.assertions.coverageRecovery = psql(`
-    SELECT available::text || '|' || source_revision::text || '|' || continuous_since::text
-    FROM telemetry_runtime.observation_coverage
-    WHERE device_id = '018f2e00-3000-7000-8000-000000000001'::uuid
-  `);
-  if (report.assertions.coverageRecovery !== 'true|3|2026-07-24 00:22:00+00') {
-    throw new Error(`unexpected coverage recovery ${report.assertions.coverageRecovery}`);
-  }
-  report.assertions.coverageQuarantine = psql(`
-    SELECT count(*)::text || '|'
-      || count(*) FILTER (WHERE device_id IS NULL AND telemetry_key IS NULL)::text
-    FROM telemetry_runtime.ingest_quarantine
-    WHERE external_id = 'tb-device-coverage-missing'
-      AND evidence ->> 'kind' = 'OBSERVATION_COVERAGE_REPORT'
-  `);
-  if (report.assertions.coverageQuarantine !== '1|1') {
-    throw new Error(`unexpected coverage quarantine ${report.assertions.coverageQuarantine}`);
-  }
   report.assertions.relayRetry = psql(`
     SELECT attempts::text || '|' || last_error_code || '|'
       || (SELECT business_revision FROM telemetry_runtime.device_observation_snapshots WHERE device_id = o.device_id)::text
     FROM telemetry_runtime.telemetry_publication_outbox o
     WHERE device_id = '018f2e00-3000-7000-8000-000000000001'::uuid
-      AND business_revision = 8 AND subscription_id IS NULL
+      AND business_revision = 6 AND subscription_id IS NULL
   `);
-  if (report.assertions.relayRetry !== '2|CENTRIFUGO_UNAVAILABLE|8') {
+  if (report.assertions.relayRetry !== '2|CENTRIFUGO_UNAVAILABLE|6') {
     throw new Error(`unexpected relay retry state ${report.assertions.relayRetry}`);
   }
   report.assertions.twoTenantIsolation = psql(`
@@ -186,12 +168,12 @@ try {
   await waitForPostgres();
   report.assertions.restartDurability = psql(`
     SELECT s.business_revision::text || '|'
-      || (SELECT source_offset FROM telemetry_runtime.source_positions WHERE integration_instance_id = '018f2e00-6000-7000-8000-000000000001'::uuid AND source_partition = 'tb-ticket-04-a')::text || '|'
+      || (SELECT source_offset FROM telemetry_runtime.source_positions WHERE source_id = 'EG8200-COMMERCIAL-001' AND source_partition = 'tb-ticket-04-a')::text || '|'
       || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o WHERE o.device_id = s.device_id AND o.subscription_id IS NULL)::text
     FROM telemetry_runtime.device_observation_snapshots s
     WHERE s.device_id = '018f2e00-3000-7000-8000-000000000001'::uuid
   `);
-  if (report.assertions.restartDurability !== '8|6|8') {
+  if (report.assertions.restartDurability !== '6|6|6') {
     throw new Error(`unexpected post-restart state ${report.assertions.restartDurability}`);
   }
 

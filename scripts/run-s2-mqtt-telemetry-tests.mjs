@@ -375,7 +375,7 @@ try {
     throw new Error(`unexpected MQTT device identities: ${JSON.stringify([...deviceIds])}`);
   }
   for (const observation of initialObservations) {
-    if (observation.integrationInstanceId !== integrationInstanceId || observation.sourcePath !== 'PUSH' || observation.externalEntityType !== 'DEVICE') {
+    if (observation.sourceId !== gatewayId || observation.sourcePath !== 'PUSH' || observation.externalEntityType !== 'DEVICE') {
       throw new Error(`invalid S2 MQTT observation identity: ${JSON.stringify(observation)}`);
     }
     if (!String(observation.sourcePosition?.partition ?? '').startsWith(`mqtt:${gatewayId}:`)

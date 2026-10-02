@@ -1,15 +1,15 @@
 BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
 
--- Runtime Point bindings snapshot the effective Counter rule used for each observation.
-ALTER TABLE telemetry_runtime.registry_point_bindings
+-- Points snapshot the effective Counter rule used for each observation.
+ALTER TABLE telemetry_runtime.points
   ADD COLUMN IF NOT EXISTS counter_decrease_mode text,
   ADD COLUMN IF NOT EXISTS counter_rollover_modulus double precision;
 
-ALTER TABLE telemetry_runtime.registry_point_bindings
-  DROP CONSTRAINT IF EXISTS registry_point_bindings_counter_semantics_check;
-ALTER TABLE telemetry_runtime.registry_point_bindings
-  ADD CONSTRAINT registry_point_bindings_counter_semantics_check CHECK (
+ALTER TABLE telemetry_runtime.points
+  DROP CONSTRAINT IF EXISTS points_counter_semantics_check;
+ALTER TABLE telemetry_runtime.points
+  ADD CONSTRAINT points_counter_semantics_check CHECK (
     (
       point_type <> 'COUNTER'
       AND counter_decrease_mode IS NULL

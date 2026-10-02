@@ -189,20 +189,11 @@ try {
   const fixtureTenancy = psql(`
     SELECT count(DISTINCT tenant_id)::text || '|'
       || count(DISTINCT site_id)::text || '|'
-      || count(*) FILTER (WHERE binding_status = 'ACTIVE')::text || '|'
-      || count(*) FILTER (WHERE binding_status = 'QUARANTINED')::text
-    FROM telemetry_runtime.registry_device_bindings
+      || count(*)::text
+    FROM telemetry_runtime.devices
   `);
-  expectEqual(fixtureTenancy, '2|3|3|1', 'two-Tenant/multi-Site bindings');
+  expectEqual(fixtureTenancy, '2|3|3', 'two-Tenant/multi-Site Devices');
   report.assertions.fixtureTenancy = fixtureTenancy;
-
-  const iamFixture = psql(`
-    SELECT count(DISTINCT tenant_id)::text || '|'
-      || count(*) FILTER (WHERE decision = 'DENY' AND site_id = '018f2e00-1000-7000-8000-000000000002')::text
-    FROM telemetry_runtime.iam_scope_projections
-  `);
-  expectEqual(iamFixture, '2|1', 'multi-Tenant and sibling-Site fixture');
-  report.assertions.iamFixture = iamFixture;
 
   const keyStates = psql(`
     SELECT (snapshot #>> '{values,0,state}') || '|'
@@ -214,103 +205,84 @@ try {
   expectEqual(keyStates, 'PRESENT|NEVER_OBSERVED|ONLY_REJECTED_CANDIDATES', 'configured/missing/rejected key fixture');
   report.assertions.keyStates = keyStates;
 
-  const quarantine = psql("SELECT reason_code || '|' || (device_id IS NULL)::text FROM telemetry_runtime.ingest_quarantine WHERE external_id = 'tb-conflicted-asset'");
-  expectEqual(quarantine, 'MAPPING_CONFLICT|true', 'ExternalBinding conflict quarantine');
-  report.assertions.externalBindingConflict = quarantine;
+  const quarantine = psql("SELECT reason_code || '|' || (device_id IS NULL)::text FROM telemetry_runtime.ingest_quarantine WHERE external_id = 'mqtt-conflicted-asset'");
+  expectEqual(quarantine, 'MAPPING_CONFLICT|true', 'Device scope conflict quarantine');
+  report.assertions.deviceScopeConflict = quarantine;
 
-  const duplicateBinding = psql(`
-    INSERT INTO telemetry_runtime.registry_device_bindings (
-      tenant_id, device_id, site_id, integration_instance_id,
-      external_entity_type, external_id, binding_status, binding_revision,
-      source_registry_revision, valid_from, valid_to, updated_at
+  const crossTenantPoint = psql(`
+    INSERT INTO telemetry_runtime.points (
+      device_id, telemetry_key, tenant_id, site_id, point_id, point_type, value_type, unit, point_revision, updated_at
     ) VALUES (
-      '018f2d00-0000-7000-8000-000000000001',
-      '018f2e00-3000-7000-8000-000000000099',
-      '018f2e00-1000-7000-8000-000000000001',
-      '018f2e00-6000-7000-8000-000000000001',
-      'DEVICE', 'tb-device-org-a-site-1', 'ACTIVE', 1, 12,
-      '2026-07-23T01:00:00Z', NULL, '2026-07-23T01:00:00Z'
+      '018f2e00-3000-7000-8000-000000000001', 'zone.cross_tenant',
+      '018f2d00-0000-7000-8000-000000000002', '018f2e00-1000-7000-8000-000000000003',
+      '01990000-1210-7000-8000-000000000009', 'TELEMETRY', 'NUMBER', 'Cel', 1, now()
     )
   `, { expectFailure: true });
-  if (!duplicateBinding.includes('registry_device_bindings_active_external_key_uidx')) {
-    throw new Error('active ExternalBinding uniqueness did not reject a duplicate');
+  if (!crossTenantPoint.includes('points_tenant_id_device_id_fkey')) {
+    throw new Error(`Point outside its Device's Tenant was accepted: ${crossTenantPoint}`);
   }
-  report.assertions.activeBindingUnique = true;
+  report.assertions.pointTenantMatchesDevice = true;
 
   const validCounterBinding = psql(`
     BEGIN;
     SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.registry_point_bindings (
-      projection_id, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key,
-      point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus,
-      binding_status, point_revision, source_registry_revision, valid_from, valid_to, updated_at
+    INSERT INTO telemetry_runtime.points (
+      device_id, telemetry_key, tenant_id, site_id, point_id, sensor_id,
+      point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus, point_revision, updated_at
     ) VALUES (
-      '01990000-1200-7000-8000-000000000001',
-      '018f2d00-0000-7000-8000-000000000001',
-      '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000001', NULL,
       '018f2e00-3000-7000-8000-000000000001', 'meter.energy_total',
-      'COUNTER', 'NUMBER', 'kWh', 'ROLLOVER', 1000000,
-      'ACTIVE', 1, 12, now(), NULL, now()
+      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
+      '01990000-1210-7000-8000-000000000001', NULL,
+      'COUNTER', 'NUMBER', 'kWh', 'ROLLOVER', 1000000, 1, now()
     );
     SELECT point_type || '|' || counter_decrease_mode || '|' || counter_rollover_modulus::text
-    FROM telemetry_runtime.registry_point_bindings
-    WHERE projection_id = '01990000-1200-7000-8000-000000000001';
+    FROM telemetry_runtime.points
+    WHERE device_id = '018f2e00-3000-7000-8000-000000000001' AND telemetry_key = 'meter.energy_total';
     ROLLBACK;
   `);
   expectEqual(validCounterBinding, 'COUNTER|ROLLOVER|1000000', 'valid runtime Counter binding semantics');
   const counterBindingMissingMode = psql(`
     BEGIN;
     SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.registry_point_bindings (
-      projection_id, tenant_id, site_id, point_id, device_id, telemetry_key,
-      point_type, value_type, unit, binding_status, point_revision, source_registry_revision, valid_from, updated_at
+    INSERT INTO telemetry_runtime.points (
+      device_id, telemetry_key, tenant_id, site_id, point_id,
+      point_type, value_type, unit, point_revision, updated_at
     ) VALUES (
-      '01990000-1200-7000-8000-000000000002',
-      '018f2d00-0000-7000-8000-000000000001',
-      '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000002',
       '018f2e00-3000-7000-8000-000000000001', 'meter.energy_total_missing_mode',
-      'COUNTER', 'NUMBER', 'kWh', 'ACTIVE', 1, 12, now(), now()
+      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
+      '01990000-1210-7000-8000-000000000002',
+      'COUNTER', 'NUMBER', 'kWh', 1, now()
     );
   `, { expectFailure: true });
-  if (!counterBindingMissingMode.includes('registry_point_bindings_counter_semantics_check')) throw new Error(`runtime Counter without mode was accepted: ${counterBindingMissingMode}`);
+  if (!counterBindingMissingMode.includes('points_counter_semantics_check')) throw new Error(`runtime Counter without mode was accepted: ${counterBindingMissingMode}`);
   const counterBindingRolloverMissingModulus = psql(`
     BEGIN;
     SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.registry_point_bindings (
-      projection_id, tenant_id, site_id, point_id, device_id, telemetry_key,
-      point_type, value_type, unit, counter_decrease_mode,
-      binding_status, point_revision, source_registry_revision, valid_from, updated_at
+    INSERT INTO telemetry_runtime.points (
+      device_id, telemetry_key, tenant_id, site_id, point_id,
+      point_type, value_type, unit, counter_decrease_mode, point_revision, updated_at
     ) VALUES (
-      '01990000-1200-7000-8000-000000000003',
-      '018f2d00-0000-7000-8000-000000000001',
-      '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000003',
       '018f2e00-3000-7000-8000-000000000001', 'meter.water_total_rollover',
-      'COUNTER', 'NUMBER', 'm3', 'ROLLOVER',
-      'ACTIVE', 1, 12, now(), now()
+      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
+      '01990000-1210-7000-8000-000000000003',
+      'COUNTER', 'NUMBER', 'm3', 'ROLLOVER', 1, now()
     );
   `, { expectFailure: true });
-  if (!counterBindingRolloverMissingModulus.includes('registry_point_bindings_counter_semantics_check')) throw new Error(`runtime rollover Counter without modulus was accepted: ${counterBindingRolloverMissingModulus}`);
+  if (!counterBindingRolloverMissingModulus.includes('points_counter_semantics_check')) throw new Error(`runtime rollover Counter without modulus was accepted: ${counterBindingRolloverMissingModulus}`);
   const nonCounterRuntimeMode = psql(`
     BEGIN;
     SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.registry_point_bindings (
-      projection_id, tenant_id, site_id, point_id, device_id, telemetry_key,
-      point_type, value_type, unit, counter_decrease_mode,
-      binding_status, point_revision, source_registry_revision, valid_from, updated_at
+    INSERT INTO telemetry_runtime.points (
+      device_id, telemetry_key, tenant_id, site_id, point_id,
+      point_type, value_type, unit, counter_decrease_mode, point_revision, updated_at
     ) VALUES (
-      '01990000-1200-7000-8000-000000000004',
-      '018f2d00-0000-7000-8000-000000000001',
-      '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000004',
       '018f2e00-3000-7000-8000-000000000001', 'meter.active_power_with_counter_mode',
-      'TELEMETRY', 'NUMBER', 'kW', 'RESET_TO_ZERO',
-      'ACTIVE', 1, 12, now(), now()
+      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
+      '01990000-1210-7000-8000-000000000004',
+      'TELEMETRY', 'NUMBER', 'kW', 'RESET_TO_ZERO', 1, now()
     );
   `, { expectFailure: true });
-  if (!nonCounterRuntimeMode.includes('registry_point_bindings_counter_semantics_check')) throw new Error(`non-Counter runtime binding accepted Counter mode: ${nonCounterRuntimeMode}`);
+  if (!nonCounterRuntimeMode.includes('points_counter_semantics_check')) throw new Error(`non-Counter runtime binding accepted Counter mode: ${nonCounterRuntimeMode}`);
   report.assertions.counterBindingSemantics = {
     valid: validCounterBinding,
     missingModeRejected: true,
@@ -329,11 +301,11 @@ try {
   expectPermissionDenied(`
     SET SESSION AUTHORIZATION s2_telemetry_iam;
     INSERT INTO telemetry_runtime.ingest_quarantine (
-      quarantine_id, integration_instance_id, external_entity_type, external_id,
+      quarantine_id, source_id, external_entity_type, external_id,
       reason_code, evidence, detected_at
     ) VALUES (
       '018f2e00-8200-7000-8000-000000000099',
-      '018f2e00-6000-7000-8000-000000000001',
+      'gateway-a',
       'DEVICE', 'forbidden-iam-write', 'SOURCE_UNTRUSTED', '{}'::jsonb, now()
     );
   `, 'IAM write isolation');
@@ -348,11 +320,11 @@ try {
     BEGIN;
     SET LOCAL ROLE s2_telemetry_runtime;
     INSERT INTO telemetry_runtime.ingest_quarantine (
-      quarantine_id, integration_instance_id, external_entity_type, external_id,
+      quarantine_id, source_id, external_entity_type, external_id,
       reason_code, evidence, detected_at
     ) VALUES (
       '018f2e00-8200-7000-8000-000000000098',
-      '018f2e00-6000-7000-8000-000000000001',
+      'gateway-a',
       'DEVICE', 'runtime-authorized-write', 'SOURCE_UNTRUSTED', '{}'::jsonb, now()
     );
     SELECT count(*) FROM telemetry_runtime.ingest_quarantine WHERE external_id = 'runtime-authorized-write';

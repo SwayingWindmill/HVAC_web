@@ -24,18 +24,39 @@ const (
 	maximumTelemetryRuntimeBodyBytes = int64(256 << 10)
 )
 
+// Observation is one point value with the Device and Point resolved from Registry; either
+// is nil when the Gateway names something unregistered, and Telemetry quarantines it.
 type Observation struct {
-	IntegrationInstanceID string         `json:"integrationInstanceId"`
-	SourcePath            string         `json:"sourcePath"`
-	ExternalEntityType    string         `json:"externalEntityType"`
-	ExternalID            string         `json:"externalId"`
-	TelemetryKey          string         `json:"telemetryKey"`
-	Value                 any            `json:"value"`
-	ValueType             string         `json:"valueType"`
-	Unit                  *string        `json:"unit"`
-	WireQuality           uint8          `json:"wireQuality"`
-	SampledAt             string         `json:"sampledAt"`
-	SourcePosition        SourcePosition `json:"sourcePosition"`
+	SourceID           string          `json:"sourceId"`
+	SourcePath         string          `json:"sourcePath"`
+	ExternalEntityType string          `json:"externalEntityType"`
+	ExternalID         string          `json:"externalId"`
+	Device             *ResolvedDevice `json:"device"`
+	Point              *ResolvedPoint  `json:"point"`
+	TelemetryKey       string          `json:"telemetryKey"`
+	Value              any             `json:"value"`
+	ValueType          string          `json:"valueType"`
+	Unit               *string         `json:"unit"`
+	WireQuality        uint8           `json:"wireQuality"`
+	SampledAt          string          `json:"sampledAt"`
+	SourcePosition     SourcePosition  `json:"sourcePosition"`
+}
+
+type ResolvedDevice struct {
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+	DeviceID string `json:"deviceId"`
+}
+
+type ResolvedPoint struct {
+	PointID                string   `json:"pointId"`
+	SensorID               *string  `json:"sensorId"`
+	PointType              string   `json:"pointType"`
+	ValueType              string   `json:"valueType"`
+	Unit                   *string  `json:"unit"`
+	CounterDecreaseMode    *string  `json:"counterDecreaseMode"`
+	CounterRolloverModulus *float64 `json:"counterRolloverModulus"`
+	PointRevision          int64    `json:"pointRevision"`
 }
 
 type SourcePosition struct {
@@ -58,39 +79,35 @@ type ObservationReceipt struct {
 }
 
 type GatewayEvidence struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	TenantID              string          `json:"tenantId"`
-	SiteID                string          `json:"siteId"`
-	GatewayID             string          `json:"gatewayId"`
-	MessageID             string          `json:"messageId"`
-	EvidenceType          string          `json:"evidenceType"`
-	ObservedAt            string          `json:"observedAt"`
-	Sequence              int64           `json:"sequence"`
-	Payload               json.RawMessage `json:"payload"`
+	TenantID     string          `json:"tenantId"`
+	SiteID       string          `json:"siteId"`
+	GatewayID    string          `json:"gatewayId"`
+	MessageID    string          `json:"messageId"`
+	EvidenceType string          `json:"evidenceType"`
+	ObservedAt   string          `json:"observedAt"`
+	Sequence     int64           `json:"sequence"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 type PresenceEvidence struct {
-	IntegrationInstanceID string `json:"integrationInstanceId"`
-	ExternalEntityType    string `json:"externalEntityType"`
-	ExternalID            string `json:"externalId"`
-	SignalType            string `json:"signalType"`
-	ObservedAt            string `json:"observedAt"`
-	SourceEventID         string `json:"sourceEventId"`
+	DeviceID      string `json:"deviceId"`
+	SignalType    string `json:"signalType"`
+	ObservedAt    string `json:"observedAt"`
+	SourceEventID string `json:"sourceEventId"`
 }
 
 type RuntimeEventEvidence struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	TenantID              string          `json:"tenantId"`
-	SiteID                string          `json:"siteId"`
-	GatewayID             string          `json:"gatewayId"`
-	MessageID             string          `json:"messageId"`
-	Sequence              int64           `json:"sequence"`
-	EventType             string          `json:"eventType"`
-	SourceType            string          `json:"sourceType"`
-	SourceID              string          `json:"sourceId"`
-	EventTime             string          `json:"eventTime"`
-	Severity              string          `json:"severity"`
-	Data                  json.RawMessage `json:"data"`
+	TenantID   string          `json:"tenantId"`
+	SiteID     string          `json:"siteId"`
+	GatewayID  string          `json:"gatewayId"`
+	MessageID  string          `json:"messageId"`
+	Sequence   int64           `json:"sequence"`
+	EventType  string          `json:"eventType"`
+	SourceType string          `json:"sourceType"`
+	SourceID   string          `json:"sourceId"`
+	EventTime  string          `json:"eventTime"`
+	Severity   string          `json:"severity"`
+	Data       json.RawMessage `json:"data"`
 }
 
 type PresenceEvidenceReceipt struct {

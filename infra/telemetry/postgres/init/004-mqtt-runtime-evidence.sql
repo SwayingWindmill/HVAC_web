@@ -5,7 +5,6 @@ SET LOCAL ROLE s2_telemetry_migrator;
 -- Device master-data state and reported online never directly owns Cloud Presence.
 CREATE TABLE IF NOT EXISTS telemetry_runtime.mqtt_gateway_evidence (
   message_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(message_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
   tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
   gateway_id text NOT NULL CHECK (length(btrim(gateway_id)) BETWEEN 1 AND 128),
@@ -22,7 +21,6 @@ CREATE INDEX IF NOT EXISTS mqtt_gateway_evidence_scope_idx
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.mqtt_runtime_events (
   message_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(message_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
   tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
   gateway_id text NOT NULL CHECK (length(btrim(gateway_id)) BETWEEN 1 AND 128),

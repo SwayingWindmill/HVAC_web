@@ -16,7 +16,7 @@ type HistoryObservation struct {
 	DeviceID               *string   `json:"device_id"`
 	PointID                *string   `json:"point_id"`
 	SensorID               *string   `json:"sensor_id"`
-	IntegrationInstanceID  string    `json:"integration_instance_id"`
+	SourceID               string    `json:"source_id"`
 	SourceEventID          string    `json:"source_event_id"`
 	SourcePartition        string    `json:"source_partition"`
 	SourceOffset           int64     `json:"source_offset"`

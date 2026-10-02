@@ -85,8 +85,8 @@ WHERE key.status = 'ACTIVE';
 
 CREATE VIEW core_registry.point_bindings_v1 WITH (security_barrier) AS
 SELECT point.tenant_id, point.site_id, point.reporting_device_id AS device_id, point.source_key,
-       point.id AS point_id, point.point_code, point.point_type, point.value_type, point.unit,
-       point.writable, point.revision AS point_revision
+       point.id AS point_id, point.sensor_id, point.point_code, point.point_type, point.value_type, point.unit,
+       point.counter_decrease_mode, point.counter_rollover_modulus, point.writable, point.revision AS point_revision
 FROM core_registry.telemetry_points AS point
 JOIN core_registry.devices AS device
   ON device.id = point.reporting_device_id AND device.status = 'ACTIVE'
