@@ -107,7 +107,7 @@ function buildIdentities(points) {
 }
 
 function buildS1Seed(points) {
-  const { tenantId, siteId } = centralPlantIdentity;
+  const { tenantId, siteId, gatewayDeviceId } = centralPlantIdentity;
   const ids = buildIdentities(points);
   const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
 
@@ -130,14 +130,27 @@ function buildS1Seed(points) {
     'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
   )`).join(',\n');
 
-  const devices = centralPlantDeviceEndpoints.map((endpoint) => {
-    const contract = deviceByName.get(endpoint.id);
-    return `(
+  const devices = [
+    `(
+      ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(siteId)}, 'eg8200-commercial-001',
+      'EG8200-COMMERCIAL-001', 'GATEWAY', 'ACTIVE', 1,
+      clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)}, NULL, NULL
+    )`,
+    ...centralPlantDeviceEndpoints.map((endpoint) => {
+      const contract = deviceByName.get(endpoint.id);
+      return `(
       ${sqlLiteral(endpoint.platformDeviceId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(contract.slug)},
       ${sqlLiteral(endpoint.name)}, ${sqlLiteral(endpoint.type)}, 'ACTIVE', 1,
       clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)}, NULL, NULL
     )`;
-  }).join(',\n');
+    }),
+  ].join(',\n');
+  // Gateway messages name each Device behind the Gateway by its device name.
+  const sourceKeys = centralPlantDevices.map((device, index) => `(
+    ${sqlLiteral(localUUID(0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
+    ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(device.name)}, ${sqlLiteral(device.platformDeviceId)},
+    'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+  )`).join(',\n');
 
   const deviceSpaceBindings = centralPlantDeviceEndpoints.map((endpoint) => `(
     ${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
@@ -228,6 +241,10 @@ ON CONFLICT (id) DO UPDATE SET asset_id=EXCLUDED.asset_id, space_id=EXCLUDED.spa
 INSERT INTO core_registry.devices (id, site_id, code, display_name, device_type, status, revision, created_at, updated_at, tenant_id, product_id, template_version_id) VALUES
 ${devices}
 ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, device_type=EXCLUDED.device_type, status='ACTIVE', updated_at=clock_timestamp();
+
+INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES
+${sourceKeys}
+ON CONFLICT (id) DO UPDATE SET source_key=EXCLUDED.source_key, device_id=EXCLUDED.device_id, status='ACTIVE', updated_at=clock_timestamp();
 
 INSERT INTO core_registry.device_space_bindings (id, tenant_id, site_id, device_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${deviceSpaceBindings}
