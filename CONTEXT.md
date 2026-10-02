@@ -327,3 +327,22 @@ A stable non-business provenance scope for one deterministic Historical Replay s
 ## Vendor Template Certification
 
 Acceptance evidence that one immutable released Device Template revision has been validated against real vendor hardware and its authoritative protocol specification. Certification verifies the released mapping and behavior; it is not a mutable Template status and does not replace the released revision itself.
+
+## Gateway
+
+A Device that holds a Gateway Credential and carries telemetry, events and commands for the Devices behind it. A Gateway's Tenant and Site come from Registry, never from what the Gateway sends.
+_Avoid_: integration instance, edge node, connector
+
+## Gateway Credential
+
+The certificate the platform issues to one Gateway; its subject is the Gateway's Device identity. A Gateway without an active credential may still connect, but none of its messages are accepted and no commands are sent to it.
+
+## Enrollment Code
+
+A one-time, short-lived code an operator issues for one registered Gateway, which the Gateway exchanges once for its first Gateway Credential.
+_Avoid_: provisioning key, activation token
+
+## Device Source Key
+
+The name a Gateway uses in its messages for one Device behind it. It is a Registry mapping scoped to that Gateway, not Device identity.
+_Avoid_: external device id, child id
