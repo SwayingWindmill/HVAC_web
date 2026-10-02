@@ -29,5 +29,5 @@ Device ingress ran one `iot-service` per Gateway: the connectivity store was pin
 ## Consequences
 
 - `contracts/mqtt/*`, the simulator and the telemetry source contract change together; `energy/v1` topics are removed, not kept alongside.
-- Telemetry trusts Connectivity as its only MQTT source and receives the resolved Tenant, Site and Device from it, so per-integration source bindings disappear.
+- Telemetry trusts Connectivity as its only MQTT source and receives the resolved Tenant, Site, Device and Point from it (Telemetry lives in its own database and cannot read Registry views, ADR 0016), so per-integration source bindings and Telemetry's Registry projections disappear.
 - A stolen Gateway certificate can still hold a broker connection until it expires, but nothing it sends is accepted and it can only reach its own topics.
