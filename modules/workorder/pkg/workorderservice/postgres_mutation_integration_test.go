@@ -57,7 +57,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 		ActorType:        "PRINCIPAL", ActorID: "principal:p4-creator", PolicyRevision: "work-order-p4-policy-1", CorrelationID: "p4-create-correlation",
 		IdempotencyKey: "p4-create-key-0001", OccurredAt: "2026-08-01T12:00:00Z",
 	}
-	created, err := store.Create(ctx, postgresOrganizationID, postgresSiteID, create)
+	created, err := store.Create(ctx, postgresTenantID, postgresSiteID, create)
 	if err != nil || created.Replayed || created.WorkOrder.Version != 1 || created.WorkOrder.WorkOrderID != postgresMutationWorkOrderID {
 		t.Fatalf("create result=%#v err=%v", created, err)
 	}
@@ -66,13 +66,13 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	store = openStore()
 	retry := create
 	retry.WorkOrderID = "01930000-1000-7000-8000-000000000032"
-	replayed, err := store.Create(ctx, postgresOrganizationID, postgresSiteID, retry)
+	replayed, err := store.Create(ctx, postgresTenantID, postgresSiteID, retry)
 	if err != nil || !replayed.Replayed || replayed.WorkOrder.WorkOrderID != postgresMutationWorkOrderID {
 		t.Fatalf("restart replay result=%#v err=%v", replayed, err)
 	}
 	conflict := create
 	conflict.Title = "Different create payload"
-	if _, err := store.Create(ctx, postgresOrganizationID, postgresSiteID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Create(ctx, postgresTenantID, postgresSiteID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("create idempotency conflict=%v", err)
 	}
 	assignee := "principal:p4-operator"
@@ -82,7 +82,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 		ActorType: "PRINCIPAL", ActorID: "principal:p4-dispatcher", PolicyRevision: "work-order-p4-policy-2", CorrelationID: "p4-assign-correlation",
 		IdempotencyKey: strings.Join([]string{"p4", "assign", "key", "0001"}, "-"), OccurredAt: "2026-08-01T12:01:00Z",
 	}
-	assigned, err := store.Assign(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment)
+	assigned, err := store.Assign(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, assignment)
 	if err != nil || assigned.Replayed || assigned.WorkOrder.Version != 2 {
 		t.Fatalf("assign result=%#v err=%v", assigned, err)
 	}
@@ -90,13 +90,13 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 
 	store = openStore()
 	defer store.Close()
-	assignmentReplay, err := store.Assign(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment)
+	assignmentReplay, err := store.Assign(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, assignment)
 	if err != nil || !assignmentReplay.Replayed || assignmentReplay.WorkOrder.Version != 2 {
 		t.Fatalf("assignment restart replay=%#v err=%v", assignmentReplay, err)
 	}
 	stale := assignment
 	stale.IdempotencyKey = strings.Join([]string{"p4", "assign", "key", "0002"}, "-")
-	if _, err := store.Assign(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
+	if _, err := store.Assign(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
 		t.Fatalf("stale assignment error=%v", err)
 	}
 	if _, err := store.Assign(ctx, postgresOtherOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment); !errors.Is(err, ErrUnavailable) {
@@ -107,7 +107,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 		ActorType: "PRINCIPAL", ActorID: "principal:p5-operator", PolicyRevision: "work-order-p5-policy-1", CorrelationID: "p5-start-correlation",
 		IdempotencyKey: "p5-start-key-0001", OccurredAt: "2026-08-01T12:02:00Z",
 	}
-	started, err := store.Transition(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, start)
+	started, err := store.Transition(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, start)
 	if err != nil || started.WorkOrder.Status != workordermodel.StatusInProgress || started.WorkOrder.Version != 3 {
 		t.Fatalf("start result=%#v err=%v", started, err)
 	}
@@ -116,7 +116,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 		ActorType: "PRINCIPAL", ActorID: "principal:p5-operator", PolicyRevision: "work-order-p5-policy-1", CorrelationID: "p5-cross-action-correlation",
 		IdempotencyKey: start.IdempotencyKey, OccurredAt: "2026-08-01T12:02:30Z",
 	}
-	if _, err := store.Transition(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, crossAction); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Transition(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, crossAction); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("cross-action idempotency error=%v", err)
 	}
 	complete := LifecycleMutation{
@@ -125,24 +125,24 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 		ActorType:          "PRINCIPAL", ActorID: "principal:p5-operator", PolicyRevision: "work-order-p5-policy-2", CorrelationID: "p5-complete-correlation",
 		IdempotencyKey: "p5-complete-key-01", OccurredAt: "2026-08-01T12:03:00Z",
 	}
-	completed, err := store.Transition(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, complete)
+	completed, err := store.Transition(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, complete)
 	if err != nil || completed.WorkOrder.Status != workordermodel.StatusCompleted || completed.WorkOrder.Version != 4 || len(completed.WorkOrder.CompletionEvidence) != 1 {
 		t.Fatalf("complete result=%#v err=%v", completed, err)
 	}
 	store.Close()
 	store = openStore()
 	defer store.Close()
-	completeReplay, err := store.Transition(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, complete)
+	completeReplay, err := store.Transition(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, complete)
 	if err != nil || !completeReplay.Replayed || completeReplay.WorkOrder.Version != 4 {
 		t.Fatalf("completion restart replay=%#v err=%v", completeReplay, err)
 	}
 	staleLifecycle := start
 	staleLifecycle.IdempotencyKey = "p5-start-key-0002"
-	if _, err := store.Transition(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, staleLifecycle); !errors.Is(err, workordermodel.ErrVersionConflict) {
+	if _, err := store.Transition(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, staleLifecycle); !errors.Is(err, workordermodel.ErrVersionConflict) {
 		t.Fatalf("stale lifecycle error=%v", err)
 	}
 
-	current, err := store.Get(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID)
+	current, err := store.Get(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID)
 	if err != nil || current.Version != 4 || len(current.Timeline) != 4 || current.Status != workordermodel.StatusCompleted || len(current.CompletionEvidence) != 1 || current.AssigneeID == nil || *current.AssigneeID != assignee {
 		t.Fatalf("authoritative mutation projection=%#v err=%v", current, err)
 	}
