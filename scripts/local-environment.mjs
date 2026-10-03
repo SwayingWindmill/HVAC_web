@@ -1,5 +1,5 @@
 // One command for the local environment: `node scripts/local-environment.mjs up | down | reset | ps`.
-// `reset` deletes this environment's containers and data volumes.
+// `reset` deletes this environment's containers, data volumes and the simulators' Edge state.
 // `up` is idempotent: it migrates, bootstraps identity, seeds the central-plant simulator and
 // starts every service from the current checkout.
 import { randomBytes } from 'node:crypto';
@@ -52,6 +52,18 @@ function ensureServiceDataDirectory(...segments) {
   mkdirSync(directory, { recursive: true });
   const result = spawnSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'chown', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '65532:65532', '/data'], { stdio: 'inherit' });
   if (result.status !== 0) throw new Error(`could not hand ${directory} to the service user`);
+}
+
+// The simulators are the Edge: their command ledger, measurement sequences and outbound
+// spool belong to the platform state they talk to. Resetting the platform without them
+// leaves the Edge rejecting fresh commands as stale and replaying old measurements.
+function clearSimulatorState() {
+  for (const name of ['eg8200', 'eg8200-b']) {
+    const directory = runtimePath('data', name);
+    if (!existsSync(directory)) continue;
+    const result = spawnSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'find', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '/data', '-mindepth', '1', '-delete'], { stdio: 'inherit' });
+    if (result.status !== 0) throw new Error(`could not clear ${directory}`);
+  }
 }
 
 function ensureKey(file, service) {
@@ -107,6 +119,9 @@ const [command, ...rest] = process.argv.slice(2);
 ensureRoleCredentials();
 if (command === 'up') up();
 else if (command === 'down') compose('--simulator-acceptance', '--intelligence', 'stop');
-else if (command === 'reset') compose('--simulator-acceptance', '--intelligence', 'down', '--volumes', '--remove-orphans');
+else if (command === 'reset') {
+  compose('--simulator-acceptance', '--intelligence', 'down', '--volumes', '--remove-orphans');
+  clearSimulatorState();
+}
 else if (command === 'ps') compose('--simulator-acceptance', '--intelligence', 'ps', ...rest);
 else throw new Error('usage: node scripts/local-environment.mjs up | down | reset | ps');

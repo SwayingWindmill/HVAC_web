@@ -432,7 +432,7 @@ const report = {
   capability: 'analytics-energy-interval-read-model',
   status: 'failed',
   startedAt: new Date().toISOString(),
-  clickHouseImage: 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c',
+  clickHouseImage: 'clickhouse/clickhouse-server:26.3.39.7@sha256:3a91276f066905da0edbbd622d3fc2a2df632c87ea7fe32ef4e74fdf8c9567b0',
   assertions: {},
 };
 
