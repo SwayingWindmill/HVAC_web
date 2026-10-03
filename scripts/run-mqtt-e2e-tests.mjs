@@ -183,13 +183,14 @@ try {
   telemetryServer.listen({ host: '127.0.0.1', port: telemetryPort });
   await once(telemetryServer, 'listening');
 
-  const connectivity = start(connectivityBinary, ['-diagnostics-addr', `127.0.0.1:${connectivityPort}`], {
+  const connectivityEnv = {
     CONNECTIVITY_MQTT_URL: `tls://127.0.0.1:${mqttPort}`, CONNECTIVITY_MQTT_SERVER_NAME: 'localhost',
     CONNECTIVITY_TLS_CERT: join(pkiDir, 'mqtt-adapter-cert.pem'), CONNECTIVITY_TLS_KEY: join(pkiDir, 'mqtt-adapter-key.pem'), CONNECTIVITY_CA: join(pkiDir, 'ca.pem'),
     CONNECTIVITY_TELEMETRY_URL: `https://127.0.0.1:${telemetryPort}`, CONNECTIVITY_TELEMETRY_SERVER_NAME: 'localhost',
     CONNECTIVITY_DATABASE_URL: `postgres://connectivity_runtime:${connectivityPassword}@127.0.0.1:${postgresPort}/hvac_s1?sslmode=disable`,
-    CONNECTIVITY_TENANT_ID: tenantId, CONNECTIVITY_QUEUE_CAPACITY: '2',
-  });
+    CONNECTIVITY_QUEUE_CAPACITY: '2',
+  };
+  const connectivity = start(connectivityBinary, ['-diagnostics-addr', `127.0.0.1:${connectivityPort}`], connectivityEnv);
   const connectivityReady = `http://127.0.0.1:${connectivityPort}/health/ready`;
   const connectivityMetrics = `http://127.0.0.1:${connectivityPort}/metrics`;
   await waitFor(async () => await httpStatus(connectivityReady) === 200, 30000, 'Connectivity readiness');
@@ -203,9 +204,9 @@ try {
 
   const gatewayConfigPath = join(outputDir, 'gateway.json');
   await writeFile(gatewayConfigPath, `${JSON.stringify({
-    schemaVersion: 4, gatewayId, tenantId, siteId, brokerUrl: `tls://127.0.0.1:${mqttPort}`,
+    schemaVersion: 5, gatewayId, brokerUrl: `tls://127.0.0.1:${mqttPort}`,
     caFile: join(pkiDir, 'ca.pem'), certFile: join(pkiDir, 'mqtt-gateway-cert.pem'), keyFile: join(pkiDir, 'mqtt-gateway-key.pem'),
-    serverName: 'localhost', queueDirectory: queueDir, maximumQueueBytes: 64 * 1024 * 1024, credentialRevision: 1,
+    serverName: 'localhost', queueDirectory: queueDir, maximumQueueBytes: 64 * 1024 * 1024,
   }, null, 2)}\n`);
   const publisherArgs = ['-plant-config', plantConfigPath, '-mqtt-config', gatewayConfigPath, '-diagnostics-addr', `127.0.0.1:${publisherPort}`];
   let publisher = start(publisherBinary, publisherArgs);
@@ -265,6 +266,17 @@ try {
 
   await stopChild(publisher);
   await stopChild(connectivity);
+
+  // With commands enabled but without the command runtime's identity (its default
+  // certificate paths do not exist here), Connectivity exits instead of serving uplink
+  // without a command channel.
+  const withoutCommands = start(connectivityBinary, ['-diagnostics-addr', `127.0.0.1:${connectivityPort}`], {
+    ...connectivityEnv, COMMAND_RUNTIME_IN_PROCESS_ENABLED: 'true',
+  });
+  const [exitCode] = await Promise.race([once(withoutCommands, 'exit'), new Promise((resolveWait) => setTimeout(() => resolveWait([null]), 30000))]);
+  if (exitCode !== 1 || !withoutCommands.output.includes('connectivity_command_runtime_unavailable')) {
+    throw new Error(`Connectivity did not exit when its command runtime could not start: exit=${exitCode}`);
+  }
   if (!sourceIdentityVerified) throw new Error('Connectivity mTLS SPIFFE identity was not verified');
   if (!connectivity.output.includes('mqtt_uplink_message_retrying')) throw new Error('Connectivity did not retry the injected Telemetry failure');
   if (recovered <= 0 || offlineQueueBytes <= 0) throw new Error('Store & Forward recovery evidence is incomplete');
@@ -273,7 +285,7 @@ try {
     observationCount: first.length, deviceCount: deviceIds.size, registeredPointCount: registeredPoints.length,
     registryIdentityResolved: true, connectivitySPIFFEIdentity: true, transientTelemetryRetryRecovered: true,
     poisonMessageQuarantined: true, backlog, offlineQueueBytes, recoveredAfterBrokerOutage: recovered,
-    maxSequenceBeforeRestart, revokedCredentialQuarantined: true,
+    maxSequenceBeforeRestart, revokedCredentialQuarantined: true, exitsWithoutCommandRuntime: true,
   };
   report.status = 'passed';
   console.log(`MQTT uplink end-to-end evidence passed: ${reportPath}`);

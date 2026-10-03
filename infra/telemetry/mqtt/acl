@@ -8,11 +8,7 @@ pattern read hvac/v1/%u/down/#
 user mqtt-telemetry-adapter
 topic read hvac/v1/+/up/#
 
-# Commands keep their per-Tenant topics until they move to
-# hvac/v1/{gatewayId}/down/command with replies on up/reply (#406).
-pattern read energy/v1/+/+/%u/command
-pattern write energy/v1/+/+/%u/command/reply
-
+# Connectivity's command connection sends to every Gateway and reads every reply.
 user command-dispatcher
-topic write energy/v1/+/+/+/command
-topic read energy/v1/+/+/+/command/reply
+topic write hvac/v1/+/down/command
+topic read hvac/v1/+/up/reply

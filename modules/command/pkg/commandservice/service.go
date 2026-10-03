@@ -274,7 +274,11 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	switch result.Phase {
 	case commandmodel.ConnectorPreSendRejected:
 		attempt.Status = commandmodel.AttemptNotSent
-		transition(intent, commandmodel.IntentQueued, "PRE_SEND_REJECTED_SAFE_TO_RETRY", "command-dispatcher", now, attempt.ID, result.EvidenceID)
+		if failureCode := strings.TrimSpace(result.FailureCode); commandmodel.TerminalPreSendRejection(failureCode) {
+			transition(intent, commandmodel.IntentRejected, failureCode, "command-dispatcher", now, attempt.ID, result.EvidenceID)
+		} else {
+			transition(intent, commandmodel.IntentQueued, "PRE_SEND_REJECTED_SAFE_TO_RETRY", "command-dispatcher", now, attempt.ID, result.EvidenceID)
+		}
 	case commandmodel.ConnectorExecutionRejected:
 		attempt.Status = commandmodel.AttemptFailed
 		reason := strings.TrimSpace(result.FailureCode)

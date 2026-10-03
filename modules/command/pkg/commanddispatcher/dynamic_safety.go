@@ -18,6 +18,10 @@ type DispatchSafetyVerifier interface {
 	VerifyBeforeDispatch(context.Context, commandmodel.DispatchEnvelope) (DispatchSafetyResult, error)
 }
 
+// DispatchSafetyStateKey is the Point Code every controllable Device reports its running
+// state with; dispatch requires it to be current before anything is sent.
+const DispatchSafetyStateKey = "run_state"
+
 type DispatchSafetyStateReader interface {
 	ReadReportedState(context.Context, commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error)
 }
@@ -27,11 +31,6 @@ type authoritativeDispatchSafetyVerifier struct {
 	key    string
 }
 
-type mappedDispatchSafetyVerifier struct {
-	reader      DispatchSafetyStateReader
-	keyByDevice map[string]string
-}
-
 func NewAuthoritativeDispatchSafetyVerifier(reader DispatchSafetyStateReader, reportedStateKey string) (DispatchSafetyVerifier, error) {
 	if reader == nil || strings.TrimSpace(reportedStateKey) == "" {
 		return nil, errors.New("dispatch safety verifier requires an authoritative state reader and key")
@@ -39,38 +38,11 @@ func NewAuthoritativeDispatchSafetyVerifier(reader DispatchSafetyStateReader, re
 	return &authoritativeDispatchSafetyVerifier{reader: reader, key: strings.TrimSpace(reportedStateKey)}, nil
 }
 
-func NewMappedDispatchSafetyVerifier(reader DispatchSafetyStateReader, keyByDevice map[string]string) (DispatchSafetyVerifier, error) {
-	if reader == nil || len(keyByDevice) == 0 {
-		return nil, errors.New("dispatch safety verifier requires authoritative state keys")
-	}
-	resolved := make(map[string]string, len(keyByDevice))
-	for deviceID, key := range keyByDevice {
-		deviceID = strings.TrimSpace(deviceID)
-		key = strings.TrimSpace(key)
-		if deviceID == "" || key == "" {
-			return nil, errors.New("dispatch safety verifier contains an invalid device key")
-		}
-		resolved[deviceID] = key
-	}
-	return &mappedDispatchSafetyVerifier{reader: reader, keyByDevice: resolved}, nil
-}
-
 func (verifier *authoritativeDispatchSafetyVerifier) VerifyBeforeDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope) (DispatchSafetyResult, error) {
 	if verifier == nil || verifier.reader == nil || strings.TrimSpace(verifier.key) == "" {
 		return DispatchSafetyResult{}, errors.New("dispatch safety verifier is unavailable")
 	}
 	return verifyBeforeDispatchWithKey(ctx, verifier.reader, envelope, verifier.key)
-}
-
-func (verifier *mappedDispatchSafetyVerifier) VerifyBeforeDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope) (DispatchSafetyResult, error) {
-	if verifier == nil || verifier.reader == nil {
-		return DispatchSafetyResult{}, errors.New("dispatch safety verifier is unavailable")
-	}
-	key := strings.TrimSpace(verifier.keyByDevice[envelope.DeviceID])
-	if key == "" {
-		return DispatchSafetyResult{}, errors.New("dispatch safety verifier has no state key for device")
-	}
-	return verifyBeforeDispatchWithKey(ctx, verifier.reader, envelope, key)
 }
 
 func verifyBeforeDispatchWithKey(ctx context.Context, reader DispatchSafetyStateReader, envelope commandmodel.DispatchEnvelope, key string) (DispatchSafetyResult, error) {

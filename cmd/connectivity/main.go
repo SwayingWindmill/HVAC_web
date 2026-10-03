@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,10 +17,6 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
-
-type moduleHealth struct {
-	commandReady atomic.Bool
-}
 
 func main() {
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
@@ -38,9 +33,8 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	connectivityTenantID := strings.TrimSpace(os.Getenv("CONNECTIVITY_TENANT_ID"))
 	connectivityDatabaseURL := strings.TrimSpace(os.Getenv("CONNECTIVITY_DATABASE_URL"))
-	connectivityStore, err := connectivity.Open(ctx, connectivityDatabaseURL, connectivityTenantID)
+	connectivityStore, err := connectivity.Open(ctx, connectivityDatabaseURL)
 	if err != nil {
 		logger.Error("iot_connectivity_store_unavailable", "error", err.Error())
 		os.Exit(1)
@@ -62,14 +56,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	health := &moduleHealth{}
-	commandRuntime, commandErr := loadInProcessCommandRuntime(ctx, connectivityStore)
-	if commandErr != nil {
-		logger.Error("iot_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", commandErr.Error())
-	} else if commandRuntime != nil {
-		commandRuntime.SetReadySink(health.commandReady.Store)
+	// Commands are part of Connectivity when enabled: if they cannot start, the process
+	// fails instead of reporting healthy without a command channel.
+	var commands *commandRuntime
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
+		if commands, err = loadCommandRuntime(ctx, connectivityStore); err != nil {
+			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
+			os.Exit(1)
+		}
 	}
-	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, health, telemetry)
+	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
 	diagnosticsErr := make(chan error, 1)
 	go func() {
 		logger.Info("mqtt_telemetry_adapter_diagnostics_started", "address", *diagnosticsAddress)
@@ -85,10 +81,9 @@ func main() {
 			logger.Error("mqtt_telemetry_module_stopped", "error_code", "TELEMETRY_MODULE_STOPPED", "error", runErr.Error())
 		}
 	}()
-	if commandRuntime != nil {
-		go commandRuntime.Run(ctx, logger)
+	if commands != nil {
+		go commands.Run(ctx, logger)
 	}
-	go runCredentialExpiry(ctx, connectivityStore, logger)
 
 	select {
 	case <-ctx.Done():
@@ -99,7 +94,9 @@ func main() {
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
-	_ = commandRuntime.Close(shutdownContext)
+	if commands != nil {
+		_ = commands.Close(shutdownContext)
+	}
 	_ = telemetry.Shutdown(shutdownContext)
 	logger.Info("mqtt_telemetry_adapter_stopped")
 }
@@ -136,28 +133,12 @@ func queueCapacity() int {
 	return capacity
 }
 
-func runCredentialExpiry(ctx context.Context, store *connectivity.Store, logger *slog.Logger) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := store.ExpireDueCredentials(ctx); err != nil {
-				logger.Error("iot_credential_expiry_failed", "error_code", "CREDENTIAL_EXPIRY_FAILED")
-			}
-		}
-	}
-}
-
-func diagnosticsServer(address string, runtime *adapter.Runtime, health *moduleHealth, telemetry *observability.Runtime) *http.Server {
+func diagnosticsServer(address string, runtime *adapter.Runtime, telemetry *observability.Runtime) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", telemetry.Metrics.Handler())
 	mux.HandleFunc("/health/live", getHealthHandler(func() bool { return true }))
 	mux.HandleFunc("/health/ready", getHealthHandler(runtime.Ready))
 	mux.HandleFunc("/health/telemetry/ready", getHealthHandler(runtime.Ready))
-	mux.HandleFunc("/health/command/ready", getHealthHandler(func() bool { return health.commandReady.Load() }))
 	return &http.Server{
 		Addr:              address,
 		Handler:           mux,

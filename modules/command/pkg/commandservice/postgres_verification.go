@@ -13,18 +13,6 @@ import (
 )
 
 func (store *PostgresStore) ClaimVerification(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	return store.claimVerification(ctx, tenantID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
-}
-
-func (store *PostgresStore) ClaimVerificationForCohort(ctx context.Context, tenantID, siteID, deviceID string, capability commandmodel.Capability, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	scope, err := exactCommandCohort(siteID, deviceID, capability)
-	if err != nil {
-		return commandmodel.VerificationEnvelope{}, err
-	}
-	return store.claimVerification(ctx, tenantID, scope, leaseOwner, leaseFor)
-}
-
-func (store *PostgresStore) claimVerification(ctx context.Context, tenantID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
 	if store == nil || store.pool == nil {
 		return commandmodel.VerificationEnvelope{}, errors.New("command store is closed")
 	}
@@ -32,7 +20,7 @@ func (store *PostgresStore) claimVerification(ctx context.Context, tenantID stri
 		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
 	}
 	for attempt := 0; attempt < 4; attempt++ {
-		envelope, err := store.claimVerificationOnce(ctx, tenantID, scope, leaseOwner, leaseFor)
+		envelope, err := store.claimVerificationOnce(ctx, tenantID, leaseOwner, leaseFor)
 		if err == nil || errors.Is(err, ErrVerificationNotAvailable) {
 			return envelope, err
 		}
@@ -43,7 +31,7 @@ func (store *PostgresStore) claimVerification(ctx context.Context, tenantID stri
 	return commandmodel.VerificationEnvelope{}, errors.New("verification claim transaction retry limit exceeded")
 }
 
-func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID string, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
 	now := store.now().UTC()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -53,7 +41,7 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID 
 	if err := activateTenant(ctx, tx, tenantID); err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
-	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, scope, now); err != nil {
+	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
 
@@ -76,7 +64,6 @@ JOIN command_runtime.connector_evidence ce
 JOIN command_runtime.device_control_state d
   ON d.tenant_id = i.tenant_id AND d.device_id = i.device_id
 WHERE i.tenant_id = $1::uuid
-  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid AND i.capability_name = $7))
   AND i.status = 'DISPATCHING'
   AND a.status = 'ACKNOWLEDGED'
   AND a.execution_fence = i.active_execution_fence
@@ -86,7 +73,7 @@ WHERE i.tenant_id = $1::uuid
 ORDER BY a.acknowledged_at, a.attempt_id
 FOR UPDATE OF i, a SKIP LOCKED
 LIMIT 1
-`, tenantID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID(), scope.queryCapability()).Scan(
+`, tenantID, now, setpointControlGroup).Scan(
 		&envelope.CommandID, &envelope.AttemptID, &envelope.TenantID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
 		&capability, &envelope.CapabilityRevision, &parameters, &envelope.VerificationPointKey,
 		&envelope.PayloadHash, &envelope.ExecutionFence, &envelope.BaselineBusinessRevision,
@@ -286,7 +273,7 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 	return nil
 }
 
-func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, scope commandCohortScope, now time.Time) error {
+func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
 	type expiredVerification struct {
 		AttemptID, CommandID, SiteID, DeviceID, PayloadHash, ConnectorEvidenceID string
 		Fence, IntentVersion, AttemptVersion                                     uint64
@@ -297,13 +284,12 @@ SELECT a.attempt_id::text, a.command_id::text, a.site_id::text, a.device_id::tex
 FROM command_runtime.command_attempts a
 JOIN command_runtime.command_intents i ON i.command_id = a.command_id
 WHERE a.tenant_id = $1::uuid
-  AND (NOT $3 OR (a.site_id = $4::uuid AND a.device_id = $5::uuid))
   AND a.status = 'ACKNOWLEDGED'
   AND a.verification_deadline <= $2
   AND i.status = 'DISPATCHING'
 FOR UPDATE OF a, i SKIP LOCKED
 LIMIT 50
-`, tenantID, now, scope.enforced, scope.querySiteID(), scope.queryDeviceID())
+`, tenantID, now)
 	if err != nil {
 		return fmt.Errorf("select expired reported-state verifications: %w", err)
 	}

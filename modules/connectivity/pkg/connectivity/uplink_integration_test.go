@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
@@ -36,6 +37,8 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		meterA   = "0192f000-3000-7000-8000-00000000000a"
 		meterB   = "0192f000-3000-7000-8000-00000000000b"
 		pointA   = "0192f000-4000-7000-8000-00000000000a"
+		commandA = "0192f000-4000-7000-8000-0000000000ca"
+		commandB = "0192f000-4000-7000-8000-0000000000cb"
 		unknown  = "0192f000-2000-7000-8000-0000000000ff"
 	)
 	cleanup := func() {
@@ -75,6 +78,9 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		  ('0192f000-5000-7000-8000-00000000000b',$2::uuid,$4::uuid,$6::uuid,'METER-01',$8::uuid,'ACTIVE',1,$9,$9)`, []any{tenantA, tenantB, siteA, siteB, gatewayA, gatewayB, meterA, meterB, now}},
 		{`INSERT INTO core_registry.telemetry_points (id,tenant_id,site_id,reporting_device_id,point_code,source_key,display_name,point_type,value_type,unit,sample_interval_ms,publish_interval_ms,stale_after_ms,status,revision,created_at,updated_at) VALUES
 		  ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'active_power','meter.active_power','Active power','TELEMETRY','NUMBER','kW',1000,5000,30000,'ACTIVE',1,$5,$5)`, []any{pointA, tenantA, siteA, meterA, now}},
+		{`INSERT INTO core_registry.telemetry_points (id,tenant_id,site_id,reporting_device_id,point_code,source_key,display_name,point_type,value_type,unit,writable,sample_interval_ms,publish_interval_ms,stale_after_ms,status,revision,created_at,updated_at) VALUES
+		  ($1::uuid,$3::uuid,$5::uuid,$7::uuid,'run_command','meter.run_command','Run command','COMMAND','BOOLEAN',NULL,true,1000,5000,30000,'ACTIVE',1,$9,$9),
+		  ($2::uuid,$4::uuid,$6::uuid,$8::uuid,'run_command','meter.run_command','Run command','COMMAND','BOOLEAN',NULL,true,1000,5000,30000,'ACTIVE',1,$9,$9)`, []any{commandA, commandB, tenantA, tenantB, siteA, siteB, meterA, meterB, now}},
 		{`INSERT INTO connectivity.gateway_credentials (id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at) VALUES
 		  ('0192f000-6000-7000-8000-00000000000a',$1::uuid,$3::uuid,repeat('a',64),'ACTIVE',$5,$6,NULL,$5,$5),
 		  ('0192f000-6000-7000-8000-00000000000b',$2::uuid,$4::uuid,repeat('b',64),'ACTIVE',$5,$6,NULL,$5,$5)`, []any{tenantA, tenantB, gatewayA, gatewayB, now.Add(-time.Minute), now.Add(time.Hour)}},
@@ -84,7 +90,7 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		}
 	}
 
-	store, err := Open(ctx, runtimeDSN, tenantA)
+	store, err := Open(ctx, runtimeDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +120,34 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		t.Fatalf("unknown Gateway err=%v", err)
 	}
 
+	if tenants, err := store.Tenants(ctx); err != nil || !containsAll(tenants, tenantA, tenantB) {
+		t.Fatalf("Tenants=%v err=%v", tenants, err)
+	}
+	if tenant, err := store.GatewayTenant(ctx, gatewayB); err != nil || tenant != tenantB {
+		t.Fatalf("Gateway B Tenant=%q err=%v", tenant, err)
+	}
+	commandTo := func(tenantID, siteID, deviceID, pointID string) commandmodel.DispatchEnvelope {
+		return commandmodel.DispatchEnvelope{TenantID: tenantID, SiteID: siteID, DeviceID: deviceID, PointID: pointID}
+	}
+	if route, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandB)); err != nil ||
+		route != (commandmodel.DeviceRoute{GatewayID: gatewayB, ExternalDeviceID: "METER-01", BindingRevision: 1}) {
+		t.Fatalf("command route=%#v err=%v", route, err)
+	}
+	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantA, siteA, meterA, pointA)); !errors.Is(err, commandmodel.ErrCommandControlDisabled) {
+		t.Fatalf("read-only Point err=%v", err)
+	}
+	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantA, siteA, gatewayA, commandA)); !errors.Is(err, commandmodel.ErrCommandRouteNotFound) {
+		t.Fatalf("Device without a source key err=%v", err)
+	}
+	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterA, commandA)); !errors.Is(err, commandmodel.ErrCommandRouteNotFound) {
+		t.Fatalf("Tenant B routed Tenant A's Device err=%v", err)
+	}
+
 	if _, err := admin.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED', revoked_at=$2, updated_at=$2 WHERE gateway_id=$1::uuid`, gatewayB, now); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandB)); !errors.Is(err, commandmodel.ErrCommandGatewayCredentialInactive) {
+		t.Fatalf("revoked Gateway command err=%v", err)
 	}
 	revoked, err := store.ResolveGateway(ctx, gatewayB)
 	if !errors.Is(err, adapter.ErrGatewayCredentialInactive) || revoked.TenantID != tenantB {
@@ -138,4 +170,17 @@ FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1, $2)`, gatewayB, unk
 	if want := gatewayB + ":" + tenantB + ":GATEWAY_CREDENTIAL_INACTIVE," + unknown + ":-:GATEWAY_UNKNOWN"; evidence != want {
 		t.Fatalf("quarantine evidence=%s want=%s", evidence, want)
 	}
+}
+
+func containsAll(values []string, wanted ...string) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range wanted {
+		if !seen[value] {
+			return false
+		}
+	}
+	return true
 }

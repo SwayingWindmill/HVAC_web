@@ -314,10 +314,12 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	}, nil
 }
 
-// mqttCommandTopic is the interim command topic, kept until commands move to
-// hvac/v1/{gatewayId}/down/command (#406).
 func mqttCommandTopic(config MQTTGatewayConfig) string {
-	return "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + config.GatewayID + "/command"
+	return "hvac/v1/" + config.GatewayID + "/down/command"
+}
+
+func mqttReplyTopic(config MQTTGatewayConfig) string {
+	return "hvac/v1/" + config.GatewayID + "/up/reply"
 }
 
 func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {

@@ -1,7 +1,8 @@
 // Runs the real Mosquitto broker with the repository's config and ACL, and checks that
 // the static pattern ACL confines each Gateway to its own topics (ADR 0015): a Gateway
 // publishes only under hvac/v1/{its certificate CN}/up, a second Gateway needs no ACL
-// change, and Connectivity receives every Gateway's uplink.
+// change, Connectivity receives every Gateway's uplink, and its command identity writes
+// only Gateway command topics.
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -72,6 +73,8 @@ try {
   report.assertions.gatewayBOwnTopic = publish('mqtt-gateway-b', `hvac/v1/${gatewayB}/up/event`);
   report.assertions.gatewayAIntoGatewayB = publish('mqtt-gateway', `hvac/v1/${gatewayB}/up/telemetry`);
   report.assertions.gatewayAIntoDownlink = publish('mqtt-gateway', `hvac/v1/${gatewayA}/down/command`);
+  report.assertions.commandsToGatewayB = publish('command-dispatcher', `hvac/v1/${gatewayB}/down/command`);
+  report.assertions.commandsIntoUplink = publish('command-dispatcher', `hvac/v1/${gatewayA}/up/telemetry`);
   await subscriberDone;
   report.assertions.connectivityReceived = received.trim().split('\n').map((line) => line.split(' ')[0]).sort();
 
@@ -80,6 +83,10 @@ try {
   }
   if (report.assertions.gatewayAIntoGatewayB !== 135 || report.assertions.gatewayAIntoDownlink !== 135) {
     throw new Error(`Gateway A reached a topic outside its uplink: ${JSON.stringify(report.assertions)}`);
+  }
+  // No Gateway is subscribed here, so an authorized command gets 16 (no matching subscribers).
+  if (report.assertions.commandsToGatewayB !== 16 || report.assertions.commandsIntoUplink !== 135) {
+    throw new Error(`the command identity is not confined to Gateway command topics: ${JSON.stringify(report.assertions)}`);
   }
   const expected = [`hvac/v1/${gatewayA}/up/telemetry`, `hvac/v1/${gatewayB}/up/event`];
   if (JSON.stringify(report.assertions.connectivityReceived) !== JSON.stringify(expected)) {

@@ -126,4 +126,4 @@ The current unit tests cover strict config and Scenario parsing, stepwise Scenar
 
 ## MQTT
 
-One simulator process is one EG8200 Gateway. Its MQTT config names the Gateway by its Registry Device id (`gatewayId`), which is also the certificate CN and the MQTT client id. It publishes telemetry to `hvac/v1/{gatewayId}/up/telemetry` and names each device by its source key, the simulator device name; Connectivity resolves Tenant, Site, Device and Point from the Registry. Commands still use the per-Tenant topics until they move to `hvac/v1/{gatewayId}/down/command` (#406).
+One simulator process is one EG8200 Gateway. Its MQTT config names the Gateway by its Registry Device id (`gatewayId`), which is also the certificate CN and the MQTT client id. It publishes telemetry to `hvac/v1/{gatewayId}/up/telemetry` and names each device by its source key, the simulator device name; Connectivity resolves Tenant, Site, Device and Point from the Registry. It receives commands on `hvac/v1/{gatewayId}/down/command` and replies on `hvac/v1/{gatewayId}/up/reply`.

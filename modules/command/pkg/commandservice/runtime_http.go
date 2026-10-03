@@ -24,43 +24,33 @@ const (
 )
 
 type RuntimeStore interface {
-	ClaimDispatchForCohort(context.Context, string, string, string, commandmodel.Capability, string, time.Duration) (commandmodel.DispatchEnvelope, error)
+	ClaimDispatch(context.Context, string, string, time.Duration) (commandmodel.DispatchEnvelope, error)
 	ResolveDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error
-	ClaimVerificationForCohort(context.Context, string, string, string, commandmodel.Capability, string, time.Duration) (commandmodel.VerificationEnvelope, error)
+	ClaimVerification(context.Context, string, string, time.Duration) (commandmodel.VerificationEnvelope, error)
 	ResolveVerification(context.Context, commandmodel.VerificationEnvelope, commandmodel.VerificationResult) error
 	PrepareConnectorEvidence(context.Context, commandmodel.PreparedConnectorEvidence) error
 	CompleteConnectorEvidence(context.Context, commandmodel.CompletedConnectorEvidence) error
 }
 
+// RuntimeHTTPConfig names the one dispatcher and the one verifier workload. Each serves
+// every Tenant: which Devices may be controlled is decided by the Registry (an active
+// writable command Point), checked by Connectivity before anything is sent.
 type RuntimeHTTPConfig struct {
 	Store            RuntimeStore
 	Metrics          *observability.Registry
 	DispatcherSPIFFE string
 	VerifierSPIFFE   string
-	TenantID         string
-	SiteID           string
-	DeviceID         string
-	Capability       commandmodel.Capability
-	Cohorts          []RuntimeCohort
-}
-
-type RuntimeCohort struct {
-	DispatcherSPIFFE string                  `json:"dispatcherSpiffe"`
-	VerifierSPIFFE   string                  `json:"verifierSpiffe"`
-	TenantID         string                  `json:"tenantId"`
-	SiteID           string                  `json:"siteId"`
-	DeviceID         string                  `json:"deviceId"`
-	Capability       commandmodel.Capability `json:"capability"`
 }
 
 type runtimeHTTPHandler struct {
-	store       RuntimeStore
-	metrics     *observability.Registry
-	dispatchers map[string][]RuntimeCohort
-	verifiers   map[string][]RuntimeCohort
+	store      RuntimeStore
+	metrics    *observability.Registry
+	dispatcher string
+	verifier   string
 }
 
 type runtimeClaimRequest struct {
+	TenantID     string `json:"tenantId"`
 	LeaseOwner   string `json:"leaseOwner"`
 	LeaseSeconds int64  `json:"leaseSeconds"`
 }
@@ -81,55 +71,11 @@ type runtimeProblem struct {
 }
 
 func NewRuntimeHTTPHandler(config RuntimeHTTPConfig) (http.Handler, error) {
-	cohorts, err := normalizedRuntimeCohorts(config)
-	if config.Store == nil || err != nil {
+	dispatcher, verifier := strings.TrimSpace(config.DispatcherSPIFFE), strings.TrimSpace(config.VerifierSPIFFE)
+	if config.Store == nil || !validSPIFFE(dispatcher) || !validSPIFFE(verifier) || dispatcher == verifier {
 		return nil, errors.New("command runtime HTTP security configuration is incomplete")
 	}
-	dispatchers := make(map[string][]RuntimeCohort, len(cohorts))
-	verifiers := make(map[string][]RuntimeCohort, len(cohorts))
-	for _, cohort := range cohorts {
-		dispatchers[cohort.DispatcherSPIFFE] = append(dispatchers[cohort.DispatcherSPIFFE], cohort)
-		verifiers[cohort.VerifierSPIFFE] = append(verifiers[cohort.VerifierSPIFFE], cohort)
-	}
-	return &runtimeHTTPHandler{store: config.Store, metrics: config.Metrics, dispatchers: dispatchers, verifiers: verifiers}, nil
-}
-
-func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error) {
-	cohorts := config.Cohorts
-	if len(cohorts) == 0 {
-		cohorts = []RuntimeCohort{{
-			DispatcherSPIFFE: config.DispatcherSPIFFE,
-			VerifierSPIFFE:   config.VerifierSPIFFE,
-			TenantID:         config.TenantID,
-			SiteID:           config.SiteID,
-			DeviceID:         config.DeviceID,
-			Capability:       config.Capability,
-		}}
-	}
-	if len(cohorts) == 0 || len(cohorts) > 64 {
-		return nil, errors.New("runtime cohort count is invalid")
-	}
-	seenDevices := make(map[string]struct{}, len(cohorts))
-	for index := range cohorts {
-		cohort := &cohorts[index]
-		cohort.DispatcherSPIFFE = strings.TrimSpace(cohort.DispatcherSPIFFE)
-		cohort.VerifierSPIFFE = strings.TrimSpace(cohort.VerifierSPIFFE)
-		cohort.TenantID = strings.TrimSpace(cohort.TenantID)
-		cohort.SiteID = strings.TrimSpace(cohort.SiteID)
-		cohort.DeviceID = strings.TrimSpace(cohort.DeviceID)
-		profile, capabilitySupported := commandmodel.CapabilityProfileFor(cohort.Capability)
-		if !validSPIFFE(cohort.DispatcherSPIFFE) || !validSPIFFE(cohort.VerifierSPIFFE) || cohort.DispatcherSPIFFE == cohort.VerifierSPIFFE ||
-			!commandmodel.IsUUIDv7(cohort.TenantID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) ||
-			!capabilitySupported || strings.TrimSpace(profile.Revision) == "" {
-			return nil, errors.New("runtime cohort is invalid")
-		}
-		deviceKey := cohort.TenantID + "\x00" + cohort.SiteID + "\x00" + cohort.DeviceID + "\x00" + string(cohort.Capability)
-		if _, duplicate := seenDevices[deviceKey]; duplicate {
-			return nil, errors.New("runtime cohort Device capability is duplicated")
-		}
-		seenDevices[deviceKey] = struct{}{}
-	}
-	return cohorts, nil
+	return &runtimeHTTPHandler{store: config.Store, metrics: config.Metrics, dispatcher: dispatcher, verifier: verifier}, nil
 }
 
 func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -138,65 +84,57 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 		writeRuntimeProblem(writer, http.StatusMethodNotAllowed, "COMMAND_RUNTIME_METHOD_NOT_ALLOWED", false)
 		return
 	}
-	identity := peerSPIFFE(request)
-	var cohorts []RuntimeCohort
+	var workload string
 	switch request.URL.Path {
 	case InternalDispatchClaimPath, InternalDispatchResolvePath, InternalConnectorPreparePath, InternalConnectorCompletePath:
-		cohorts = handler.dispatchers[identity]
+		workload = handler.dispatcher
 	case InternalVerificationClaimPath, InternalVerificationResolvePath:
-		cohorts = handler.verifiers[identity]
+		workload = handler.verifier
 	default:
 		writeRuntimeProblem(writer, http.StatusNotFound, "COMMAND_RUNTIME_ROUTE_NOT_FOUND", false)
 		return
 	}
-	if len(cohorts) == 0 {
+	if peerSPIFFE(request) != workload {
 		writeRuntimeProblem(writer, http.StatusForbidden, "COMMAND_RUNTIME_WORKLOAD_FORBIDDEN", false)
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumRuntimeRequestBody)
 	switch request.URL.Path {
 	case InternalDispatchClaimPath:
-		handler.claimDispatch(writer, request, cohorts)
+		handler.claimDispatch(writer, request)
 	case InternalDispatchResolvePath:
-		handler.resolveDispatch(writer, request, cohorts)
+		handler.resolveDispatch(writer, request)
 	case InternalVerificationClaimPath:
-		handler.claimVerification(writer, request, cohorts)
+		handler.claimVerification(writer, request)
 	case InternalVerificationResolvePath:
-		handler.resolveVerification(writer, request, cohorts)
+		handler.resolveVerification(writer, request)
 	case InternalConnectorPreparePath:
-		handler.prepareConnectorEvidence(writer, request, cohorts)
+		handler.prepareConnectorEvidence(writer, request)
 	case InternalConnectorCompletePath:
-		handler.completeConnectorEvidence(writer, request, cohorts)
+		handler.completeConnectorEvidence(writer, request)
 	}
 }
 
-func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, request *http.Request) {
 	input, ok := decodeRuntimeClaim(writer, request)
 	if !ok {
 		return
 	}
-	for _, cohort := range cohorts {
-		envelope, err := handler.store.ClaimDispatchForCohort(request.Context(), cohort.TenantID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
-		if errors.Is(err, ErrNoDispatchAvailable) {
-			continue
-		}
-		if err != nil {
-			writeRuntimeStoreError(writer, err)
-			return
-		}
-		writeRuntimeJSON(writer, http.StatusOK, envelope)
+	envelope, err := handler.store.ClaimDispatch(request.Context(), input.TenantID, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	if errors.Is(err, ErrNoDispatchAvailable) {
+		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, envelope)
 }
 
-func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, request *http.Request) {
 	var input runtimeDispatchResolveRequest
 	if !decodeRuntimeJSON(writer, request, &input) {
-		return
-	}
-	if !anyRuntimeCommandCohort(cohorts, input.Envelope.TenantID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
-		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.ResolveDispatch(request.Context(), input.Envelope, input.Result); err != nil {
@@ -213,33 +151,26 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *runtimeHTTPHandler) claimVerification(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) claimVerification(writer http.ResponseWriter, request *http.Request) {
 	input, ok := decodeRuntimeClaim(writer, request)
 	if !ok {
 		return
 	}
-	for _, cohort := range cohorts {
-		envelope, err := handler.store.ClaimVerificationForCohort(request.Context(), cohort.TenantID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
-		if errors.Is(err, ErrVerificationNotAvailable) {
-			continue
-		}
-		if err != nil {
-			writeRuntimeStoreError(writer, err)
-			return
-		}
-		writeRuntimeJSON(writer, http.StatusOK, envelope)
+	envelope, err := handler.store.ClaimVerification(request.Context(), input.TenantID, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	if errors.Is(err, ErrVerificationNotAvailable) {
+		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, envelope)
 }
 
-func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWriter, request *http.Request) {
 	var input runtimeVerificationResolveRequest
 	if !decodeRuntimeJSON(writer, request, &input) {
-		return
-	}
-	if !anyRuntimeCommandCohort(cohorts, input.Envelope.TenantID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
-		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.ResolveVerification(request.Context(), input.Envelope, input.Result); err != nil {
@@ -263,13 +194,9 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *runtimeHTTPHandler) prepareConnectorEvidence(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) prepareConnectorEvidence(writer http.ResponseWriter, request *http.Request) {
 	var evidence commandmodel.PreparedConnectorEvidence
 	if !decodeRuntimeJSON(writer, request, &evidence) {
-		return
-	}
-	if !anyRuntimeCohort(cohorts, evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
-		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.PrepareConnectorEvidence(request.Context(), evidence); err != nil {
@@ -279,13 +206,9 @@ func (handler *runtimeHTTPHandler) prepareConnectorEvidence(writer http.Response
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.ResponseWriter, request *http.Request, cohorts []RuntimeCohort) {
+func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.ResponseWriter, request *http.Request) {
 	var evidence commandmodel.CompletedConnectorEvidence
 	if !decodeRuntimeJSON(writer, request, &evidence) {
-		return
-	}
-	if !anyRuntimeCohort(cohorts, evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
-		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.CompleteConnectorEvidence(request.Context(), evidence); err != nil {
@@ -295,38 +218,12 @@ func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.Respons
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func exactRuntimeCohort(cohort RuntimeCohort, tenantID, siteID, deviceID string) bool {
-	return tenantID == cohort.TenantID && siteID == cohort.SiteID && deviceID == cohort.DeviceID
-}
-
-func exactRuntimeCommandCohort(cohort RuntimeCohort, tenantID, siteID, deviceID string, capability commandmodel.Capability) bool {
-	return exactRuntimeCohort(cohort, tenantID, siteID, deviceID) && capability == cohort.Capability
-}
-
-func anyRuntimeCohort(cohorts []RuntimeCohort, tenantID, siteID, deviceID string) bool {
-	for _, cohort := range cohorts {
-		if exactRuntimeCohort(cohort, tenantID, siteID, deviceID) {
-			return true
-		}
-	}
-	return false
-}
-
-func anyRuntimeCommandCohort(cohorts []RuntimeCohort, tenantID, siteID, deviceID string, capability commandmodel.Capability) bool {
-	for _, cohort := range cohorts {
-		if exactRuntimeCommandCohort(cohort, tenantID, siteID, deviceID, capability) {
-			return true
-		}
-	}
-	return false
-}
-
 func decodeRuntimeClaim(writer http.ResponseWriter, request *http.Request) (runtimeClaimRequest, bool) {
 	var input runtimeClaimRequest
 	if !decodeRuntimeJSON(writer, request, &input) {
 		return runtimeClaimRequest{}, false
 	}
-	if strings.TrimSpace(input.LeaseOwner) == "" || input.LeaseSeconds <= 0 || input.LeaseSeconds > 120 {
+	if !commandmodel.IsUUIDv7(input.TenantID) || strings.TrimSpace(input.LeaseOwner) == "" || input.LeaseSeconds <= 0 || input.LeaseSeconds > 120 {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return runtimeClaimRequest{}, false
 	}

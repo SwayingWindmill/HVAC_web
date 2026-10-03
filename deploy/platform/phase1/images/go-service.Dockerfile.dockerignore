@@ -13,3 +13,7 @@
 !tools/**
 !contracts/
 !contracts/**
+
+# Go services never need Node dependencies; walking them over the WSL mount is what
+# exhausts memory when several images build at once.
+**/node_modules

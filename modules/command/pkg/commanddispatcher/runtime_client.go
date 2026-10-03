@@ -21,21 +21,17 @@ const maximumRuntimeResponseBytes = int64(512 << 10)
 type RuntimeClientConfig struct {
 	BaseURL    string
 	HTTPClient *http.Client
-	TenantID   string
-	SiteID     string
-	DeviceID   string
-	DeviceIDs  []string
 }
 
+// RuntimeClient is the dispatcher's and verifier's connection to the command runtime,
+// which serves every Tenant; each claim names the Tenant it works in.
 type RuntimeClient struct {
 	baseURL    string
 	httpClient *http.Client
-	tenantID   string
-	siteID     string
-	deviceIDs  map[string]struct{}
 }
 
 type runtimeClaimRequest struct {
+	TenantID     string `json:"tenantId"`
 	LeaseOwner   string `json:"leaseOwner"`
 	LeaseSeconds int64  `json:"leaseSeconds"`
 }
@@ -61,108 +57,59 @@ func NewRuntimeClient(config RuntimeClientConfig) (*RuntimeClient, error) {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("command runtime base URL must be an HTTPS service origin")
 	}
-	tenantID := strings.TrimSpace(config.TenantID)
-	siteID := strings.TrimSpace(config.SiteID)
-	deviceIDs := make(map[string]struct{}, len(config.DeviceIDs)+1)
-	if deviceID := strings.TrimSpace(config.DeviceID); deviceID != "" {
-		deviceIDs[deviceID] = struct{}{}
-	}
-	for _, rawDeviceID := range config.DeviceIDs {
-		deviceID := strings.TrimSpace(rawDeviceID)
-		if deviceID != "" {
-			deviceIDs[deviceID] = struct{}{}
-		}
-	}
-	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || len(deviceIDs) == 0 {
-		return nil, errors.New("command runtime approved cohort is incomplete")
-	}
-	for deviceID := range deviceIDs {
-		if !commandmodel.IsUUIDv7(deviceID) {
-			return nil, errors.New("command runtime approved cohort is incomplete")
-		}
-	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &RuntimeClient{
-		baseURL: baseURL, httpClient: client,
-		tenantID: tenantID, siteID: siteID, deviceIDs: deviceIDs,
-	}, nil
+	return &RuntimeClient{baseURL: baseURL, httpClient: client}, nil
 }
 
 func (client *RuntimeClient) ClaimDispatch(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
-	if client == nil || tenantID != client.tenantID {
-		return commandmodel.DispatchEnvelope{}, commandservice.ErrInvalidRequest
-	}
 	var envelope commandmodel.DispatchEnvelope
 	status, err := client.post(ctx, commandservice.InternalDispatchClaimPath, runtimeClaimRequest{
-		LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
+		TenantID: tenantID, LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
 	}, &envelope)
 	if status == http.StatusNoContent && err == nil {
 		return commandmodel.DispatchEnvelope{}, commandservice.ErrNoDispatchAvailable
 	}
-	if err == nil && !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+	if err == nil && envelope.TenantID != tenantID {
 		return commandmodel.DispatchEnvelope{}, commandservice.ErrInvalidRequest
 	}
 	return envelope, err
 }
 
 func (client *RuntimeClient) ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
-	if client == nil || !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
-		return commandservice.ErrInvalidRequest
-	}
 	_, err := client.post(ctx, commandservice.InternalDispatchResolvePath, runtimeDispatchResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
 
 func (client *RuntimeClient) ClaimVerification(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	if client == nil || tenantID != client.tenantID {
-		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
-	}
 	var envelope commandmodel.VerificationEnvelope
 	status, err := client.post(ctx, commandservice.InternalVerificationClaimPath, runtimeClaimRequest{
-		LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
+		TenantID: tenantID, LeaseOwner: leaseOwner, LeaseSeconds: int64(leaseFor / time.Second),
 	}, &envelope)
 	if status == http.StatusNoContent && err == nil {
 		return commandmodel.VerificationEnvelope{}, commandservice.ErrVerificationNotAvailable
 	}
-	if err == nil && !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+	if err == nil && envelope.TenantID != tenantID {
 		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
 	}
 	return envelope, err
 }
 
 func (client *RuntimeClient) ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error {
-	if client == nil || !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
-		return commandservice.ErrInvalidRequest
-	}
 	_, err := client.post(ctx, commandservice.InternalVerificationResolvePath, runtimeVerificationResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
 
 func (client *RuntimeClient) Prepare(ctx context.Context, evidence commandmodel.PreparedConnectorEvidence) error {
-	if client == nil || !client.approvedScope(evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
-		return commandservice.ErrInvalidRequest
-	}
 	_, err := client.post(ctx, commandservice.InternalConnectorPreparePath, evidence, nil)
 	return err
 }
 
 func (client *RuntimeClient) Complete(ctx context.Context, evidence commandmodel.CompletedConnectorEvidence) error {
-	if client == nil || !client.approvedScope(evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
-		return commandservice.ErrInvalidRequest
-	}
 	_, err := client.post(ctx, commandservice.InternalConnectorCompletePath, evidence, nil)
 	return err
-}
-
-func (client *RuntimeClient) approvedScope(tenantID, siteID, deviceID string) bool {
-	if client == nil || tenantID != client.tenantID || siteID != client.siteID {
-		return false
-	}
-	_, ok := client.deviceIDs[deviceID]
-	return ok
 }
 
 func (client *RuntimeClient) post(ctx context.Context, path string, input, output any) (int, error) {

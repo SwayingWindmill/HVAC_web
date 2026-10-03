@@ -32,8 +32,8 @@ export function durationMilliseconds(value) {
 
 /**
  * The live acceptance rig is a single reviewed profile because the plant cadence, the
- * Registry staleness contract, the runtime freshness policy and the MQTT session
- * lifetime only work as a consistent set. Loading validates that consistency so a
+ * Registry staleness contract and the runtime freshness policy only work as a
+ * consistent set. Loading validates that consistency so a
  * partially edited profile fails loudly instead of producing a rig that looks live but
  * reports STALE inputs.
  */
@@ -85,16 +85,6 @@ export async function loadAcceptanceRig(root, profilePath = defaultAcceptanceRig
   invariant(
     registry.publishIntervalMs === durationMilliseconds(plant.required.publishInterval),
     'registry.publishIntervalMs must match the required-device publish interval',
-  );
-
-  const connectivity = profile.connectivity ?? {};
-  invariant(
-    Number.isInteger(connectivity.sessionLifetimeHours) && connectivity.sessionLifetimeHours > 0,
-    'connectivity.sessionLifetimeHours must be a positive integer',
-  );
-  invariant(
-    connectivity.sessionLifetimeHours >= 72,
-    'connectivity.sessionLifetimeHours must outlast a multi-day acceptance window; the previous 24h session expired mid-run',
   );
 
   return profile;

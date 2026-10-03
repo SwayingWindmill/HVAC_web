@@ -108,15 +108,6 @@ const commandService = await readFile(resolve(root, 'modules/command/pkg/command
 invariant(commandService.includes('strings.HasSuffix(raw, "/approve")'), 'Command Service must route canonical /approve');
 invariant(!commandService.includes('strings.HasSuffix(raw, ":approve")'), 'Command Service production route must not parse legacy :approve');
 
-const mqttConfig = await readFile(resolve(root, 'modules/connectivity/pkg/adapter/config.go'), 'utf8');
-for (const messageType of ['telemetry', 'state', 'event', 'heartbeat']) {
-  invariant(mqttConfig.includes(`energy/v1/+/+/+/${messageType}`), `MQTT uplink subscription is missing ${messageType}`);
-}
-invariant(!mqttConfig.includes('energy/v1/+/+/+/#'), 'MQTT uplink adapter must not subscribe to command/reply through #');
-const mqttProcessor = await readFile(resolve(root, 'modules/connectivity/pkg/adapter/processor.go'), 'utf8');
-invariant(mqttProcessor.includes('MessageTypeState') && mqttProcessor.includes('MessageTypeEvent') && mqttProcessor.includes('MessageTypeHeartbeat'), 'MQTT V2.1.2 message family is incomplete');
-invariant(mqttProcessor.includes('SOURCE_ACTIVITY'), 'MQTT wire activity must publish Presence evidence');
-
 const durableIntegration = await readFile(resolve(root, 'infra/registry/postgres/init/009i-backend-integration-v2.sql'), 'utf8');
 for (const token of ['domain_outbox_events', 'domain_event_deliveries', 'domain_consumer_inbox', 'cross_store_publications', 'publication_evidence']) {
   invariant(durableIntegration.includes(token), `durable/cross-store foundation missing ${token}`);

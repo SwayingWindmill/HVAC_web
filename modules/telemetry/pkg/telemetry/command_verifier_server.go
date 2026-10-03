@@ -68,7 +68,7 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for authoritative command state.", false)
 		return
 	}
-	if h.store == nil || !uuidV7Pattern.MatchString(h.commandVerifierTenantID) || !uuidV7Pattern.MatchString(h.commandVerifierSiteID) || len(h.commandVerifierDeviceIDs) == 0 {
+	if h.store == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_COMMAND_REPORTED_STATE_UNAVAILABLE", "Command reported state is not configured.", true)
 		return
 	}
@@ -78,22 +78,14 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_KEY_INVALID", "A single reported-state key is required.", false)
 		return
 	}
-	deviceID := h.commandVerifierDeviceID
-	if deviceIDs, hasDeviceID := query["deviceId"]; hasDeviceID {
-		if len(deviceIDs) != 1 {
-			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single approved Device is required.", false)
-			return
-		}
-		deviceID = strings.TrimSpace(deviceIDs[0])
-	}
-	if !uuidV7Pattern.MatchString(deviceID) {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single approved Device is required.", false)
+	// The command runtime serves every Tenant; the answer names the Device's own Tenant
+	// and Site, which the caller checks against the command.
+	deviceIDs := query["deviceId"]
+	if len(deviceIDs) != 1 || !uuidV7Pattern.MatchString(strings.TrimSpace(deviceIDs[0])) {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single Device is required.", false)
 		return
 	}
-	if _, allowed := h.commandVerifierDeviceIDs[deviceID]; !allowed {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The configured telemetry resource was not found.", false)
-		return
-	}
+	deviceID := strings.TrimSpace(deviceIDs[0])
 	reportedStateKey := strings.TrimSpace(keys[0])
 	commit, err := h.store.EvaluateAndRead(request.Context(), telemetryauth.Target{
 		DeviceID: deviceID, Keys: []string{reportedStateKey},
@@ -115,8 +107,7 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 }
 
 func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObservationSnapshot, reportedStateKey, deviceID string) (commandReportedStateResponse, error) {
-	if string(snapshot.TenantId) != h.commandVerifierTenantID || string(snapshot.SiteId) != h.commandVerifierSiteID ||
-		string(snapshot.DeviceId) != deviceID || snapshot.BusinessRevision < 0 {
+	if string(snapshot.DeviceId) != deviceID || snapshot.BusinessRevision < 0 {
 		return commandReportedStateResponse{}, errors.New("command reported-state scope mismatch")
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, string(snapshot.EvaluatedAt))
@@ -172,7 +163,7 @@ func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObser
 		return commandReportedStateResponse{}, errors.New("command reported-state key is missing or duplicated")
 	}
 	payload := commandReportedStateEvidencePayload{
-		SchemaVersion: 1, TenantID: h.commandVerifierTenantID, SiteID: h.commandVerifierSiteID, DeviceID: deviceID,
+		SchemaVersion: 1, TenantID: string(snapshot.TenantId), SiteID: string(snapshot.SiteId), DeviceID: deviceID,
 		EvaluationAvailability: string(snapshot.EvaluationAvailability), Presence: presence, Readiness: string(snapshot.TelemetryReadiness),
 		Freshness: freshness, Quality: quality, BusinessRevision: uint64(snapshot.BusinessRevision), ReportedValue: reportedValue,
 		ObservedAt: observedAt.UTC(), ReportedStateKey: reportedStateKey,

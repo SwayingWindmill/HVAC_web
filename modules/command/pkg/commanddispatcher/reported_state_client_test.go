@@ -11,7 +11,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-func TestReportedStateClientReadsExactCohort(t *testing.T) {
+func TestReportedStateClientReadsTheCommandedDevice(t *testing.T) {
 	observedAt := time.Date(2026, 7, 26, 2, 0, 0, 0, time.UTC)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != internalCommandReportedStatePath || request.URL.Query().Get("key") != "zone.temperature_setpoint" {
@@ -29,7 +29,7 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 	}))
 	defer server.Close()
 	client, err := NewReportedStateClient(ReportedStateClientConfig{
-		BaseURL: server.URL, HTTPClient: server.Client(), TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		BaseURL: server.URL, HTTPClient: server.Client(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,16 +46,27 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 	}
 }
 
-func TestReportedStateClientRejectsEnvelopeOutsideCohort(t *testing.T) {
-	client, err := NewReportedStateClient(ReportedStateClientConfig{
-		BaseURL: "https://s2.example.test", HTTPClient: http.DefaultClient, TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
-	})
+func TestReportedStateClientRejectsStateOfAnotherDevice(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"schemaVersion": 1,
+			"evidenceId":    "s2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"tenantId":      "org-1", "siteId": "site-1", "deviceId": "other-device",
+			"evaluationAvailability": "AVAILABLE", "presence": "ONLINE", "readiness": "CURRENT",
+			"freshness": "FRESH", "quality": "GOOD", "businessRevision": 19,
+			"reportedValue": map[string]any{"number": 22.5}, "observedAt": time.Now().UTC(), "reportedStateKey": "run_state",
+		})
+	}))
+	defer server.Close()
+	client, err := NewReportedStateClient(ReportedStateClientConfig{BaseURL: server.URL, HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := client.ReadReportedState(context.Background(), commandmodel.VerificationEnvelope{
-		TenantID: "org-1", SiteID: "site-1", DeviceID: "other-device", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
+		TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
+		VerificationPointKey: "run_state",
 	}); err == nil {
-		t.Fatal("expected out-of-cohort envelope to fail closed")
+		t.Fatal("state of another Device was accepted for the commanded Device")
 	}
 }

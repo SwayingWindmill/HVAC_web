@@ -16,7 +16,6 @@ func TestEdgeMQTTCommandRestartDoesNotReplayMayExecuteRecord(t *testing.T) {
 	wireID := config.Plant.Chiller.ID
 	queueDirectory := t.TempDir()
 	gatewayConfig := MQTTGatewayConfig{
-		TenantID: "018f3d00-0000-7000-8000-000000000001", SiteID: "018f3e00-1000-7000-8000-000000000001",
 		QueueDirectory: queueDirectory,
 	}
 	ledgerPath := queueDirectory + "/command-execution-records.json"

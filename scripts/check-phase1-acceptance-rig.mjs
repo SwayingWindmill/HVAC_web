@@ -87,23 +87,18 @@ notes.push(
   `runtime freshness: ${freshnessRows.length} policies, ${profile.runtimeFreshness.freshWithinSeconds}s/${profile.runtimeFreshness.expectedSampleIntervalSeconds}s for the chain Devices`,
 );
 
-// 3. The MQTT Gateway session must outlast the acceptance window. The seeded 24h session
-//    expired during a run and the adapter reported every valid message as a permanent
-//    defect.
-const sessionRows = psqlRows(
+// 3. Every Gateway credential must outlast the acceptance window: a Gateway whose
+//    credential lapses mid-run has all of its uplink quarantined.
+const credentialRows = psqlRows(
   'hvac_s1',
-  `SELECT status || '|' || round(extract(epoch FROM (expires_at - now())) / 3600)::text
-     FROM connectivity.sessions WHERE status = 'ACTIVE'`,
+  `SELECT gateway_id::text || '|' || round(extract(epoch FROM (valid_until - now())) / 3600)::text
+     FROM connectivity.gateway_credentials WHERE status = 'ACTIVE'`,
 );
-invariant(sessionRows.length === 1, `expected exactly one ACTIVE Gateway session, found ${sessionRows.length}`);
-for (const row of sessionRows) {
-  const [status, remainingHours] = row.split('|');
-  invariant(status === 'ACTIVE', `Gateway session status is ${status}`);
-  invariant(
-    Number(remainingHours) > 24,
-    `Gateway session expires in ${remainingHours}h; the rig profile asks for ${profile.connectivity.sessionLifetimeHours}h so a run cannot outlive its credential`,
-  );
-  notes.push(`connectivity session: ACTIVE for another ${remainingHours}h`);
+invariant(credentialRows.length > 0, 'expected at least one ACTIVE Gateway credential');
+for (const row of credentialRows) {
+  const [gatewayId, remainingHours] = row.split('|');
+  invariant(Number(remainingHours) > 24, `Gateway ${gatewayId} credential expires in ${remainingHours}h, inside the acceptance window`);
+  notes.push(`Gateway ${gatewayId} credential: ACTIVE for another ${remainingHours}h`);
 }
 
 // 4. The broker must not be replaying a persisted backlog: a saturated queue is what put

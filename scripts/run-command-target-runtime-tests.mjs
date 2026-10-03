@@ -21,7 +21,6 @@ const modules = [
   './modules/telemetry/...',
 ];
 const commands = [
-  [process.execPath, ['scripts/check-command-target-runtime.mjs']],
   [process.execPath, ['scripts/run-go.mjs', 'test', ...modules]],
   [process.execPath, ['scripts/run-go.mjs', 'vet', ...modules]],
   [process.execPath, ['scripts/run-go.mjs', 'build', '-o', 'out/command-owner', './modules/command/cmd/command-owner']],

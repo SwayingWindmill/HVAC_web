@@ -88,7 +88,18 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 	if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{target}); err != nil {
 		return SnapshotCommit{}, fmt.Errorf("validate telemetry snapshot target: %w", err)
 	}
+	// The evaluation writes the Device snapshot in a serializable transaction that
+	// conflicts with concurrent ingest, so it is retried like ingest is.
+	for attempt := 0; attempt < 3; attempt++ {
+		commit, err := store.evaluateAndReadOnce(ctx, target, evaluatedAt)
+		if err == nil || !retryableTelemetryTransaction(err) {
+			return commit, err
+		}
+	}
+	return SnapshotCommit{}, errors.New("telemetry snapshot transaction retry budget exhausted")
+}
 
+func (store *PostgresStore) evaluateAndReadOnce(ctx context.Context, target telemetryauth.Target, evaluatedAt time.Time) (SnapshotCommit, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return SnapshotCommit{}, fmt.Errorf("begin telemetry snapshot transaction: %w", err)

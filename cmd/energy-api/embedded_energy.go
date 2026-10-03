@@ -10,17 +10,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
-	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
@@ -474,11 +471,6 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 	return server, telemetry, store.Close, nil
 }
 
-type embeddedRuntimeCohortDocument struct {
-	SchemaVersion int                            `json:"schemaVersion"`
-	Cohorts       []commandservice.RuntimeCohort `json:"cohorts"`
-}
-
 func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("COMMAND_TLS_CERT"), energyRequiredEnv("COMMAND_TLS_KEY"))
 	if err != nil {
@@ -538,12 +530,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.S
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-	runtimeConfig, err := embeddedCommandRuntimeConfig(store, telemetry.Metrics)
-	if err != nil {
-		store.Close()
-		return nil, nil, func() {}, err
-	}
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeConfig)
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(store, telemetry.Metrics))
 	if err != nil {
 		store.Close()
 		return nil, nil, func() {}, err
@@ -570,41 +557,12 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.S
 	return server, telemetry, store.Close, nil
 }
 
-func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *observability.Registry) (commandservice.RuntimeHTTPConfig, error) {
-	path := strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_COHORTS_FILE"))
-	if path == "" {
-		return commandservice.RuntimeHTTPConfig{
-			Store: store, Metrics: metrics,
-			DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
-			VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
-			TenantID:         energyRequiredEnv("COMMAND_APPROVED_TENANT_ID"),
-			SiteID:           energyRequiredEnv("COMMAND_APPROVED_SITE_ID"),
-			DeviceID:         energyRequiredEnv("COMMAND_APPROVED_DEVICE_ID"),
-			Capability:       commandmodel.Capability(energyRequiredEnv("COMMAND_APPROVED_CAPABILITY")),
-		}, nil
+func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *observability.Registry) commandservice.RuntimeHTTPConfig {
+	return commandservice.RuntimeHTTPConfig{
+		Store: store, Metrics: metrics,
+		DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
+		VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
 	}
-	if !filepath.IsAbs(path) {
-		return commandservice.RuntimeHTTPConfig{}, errors.New("Command runtime cohort path must be absolute")
-	}
-	info, err := os.Stat(path)
-	if err != nil || info.Size() <= 0 || info.Size() > 64<<10 {
-		return commandservice.RuntimeHTTPConfig{}, errors.New("Command runtime cohort file size is invalid")
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return commandservice.RuntimeHTTPConfig{}, err
-	}
-	var document embeddedRuntimeCohortDocument
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
-		return commandservice.RuntimeHTTPConfig{}, errors.New("Command runtime cohort document is invalid")
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || document.SchemaVersion != 1 || len(document.Cohorts) == 0 {
-		return commandservice.RuntimeHTTPConfig{}, errors.New("Command runtime cohort document is invalid")
-	}
-	return commandservice.RuntimeHTTPConfig{Store: store, Metrics: metrics, Cohorts: document.Cohorts}, nil
 }
 
 func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {

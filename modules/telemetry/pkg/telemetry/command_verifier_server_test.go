@@ -38,15 +38,14 @@ func (store *commandReportedStateStore) EvaluateAndRead(_ context.Context, targe
 	}}, nil
 }
 
-func TestCommandReportedStateReturnsExactConfiguredCohort(t *testing.T) {
+func TestCommandReportedStateAnswersForTheDevicesOwnTenantAndSite(t *testing.T) {
 	now := time.Date(2026, 7, 26, 1, 2, 3, 0, time.UTC)
 	store := &commandReportedStateStore{}
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
-		CommandVerifierTenantID: tenantA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
 		Now: func() time.Time { return now },
 	})
-	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)
+	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?deviceId="+deviceA+"&key=zone.temperature_setpoint", nil)
 	request.TLS = verifiedTLSState(commandVerifierSPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -69,10 +68,9 @@ func TestCommandReportedStateRejectsOtherWorkload(t *testing.T) {
 	store := &commandReportedStateStore{}
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
-		CommandVerifierTenantID: tenantA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
 		Now: time.Now,
 	})
-	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)
+	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?deviceId="+deviceA+"&key=zone.temperature_setpoint", nil)
 	request.TLS = verifiedTLSState(gatewaySPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
