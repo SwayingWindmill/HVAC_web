@@ -2,6 +2,7 @@ package commandservice
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestPostgresPreSendRetryAdvancesFenceAndRejectsOldAttempt(t *testing.T) {
 	}
 	if err := store.ResolveDispatch(ctx, first, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true,
-		EvidenceID: "late-old-fence",
+		EvidenceID: "late-old-fence", EdgeExecution: postgresEdgeExecution(t, first),
 	}); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("old attempt was not fenced: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestPostgresExpiredPreparedLeaseFreezesOutcomeUnknown(t *testing.T) {
 	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
 	if err := store.ResolveDispatch(ctx, first, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true,
-		EvidenceID: "late-after-expiry",
+		EvidenceID: "late-after-expiry", EdgeExecution: postgresEdgeExecution(t, first),
 	}); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("expired worker result did not observe frozen state: %v", err)
 	}
@@ -161,6 +162,7 @@ func TestPostgresReportedStateMismatchFreezesOutcomeUnknown(t *testing.T) {
 	}
 	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-mismatch",
+		EdgeExecution: recordAcknowledgedConnectorEvidence(t, store, *now, dispatch),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +198,7 @@ func TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision(t *testing.T) {
 	}
 	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-timestamp-precision",
+		EdgeExecution: recordAcknowledgedConnectorEvidence(t, store, *now, dispatch),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +233,7 @@ func TestPostgresExpiredReportedStateVerificationFreezesOutcomeUnknown(t *testin
 	}
 	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-expired",
+		EdgeExecution: recordAcknowledgedConnectorEvidence(t, store, *now, dispatch),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +270,7 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 	ctx := t.Context()
 	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
 		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true,
-		EvidenceID: evidencePrefix + "-provider-ack", EdgeExecution: postgresEdgeExecution(t, dispatch),
+		EvidenceID: evidencePrefix + "-provider-ack", EdgeExecution: recordAcknowledgedConnectorEvidence(t, store, *now, dispatch),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -359,4 +363,30 @@ WHERE i.command_id = $1::uuid
 	if actualIntentStatus != intentStatus || latestAttemptStatus != attemptStatus || attemptCount != attempts || frozenState != frozen {
 		t.Fatalf("dispatch state intent=%s attempt=%s attempts=%d frozen=%v", actualIntentStatus, latestAttemptStatus, attemptCount, frozenState)
 	}
+}
+
+// recordAcknowledgedConnectorEvidence records what the connector persists before an
+// acknowledged dispatch is resolved: verification is only claimable for an attempt with
+// durable ACKNOWLEDGED connector evidence and executed Edge evidence.
+func recordAcknowledgedConnectorEvidence(t *testing.T, store *PostgresStore, at time.Time, dispatch commandmodel.DispatchEnvelope) *commandmodel.EdgeExecutionEvidence {
+	t.Helper()
+	prepared := commandmodel.PreparedConnectorEvidence{
+		AttemptID: dispatch.AttemptID, CommandID: dispatch.CommandID,
+		TenantID: dispatch.TenantID, SiteID: dispatch.SiteID, DeviceID: dispatch.DeviceID,
+		ExternalDeviceID: "CHILLER-01", ExecutionFence: dispatch.ExecutionFence, PayloadHash: dispatch.PayloadHash,
+		MappingRevision: "mqtt-command-v1", BindingRevision: "registry-source-key:1",
+		ProviderEndpoint: "hvac/v1/018f3e00-4000-7000-8000-000000000100/down/command", ProviderMethod: "setTemperatureSetpoint",
+		RequestSHA256: strings.Repeat("a", 64), PreparedAt: at,
+	}
+	if err := store.PrepareConnectorEvidence(t.Context(), prepared); err != nil {
+		t.Fatalf("prepare connector evidence: %v", err)
+	}
+	edge := postgresEdgeExecution(t, dispatch)
+	if err := store.CompleteConnectorEvidence(t.Context(), commandmodel.CompletedConnectorEvidence{
+		PreparedConnectorEvidence: prepared, RequestWritten: true, ConnectorPhase: commandmodel.ConnectorAcknowledged,
+		ProviderStatusCode: 200, ResponseSHA256: strings.Repeat("b", 64), EdgeExecution: edge, CompletedAt: at,
+	}); err != nil {
+		t.Fatalf("complete connector evidence: %v", err)
+	}
+	return edge
 }
