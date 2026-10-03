@@ -89,7 +89,7 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 	if len(actions) != 4 || actions[0] != NotificationCreated || actions[1] != NotificationSeverityChanged || actions[2] != NotificationAcknowledged || actions[3] != NotificationCleared {
 		t.Fatalf("Alarm outbox emitted non-business or missing state events: actions=%#v versions=%#v", actions, versions)
 	}
-	if versions[0] != 1 || versions[1] != 3 || versions[2] != acked.Alarm.Version || versions[3] != cleared.Version {
+	if versions[0] != created.Version || versions[1] != severityChanged.Version || versions[2] != acked.Alarm.Version || versions[3] != cleared.Version {
 		t.Fatalf("Alarm outbox is not bound to exact aggregate versions: %#v", versions)
 	}
 
