@@ -11,7 +11,7 @@ const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-historical-replay-${process.pid}`;
 const reportPath = resolve(root, process.env.HISTORICAL_REPLAY_REPORT_PATH ?? 'out/historical-replay/integration.json');
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
-const clickHouseImage = 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c';
+const clickHouseImage = 'clickhouse/clickhouse-server:26.3.39.7@sha256:3a91276f066905da0edbbd622d3fc2a2df632c87ea7fe32ef4e74fdf8c9567b0';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 async function findAvailablePort() {

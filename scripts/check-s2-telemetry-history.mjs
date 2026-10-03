@@ -70,7 +70,7 @@ assert.equal(
   2,
   'raw and hourly materialized-view target tables must both retain deduplication tokens',
 );
-assert(compose.includes('clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c'), 'ClickHouse image must be version and digest pinned');
+assert(compose.includes('clickhouse/clickhouse-server:26.3.39.7@sha256:3a91276f066905da0edbbd622d3fc2a2df632c87ea7fe32ef4e74fdf8c9567b0'), 'ClickHouse image must be version and digest pinned');
 assert(compose.includes('./clickhouse/init:/docker-entrypoint-initdb.d:ro'), 'ClickHouse init must be mounted read-only');
 assert(integration.includes('pullDockerImageWithRetry'), 'history integration must use bounded immutable-image pull retries');
 assert(integration.includes("'--pull=never'"), 'history integration compose startup must not repull images');

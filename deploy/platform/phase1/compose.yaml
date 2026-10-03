@@ -784,7 +784,7 @@ services:
 
   clickhouse:
     profiles: ["local-clickhouse"]
-    image: clickhouse/clickhouse-server:26.3.12.3
+    image: clickhouse/clickhouse-server:26.3.39.7
     restart: unless-stopped
     environment:
       CLICKHOUSE_SERVER_MEMORY_USAGE: ${CLICKHOUSE_SERVER_MEMORY_USAGE:-3221225472}
@@ -837,7 +837,7 @@ services:
     logging: *default-logging
 
   clickhouse-backup:
-    image: clickhouse/clickhouse-server:26.3.12.3
+    image: clickhouse/clickhouse-server:26.3.39.7
     profiles: ["backup"]
     depends_on:
       clickhouse:
