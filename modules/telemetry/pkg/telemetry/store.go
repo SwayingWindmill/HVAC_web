@@ -88,8 +88,7 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 	if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{target}); err != nil {
 		return SnapshotCommit{}, fmt.Errorf("validate telemetry snapshot target: %w", err)
 	}
-	// The evaluation writes the Device snapshot in a serializable transaction that
-	// conflicts with concurrent ingest, so it is retried like ingest is.
+	// Retried like ingest: a transient database failure must not fail a reported-state read.
 	for attempt := 0; attempt < 3; attempt++ {
 		commit, err := store.evaluateAndReadOnce(ctx, target, evaluatedAt)
 		if err == nil || !retryableTelemetryTransaction(err) {
@@ -100,7 +99,7 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 }
 
 func (store *PostgresStore) evaluateAndReadOnce(ctx context.Context, target telemetryauth.Target, evaluatedAt time.Time) (SnapshotCommit, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return SnapshotCommit{}, fmt.Errorf("begin telemetry snapshot transaction: %w", err)
 	}
@@ -109,6 +108,9 @@ func (store *PostgresStore) evaluateAndReadOnce(ctx context.Context, target tele
 		return SnapshotCommit{}, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
 
+	if err := lockDevice(ctx, tx, target.DeviceID); err != nil {
+		return SnapshotCommit{}, err
+	}
 	commit, err := store.evaluateAndPersistDevice(ctx, tx, target.DeviceID, target.Keys, evaluatedAt)
 	if err != nil {
 		return SnapshotCommit{}, err
@@ -117,6 +119,15 @@ func (store *PostgresStore) evaluateAndReadOnce(ctx context.Context, target tele
 		return SnapshotCommit{}, fmt.Errorf("commit telemetry snapshot transaction: %w", err)
 	}
 	return commit, nil
+}
+
+// lockDevice serializes every transaction that reads and rewrites one Device's state,
+// so they see each other's writes and take their row locks in the same order.
+func lockDevice(ctx context.Context, tx pgx.Tx, deviceID string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('telemetry-device:' || $1, 0))`, deviceID); err != nil {
+		return fmt.Errorf("lock telemetry Device: %w", err)
+	}
+	return nil
 }
 
 func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time) (SnapshotCommit, error) {
