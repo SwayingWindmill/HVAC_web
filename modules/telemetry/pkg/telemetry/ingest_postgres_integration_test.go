@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +97,77 @@ func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
 	}
 	if afterLatestValue != latestValue || afterLatestRevision != latestRevision || afterSnapshotRevision != snapshotRevision || afterSnapshotSHA != snapshotSHA || afterPresenceSignals != presenceSignals {
 		t.Fatalf("Historical Replay mutated Current: latest=%s/%d -> %s/%d snapshot=%d/%s -> %d/%s presence=%d -> %d", latestValue, latestRevision, afterLatestValue, afterLatestRevision, snapshotRevision, snapshotSHA, afterSnapshotRevision, afterSnapshotSHA, presenceSignals, afterPresenceSignals)
+	}
+}
+
+// Two Gateways ingest for different Devices at once while commands read reported state:
+// work on one Device must not fail because of work on another.
+func TestPostgresConcurrentDevicesDoNotConflict(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetIngestState(t, admin)
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const observations = 60
+	start := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
+	ingest := func(eventBase int, sourceID, partition, externalID string) error {
+		for index := range observations {
+			sampledAt := start.Add(time.Duration(index) * time.Second)
+			candidate := ingestCandidate(
+				ingestEvent(eventBase+index), sourceID, partition, int64(index+1), SourcePathPush,
+				externalID, "zone.temperature", json.RawMessage(fmt.Sprintf("%d.5", 20+index%5)), "NUMBER", "Cel",
+				sampledAt, sampledAt.Add(time.Second),
+			)
+			if _, err := store.AcceptObservation(ctx, candidate); err != nil {
+				return fmt.Errorf("%s observation %d: %w", externalID, index, err)
+			}
+		}
+		return nil
+	}
+	errs := make(chan error, 3)
+	done := make(chan struct{})
+	var writers sync.WaitGroup
+	writers.Add(2)
+	go func() {
+		defer writers.Done()
+		errs <- ingest(300, sourceA, "tb-ticket-04-concurrent-a", "tb-device-org-a-site-1")
+	}()
+	go func() {
+		defer writers.Done()
+		errs <- ingest(400, sourceB, "tb-ticket-04-concurrent-b", "tb-device-org-b-site-1")
+	}()
+	go func() {
+		reads := 0
+		for {
+			select {
+			case <-done:
+				errs <- nil
+				return
+			default:
+			}
+			device := []string{deviceA, deviceB}[reads%2]
+			if _, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: device}, start.Add(2*time.Minute)); err != nil {
+				errs <- fmt.Errorf("reported state read %d: %w", reads, err)
+				return
+			}
+			reads++
+		}
+	}()
+	writers.Wait()
+	close(done)
+	for range 3 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

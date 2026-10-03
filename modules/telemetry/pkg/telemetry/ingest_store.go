@@ -75,8 +75,11 @@ func (store *PostgresStore) acceptObservation(ctx context.Context, candidate Obs
 	return ObservationReceipt{}, errors.New("telemetry observation transaction retry budget exhausted")
 }
 
+// acceptObservationOnce runs at READ COMMITTED: the source partition, the source event
+// and the Device are each serialized by their own lock, taken in that order, so work on
+// one Device never waits on or fails because of another.
 func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate ObservationCandidate, evaluate observationEvaluator) (ObservationReceipt, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return ObservationReceipt{}, fmt.Errorf("begin telemetry observation transaction: %w", err)
 	}
@@ -240,6 +243,9 @@ FOR UPDATE
 		return facts, existingID, nil
 	}
 	deviceID := facts.Device.DeviceID
+	if err := lockDevice(ctx, tx, deviceID); err != nil {
+		return ObservationFacts{}, "", err
+	}
 	var policy ObservationPolicy
 	var futureSeconds, lagSeconds int
 	err = tx.QueryRow(ctx, `
