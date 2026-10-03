@@ -23,7 +23,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-const mqttTelemetryEnvelopeSchemaVersion = "1.0"
+const mqttTelemetryEnvelopeSchemaVersion = "2.0"
 
 type mqttTelemetryEnvelope struct {
 	SchemaVersion string               `json:"schemaVersion"`
@@ -72,11 +72,6 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	for _, deviceID := range plantConfig.ReportingDeviceIDs() {
-		if _, ok := config.DeviceExternalIDByDeviceID[deviceID]; !ok {
-			return nil, fmt.Errorf("MQTT gateway externalId mapping is missing device %s", deviceID)
-		}
-	}
 	if err := os.MkdirAll(config.QueueDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("create MQTT queue directory: %w", err)
 	}
@@ -92,7 +87,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err != nil {
 		return nil, err
 	}
-	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.GatewayID, evidenceSpool)
+	commandHandler, err := newEdgeCommandHandler(edgeRuntime, config, plantConfig.Plant.DeviceIDs(), evidenceSpool)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +120,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			connected.Store(true)
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-			commandTopic := "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command"
+			commandTopic := mqttCommandTopic(config)
 			go func() {
 				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
@@ -140,7 +135,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			}()
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID:          strings.TrimSpace(config.ClientID),
+			ClientID:          config.GatewayID,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
 		},
 	})
@@ -152,13 +147,13 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		pointByKey[pointReference(point.DeviceID, point.TelemetryKey)] = point
 	}
 	return &MQTTPublisher{
-		gatewayID:      plantConfig.GatewayID,
+		gatewayID:      config.GatewayID,
 		config:         config,
 		pointByKey:     pointByKey,
 		manager:        manager,
 		commandHandler: commandHandler,
 		evidenceSpool:  evidenceSpool,
-		commandTopic:   "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command",
+		commandTopic:   mqttCommandTopic(config),
 		metrics:        metrics,
 		connected:      connected,
 	}, nil
@@ -216,7 +211,7 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 	if err != nil {
 		return fmt.Errorf("encode MQTT telemetry envelope: %w", err)
 	}
-	topic := "energy/v1/" + publisher.config.TenantID + "/" + publisher.config.SiteID + "/" + publisher.gatewayID + "/telemetry"
+	topic := "hvac/v1/" + publisher.gatewayID + "/up/telemetry"
 	admission, err := publisher.evidenceSpool.Enqueue(envelope.MessageID, EvidenceTelemetryNormal, topic, payload)
 	if err != nil {
 		if publisher.metrics != nil && errors.Is(err, ErrOfflineCapacity) {
@@ -257,10 +252,7 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	publishedAt := time.Time{}
 	var gatewaySequence uint64
 	for _, measurement := range measurements {
-		deviceID := strings.TrimSpace(publisher.config.DeviceExternalIDByDeviceID[measurement.DeviceID])
-		if deviceID == "" {
-			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT deviceId is missing for device %s", measurement.DeviceID)
-		}
+		deviceID := measurement.DeviceID
 		point, ok := publisher.pointByKey[pointReference(measurement.DeviceID, measurement.TelemetryKey)]
 		if !ok {
 			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
@@ -320,6 +312,12 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 		Replay:        false,
 		Payload:       mqttTelemetryPayload{Devices: devices},
 	}, nil
+}
+
+// mqttCommandTopic is the interim command topic, kept until commands move to
+// hvac/v1/{gatewayId}/down/command (#406).
+func mqttCommandTopic(config MQTTGatewayConfig) string {
+	return "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + config.GatewayID + "/command"
 }
 
 func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {

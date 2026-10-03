@@ -45,12 +45,15 @@ type commandRuntimeBindings struct {
 	Devices       []commandRuntimeBinding `json:"devices"`
 }
 
-func loadInProcessCommandRuntime(ctx context.Context, store *connectivity.Store, integration connectivity.IntegrationDescriptor) (*inProcessCommandRuntime, error) {
+func loadInProcessCommandRuntime(ctx context.Context, store *connectivity.Store) (*inProcessCommandRuntime, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
 		return nil, nil
 	}
-	if store == nil || strings.TrimSpace(integration.ID) == "" {
-		return nil, errors.New("Command Runtime requires Connectivity owner state")
+	// Commands still travel through one integration instance until they move to
+	// per-Gateway topics (#406).
+	integration, err := store.LoadIntegration(ctx, mustCommandEnv("MQTT_COMMAND_INTEGRATION_ID"))
+	if err != nil {
+		return nil, fmt.Errorf("load command integration instance: %w", err)
 	}
 	bindings, err := loadCommandRuntimeBindings()
 	if err != nil {

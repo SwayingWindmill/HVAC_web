@@ -1,11 +1,18 @@
-user EG8200-COMMERCIAL-001
-topic write energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/EG8200-COMMERCIAL-001/telemetry
-topic read energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/EG8200-COMMERCIAL-001/command
-topic write energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/EG8200-COMMERCIAL-001/command/reply
+# Mosquitto uses each client certificate's CN as its username (use_identity_as_username).
+# A Gateway's CN is its Registry Device id, so these patterns confine every Gateway to
+# its own topics and adding a Gateway changes nothing here (ADR 0015).
+pattern write hvac/v1/%u/up/#
+pattern read hvac/v1/%u/down/#
 
+# Connectivity consumes every Gateway's uplink.
 user mqtt-telemetry-adapter
-topic read energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/+/telemetry
+topic read hvac/v1/+/up/#
+
+# Commands keep their per-Tenant topics until they move to
+# hvac/v1/{gatewayId}/down/command with replies on up/reply (#406).
+pattern read energy/v1/+/+/%u/command
+pattern write energy/v1/+/+/%u/command/reply
 
 user command-dispatcher
-topic write energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/EG8200-COMMERCIAL-001/command
-topic read energy/v1/018f3d00-0000-7000-8000-000000000001/018f3e00-1000-7000-8000-000000000001/EG8200-COMMERCIAL-001/command/reply
+topic write energy/v1/+/+/+/command
+topic read energy/v1/+/+/+/command/reply

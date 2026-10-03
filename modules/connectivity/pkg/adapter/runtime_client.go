@@ -18,8 +18,6 @@ import (
 
 const (
 	sourceObservationPath            = "/internal/v1/telemetry/sources/observations:accept"
-	mqttGatewayEvidencePath          = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
-	mqttPresenceEvidencePath         = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
 	mqttRuntimeEventPath             = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumTelemetryRuntimeBodyBytes = int64(256 << 10)
 )
@@ -78,24 +76,6 @@ type ObservationReceipt struct {
 	PositionAdvanced bool     `json:"positionAdvanced"`
 }
 
-type GatewayEvidence struct {
-	TenantID     string          `json:"tenantId"`
-	SiteID       string          `json:"siteId"`
-	GatewayID    string          `json:"gatewayId"`
-	MessageID    string          `json:"messageId"`
-	EvidenceType string          `json:"evidenceType"`
-	ObservedAt   string          `json:"observedAt"`
-	Sequence     int64           `json:"sequence"`
-	Payload      json.RawMessage `json:"payload"`
-}
-
-type PresenceEvidence struct {
-	DeviceID      string `json:"deviceId"`
-	SignalType    string `json:"signalType"`
-	ObservedAt    string `json:"observedAt"`
-	SourceEventID string `json:"sourceEventId"`
-}
-
 type RuntimeEventEvidence struct {
 	TenantID   string          `json:"tenantId"`
 	SiteID     string          `json:"siteId"`
@@ -110,18 +90,8 @@ type RuntimeEventEvidence struct {
 	Data       json.RawMessage `json:"data"`
 }
 
-type PresenceEvidenceReceipt struct {
-	DeviceID         string `json:"deviceId"`
-	Accepted         bool   `json:"accepted"`
-	Duplicate        bool   `json:"duplicate"`
-	BusinessRevision int64  `json:"businessRevision"`
-	StateChanged     bool   `json:"stateChanged"`
-}
-
 type RuntimeClient interface {
 	AcceptObservation(context.Context, Observation) (ObservationReceipt, error)
-	AcceptGatewayEvidence(context.Context, GatewayEvidence) error
-	AcceptPresenceEvidence(context.Context, PresenceEvidence) (PresenceEvidenceReceipt, error)
 	AcceptRuntimeEvent(context.Context, RuntimeEventEvidence) error
 }
 
@@ -211,23 +181,11 @@ func (client *TelemetryRuntimeClient) AcceptObservation(ctx context.Context, obs
 	return receipt, nil
 }
 
-func (client *TelemetryRuntimeClient) AcceptGatewayEvidence(ctx context.Context, evidence GatewayEvidence) error {
-	return client.postEvidence(ctx, mqttGatewayEvidencePath, evidence, nil)
-}
-
-func (client *TelemetryRuntimeClient) AcceptPresenceEvidence(ctx context.Context, evidence PresenceEvidence) (PresenceEvidenceReceipt, error) {
-	var receipt PresenceEvidenceReceipt
-	if err := client.postEvidence(ctx, mqttPresenceEvidencePath, evidence, &receipt); err != nil {
-		return PresenceEvidenceReceipt{}, err
-	}
-	return receipt, nil
-}
-
 func (client *TelemetryRuntimeClient) AcceptRuntimeEvent(ctx context.Context, evidence RuntimeEventEvidence) error {
-	return client.postEvidence(ctx, mqttRuntimeEventPath, evidence, nil)
+	return client.postEvidence(ctx, mqttRuntimeEventPath, evidence)
 }
 
-func (client *TelemetryRuntimeClient) postEvidence(ctx context.Context, path string, value any, destination any) error {
+func (client *TelemetryRuntimeClient) postEvidence(ctx context.Context, path string, value any) error {
 	body, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode MQTT evidence: %w", err)
@@ -243,20 +201,11 @@ func (client *TelemetryRuntimeClient) postEvidence(ctx context.Context, path str
 		return errors.New("MQTT evidence request failed")
 	}
 	defer response.Body.Close()
-	responseBody, err := readBounded(response.Body, maximumTelemetryRuntimeBodyBytes)
-	if err != nil {
+	if _, err := readBounded(response.Body, maximumTelemetryRuntimeBodyBytes); err != nil {
 		return fmt.Errorf("read MQTT evidence response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("MQTT evidence returned %d", response.StatusCode)
-	}
-	if destination == nil {
-		return nil
-	}
-	decoder := json.NewDecoder(bytes.NewReader(responseBody))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil || ensureJSONEOF(decoder) != nil {
-		return errors.New("MQTT evidence receipt is invalid")
 	}
 	return nil
 }

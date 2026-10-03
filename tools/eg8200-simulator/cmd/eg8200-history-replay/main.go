@@ -53,7 +53,7 @@ type replayClient struct {
 
 func main() {
 	plantConfigPath := flag.String("plant-config", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_PLANT_CONFIG")), "path to the canonical Virtual Central Plant config")
-	mqttConfigPath := flag.String("mqtt-config", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_MQTT_CONFIG")), "path to the existing MQTT config used for Device external identity mapping")
+	deviceIDsPath := flag.String("device-ids", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DEVICE_IDS")), "path to the JSON object mapping each simulator device to its platform Device id")
 	telemetryURL := flag.String("telemetry-url", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TELEMETRY_URL")), "HTTPS origin for Telemetry Runtime")
 	datasetID := flag.String("dataset-id", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DATASET_ID")), "stable replay dataset UUIDv7")
 	fromValue := flag.String("from", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_FROM")), "historical replay start time in RFC3339")
@@ -64,8 +64,8 @@ func main() {
 	serverName := flag.String("server-name", envOr("EG8200_HISTORY_REPLAY_SERVER_NAME", "telemetry-runtime-service"), "Telemetry Runtime TLS server name")
 	flag.Parse()
 
-	if strings.TrimSpace(*plantConfigPath) == "" || strings.TrimSpace(*mqttConfigPath) == "" {
-		log.Fatal("historical replay requires plant-config and mqtt-config")
+	if strings.TrimSpace(*plantConfigPath) == "" || strings.TrimSpace(*deviceIDsPath) == "" {
+		log.Fatal("historical replay requires plant-config and device-ids")
 	}
 	if !uuidV7Pattern.MatchString(strings.TrimSpace(*datasetID)) {
 		log.Fatal("historical replay dataset-id must be UUIDv7")
@@ -78,7 +78,7 @@ func main() {
 	if err != nil || duration <= 0 {
 		log.Fatal("historical replay duration must be positive")
 	}
-	plantConfig, mqttConfig, err := loadReplayConfigs(*plantConfigPath, *mqttConfigPath)
+	plantConfig, deviceIDs, err := loadReplayConfigs(*plantConfigPath, *deviceIDsPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,42 +89,43 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	count, err := runReplay(ctx, plantConfig, mqttConfig, strings.ToLower(strings.TrimSpace(*datasetID)), from.UTC(), duration, client.Admit)
+	count, err := runReplay(ctx, plantConfig, deviceIDs, strings.ToLower(strings.TrimSpace(*datasetID)), from.UTC(), duration, client.Admit)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("historical replay admitted %d observations", count)
 }
 
-func loadReplayConfigs(plantPath, mqttPath string) (simulator.Config, simulator.MQTTGatewayConfig, error) {
+func loadReplayConfigs(plantPath, deviceIDsPath string) (simulator.Config, map[string]string, error) {
 	plantFile, err := os.Open(plantPath)
 	if err != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, fmt.Errorf("open replay plant config: %w", err)
+		return simulator.Config{}, nil, fmt.Errorf("open replay plant config: %w", err)
 	}
 	plantConfig, decodeErr := simulator.DecodeConfig(plantFile)
 	closeErr := plantFile.Close()
 	if decodeErr != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, decodeErr
+		return simulator.Config{}, nil, decodeErr
 	}
 	if closeErr != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, closeErr
+		return simulator.Config{}, nil, closeErr
 	}
-	mqttFile, err := os.Open(mqttPath)
+	raw, err := os.ReadFile(deviceIDsPath)
 	if err != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, fmt.Errorf("open replay MQTT config: %w", err)
+		return simulator.Config{}, nil, fmt.Errorf("read replay Device ids: %w", err)
 	}
-	mqttConfig, decodeErr := simulator.DecodeMQTTGatewayConfig(mqttFile)
-	closeErr = mqttFile.Close()
-	if decodeErr != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, decodeErr
+	var deviceIDs map[string]string
+	if err := json.Unmarshal(raw, &deviceIDs); err != nil {
+		return simulator.Config{}, nil, fmt.Errorf("decode replay Device ids: %w", err)
 	}
-	if closeErr != nil {
-		return simulator.Config{}, simulator.MQTTGatewayConfig{}, closeErr
+	for _, deviceID := range plantConfig.ReportingDeviceIDs() {
+		if !uuidV7Pattern.MatchString(deviceIDs[deviceID]) {
+			return simulator.Config{}, nil, fmt.Errorf("replay Device id for %s is missing or not UUIDv7", deviceID)
+		}
 	}
-	return plantConfig, mqttConfig, nil
+	return plantConfig, deviceIDs, nil
 }
 
-func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulator.MQTTGatewayConfig, datasetID string, from time.Time, duration time.Duration, admit replayAdmitter) (int, error) {
+func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[string]string, datasetID string, from time.Time, duration time.Duration, admit replayAdmitter) (int, error) {
 	if admit == nil || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 {
 		return 0, errors.New("historical replay runner configuration is invalid")
 	}
@@ -137,7 +138,7 @@ func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulato
 	if err != nil {
 		return 0, err
 	}
-	offsets := make(map[string]int64, len(mqttConfig.DeviceExternalIDByDeviceID))
+	offsets := make(map[string]int64, len(deviceIDs))
 	admitted := 0
 	emit := func(snapshot simulator.Snapshot) error {
 		measurements, err := scheduler.Observe(snapshot)
@@ -155,7 +156,7 @@ func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulato
 			if !ok {
 				return fmt.Errorf("historical replay point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
 			}
-			deviceID := strings.TrimSpace(mqttConfig.DeviceExternalIDByDeviceID[measurement.DeviceID])
+			deviceID := strings.TrimSpace(deviceIDs[measurement.DeviceID])
 			if deviceID == "" {
 				return fmt.Errorf("historical replay Device identity is missing for %s", measurement.DeviceID)
 			}

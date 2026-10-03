@@ -17,8 +17,6 @@ import (
 const (
 	InternalSourceObservationPath           = "/internal/v1/telemetry/sources/observations:accept"
 	InternalHistoricalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
-	InternalMQTTGatewayEvidencePath         = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
-	InternalMQTTPresenceEvidencePath        = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
 	InternalMQTTRuntimeEventPath            = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumSourceObservationSize            = 96 << 10
 )
@@ -248,81 +246,6 @@ func deterministicHistoricalReplayEventID(datasetID, partition string, offset in
 	identifier[8] = (identifier[8] & 0x3f) | 0x80
 	raw := hex.EncodeToString(identifier)
 	return raw[:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:], nil
-}
-
-type mqttGatewayEvidenceRequest struct {
-	TenantID     string          `json:"tenantId"`
-	SiteID       string          `json:"siteId"`
-	GatewayID    string          `json:"gatewayId"`
-	MessageID    string          `json:"messageId"`
-	EvidenceType string          `json:"evidenceType"`
-	ObservedAt   string          `json:"observedAt"`
-	Sequence     int64           `json:"sequence"`
-	Payload      json.RawMessage `json:"payload"`
-}
-
-func (h *handler) handleMQTTGatewayEvidence(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
-		return
-	}
-	if h.mqttEvidenceAcceptor == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT evidence acceptance path is temporarily unavailable.", true)
-		return
-	}
-	var input mqttGatewayEvidenceRequest
-	if !decodeSourceRequest(writer, request, &input) {
-		return
-	}
-	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
-	if err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT evidence request is invalid.", false)
-		return
-	}
-	evidence := GatewayEvidence{
-		TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID),
-		GatewayID: strings.TrimSpace(input.GatewayID), MessageID: strings.TrimSpace(input.MessageID), EvidenceType: strings.ToUpper(strings.TrimSpace(input.EvidenceType)),
-		ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), Sequence: input.Sequence, Payload: append(json.RawMessage(nil), input.Payload...),
-	}
-	if err = h.mqttEvidenceAcceptor.AcceptGatewayEvidence(request.Context(), evidence); err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT evidence request was rejected.", false)
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "messageId": evidence.MessageID})
-}
-
-type mqttPresenceEvidenceRequest struct {
-	DeviceID      string `json:"deviceId"`
-	SignalType    string `json:"signalType"`
-	ObservedAt    string `json:"observedAt"`
-	SourceEventID string `json:"sourceEventId"`
-}
-
-func (h *handler) handleMQTTPresenceEvidence(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
-		return
-	}
-	if h.mqttEvidenceAcceptor == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT Presence evidence path is temporarily unavailable.", true)
-		return
-	}
-	var input mqttPresenceEvidenceRequest
-	if !decodeSourceRequest(writer, request, &input) {
-		return
-	}
-	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
-	if err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT Presence evidence request is invalid.", false)
-		return
-	}
-	receipt, err := h.mqttEvidenceAcceptor.AcceptPresenceEvidence(request.Context(), DevicePresenceEvidence{
-		DeviceID:   strings.ToLower(strings.TrimSpace(input.DeviceID)),
-		SignalType: strings.ToUpper(strings.TrimSpace(input.SignalType)), ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), SourceEventID: strings.TrimSpace(input.SourceEventID),
-	})
-	if err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT Presence evidence request was rejected.", false)
-		return
-	}
-	writeJSON(writer, http.StatusOK, receipt)
 }
 
 type mqttRuntimeEventRequest struct {

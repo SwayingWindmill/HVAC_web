@@ -159,14 +159,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.handleHistoricalReplayObservation(writer, request)
 		return
 	}
-	if request.URL.Path == InternalMQTTGatewayEvidencePath {
-		h.handleMQTTGatewayEvidence(writer, request)
-		return
-	}
-	if request.URL.Path == InternalMQTTPresenceEvidencePath {
-		h.handleMQTTPresenceEvidence(writer, request)
-		return
-	}
 	if request.URL.Path == InternalMQTTRuntimeEventPath {
 		h.handleMQTTRuntimeEvent(writer, request)
 		return

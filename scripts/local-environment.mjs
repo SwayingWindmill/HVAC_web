@@ -96,6 +96,7 @@ function up() {
   run([launcher, 'run', '--rm', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
   compose('--source-deploy', '--intelligence', 'up', '-d');
   ensureServiceDataDirectory('data', 'eg8200');
+  ensureServiceDataDirectory('data', 'eg8200-b');
   script('phase1-central-plant-simulator.mjs');
   const env = readFileSync(localEnvFile, 'utf8');
   const origin = /^PUBLIC_ORIGIN=(.+)$/m.exec(env)?.[1]?.trim();

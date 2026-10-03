@@ -10,24 +10,27 @@ import (
 	"strings"
 )
 
-const MQTTGatewayConfigSchemaVersion = 3
+const MQTTGatewayConfigSchemaVersion = 4
 
 var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
+// MQTTGatewayConfig identifies the Gateway by its Registry Device id, which is also its
+// certificate CN and MQTT client id. Devices are named on the wire by their source keys
+// (the simulator device names). TenantID and SiteID only address the command topics,
+// which still carry them until commands move to hvac/v1 (#406).
 type MQTTGatewayConfig struct {
-	SchemaVersion              int               `json:"schemaVersion"`
-	TenantID                   string            `json:"tenantId"`
-	SiteID                     string            `json:"siteId"`
-	BrokerURL                  string            `json:"brokerUrl"`
-	ClientID                   string            `json:"clientId"`
-	CAFile                     string            `json:"caFile"`
-	CertFile                   string            `json:"certFile"`
-	KeyFile                    string            `json:"keyFile"`
-	ServerName                 string            `json:"serverName"`
-	QueueDirectory             string            `json:"queueDirectory"`
-	MaximumQueueBytes          int64             `json:"maximumQueueBytes"`
-	CredentialRevision         uint64            `json:"credentialRevision"`
-	DeviceExternalIDByDeviceID map[string]string `json:"deviceExternalIdByDeviceId"`
+	SchemaVersion      int    `json:"schemaVersion"`
+	GatewayID          string `json:"gatewayId"`
+	TenantID           string `json:"tenantId"`
+	SiteID             string `json:"siteId"`
+	BrokerURL          string `json:"brokerUrl"`
+	CAFile             string `json:"caFile"`
+	CertFile           string `json:"certFile"`
+	KeyFile            string `json:"keyFile"`
+	ServerName         string `json:"serverName"`
+	QueueDirectory     string `json:"queueDirectory"`
+	MaximumQueueBytes  int64  `json:"maximumQueueBytes"`
+	CredentialRevision uint64 `json:"credentialRevision"`
 }
 
 func DecodeMQTTGatewayConfig(reader io.Reader) (MQTTGatewayConfig, error) {
@@ -51,6 +54,9 @@ func (config MQTTGatewayConfig) Validate() error {
 	if config.SchemaVersion != MQTTGatewayConfigSchemaVersion {
 		return fmt.Errorf("unsupported MQTT gateway config schemaVersion %d", config.SchemaVersion)
 	}
+	if !uuidV7Pattern.MatchString(config.GatewayID) || config.GatewayID != strings.ToLower(config.GatewayID) {
+		return errors.New("MQTT gatewayId must be a lowercase UUIDv7 Registry Device id")
+	}
 	if !uuidV7Pattern.MatchString(strings.TrimSpace(config.TenantID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(config.SiteID)) {
 		return errors.New("MQTT gateway tenantId and siteId must be UUIDv7")
 	}
@@ -59,7 +65,6 @@ func (config MQTTGatewayConfig) Validate() error {
 		return errors.New("MQTT gateway brokerUrl must be a tls:// origin")
 	}
 	for name, value := range map[string]string{
-		"clientId":       config.ClientID,
 		"caFile":         config.CAFile,
 		"certFile":       config.CertFile,
 		"keyFile":        config.KeyFile,
@@ -75,19 +80,6 @@ func (config MQTTGatewayConfig) Validate() error {
 	}
 	if config.CredentialRevision == 0 {
 		return errors.New("MQTT gateway credentialRevision must be positive")
-	}
-	if len(config.DeviceExternalIDByDeviceID) == 0 {
-		return errors.New("MQTT gateway deviceExternalIdByDeviceId is required")
-	}
-	seenExternal := make(map[string]struct{}, len(config.DeviceExternalIDByDeviceID))
-	for deviceID, externalID := range config.DeviceExternalIDByDeviceID {
-		if strings.TrimSpace(deviceID) == "" || !uuidV7Pattern.MatchString(strings.TrimSpace(externalID)) {
-			return errors.New("MQTT gateway device identity mapping is invalid")
-		}
-		if _, duplicate := seenExternal[externalID]; duplicate {
-			return fmt.Errorf("MQTT gateway externalId %s is mapped more than once", externalID)
-		}
-		seenExternal[externalID] = struct{}{}
 	}
 	return nil
 }

@@ -52,6 +52,7 @@ COPY infra/registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/r
 COPY infra/registry/postgres/init/013-s22-intelligence-products.sql /opt/hvac/repo/infra/registry/postgres/init/013-s22-intelligence-products.sql
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
+COPY infra/connectivity/postgres/init/003-gateway-uplink.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-gateway-uplink.sql
 COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
 COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/hvac/repo/services/rule-runtime-service/migrations/002_s21_rule_management.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql

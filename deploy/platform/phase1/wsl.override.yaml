@@ -44,10 +44,8 @@ services:
   connectivity:
     environment:
       COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
-      MQTT_TELEMETRY_ADAPTER_CONFIG: /run/hvac/config/mqtt-adapter.json
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
-      - ${PHASE1_RUNTIME_DIR:-./runtime}/config:/run/hvac/config:ro
       - ./config/command-edge-bindings.local.json:/run/hvac/phase1-config/command-edge-bindings.local.json:ro
     depends_on:
       energy-api:

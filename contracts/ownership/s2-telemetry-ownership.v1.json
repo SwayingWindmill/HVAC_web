@@ -70,9 +70,9 @@
   ],
   "ingestSources": [
     {
-      "service": "mqtt-telemetry-adapter",
+      "service": "connectivity",
       "transport": "MQTT",
-      "schema": "energy-telemetry-envelope/v1",
+      "schema": "gateway-uplink/v2",
       "unknownMajorVersion": "REJECT"
     }
   ],

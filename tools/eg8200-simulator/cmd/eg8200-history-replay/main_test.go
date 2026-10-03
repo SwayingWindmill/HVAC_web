@@ -8,7 +8,7 @@ import (
 )
 
 func TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests(t *testing.T) {
-	plantConfig, mqttConfig, err := loadReplayConfigs("../../configs/central-plant.local.json", "../../configs/central-plant.mqtt.local.example.json")
+	plantConfig, deviceIDs, err := loadReplayConfigs("../../configs/central-plant.local.json", "../../configs/central-plant.device-ids.local.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests(t *testin
 
 	run := func() []replayObservationRequest {
 		requests := make([]replayObservationRequest, 0)
-		count, err := runReplay(t.Context(), plantConfig, mqttConfig, datasetID, from, duration, func(_ context.Context, request replayObservationRequest) error {
+		count, err := runReplay(t.Context(), plantConfig, deviceIDs, datasetID, from, duration, func(_ context.Context, request replayObservationRequest) error {
 			requests = append(requests, request)
 			return nil
 		})

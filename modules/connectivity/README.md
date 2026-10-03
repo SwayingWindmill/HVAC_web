@@ -1,92 +1,56 @@
-# MQTT Telemetry Adapter
+# Connectivity
 
-This service is the MQTT transport adapter for S2 Telemetry Runtime.
-
-```text
-EG8200 / Edge Gateway
-    -> MQTT v5 QoS 1
-        -> Eclipse Mosquitto
-            -> mqtt-telemetry-adapter
-                -> mTLS S2 source observation endpoint
-                    -> telemetry-runtime-service
-```
-
-MQTT is transport only. Device/Point mapping, ordering, deduplication, quarantine, current-state revision, Point/Sensor identity and history ownership remain in S2 Telemetry Runtime.
-
-## Topic contract
-
-Telemetry uses exactly:
+One Connectivity process serves every Tenant, Site and Gateway (ADR 0015).
 
 ```text
-energy/v1/{tenantId}/{siteId}/{gatewayId}/telemetry
+Gateway --MQTT v5 QoS 1, mTLS--> Mosquitto --> Connectivity --mTLS--> Telemetry Runtime
 ```
 
-The adapter subscribes to `energy/v1/+/+/+/telemetry`, but every message is checked against a configured `gatewayId -> tenantId/siteId` binding before it can reach S2. The tenant, site and gateway values inside the envelope must exactly match the MQTT topic.
+## Uplink
 
-The payload schema is `contracts/mqtt/energy-telemetry-envelope.v1.schema.json`.
-
-Each Point owns its own `sampledAt` and `sequence`. The adapter turns that into an S2 Source Position:
+A Gateway's certificate CN is its Registry Device id. It publishes to:
 
 ```text
-partition = mqtt:{gatewayId}:{externalDeviceId}:{telemetryKey}
-offset    = point.sequence
-eventId   = deterministic UUIDv7(sampledAt, partition, sequence, value)
+hvac/v1/{gatewayId}/up/telemetry
+hvac/v1/{gatewayId}/up/event
 ```
 
-That makes MQTT QoS retransmission and reconnect delivery reuse S2's existing duplicate and out-of-order semantics instead of adding a second dedup store.
+The payloads are `contracts/mqtt/gateway-uplink.v2.schema.json`. Messages carry no Tenant or Site.
 
-Envelope v1 accepts `quality=GOOD` only. Edge fault quality such as TIMEOUT/OFFLINE/PARSE_ERROR is deliberately not coerced to GOOD; it requires a versioned source-quality extension to the S2 observation contract.
+For each message Connectivity:
 
-## Security
+1. finds the Gateway in the Registry gateway directory (`core_registry.gateway_directory_v1`) and checks that it holds an active Gateway Credential;
+2. resolves each Device by its source key (`gateway_device_source_keys_v1`) and each Point by its Point Code (`point_bindings_v1`), inside the Gateway's Tenant;
+3. sends Telemetry the resolved Tenant, Site, Device and Point with every value. An unregistered Device or Point is still sent and Telemetry quarantines it with evidence.
 
-The local Mosquitto profile in `infra/telemetry/mqtt` requires TLS 1.3 client certificates and disables anonymous access. Mosquitto uses certificate Common Name as the ACL username:
+A message from an unknown Gateway, from a Gateway without an active credential, or that cannot be parsed is written to `connectivity.uplink_quarantine` and acknowledged.
 
-- `EG8200-COMMERCIAL-001` may publish only its configured Tenant/Site/Gateway telemetry topic.
-- `mqtt-telemetry-adapter` may subscribe only to the configured central-plant telemetry topic family.
+## Ordering and backpressure
 
-The adapter separately uses its SPIFFE client certificate when calling S2. S2 must authorize:
+Each Gateway has its own queue and worker, created when its first message arrives. A message is acknowledged only after it is processed or quarantined. A transient failure is retried in place, so a Gateway's messages stay in order. When a Gateway's queue is full, Connectivity stops taking messages and the broker holds the backlog; nothing is dropped. `hvac_mqtt_gateway_queue_depth{gateway_id}` shows each Gateway's backlog.
 
-```text
-spiffe://hvac.local/mqtt-telemetry-adapter
-```
+## Broker
 
-for the configured integration instance.
+`infra/telemetry/mqtt/acl` confines every Gateway to `hvac/v1/{its CN}/up/#` and `hvac/v1/{its CN}/down/#` with static patterns, so adding a Gateway changes no broker configuration.
 
-## Reliability
+## Configuration
 
-The adapter uses MQTT QoS 1 and manual acknowledgements. It acknowledges a broker delivery only after all contained Point observations receive durable S2 receipts. Temporary S2 failures are retried in place with bounded exponential backoff while the MQTT delivery remains unacknowledged; reconnect redelivery remains an additional recovery path. Invalid, malformed or unauthorized MQTT messages are treated as permanent poison messages, logged, and acknowledged after rejection so they cannot block the durable session forever.
+Environment variables, with defaults for the Phase 1 compose network:
 
-The EG8200 MQTT publisher uses Paho's persistent file queue. It can continue queueing publishes while disconnected and drains them after reconnect. `maximumQueueBytes` is checked before enqueue so the local store cannot grow without bound.
+| Variable | Default |
+| --- | --- |
+| `CONNECTIVITY_MQTT_URL` | `tls://mqtt-broker:8883` |
+| `CONNECTIVITY_MQTT_CLIENT_ID` | `connectivity` |
+| `CONNECTIVITY_TELEMETRY_URL` | `https://telemetry-runtime-service:8446` |
+| `CONNECTIVITY_TLS_CERT` / `CONNECTIVITY_TLS_KEY` | `/run/hvac/pki/mqtt-telemetry-adapter/tls.*` |
+| `CONNECTIVITY_CA` | `/run/hvac/pki/ca.crt` |
+| `CONNECTIVITY_DATABASE_URL` | required |
 
-## Local configuration
-
-Adapter example:
-
-```text
-modules/connectivity/configs/central-plant.local.example.json
-```
-
-Gateway publisher example:
-
-```text
-tools/eg8200-simulator/configs/central-plant.mqtt.local.example.json
-```
-
-The central-plant PKI generator emits:
-
-```text
-mqtt-broker-cert.pem / mqtt-broker-key.pem
-mqtt-adapter-cert.pem / mqtt-adapter-key.pem
-mqtt-gateway-cert.pem / mqtt-gateway-key.pem
-ca.pem
-```
+Commands still run through one integration instance (`MQTT_COMMAND_INTEGRATION_ID`) on per-Tenant topics until they move to `hvac/v1/{gatewayId}/down/command` (#406).
 
 ## Verification
 
 ```text
-npm run test:mqtt-telemetry-adapter
-npm run build:mqtt-telemetry-adapter
-npm run build:eg8200-mqtt-publisher
+(cd modules/connectivity && go test ./...)
+node scripts/run-s1-registry-postgres-tests.mjs   # includes the Connectivity store against the Registry read port
 ```
-
-The Docker-backed Mosquitto integration gate is executed separately because it requires the WSL Linux Docker toolchain.

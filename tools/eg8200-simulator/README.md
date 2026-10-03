@@ -60,14 +60,14 @@ go run ./tools/eg8200-simulator/cmd/eg8200-simulator
 
 ## Historical Replay
 
-Historical Replay is an explicit operator/development path and is not part of the live MQTT loop or the production compose topology. The runner reuses the canonical Plant/Scenario, Point metadata, and the MQTT config's mapping from simulator Device to platform Device ID, then submits observations sequentially to the Telemetry-owned history-only admission route.
+Historical Replay is an explicit operator/development path and is not part of the live MQTT loop or the production compose topology. The runner reuses the canonical Plant/Scenario, Point metadata, and a mapping from each simulator device to its platform Device id (`configs/central-plant.device-ids.local.json`), then submits observations sequentially to the Telemetry-owned history-only admission route.
 
 `TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE` must name the dedicated replay workload (default `spiffe://hvac.local/historical-replay-runner`). Telemetry resolves each replayed Point from the Point it last accepted live for that Device and key, so replay a Device only after live data has reached it. Do not reuse the MQTT adapter identity. A replay also requires a stable UUIDv7 `dataset-id`, historical start instant, and finite duration:
 
 ```bash
 go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
   -plant-config ./tools/eg8200-simulator/configs/central-plant.local.json \
-  -mqtt-config ./tools/eg8200-simulator/configs/central-plant.mqtt.local.example.json \
+  -device-ids ./tools/eg8200-simulator/configs/central-plant.device-ids.local.json \
   -telemetry-url https://127.0.0.1:18446 \
   -dataset-id 01900000-0000-7000-8000-000000000002 \
   -from 2026-07-01T00:00:00Z \
@@ -124,6 +124,6 @@ go test ./tools/eg8200-simulator/...
 
 The current unit tests cover strict config and Scenario parsing, stepwise Scenario progression, energy balance, pump affinity behavior, command validation, plant interlocks, telemetry payloads, and simulator authority boundaries.
 
-## Scope boundary
+## MQTT
 
-This MVP intentionally uses one ThingsBoard device token per simulated field device because the existing repository command path already uses the ThingsBoard Device HTTP API. A later ticket can add the ThingsBoard Gateway MQTT API when the project needs one logical EG8200 connection representing hundreds of downstream Modbus/BACnet devices. The HVAC physical model and command interface are kept independent of the transport so that migration does not require rewriting device behavior.
+One simulator process is one EG8200 Gateway. Its MQTT config names the Gateway by its Registry Device id (`gatewayId`), which is also the certificate CN and the MQTT client id. It publishes telemetry to `hvac/v1/{gatewayId}/up/telemetry` and names each device by its source key, the simulator device name; Connectivity resolves Tenant, Site, Device and Point from the Registry. Commands still use the per-Tenant topics until they move to `hvac/v1/{gatewayId}/down/command` (#406).

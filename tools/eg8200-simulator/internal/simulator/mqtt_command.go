@@ -80,20 +80,15 @@ type edgeCommandHandler struct {
 	maxFenceByDevice map[string]uint64
 }
 
-func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayConfig, gatewayID string, spool *mqttEvidenceSpool) (*edgeCommandHandler, error) {
+// newEdgeCommandHandler accepts commands for the plant's devices, which commands name by
+// the same source keys the Gateway uses on the wire.
+func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayConfig, deviceIDs []string, spool *mqttEvidenceSpool) (*edgeCommandHandler, error) {
 	if edgeRuntime == nil || spool == nil {
 		return nil, errors.New("MQTT command handler requires Edge Control Runtime and evidence spool")
 	}
-	deviceByWireID := make(map[string]string, len(config.DeviceExternalIDByDeviceID))
-	for deviceID, wireID := range config.DeviceExternalIDByDeviceID {
-		wireID = strings.TrimSpace(wireID)
-		if wireID == "" {
-			return nil, errors.New("MQTT command routing contains an empty device id")
-		}
-		if _, duplicate := deviceByWireID[wireID]; duplicate {
-			return nil, errors.New("MQTT command routing contains duplicate device ids")
-		}
-		deviceByWireID[wireID] = deviceID
+	deviceByWireID := make(map[string]string, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		deviceByWireID[deviceID] = deviceID
 	}
 	ledgerPath := filepath.Join(config.QueueDirectory, "command-execution-records.json")
 	results, err := loadEdgeCommandLedger(ledgerPath)
@@ -116,7 +111,7 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 	return &edgeCommandHandler{
 		edgeRuntime:      edgeRuntime,
 		deviceByWireID:   deviceByWireID,
-		replyTopic:       "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + gatewayID + "/command/reply",
+		replyTopic:       mqttCommandTopic(config) + "/reply",
 		now:              time.Now,
 		ledgerPath:       ledgerPath,
 		spool:            spool,

@@ -76,7 +76,9 @@ func generate(directory string, now time.Time) error {
 		{name: "gateway", commonName: "platform-gateway", spiffeID: "spiffe://hvac.local/platform-gateway", client: true},
 		{name: "mqtt-broker", commonName: "mqtt-broker", spiffeID: "spiffe://hvac.local/mqtt-broker", dnsNames: []string{"localhost", "mqtt-broker"}, server: true},
 		{name: "mqtt-adapter", commonName: "mqtt-telemetry-adapter", spiffeID: "spiffe://hvac.local/mqtt-telemetry-adapter", client: true},
-		{name: "mqtt-gateway", commonName: "EG8200-COMMERCIAL-001", spiffeID: "spiffe://hvac.local/eg8200-gateway", client: true},
+		// A Gateway's certificate CN is its Registry Device id (ADR 0015).
+		{name: "mqtt-gateway", commonName: "018f3e00-4000-7000-8000-000000000100", spiffeID: "spiffe://hvac.local/eg8200-gateway", client: true},
+		{name: "mqtt-gateway-b", commonName: "018f3e00-4000-7000-8000-000000000200", spiffeID: "spiffe://hvac.local/eg8200-gateway-b", client: true},
 		{name: "centrifugo", commonName: "centrifugo", spiffeID: "spiffe://hvac.local/centrifugo", client: true},
 		{name: "command", commonName: "localhost", spiffeID: "spiffe://hvac.local/command-service", dnsNames: []string{"localhost", "command-service"}, server: true},
 		{name: "command-dispatcher", commonName: "command-dispatcher", spiffeID: "spiffe://hvac.local/command-dispatcher", client: true},

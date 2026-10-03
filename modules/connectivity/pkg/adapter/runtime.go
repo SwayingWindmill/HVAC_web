@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -19,22 +18,25 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-const mqttMaxProcessingAttempts = 4
-
 type queuedPublish struct {
-	packet  *paho.Publish
-	ack     func(*paho.Publish) error
-	attempt int
+	packet *paho.Publish
+	ack    func(*paho.Publish) error
 }
 
+// Runtime consumes every Gateway's uplink. Each Gateway gets its own ordered queue and
+// worker, created when its first message arrives. A message is acknowledged only after
+// it is processed or quarantined; when a Gateway's queue is full, receiving pauses and
+// the broker holds the backlog.
 type Runtime struct {
-	config       Config
-	processor    *Processor
-	logger       *slog.Logger
-	metrics      *observability.Registry
-	retryDelay   func(int) time.Duration
-	parkingSlots chan struct{}
-	queueDepth   atomic.Int64
+	config     Config
+	processor  *Processor
+	logger     *slog.Logger
+	metrics    *observability.Registry
+	retryDelay func(int) time.Duration
+
+	queuesMu sync.Mutex
+	queues   map[string]chan queuedPublish
+	workers  sync.WaitGroup
 
 	mu          sync.RWMutex
 	connected   bool
@@ -44,13 +46,11 @@ type Runtime struct {
 }
 
 func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metrics *observability.Registry) (*Runtime, error) {
-	if err := config.Validate(); err != nil || processor == nil || len(config.RuntimeGatewayIDs) == 0 {
-		return nil, errors.New("MQTT telemetry runtime dependencies are invalid")
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
-	for _, gatewayID := range config.RuntimeGatewayIDs {
-		if !validGatewayID(strings.TrimSpace(gatewayID)) {
-			return nil, errors.New("MQTT telemetry runtime Gateway identity is invalid")
-		}
+	if processor == nil {
+		return nil, errors.New("MQTT uplink runtime requires a processor")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -58,7 +58,7 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 	if metrics == nil {
 		metrics = observability.NewRegistry()
 	}
-	return &Runtime{config: config, processor: processor, logger: logger, metrics: metrics, retryDelay: mqttRetryDelay}, nil
+	return &Runtime{config: config, processor: processor, logger: logger, metrics: metrics, retryDelay: mqttRetryDelay, queues: map[string]chan queuedPublish{}}, nil
 }
 
 func (runtime *Runtime) Ready() bool {
@@ -82,33 +82,24 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	queues := runtime.newProcessingQueues()
-	_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_capacity", "Configured MQTT processing queue capacity across Gateway partitions.", nil, float64(runtime.config.ProcessingQueueCapacity*len(queues)))
-	_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Current MQTT processing queue depth.", nil, 0)
 	workerContext, workerCancel := context.WithCancel(ctx)
-	defer workerCancel()
-	var workers sync.WaitGroup
-	for gatewayID, queue := range queues {
-		gatewayID, queue := gatewayID, queue
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			runtime.processQueue(workerContext, gatewayID, queue)
-		}()
-	}
+	defer func() {
+		workerCancel()
+		runtime.workers.Wait()
+	}()
 
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
 		TlsCfg:                        tlsConfig,
-		KeepAlive:                     runtime.config.MQTT.KeepAliveSeconds,
+		KeepAlive:                     mqttKeepAliveSeconds,
 		CleanStartOnInitialConnection: false,
-		SessionExpiryInterval:         runtime.config.MQTT.SessionExpirySeconds,
-		ConnectTimeout:                runtime.config.MQTT.ConnectTimeout(),
+		SessionExpiryInterval:         mqttSessionExpirySeconds,
+		ConnectTimeout:                mqttConnectTimeout,
 		ReconnectBackoff:              autopaho.DefaultExponentialBackoff(),
 		OnConnectError: func(connectErr error) {
 			runtime.recordConnectionState(false, false, connectErr)
 			_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
-			runtime.logger.Warn("mqtt_telemetry_adapter_connect_failed", "error", connectErr.Error())
+			runtime.logger.Warn("mqtt_uplink_connect_failed", "error", connectErr.Error())
 		},
 		OnConnectionDown: func() bool {
 			runtime.recordConnectionState(false, false, errors.New("MQTT connection lost"))
@@ -120,12 +111,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			EnableManualAcknowledgment: true,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(received paho.PublishReceived) (bool, error) {
-					return runtime.enqueuePublish(ctx, queues, received)
+					if received.Packet == nil || received.Client == nil {
+						return false, errors.New("MQTT publish callback is incomplete")
+					}
+					return true, runtime.enqueue(workerContext, received.Packet, received.Client.Ack)
 				},
 			},
 		},
 	}
-
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
 		runtime.recordConnectionState(true, false, nil)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
@@ -133,99 +126,72 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
-		workerCancel()
-		workers.Wait()
 		return fmt.Errorf("create MQTT connection: %w", err)
 	}
 	if err := manager.AwaitConnection(ctx); err != nil {
-		workerCancel()
-		workers.Wait()
 		return fmt.Errorf("await MQTT connection: %w", err)
 	}
-
 	select {
 	case <-ctx.Done():
 	case <-manager.Done():
 		if ctx.Err() == nil {
-			workerCancel()
-			workers.Wait()
 			return errors.New("MQTT connection manager stopped")
 		}
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = manager.Disconnect(shutdownContext)
-	workerCancel()
-	workers.Wait()
 	return nil
 }
 
 func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager) {
 	subscribeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	subscriptions := make([]paho.SubscribeOptions, 0, len(runtime.config.MQTT.TopicFilters))
-	for _, topic := range runtime.config.MQTT.TopicFilters {
+	subscriptions := make([]paho.SubscribeOptions, 0, len(UplinkTopicFilters))
+	for _, topic := range UplinkTopicFilters {
 		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: topic, QoS: 1})
 	}
-	_, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions})
-	if err != nil {
+	if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions}); err != nil {
 		runtime.recordConnectionState(true, false, err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
-		runtime.logger.Warn("mqtt_telemetry_adapter_subscribe_failed", "error", err.Error())
+		runtime.logger.Warn("mqtt_uplink_subscribe_failed", "error", err.Error())
 		return
 	}
 	runtime.recordConnectionState(true, true, nil)
 	_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-	runtime.logger.Info("mqtt_telemetry_adapter_subscribed", "topic_filters", runtime.config.MQTT.TopicFilters)
+	runtime.logger.Info("mqtt_uplink_subscribed", "topic_filters", UplinkTopicFilters)
 }
 
-var (
-	errProcessingQueueSaturated   = errors.New("MQTT processing queue is saturated")
-	errProcessingParkingSaturated = errors.New("MQTT processing parking capacity is saturated")
-)
-
-func (runtime *Runtime) newProcessingQueues() map[string]chan queuedPublish {
-	queues := make(map[string]chan queuedPublish, len(runtime.config.RuntimeGatewayIDs))
-	for _, gatewayID := range runtime.config.RuntimeGatewayIDs {
-		queues[strings.TrimSpace(gatewayID)] = make(chan queuedPublish, runtime.config.ProcessingQueueCapacity)
-	}
-	runtime.parkingSlots = make(chan struct{}, runtime.config.ProcessingQueueCapacity*len(queues))
-	return queues
-}
-
-func (runtime *Runtime) enqueuePublish(ctx context.Context, queues map[string]chan queuedPublish, received paho.PublishReceived) (bool, error) {
-	if received.Packet == nil || received.Client == nil {
-		return false, errors.New("MQTT publish callback is incomplete")
-	}
-	packetCopy := *received.Packet
-	packetCopy.Payload = append([]byte(nil), received.Packet.Payload...)
-	item := queuedPublish{packet: &packetCopy, ack: received.Client.Ack}
-	messageTopic, err := ParseMessageTopic(packetCopy.Topic)
-	if err != nil {
-		return true, runtime.ackTerminal(item, "quarantined", err, 1)
-	}
-	queue, ok := queues[messageTopic.GatewayID]
-	if !ok {
-		return true, runtime.ackTerminal(item, "quarantined", errors.New("MQTT Gateway scope is not configured"), 1)
-	}
-	return runtime.enqueueQueuedPublish(ctx, messageTopic.GatewayID, queue, item)
-}
-
-func (runtime *Runtime) enqueueQueuedPublish(ctx context.Context, gatewayID string, queue chan<- queuedPublish, item queuedPublish) (bool, error) {
+// enqueue hands a message to its Gateway's queue and blocks while that queue is full,
+// which stops reading from the broker instead of dropping the message.
+func (runtime *Runtime) enqueue(ctx context.Context, received *paho.Publish, ack func(*paho.Publish) error) error {
+	packet := *received
+	packet.Payload = append([]byte(nil), received.Payload...)
+	gatewayID := TopicGatewayID(packet.Topic)
+	queue := runtime.queueFor(ctx, gatewayID)
 	select {
-	case queue <- item:
-		depth := runtime.queueDepth.Add(1)
-		_ = runtime.metrics.AddCounter("hvac_mqtt_messages_received_total", "MQTT telemetry messages received from the broker.", map[string]string{"outcome": "queued"}, 1)
-		_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Current MQTT processing queue depth.", nil, float64(depth))
-		return true, nil
+	case queue <- queuedPublish{packet: &packet, ack: ack}:
+		runtime.recordQueueDepth(gatewayID, len(queue))
+		return nil
 	case <-ctx.Done():
-		return false, ctx.Err()
-	default:
-		runtime.recordProcessingFailure(errProcessingQueueSaturated)
-		_ = runtime.metrics.AddCounter("hvac_mqtt_messages_received_total", "MQTT telemetry messages received from the broker.", map[string]string{"outcome": "queue_saturated"}, 1)
-		runtime.logger.Error("mqtt_telemetry_processing_queue_saturated", "gateway_id", gatewayID, "error_code", "MQTT_PROCESSING_QUEUE_SATURATED")
-		return true, runtime.ackTerminal(item, "dead", errProcessingQueueSaturated, 1)
+		return ctx.Err()
 	}
+}
+
+func (runtime *Runtime) queueFor(ctx context.Context, gatewayID string) chan queuedPublish {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	if queue, ok := runtime.queues[gatewayID]; ok {
+		return queue
+	}
+	queue := make(chan queuedPublish, runtime.config.QueueCapacity)
+	runtime.queues[gatewayID] = queue
+	runtime.workers.Add(1)
+	go func() {
+		defer runtime.workers.Done()
+		runtime.processQueue(ctx, gatewayID, queue)
+	}()
+	return queue
 }
 
 func (runtime *Runtime) processQueue(ctx context.Context, gatewayID string, queue chan queuedPublish) {
@@ -233,109 +199,58 @@ func (runtime *Runtime) processQueue(ctx context.Context, gatewayID string, queu
 		select {
 		case <-ctx.Done():
 			return
-		case item, ok := <-queue:
-			if !ok {
-				return
-			}
-			depth := runtime.queueDepth.Add(-1)
-			_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Current MQTT processing queue depth.", nil, float64(depth))
-			if !runtime.processPublish(ctx, gatewayID, queue, item) {
+		case item := <-queue:
+			runtime.recordQueueDepth(gatewayID, len(queue))
+			if !runtime.processPublish(ctx, gatewayID, item) {
 				return
 			}
 		}
 	}
 }
 
-func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, queue chan<- queuedPublish, item queuedPublish) bool {
-	started := time.Now()
-	attempt := item.attempt + 1
-	processContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-	result, err := runtime.processor.Process(processContext, item.packet.Topic, item.packet.Payload)
-	cancel()
-	if err == nil {
-		if ackErr := item.ack(item.packet); ackErr != nil {
-			runtime.recordProcessingFailure(ackErr)
-			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT telemetry messages by processing outcome.", map[string]string{"outcome": "ack_failed"}, 1)
-			_ = runtime.metrics.ObserveHistogram("hvac_mqtt_message_processing_duration_seconds", "MQTT telemetry message processing duration.", map[string]string{"outcome": "ack_failed"}, time.Since(started).Seconds(), nil)
-			runtime.logger.Warn("mqtt_telemetry_ack_failed", "gateway_id", gatewayID, "message_id", result.MessageID, "error", ackErr.Error())
-			return false
+// processPublish retries a transient failure in place, keeping the Gateway's messages in
+// order, until the message is processed, quarantined or Connectivity stops. A message
+// left unacknowledged at shutdown is redelivered by the broker.
+func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, item queuedPublish) bool {
+	for attempt := 1; ; attempt++ {
+		started := time.Now()
+		processContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+		result, err := runtime.processor.Process(processContext, item.packet.Topic, item.packet.Payload)
+		cancel()
+		switch {
+		case err == nil:
+			if ackErr := item.ack(item.packet); ackErr != nil {
+				runtime.recordProcessingFailure(ackErr)
+				runtime.logger.Warn("mqtt_uplink_ack_failed", "gateway_id", gatewayID, "message_id", result.MessageID, "error", ackErr.Error())
+				return false
+			}
+			runtime.recordProcessingSuccess()
+			runtime.recordProcessingResult(result, time.Since(started))
+			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
+				"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
+				"quarantined", result.Quarantined, "rejected", result.Rejected)
+			return true
+		case isPermanentMessageError(err):
+			if ackErr := item.ack(item.packet); ackErr != nil {
+				runtime.recordProcessingFailure(ackErr)
+				return false
+			}
+			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
+			runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", err.Error())
+			return true
 		}
-		runtime.recordProcessingSuccess()
-		runtime.recordProcessingResult(result, time.Since(started))
-		runtime.logger.Info(
-			"mqtt_telemetry_message_processed",
-			"gateway_id", gatewayID,
-			"message_id", result.MessageID,
-			"replay", result.Replay,
-			"point_count", result.PointCount,
-			"accepted", result.Accepted,
-			"duplicate", result.Duplicate,
-			"out_of_order", result.OutOfOrder,
-			"quarantined", result.Quarantined,
-			"rejected", result.Rejected,
-		)
-		return true
-	}
-	if isPermanentMessageError(err) {
-		return runtime.ackTerminal(item, "quarantined", err, attempt) == nil
-	}
-	runtime.recordProcessingFailure(err)
-	if attempt >= mqttMaxProcessingAttempts {
-		runtime.logger.Error("mqtt_telemetry_message_dead", "gateway_id", gatewayID, "topic", item.packet.Topic, "attempts", attempt, "error_code", "MQTT_PROCESSING_RETRIES_EXHAUSTED")
-		return runtime.ackTerminal(item, "dead", err, attempt) == nil
-	}
-	item.attempt = attempt
-	runtime.parkPublish(ctx, gatewayID, queue, item, err)
-	return true
-}
-
-func (runtime *Runtime) parkPublish(ctx context.Context, gatewayID string, queue chan<- queuedPublish, item queuedPublish, processingErr error) {
-	select {
-	case runtime.parkingSlots <- struct{}{}:
-	default:
-		runtime.recordProcessingFailure(errProcessingParkingSaturated)
-		runtime.logger.Error("mqtt_telemetry_parking_saturated", "gateway_id", gatewayID, "topic", item.packet.Topic, "error_code", "MQTT_PROCESSING_PARKING_SATURATED")
-		_ = runtime.ackTerminal(item, "dead", errProcessingParkingSaturated, item.attempt)
-		return
-	}
-	delay := runtime.retryDelay(item.attempt)
-	_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT telemetry processing retries after transient downstream failures.", map[string]string{"reason_family": "dependency"}, 1)
-	_ = runtime.metrics.AddCounter("hvac_mqtt_messages_parked_total", "MQTT telemetry messages parked for bounded retry.", map[string]string{"outcome": "parked"}, 1)
-	runtime.logger.Warn("mqtt_telemetry_message_parked", "gateway_id", gatewayID, "topic", item.packet.Topic, "attempt", item.attempt, "retry_in", delay.String(), "error", processingErr.Error())
-	go func() {
-		defer func() { <-runtime.parkingSlots }()
+		runtime.recordProcessingFailure(err)
+		_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": "dependency"}, 1)
+		delay := runtime.retryDelay(attempt)
+		runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", item.packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
 		timer := time.NewTimer(delay)
-		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return
+			timer.Stop()
+			return false
 		case <-timer.C:
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case queue <- item:
-			depth := runtime.queueDepth.Add(1)
-			_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Current MQTT processing queue depth.", nil, float64(depth))
-			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_parked_total", "MQTT telemetry messages parked for bounded retry.", map[string]string{"outcome": "requeued"}, 1)
-		default:
-			runtime.recordProcessingFailure(errProcessingQueueSaturated)
-			runtime.logger.Error("mqtt_telemetry_parked_retry_queue_saturated", "gateway_id", gatewayID, "topic", item.packet.Topic, "error_code", "MQTT_PROCESSING_QUEUE_SATURATED")
-			_ = runtime.ackTerminal(item, "dead", errProcessingQueueSaturated, item.attempt)
-		}
-	}()
-}
-
-func (runtime *Runtime) ackTerminal(item queuedPublish, outcome string, processingErr error, attempts int) error {
-	if ackErr := item.ack(item.packet); ackErr != nil {
-		runtime.recordProcessingFailure(ackErr)
-		_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT telemetry messages by processing outcome.", map[string]string{"outcome": "ack_failed"}, 1)
-		runtime.logger.Warn("mqtt_telemetry_terminal_ack_failed", "topic", item.packet.Topic, "outcome", outcome, "error", ackErr.Error())
-		return ackErr
 	}
-	_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT telemetry messages by processing outcome.", map[string]string{"outcome": outcome}, 1)
-	runtime.logger.Warn("mqtt_telemetry_message_terminal", "topic", item.packet.Topic, "outcome", outcome, "attempts", attempts, "error", processingErr.Error())
-	return nil
 }
 
 func mqttRetryDelay(attempt int) time.Duration {
@@ -350,6 +265,10 @@ func mqttRetryDelay(attempt int) time.Duration {
 		return 10 * time.Second
 	}
 	return delay
+}
+
+func (runtime *Runtime) recordQueueDepth(gatewayID string, depth int) {
+	_ = runtime.metrics.SetGauge("hvac_mqtt_gateway_queue_depth", "Messages waiting in a Gateway's uplink queue.", map[string]string{"gateway_id": gatewayID}, float64(depth))
 }
 
 func (runtime *Runtime) recordConnectionState(connected, subscribed bool, err error) {
@@ -370,13 +289,13 @@ func (runtime *Runtime) recordConnectionState(connected, subscribed bool, err er
 	if subscribed {
 		subscribedValue = 1
 	}
-	_ = runtime.metrics.SetGauge("hvac_mqtt_connected", "Whether the MQTT adapter is connected to its broker.", nil, connectedValue)
-	_ = runtime.metrics.SetGauge("hvac_mqtt_subscribed", "Whether the MQTT adapter has its telemetry subscription active.", nil, subscribedValue)
+	_ = runtime.metrics.SetGauge("hvac_mqtt_connected", "Whether Connectivity is connected to its MQTT broker.", nil, connectedValue)
+	_ = runtime.metrics.SetGauge("hvac_mqtt_subscribed", "Whether Connectivity's uplink subscription is active.", nil, subscribedValue)
 }
 
 func (runtime *Runtime) recordProcessingResult(result ProcessingResult, elapsed time.Duration) {
-	_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT telemetry messages by processing outcome.", map[string]string{"outcome": "success"}, 1)
-	_ = runtime.metrics.ObserveHistogram("hvac_mqtt_message_processing_duration_seconds", "MQTT telemetry message processing duration.", map[string]string{"outcome": "success"}, elapsed.Seconds(), nil)
+	_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "success"}, 1)
+	_ = runtime.metrics.ObserveHistogram("hvac_mqtt_message_processing_duration_seconds", "MQTT uplink message processing duration.", map[string]string{"outcome": "success"}, elapsed.Seconds(), nil)
 	if result.Replay {
 		_ = runtime.metrics.AddCounter("hvac_mqtt_replay_messages_total", "MQTT telemetry messages explicitly marked as replay.", map[string]string{"outcome": "processed"}, 1)
 	}
@@ -388,7 +307,7 @@ func (runtime *Runtime) recordProcessingResult(result ProcessingResult, elapsed 
 		"rejected":     result.Rejected,
 	} {
 		if count > 0 {
-			_ = runtime.metrics.AddCounter("hvac_mqtt_values_total", "Point values delivered through the MQTT telemetry adapter by S2 outcome.", map[string]string{"outcome": outcome}, float64(count))
+			_ = runtime.metrics.AddCounter("hvac_mqtt_values_total", "Point values delivered through Connectivity by Telemetry outcome.", map[string]string{"outcome": outcome}, float64(count))
 		}
 	}
 }
@@ -404,10 +323,6 @@ func (runtime *Runtime) recordProcessingSuccess() {
 	defer runtime.mu.Unlock()
 	runtime.lastError = ""
 	runtime.lastSuccess = time.Now().UTC()
-}
-
-func NewMQTTTLSConfig(config MQTTConfig) (*tls.Config, error) {
-	return newMQTTTLSConfig(config)
 }
 
 func newMQTTTLSConfig(config MQTTConfig) (*tls.Config, error) {
