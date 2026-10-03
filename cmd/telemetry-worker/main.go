@@ -314,7 +314,7 @@ func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.H
 		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
 		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
 		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
-		Username: strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_USERNAME")),
+		Username: envOr("TELEMETRY_CLICKHOUSE_USERNAME", "telemetry_history_writer"),
 		Password: os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD"),
 	})
 	if err != nil {

@@ -933,7 +933,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_CLICKHOUSE_HTTP_URL: clickHouseURL,
       TELEMETRY_CLICKHOUSE_DATABASE: 'telemetry_history',
       TELEMETRY_CLICKHOUSE_TABLE: 'observations',
-      TELEMETRY_CLICKHOUSE_USERNAME: 'telemetry_history',
+      TELEMETRY_CLICKHOUSE_USERNAME: 'telemetry_history_writer',
       TELEMETRY_CLICKHOUSE_PASSWORD: '',
       TELEMETRY_HISTORY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.historyDiagnostics}`,
       TELEMETRY_HISTORY_POLL_INTERVAL: '100ms',
