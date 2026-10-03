@@ -52,7 +52,7 @@ ORDER BY (
   source_current_observation_id
 )
 SETTINGS index_granularity = 8192,
-         non_replicated_deduplication_window = 100000;
+         non_replicated_deduplication_window = 10000;
 
 CREATE USER IF NOT EXISTS analytics_projector_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS analytics_projector_writer IDENTIFIED WITH no_password;

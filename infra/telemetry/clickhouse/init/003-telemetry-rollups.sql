@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.numeric_1min_states (
 ENGINE = AggregatingMergeTree
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, bucket)
-SETTINGS non_replicated_deduplication_window = 100000;
+SETTINGS non_replicated_deduplication_window = 10000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry_history.observations_to_numeric_1min
 TO telemetry_history.numeric_1min_states
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.numeric_15min_states (
 ENGINE = AggregatingMergeTree
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, bucket)
-SETTINGS non_replicated_deduplication_window = 100000;
+SETTINGS non_replicated_deduplication_window = 10000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry_history.observations_to_numeric_15min
 TO telemetry_history.numeric_15min_states

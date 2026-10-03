@@ -114,6 +114,28 @@ func TestHistoryRelayRunDrainsWithoutPollingDelay(t *testing.T) {
 	}
 }
 
+// A trickle of observations is written once per poll interval, not as soon as each
+// arrives: every insert is a ClickHouse part, multiplied by the rollup views.
+func TestHistoryRelayRunWaitsAfterAPartialBatch(t *testing.T) {
+	repo := &historyRepositoryStub{batch: HistoryBatch{LeaseID: "lease", Observations: []HistoryObservation{{ObservationID: "observation"}}}}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	passes := 0
+	relay.Run(ctx, time.Hour, func(published int, err error) {
+		if err != nil || published != 1 {
+			t.Fatalf("pass=%d err=%v", published, err)
+		}
+		passes++
+	})
+	if passes != 1 {
+		t.Fatalf("a partial batch was followed by another insert before the poll interval; passes=%d", passes)
+	}
+}
+
 func (repository *historyRepositoryStub) ClaimHistoryBatch(context.Context, int, time.Time, time.Duration, int) (HistoryBatch, error) {
 	return repository.batch, repository.claimErr
 }

@@ -48,11 +48,11 @@ func main() {
 		logger.Error("telemetry_clickhouse_configuration_invalid", "error_code", "TELEMETRY_CLICKHOUSE_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 250*time.Millisecond, 25*time.Millisecond, time.Minute)
+	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository:  repository,
 		Sink:        sink,
-		BatchSize:   integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 256, 1, 4096),
+		BatchSize:   integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096),
 		LeaseFor:    durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
 		RetryAfter:  durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
 		MaxAttempts: integerEnv("TELEMETRY_HISTORY_MAX_ATTEMPTS", 12, 1, 100),

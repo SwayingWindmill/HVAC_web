@@ -315,7 +315,7 @@ func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.H
 	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
 		Repository:  repository,
 		Sink:        sink,
-		BatchSize:   integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 256, 1, 4096),
+		BatchSize:   integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 4096, 1, 4096),
 		LeaseFor:    durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
 		RetryAfter:  durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
 		MaxAttempts: integerEnv("TELEMETRY_HISTORY_MAX_ATTEMPTS", 12, 1, 100),
@@ -332,7 +332,7 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, lo
 	if relay == nil {
 		return
 	}
-	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 250*time.Millisecond, 25*time.Millisecond, time.Minute)
+	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 5*time.Second, 25*time.Millisecond, time.Minute)
 	lastFailureLog := time.Time{}
 	logger.Info("telemetry_history_projection_started", "poll_interval", pollInterval.String())
 	relay.Run(ctx, pollInterval, func(published int, err error) {
