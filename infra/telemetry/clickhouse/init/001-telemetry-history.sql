@@ -44,8 +44,10 @@ ORDER BY (
   sampled_at,
   observation_id
 )
+-- The deduplication window only has to cover retried history batches (about one insert
+-- per poll interval); every remembered block stays in server memory.
 SETTINGS index_granularity = 8192,
-         non_replicated_deduplication_window = 100000;
+         non_replicated_deduplication_window = 10000;
 
 CREATE TABLE IF NOT EXISTS telemetry_history.numeric_hourly_states (
   hour DateTime('UTC'),
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.numeric_hourly_states (
 ENGINE = AggregatingMergeTree
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, hour)
-SETTINGS non_replicated_deduplication_window = 100000;
+SETTINGS non_replicated_deduplication_window = 10000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry_history.observations_to_numeric_hourly
 TO telemetry_history.numeric_hourly_states

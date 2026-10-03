@@ -130,15 +130,18 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 	return len(batch.Observations), nil
 }
 
-// Run drains successful batches immediately; only an idle or failed pass waits.
-// The shared loop keeps the combined worker and standalone projector consistent.
+// Run drains a backlog (full batches) immediately; otherwise it waits the poll interval
+// so a trickle of observations is written as one insert per interval. Every insert is a
+// ClickHouse part, multiplied by the rollup views, and tiny frequent parts exhaust
+// ClickHouse memory. The shared loop keeps the combined worker and standalone projector
+// consistent.
 func (relay *HistoryRelay) Run(ctx context.Context, idleInterval time.Duration, report func(int, error)) {
 	for ctx.Err() == nil {
 		passContext, cancel := context.WithTimeout(ctx, min(15*time.Second, relay.leaseFor/2))
 		published, err := relay.RelayOnce(passContext)
 		cancel()
 		report(published, err)
-		if err == nil && published > 0 {
+		if err == nil && published == relay.batchSize {
 			continue
 		}
 		timer := time.NewTimer(idleInterval)
