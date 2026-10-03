@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -13,193 +12,120 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-const (
-	runtimeGatewayA = "EG8200-COMMERCIAL-001"
-	runtimeGatewayB = "EG8200-COMMERCIAL-002"
-	runtimeMessageA = "0198a100-0000-7000-8000-000000000011"
-	runtimeMessageB = "0198a100-0000-7000-8000-000000000012"
-)
-
-type runtimeProcessingClient struct {
-	mu            sync.Mutex
-	attempts      map[string]int
-	poisonDevice  string
-	poisonStarted chan struct{}
+// ackLog records acknowledged message ids in order.
+type ackLog struct {
+	mu    sync.Mutex
+	acked []string
+	seen  chan string
 }
 
-func (client *runtimeProcessingClient) AcceptObservation(ctx context.Context, observation Observation) (ObservationReceipt, error) {
-	client.mu.Lock()
-	client.attempts[observation.ExternalID]++
-	attempt := client.attempts[observation.ExternalID]
-	client.mu.Unlock()
-	if observation.ExternalID == client.poisonDevice {
-		if attempt == 1 && client.poisonStarted != nil {
-			close(client.poisonStarted)
-		}
-		select {
-		case <-ctx.Done():
-			return ObservationReceipt{}, ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-			return ObservationReceipt{}, errors.New("telemetry runtime unavailable")
-		}
-	}
-	return ObservationReceipt{Status: "ACCEPTED"}, nil
-}
+func newAckLog() *ackLog { return &ackLog{seen: make(chan string, 64)} }
 
-func (client *runtimeProcessingClient) AcceptGatewayEvidence(context.Context, GatewayEvidence) error {
-	return nil
-}
-
-func (client *runtimeProcessingClient) AcceptPresenceEvidence(context.Context, PresenceEvidence) (PresenceEvidenceReceipt, error) {
-	return PresenceEvidenceReceipt{}, nil
-}
-
-func (client *runtimeProcessingClient) AcceptRuntimeEvent(context.Context, RuntimeEventEvidence) error {
-	return nil
-}
-
-func (client *runtimeProcessingClient) attemptCount(deviceID string) int {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	return client.attempts[deviceID]
-}
-
-func TestParkedPoisonMessageDoesNotBlockUnrelatedDeviceInSameGateway(t *testing.T) {
-	client := &runtimeProcessingClient{attempts: map[string]int{}, poisonDevice: "POISON-01", poisonStarted: make(chan struct{})}
-	runtime := newProcessingTestRuntime(t, client, 4)
-	runtime.retryDelay = func(int) time.Duration { return 100 * time.Millisecond }
-	queues := runtime.newProcessingQueues()
-	ctx, cancel := context.WithCancel(t.Context())
-
-	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		runtime.processQueue(ctx, runtimeGatewayA, queues[runtimeGatewayA])
-	}()
-	t.Cleanup(func() {
-		cancel()
-		workers.Wait()
-	})
-
-	poisonAck := make(chan struct{}, 1)
-	goodAck := make(chan struct{}, 1)
-	poison := processingTestPublish(runtimeGatewayA, runtimeMessageA, "POISON-01", func(*paho.Publish) error {
-		poisonAck <- struct{}{}
+func (log *ackLog) ack(id string) func(*paho.Publish) error {
+	return func(*paho.Publish) error {
+		log.mu.Lock()
+		log.acked = append(log.acked, id)
+		log.mu.Unlock()
+		log.seen <- id
 		return nil
-	})
-	good := processingTestPublish(runtimeGatewayA, runtimeMessageB, "GOOD-01", func(*paho.Publish) error {
-		goodAck <- struct{}{}
-		return nil
-	})
-	if handled, err := runtime.enqueueQueuedPublish(ctx, runtimeGatewayA, queues[runtimeGatewayA], poison); !handled || err != nil {
-		t.Fatalf("enqueue poison handled=%t err=%v", handled, err)
-	}
-	select {
-	case <-client.poisonStarted:
-	case <-time.After(time.Second):
-		t.Fatal("poison message did not start")
-	}
-	if handled, err := runtime.enqueueQueuedPublish(ctx, runtimeGatewayA, queues[runtimeGatewayA], good); !handled || err != nil {
-		t.Fatalf("enqueue good handled=%t err=%v", handled, err)
-	}
-	select {
-	case <-goodAck:
-	case <-time.After(80 * time.Millisecond):
-		t.Fatal("healthy device was blocked while poison message was parked")
-	}
-	select {
-	case <-poisonAck:
-		t.Fatal("poison message exhausted retries before bounded retry window elapsed")
-	default:
-	}
-	select {
-	case <-poisonAck:
-	case <-time.After(time.Second):
-		t.Fatal("poison message never reached terminal dead disposition")
-	}
-	if attempts := client.attemptCount("POISON-01"); attempts != mqttMaxProcessingAttempts {
-		t.Fatalf("poison attempts=%d want=%d", attempts, mqttMaxProcessingAttempts)
-	}
-	if attempts := client.attemptCount("GOOD-01"); attempts != 1 {
-		t.Fatalf("healthy attempts=%d want=1", attempts)
-	}
-	cancel()
-}
-
-func TestProcessingQueueSaturationIsExplicitDeadDisposition(t *testing.T) {
-	client := &runtimeProcessingClient{attempts: map[string]int{}}
-	runtime := newProcessingTestRuntime(t, client, 1)
-	queue := make(chan queuedPublish, 1)
-	ctx := t.Context()
-	firstAck := 0
-	deadAck := 0
-	first := processingTestPublish(runtimeGatewayA, runtimeMessageA, "FIRST-01", func(*paho.Publish) error {
-		firstAck++
-		return nil
-	})
-	second := processingTestPublish(runtimeGatewayA, runtimeMessageB, "SECOND-01", func(*paho.Publish) error {
-		deadAck++
-		return nil
-	})
-	if handled, err := runtime.enqueueQueuedPublish(ctx, runtimeGatewayA, queue, first); !handled || err != nil {
-		t.Fatalf("first enqueue handled=%t err=%v", handled, err)
-	}
-	if handled, err := runtime.enqueueQueuedPublish(ctx, runtimeGatewayA, queue, second); !handled || err != nil {
-		t.Fatalf("saturated enqueue handled=%t err=%v", handled, err)
-	}
-	if firstAck != 0 || deadAck != 1 {
-		t.Fatalf("acks first=%d dead=%d", firstAck, deadAck)
-	}
-	if depth := runtime.queueDepth.Load(); depth != 1 {
-		t.Fatalf("queue depth=%d want=1", depth)
-	}
-
-	runtime.parkingSlots = make(chan struct{}, 1)
-	runtime.parkingSlots <- struct{}{}
-	parkingDeadAck := 0
-	parked := processingTestPublish(runtimeGatewayA, runtimeMessageB, "PARKED-01", func(*paho.Publish) error {
-		parkingDeadAck++
-		return nil
-	})
-	parked.attempt = 1
-	runtime.parkPublish(ctx, runtimeGatewayA, queue, parked, errors.New("telemetry runtime unavailable"))
-	if parkingDeadAck != 1 {
-		t.Fatalf("parking saturation dead ack=%d want=1", parkingDeadAck)
 	}
 }
 
-func newProcessingTestRuntime(t *testing.T, client RuntimeClient, capacity int) *Runtime {
+func (log *ackLog) await(t *testing.T, id string) {
 	t.Helper()
-	scopes := []GatewayScopeConfig{
-		{GatewayID: runtimeGatewayA, TenantID: testTenantID, SiteID: testSiteID},
-		{GatewayID: runtimeGatewayB, TenantID: testTenantID, SiteID: testSiteID},
+	select {
+	case got := <-log.seen:
+		if got != id {
+			t.Fatalf("acked %s, want %s", got, id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("message %s was never acknowledged", id)
 	}
-	processor, err := NewProcessor("018f3e00-0000-7000-8000-000000000101", newTestBindingAuthorizer(scopes), client)
+}
+
+func TestFullGatewayQueuePausesInsteadOfDropping(t *testing.T) {
+	telemetry := &fakeTelemetry{release: make(chan struct{})}
+	runtime := newTestRuntime(t, telemetry, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	acks := newAckLog()
+
+	// The worker holds the first message; the second fills the queue; the third waits.
+	for index := 1; index <= 2; index++ {
+		if err := runtime.enqueue(ctx, publish(testGatewayA, index), acks.ack(messageID(index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thirdQueued := make(chan error, 1)
+	go func() { thirdQueued <- runtime.enqueue(ctx, publish(testGatewayA, 3), acks.ack(messageID(3))) }()
+	select {
+	case err := <-thirdQueued:
+		t.Fatalf("enqueue into a full Gateway queue returned %v instead of waiting", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(telemetry.release)
+	if err := <-thirdQueued; err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 3; index++ {
+		acks.await(t, messageID(index))
+	}
+	if accepted := len(telemetry.accepted()); accepted != 3 {
+		t.Fatalf("accepted=%d, want all 3", accepted)
+	}
+}
+
+func TestTransientFailureIsRetriedInOrderBeforeAck(t *testing.T) {
+	telemetry := &fakeTelemetry{failures: 2}
+	runtime := newTestRuntime(t, telemetry, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	acks := newAckLog()
+	for index := 1; index <= 2; index++ {
+		if err := runtime.enqueue(ctx, publish(testGatewayA, index), acks.ack(messageID(index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acks.await(t, messageID(1))
+	acks.await(t, messageID(2))
+	observations := telemetry.accepted()
+	if len(observations) != 2 || observations[0].SourcePosition.Offset != 1 || observations[1].SourcePosition.Offset != 2 {
+		t.Fatalf("observations=%#v", observations)
+	}
+}
+
+func TestGatewaysDoNotWaitForEachOther(t *testing.T) {
+	telemetry := &fakeTelemetry{failures: 1_000_000}
+	runtime := newTestRuntime(t, telemetry, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	acks := newAckLog()
+	unknownGateway := "018f3e00-4000-7000-8000-000000000999"
+	// Gateway A keeps failing; a message from an unknown Gateway is still quarantined and acked.
+	if err := runtime.enqueue(ctx, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.enqueue(ctx, publish(unknownGateway, 2), acks.ack(messageID(2))); err != nil {
+		t.Fatal(err)
+	}
+	acks.await(t, messageID(2))
+}
+
+func newTestRuntime(t *testing.T, telemetry RuntimeClient, capacity int) *Runtime {
+	t.Helper()
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    capacity,
+	}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := Config{
-		SchemaVersion:         ConfigSchemaVersion,
-		IntegrationInstanceID: "018f3e00-0000-7000-8000-000000000101",
-		MQTT: MQTTConfig{
-			BrokerURL: "tls://localhost:8883", ClientID: "s06-test",
-			TopicFilters: []string{"energy/v1/+/+/+/telemetry", "energy/v1/+/+/+/state", "energy/v1/+/+/+/event", "energy/v1/+/+/+/heartbeat"},
-			CAFile:       "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local",
-			KeepAliveSeconds: 30, SessionExpirySeconds: 3600, ConnectTimeoutSeconds: 5,
-		},
-		TelemetryRuntime:  TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
-		RuntimeGatewayIDs: []string{runtimeGatewayA, runtimeGatewayB}, ProcessingQueueCapacity: capacity,
-	}
-	runtime, err := NewRuntime(config, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
 	return runtime
 }
 
-func processingTestPublish(gatewayID, messageID, deviceID string, ack func(*paho.Publish) error) queuedPublish {
-	topic := "energy/v1/" + testTenantID + "/" + testSiteID + "/" + gatewayID + "/telemetry"
-	payload := []byte(`{"schemaVersion":"1.0","messageId":"` + messageID + `","gatewayId":"` + gatewayID + `","timestamp":1786352400000,"sequence":42,"replay":false,"payload":{"devices":[{"deviceId":"` + deviceID + `","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`)
-	return queuedPublish{packet: &paho.Publish{Topic: topic, Payload: payload, QoS: 1}, ack: ack}
+func publish(gatewayID string, index int) *paho.Publish {
+	return &paho.Publish{Topic: telemetryTopic(gatewayID), Payload: telemetryPayload(gatewayID, messageID(index), index, "METER-01", "active_power"), QoS: 1}
 }

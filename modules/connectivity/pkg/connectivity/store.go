@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 var (
@@ -23,7 +22,6 @@ var (
 	ErrOwnershipHeld       = errors.New("connector ownership is held by another owner")
 	ErrOwnershipLost       = errors.New("connector ownership lease is not active")
 	ErrCredentialInactive  = errors.New("credential is not active")
-	ErrEnrollmentInvalid   = errors.New("enrollment is invalid or already consumed")
 	ErrCorrelationMismatch = errors.New("command correlation does not match durable state")
 
 	uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -54,31 +52,12 @@ type OwnershipLease struct {
 	Revision   uint64
 }
 
-type CredentialRefInput struct {
-	ID                     string
-	IntegrationInstanceID  string
-	Kind                   string
-	SecretRef              string
-	CertificateFingerprint string
-	TokenHash              string
-	ValidFrom              time.Time
-	ValidUntil             time.Time
-	RotatedFromID          string
-}
-
 type SessionInput struct {
 	ID                    string
 	IntegrationInstanceID string
 	CredentialRefID       string
 	GatewayExternalID     string
 	ExpiresAt             time.Time
-}
-
-type EnrollmentConsumeInput struct {
-	EnrollmentID         string
-	HardwareIdentityHash string
-	ChallengeHash        string
-	Credential           CredentialRefInput
 }
 
 func Open(ctx context.Context, databaseURL, tenantID string) (*Store, error) {
@@ -138,94 +117,6 @@ WHERE i.tenant_id = $1::uuid AND i.id = $2::uuid
 		return IntegrationDescriptor{}, fmt.Errorf("load IntegrationInstance: %w", err)
 	}
 	return descriptor, nil
-}
-
-func (store *Store) AuthorizeGateway(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayExternalID string) error {
-	if tenantID != store.tenantID {
-		return ErrBindingNotFound
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var active bool
-	err = tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1
-  FROM connectivity.integration_instances i
-  JOIN connectivity.sessions s
-    ON s.tenant_id = i.tenant_id AND s.integration_instance_id = i.id
-  JOIN connectivity.credential_refs c
-    ON c.tenant_id = s.tenant_id AND c.id = s.credential_ref_id
-  WHERE i.tenant_id = $1::uuid AND i.id = $2::uuid
-    AND i.site_id = $3::uuid AND i.gateway_external_id = $4 AND i.status = 'ACTIVE'
-    AND s.gateway_external_id = i.gateway_external_id AND s.status = 'ACTIVE'
-    AND s.opened_at <= $5 AND s.expires_at > $5
-    AND c.integration_instance_id = i.id AND c.status = 'ACTIVE'
-    AND c.valid_from <= $5 AND c.valid_until > $5
-)
-`, store.tenantID, integrationInstanceID, strings.TrimSpace(siteID), strings.TrimSpace(gatewayExternalID), now).Scan(&active)
-	if err != nil {
-		return fmt.Errorf("authorize Gateway session: %w", err)
-	}
-	if !active {
-		return ErrBindingNotFound
-	}
-	return nil
-}
-
-// ResolveGatewayChild returns the Device a Gateway names by its child external ID, or ""
-// when that child is not registered behind the Gateway.
-func (store *Store) ResolveGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) (string, error) {
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback(ctx)
-	var deviceID string
-	err = tx.QueryRow(ctx, `
-SELECT child_device_id::text
-FROM connectivity.gateway_child_bindings
-WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
-  AND gateway_external_id = $3 AND child_external_id = $4
-  AND status = 'ACTIVE' AND valid_from <= $5 AND (valid_to IS NULL OR valid_to > $5)
-`, store.tenantID, integrationInstanceID, strings.TrimSpace(gatewayExternalID), strings.TrimSpace(externalDeviceID), store.clock().UTC()).Scan(&deviceID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("resolve GatewayChildBinding: %w", err)
-	}
-	return deviceID, nil
-}
-
-// ResolvePoint reads a Device's active Point from the Registry read port by the Point Code
-// the Gateway sends, or nil when the Device has no such registered Point.
-func (store *Store) ResolvePoint(ctx context.Context, deviceID, pointCode string) (*adapter.ResolvedPoint, error) {
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	var point adapter.ResolvedPoint
-	err = tx.QueryRow(ctx, `
-SELECT point_id::text, sensor_id::text, point_type, value_type, unit,
-       counter_decrease_mode, counter_rollover_modulus, point_revision
-FROM core_registry.point_bindings_v1
-WHERE device_id = $1::uuid AND point_code = $2
-`, deviceID, pointCode).Scan(
-		&point.PointID, &point.SensorID, &point.PointType, &point.ValueType, &point.Unit,
-		&point.CounterDecreaseMode, &point.CounterRolloverModulus, &point.PointRevision,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve Registry Point binding: %w", err)
-	}
-	return &point, nil
 }
 
 func (store *Store) ResolveCommandRoute(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayID, deviceID string) (commandmodel.DeviceRoute, error) {
@@ -335,46 +226,6 @@ SELECT EXISTS (
 	return nil
 }
 
-func (store *Store) RevokeCredential(ctx context.Context, credentialRefID, reason string) error {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return errors.New("credential revocation reason is required")
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var integrationID, siteID string
-	var revision uint64
-	err = tx.QueryRow(ctx, `
-UPDATE connectivity.credential_refs c
-SET status = 'REVOKED', revoked_at = $3, revision = revision + 1, updated_at = $3
-FROM connectivity.integration_instances i
-WHERE c.tenant_id = $1::uuid AND c.id = $2::uuid AND c.status = 'ACTIVE'
-  AND i.tenant_id = c.tenant_id AND i.id = c.integration_instance_id
-RETURNING c.integration_instance_id::text, i.site_id::text, c.revision
-`, store.tenantID, credentialRefID, now).Scan(&integrationID, &siteID, &revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCredentialInactive
-	}
-	if err != nil {
-		return fmt.Errorf("revoke CredentialRef: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE connectivity.sessions
-SET status = 'INVALIDATED', closed_at = $3, close_reason = $4, revision = revision + 1, updated_at = $3
-WHERE tenant_id = $1::uuid AND credential_ref_id = $2::uuid AND status = 'ACTIVE'
-`, store.tenantID, credentialRefID, now, "CREDENTIAL_REVOKED:"+reason); err != nil {
-		return fmt.Errorf("invalidate credential sessions: %w", err)
-	}
-	if err := store.insertAudit(ctx, tx, siteID, integrationID, "CREDENTIAL_REVOKED", credentialRefID, revision, map[string]any{"reason": reason}, now); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
 func (store *Store) ExpireDueCredentials(ctx context.Context) (int64, error) {
 	tx, err := store.beginTenant(ctx)
 	if err != nil {
@@ -452,118 +303,6 @@ INSERT INTO connectivity.sessions (
 `, input.ID, store.tenantID, siteID, input.IntegrationInstanceID, input.CredentialRefID, credentialRevision, strings.TrimSpace(input.GatewayExternalID), now, input.ExpiresAt.UTC())
 	if err != nil {
 		return fmt.Errorf("open connectivity session: %w", err)
-	}
-	return tx.Commit(ctx)
-}
-
-func (store *Store) ConsumeEnrollment(ctx context.Context, input EnrollmentConsumeInput) error {
-	if !uuidV7Pattern.MatchString(input.EnrollmentID) || !validCredentialInput(input.Credential) ||
-		!isSHA256(input.HardwareIdentityHash) || !isSHA256(input.ChallengeHash) {
-		return ErrEnrollmentInvalid
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var siteID, integrationID, deviceID string
-	var gatewayExternalID *string
-	err = tx.QueryRow(ctx, `
-SELECT e.site_id::text, e.integration_instance_id::text, e.device_id::text, e.gateway_external_id
-FROM connectivity.enrollments e
-WHERE e.tenant_id = $1::uuid AND e.id = $2::uuid
-  AND e.consumed_at IS NULL AND e.expires_at > $3
-  AND e.hardware_identity_sha256 = $4 AND e.challenge_hash_sha256 = $5
-  AND EXISTS (
-    SELECT 1 FROM connectivity.device_bindings d
-    WHERE d.tenant_id = e.tenant_id AND d.integration_instance_id = e.integration_instance_id
-      AND d.site_id = e.site_id AND d.device_id = e.device_id
-      AND d.status = 'ACTIVE' AND d.valid_from <= $3 AND (d.valid_to IS NULL OR d.valid_to > $3)
-    UNION ALL
-    SELECT 1 FROM connectivity.gateway_child_bindings g
-    WHERE g.tenant_id = e.tenant_id AND g.integration_instance_id = e.integration_instance_id
-      AND g.site_id = e.site_id AND g.child_device_id = e.device_id
-      AND e.gateway_external_id IS NOT NULL AND g.gateway_external_id = e.gateway_external_id
-      AND g.status = 'ACTIVE' AND g.valid_from <= $3 AND (g.valid_to IS NULL OR g.valid_to > $3)
-  )
-FOR UPDATE
-`, store.tenantID, input.EnrollmentID, now, input.HardwareIdentityHash, input.ChallengeHash).Scan(&siteID, &integrationID, &deviceID, &gatewayExternalID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrEnrollmentInvalid
-	}
-	if err != nil {
-		return fmt.Errorf("load Enrollment: %w", err)
-	}
-	if input.Credential.IntegrationInstanceID != integrationID {
-		return ErrEnrollmentInvalid
-	}
-	if err := store.insertCredential(ctx, tx, input.Credential, now); err != nil {
-		return err
-	}
-	tag, err := tx.Exec(ctx, `
-UPDATE connectivity.enrollments
-SET consumed_at = $3, credential_ref_id = $4::uuid, revision = revision + 1, updated_at = $3
-WHERE tenant_id = $1::uuid AND id = $2::uuid AND consumed_at IS NULL
-`, store.tenantID, input.EnrollmentID, now, input.Credential.ID)
-	if err != nil || tag.RowsAffected() != 1 {
-		return ErrEnrollmentInvalid
-	}
-	gateway := ""
-	if gatewayExternalID != nil {
-		gateway = *gatewayExternalID
-	}
-	if err := store.insertAudit(ctx, tx, siteID, integrationID, "ENROLLMENT_CONSUMED", deviceID, 1, map[string]any{
-		"enrollmentId": input.EnrollmentID, "credentialRefId": input.Credential.ID, "gatewayExternalId": gateway,
-	}, now); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-func (store *Store) RotateCredential(ctx context.Context, oldCredentialRefID string, replacement CredentialRefInput, overlapUntil time.Time) error {
-	if !validCredentialInput(replacement) || strings.TrimSpace(oldCredentialRefID) == "" || replacement.RotatedFromID != oldCredentialRefID ||
-		overlapUntil.Before(replacement.ValidFrom) || overlapUntil.After(replacement.ValidFrom.Add(15*time.Minute)) {
-		return errors.New("credential rotation input or overlap window is invalid")
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var siteID, integrationID string
-	var oldRevision uint64
-	err = tx.QueryRow(ctx, `
-SELECT i.site_id::text, c.integration_instance_id::text, c.revision
-FROM connectivity.credential_refs c
-JOIN connectivity.integration_instances i ON i.tenant_id = c.tenant_id AND i.id = c.integration_instance_id
-WHERE c.tenant_id = $1::uuid AND c.id = $2::uuid AND c.status = 'ACTIVE'
-FOR UPDATE OF c
-`, store.tenantID, oldCredentialRefID).Scan(&siteID, &integrationID, &oldRevision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCredentialInactive
-	}
-	if err != nil {
-		return fmt.Errorf("load rotation source CredentialRef: %w", err)
-	}
-	if integrationID != replacement.IntegrationInstanceID {
-		return errors.New("replacement CredentialRef changes IntegrationInstance")
-	}
-	if err := store.insertCredential(ctx, tx, replacement, now); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE connectivity.credential_refs
-SET valid_until = LEAST(valid_until, $3), revision = revision + 1, updated_at = $4
-WHERE tenant_id = $1::uuid AND id = $2::uuid
-`, store.tenantID, oldCredentialRefID, overlapUntil.UTC(), now); err != nil {
-		return fmt.Errorf("bound credential rotation overlap: %w", err)
-	}
-	if err := store.insertAudit(ctx, tx, siteID, integrationID, "CREDENTIAL_ROTATED", replacement.ID, oldRevision+1, map[string]any{
-		"rotatedFromCredentialRefId": oldCredentialRefID,
-	}, now); err != nil {
-		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -751,49 +490,6 @@ func (store *Store) beginTenant(ctx context.Context) (pgx.Tx, error) {
 	return tx, nil
 }
 
-func (store *Store) insertCredential(ctx context.Context, tx pgx.Tx, credential CredentialRefInput, now time.Time) error {
-	_, err := tx.Exec(ctx, `
-INSERT INTO connectivity.credential_refs (
-  id, tenant_id, integration_instance_id, credential_kind, secret_ref,
-  certificate_fingerprint_sha256, token_hash_sha256, status,
-  valid_from, valid_until, rotated_from_id, revoked_at, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), 'ACTIVE', $8, $9, NULLIF($10, '')::uuid, NULL, 1, $11, $11)
-`, credential.ID, store.tenantID, credential.IntegrationInstanceID, credential.Kind, strings.TrimSpace(credential.SecretRef),
-		strings.ToLower(strings.TrimSpace(credential.CertificateFingerprint)), strings.ToLower(strings.TrimSpace(credential.TokenHash)),
-		credential.ValidFrom.UTC(), credential.ValidUntil.UTC(), strings.TrimSpace(credential.RotatedFromID), now)
-	if err != nil {
-		return fmt.Errorf("insert CredentialRef: %w", err)
-	}
-	return nil
-}
-
-func validCredentialInput(input CredentialRefInput) bool {
-	if !uuidV7Pattern.MatchString(strings.TrimSpace(input.ID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(input.IntegrationInstanceID)) ||
-		input.ValidFrom.IsZero() || input.ValidUntil.IsZero() || !input.ValidUntil.After(input.ValidFrom) {
-		return false
-	}
-	if input.RotatedFromID != "" && !uuidV7Pattern.MatchString(strings.TrimSpace(input.RotatedFromID)) {
-		return false
-	}
-	switch strings.TrimSpace(input.Kind) {
-	case "MTLS_CERTIFICATE":
-		return isSHA256(input.CertificateFingerprint) && strings.TrimSpace(input.TokenHash) == ""
-	case "TOKEN_HASH":
-		return isSHA256(input.TokenHash) && strings.TrimSpace(input.CertificateFingerprint) == ""
-	default:
-		return false
-	}
-}
-
-func isSHA256(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if len(value) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
 const correlationSelect = `
 SELECT attempt_id::text, execution_fence, command_id::text, tenant_id::text, site_id::text,
        integration_instance_id::text, device_id::text, point_id::text, capability, external_device_id,
@@ -869,26 +565,6 @@ func sameCorrelationIdentity(left, right commandmodel.CommandCorrelation) bool {
 		left.MappingRevision == right.MappingRevision && left.BindingRevision == right.BindingRevision &&
 		left.ProviderEndpoint == right.ProviderEndpoint && left.ProviderMethod == right.ProviderMethod &&
 		left.RequestSHA256 == right.RequestSHA256
-}
-
-func (store *Store) insertAudit(ctx context.Context, tx pgx.Tx, siteID, integrationID, eventType, subjectID string, revision uint64, evidence map[string]any, occurredAt time.Time) error {
-	eventID, err := newUUIDv7(occurredAt)
-	if err != nil {
-		return err
-	}
-	evidenceJSON, err := json.Marshal(evidence)
-	if err != nil {
-		return fmt.Errorf("marshal connectivity audit evidence: %w", err)
-	}
-	_, err = tx.Exec(ctx, `
-INSERT INTO connectivity.audit_facts (
-  event_id, tenant_id, site_id, integration_instance_id, event_type, subject_id, revision, evidence, occurred_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8::jsonb, $9)
-`, eventID, store.tenantID, siteID, integrationID, eventType, subjectID, revision, evidenceJSON, occurredAt.UTC())
-	if err != nil {
-		return fmt.Errorf("insert connectivity audit fact: %w", err)
-	}
-	return nil
 }
 
 func nullableTime(value time.Time) any {

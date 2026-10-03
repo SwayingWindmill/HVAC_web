@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hvac.local/contracts/mqtt/gateway-uplink.v2.schema.json",
+  "title": "Gateway MQTT uplink v2",
+  "description": "What a Gateway publishes (ADR 0015). Topics carry only the Gateway id, which is the Gateway's Registry Device id and its certificate CN: hvac/v1/{gatewayId}/up/telemetry and hvac/v1/{gatewayId}/up/event. Messages never carry Tenant or Site; Connectivity resolves them from the Registry gateway directory. The envelope gatewayId must equal the topic's.",
+  "oneOf": [
+    { "$ref": "#/$defs/telemetryEnvelope" },
+    { "$ref": "#/$defs/eventEnvelope" }
+  ],
+  "$defs": {
+    "uuidV7": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "epochMillis": { "type": "integer", "minimum": 0, "maximum": 281474976710655 },
+    "header": {
+      "type": "object",
+      "required": ["schemaVersion", "messageId", "gatewayId", "timestamp", "sequence"],
+      "properties": {
+        "schemaVersion": { "const": "2.0" },
+        "messageId": { "$ref": "#/$defs/uuidV7" },
+        "gatewayId": { "$ref": "#/$defs/uuidV7" },
+        "timestamp": { "$ref": "#/$defs/epochMillis" },
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807, "description": "Source offset for every point in the message." },
+        "traceId": { "type": "string", "maxLength": 256 }
+      }
+    },
+    "telemetryEnvelope": {
+      "title": "hvac/v1/{gatewayId}/up/telemetry",
+      "allOf": [{ "$ref": "#/$defs/header" }],
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["replay", "payload"],
+      "properties": {
+        "replay": { "type": "boolean" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["devices"],
+          "properties": {
+            "devices": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "$ref": "#/$defs/device" } }
+          }
+        }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceId", "deviceTimestamp", "points"],
+      "properties": {
+        "deviceId": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The Device's source key behind this Gateway; unregistered keys are quarantined by Telemetry." },
+        "deviceTimestamp": { "$ref": "#/$defs/epochMillis" },
+        "points": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/point" } }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "value", "quality"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$", "description": "The Registry Point Code of the Device's Point." },
+        "value": { "not": { "type": "null" } },
+        "quality": { "type": "integer", "minimum": 0, "maximum": 255, "description": "0 is good; anything else marks the value as from an untrusted source." },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "eventEnvelope": {
+      "title": "hvac/v1/{gatewayId}/up/event",
+      "allOf": [{ "$ref": "#/$defs/header" }],
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["payload"],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["eventType", "sourceType", "sourceId", "eventTime", "severity"],
+          "properties": {
+            "eventType": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "sourceType": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "sourceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "eventTime": { "$ref": "#/$defs/epochMillis" },
+            "severity": { "enum": ["INFO", "WARNING", "CRITICAL"] },
+            "data": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

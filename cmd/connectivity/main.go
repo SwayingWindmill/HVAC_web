@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -27,22 +28,11 @@ func main() {
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "mqtt-telemetry-adapter", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	configPath := flag.String("config", strings.TrimSpace(os.Getenv("MQTT_TELEMETRY_ADAPTER_CONFIG")), "path to the MQTT telemetry adapter JSON config")
 	diagnosticsAddress := flag.String("diagnostics-addr", envOr("MQTT_TELEMETRY_ADAPTER_DIAGNOSTICS_ADDR", ":19094"), "health server listen address")
 	flag.Parse()
-	if strings.TrimSpace(*configPath) == "" {
-		logger.Error("mqtt_telemetry_adapter_config_required")
-		os.Exit(2)
-	}
-	configFile, err := os.Open(*configPath)
-	if err != nil {
-		logger.Error("mqtt_telemetry_adapter_config_open_failed", "error", err.Error())
-		os.Exit(1)
-	}
-	config, err := adapter.DecodeConfig(configFile)
-	_ = configFile.Close()
-	if err != nil {
-		logger.Error("mqtt_telemetry_adapter_config_invalid", "cause", err.Error())
+	config := uplinkConfig()
+	if err := config.Validate(); err != nil {
+		logger.Error("connectivity_uplink_config_invalid", "cause", err.Error())
 		os.Exit(1)
 	}
 
@@ -56,24 +46,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
-	integration, err := connectivityStore.LoadIntegration(ctx, config.IntegrationInstanceID)
-	if err != nil {
-		logger.Error("iot_integration_instance_unavailable", "integration_instance_id", config.IntegrationInstanceID)
-		os.Exit(1)
-	}
-	if integration.TopicNamespace != "energy/v1" {
-		logger.Error("iot_transport_profile_mismatch", "integration_instance_id", integration.ID)
-		os.Exit(1)
-	}
-	config.MQTT.BrokerURL = integration.BrokerOrigin
-	config.RuntimeGatewayIDs = []string{integration.GatewayExternalID}
-
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClient(config.TelemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
 		os.Exit(1)
 	}
-	processor, err := adapter.NewProcessor(config.IntegrationInstanceID, connectivityStore, telemetryRuntime)
+	processor, err := adapter.NewProcessor(connectivityStore, telemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		os.Exit(1)
@@ -85,7 +63,7 @@ func main() {
 	}
 
 	health := &moduleHealth{}
-	commandRuntime, commandErr := loadInProcessCommandRuntime(ctx, connectivityStore, integration)
+	commandRuntime, commandErr := loadInProcessCommandRuntime(ctx, connectivityStore)
 	if commandErr != nil {
 		logger.Error("iot_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", commandErr.Error())
 	} else if commandRuntime != nil {
@@ -100,7 +78,7 @@ func main() {
 		}
 	}()
 	go func() {
-		logger.Info("mqtt_telemetry_adapter_started", "integration_instance_id", config.IntegrationInstanceID, "gateway_id", integration.GatewayExternalID, "topic_filters", config.MQTT.TopicFilters)
+		logger.Info("connectivity_uplink_started", "topic_filters", adapter.UplinkTopicFilters)
 		if runErr := runtime.Run(ctx); runErr != nil && ctx.Err() == nil {
 			// Telemetry ingress is its own fault domain. Command delivery remains
 			// running; telemetry readiness becomes false until the process is repaired.
@@ -124,6 +102,38 @@ func main() {
 	_ = commandRuntime.Close(shutdownContext)
 	_ = telemetry.Shutdown(shutdownContext)
 	logger.Info("mqtt_telemetry_adapter_stopped")
+}
+
+// uplinkConfig reads the uplink settings; the defaults are the in-container paths of
+// Connectivity's workload identity and the Phase 1 service addresses.
+func uplinkConfig() adapter.Config {
+	identityCert := envOr("CONNECTIVITY_TLS_CERT", "/run/hvac/pki/mqtt-telemetry-adapter/tls.crt")
+	identityKey := envOr("CONNECTIVITY_TLS_KEY", "/run/hvac/pki/mqtt-telemetry-adapter/tls.key")
+	ca := envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt")
+	return adapter.Config{
+		MQTT: adapter.MQTTConfig{
+			BrokerURL: envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
+			ClientID:  envOr("CONNECTIVITY_MQTT_CLIENT_ID", "connectivity"),
+			CAFile:    ca, CertFile: identityCert, KeyFile: identityKey,
+			ServerName: envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
+		},
+		TelemetryRuntime: adapter.TelemetryRuntimeConfig{
+			BaseURL: envOr("CONNECTIVITY_TELEMETRY_URL", "https://telemetry-runtime-service:8446"),
+			CAFile:  ca, CertFile: identityCert, KeyFile: identityKey,
+			ServerName: envOr("CONNECTIVITY_TELEMETRY_SERVER_NAME", "telemetry-runtime-service"),
+		},
+		QueueCapacity: queueCapacity(),
+	}
+}
+
+// queueCapacity bounds each Gateway's in-process backlog (CONNECTIVITY_QUEUE_CAPACITY,
+// default 1024); beyond it the broker holds the Gateway's messages.
+func queueCapacity() int {
+	capacity, err := strconv.Atoi(envOr("CONNECTIVITY_QUEUE_CAPACITY", "1024"))
+	if err != nil {
+		return 0
+	}
+	return capacity
 }
 
 func runCredentialExpiry(ctx context.Context, store *connectivity.Store, logger *slog.Logger) {

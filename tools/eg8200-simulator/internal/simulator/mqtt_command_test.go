@@ -53,14 +53,13 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wireID := "018f3e00-4000-7000-8000-000000000001"
+	wireID := config.Plant.Chiller.ID
 	gatewayConfig := MQTTGatewayConfig{
-		TenantID:                   "018f3d00-0000-7000-8000-000000000001",
-		SiteID:                     "018f3e00-1000-7000-8000-000000000001",
-		QueueDirectory:             t.TempDir(),
-		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
+		TenantID:       "018f3d00-0000-7000-8000-000000000001",
+		SiteID:         "018f3e00-1000-7000-8000-000000000001",
+		QueueDirectory: t.TempDir(),
 	}
-	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +88,7 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("duplicate command must return cached reply without re-execution: first=%+v second=%+v", first, second)
 	}
-	restarted, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
+	restarted, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,14 +114,13 @@ func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wireID := "018f3e00-4000-7000-8000-000000000001"
+	wireID := config.Plant.Chiller.ID
 	gatewayConfig := MQTTGatewayConfig{
-		TenantID:                   "018f3d00-0000-7000-8000-000000000001",
-		SiteID:                     "018f3e00-1000-7000-8000-000000000001",
-		QueueDirectory:             t.TempDir(),
-		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
+		TenantID:       "018f3d00-0000-7000-8000-000000000001",
+		SiteID:         "018f3e00-1000-7000-8000-000000000001",
+		QueueDirectory: t.TempDir(),
 	}
-	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}

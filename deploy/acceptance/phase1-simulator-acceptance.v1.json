@@ -36,10 +36,16 @@
       "category": "simulator"
     },
     {
-      "id": "GATE-MQTT-E2E",
-      "command": "npm run telemetry:mqtt:integration",
+      "id": "GATE-MQTT-ACL",
+      "command": "npm run mqtt:acl:integration",
       "category": "iot",
-      "evidence": ["out/s2-mqtt-integration/integration.json"]
+      "evidence": ["out/mqtt-broker-acl/acl.json"]
+    },
+    {
+      "id": "GATE-MQTT-E2E",
+      "command": "npm run mqtt:e2e:integration",
+      "category": "iot",
+      "evidence": ["out/mqtt-e2e/integration.json"]
     },
     {
       "id": "GATE-S2-POSTGRES",
@@ -159,14 +165,14 @@
       "class": "SOFTWARE_REQUIRED",
       "title": "MQTT 临时下游故障可重试且 poison message 不污染 S2",
       "gateIds": ["GATE-MQTT-E2E"],
-      "acceptance": "注入 S2 503 后恢复；非法消息丢弃；Adapter 保持 ready"
+      "acceptance": "注入 Telemetry 503 后原地重试恢复；非法消息隔离并留下证据；Telemetry 变慢时网关队列积压且积压消失后已发布消息全部处理；凭据吊销后上行被隔离"
     },
     {
       "id": "REQ-TLM-003",
       "class": "SOFTWARE_REQUIRED",
-      "title": "Gateway Topic ACL 和跨 Site 隔离",
-      "gateIds": ["GATE-MQTT-E2E"],
-      "acceptance": "错误 Site publish 返回 MQTT v5 Not authorized"
+      "title": "Gateway Topic ACL 和跨 Gateway 隔离",
+      "gateIds": ["GATE-MQTT-ACL"],
+      "acceptance": "网关只能发布到 hvac/v1/{自己的证书 CN}/up；发布到其他网关或下行 topic 返回 MQTT v5 Not authorized；新增网关无需修改 ACL"
     },
     {
       "id": "REQ-TLM-004",

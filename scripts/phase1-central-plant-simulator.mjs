@@ -6,7 +6,10 @@ import path from 'node:path';
 import {
   centralPlantDevices,
   centralPlantIdentity,
+  localSites,
   localUUID,
+  siteDeviceId,
+  siteUUID,
   sqlLiteral,
 } from './central-plant-local-contract.mjs';
 import {
@@ -24,10 +27,7 @@ import { localContainer, repoRoot, runtimeDir } from './lib/local-environment.mj
 const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
 const runtimeRoot = runtimeDir;
 const internalPkiDir = path.join(runtimeRoot, 'internal-pki');
-const simulatorPkiDir = path.join(internalPkiDir, 'eg8200-simulator');
-const simulatorQueueDir = path.join(runtimeRoot, 'data', 'eg8200');
 const runtimeConfigDir = path.join(runtimeRoot, 'config');
-const mqttConfigPath = path.join(runtimeConfigDir, 'eg8200-mqtt.json');
 const pointContractPath = path.join(repoRoot, 'contracts', 'registry', 'central-plant-device-points.v2.json');
 const reconciliationPath = path.join(runtimeRoot, 'identity-reconcile.json');
 
@@ -89,27 +89,38 @@ function bindingRoleForDeviceType(deviceType) {
   return 'CONTROLLER';
 }
 
-function buildIdentities(points) {
+function buildIdentities(site, points) {
   let sequence = 1;
   let commandSequence = 1;
-  const nextID = () => localUUID(sequence++);
+  const nextID = () => siteUUID(site, sequence++);
   const spaceIdByKey = new Map(centralPlantAreas.map((space) => [space.id, nextID()]));
   const assetIdByKey = new Map(centralPlantEquipment.map((asset) => [asset.id, nextID()]));
   const sensorIdByKey = new Map(centralPlantSensors.map((sensor) => [sensor.id, nextID()]));
   const pointIdByRef = new Map(points.map((point) => {
-    const expected = point.pointType === 'COMMAND' ? localUUID(0x500000000000 + commandSequence++) : nextID();
-    if (point.pointId && point.pointId !== expected) {
+    const expected = point.pointType === 'COMMAND' ? siteUUID(site, 0x500000000000 + commandSequence++) : nextID();
+    if (site.index === 0 && point.pointId && point.pointId !== expected) {
       throw new Error(`point ${point.deviceId}/${point.telemetryKey} canonical pointId ${point.pointId} does not match deterministic Registry identity ${expected}`);
     }
-    return [`${point.deviceId}/${point.telemetryKey}`, point.pointId ?? expected];
+    return [`${point.deviceId}/${point.telemetryKey}`, expected];
   }));
   return { nextID, spaceIdByKey, assetIdByKey, sensorIdByKey, pointIdByRef };
 }
 
-function buildS1Seed(points) {
-  const { tenantId, siteId, gatewayDeviceId } = centralPlantIdentity;
-  const ids = buildIdentities(points);
-  const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
+// The plant's Devices and endpoints with their platform ids at a Site.
+function siteDevices(site) {
+  return centralPlantDevices.map((device) => ({ ...device, platformDeviceId: siteDeviceId(site, device.platformDeviceId) }));
+}
+
+function siteEndpoints(site) {
+  return centralPlantDeviceEndpoints.map((endpoint) => ({ ...endpoint, platformDeviceId: siteDeviceId(site, endpoint.platformDeviceId) }));
+}
+
+function buildS1Seed(site, points) {
+  const { tenantId, siteId, gatewayDeviceId } = site;
+  const ids = buildIdentities(site, points);
+  const plantDevices = siteDevices(site);
+  const plantEndpoints = siteEndpoints(site);
+  const deviceByName = new Map(plantDevices.map((device) => [device.name, device]));
 
   const spaces = centralPlantAreas.map((space) => `(
     ${sqlLiteral(ids.spaceIdByKey.get(space.id))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
@@ -132,11 +143,11 @@ function buildS1Seed(points) {
 
   const devices = [
     `(
-      ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(siteId)}, 'eg8200-commercial-001',
-      'EG8200-COMMERCIAL-001', 'GATEWAY', 'ACTIVE', 1,
+      ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(site.gatewayCode)},
+      ${sqlLiteral(site.gatewayName)}, 'GATEWAY', 'ACTIVE', 1,
       clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)}, NULL, NULL
     )`,
-    ...centralPlantDeviceEndpoints.map((endpoint) => {
+    ...plantEndpoints.map((endpoint) => {
       const contract = deviceByName.get(endpoint.id);
       return `(
       ${sqlLiteral(endpoint.platformDeviceId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(contract.slug)},
@@ -146,19 +157,19 @@ function buildS1Seed(points) {
     }),
   ].join(',\n');
   // Gateway messages name each Device behind the Gateway by its device name.
-  const sourceKeys = centralPlantDevices.map((device, index) => `(
-    ${sqlLiteral(localUUID(0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
+  const sourceKeys = plantDevices.map((device, index) => `(
+    ${sqlLiteral(siteUUID(site, 0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
     ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(device.name)}, ${sqlLiteral(device.platformDeviceId)},
     'ACTIVE', 1, clock_timestamp(), clock_timestamp()
   )`).join(',\n');
 
-  const deviceSpaceBindings = centralPlantDeviceEndpoints.map((endpoint) => `(
+  const deviceSpaceBindings = plantEndpoints.map((endpoint) => `(
     ${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
     ${sqlLiteral(endpoint.platformDeviceId)}, ${sqlLiteral(ids.spaceIdByKey.get(endpoint.areaId))},
     'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
   )`).join(',\n');
 
-  const deviceBindings = centralPlantDeviceEndpoints.flatMap((endpoint) => endpoint.equipmentIds.map((assetKey) => {
+  const deviceBindings = plantEndpoints.flatMap((endpoint) => endpoint.equipmentIds.map((assetKey) => {
     const contract = deviceByName.get(endpoint.id);
     return `(
       ${sqlLiteral(ids.nextID())}, ${sqlLiteral(siteId)}, ${sqlLiteral(endpoint.platformDeviceId)},
@@ -223,7 +234,7 @@ function buildS1Seed(points) {
 
   return `BEGIN;
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id)
-VALUES (${sqlLiteral(siteId)}, 'local-energy-site', '本地智慧能源站点', 'Asia/Shanghai', 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)})
+VALUES (${sqlLiteral(siteId)}, ${sqlLiteral(site.siteCode)}, ${sqlLiteral(site.siteName)}, 'Asia/Shanghai', 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)})
 ON CONFLICT (id) DO UPDATE SET status='ACTIVE', tenant_id=EXCLUDED.tenant_id, updated_at=clock_timestamp();
 
 INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code, display_name, space_type, status, revision, created_at, updated_at) VALUES
@@ -313,14 +324,13 @@ COMMIT;`;
 }
 
 function buildConnectivitySeed(rig) {
-  const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
+  const [site] = localSites;
+  const { tenantId, siteId, gatewayDeviceId } = site;
+  const { integrationInstanceId } = centralPlantIdentity;
   const transportProfileId = localUUID(0x810000000001);
   const credentialRefId = localUUID(0x810000000002);
   const sessionId = localUUID(0x810000000003);
-  const certificate = new X509Certificate(readFileSync(path.join(simulatorPkiDir, 'tls.crt')));
-  const certificateFingerprint = certificate.fingerprint256.replaceAll(':', '').toLowerCase();
-  const certificateValidFrom = new Date(certificate.validFrom).toISOString();
-  const certificateValidUntil = new Date(certificate.validTo).toISOString();
+  const { certificateFingerprint, certificateValidFrom, certificateValidUntil } = gatewayCertificate(site);
   const deviceBindings = centralPlantDevices.map((device, index) => `(
     ${sqlLiteral(localUUID(0x820000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
     ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(device.platformDeviceId)},
@@ -328,8 +338,8 @@ function buildConnectivitySeed(rig) {
   )`).join(',\n');
   const childBindings = centralPlantDevices.map((device, index) => `(
     ${sqlLiteral(localUUID(0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
-    ${sqlLiteral(integrationInstanceId)}, 'EG8200-COMMERCIAL-001', ${sqlLiteral(device.platformDeviceId)},
-    ${sqlLiteral(device.platformDeviceId)}, 'ACTIVE', clock_timestamp(), NULL, 1,
+    ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(device.platformDeviceId)},
+    ${sqlLiteral(device.name)}, 'ACTIVE', clock_timestamp(), NULL, 1,
     clock_timestamp(), clock_timestamp()
   )`).join(',\n');
 
@@ -346,7 +356,7 @@ INSERT INTO connectivity.integration_instances (
   id, tenant_id, site_id, transport_profile_id, gateway_external_id, status, revision, created_at, updated_at
 ) VALUES (
   ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(transportProfileId)},
-  'EG8200-COMMERCIAL-001', 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+  ${sqlLiteral(gatewayDeviceId)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
 )
 ON CONFLICT (id) DO UPDATE SET transport_profile_id=EXCLUDED.transport_profile_id, gateway_external_id=EXCLUDED.gateway_external_id, status='ACTIVE', revision=connectivity.integration_instances.revision+1, updated_at=clock_timestamp();
 
@@ -370,7 +380,7 @@ INSERT INTO connectivity.credential_refs (
   rotated_from_id, revoked_at, revision, created_at, updated_at
 ) VALUES (
   ${sqlLiteral(credentialRefId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(integrationInstanceId)}, 'MTLS_CERTIFICATE',
-  'file:///run/hvac/pki/eg8200-simulator/tls.crt', ${sqlLiteral(certificateFingerprint)}, NULL, 'ACTIVE',
+  ${sqlLiteral(`file:///run/hvac/pki/gateways/${gatewayDeviceId}/tls.crt`)}, ${sqlLiteral(certificateFingerprint)}, NULL, 'ACTIVE',
   ${sqlLiteral(certificateValidFrom)}, ${sqlLiteral(certificateValidUntil)}, NULL, NULL, 1,
   clock_timestamp(), clock_timestamp()
 )
@@ -394,7 +404,7 @@ INSERT INTO connectivity.sessions (
 ) VALUES (
   ${sqlLiteral(sessionId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
   ${sqlLiteral(credentialRefId)}, (SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(credentialRefId)}::uuid),
-  'EG8200-COMMERCIAL-001', 'ACTIVE', clock_timestamp(),
+  ${sqlLiteral(gatewayDeviceId)}, 'ACTIVE', clock_timestamp(),
   LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '${(rig?.connectivity.sessionLifetimeHours ?? 24)} hours'),
   NULL, NULL, 1, clock_timestamp()
 )
@@ -402,16 +412,17 @@ ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, cre
 COMMIT;`;
 }
 
-function buildS2Seed(points, rig) {
-  const { tenantId, siteId } = centralPlantIdentity;
-  const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
+function buildS2Seed(site, points, rig) {
+  const { tenantId, siteId } = site;
+  const plantDevices = siteDevices(site);
+  const deviceByName = new Map(plantDevices.map((device) => [device.name, device]));
 
   // Telemetry learns each Point from the identity Connectivity resolves on the first observation.
-  const devices = centralPlantDevices.map((device) => `(
+  const devices = plantDevices.map((device) => `(
     ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, 'APPLICABLE', clock_timestamp()
   )`).join(',\n');
 
-  const presence = centralPlantDevices.map((device) => `(
+  const presence = plantDevices.map((device) => `(
     ${sqlLiteral(device.platformDeviceId)}, 1, 30, 120, true, ARRAY['SOURCE_ACTIVITY']::text[], 60,
     ${device.name === 'METER-HVAC-TOTAL' ? 604800 : 120}, clock_timestamp()
   )`).join(',\n');
@@ -429,7 +440,7 @@ function buildS2Seed(points, rig) {
     )`;
   }).join(',\n');
 
-  const coverage = centralPlantDevices.map((device) => `(
+  const coverage = plantDevices.map((device) => `(
     ${sqlLiteral(device.platformDeviceId)}, true, clock_timestamp(), NULL, 1, clock_timestamp()
   )`).join(',\n');
 
@@ -454,16 +465,24 @@ RESET ROLE;
 COMMIT;`;
 }
 
-function ensureSimulatorCertificate() {
-  mkdirSync(simulatorPkiDir, { recursive: true, mode: 0o700 });
-  const keyPath = path.join(simulatorPkiDir, 'tls.key');
-  const certPath = path.join(simulatorPkiDir, 'tls.crt');
+function gatewayPkiDir(site) {
+  return path.join(internalPkiDir, 'gateways', site.gatewayDeviceId);
+}
+
+// A Gateway's certificate CN is its Registry Device id (ADR 0015). Enrollment replaces
+// this local signing (#407).
+function ensureGatewayCertificate(site) {
+  const pkiDir = gatewayPkiDir(site);
+  // Group-readable so the service group (65532) can be given the Gateway identity.
+  mkdirSync(pkiDir, { recursive: true, mode: 0o750 });
+  const keyPath = path.join(pkiDir, 'tls.key');
+  const certPath = path.join(pkiDir, 'tls.crt');
   const keyReady = existsSync(keyPath) && readFileSync(keyPath).includes('PRIVATE KEY');
   const certReady = existsSync(certPath) && readFileSync(certPath).includes('BEGIN CERTIFICATE');
   if (keyReady && certReady) return;
 
-  const csrPath = path.join(simulatorPkiDir, 'tls.csr');
-  const extPath = path.join(simulatorPkiDir, 'tls.ext');
+  const csrPath = path.join(pkiDir, 'tls.csr');
+  const extPath = path.join(pkiDir, 'tls.ext');
   for (const stalePath of [keyPath, certPath, csrPath, extPath]) rmSync(stalePath, { force: true });
   const caCertPath = path.join(internalPkiDir, 'ca.pem');
   const caKeyPath = path.join(internalPkiDir, 'ca.key');
@@ -471,38 +490,62 @@ function ensureSimulatorCertificate() {
   if (!existsSync(caCertPath) || !existsSync(caKeyPath)) throw new Error('Phase 1 internal CA is unavailable');
 
   run('openssl', ['genrsa', '-out', keyPath, '2048']);
-  run('openssl', ['req', '-new', '-key', keyPath, '-out', csrPath, '-subj', '/CN=EG8200-COMMERCIAL-001']);
-  writeFileSync(extPath, 'extendedKeyUsage=clientAuth\nsubjectAltName=DNS:EG8200-COMMERCIAL-001\n', { mode: 0o600 });
+  run('openssl', ['req', '-new', '-key', keyPath, '-out', csrPath, '-subj', `/CN=${site.gatewayDeviceId}`]);
+  writeFileSync(extPath, `extendedKeyUsage=clientAuth\nsubjectAltName=DNS:${site.gatewayDeviceId}\n`, { mode: 0o600 });
   const serialArgs = existsSync(caSerialPath) ? ['-CAserial', caSerialPath] : ['-CAcreateserial'];
   run('openssl', [
     'x509', '-req', '-in', csrPath, '-CA', caCertPath, '-CAkey', caKeyPath,
-    ...serialArgs, '-out', certPath, '-days', '825', '-sha256', '-extfile', extPath,
+    ...serialArgs, '-out', certPath, '-days', '90', '-sha256', '-extfile', extPath,
   ]);
-  chmodSync(keyPath, 0o600);
+  chmodSync(keyPath, 0o640);
   chmodSync(certPath, 0o644);
   rmSync(csrPath, { force: true });
   rmSync(extPath, { force: true });
 }
 
-function writeSimulatorConfig(credentialRevision) {
+function gatewayCertificate(site) {
+  const certificate = new X509Certificate(readFileSync(path.join(gatewayPkiDir(site), 'tls.crt')));
+  return {
+    certificateFingerprint: certificate.fingerprint256.replaceAll(':', '').toLowerCase(),
+    certificateValidFrom: new Date(certificate.validFrom).toISOString(),
+    certificateValidUntil: new Date(certificate.validTo).toISOString(),
+  };
+}
+
+// The Gateway Credential Connectivity checks before accepting the Gateway's uplink.
+function buildGatewayCredentialSeed(site) {
+  const { certificateFingerprint, certificateValidFrom, certificateValidUntil } = gatewayCertificate(site);
+  return `BEGIN;
+INSERT INTO connectivity.gateway_credentials (
+  id, tenant_id, gateway_id, certificate_fingerprint_sha256, status, valid_from, valid_until, revoked_at, created_at, updated_at
+) VALUES (
+  ${sqlLiteral(siteUUID(site, 0x840000000001))}, ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.gatewayDeviceId)},
+  ${sqlLiteral(certificateFingerprint)}, 'ACTIVE', ${sqlLiteral(certificateValidFrom)}, ${sqlLiteral(certificateValidUntil)}, NULL,
+  clock_timestamp(), clock_timestamp()
+)
+ON CONFLICT (id) DO UPDATE SET certificate_fingerprint_sha256=EXCLUDED.certificate_fingerprint_sha256, status='ACTIVE',
+  valid_from=EXCLUDED.valid_from, valid_until=EXCLUDED.valid_until, revoked_at=NULL, updated_at=clock_timestamp();
+COMMIT;`;
+}
+
+function writeSimulatorConfig(site, credentialRevision) {
   mkdirSync(runtimeConfigDir, { recursive: true });
-  mkdirSync(simulatorQueueDir, { recursive: true });
+  mkdirSync(path.join(runtimeRoot, 'data', site.simulatorQueue), { recursive: true });
   const config = {
-    schemaVersion: 3,
-    tenantId: centralPlantIdentity.tenantId,
-    siteId: centralPlantIdentity.siteId,
+    schemaVersion: 4,
+    gatewayId: site.gatewayDeviceId,
+    tenantId: site.tenantId,
+    siteId: site.siteId,
     brokerUrl: 'tls://mqtt-broker:8883',
-    clientId: 'EG8200-COMMERCIAL-001',
     caFile: '/run/hvac/pki/ca.pem',
-    certFile: '/run/hvac/pki/eg8200-simulator/tls.crt',
-    keyFile: '/run/hvac/pki/eg8200-simulator/tls.key',
+    certFile: `/run/hvac/pki/gateways/${site.gatewayDeviceId}/tls.crt`,
+    keyFile: `/run/hvac/pki/gateways/${site.gatewayDeviceId}/tls.key`,
     serverName: 'mqtt-broker',
     queueDirectory: '/run/hvac/eg8200',
     maximumQueueBytes: 64 * 1024 * 1024,
     credentialRevision,
-    deviceExternalIdByDeviceId: Object.fromEntries(centralPlantDevices.map((device) => [device.name, device.platformDeviceId])),
   };
-  writeFileSync(mqttConfigPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(path.join(runtimeConfigDir, site.simulatorConfig), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o640 });
 }
 
 function runLocalAdminGrant() {
@@ -519,7 +562,7 @@ function startSimulatorService() {
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
     '--simulator-acceptance',
     '--profile', 'simulator-acceptance',
-    'up', '-d', '--build', 'eg8200-simulator',
+    'up', '-d', '--build', ...localSites.map((site) => site.simulatorService),
   ]);
 }
 
@@ -538,13 +581,17 @@ const seededPoints = rig ? applyRegistryRigToPoints(rig, registryPoints) : regis
 const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMAND');
 const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
-ensureSimulatorCertificate();
-psql('hvac_s1', buildS1Seed(seededPoints));
+for (const site of localSites) {
+  ensureGatewayCertificate(site);
+  psql('hvac_s1', buildS1Seed(site, seededPoints));
+  psql('hvac_s1', buildGatewayCredentialSeed(site));
+  psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
+}
 psql('hvac_s1', buildConnectivitySeed(rig));
 const credentialRevision = Number(psqlScalar('hvac_s1', `SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(localUUID(0x810000000002))}::uuid`));
 if (!Number.isSafeInteger(credentialRevision) || credentialRevision < 1) throw new Error('simulator CredentialRef revision is invalid');
-writeSimulatorConfig(credentialRevision);
-psql('hvac_s2', buildS2Seed(observedPoints, rig));
+for (const site of localSites) writeSimulatorConfig(site, credentialRevision);
+// The local administrator is granted Site A; other Sites are reached through the API.
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
 startSimulatorService();

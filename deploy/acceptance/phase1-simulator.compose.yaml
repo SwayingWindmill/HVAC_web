@@ -1,5 +1,5 @@
 services:
-  eg8200-simulator:
+  eg8200-simulator: &eg8200-simulator
     profiles: ["simulator-acceptance"]
     restart: unless-stopped
     env_file:
@@ -40,6 +40,20 @@ services:
     cpus: ${EG8200_SIMULATOR_CPUS:-0.50}
     mem_limit: ${EG8200_SIMULATOR_MEMORY_LIMIT:-256m}
     mem_reservation: ${EG8200_SIMULATOR_MEMORY_RESERVATION:-64m}
+
+  # The second local Site's Gateway: same plant model, its own Registry identity (ADR 0015).
+  eg8200-simulator-b:
+    <<: *eg8200-simulator
+    environment:
+      EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
+      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt-b.json
+      EG8200_ATV630_MODBUS_ADDR: :1502
+      EG8200_MQTT_DIAGNOSTICS_ADDR: :19095
+    volumes:
+      - ${EG8200_PLANT_CONFIG_PATH:-../../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${EG8200_B_QUEUE_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/data/eg8200-b}:/run/hvac/eg8200
 
   virtual-atv630:
     profiles: ["atv630-protocol-acceptance"]

@@ -13,11 +13,11 @@ func TestEdgeMQTTCommandRestartDoesNotReplayMayExecuteRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wireID := "018f3e00-4000-7000-8000-000000000001"
+	wireID := config.Plant.Chiller.ID
 	queueDirectory := t.TempDir()
 	gatewayConfig := MQTTGatewayConfig{
 		TenantID: "018f3d00-0000-7000-8000-000000000001", SiteID: "018f3e00-1000-7000-8000-000000000001",
-		QueueDirectory: queueDirectory, DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
+		QueueDirectory: queueDirectory,
 	}
 	ledgerPath := queueDirectory + "/command-execution-records.json"
 	commandID := "018f3e00-9000-7000-8000-000000000021"
@@ -27,7 +27,7 @@ func TestEdgeMQTTCommandRestartDoesNotReplayMayExecuteRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, err := newEdgeCommandHandler(runtime, gatewayConfig, "EG8200-COMMERCIAL-001", testMQTTEvidenceSpool(t))
+	handler, err := newEdgeCommandHandler(runtime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
 	}

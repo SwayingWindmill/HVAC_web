@@ -29,6 +29,7 @@ async function findAvailablePort(requestedPort = 0) {
 const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
 const telemetryGrantPassword = randomBytes(24).toString('hex');
 const coreServicePassword = randomBytes(24).toString('hex');
+const connectivityPassword = randomBytes(24).toString('hex');
 const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
 
 function run(command, args, options = {}) {
@@ -251,6 +252,25 @@ async function runLegacyMigrationGoTests() {
   });
   const [code, signal] = await once(child, 'exit');
   if (signal || code !== 0) throw new Error(`S1 Legacy migration PostgreSQL tests failed: ${signal ?? code}`);
+}
+
+// Connectivity reads the Registry read port as connectivity_runtime, under real RLS.
+async function runConnectivityGoTests() {
+  await mkdir(goCacheDir, { recursive: true });
+  psql(`ALTER ROLE connectivity_runtime PASSWORD '${connectivityPassword}'`);
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './modules/connectivity/pkg/connectivity'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      GOCACHE: goCacheDir,
+      CONNECTIVITY_ADMIN_DSN: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      CONNECTIVITY_POSTGRES_DSN: `postgres://connectivity_runtime:${connectivityPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+    },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`Connectivity PostgreSQL tests failed: ${signal ?? code}`);
 }
 
 async function runGatewayRoutingGoTests() {
@@ -1761,6 +1781,7 @@ try {
   await runCoreGoTests();
   report.assertions.coreRegistryStore = 'passed';
   await runGatewayRoutingGoTests();
+  await runConnectivityGoTests();
   report.assertions.gatewayRegistryRouting = 'passed';
 
   const optimizationPolicyId = '01990000-1910-7000-8000-000000000001';

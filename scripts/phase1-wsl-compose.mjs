@@ -121,6 +121,7 @@ const env = {
   IAM_RECONCILER_DATABASE_URL: databaseUrl('s1_iam_reconciler', 'hvac_s1'),
   CONNECTIVITY_DATABASE_URL: databaseUrl('connectivity_runtime', 'hvac_s1'),
   CONNECTIVITY_TENANT_ID: centralPlantIdentity.tenantId,
+  MQTT_COMMAND_INTEGRATION_ID: centralPlantIdentity.integrationInstanceId,
   ...(atv630ProtocolAcceptance ? {
     ATV630_SOURCE_ROOT: repoRoot,
     ATV630_PLANT_CONFIG_PATH: path.join(repoRoot, 'tools', 'eg8200-simulator', 'configs', 'central-plant.local.json'),

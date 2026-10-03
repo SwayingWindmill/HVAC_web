@@ -2,116 +2,171 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ProcessingResult struct {
-	MessageID     string
-	MessageType   string
-	Replay        bool
-	PointCount    int
-	EvidenceCount int
-	Accepted      int
-	Duplicate     int
-	OutOfOrder    int
-	Quarantined   int
-	Rejected      int
+	MessageID   string
+	MessageType string
+	Replay      bool
+	PointCount  int
+	Accepted    int
+	Duplicate   int
+	OutOfOrder  int
+	Quarantined int
+	Rejected    int
 }
 
-// IdentityResolver authorizes a Gateway and resolves what its messages name: a child
-// Device ("" when unregistered) and a Device's Point by Point Code (nil when unregistered).
+// Gateway is a Registry Gateway Device with the Tenant and Site it belongs to.
+type Gateway struct {
+	ID       string
+	TenantID string
+	SiteID   string
+}
+
+var (
+	ErrGatewayUnknown            = errors.New("Gateway is not in the Registry gateway directory")
+	ErrGatewayCredentialInactive = errors.New("Gateway holds no active credential")
+)
+
+const (
+	QuarantineGatewayUnknown            = "GATEWAY_UNKNOWN"
+	QuarantineGatewayCredentialInactive = "GATEWAY_CREDENTIAL_INACTIVE"
+	QuarantineMessageInvalid            = "MESSAGE_INVALID"
+)
+
+// UplinkQuarantine is evidence of a Gateway message Connectivity did not accept.
+// TenantID is empty when the Gateway is unknown.
+type UplinkQuarantine struct {
+	TenantID   string
+	GatewayID  string
+	Topic      string
+	ReasonCode string
+	Detail     string
+	Payload    []byte
+	ReceivedAt time.Time
+}
+
+func (quarantine UplinkQuarantine) PayloadSHA256() string {
+	digest := sha256.Sum256(quarantine.Payload)
+	return hex.EncodeToString(digest[:])
+}
+
+// IdentityResolver resolves what a Gateway's messages name from the Registry read
+// port: the Gateway itself (ErrGatewayUnknown, ErrGatewayCredentialInactive), a Device
+// by its source key ("" when unregistered) and a Device's Point by Point Code (nil when
+// unregistered). It also keeps quarantine evidence.
 type IdentityResolver interface {
-	AuthorizeGateway(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayExternalID string) error
-	ResolveGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) (string, error)
-	ResolvePoint(ctx context.Context, deviceID, pointCode string) (*ResolvedPoint, error)
+	ResolveGateway(ctx context.Context, gatewayID string) (Gateway, error)
+	ResolveDevice(ctx context.Context, gateway Gateway, sourceKey string) (string, error)
+	ResolvePoint(ctx context.Context, gateway Gateway, deviceID, pointCode string) (*ResolvedPoint, error)
+	QuarantineUplink(ctx context.Context, quarantine UplinkQuarantine) error
 }
 
 type Processor struct {
-	integrationInstanceID string
-	bindings              IdentityResolver
-	runtime               RuntimeClient
+	identities IdentityResolver
+	runtime    RuntimeClient
+	now        func() time.Time
 }
 
-func NewProcessor(integrationInstanceID string, bindings IdentityResolver, runtime RuntimeClient) (*Processor, error) {
-	integrationInstanceID = strings.TrimSpace(integrationInstanceID)
-	if !uuidV7Pattern.MatchString(integrationInstanceID) || bindings == nil || runtime == nil {
-		return nil, errors.New("MQTT telemetry processor dependencies are invalid")
+func NewProcessor(identities IdentityResolver, runtime RuntimeClient) (*Processor, error) {
+	if identities == nil || runtime == nil {
+		return nil, errors.New("MQTT uplink processor dependencies are invalid")
 	}
-	return &Processor{integrationInstanceID: integrationInstanceID, bindings: bindings, runtime: runtime}, nil
+	return &Processor{identities: identities, runtime: runtime, now: time.Now}, nil
 }
 
+// Process handles one Gateway message. A message Connectivity will never accept is
+// kept as quarantine evidence and returned as a permanent error, so it is acknowledged;
+// any other error is transient and the message is retried.
 func (processor *Processor) Process(ctx context.Context, topic string, payload []byte) (ProcessingResult, error) {
+	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(topic), Topic: topic, Payload: payload, ReceivedAt: processor.now().UTC()}
 	messageTopic, err := ParseMessageTopic(topic)
 	if err != nil {
-		return ProcessingResult{}, permanentMessage(err)
+		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
 	}
-	if err := processor.bindings.AuthorizeGateway(ctx, processor.integrationInstanceID, messageTopic.TenantID, messageTopic.SiteID, messageTopic.GatewayID); err != nil {
-		return ProcessingResult{}, permanentMessage(errors.New("MQTT Gateway has no active IntegrationInstance binding"))
+	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
+	switch {
+	case errors.Is(err, ErrGatewayUnknown):
+		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineGatewayUnknown, err)
+	case errors.Is(err, ErrGatewayCredentialInactive):
+		quarantine.TenantID = gateway.TenantID
+		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineGatewayCredentialInactive, err)
+	case err != nil:
+		return ProcessingResult{}, fmt.Errorf("resolve MQTT Gateway: %w", err)
 	}
+	quarantine.TenantID = gateway.TenantID
 	switch messageTopic.MessageType {
 	case MessageTypeTelemetry:
-		return processor.processTelemetry(ctx, messageTopic.TopicScope, payload)
-	case MessageTypeState:
-		return processor.processState(ctx, messageTopic.TopicScope, payload)
-	case MessageTypeHeartbeat:
-		return processor.processHeartbeat(ctx, messageTopic.TopicScope, payload)
-	case MessageTypeEvent:
-		return processor.processEvent(ctx, messageTopic.TopicScope, payload)
+		envelope, err := DecodeTelemetryEnvelope(payload, gateway.ID)
+		if err != nil {
+			return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
+		}
+		return processor.processTelemetry(ctx, gateway, envelope)
 	default:
-		return ProcessingResult{}, permanentMessage(errors.New("unsupported MQTT uplink message type"))
+		envelope, err := DecodeEventEnvelope(payload, gateway.ID)
+		if err != nil {
+			return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
+		}
+		return processor.processEvent(ctx, gateway, envelope)
 	}
 }
 
-func (processor *Processor) resolveChild(ctx context.Context, scope TopicScope, externalDeviceID string) (*ResolvedDevice, error) {
-	deviceID, err := processor.bindings.ResolveGatewayChild(ctx, processor.integrationInstanceID, scope.GatewayID, strings.TrimSpace(externalDeviceID))
-	if err != nil {
-		return nil, fmt.Errorf("resolve MQTT child Device %s: %w", externalDeviceID, err)
+func (processor *Processor) quarantine(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) error {
+	quarantine.ReasonCode = reasonCode
+	quarantine.Detail = cause.Error()
+	if len(quarantine.Detail) > 1024 {
+		quarantine.Detail = quarantine.Detail[:1024]
 	}
-	if deviceID == "" {
-		return nil, nil
+	if err := processor.identities.QuarantineUplink(ctx, quarantine); err != nil {
+		return fmt.Errorf("keep MQTT uplink quarantine evidence: %w", err)
 	}
-	return &ResolvedDevice{TenantID: scope.TenantID, SiteID: scope.SiteID, DeviceID: deviceID}, nil
+	return permanentMessage(cause)
 }
 
-func (processor *Processor) processTelemetry(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
-	envelope, err := DecodeTelemetryEnvelope(payload, scope)
-	if err != nil {
-		return ProcessingResult{}, permanentMessage(err)
-	}
+func (processor *Processor) processTelemetry(ctx context.Context, gateway Gateway, envelope TelemetryEnvelope) (ProcessingResult, error) {
 	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeTelemetry, Replay: envelope.Replay}
 	for _, device := range envelope.Payload.Devices {
-		resolved, err := processor.resolveChild(ctx, scope, device.DeviceID)
+		sourceKey := strings.TrimSpace(device.DeviceID)
+		var resolved *ResolvedDevice
+		deviceID, err := processor.identities.ResolveDevice(ctx, gateway, sourceKey)
 		if err != nil {
-			return ProcessingResult{}, err
+			return ProcessingResult{}, fmt.Errorf("resolve MQTT Device %s: %w", sourceKey, err)
+		}
+		if deviceID != "" {
+			resolved = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
 		}
 		for _, point := range device.Points {
-			partition := sourcePartition(envelope.GatewayID, device.DeviceID, point.Code)
-			eventID, eventErr := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
-			if eventErr != nil {
-				return ProcessingResult{}, permanentMessage(eventErr)
-			}
-			valueType, typeErr := wireValueType(point.Value)
-			if typeErr != nil {
-				return ProcessingResult{}, permanentMessage(typeErr)
-			}
+			pointCode := strings.TrimSpace(point.Code)
 			var resolvedPoint *ResolvedPoint
 			if resolved != nil {
-				if resolvedPoint, err = processor.bindings.ResolvePoint(ctx, resolved.DeviceID, strings.TrimSpace(point.Code)); err != nil {
-					return ProcessingResult{}, fmt.Errorf("resolve MQTT point %s/%s: %w", device.DeviceID, point.Code, err)
+				if resolvedPoint, err = processor.identities.ResolvePoint(ctx, gateway, deviceID, pointCode); err != nil {
+					return ProcessingResult{}, fmt.Errorf("resolve MQTT point %s/%s: %w", sourceKey, pointCode, err)
 				}
 			}
-			observation := Observation{
-				SourceID: scope.GatewayID, Device: resolved, Point: resolvedPoint,
-				SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: strings.TrimSpace(device.DeviceID), TelemetryKey: strings.TrimSpace(point.Code),
+			partition := sourcePartition(gateway.ID, sourceKey, pointCode)
+			eventID, err := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
+			if err != nil {
+				return ProcessingResult{}, permanentMessage(err)
+			}
+			valueType, err := wireValueType(point.Value)
+			if err != nil {
+				return ProcessingResult{}, permanentMessage(err)
+			}
+			receipt, err := processor.runtime.AcceptObservation(ctx, Observation{
+				SourceID: gateway.ID, Device: resolved, Point: resolvedPoint,
+				SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: sourceKey, TelemetryKey: pointCode,
 				Value: point.Value, ValueType: valueType, Unit: point.Unit, WireQuality: point.Quality, SampledAt: unixMillisRFC3339(device.DeviceTimestamp),
 				SourcePosition: SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
-			}
-			receipt, acceptErr := processor.runtime.AcceptObservation(ctx, observation)
-			if acceptErr != nil {
-				return ProcessingResult{}, fmt.Errorf("accept MQTT point %s/%s: %w", device.DeviceID, point.Code, acceptErr)
+			})
+			if err != nil {
+				return ProcessingResult{}, fmt.Errorf("accept MQTT point %s/%s: %w", sourceKey, pointCode, err)
 			}
 			result.PointCount++
 			switch receipt.Status {
@@ -126,98 +181,22 @@ func (processor *Processor) processTelemetry(ctx context.Context, scope TopicSco
 			case "REJECTED":
 				result.Rejected++
 			default:
-				return ProcessingResult{}, fmt.Errorf("unexpected S2 receipt status %s", receipt.Status)
+				return ProcessingResult{}, fmt.Errorf("unexpected Telemetry receipt status %s", receipt.Status)
 			}
 		}
 	}
 	return result, nil
 }
 
-func (processor *Processor) processState(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
-	envelope, err := DecodeStateEnvelope(payload, scope)
-	if err != nil {
-		return ProcessingResult{}, permanentMessage(err)
-	}
-	rawPayload, _ := json.Marshal(envelope.Payload)
-	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
-		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
-		MessageID: envelope.MessageID, EvidenceType: "STATE", ObservedAt: unixMillisRFC3339(envelope.Timestamp), Sequence: int64(envelope.Sequence), Payload: rawPayload,
-	}); err != nil {
-		return ProcessingResult{}, fmt.Errorf("accept MQTT state evidence: %w", err)
-	}
-	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeState, EvidenceCount: 1}
-	for _, device := range envelope.Payload.Devices {
-		if device.Online == nil || !*device.Online {
-			continue
-		}
-		emitted, err := processor.emitSourceActivity(ctx, scope, envelope.MessageID, envelope.Timestamp, device.DeviceID, "state")
-		if err != nil {
-			return ProcessingResult{}, err
-		}
-		if emitted {
-			result.EvidenceCount++
-		}
-	}
-	return result, nil
-}
-
-func (processor *Processor) processHeartbeat(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
-	envelope, err := DecodeHeartbeatEnvelope(payload, scope)
-	if err != nil {
-		return ProcessingResult{}, permanentMessage(err)
-	}
-	rawPayload, _ := json.Marshal(envelope.Payload)
-	if err = processor.runtime.AcceptGatewayEvidence(ctx, GatewayEvidence{
-		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
-		MessageID: envelope.MessageID, EvidenceType: "HEARTBEAT", ObservedAt: unixMillisRFC3339(envelope.Timestamp), Sequence: int64(envelope.Sequence), Payload: rawPayload,
-	}); err != nil {
-		return ProcessingResult{}, fmt.Errorf("accept MQTT heartbeat evidence: %w", err)
-	}
-	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeHeartbeat, EvidenceCount: 1}
-	for _, deviceID := range envelope.Payload.ConnectedDevices {
-		emitted, err := processor.emitSourceActivity(ctx, scope, envelope.MessageID, envelope.Timestamp, deviceID, "heartbeat")
-		if err != nil {
-			return ProcessingResult{}, err
-		}
-		if emitted {
-			result.EvidenceCount++
-		}
-	}
-	return result, nil
-}
-
-func (processor *Processor) processEvent(ctx context.Context, scope TopicScope, payload []byte) (ProcessingResult, error) {
-	envelope, err := DecodeEventEnvelope(payload, scope)
-	if err != nil {
-		return ProcessingResult{}, permanentMessage(err)
-	}
-	if err = processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
-		TenantID: scope.TenantID, SiteID: scope.SiteID, GatewayID: scope.GatewayID,
-		MessageID: envelope.MessageID, Sequence: int64(envelope.Sequence), EventType: strings.TrimSpace(envelope.Payload.EventType),
-		SourceType: strings.TrimSpace(envelope.Payload.SourceType), SourceID: strings.TrimSpace(envelope.Payload.SourceID), EventTime: unixMillisRFC3339(envelope.Payload.EventTime),
-		Severity: strings.ToUpper(strings.TrimSpace(envelope.Payload.Severity)), Data: append(json.RawMessage(nil), envelope.Payload.Data...),
+func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, envelope EventEnvelope) (ProcessingResult, error) {
+	event := envelope.Payload
+	if err := processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+		TenantID: gateway.TenantID, SiteID: gateway.SiteID, GatewayID: gateway.ID,
+		MessageID: envelope.MessageID, Sequence: int64(envelope.Sequence), EventType: strings.TrimSpace(event.EventType),
+		SourceType: strings.TrimSpace(event.SourceType), SourceID: strings.TrimSpace(event.SourceID), EventTime: unixMillisRFC3339(event.EventTime),
+		Severity: strings.ToUpper(strings.TrimSpace(event.Severity)), Data: append(json.RawMessage(nil), event.Data...),
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}
-	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent, EvidenceCount: 1}, nil
-}
-
-// emitSourceActivity reports Presence for a registered child Device; an unregistered one
-// has no Presence to report.
-func (processor *Processor) emitSourceActivity(ctx context.Context, scope TopicScope, messageID string, observedAt int64, externalDeviceID, discriminator string) (bool, error) {
-	device, err := processor.resolveChild(ctx, scope, externalDeviceID)
-	if err != nil || device == nil {
-		return false, err
-	}
-	sourceEventID, err := deterministicEvidenceEventID(messageID, observedAt, discriminator+":"+strings.TrimSpace(externalDeviceID))
-	if err != nil {
-		return false, permanentMessage(err)
-	}
-	_, err = processor.runtime.AcceptPresenceEvidence(ctx, PresenceEvidence{
-		DeviceID: device.DeviceID, SignalType: "SOURCE_ACTIVITY", ObservedAt: unixMillisRFC3339(observedAt), SourceEventID: sourceEventID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("accept MQTT Presence evidence for device %s: %w", externalDeviceID, err)
-	}
-	return true, nil
+	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent}, nil
 }
