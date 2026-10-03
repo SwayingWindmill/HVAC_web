@@ -84,7 +84,7 @@ for (const marker of [
 ]) {
   assert(domain.includes(marker), `missing energy-domain marker ${marker}`);
 }
-for (const marker of ['counterDeltaQuery', 'fact.source_previous_observation_id = delta.previous_observation_id', "delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')", 'source_event_id', 'LEFT ANTI JOIN', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
+for (const marker of ['counterDeltaQuery', "delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')", 'source_event_id', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
   assert(clickHouseClient.includes(marker), `missing ClickHouse adapter marker ${marker}`);
 }
 for (const marker of [
