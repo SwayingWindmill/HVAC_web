@@ -128,7 +128,7 @@ try {
     FROM telemetry_runtime.source_observations
     WHERE source_partition LIKE 'tb-ticket-04%'
   `);
-  if (report.assertions.rejectedAndQuarantined !== '3|1|0|1') {
+  if (report.assertions.rejectedAndQuarantined !== '3|1|1|1') {
     throw new Error(`unexpected rejected/quarantine evidence ${report.assertions.rejectedAndQuarantined}`);
   }
   report.assertions.historyOutbox = psql(`
@@ -142,7 +142,7 @@ try {
     FROM telemetry_runtime.telemetry_history_outbox
     WHERE payload ->> 'source_partition' LIKE 'tb-ticket-04%'
   `);
-  if (report.assertions.historyOutbox !== '9|9|0|8') {
+  if (report.assertions.historyOutbox !== '10|10|1|9') {
     throw new Error(`unexpected history outbox state ${report.assertions.historyOutbox}`);
   }
   report.assertions.relayRetry = psql(`

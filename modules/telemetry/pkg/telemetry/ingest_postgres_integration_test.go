@@ -73,7 +73,7 @@ func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
 		t.Fatalf("replay receipt=%#v", replayReceipt)
 	}
 	assertObservationRow(t, admin, replay.Position.EventID, "ACCEPTED", "GOOD", "HISTORY_REPLAY", true)
-	assertHistoryOutbox(t, admin, replay.Position.EventID, "ACCEPTED", "", siteA, deviceA, true)
+	assertHistoryOutbox(t, admin, replay.Position.EventID, "ACCEPTED", tenantA, siteA, deviceA, true)
 
 	duplicate, err := store.AcceptHistoricalObservation(ctx, replay)
 	if err != nil {
@@ -348,7 +348,7 @@ ORDER BY q.detected_at DESC LIMIT 1
 		!extremeFutureReceipt.PositionAdvanced {
 		t.Fatalf("extreme future-clock receipt=%#v", extremeFutureReceipt)
 	}
-	assertObservationRow(t, admin, extremeFuture.Position.EventID, "REJECTED", "REJECTED", "PUSH", false)
+	assertObservationRow(t, admin, extremeFuture.Position.EventID, "REJECTED", "INVALID", "PUSH", false)
 	var extremeFutureSampledAt time.Time
 	if err := admin.QueryRow(ctx, `SELECT sampled_at FROM telemetry_runtime.source_observations WHERE source_event_id = $1::uuid`, extremeFuture.Position.EventID).Scan(&extremeFutureSampledAt); err != nil {
 		t.Fatal(err)
@@ -561,10 +561,10 @@ WHERE source_event_id = $1::uuid
 	}
 }
 
-func assertHistoryOutbox(t *testing.T, admin *pgxpool.Pool, sourceEventID, status, organizationID, siteID, deviceID string, valuePresent bool) {
+func assertHistoryOutbox(t *testing.T, admin *pgxpool.Pool, sourceEventID, status, tenantID, siteID, deviceID string, valuePresent bool) {
 	t.Helper()
 	var deliveryState, actualStatus string
-	var actualOrganizationID, actualSiteID, actualDeviceID, value *string
+	var actualTenantID, actualSiteID, actualDeviceID, value *string
 	if err := admin.QueryRow(t.Context(), `
 SELECT delivery_state,
        payload ->> 'acceptance_status',
@@ -574,7 +574,7 @@ SELECT delivery_state,
        COALESCE(payload ->> 'value_json', payload ->> 'value_number', payload ->> 'value_string', payload ->> 'value_boolean')
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE payload ->> 'source_event_id' = $1
-`, sourceEventID).Scan(&deliveryState, &actualStatus, &actualOrganizationID, &actualSiteID, &actualDeviceID, &value); err != nil {
+`, sourceEventID).Scan(&deliveryState, &actualStatus, &actualTenantID, &actualSiteID, &actualDeviceID, &value); err != nil {
 		t.Fatal(err)
 	}
 	optionalMatches := func(actual *string, expected string) bool {
@@ -584,9 +584,9 @@ WHERE payload ->> 'source_event_id' = $1
 		return actual != nil && *actual == expected
 	}
 	if deliveryState != "PENDING" || actualStatus != status ||
-		!optionalMatches(actualOrganizationID, organizationID) || !optionalMatches(actualSiteID, siteID) || !optionalMatches(actualDeviceID, deviceID) ||
+		!optionalMatches(actualTenantID, tenantID) || !optionalMatches(actualSiteID, siteID) || !optionalMatches(actualDeviceID, deviceID) ||
 		(value != nil) != valuePresent {
-		t.Fatalf("history outbox state=%s status=%s organization=%v site=%v device=%v value=%v", deliveryState, actualStatus, actualOrganizationID, actualSiteID, actualDeviceID, value)
+		t.Fatalf("history outbox state=%s status=%s tenant=%v site=%v device=%v value=%v", deliveryState, actualStatus, actualTenantID, actualSiteID, actualDeviceID, value)
 	}
 }
 
