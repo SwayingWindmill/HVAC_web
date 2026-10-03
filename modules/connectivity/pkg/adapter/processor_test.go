@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -30,20 +29,29 @@ func (client *fakeRuntimeClient) AcceptRuntimeEvent(context.Context, RuntimeEven
 	return nil
 }
 
-func TestProcessorRejectsUnknownChildWithoutCreatingIdentity(t *testing.T) {
-	client := &fakeRuntimeClient{}
+func TestProcessorSendsUnregisteredIdentityToTelemetryQuarantine(t *testing.T) {
+	client := &fakeRuntimeClient{statuses: []string{"QUARANTINED", "QUARANTINED"}}
 	processor, err := NewProcessor("018f3e00-0000-7000-8000-000000000101", newTestBindingAuthorizer([]GatewayScopeConfig{{GatewayID: "EG8200-COMMERCIAL-001", TenantID: testTenantID, SiteID: testSiteID}}), client)
 	if err != nil {
 		t.Fatal(err)
 	}
 	topic := "energy/v1/" + testTenantID + "/" + testSiteID + "/EG8200-COMMERCIAL-001/telemetry"
-	payload := []byte(`{"schemaVersion":"1.0","messageId":"` + testMessageID + `","gatewayId":"EG8200-COMMERCIAL-001","timestamp":1786352400000,"sequence":42,"replay":false,"payload":{"devices":[{"deviceId":"UNKNOWN-CHILD","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`)
-	_, err = processor.Process(context.Background(), topic, payload)
-	if err == nil || !strings.Contains(err.Error(), "not pre-registered") {
-		t.Fatalf("unknown child error=%v", err)
+	payload := []byte(`{"schemaVersion":"1.0","messageId":"` + testMessageID + `","gatewayId":"EG8200-COMMERCIAL-001","timestamp":1786352400000,"sequence":42,"replay":false,"payload":{"devices":[` +
+		`{"deviceId":"UNKNOWN-CHILD","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]},` +
+		`{"deviceId":"METER-01","deviceTimestamp":1786352399000,"points":[{"code":"unregistered_point","value":1,"quality":0,"unit":"kW"}]}]}}`)
+	result, err := processor.Process(context.Background(), topic, payload)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(client.observations) != 0 {
-		t.Fatalf("unknown child reached S2: %#v", client.observations)
+	if result.Quarantined != 2 || len(client.observations) != 2 {
+		t.Fatalf("result=%#v observations=%#v", result, client.observations)
+	}
+	unknownDevice, unknownPoint := client.observations[0], client.observations[1]
+	if unknownDevice.Device != nil || unknownDevice.Point != nil || unknownDevice.ExternalID != "UNKNOWN-CHILD" {
+		t.Fatalf("unregistered Device observation=%#v", unknownDevice)
+	}
+	if unknownPoint.Device == nil || unknownPoint.Device.DeviceID != testDeviceID || unknownPoint.Point != nil {
+		t.Fatalf("unregistered Point observation=%#v", unknownPoint)
 	}
 }
 
@@ -66,6 +74,9 @@ func TestProcessorMapsMQTTPointToStableS2SourcePosition(t *testing.T) {
 		t.Fatalf("observations=%#v", client.observations)
 	}
 	first := client.observations[0]
+	if first.SourceID != "EG8200-COMMERCIAL-001" || *first.Device != (ResolvedDevice{TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID}) || first.Point == nil || first.Point.PointID != testPointID {
+		t.Fatalf("first observation identity=%#v device=%#v point=%#v", first, first.Device, first.Point)
+	}
 	if first.SourcePath != "PUSH" || first.ExternalID != "METER-01" || first.TelemetryKey != "active_power" || first.SourcePosition.Partition != "mqtt:EG8200-COMMERCIAL-001:METER-01:active_power" || first.SourcePosition.Offset != 42 || !uuidV7Pattern.MatchString(first.SourcePosition.EventID) {
 		t.Fatalf("first observation=%#v", first)
 	}

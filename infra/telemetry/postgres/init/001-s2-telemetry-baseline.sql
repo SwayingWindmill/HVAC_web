@@ -14,55 +14,20 @@ $$;
 REVOKE ALL ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) TO s2_telemetry_runtime, s2_telemetry_relay, s2_telemetry_history;
 
-CREATE TABLE IF NOT EXISTS telemetry_runtime.registry_device_bindings (
+-- A Device whose observations Telemetry evaluates. Its Tenant and Site come from the
+-- source that resolved it (Connectivity, ADR 0016); Telemetry keeps no Registry copy.
+CREATE TABLE IF NOT EXISTS telemetry_runtime.devices (
   device_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(device_id)),
   tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
-  external_entity_type text NOT NULL CHECK (external_entity_type IN ('DEVICE', 'ASSET')),
-  external_id text NOT NULL CHECK (char_length(external_id) BETWEEN 1 AND 512),
-  binding_status text NOT NULL CHECK (binding_status IN ('ACTIVE', 'QUARANTINED', 'RETIRED')),
-  binding_revision bigint NOT NULL CHECK (binding_revision >= 1),
-  source_registry_revision bigint NOT NULL CHECK (source_registry_revision >= 1),
-  valid_from timestamptz NOT NULL,
-  valid_to timestamptz,
-  updated_at timestamptz NOT NULL,
-  CHECK (valid_to IS NULL OR valid_to > valid_from)
+  updated_at timestamptz NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS registry_device_bindings_active_external_key_uidx
-  ON telemetry_runtime.registry_device_bindings (integration_instance_id, external_entity_type, external_id)
-  WHERE binding_status = 'ACTIVE' AND valid_to IS NULL;
-CREATE INDEX IF NOT EXISTS registry_device_bindings_tenant_idx
-  ON telemetry_runtime.registry_device_bindings (tenant_id, site_id, device_id);
-
-CREATE TABLE IF NOT EXISTS telemetry_runtime.iam_scope_projections (
-  projection_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(projection_id)),
-  tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
-  principal_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(principal_id)),
-  site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
-  telemetry_key text CHECK (telemetry_key IS NULL OR telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
-  action text NOT NULL CHECK (action IN ('SNAPSHOT_READ', 'BATCH_READ', 'SUBSCRIBE', 'CURSOR_USE', 'CURSOR_CHECKPOINT')),
-  decision text NOT NULL CHECK (decision IN ('ALLOW', 'DENY')),
-  policy_revision bigint NOT NULL CHECK (policy_revision >= 1),
-  source_event_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(source_event_id)),
-  valid_until timestamptz NOT NULL,
-  revoked_at timestamptz,
-  updated_at timestamptz NOT NULL,
-  CHECK (revoked_at IS NULL OR revoked_at <= valid_until)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS iam_scope_projections_identity_uidx
-  ON telemetry_runtime.iam_scope_projections
-  (tenant_id, principal_id, device_id, telemetry_key, action, policy_revision) NULLS NOT DISTINCT;
-CREATE INDEX IF NOT EXISTS iam_scope_projections_lookup_idx
-  ON telemetry_runtime.iam_scope_projections
-  (tenant_id, principal_id, device_id, action, valid_until)
-  WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS devices_tenant_idx
+  ON telemetry_runtime.devices (tenant_id, site_id, device_id);
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_policies (
-  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.devices(device_id),
   policy_revision bigint NOT NULL CHECK (policy_revision >= 1),
   online_within_seconds integer NOT NULL CHECK (online_within_seconds BETWEEN 1 AND 86400),
   offline_after_seconds integer NOT NULL CHECK (offline_after_seconds > online_within_seconds AND offline_after_seconds <= 604800),
@@ -71,7 +36,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_policies (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.freshness_policies (
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid NOT NULL REFERENCES telemetry_runtime.devices(device_id),
   telemetry_key text NOT NULL CHECK (telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
   policy_revision bigint NOT NULL CHECK (policy_revision >= 1),
   fresh_within_seconds integer NOT NULL CHECK (fresh_within_seconds BETWEEN 1 AND 604800),
@@ -81,23 +46,23 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.freshness_policies (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.source_positions (
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
+  source_id text NOT NULL CHECK (char_length(source_id) BETWEEN 1 AND 256),
   source_partition text NOT NULL CHECK (char_length(source_partition) BETWEEN 1 AND 256),
   source_offset bigint NOT NULL CHECK (source_offset >= 0),
   source_event_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(source_event_id)),
   observed_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  PRIMARY KEY (integration_instance_id, source_partition),
-  UNIQUE (integration_instance_id, source_event_id)
+  PRIMARY KEY (source_id, source_partition),
+  UNIQUE (source_id, source_event_id)
 );
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.source_observations (
   observation_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(observation_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
+  source_id text NOT NULL CHECK (char_length(source_id) BETWEEN 1 AND 256),
   source_event_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(source_event_id)),
   source_partition text NOT NULL CHECK (char_length(source_partition) BETWEEN 1 AND 256),
   source_offset bigint NOT NULL CHECK (source_offset >= 0),
-  device_id uuid REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid REFERENCES telemetry_runtime.devices(device_id),
   telemetry_key text NOT NULL CHECK (telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
   value jsonb,
   value_type text CHECK (value_type IS NULL OR value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')),
@@ -108,8 +73,8 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.source_observations (
   quality_reasons text[] NOT NULL DEFAULT '{}',
   payload_sha256 text NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
   created_at timestamptz NOT NULL,
-  UNIQUE (integration_instance_id, source_event_id),
-  UNIQUE (integration_instance_id, source_partition, source_offset),
+  UNIQUE (source_id, source_event_id),
+  UNIQUE (source_id, source_partition, source_offset),
   CHECK (received_at >= sampled_at - interval '24 hours')
 );
 
@@ -119,10 +84,10 @@ CREATE INDEX IF NOT EXISTS source_observations_device_key_time_idx
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.ingest_quarantine (
   quarantine_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(quarantine_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
+  source_id text NOT NULL CHECK (char_length(source_id) BETWEEN 1 AND 256),
   external_entity_type text NOT NULL CHECK (external_entity_type IN ('DEVICE', 'ASSET')),
   external_id text NOT NULL CHECK (char_length(external_id) BETWEEN 1 AND 512),
-  device_id uuid REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid REFERENCES telemetry_runtime.devices(device_id),
   telemetry_key text CHECK (telemetry_key IS NULL OR telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
   reason_code text NOT NULL CHECK (reason_code IN ('MAPPING_NOT_FOUND', 'MAPPING_CONFLICT', 'MAPPING_QUARANTINED', 'MAPPING_RETIRED', 'SOURCE_UNTRUSTED', 'TYPE_MISMATCH', 'UNIT_MISMATCH', 'OUT_OF_RANGE', 'CLOCK_AHEAD', 'CLOCK_BEHIND')),
   evidence jsonb NOT NULL,
@@ -133,11 +98,11 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.ingest_quarantine (
 );
 
 CREATE INDEX IF NOT EXISTS ingest_quarantine_open_idx
-  ON telemetry_runtime.ingest_quarantine (integration_instance_id, external_entity_type, external_id, detected_at)
+  ON telemetry_runtime.ingest_quarantine (source_id, external_entity_type, external_id, detected_at)
   WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.latest_accepted_telemetry (
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid NOT NULL REFERENCES telemetry_runtime.devices(device_id),
   telemetry_key text NOT NULL CHECK (telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
   business_revision bigint NOT NULL CHECK (business_revision >= 1),
   value jsonb NOT NULL,
@@ -155,7 +120,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.latest_accepted_telemetry (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.device_presence (
-  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.devices(device_id),
   business_revision bigint NOT NULL CHECK (business_revision >= 1),
   applicability text NOT NULL CHECK (applicability IN ('APPLICABLE', 'NOT_APPLICABLE')),
   current_state text CHECK (current_state IS NULL OR current_state IN ('ONLINE', 'OFFLINE', 'UNKNOWN')),
@@ -168,7 +133,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.device_presence (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.device_observation_snapshots (
-  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid PRIMARY KEY REFERENCES telemetry_runtime.devices(device_id),
   business_revision bigint NOT NULL CHECK (business_revision >= 1),
   evaluated_at timestamptz NOT NULL,
   evaluation_availability text NOT NULL CHECK (evaluation_availability IN ('AVAILABLE', 'UNAVAILABLE')),
@@ -186,7 +151,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_subscriptions (
   client_subscription_id text NOT NULL CHECK (char_length(client_subscription_id) BETWEEN 1 AND 128 AND client_subscription_id ~ '^[A-Za-z0-9_.:-]+$'),
   principal_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(principal_id)),
   tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid NOT NULL REFERENCES telemetry_runtime.devices(device_id),
   keys jsonb NOT NULL CHECK (jsonb_typeof(keys) = 'array'),
   scope_sha256 text NOT NULL CHECK (scope_sha256 ~ '^[a-f0-9]{64}$'),
   policy_revision bigint NOT NULL CHECK (policy_revision >= 1),
@@ -225,7 +190,7 @@ CREATE INDEX IF NOT EXISTS recovery_cursors_subscription_expiry_idx
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_publication_outbox (
   event_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(event_id)),
-  device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
+  device_id uuid NOT NULL REFERENCES telemetry_runtime.devices(device_id),
   business_revision bigint NOT NULL CHECK (business_revision >= 1),
   subscription_id text REFERENCES telemetry_runtime.telemetry_subscriptions(subscription_id),
   event_family text NOT NULL CHECK (event_family = 'hvac.telemetry.device-snapshot.v1'),
@@ -245,10 +210,8 @@ CREATE INDEX IF NOT EXISTS telemetry_publication_outbox_pending_idx
   ON telemetry_runtime.telemetry_publication_outbox (available_at, event_id)
   WHERE delivery_state = 'PENDING';
 
-ALTER TABLE telemetry_runtime.registry_device_bindings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry_runtime.registry_device_bindings FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry_runtime.iam_scope_projections ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry_runtime.iam_scope_projections FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.devices FORCE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.presence_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.presence_policies FORCE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.freshness_policies ENABLE ROW LEVEL SECURITY;
@@ -272,10 +235,8 @@ ALTER TABLE telemetry_runtime.recovery_cursors FORCE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.telemetry_publication_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_runtime.telemetry_publication_outbox FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY registry_device_bindings_migrator_all ON telemetry_runtime.registry_device_bindings FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
-CREATE POLICY registry_device_bindings_runtime_all ON telemetry_runtime.registry_device_bindings FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
-CREATE POLICY iam_scope_projections_migrator_all ON telemetry_runtime.iam_scope_projections FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
-CREATE POLICY iam_scope_projections_runtime_all ON telemetry_runtime.iam_scope_projections FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
+CREATE POLICY devices_migrator_all ON telemetry_runtime.devices FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
+CREATE POLICY devices_runtime_all ON telemetry_runtime.devices FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
 CREATE POLICY presence_policies_migrator_all ON telemetry_runtime.presence_policies FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
 CREATE POLICY presence_policies_runtime_all ON telemetry_runtime.presence_policies FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
 CREATE POLICY freshness_policies_migrator_all ON telemetry_runtime.freshness_policies FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);

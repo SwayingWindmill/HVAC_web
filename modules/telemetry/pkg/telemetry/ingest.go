@@ -59,14 +59,10 @@ const (
 type QuarantineReason string
 
 const (
-	QuarantineMappingNotFound         QuarantineReason = "MAPPING_NOT_FOUND"
-	QuarantineMappingConflict         QuarantineReason = "MAPPING_CONFLICT"
-	QuarantineMappingQuarantined      QuarantineReason = "MAPPING_QUARANTINED"
-	QuarantineMappingRetired          QuarantineReason = "MAPPING_RETIRED"
-	QuarantinePointMappingNotFound    QuarantineReason = "POINT_MAPPING_NOT_FOUND"
-	QuarantinePointMappingConflict    QuarantineReason = "POINT_MAPPING_CONFLICT"
-	QuarantinePointMappingQuarantined QuarantineReason = "POINT_MAPPING_QUARANTINED"
-	QuarantinePolicyNotConfigured     QuarantineReason = "POLICY_NOT_CONFIGURED"
+	QuarantineMappingNotFound      QuarantineReason = "MAPPING_NOT_FOUND"
+	QuarantineMappingConflict      QuarantineReason = "MAPPING_CONFLICT"
+	QuarantinePointMappingNotFound QuarantineReason = "POINT_MAPPING_NOT_FOUND"
+	QuarantinePolicyNotConfigured  QuarantineReason = "POLICY_NOT_CONFIGURED"
 )
 
 type SourcePosition struct {
@@ -80,49 +76,41 @@ type SourcePositionHead struct {
 	EventID string
 }
 
+// ObservationCandidate is one value from a source. Live sources (Connectivity) send the
+// Device and Point they resolved from Registry; history replay names only the Device and
+// key and Telemetry resolves the Point from its own last accepted mapping.
 type ObservationCandidate struct {
-	IntegrationInstanceID string
-	SourcePath            SourcePath
-	ExternalEntityType    string
-	ExternalID            string
-	TelemetryKey          string
-	Value                 json.RawMessage
-	ValueType             string
-	Unit                  *string
-	WireQuality           uint8
-	SampledAt             time.Time
-	ReceivedAt            time.Time
-	Position              SourcePosition
+	SourceID           string
+	SourcePath         SourcePath
+	ExternalEntityType string
+	ExternalID         string
+	Device             *ResolvedDevice
+	Point              *ResolvedPoint
+	TelemetryKey       string
+	Value              json.RawMessage
+	ValueType          string
+	Unit               *string
+	WireQuality        uint8
+	SampledAt          time.Time
+	ReceivedAt         time.Time
+	Position           SourcePosition
 }
 
-type RuntimeBinding struct {
-	TenantID              string
-	DeviceID              string
-	SiteID                string
-	IntegrationInstanceID string
-	ExternalEntityType    string
-	ExternalID            string
-	Status                string
-	ValidFrom             time.Time
-	ValidTo               *time.Time
+type ResolvedDevice struct {
+	TenantID string
+	SiteID   string
+	DeviceID string
 }
 
-type RuntimePointBinding struct {
-	TenantID               string
-	SiteID                 string
+type ResolvedPoint struct {
 	PointID                string
 	SensorID               *string
-	DeviceID               string
-	TelemetryKey           string
 	PointType              string
 	ValueType              string
 	Unit                   *string
 	CounterDecreaseMode    *string
 	CounterRolloverModulus *float64
-	Status                 string
 	PointRevision          int64
-	ValidFrom              time.Time
-	ValidTo                *time.Time
 }
 
 type ObservationPolicy struct {
@@ -137,8 +125,9 @@ type ObservationPolicy struct {
 }
 
 type ObservationFacts struct {
-	Bindings         []RuntimeBinding
-	PointBindings    []RuntimePointBinding
+	Device           *ResolvedDevice
+	DeviceConflict   bool
+	Point            *ResolvedPoint
 	Policy           *ObservationPolicy
 	CurrentPosition  *SourcePositionHead
 	EventAlreadySeen bool
@@ -180,33 +169,9 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 		}
 	}
 
-	binding, quarantine := resolveRuntimeBinding(candidate, facts.Bindings)
-	if quarantine != "" {
-		return ObservationDecision{
-			Status: ObservationQuarantined, Quality: QualityInvalid, QuarantineReason: quarantine, AdvancePosition: true,
-		}
-	}
-	decision := ObservationDecision{
-		TenantID: binding.TenantID, DeviceID: binding.DeviceID, SiteID: binding.SiteID,
-		Status: ObservationQuarantined, Quality: QualityInvalid, AdvancePosition: true,
-	}
-	pointBinding, pointQuarantine := resolveRuntimePointBinding(candidate, binding, facts.PointBindings)
-	if pointQuarantine != "" {
-		decision.QuarantineReason = pointQuarantine
+	decision, resolved := resolveObservationIdentity(facts)
+	if !resolved {
 		return decision
-	}
-	decision.PointID = pointBinding.PointID
-	decision.PointType = pointBinding.PointType
-	decision.PointRevision = pointBinding.PointRevision
-	if pointBinding.CounterDecreaseMode != nil {
-		decision.CounterDecreaseMode = *pointBinding.CounterDecreaseMode
-	}
-	if pointBinding.CounterRolloverModulus != nil {
-		modulus := *pointBinding.CounterRolloverModulus
-		decision.CounterRolloverModulus = &modulus
-	}
-	if pointBinding.SensorID != nil {
-		decision.SensorID = *pointBinding.SensorID
 	}
 	if facts.Policy == nil || facts.Policy.Revision < 1 {
 		decision.QuarantineReason = QuarantinePolicyNotConfigured
@@ -258,31 +223,9 @@ func EvaluateHistoricalObservation(candidate ObservationCandidate, facts Observa
 		}
 	}
 
-	binding, quarantine := resolveRuntimeBinding(candidate, facts.Bindings)
-	if quarantine != "" {
-		return ObservationDecision{Status: ObservationQuarantined, Quality: QualityInvalid, QuarantineReason: quarantine, AdvancePosition: true}
-	}
-	decision := ObservationDecision{
-		TenantID: binding.TenantID, DeviceID: binding.DeviceID, SiteID: binding.SiteID,
-		Status: ObservationQuarantined, Quality: QualityInvalid, AdvancePosition: true,
-	}
-	pointBinding, pointQuarantine := resolveRuntimePointBinding(candidate, binding, facts.PointBindings)
-	if pointQuarantine != "" {
-		decision.QuarantineReason = pointQuarantine
+	decision, resolved := resolveObservationIdentity(facts)
+	if !resolved {
 		return decision
-	}
-	decision.PointID = pointBinding.PointID
-	decision.PointType = pointBinding.PointType
-	decision.PointRevision = pointBinding.PointRevision
-	if pointBinding.CounterDecreaseMode != nil {
-		decision.CounterDecreaseMode = *pointBinding.CounterDecreaseMode
-	}
-	if pointBinding.CounterRolloverModulus != nil {
-		modulus := *pointBinding.CounterRolloverModulus
-		decision.CounterRolloverModulus = &modulus
-	}
-	if pointBinding.SensorID != nil {
-		decision.SensorID = *pointBinding.SensorID
 	}
 	if facts.Policy == nil || facts.Policy.Revision < 1 {
 		decision.QuarantineReason = QuarantinePolicyNotConfigured
@@ -313,78 +256,38 @@ func terminalObservation(status ObservationStatus, quality ObservationQuality, r
 	return ObservationDecision{Status: status, Quality: quality, QualityReasons: []QualityReason{reason}, AdvancePosition: advance}
 }
 
-func resolveRuntimeBinding(candidate ObservationCandidate, bindings []RuntimeBinding) (RuntimeBinding, QuarantineReason) {
-	active := make([]RuntimeBinding, 0, 1)
-	hasQuarantined := false
-	hasRetired := false
-	observedAt := candidate.ReceivedAt.UTC()
-	for _, binding := range bindings {
-		if binding.IntegrationInstanceID != candidate.IntegrationInstanceID || binding.ExternalEntityType != candidate.ExternalEntityType || binding.ExternalID != candidate.ExternalID {
-			continue
-		}
-		switch binding.Status {
-		case "ACTIVE":
-			if !binding.ValidFrom.IsZero() && observedAt.Before(binding.ValidFrom.UTC()) {
-				continue
-			}
-			if binding.ValidTo != nil && !observedAt.Before(binding.ValidTo.UTC()) {
-				hasRetired = true
-				continue
-			}
-			active = append(active, binding)
-		case "QUARANTINED":
-			hasQuarantined = true
-		case "RETIRED":
-			hasRetired = true
-		}
+// resolveObservationIdentity starts a quarantined decision for the resolved Device and
+// Point; resolved is false when the observation must stay quarantined for its identity.
+func resolveObservationIdentity(facts ObservationFacts) (ObservationDecision, bool) {
+	decision := ObservationDecision{Status: ObservationQuarantined, Quality: QualityInvalid, AdvancePosition: true}
+	switch {
+	case facts.DeviceConflict:
+		decision.QuarantineReason = QuarantineMappingConflict
+		return decision, false
+	case facts.Device == nil:
+		decision.QuarantineReason = QuarantineMappingNotFound
+		return decision, false
 	}
-	if len(active) > 1 {
-		return RuntimeBinding{}, QuarantineMappingConflict
+	decision.TenantID, decision.SiteID, decision.DeviceID = facts.Device.TenantID, facts.Device.SiteID, facts.Device.DeviceID
+	if facts.Point == nil {
+		decision.QuarantineReason = QuarantinePointMappingNotFound
+		return decision, false
 	}
-	if len(active) == 1 {
-		return active[0], ""
+	point := facts.Point
+	decision.PointID = point.PointID
+	decision.PointType = point.PointType
+	decision.PointRevision = point.PointRevision
+	if point.CounterDecreaseMode != nil {
+		decision.CounterDecreaseMode = *point.CounterDecreaseMode
 	}
-	if hasQuarantined {
-		return RuntimeBinding{}, QuarantineMappingQuarantined
+	if point.CounterRolloverModulus != nil {
+		modulus := *point.CounterRolloverModulus
+		decision.CounterRolloverModulus = &modulus
 	}
-	if hasRetired {
-		return RuntimeBinding{}, QuarantineMappingRetired
+	if point.SensorID != nil {
+		decision.SensorID = *point.SensorID
 	}
-	return RuntimeBinding{}, QuarantineMappingNotFound
-}
-
-func resolveRuntimePointBinding(candidate ObservationCandidate, deviceBinding RuntimeBinding, bindings []RuntimePointBinding) (RuntimePointBinding, QuarantineReason) {
-	matched := make([]RuntimePointBinding, 0, 1)
-	hasQuarantined := false
-	sampledAt := candidate.SampledAt.UTC()
-	for _, binding := range bindings {
-		if binding.TenantID != deviceBinding.TenantID || binding.SiteID != deviceBinding.SiteID ||
-			binding.DeviceID != deviceBinding.DeviceID || binding.TelemetryKey != candidate.TelemetryKey {
-			continue
-		}
-		if !binding.ValidFrom.IsZero() && sampledAt.Before(binding.ValidFrom.UTC()) {
-			continue
-		}
-		if binding.ValidTo != nil && !sampledAt.Before(binding.ValidTo.UTC()) {
-			continue
-		}
-		switch binding.Status {
-		case "ACTIVE", "RETIRED":
-			matched = append(matched, binding)
-		case "QUARANTINED":
-			hasQuarantined = true
-		}
-	}
-	if len(matched) > 1 {
-		return RuntimePointBinding{}, QuarantinePointMappingConflict
-	}
-	if len(matched) == 1 {
-		return matched[0], ""
-	}
-	if hasQuarantined {
-		return RuntimePointBinding{}, QuarantinePointMappingQuarantined
-	}
-	return RuntimePointBinding{}, QuarantinePointMappingNotFound
+	return decision, true
 }
 
 func validateObservation(candidate ObservationCandidate, policy ObservationPolicy, evaluatedAt time.Time) ([]QualityReason, bool) {

@@ -902,9 +902,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_IAM_CA: paths.ca,
       TELEMETRY_IAM_GRANT_CERT: paths.iamCert,
       TELEMETRY_DATABASE_URL: databases.telemetry,
-      TELEMETRY_SOURCE_BINDINGS_JSON: JSON.stringify({
-        'spiffe://hvac.local/mqtt-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
-      }),
       TELEMETRY_IAM_ENDPOINT: iamURL,
       TELEMETRY_ALLOWED_SNAPSHOT_READER_SPIFFES: 'spiffe://hvac.local/operations-agent-service',
       TELEMETRY_REALTIME_ENABLED: 'true',

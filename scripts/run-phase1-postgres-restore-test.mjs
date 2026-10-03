@@ -47,7 +47,7 @@ async function waitForDatabase(database) {
     if (!probe.error && probe.status === 0) {
       const schemaProbe = spawnSync(dockerPath, [
         'exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-Atqc',
-        "SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.registry_device_bindings') IS NOT NULL)::text",
+        "SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.devices') IS NOT NULL)::text",
       ], { cwd: root, encoding: 'utf8', windowsHide: true });
       if (!schemaProbe.error && schemaProbe.status === 0) {
         const [startedAt, schemaReady] = String(schemaProbe.stdout).trim().split('|');
@@ -91,7 +91,7 @@ function databaseSnapshot(database) {
     SELECT count(*)::text || '|'
       || count(DISTINCT tenant_id)::text || '|'
       || count(DISTINCT site_id)::text
-    FROM telemetry_runtime.registry_device_bindings
+    FROM telemetry_runtime.devices
   `);
   return { tables, counts, rls, fixture };
 }

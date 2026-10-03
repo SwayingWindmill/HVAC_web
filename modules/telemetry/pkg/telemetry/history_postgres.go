@@ -80,7 +80,7 @@ INSERT INTO telemetry_runtime.telemetry_history_outbox (
 
 func buildHistoryObservation(observationID string, candidate ObservationCandidate, decision ObservationDecision, sourcePayloadSHA string) (HistoryObservation, error) {
 	observation := HistoryObservation{
-		ObservationID: observationID, IntegrationInstanceID: candidate.IntegrationInstanceID,
+		ObservationID: observationID, SourceID: candidate.SourceID,
 		SourceEventID: candidate.Position.EventID, SourcePartition: candidate.Position.Partition,
 		SourceOffset: candidate.Position.Offset, SourcePath: string(candidate.SourcePath),
 		TelemetryKey: candidate.TelemetryKey, ValueType: stringPointer(candidate.ValueType), Unit: copyStringPointer(candidate.Unit),

@@ -103,14 +103,14 @@ ALTER TABLE telemetry_runtime.ingest_quarantine
 
 CREATE INDEX IF NOT EXISTS source_observations_receipt_idx
   ON telemetry_runtime.source_observations
-  (integration_instance_id, source_partition, source_offset, source_event_id, acceptance_status);
+  (source_id, source_partition, source_offset, source_event_id, acceptance_status);
 CREATE INDEX IF NOT EXISTS source_observations_rejected_device_key_idx
   ON telemetry_runtime.source_observations (device_id, telemetry_key, created_at DESC)
   WHERE acceptance_status = 'REJECTED' AND device_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.source_delivery_evidence (
   evidence_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(evidence_id)),
-  integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
+  source_id text NOT NULL CHECK (char_length(source_id) BETWEEN 1 AND 256),
   source_event_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(source_event_id)),
   source_partition text NOT NULL CHECK (char_length(source_partition) BETWEEN 1 AND 256),
   source_offset bigint NOT NULL CHECK (source_offset >= 0),
@@ -122,15 +122,15 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.source_delivery_evidence (
 );
 CREATE INDEX IF NOT EXISTS source_delivery_evidence_position_idx
   ON telemetry_runtime.source_delivery_evidence
-  (integration_instance_id, source_partition, source_offset, detected_at DESC);
+  (source_id, source_partition, source_offset, detected_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS source_delivery_evidence_identity_uidx
   ON telemetry_runtime.source_delivery_evidence (
-    integration_instance_id, source_event_id, source_partition, source_offset,
+    source_id, source_event_id, source_partition, source_offset,
     delivery_status, quality_reason, payload_sha256
   );
 CREATE UNIQUE INDEX IF NOT EXISTS ingest_quarantine_open_coverage_identity_uidx
   ON telemetry_runtime.ingest_quarantine (
-    integration_instance_id, external_entity_type, external_id, reason_code,
+    source_id, external_entity_type, external_id, reason_code,
     (evidence ->> 'sourceRevision')
   )
   WHERE resolved_at IS NULL AND evidence ->> 'kind' = 'OBSERVATION_COVERAGE_REPORT';

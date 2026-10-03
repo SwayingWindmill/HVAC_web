@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 var (
@@ -44,14 +45,6 @@ type IntegrationDescriptor struct {
 	TransportProfileRevision uint64
 	BrokerOrigin             string
 	TopicNamespace           string
-}
-
-type ChildBinding struct {
-	DeviceID          string
-	ExternalDeviceID  string
-	BindingRevision   uint64
-	IntegrationID     string
-	GatewayExternalID string
 }
 
 type OwnershipLease struct {
@@ -183,35 +176,56 @@ SELECT EXISTS (
 	return nil
 }
 
-func (store *Store) AuthorizeGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) error {
-	_, err := store.ResolveGatewayChildByExternal(ctx, integrationInstanceID, gatewayExternalID, externalDeviceID)
-	return err
-}
-
-func (store *Store) ResolveGatewayChildByExternal(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) (ChildBinding, error) {
+// ResolveGatewayChild returns the Device a Gateway names by its child external ID, or ""
+// when that child is not registered behind the Gateway.
+func (store *Store) ResolveGatewayChild(ctx context.Context, integrationInstanceID, gatewayExternalID, externalDeviceID string) (string, error) {
 	tx, err := store.beginTenant(ctx)
 	if err != nil {
-		return ChildBinding{}, err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var binding ChildBinding
+	var deviceID string
 	err = tx.QueryRow(ctx, `
-SELECT child_device_id::text, child_external_id, revision, integration_instance_id::text, gateway_external_id
+SELECT child_device_id::text
 FROM connectivity.gateway_child_bindings
 WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
   AND gateway_external_id = $3 AND child_external_id = $4
   AND status = 'ACTIVE' AND valid_from <= $5 AND (valid_to IS NULL OR valid_to > $5)
-`, store.tenantID, integrationInstanceID, strings.TrimSpace(gatewayExternalID), strings.TrimSpace(externalDeviceID), now).Scan(
-		&binding.DeviceID, &binding.ExternalDeviceID, &binding.BindingRevision, &binding.IntegrationID, &binding.GatewayExternalID,
-	)
+`, store.tenantID, integrationInstanceID, strings.TrimSpace(gatewayExternalID), strings.TrimSpace(externalDeviceID), store.clock().UTC()).Scan(&deviceID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ChildBinding{}, ErrBindingNotFound
+		return "", nil
 	}
 	if err != nil {
-		return ChildBinding{}, fmt.Errorf("resolve GatewayChildBinding: %w", err)
+		return "", fmt.Errorf("resolve GatewayChildBinding: %w", err)
 	}
-	return binding, nil
+	return deviceID, nil
+}
+
+// ResolvePoint reads a Device's active Point from the Registry read port by the Point Code
+// the Gateway sends, or nil when the Device has no such registered Point.
+func (store *Store) ResolvePoint(ctx context.Context, deviceID, pointCode string) (*adapter.ResolvedPoint, error) {
+	tx, err := store.beginTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var point adapter.ResolvedPoint
+	err = tx.QueryRow(ctx, `
+SELECT point_id::text, sensor_id::text, point_type, value_type, unit,
+       counter_decrease_mode, counter_rollover_modulus, point_revision
+FROM core_registry.point_bindings_v1
+WHERE device_id = $1::uuid AND point_code = $2
+`, deviceID, pointCode).Scan(
+		&point.PointID, &point.SensorID, &point.PointType, &point.ValueType, &point.Unit,
+		&point.CounterDecreaseMode, &point.CounterRolloverModulus, &point.PointRevision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve Registry Point binding: %w", err)
+	}
+	return &point, nil
 }
 
 func (store *Store) ResolveCommandRoute(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayID, deviceID string) (commandmodel.DeviceRoute, error) {

@@ -13,6 +13,10 @@ import (
 const mqttSourceSPIFFE = "spiffe://hvac.local/mqtt-telemetry-adapter"
 const replaySourceSPIFFE = "spiffe://hvac.local/historical-replay-runner"
 
+// resolvedIdentityJSON is the Device and Point Connectivity resolved for CHILLER-01/zone.temperature.
+const resolvedIdentityJSON = `"device":{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","deviceId":"` + deviceA + `"},` +
+	`"point":{"pointId":"018f2e00-3100-7000-8000-000000000001","sensorId":null,"pointType":"TELEMETRY","valueType":"NUMBER","unit":"Cel","counterDecreaseMode":null,"counterRolloverModulus":null,"pointRevision":3}`
+
 type fakeObservationAcceptor struct {
 	candidates []ObservationCandidate
 	receipt    ObservationReceipt
@@ -35,31 +39,6 @@ func (fake *fakeHistoricalObservationAcceptor) AcceptHistoricalObservation(_ con
 	return fake.receipt, fake.err
 }
 
-func TestParseSourceAuthenticatorJSONRequiresExactSPIFFEAndIntegrationBindings(t *testing.T) {
-	authenticator, err := ParseSourceAuthenticatorJSON(`{"` + mqttSourceSPIFFE + `":["` + integrationA + `"]}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !authenticator.AllowsSource(mqttSourceSPIFFE, integrationA) || authenticator.AllowsSource(mqttSourceSPIFFE, "018f2e00-6000-7000-8000-000000000099") {
-		t.Fatal("source authenticator scope is not exact")
-	}
-	for _, raw := range []string{
-		`{}`,
-		`{"https://source.invalid":["` + integrationA + `"]}`,
-		`{"spiffe://hvac.local":["` + integrationA + `"]}`,
-		`{"spiffe://hvac.local/?scope=all":["` + integrationA + `"]}`,
-		`{"spiffe://hvac.local/mqtt-telemetry-adapter#shadow":["` + integrationA + `"]}`,
-		`{"spiffe://user@hvac.local/mqtt-telemetry-adapter":["` + integrationA + `"]}`,
-		`{"` + mqttSourceSPIFFE + `":["not-a-uuid"]}`,
-		`{"` + mqttSourceSPIFFE + `":["` + integrationA + `","` + integrationA + `"]}`,
-		`{"` + mqttSourceSPIFFE + `":["` + integrationA + `"]}{}`,
-	} {
-		if _, err := ParseSourceAuthenticatorJSON(raw); err == nil {
-			t.Fatalf("invalid source bindings accepted: %s", raw)
-		}
-	}
-}
-
 func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 0, 5, 0, time.UTC)
 	for _, sourcePath := range []SourcePath{SourcePathWebhook, SourcePathPush, SourcePathPoll, SourcePathReconciliation} {
@@ -70,10 +49,10 @@ func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 			}}
 			handler := NewHandler(ServerConfig{
 				ObservationAcceptor: acceptor,
-				SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
+				AllowedSourceSPIFFE: mqttSourceSPIFFE,
 				Now:                 func() time.Time { return now },
 			})
-			body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+			body := `{"sourceId":"` + sourceA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
 			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
@@ -86,7 +65,7 @@ func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 				t.Fatalf("candidates=%#v", acceptor.candidates)
 			}
 			candidate := acceptor.candidates[0]
-			if candidate.SourcePath != sourcePath || candidate.IntegrationInstanceID != integrationA || candidate.ReceivedAt != now || candidate.Position.Offset != 100 {
+			if candidate.SourcePath != sourcePath || candidate.SourceID != sourceA || *candidate.Device != (ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}) || candidate.Point.PointRevision != 3 || candidate.ReceivedAt != now || candidate.Position.Offset != 100 {
 				t.Fatalf("candidate=%#v", candidate)
 			}
 		})
@@ -101,10 +80,9 @@ func TestHistoricalReplayRouteOwnsProvenanceAndEventIdentity(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		HistoricalObservationAcceptor: acceptor,
 		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
-		SourceAuthenticator:           NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
 		Now:                           func() time.Time { return now },
 	})
-	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
+	body := `{"replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceId":"` + deviceA + `","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
 
 	request := httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -118,7 +96,7 @@ func TestHistoricalReplayRouteOwnsProvenanceAndEventIdentity(t *testing.T) {
 		t.Fatalf("candidates=%#v", acceptor.candidates)
 	}
 	candidate := acceptor.candidates[0]
-	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.ExternalID != "tb-device-org-a-site-1" || candidate.ReceivedAt != now || candidate.Position.Offset != 7 {
+	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.ExternalID != deviceA || candidate.SourceID != historicalReplaySourceID || candidate.ReceivedAt != now || candidate.Position.Offset != 7 {
 		t.Fatalf("candidate=%#v", candidate)
 	}
 	if !strings.HasPrefix(candidate.Position.Partition, "history-replay:01991f00-0000-7000-8000-000000000001:") || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
@@ -140,9 +118,9 @@ func TestHistoricalReplayRequiresDedicatedWorkloadIdentity(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		HistoricalObservationAcceptor: acceptor,
 		AllowedHistoricalReplaySPIFFE: replaySourceSPIFFE,
-		SourceAuthenticator:           NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
+		AllowedSourceSPIFFE:           mqttSourceSPIFFE,
 	})
-	body := `{"integrationInstanceId":"` + integrationA + `","replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceExternalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
+	body := `{"replayDatasetId":"01991f00-0000-7000-8000-000000000001","deviceId":"` + deviceA + `","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","offset":7}`
 	request := httptest.NewRequest(http.MethodPost, InternalHistoricalReplayObservationPath, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
@@ -159,12 +137,12 @@ func TestHistoricalReplayRequiresDedicatedWorkloadIdentity(t *testing.T) {
 func TestHistoricalReplayCannotEnterThroughLiveSourceRoute(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		ObservationAcceptor: &fakeObservationAcceptor{},
-		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{replaySourceSPIFFE: {integrationA}}),
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
 	})
-	body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}`
+	body := `{"sourceId":"` + sourceA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}`
 	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.TLS = verifiedTLSState(replaySourceSPIFFE)
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TELEMETRY_SOURCE_REQUEST_INVALID") {
@@ -176,9 +154,9 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	acceptor := &fakeObservationAcceptor{}
 	handler := NewHandler(ServerConfig{
 		ObservationAcceptor: acceptor,
-		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
 	})
-	validBody := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+	validBody := `{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 
 	tests := []struct {
 		name   string
@@ -190,7 +168,7 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	}{
 		{name: "missing workload", body: validBody, status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
 		{name: "wrong workload", peer: "spiffe://hvac.local/legacy-backend", body: validBody, status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
-		{name: "wrong integration scope", peer: mqttSourceSPIFFE, body: strings.Replace(validBody, integrationA, "018f2e00-6000-7000-8000-000000000099", 1), status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
+		{name: "replay workload", peer: replaySourceSPIFFE, body: validBody, status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
 		{name: "forged integration header", peer: mqttSourceSPIFFE, body: validBody, header: "X-Integration-Instance-ID", status: http.StatusBadRequest, code: "TELEMETRY_FORGED_IDENTITY_HEADER"},
 	}
 	for _, test := range tests {
@@ -198,7 +176,7 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			if test.header != "" {
-				request.Header.Set(test.header, integrationA)
+				request.Header.Set(test.header, sourceA)
 			}
 			if test.peer != "" {
 				request.TLS = verifiedTLSState(test.peer)
@@ -216,8 +194,7 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 }
 
 func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
-	authenticator := NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}})
-	validBody := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+	validBody := `{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 	for _, test := range []struct {
 		name        string
 		acceptor    *fakeObservationAcceptor
@@ -232,7 +209,7 @@ func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
 		{name: "store unavailable", acceptor: &fakeObservationAcceptor{err: errors.New("postgres unavailable")}, body: validBody, contentType: "application/json", status: http.StatusServiceUnavailable, code: "TELEMETRY_SOURCE_UNAVAILABLE"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandler(ServerConfig{ObservationAcceptor: test.acceptor, SourceAuthenticator: authenticator})
+			handler := NewHandler(ServerConfig{ObservationAcceptor: test.acceptor, AllowedSourceSPIFFE: mqttSourceSPIFFE})
 			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
 			if test.contentType != "" {
 				request.Header.Set("Content-Type", test.contentType)
@@ -242,50 +219,6 @@ func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), test.code) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-		})
-	}
-}
-
-type fakeCoverageReporter struct {
-	reports []CoverageReport
-	receipt CoverageReceipt
-	err     error
-}
-
-func (fake *fakeCoverageReporter) ReportCoverage(_ context.Context, report CoverageReport) (CoverageReceipt, error) {
-	fake.reports = append(fake.reports, report)
-	return fake.receipt, fake.err
-}
-
-func TestSourceCoverageReportsOutageAndRecovery(t *testing.T) {
-	now := time.Date(2026, 7, 24, 2, 10, 0, 0, time.UTC)
-	authenticator := NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}})
-	for _, test := range []struct {
-		name      string
-		body      string
-		available bool
-		reason    string
-	}{
-		{name: "outage", body: `{"integrationInstanceId":"` + integrationA + `","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","available":false,"continuousSince":null,"reason":"SOURCE_UNAVAILABLE","sourceRevision":2}`, reason: "SOURCE_UNAVAILABLE"},
-		{name: "recovery", body: `{"integrationInstanceId":"` + integrationA + `","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","available":true,"continuousSince":"2026-07-24T02:10:00Z","reason":"","sourceRevision":3}`, available: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			reporter := &fakeCoverageReporter{receipt: CoverageReceipt{Status: "APPLIED", DeviceID: deviceA, BusinessRevision: 3, StateChanged: true}}
-			handler := NewHandler(ServerConfig{CoverageReporter: reporter, SourceAuthenticator: authenticator, Now: func() time.Time { return now }})
-			request := httptest.NewRequest(http.MethodPost, InternalSourceCoveragePath, strings.NewReader(test.body))
-			request.Header.Set("Content-Type", "application/json")
-			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-			if len(reporter.reports) != 1 || reporter.reports[0].Available != test.available || string(reporter.reports[0].Reason) != test.reason || reporter.reports[0].ReportedAt != now {
-				t.Fatalf("reports=%#v", reporter.reports)
-			}
-			if test.available && (reporter.reports[0].ContinuousSince == nil || !reporter.reports[0].ContinuousSince.Equal(now)) {
-				t.Fatalf("continuousSince=%#v", reporter.reports[0].ContinuousSince)
 			}
 		})
 	}

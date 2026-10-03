@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   device_id Nullable(UUID),
   point_id Nullable(UUID),
   sensor_id Nullable(UUID),
-  integration_instance_id UUID,
+  source_id LowCardinality(String),
   source_event_id UUID,
   source_partition LowCardinality(String),
   source_offset UInt64,

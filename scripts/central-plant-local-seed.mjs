@@ -192,20 +192,8 @@ COMMIT;
 }
 
 export function buildS2SeedSQL({ pointsByDevice, spatialPoints = [] }) {
-  const { tenantId, siteId, integrationInstanceId } = centralPlantIdentity;
-  const { sensorIdByKey, pointIdByRef } = buildCentralPlantSpatialIdentities(spatialPoints);
-  const platformDeviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
-  const bindingRows = centralPlantDevices.map((device) => `(${sqlLiteral(tenantId)},${sqlLiteral(device.platformDeviceId)},${sqlLiteral(siteId)},${sqlLiteral(integrationInstanceId)},'DEVICE',${sqlLiteral(device.platformDeviceId)},'ACTIVE',1,1,clock_timestamp(),NULL,clock_timestamp())`).join(',\n  ');
-  const pointBindingRows = spatialPoints.map((point, index) => {
-    const platformDevice = platformDeviceByName.get(point.deviceId);
-    if (!platformDevice) throw new Error(`S2 Point projection references unknown Device ${point.deviceId}`);
-    const pointID = pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`);
-    const sensorID = point.sensorId ? sensorIdByKey.get(point.sensorId) : null;
-    const counterDecreaseMode = point.pointType === 'COUNTER' ? 'RESET_TO_ZERO' : null;
-    if (!pointID) throw new Error(`S2 Point projection identity is missing for ${point.deviceId}/${point.telemetryKey}`);
-    if (point.sensorId && !sensorID) throw new Error(`S2 Point projection references unknown Sensor ${point.sensorId}`);
-    return `(${sqlLiteral(localUUID(0x600000000000 + index + 1))},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},${sqlLiteral(pointID)},${sensorID ? sqlLiteral(sensorID) : 'NULL'},${sqlLiteral(platformDevice.platformDeviceId)},${sqlLiteral(point.telemetryKey)},${sqlLiteral(point.pointType)},${sqlLiteral(point.valueType)},${point.unit ? sqlLiteral(point.unit) : 'NULL'},${counterDecreaseMode ? sqlLiteral(counterDecreaseMode) : 'NULL'},NULL,'ACTIVE',1,1,'2000-01-01T00:00:00Z',NULL,clock_timestamp())`;
-  }).join(',\n  ');
+  const { tenantId, siteId } = centralPlantIdentity;
+  const deviceRows = centralPlantDevices.map((device) => `(${sqlLiteral(device.platformDeviceId)},${sqlLiteral(tenantId)},${sqlLiteral(siteId)},clock_timestamp())`).join(',\n  ');
   const presenceRows = centralPlantDevices.map((device) => {
     const maxSourceLagSeconds = device.name === 'METER-HVAC-TOTAL' ? 7 * 24 * 60 * 60 : 120;
     return `(${sqlLiteral(device.platformDeviceId)},1,30,120,true,ARRAY['SOURCE_ACTIVITY']::text[],15,${maxSourceLagSeconds},clock_timestamp())`;
@@ -215,10 +203,8 @@ export function buildS2SeedSQL({ pointsByDevice, spatialPoints = [] }) {
   return `BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
 DELETE FROM telemetry_runtime.telemetry_publication_outbox;
-INSERT INTO telemetry_runtime.registry_device_bindings (tenant_id, device_id, site_id, integration_instance_id, external_entity_type, external_id, binding_status, binding_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
-  ${bindingRows} ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, external_id=EXCLUDED.external_id, binding_status='ACTIVE', updated_at=clock_timestamp();
-${pointBindingRows ? `INSERT INTO telemetry_runtime.registry_point_bindings (projection_id, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus, binding_status, point_revision, source_registry_revision, valid_from, valid_to, updated_at) VALUES
-  ${pointBindingRows} ON CONFLICT (projection_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, point_id=EXCLUDED.point_id, sensor_id=EXCLUDED.sensor_id, device_id=EXCLUDED.device_id, telemetry_key=EXCLUDED.telemetry_key, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, binding_status='ACTIVE', point_revision=EXCLUDED.point_revision, source_registry_revision=EXCLUDED.source_registry_revision, valid_from=EXCLUDED.valid_from, valid_to=NULL, updated_at=clock_timestamp();` : ''}
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, updated_at) VALUES
+  ${deviceRows} ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, updated_at=clock_timestamp();
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
   ${presenceRows} ON CONFLICT (device_id) DO UPDATE SET policy_revision=EXCLUDED.policy_revision, max_future_clock_skew_seconds=EXCLUDED.max_future_clock_skew_seconds, max_source_lag_seconds=EXCLUDED.max_source_lag_seconds, updated_at=clock_timestamp();
 INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, updated_at) VALUES

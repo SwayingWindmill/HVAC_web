@@ -10,13 +10,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
 	ingestPartitionA = "tb-ticket-04-a"
 	ingestPartitionB = "tb-ticket-04-b"
-	integrationB     = "018f2e00-6000-7000-8000-000000000002"
+	sourceB          = "EG8200-COMMERCIAL-002"
 )
 
 func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
@@ -40,7 +39,7 @@ func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
 	}
 	liveAt := time.Date(2026, 7, 24, 0, 1, 2, 0, time.UTC)
 	live := ingestCandidate(
-		ingestEvent(201), integrationA, ingestPartitionA, 1, SourcePathWebhook,
+		ingestEvent(201), sourceA, ingestPartitionA, 1, SourcePathWebhook,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`24.0`), "NUMBER", "Cel",
 		liveAt.Add(-2*time.Second), liveAt,
 	)
@@ -62,7 +61,7 @@ func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
 	}
 
 	replay := ingestCandidate(
-		ingestEvent(202), integrationA, "tb-ticket-04-replay", 1, SourcePathHistoryReplay,
+		ingestEvent(202), sourceA, "tb-ticket-04-replay", 1, SourcePathHistoryReplay,
 		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`21.5`), "NUMBER", "Cel",
 		time.Date(2026, 7, 23, 0, 10, 0, 0, time.UTC), liveAt.Add(time.Minute),
 	)
@@ -74,7 +73,7 @@ func TestPostgresHistoricalReplayPreservesCurrentTruth(t *testing.T) {
 		t.Fatalf("replay receipt=%#v", replayReceipt)
 	}
 	assertObservationRow(t, admin, replay.Position.EventID, "ACCEPTED", "GOOD", "HISTORY_REPLAY", true)
-	assertHistoryOutbox(t, admin, replay.Position.EventID, "ACCEPTED", "", siteA, deviceA, true)
+	assertHistoryOutbox(t, admin, replay.Position.EventID, "ACCEPTED", tenantA, siteA, deviceA, true)
 
 	duplicate, err := store.AcceptHistoricalObservation(ctx, replay)
 	if err != nil {
@@ -127,7 +126,7 @@ func TestPostgresIngestEndToEnd(t *testing.T) {
 
 	acceptedAt := time.Date(2026, 7, 24, 0, 1, 2, 0, time.UTC)
 	accepted := ingestCandidate(
-		ingestEvent(101), integrationA, ingestPartitionA, 1, SourcePathWebhook,
+		ingestEvent(101), sourceA, ingestPartitionA, 1, SourcePathWebhook,
 		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`24.0`), "NUMBER", "Cel",
 		acceptedAt.Add(-2*time.Second), acceptedAt,
 	)
@@ -136,7 +135,7 @@ func TestPostgresIngestEndToEnd(t *testing.T) {
 		t.Fatalf("accepted receipt=%#v", receipt)
 	}
 	assertObservationRow(t, admin, accepted.Position.EventID, "ACCEPTED", "GOOD", "WEBHOOK", true)
-	assertHistoryOutbox(t, admin, accepted.Position.EventID, "ACCEPTED", orgA, siteA, deviceA, true)
+	assertHistoryOutbox(t, admin, accepted.Position.EventID, "ACCEPTED", tenantA, siteA, deviceA, true)
 	assertIngestRevision(t, admin, deviceA, 2, 2)
 	var latestValue string
 	var latestQuality string
@@ -196,7 +195,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 	assertIngestRevision(t, admin, deviceA, 2, 2)
 
 	lateSample := ingestCandidate(
-		ingestEvent(199), integrationA, ingestPartitionB, 1, SourcePathPush,
+		ingestEvent(199), sourceA, ingestPartitionB, 1, SourcePathPush,
 		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`23.5`), "NUMBER", "Cel",
 		accepted.SampledAt.Add(-time.Second), acceptedAt.Add(3*time.Second),
 	)
@@ -208,7 +207,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 		t.Fatalf("late sampled observation=%#v", lateReceipt)
 	}
 	assertObservationRow(t, admin, lateSample.Position.EventID, "OUT_OF_ORDER", "GOOD", "PUSH", true)
-	assertHistoryOutbox(t, admin, lateSample.Position.EventID, "OUT_OF_ORDER", orgA, siteA, deviceA, true)
+	assertHistoryOutbox(t, admin, lateSample.Position.EventID, "OUT_OF_ORDER", tenantA, siteA, deviceA, true)
 	assertIngestRevision(t, admin, deviceA, 2, 2)
 	if err := admin.QueryRow(ctx, `
 SELECT value::text, quality, business_revision
@@ -223,7 +222,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 
 	rejectedAt := acceptedAt.Add(10 * time.Second)
 	rejected := ingestCandidate(
-		ingestEvent(104), integrationA, ingestPartitionA, 2, SourcePathPush,
+		ingestEvent(104), sourceA, ingestPartitionA, 2, SourcePathPush,
 		"tb-device-org-a-site-1", "zone.humidity", json.RawMessage(`"invalid"`), "NUMBER", "%RH",
 		rejectedAt.Add(-time.Second), rejectedAt,
 	)
@@ -235,7 +234,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 		t.Fatalf("rejected=%#v", rejectedReceipt)
 	}
 	assertObservationRow(t, admin, rejected.Position.EventID, "REJECTED", "INVALID", "PUSH", false)
-	assertHistoryOutbox(t, admin, rejected.Position.EventID, "REJECTED", orgA, siteA, deviceA, false)
+	assertHistoryOutbox(t, admin, rejected.Position.EventID, "REJECTED", tenantA, siteA, deviceA, false)
 	assertIngestRevision(t, admin, deviceA, 3, 3)
 	var missingReason string
 	if err := admin.QueryRow(ctx, `
@@ -273,7 +272,7 @@ WHERE s.device_id = $1::uuid AND value ->> 'key' = 'zone.humidity'
 
 	suspectReceivedAt := time.Date(2026, 7, 24, 0, 20, 0, 0, time.UTC)
 	suspect := ingestCandidate(
-		ingestEvent(106), integrationA, ingestPartitionA, 4, SourcePathReconciliation,
+		ingestEvent(106), sourceA, ingestPartitionA, 4, SourcePathReconciliation,
 		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`25.0`), "NUMBER", "Cel",
 		time.Date(2026, 7, 24, 0, 2, 0, 0, time.UTC), suspectReceivedAt,
 	)
@@ -287,39 +286,9 @@ WHERE s.device_id = $1::uuid AND value ->> 'key' = 'zone.humidity'
 	assertObservationRow(t, admin, suspect.Position.EventID, "ACCEPTED", "STALE", "RECONCILIATION", true)
 	assertIngestRevision(t, admin, deviceA, 4, 4)
 
-	outageAt := suspectReceivedAt.Add(time.Minute)
-	outage, err := store.ReportCoverage(ctx, CoverageReport{
-		IntegrationInstanceID: integrationA, ExternalEntityType: "DEVICE", ExternalID: "tb-device-org-a-site-1",
-		Available: false, Reason: telemetryapi.AvailabilityReasonCodeSourceUnavailable,
-		SourceRevision: 2, ReportedAt: outageAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outage.Status != "APPLIED" || outage.BusinessRevision != 5 || !outage.StateChanged {
-		t.Fatalf("outage=%#v", outage)
-	}
-	assertSnapshotAvailability(t, admin, deviceA, "UNAVAILABLE", "SOURCE_UNAVAILABLE", "")
-	assertIngestRevision(t, admin, deviceA, 5, 5)
-
-	recoveryAt := outageAt.Add(time.Minute)
-	recoveryStart := recoveryAt
-	recovery, err := store.ReportCoverage(ctx, CoverageReport{
-		IntegrationInstanceID: integrationA, ExternalEntityType: "DEVICE", ExternalID: "tb-device-org-a-site-1",
-		Available: true, ContinuousSince: &recoveryStart, SourceRevision: 3, ReportedAt: recoveryAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovery.Status != "APPLIED" || recovery.BusinessRevision != 6 || !recovery.StateChanged {
-		t.Fatalf("recovery=%#v", recovery)
-	}
-	assertSnapshotAvailability(t, admin, deviceA, "UNAVAILABLE", "OBSERVATION_COVERAGE_GAP", "")
-	assertIngestRevision(t, admin, deviceA, 6, 6)
-
-	recentAt := recoveryAt.Add(6 * time.Second)
+	recentAt := suspectReceivedAt.Add(time.Minute)
 	recent := ingestCandidate(
-		ingestEvent(107), integrationA, ingestPartitionA, 5, SourcePathPoll,
+		ingestEvent(107), sourceA, ingestPartitionA, 5, SourcePathPoll,
 		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`25.5`), "NUMBER", "Cel",
 		recentAt.Add(-time.Second), recentAt,
 	)
@@ -327,14 +296,14 @@ WHERE s.device_id = $1::uuid AND value ->> 'key' = 'zone.humidity'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recentReceipt.BusinessRevision != 7 || !recentReceipt.StateChanged {
+	if recentReceipt.BusinessRevision != 5 || !recentReceipt.StateChanged {
 		t.Fatalf("recent=%#v", recentReceipt)
 	}
 	assertSnapshotAvailability(t, admin, deviceA, "AVAILABLE", "", "ONLINE")
-	assertIngestRevision(t, admin, deviceA, 7, 7)
+	assertIngestRevision(t, admin, deviceA, 5, 5)
 
 	missing := ingestCandidate(
-		ingestEvent(108), integrationA, "tb-ticket-04-missing", 1, SourcePathWebhook,
+		ingestEvent(108), sourceA, "tb-ticket-04-missing", 1, SourcePathWebhook,
 		"tb-device-missing", "zone.temperature", json.RawMessage(`999.123`), "NUMBER", "Cel",
 		recentAt, recentAt.Add(time.Second),
 	)
@@ -351,7 +320,7 @@ WHERE s.device_id = $1::uuid AND value ->> 'key' = 'zone.humidity'
 SELECT q.evidence::text, o.value::text
 FROM telemetry_runtime.ingest_quarantine q
 JOIN telemetry_runtime.source_observations o
-  ON o.integration_instance_id = q.integration_instance_id
+  ON o.source_id = q.source_id
  AND o.source_event_id = $1::uuid
 WHERE q.external_id = 'tb-device-missing'
 ORDER BY q.detected_at DESC LIMIT 1
@@ -362,45 +331,11 @@ ORDER BY q.detected_at DESC LIMIT 1
 		t.Fatalf("quarantine leaked raw telemetry: value=%v evidence=%s", quarantinedValue, quarantineEvidence)
 	}
 	assertHistoryOutbox(t, admin, missing.Position.EventID, "QUARANTINED", "", "", "", false)
-	assertIngestRevision(t, admin, deviceA, 7, 7)
-
-	coverageQuarantineAt := recentAt.Add(1500 * time.Millisecond)
-	coverageMissingReport := CoverageReport{
-		IntegrationInstanceID: integrationA, ExternalEntityType: "DEVICE", ExternalID: "tb-device-coverage-missing",
-		Available: false, Reason: telemetryapi.AvailabilityReasonCodeSourceUnavailable,
-		SourceRevision: 1, ReportedAt: coverageQuarantineAt,
-	}
-	coverageQuarantine, err := store.ReportCoverage(ctx, coverageMissingReport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverageQuarantine.Status != "QUARANTINED" || coverageQuarantine.QuarantineReason != QuarantineMappingNotFound || coverageQuarantine.EvidenceID == "" || coverageQuarantine.DeviceID != "" {
-		t.Fatalf("coverage quarantine=%#v", coverageQuarantine)
-	}
-	var coverageKind string
-	var coverageDeviceID, coverageKey *string
-	if err := admin.QueryRow(ctx, `
-SELECT evidence ->> 'kind', device_id::text, telemetry_key
-FROM telemetry_runtime.ingest_quarantine
-WHERE quarantine_id = $1::uuid
-`, coverageQuarantine.EvidenceID).Scan(&coverageKind, &coverageDeviceID, &coverageKey); err != nil {
-		t.Fatal(err)
-	}
-	if coverageKind != "OBSERVATION_COVERAGE_REPORT" || coverageDeviceID != nil || coverageKey != nil {
-		t.Fatalf("coverage evidence kind=%s device=%v key=%v", coverageKind, coverageDeviceID, coverageKey)
-	}
-	coverageQuarantineAgain, err := store.ReportCoverage(ctx, coverageMissingReport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverageQuarantineAgain.EvidenceID != coverageQuarantine.EvidenceID {
-		t.Fatalf("coverage quarantine evidence was not idempotent: first=%s second=%s", coverageQuarantine.EvidenceID, coverageQuarantineAgain.EvidenceID)
-	}
-	assertIngestRevision(t, admin, deviceA, 7, 7)
+	assertIngestRevision(t, admin, deviceA, 5, 5)
 
 	extremeFutureReceivedAt := recentAt.Add(1750 * time.Millisecond)
 	extremeFuture := ingestCandidate(
-		ingestEvent(111), integrationA, "tb-ticket-04-future-clock", 1, SourcePathPush,
+		ingestEvent(111), sourceA, "tb-ticket-04-future-clock", 1, SourcePathPush,
 		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`26.5`), "NUMBER", "Cel",
 		extremeFutureReceivedAt.Add(48*time.Hour), extremeFutureReceivedAt,
 	)
@@ -413,7 +348,7 @@ WHERE quarantine_id = $1::uuid
 		!extremeFutureReceipt.PositionAdvanced {
 		t.Fatalf("extreme future-clock receipt=%#v", extremeFutureReceipt)
 	}
-	assertObservationRow(t, admin, extremeFuture.Position.EventID, "REJECTED", "REJECTED", "PUSH", false)
+	assertObservationRow(t, admin, extremeFuture.Position.EventID, "REJECTED", "INVALID", "PUSH", false)
 	var extremeFutureSampledAt time.Time
 	if err := admin.QueryRow(ctx, `SELECT sampled_at FROM telemetry_runtime.source_observations WHERE source_event_id = $1::uuid`, extremeFuture.Position.EventID).Scan(&extremeFutureSampledAt); err != nil {
 		t.Fatal(err)
@@ -421,11 +356,11 @@ WHERE quarantine_id = $1::uuid
 	if !extremeFutureSampledAt.Equal(extremeFuture.SampledAt) {
 		t.Fatalf("future-clock evidence sampledAt=%s expected=%s", extremeFutureSampledAt, extremeFuture.SampledAt)
 	}
-	assertIngestRevision(t, admin, deviceA, 7, 7)
+	assertIngestRevision(t, admin, deviceA, 5, 5)
 
 	bAt := recentAt.Add(2 * time.Second)
 	organizationB := ingestCandidate(
-		ingestEvent(109), integrationB, ingestPartitionB, 1, SourcePathPush,
+		ingestEvent(109), sourceB, ingestPartitionB, 1, SourcePathPush,
 		"tb-device-org-b-site-1", "zone.temperature", json.RawMessage(`21.0`), "NUMBER", "Cel",
 		bAt.Add(-time.Second), bAt,
 	)
@@ -440,7 +375,7 @@ WHERE quarantine_id = $1::uuid
 	if err := admin.QueryRow(ctx, `SELECT snapshot::text FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, deviceB).Scan(&organizationBSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(organizationBSnapshot, orgB) || strings.Contains(organizationBSnapshot, orgA) || strings.Contains(organizationBSnapshot, deviceA) {
+	if !strings.Contains(organizationBSnapshot, tenantB) || strings.Contains(organizationBSnapshot, tenantA) || strings.Contains(organizationBSnapshot, deviceA) {
 		t.Fatalf("Organization B isolation failed: %s", organizationBSnapshot)
 	}
 
@@ -476,7 +411,7 @@ ORDER BY business_revision LIMIT 1
 	if _, err := failingStore.AcceptObservation(ctx, rollbackCandidate); err == nil {
 		t.Fatal("outbox failure unexpectedly committed observation")
 	}
-	assertIngestRevision(t, admin, deviceA, 7, 7)
+	assertIngestRevision(t, admin, deviceA, 5, 5)
 	var rollbackRows int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.source_observations WHERE source_event_id = $1::uuid`, rollbackCandidate.Position.EventID).Scan(&rollbackRows); err != nil {
 		t.Fatal(err)
@@ -494,8 +429,8 @@ ORDER BY business_revision LIMIT 1
 	var headOffset int64
 	if err := admin.QueryRow(ctx, `
 SELECT source_offset FROM telemetry_runtime.source_positions
-WHERE integration_instance_id = $1::uuid AND source_partition = $2
-`, integrationA, ingestPartitionA).Scan(&headOffset); err != nil {
+WHERE source_id = $1 AND source_partition = $2
+`, sourceA, ingestPartitionA).Scan(&headOffset); err != nil {
 		t.Fatal(err)
 	}
 	if headOffset != 5 {
@@ -506,10 +441,10 @@ WHERE integration_instance_id = $1::uuid AND source_partition = $2
 	if err != nil {
 		t.Fatal(err)
 	}
-	if committedAfterRollback.BusinessRevision != 8 || !committedAfterRollback.StateChanged {
+	if committedAfterRollback.BusinessRevision != 6 || !committedAfterRollback.StateChanged {
 		t.Fatalf("committed after rollback=%#v", committedAfterRollback)
 	}
-	assertIngestRevision(t, admin, deviceA, 8, 8)
+	assertIngestRevision(t, admin, deviceA, 6, 6)
 
 	store.Close()
 	reopened, err := OpenPostgresStore(ctx, runtimeURL)
@@ -531,16 +466,16 @@ WHERE usename = 's2_telemetry_service' AND pid <> pg_backend_pid()
 	if afterRestart.Status != ObservationDuplicate || afterRestart.EvidenceID == "" {
 		t.Fatalf("restart duplicate=%#v", afterRestart)
 	}
-	assertIngestRevision(t, admin, deviceA, 8, 8)
+	assertIngestRevision(t, admin, deviceA, 6, 6)
 
 	if _, err := admin.Exec(ctx, `
 UPDATE telemetry_runtime.telemetry_publication_outbox
 SET attempts = attempts + 2, last_error_code = 'CENTRIFUGO_UNAVAILABLE', available_at = available_at + interval '5 seconds'
-WHERE device_id = $1::uuid AND business_revision = 8 AND subscription_id IS NULL
+WHERE device_id = $1::uuid AND business_revision = 6 AND subscription_id IS NULL
 `, deviceA); err != nil {
 		t.Fatal(err)
 	}
-	assertIngestRevision(t, admin, deviceA, 8, 8)
+	assertIngestRevision(t, admin, deviceA, 6, 6)
 }
 
 func resetIngestState(t *testing.T, admin *pgxpool.Pool) {
@@ -569,14 +504,41 @@ func resetIngestState(t *testing.T, admin *pgxpool.Pool) {
 	}
 }
 
-func ingestCandidate(eventID, integrationID, partition string, offset int64, sourcePath SourcePath, externalID, key string, value json.RawMessage, valueType, unit string, sampledAt, receivedAt time.Time) ObservationCandidate {
-	return ObservationCandidate{
-		IntegrationInstanceID: integrationID, SourcePath: sourcePath,
+// ingestCandidate builds a source observation carrying the identity Connectivity would
+// resolve for the fixture Device; history replay names the Device ID instead.
+func ingestCandidate(eventID, sourceID, partition string, offset int64, sourcePath SourcePath, externalID, key string, value json.RawMessage, valueType, unit string, sampledAt, receivedAt time.Time) ObservationCandidate {
+	candidate := ObservationCandidate{
+		SourceID: sourceID, SourcePath: sourcePath,
 		ExternalEntityType: "DEVICE", ExternalID: externalID, TelemetryKey: key,
 		Value: append(json.RawMessage(nil), value...), ValueType: valueType, Unit: &unit,
 		SampledAt: sampledAt, ReceivedAt: receivedAt,
 		Position: SourcePosition{Partition: partition, Offset: offset, EventID: eventID},
 	}
+	device, known := fixtureDevices[externalID]
+	if !known {
+		return candidate
+	}
+	if sourcePath == SourcePathHistoryReplay {
+		candidate.SourceID, candidate.ExternalID = historicalReplaySourceID, device.DeviceID
+		return candidate
+	}
+	candidate.Device = &device
+	if pointID, registered := fixturePoints[device.DeviceID+"/"+key]; registered {
+		candidate.Point = &ResolvedPoint{PointID: pointID, PointType: "TELEMETRY", ValueType: valueType, Unit: &unit, PointRevision: 1}
+	}
+	return candidate
+}
+
+var fixtureDevices = map[string]ResolvedDevice{
+	"tb-device-org-a-site-1":      {TenantID: tenantA, SiteID: siteA, DeviceID: deviceA},
+	"mqtt-device-tenant-a-site-1": {TenantID: tenantA, SiteID: siteA, DeviceID: deviceA},
+	"tb-device-org-b-site-1":      {TenantID: tenantB, SiteID: "018f2e00-1000-7000-8000-000000000003", DeviceID: deviceB},
+}
+
+var fixturePoints = map[string]string{
+	deviceA + "/zone.temperature": "018f2e00-3100-7000-8000-000000000001",
+	deviceA + "/zone.humidity":    "018f2e00-3100-7000-8000-000000000002",
+	deviceB + "/zone.temperature": "018f2e00-3100-7000-8000-000000000004",
 }
 
 func ingestEvent(suffix int) string {
@@ -599,20 +561,20 @@ WHERE source_event_id = $1::uuid
 	}
 }
 
-func assertHistoryOutbox(t *testing.T, admin *pgxpool.Pool, sourceEventID, status, organizationID, siteID, deviceID string, valuePresent bool) {
+func assertHistoryOutbox(t *testing.T, admin *pgxpool.Pool, sourceEventID, status, tenantID, siteID, deviceID string, valuePresent bool) {
 	t.Helper()
 	var deliveryState, actualStatus string
-	var actualOrganizationID, actualSiteID, actualDeviceID, value *string
+	var actualTenantID, actualSiteID, actualDeviceID, value *string
 	if err := admin.QueryRow(t.Context(), `
 SELECT delivery_state,
        payload ->> 'acceptance_status',
-       payload ->> 'owning_organization_id',
+       payload ->> 'tenant_id',
        payload ->> 'site_id',
        payload ->> 'device_id',
        COALESCE(payload ->> 'value_json', payload ->> 'value_number', payload ->> 'value_string', payload ->> 'value_boolean')
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE payload ->> 'source_event_id' = $1
-`, sourceEventID).Scan(&deliveryState, &actualStatus, &actualOrganizationID, &actualSiteID, &actualDeviceID, &value); err != nil {
+`, sourceEventID).Scan(&deliveryState, &actualStatus, &actualTenantID, &actualSiteID, &actualDeviceID, &value); err != nil {
 		t.Fatal(err)
 	}
 	optionalMatches := func(actual *string, expected string) bool {
@@ -622,9 +584,9 @@ WHERE payload ->> 'source_event_id' = $1
 		return actual != nil && *actual == expected
 	}
 	if deliveryState != "PENDING" || actualStatus != status ||
-		!optionalMatches(actualOrganizationID, organizationID) || !optionalMatches(actualSiteID, siteID) || !optionalMatches(actualDeviceID, deviceID) ||
+		!optionalMatches(actualTenantID, tenantID) || !optionalMatches(actualSiteID, siteID) || !optionalMatches(actualDeviceID, deviceID) ||
 		(value != nil) != valuePresent {
-		t.Fatalf("history outbox state=%s status=%s organization=%v site=%v device=%v value=%v", deliveryState, actualStatus, actualOrganizationID, actualSiteID, actualDeviceID, value)
+		t.Fatalf("history outbox state=%s status=%s tenant=%v site=%v device=%v value=%v", deliveryState, actualStatus, actualTenantID, actualSiteID, actualDeviceID, value)
 	}
 }
 

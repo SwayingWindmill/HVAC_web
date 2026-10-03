@@ -32,10 +32,24 @@ func (authorizer *testBindingAuthorizer) AuthorizeGateway(_ context.Context, _ s
 	return nil
 }
 
-func (authorizer *testBindingAuthorizer) AuthorizeGatewayChild(_ context.Context, _ string, gatewayExternalID, externalDeviceID string) error {
+// ResolveGatewayChild names each registered child after itself; the test Point registry
+// knows every point except "unregistered_point".
+func (authorizer *testBindingAuthorizer) ResolveGatewayChild(_ context.Context, _ string, gatewayExternalID, externalDeviceID string) (string, error) {
 	children := authorizer.children[strings.TrimSpace(gatewayExternalID)]
 	if _, ok := children[strings.TrimSpace(externalDeviceID)]; !ok {
-		return errors.New("child binding not found")
+		return "", nil
 	}
-	return nil
+	return testDeviceID, nil
 }
+
+func (authorizer *testBindingAuthorizer) ResolvePoint(_ context.Context, _ string, sourceKey string) (*ResolvedPoint, error) {
+	if sourceKey == "unregistered_point" {
+		return nil, nil
+	}
+	return &ResolvedPoint{PointID: testPointID, PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1}, nil
+}
+
+const (
+	testDeviceID = "018f3e00-4000-7000-8000-000000000001"
+	testPointID  = "018f3e00-5000-7000-8000-000000000001"
+)

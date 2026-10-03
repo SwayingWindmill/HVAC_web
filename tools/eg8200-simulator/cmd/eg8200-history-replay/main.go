@@ -33,16 +33,15 @@ const (
 var uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 type replayObservationRequest struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	ReplayDatasetID       string          `json:"replayDatasetId"`
-	DeviceExternalID      string          `json:"deviceExternalId"`
-	TelemetryKey          string          `json:"telemetryKey"`
-	Value                 json.RawMessage `json:"value"`
-	ValueType             string          `json:"valueType"`
-	Unit                  *string         `json:"unit"`
-	WireQuality           uint8           `json:"wireQuality"`
-	SampledAt             time.Time       `json:"sampledAt"`
-	Offset                int64           `json:"offset"`
+	ReplayDatasetID string          `json:"replayDatasetId"`
+	DeviceID        string          `json:"deviceId"`
+	TelemetryKey    string          `json:"telemetryKey"`
+	Value           json.RawMessage `json:"value"`
+	ValueType       string          `json:"valueType"`
+	Unit            *string         `json:"unit"`
+	WireQuality     uint8           `json:"wireQuality"`
+	SampledAt       time.Time       `json:"sampledAt"`
+	Offset          int64           `json:"offset"`
 }
 
 type replayAdmitter func(context.Context, replayObservationRequest) error
@@ -56,7 +55,6 @@ func main() {
 	plantConfigPath := flag.String("plant-config", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_PLANT_CONFIG")), "path to the canonical Virtual Central Plant config")
 	mqttConfigPath := flag.String("mqtt-config", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_MQTT_CONFIG")), "path to the existing MQTT config used for Device external identity mapping")
 	telemetryURL := flag.String("telemetry-url", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TELEMETRY_URL")), "HTTPS origin for Telemetry Runtime")
-	integrationID := flag.String("integration-id", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_INTEGRATION_ID")), "current authorized integration instance UUIDv7")
 	datasetID := flag.String("dataset-id", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DATASET_ID")), "stable replay dataset UUIDv7")
 	fromValue := flag.String("from", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_FROM")), "historical replay start time in RFC3339")
 	durationValue := flag.String("duration", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DURATION")), "finite replay duration")
@@ -69,8 +67,8 @@ func main() {
 	if strings.TrimSpace(*plantConfigPath) == "" || strings.TrimSpace(*mqttConfigPath) == "" {
 		log.Fatal("historical replay requires plant-config and mqtt-config")
 	}
-	if !uuidV7Pattern.MatchString(strings.TrimSpace(*integrationID)) || !uuidV7Pattern.MatchString(strings.TrimSpace(*datasetID)) {
-		log.Fatal("historical replay integration-id and dataset-id must be UUIDv7")
+	if !uuidV7Pattern.MatchString(strings.TrimSpace(*datasetID)) {
+		log.Fatal("historical replay dataset-id must be UUIDv7")
 	}
 	from, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*fromValue))
 	if err != nil {
@@ -91,7 +89,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	count, err := runReplay(ctx, plantConfig, mqttConfig, strings.TrimSpace(*integrationID), strings.ToLower(strings.TrimSpace(*datasetID)), from.UTC(), duration, client.Admit)
+	count, err := runReplay(ctx, plantConfig, mqttConfig, strings.ToLower(strings.TrimSpace(*datasetID)), from.UTC(), duration, client.Admit)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -126,8 +124,8 @@ func loadReplayConfigs(plantPath, mqttPath string) (simulator.Config, simulator.
 	return plantConfig, mqttConfig, nil
 }
 
-func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulator.MQTTGatewayConfig, integrationID, datasetID string, from time.Time, duration time.Duration, admit replayAdmitter) (int, error) {
-	if admit == nil || !uuidV7Pattern.MatchString(integrationID) || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 {
+func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulator.MQTTGatewayConfig, datasetID string, from time.Time, duration time.Duration, admit replayAdmitter) (int, error) {
+	if admit == nil || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 {
 		return 0, errors.New("historical replay runner configuration is invalid")
 	}
 	pointByReference := make(map[string]simulator.PointConfig, len(config.Points))
@@ -157,9 +155,9 @@ func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulato
 			if !ok {
 				return fmt.Errorf("historical replay point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
 			}
-			externalID := strings.TrimSpace(mqttConfig.DeviceExternalIDByDeviceID[measurement.DeviceID])
-			if externalID == "" {
-				return fmt.Errorf("historical replay Device external identity is missing for %s", measurement.DeviceID)
+			deviceID := strings.TrimSpace(mqttConfig.DeviceExternalIDByDeviceID[measurement.DeviceID])
+			if deviceID == "" {
+				return fmt.Errorf("historical replay Device identity is missing for %s", measurement.DeviceID)
 			}
 			var unit *string
 			if value := strings.TrimSpace(point.Unit); value != "" {
@@ -174,21 +172,20 @@ func runReplay(ctx context.Context, config simulator.Config, mqttConfig simulato
 				return fmt.Errorf("encode historical replay value for %s/%s: %w", measurement.DeviceID, measurement.TelemetryKey, err)
 			}
 			request := replayObservationRequest{
-				IntegrationInstanceID: integrationID,
-				ReplayDatasetID:       datasetID,
-				DeviceExternalID:      externalID,
-				TelemetryKey:          strings.TrimSpace(point.PointCode),
-				Value:                 value,
-				ValueType:             strings.TrimSpace(point.ValueType),
-				Unit:                  unit,
-				WireQuality:           wireQuality,
-				SampledAt:             measurement.ObservedAt.UTC(),
-				Offset:                offsets[externalID],
+				ReplayDatasetID: datasetID,
+				DeviceID:        deviceID,
+				TelemetryKey:    strings.TrimSpace(point.PointCode),
+				Value:           value,
+				ValueType:       strings.TrimSpace(point.ValueType),
+				Unit:            unit,
+				WireQuality:     wireQuality,
+				SampledAt:       measurement.ObservedAt.UTC(),
+				Offset:          offsets[deviceID],
 			}
 			if err := admit(ctx, request); err != nil {
 				return err
 			}
-			offsets[externalID]++
+			offsets[deviceID]++
 			admitted++
 		}
 		return nil

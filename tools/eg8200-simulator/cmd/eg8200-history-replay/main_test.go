@@ -13,15 +13,14 @@ func TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests(t *testin
 		t.Fatal(err)
 	}
 	const (
-		integrationID = "018f3e00-0000-7000-8000-000000000101"
-		datasetID     = "01991f00-0000-7000-8000-000000000001"
+		datasetID = "01991f00-0000-7000-8000-000000000001"
 	)
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	duration := 2 * plantConfig.Interval()
 
 	run := func() []replayObservationRequest {
 		requests := make([]replayObservationRequest, 0)
-		count, err := runReplay(t.Context(), plantConfig, mqttConfig, integrationID, datasetID, from, duration, func(_ context.Context, request replayObservationRequest) error {
+		count, err := runReplay(t.Context(), plantConfig, mqttConfig, datasetID, from, duration, func(_ context.Context, request replayObservationRequest) error {
 			requests = append(requests, request)
 			return nil
 		})
@@ -42,12 +41,12 @@ func TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests(t *testin
 
 	nextOffset := map[string]int64{}
 	for _, request := range first {
-		if request.IntegrationInstanceID != integrationID || request.ReplayDatasetID != datasetID || request.DeviceExternalID == "" || request.TelemetryKey == "" || len(request.Value) == 0 || request.SampledAt.Before(from) || request.SampledAt.After(from.Add(duration)) {
+		if request.ReplayDatasetID != datasetID || request.DeviceID == "" || request.TelemetryKey == "" || len(request.Value) == 0 || request.SampledAt.Before(from) || request.SampledAt.After(from.Add(duration)) {
 			t.Fatalf("request=%#v", request)
 		}
-		if request.Offset != nextOffset[request.DeviceExternalID] {
-			t.Fatalf("device %s offset=%d want=%d", request.DeviceExternalID, request.Offset, nextOffset[request.DeviceExternalID])
+		if request.Offset != nextOffset[request.DeviceID] {
+			t.Fatalf("device %s offset=%d want=%d", request.DeviceID, request.Offset, nextOffset[request.DeviceID])
 		}
-		nextOffset[request.DeviceExternalID]++
+		nextOffset[request.DeviceID]++
 	}
 }

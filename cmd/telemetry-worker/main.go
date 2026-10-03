@@ -107,12 +107,6 @@ func main() {
 		go runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
 	}
 
-	sourceAuthenticator, err := telemetry.ParseSourceAuthenticatorJSON(requiredEnv("TELEMETRY_SOURCE_BINDINGS_JSON"))
-	if err != nil {
-		logger.Error("telemetry_source_bindings_invalid", "error_code", "TELEMETRY_SOURCE_BINDINGS_INVALID")
-		os.Exit(1)
-	}
-
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -185,7 +179,8 @@ func main() {
 			RuntimeAudience:               envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 			HistoricalObservationAcceptor: store,
 			AllowedHistoricalReplaySPIFFE: envOr("TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE", "spiffe://hvac.local/historical-replay-runner"),
-			ObservationAcceptor:           store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,
+			ObservationAcceptor:           store, MQTTEvidenceAcceptor: store,
+			AllowedSourceSPIFFE:            envOr("TELEMETRY_ALLOWED_SOURCE_SPIFFE", "spiffe://hvac.local/mqtt-telemetry-adapter"),
 			Realtime:                       realtimeService,
 			AllowedCentrifugoSPIFFE:        envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
 			CentrifugoProxySecret:          strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),

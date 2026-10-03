@@ -71,7 +71,6 @@ test('central plant seeds cover every canonical telemetry Point', () => {
   assert.ok(s1.includes('INSERT INTO connectivity.integration_instances'));
   assert.ok(s1.includes('INSERT INTO connectivity.gateway_child_bindings'));
   assert.ok(s1.includes('tls://127.0.0.1:58883'));
-  assert.ok(s2.includes("'RESET_TO_ZERO'"));
   assert.ok(!s1.includes('ACCESS_TOKEN'));
   assert.ok(!s2.includes('ACCESS_TOKEN'));
 });
@@ -92,7 +91,6 @@ test('central plant local runtime uses MQTT only', () => {
   for (const marker of [
     './cmd/connectivity',
     './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher',
-    "'spiffe://hvac.local/mqtt-telemetry-adapter'",
     "'energy/v1/+/+/+/telemetry'",
     "'energy/v1/+/+/+/state'",
     "'energy/v1/+/+/+/event'",

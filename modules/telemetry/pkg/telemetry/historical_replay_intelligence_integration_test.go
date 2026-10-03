@@ -15,7 +15,7 @@ const (
 	intelligenceTenantID      = "018f1d00-0000-7000-8000-000000000001"
 	intelligenceSiteID        = "018f1e00-1000-7000-8000-000000000001"
 	intelligenceDeviceID      = "018f1e00-4000-7000-8000-000000000001"
-	intelligenceIntegrationID = "018f1e00-6100-7000-8000-000000000001"
+	intelligenceSourceID      = "issue-348-gateway"
 	intelligenceDatasetID     = "01990000-3480-7000-8000-000000000001"
 	intelligenceExternalID    = "edge-device-owner-a-1"
 	intelligenceLoadPointID   = "01990000-3481-7000-8000-000000000001"
@@ -159,16 +159,16 @@ func historicalReplayIntelligenceRequests() []historicalReplayObservationRequest
 	unitKW, unitKWh := "kW", "kWh"
 	load := func(offset int64, at string, value float64) historicalReplayObservationRequest {
 		return historicalReplayObservationRequest{
-			IntegrationInstanceID: intelligenceIntegrationID, ReplayDatasetID: intelligenceDatasetID,
-			DeviceExternalID: intelligenceExternalID, TelemetryKey: "site.load_kw",
+			ReplayDatasetID: intelligenceDatasetID,
+			DeviceID:        intelligenceDeviceID, TelemetryKey: "site.load_kw",
 			Value: json.RawMessage(fmt.Sprintf("%g", value)), ValueType: "NUMBER", Unit: &unitKW,
 			SampledAt: at, Offset: offset,
 		}
 	}
 	energy := func(offset int64, at string, value float64) historicalReplayObservationRequest {
 		return historicalReplayObservationRequest{
-			IntegrationInstanceID: intelligenceIntegrationID, ReplayDatasetID: intelligenceDatasetID,
-			DeviceExternalID: intelligenceExternalID, TelemetryKey: "grid.import_energy_total",
+			ReplayDatasetID: intelligenceDatasetID,
+			DeviceID:        intelligenceDeviceID, TelemetryKey: "grid.import_energy_total",
 			Value: json.RawMessage(fmt.Sprintf("%g", value)), ValueType: "NUMBER", Unit: &unitKWh,
 			SampledAt: at, Offset: offset,
 		}
@@ -191,17 +191,23 @@ func historicalReplayIntelligenceRequests() []historicalReplayObservationRequest
 
 func historicalReplayIntelligenceCurrentObservations(at time.Time) []ObservationCandidate {
 	unit := "Cel"
+	device := &ResolvedDevice{TenantID: intelligenceTenantID, SiteID: intelligenceSiteID, DeviceID: intelligenceDeviceID}
+	point := func(pointID string) *ResolvedPoint {
+		return &ResolvedPoint{PointID: pointID, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, PointRevision: 1}
+	}
 	return []ObservationCandidate{
 		{
-			IntegrationInstanceID: intelligenceIntegrationID, SourcePath: SourcePathPoll,
+			SourceID: intelligenceSourceID, SourcePath: SourcePathPoll,
 			ExternalEntityType: "DEVICE", ExternalID: intelligenceExternalID,
+			Device: device, Point: point("01990000-3481-7000-8000-000000000003"),
 			TelemetryKey: "btu_meter.supply_water_temperature", Value: json.RawMessage(`7`), ValueType: "NUMBER", Unit: &unit,
 			SampledAt: at, ReceivedAt: at.Add(time.Second),
 			Position: SourcePosition{Partition: "issue-348-current", Offset: 1, EventID: "01990000-3485-7000-8000-000000000001"},
 		},
 		{
-			IntegrationInstanceID: intelligenceIntegrationID, SourcePath: SourcePathPoll,
+			SourceID: intelligenceSourceID, SourcePath: SourcePathPoll,
 			ExternalEntityType: "DEVICE", ExternalID: intelligenceExternalID,
+			Device: device, Point: point("01990000-3481-7000-8000-000000000004"),
 			TelemetryKey: "zone.temperature", Value: json.RawMessage(`23`), ValueType: "NUMBER", Unit: &unit,
 			SampledAt: at.Add(2 * time.Second), ReceivedAt: at.Add(3 * time.Second),
 			Position: SourcePosition{Partition: "issue-348-current", Offset: 2, EventID: "01990000-3485-7000-8000-000000000002"},
@@ -220,23 +226,20 @@ DELETE FROM telemetry_runtime.device_observation_snapshots WHERE device_id=$1::u
 DELETE FROM telemetry_runtime.device_presence WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.source_observations WHERE device_id=$1::uuid;
-DELETE FROM telemetry_runtime.source_positions WHERE integration_instance_id=$2::uuid;
+DELETE FROM telemetry_runtime.source_positions WHERE source_id IN ($2, 'history-replay');
 DELETE FROM telemetry_runtime.freshness_policies WHERE device_id=$1::uuid;
 DELETE FROM telemetry_runtime.presence_policies WHERE device_id=$1::uuid;
-DELETE FROM telemetry_runtime.registry_point_bindings WHERE device_id=$1::uuid;
-DELETE FROM telemetry_runtime.registry_device_bindings WHERE device_id=$1::uuid;
-INSERT INTO telemetry_runtime.registry_device_bindings (
-  tenant_id,device_id,site_id,integration_instance_id,external_entity_type,external_id,
-  binding_status,binding_revision,source_registry_revision,valid_from,valid_to,updated_at
-) VALUES ($3::uuid,$1::uuid,$4::uuid,$2::uuid,'DEVICE',$5,'ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z');
-INSERT INTO telemetry_runtime.registry_point_bindings (
-  projection_id,tenant_id,site_id,point_id,sensor_id,device_id,telemetry_key,point_type,value_type,unit,binding_status,
-  point_revision,source_registry_revision,valid_from,valid_to,updated_at,counter_decrease_mode,counter_rollover_modulus
+DELETE FROM telemetry_runtime.points WHERE device_id=$1::uuid;
+DELETE FROM telemetry_runtime.devices WHERE device_id=$1::uuid;
+INSERT INTO telemetry_runtime.devices (device_id,tenant_id,site_id,updated_at)
+VALUES ($1::uuid,$3::uuid,$4::uuid,'2026-08-28T00:00:00Z');
+-- The Points a live source resolved earlier; replay resolves from them.
+INSERT INTO telemetry_runtime.points (
+  device_id,telemetry_key,tenant_id,site_id,point_id,sensor_id,point_type,value_type,unit,
+  point_revision,updated_at,counter_decrease_mode,counter_rollover_modulus
 ) VALUES
-  ('01990000-3482-7000-8000-000000000001',$3::uuid,$4::uuid,$6::uuid,NULL,$1::uuid,'site.load_kw','TELEMETRY','NUMBER','kW','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z',NULL,NULL),
-  ('01990000-3482-7000-8000-000000000002',$3::uuid,$4::uuid,$7::uuid,NULL,$1::uuid,'grid.import_energy_total','COUNTER','NUMBER','kWh','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z','RESET_TO_ZERO',NULL),
-  ('01990000-3482-7000-8000-000000000003',$3::uuid,$4::uuid,'01990000-3481-7000-8000-000000000003',NULL,$1::uuid,'btu_meter.supply_water_temperature','TELEMETRY','NUMBER','Cel','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z',NULL,NULL),
-  ('01990000-3482-7000-8000-000000000004',$3::uuid,$4::uuid,'01990000-3481-7000-8000-000000000004',NULL,$1::uuid,'zone.temperature','TELEMETRY','NUMBER','Cel','ACTIVE',1,1,'2026-08-01T00:00:00Z',NULL,'2026-08-28T00:00:00Z',NULL,NULL);
+  ($1::uuid,'site.load_kw',$3::uuid,$4::uuid,$5::uuid,NULL,'TELEMETRY','NUMBER','kW',1,'2026-08-28T00:00:00Z',NULL,NULL),
+  ($1::uuid,'grid.import_energy_total',$3::uuid,$4::uuid,$6::uuid,NULL,'COUNTER','NUMBER','kWh',1,'2026-08-28T00:00:00Z','RESET_TO_ZERO',NULL);
 INSERT INTO telemetry_runtime.presence_policies (
   device_id,policy_revision,online_within_seconds,offline_after_seconds,coverage_required,
   accepted_signal_types,max_future_clock_skew_seconds,max_source_lag_seconds,updated_at
@@ -248,7 +251,7 @@ INSERT INTO telemetry_runtime.freshness_policies (
   ($1::uuid,'grid.import_energy_total',1,900,true,900,'NUMBER','kWh',0,NULL,'2026-08-28T00:00:00Z'),
   ($1::uuid,'btu_meter.supply_water_temperature',1,300,true,60,'NUMBER','Cel',0,30,'2026-08-28T00:00:00Z'),
   ($1::uuid,'zone.temperature',1,300,true,60,'NUMBER','Cel',-20,60,'2026-08-28T00:00:00Z');
-`, intelligenceDeviceID, intelligenceIntegrationID, intelligenceTenantID, intelligenceSiteID, intelligenceExternalID, intelligenceLoadPointID, intelligenceEnergyPointID); err != nil {
+`, intelligenceDeviceID, intelligenceSourceID, intelligenceTenantID, intelligenceSiteID, intelligenceLoadPointID, intelligenceEnergyPointID); err != nil {
 		t.Fatal(err)
 	}
 }

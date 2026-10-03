@@ -107,10 +107,9 @@ SELECT subscription_id, client_subscription_id, principal_id::text, subject, sub
 FROM telemetry_runtime.telemetry_subscriptions
 WHERE principal_id = $1::uuid AND channel = $2 AND status = 'ACTIVE' AND expires_at > $3
   AND EXISTS (
-    SELECT 1 FROM telemetry_runtime.registry_device_bindings binding
-    WHERE binding.device_id = telemetry_subscriptions.device_id
-      AND binding.tenant_id = telemetry_subscriptions.tenant_id
-      AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
+    SELECT 1 FROM telemetry_runtime.devices device
+    WHERE device.device_id = telemetry_subscriptions.device_id
+      AND device.tenant_id = telemetry_subscriptions.tenant_id
   )
 `, principalID, channel, now)
 	return scanRealtimeSubscription(row)
@@ -128,10 +127,9 @@ SELECT subscription_id, client_subscription_id, principal_id::text, subject, sub
 FROM telemetry_runtime.telemetry_subscriptions
 WHERE device_id = $1::uuid AND status = 'ACTIVE' AND expires_at > $2
   AND EXISTS (
-    SELECT 1 FROM telemetry_runtime.registry_device_bindings binding
-    WHERE binding.device_id = telemetry_subscriptions.device_id
-      AND binding.tenant_id = telemetry_subscriptions.tenant_id
-      AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
+    SELECT 1 FROM telemetry_runtime.devices device
+    WHERE device.device_id = telemetry_subscriptions.device_id
+      AND device.tenant_id = telemetry_subscriptions.tenant_id
   )
 ORDER BY subscription_id
 `, deviceID, now)

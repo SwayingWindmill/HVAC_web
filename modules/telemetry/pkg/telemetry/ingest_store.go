@@ -51,7 +51,7 @@ func (store *PostgresStore) AcceptObservation(ctx context.Context, candidate Obs
 }
 
 func (store *PostgresStore) AcceptHistoricalObservation(ctx context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
-	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" {
+	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.Device != nil || candidate.Point != nil {
 		return ObservationReceipt{}, errors.New("historical observation must use server-owned HISTORY_REPLAY Device provenance")
 	}
 	return store.acceptObservation(ctx, candidate, EvaluateHistoricalObservation)
@@ -84,10 +84,10 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
 		return ObservationReceipt{}, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, candidate.IntegrationInstanceID+":partition:"+candidate.Position.Partition); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, candidate.SourceID+":partition:"+candidate.Position.Partition); err != nil {
 		return ObservationReceipt{}, fmt.Errorf("lock telemetry source partition: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, candidate.IntegrationInstanceID+":event:"+candidate.Position.EventID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, candidate.SourceID+":event:"+candidate.Position.EventID); err != nil {
 		return ObservationReceipt{}, fmt.Errorf("lock telemetry source event: %w", err)
 	}
 
@@ -96,6 +96,9 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 		return ObservationReceipt{}, err
 	}
 	decision := evaluate(candidate, facts, candidate.ReceivedAt)
+	if err := recordResolvedIdentity(ctx, tx, candidate, decision); err != nil {
+		return ObservationReceipt{}, err
+	}
 	payloadSHA, err := observationPayloadSHA(candidate)
 	if err != nil {
 		return ObservationReceipt{}, err
@@ -170,8 +173,14 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 }
 
 func validateObservationCandidate(candidate ObservationCandidate) error {
-	if !uuidV7Pattern.MatchString(candidate.IntegrationInstanceID) || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
-		return errors.New("telemetry source identity must be UUIDv7")
+	if len(candidate.SourceID) < 1 || len(candidate.SourceID) > 256 || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
+		return errors.New("telemetry source identity is invalid")
+	}
+	if device := candidate.Device; device != nil && (!uuidV7Pattern.MatchString(device.TenantID) || !uuidV7Pattern.MatchString(device.SiteID) || !uuidV7Pattern.MatchString(device.DeviceID)) {
+		return errors.New("telemetry resolved Device is invalid")
+	}
+	if point := candidate.Point; point != nil && (candidate.Device == nil || !uuidV7Pattern.MatchString(point.PointID) || point.SensorID != nil && !uuidV7Pattern.MatchString(*point.SensorID) || point.PointRevision < 1) {
+		return errors.New("telemetry resolved Point is invalid")
 	}
 	if !candidate.SourcePath.Valid() {
 		return errors.New("telemetry source path is invalid")
@@ -203,8 +212,8 @@ func loadObservationFacts(ctx context.Context, tx pgx.Tx, candidate ObservationC
 	err := tx.QueryRow(ctx, `
 SELECT observation_id::text
 FROM telemetry_runtime.source_observations
-WHERE integration_instance_id = $1::uuid AND source_event_id = $2::uuid
-`, candidate.IntegrationInstanceID, candidate.Position.EventID).Scan(&existingID)
+WHERE source_id = $1 AND source_event_id = $2::uuid
+`, candidate.SourceID, candidate.Position.EventID).Scan(&existingID)
 	if err == nil {
 		facts.EventAlreadySeen = true
 	} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -215,30 +224,22 @@ WHERE integration_instance_id = $1::uuid AND source_event_id = $2::uuid
 	err = tx.QueryRow(ctx, `
 SELECT source_offset, source_event_id::text
 FROM telemetry_runtime.source_positions
-WHERE integration_instance_id = $1::uuid AND source_partition = $2
+WHERE source_id = $1 AND source_partition = $2
 FOR UPDATE
-`, candidate.IntegrationInstanceID, candidate.Position.Partition).Scan(&head.Offset, &head.EventID)
+`, candidate.SourceID, candidate.Position.Partition).Scan(&head.Offset, &head.EventID)
 	if err == nil {
 		facts.CurrentPosition = &head
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return ObservationFacts{}, "", fmt.Errorf("lock telemetry source position: %w", err)
 	}
 
-	facts.Bindings, err = queryRuntimeBindings(
-		ctx, tx, candidate.IntegrationInstanceID, candidate.ExternalEntityType, candidate.ExternalID,
-	)
-	if err != nil {
+	if err := loadObservationIdentity(ctx, tx, candidate, &facts); err != nil {
 		return ObservationFacts{}, "", err
 	}
-
-	binding, quarantine := resolveRuntimeBinding(candidate, facts.Bindings)
-	if quarantine != "" {
+	if facts.Device == nil || facts.DeviceConflict {
 		return facts, existingID, nil
 	}
-	facts.PointBindings, err = queryRuntimePointBindings(ctx, tx, binding.TenantID, binding.DeviceID, candidate.TelemetryKey, candidate.SampledAt)
-	if err != nil {
-		return ObservationFacts{}, "", err
-	}
+	deviceID := facts.Device.DeviceID
 	var policy ObservationPolicy
 	var futureSeconds, lagSeconds int
 	err = tx.QueryRow(ctx, `
@@ -248,7 +249,7 @@ SELECT f.policy_revision, p.policy_revision, f.value_type, f.expected_unit,
 FROM telemetry_runtime.freshness_policies f
 JOIN telemetry_runtime.presence_policies p USING (device_id)
 WHERE f.device_id = $1::uuid AND f.telemetry_key = $2 AND f.configured
-`, binding.DeviceID, candidate.TelemetryKey).Scan(
+`, deviceID, candidate.TelemetryKey).Scan(
 		&policy.Revision, &policy.PresencePolicyRevision, &policy.ValueType, &policy.Unit,
 		&policy.MinimumNumber, &policy.MaximumNumber, &futureSeconds, &lagSeconds,
 	)
@@ -264,7 +265,7 @@ WHERE f.device_id = $1::uuid AND f.telemetry_key = $2 AND f.configured
 SELECT sampled_at
 FROM telemetry_runtime.latest_accepted_telemetry
 WHERE device_id = $1::uuid AND telemetry_key = $2
-`, binding.DeviceID, candidate.TelemetryKey).Scan(&latest)
+`, deviceID, candidate.TelemetryKey).Scan(&latest)
 	if err == nil {
 		latest = latest.UTC()
 		facts.LatestSampledAt = &latest
@@ -274,19 +275,110 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 	return facts, existingID, nil
 }
 
+// loadObservationIdentity takes a live source's resolved Device and Point as given, unless
+// Telemetry already knows that Device under another Tenant or Site. History replay names
+// a Device ID only and resolves both from what Telemetry last accepted.
+func loadObservationIdentity(ctx context.Context, tx pgx.Tx, candidate ObservationCandidate, facts *ObservationFacts) error {
+	deviceID := candidate.ExternalID
+	if candidate.SourcePath != SourcePathHistoryReplay {
+		if candidate.Device == nil {
+			return nil
+		}
+		deviceID = candidate.Device.DeviceID
+	}
+	var known ResolvedDevice
+	err := tx.QueryRow(ctx, `
+SELECT tenant_id::text, site_id::text, device_id::text
+FROM telemetry_runtime.devices
+WHERE device_id = $1::uuid
+`, deviceID).Scan(&known.TenantID, &known.SiteID, &known.DeviceID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("query telemetry Device identity: %w", err)
+	}
+	if candidate.SourcePath != SourcePathHistoryReplay {
+		facts.Device = candidate.Device
+		facts.Point = candidate.Point
+		facts.DeviceConflict = err == nil && known != *candidate.Device
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	facts.Device = &known
+	var point ResolvedPoint
+	err = tx.QueryRow(ctx, `
+SELECT point_id::text, sensor_id::text, point_type, value_type, unit,
+       counter_decrease_mode, counter_rollover_modulus, point_revision
+FROM telemetry_runtime.points
+WHERE device_id = $1::uuid AND telemetry_key = $2
+`, known.DeviceID, candidate.TelemetryKey).Scan(
+		&point.PointID, &point.SensorID, &point.PointType, &point.ValueType, &point.Unit,
+		&point.CounterDecreaseMode, &point.CounterRolloverModulus, &point.PointRevision,
+	)
+	if err == nil {
+		facts.Point = &point
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("query telemetry Point identity: %w", err)
+	}
+	return nil
+}
+
+// recordResolvedIdentity keeps the Device and Point a live source resolved, so evidence
+// can reference the Device and history replay can resolve the Point later.
+func recordResolvedIdentity(ctx context.Context, tx pgx.Tx, candidate ObservationCandidate, decision ObservationDecision) error {
+	if candidate.Device == nil || decision.DeviceID == "" {
+		return nil
+	}
+	device := candidate.Device
+	if _, err := tx.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4)
+ON CONFLICT (device_id) DO NOTHING
+`, device.DeviceID, device.TenantID, device.SiteID, candidate.ReceivedAt); err != nil {
+		return fmt.Errorf("record telemetry Device identity: %w", err)
+	}
+	if candidate.Point == nil || decision.PointID == "" {
+		return nil
+	}
+	point := candidate.Point
+	if _, err := tx.Exec(ctx, `
+INSERT INTO telemetry_runtime.points (
+  device_id, telemetry_key, tenant_id, site_id, point_id, sensor_id, point_type, value_type, unit,
+  counter_decrease_mode, counter_rollover_modulus, point_revision, updated_at
+) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7, $8, $9, $10, $11, $12, $13)
+ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
+  point_id = EXCLUDED.point_id,
+  sensor_id = EXCLUDED.sensor_id,
+  point_type = EXCLUDED.point_type,
+  value_type = EXCLUDED.value_type,
+  unit = EXCLUDED.unit,
+  counter_decrease_mode = EXCLUDED.counter_decrease_mode,
+  counter_rollover_modulus = EXCLUDED.counter_rollover_modulus,
+  point_revision = EXCLUDED.point_revision,
+  updated_at = EXCLUDED.updated_at
+WHERE (telemetry_runtime.points.point_id, telemetry_runtime.points.point_revision)
+  IS DISTINCT FROM (EXCLUDED.point_id, EXCLUDED.point_revision)
+`, device.DeviceID, candidate.TelemetryKey, device.TenantID, device.SiteID, point.PointID, point.SensorID,
+		point.PointType, point.ValueType, point.Unit, point.CounterDecreaseMode, point.CounterRolloverModulus,
+		point.PointRevision, candidate.ReceivedAt); err != nil {
+		return fmt.Errorf("record telemetry Point identity: %w", err)
+	}
+	return nil
+}
+
 func advanceSourcePosition(ctx context.Context, tx pgx.Tx, candidate ObservationCandidate) error {
 	_, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.source_positions (
-  integration_instance_id, source_partition, source_offset, source_event_id,
+  source_id, source_partition, source_offset, source_event_id,
   observed_at, updated_at
-) VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6)
-ON CONFLICT (integration_instance_id, source_partition) DO UPDATE SET
+) VALUES ($1, $2, $3, $4::uuid, $5, $6)
+ON CONFLICT (source_id, source_partition) DO UPDATE SET
   source_offset = EXCLUDED.source_offset,
   source_event_id = EXCLUDED.source_event_id,
   observed_at = EXCLUDED.observed_at,
   updated_at = EXCLUDED.updated_at
 WHERE telemetry_runtime.source_positions.source_offset < EXCLUDED.source_offset
-`, candidate.IntegrationInstanceID, candidate.Position.Partition, candidate.Position.Offset, candidate.Position.EventID, candidate.SampledAt, candidate.ReceivedAt)
+`, candidate.SourceID, candidate.Position.Partition, candidate.Position.Offset, candidate.Position.EventID, candidate.SampledAt, candidate.ReceivedAt)
 	if err != nil {
 		return fmt.Errorf("advance telemetry source position: %w", err)
 	}
@@ -305,15 +397,15 @@ func insertSourceDeliveryEvidence(ctx context.Context, tx pgx.Tx, evidenceID str
 	var persistedID string
 	err := tx.QueryRow(ctx, `
 INSERT INTO telemetry_runtime.source_delivery_evidence (
-  evidence_id, tenant_id, integration_instance_id, source_event_id, source_partition,
+  evidence_id, tenant_id, source_id, source_event_id, source_partition,
   source_offset, source_path, delivery_status, quality_reason, payload_sha256, detected_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11)
+) VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (
-  integration_instance_id, source_event_id, source_partition, source_offset,
+  source_id, source_event_id, source_partition, source_offset,
   delivery_status, quality_reason, payload_sha256
 ) DO UPDATE SET detected_at = LEAST(telemetry_runtime.source_delivery_evidence.detected_at, EXCLUDED.detected_at)
 RETURNING evidence_id::text
-`, evidenceID, tenantID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
+`, evidenceID, tenantID, candidate.SourceID, candidate.Position.EventID, candidate.Position.Partition,
 		candidate.Position.Offset, string(candidate.SourcePath), string(decision.Status), string(reason), payloadSHA, candidate.ReceivedAt).Scan(&persistedID)
 	if err != nil {
 		return "", fmt.Errorf("persist telemetry delivery evidence: %w", err)
@@ -344,15 +436,15 @@ func insertSourceObservation(ctx context.Context, tx pgx.Tx, observationID strin
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.source_observations (
-  observation_id, tenant_id, integration_instance_id, source_event_id, source_partition,
+  observation_id, tenant_id, source_id, source_event_id, source_partition,
   source_offset, source_path, device_id, point_id, sensor_id, telemetry_key, value, value_type, unit,
   sampled_at, received_at, acceptance_status, quality, quality_reasons,
   payload_sha256, created_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8::uuid, $9::uuid, $10::uuid, $11, $12::jsonb, $13, $14,
+  $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8::uuid, $9::uuid, $10::uuid, $11, $12::jsonb, $13, $14,
   $15, $16, $17, $18, $19, $20, $16
 )
-`, observationID, tenantID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
+`, observationID, tenantID, candidate.SourceID, candidate.Position.EventID, candidate.Position.Partition,
 		candidate.Position.Offset, string(candidate.SourcePath), deviceID, pointID, sensorID, candidate.TelemetryKey, value, candidate.ValueType, candidate.Unit,
 		candidate.SampledAt, candidate.ReceivedAt, string(decision.Status), string(decision.Quality), qualityReasonStrings(decision.QualityReasons), payloadSHA)
 	if err != nil {
@@ -387,10 +479,10 @@ func (store *PostgresStore) insertQuarantine(ctx context.Context, tx pgx.Tx, can
 	}
 	_, err = tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.ingest_quarantine (
-  quarantine_id, tenant_id, integration_instance_id, external_entity_type, external_id,
+  quarantine_id, tenant_id, source_id, external_entity_type, external_id,
   device_id, telemetry_key, reason_code, evidence, detected_at, resolved_at, resolution
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::uuid, $7, $8, $9::jsonb, $10, NULL, NULL)
-`, quarantineID, tenantID, candidate.IntegrationInstanceID, candidate.ExternalEntityType, candidate.ExternalID,
+) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7, $8, $9::jsonb, $10, NULL, NULL)
+`, quarantineID, tenantID, candidate.SourceID, candidate.ExternalEntityType, candidate.ExternalID,
 		deviceID, candidate.TelemetryKey, string(decision.QuarantineReason), evidence, candidate.ReceivedAt)
 	if err != nil {
 		return fmt.Errorf("persist telemetry quarantine evidence: %w", err)
@@ -442,18 +534,18 @@ INSERT INTO telemetry_runtime.presence_signals (
 
 func observationPayloadSHA(candidate ObservationCandidate) (string, error) {
 	encoded, err := json.Marshal(struct {
-		IntegrationInstanceID string          `json:"integrationInstanceId"`
-		SourcePath            SourcePath      `json:"sourcePath"`
-		ExternalEntityType    string          `json:"externalEntityType"`
-		ExternalID            string          `json:"externalId"`
-		TelemetryKey          string          `json:"telemetryKey"`
-		Value                 json.RawMessage `json:"value"`
-		ValueType             string          `json:"valueType"`
-		Unit                  *string         `json:"unit"`
-		SampledAt             time.Time       `json:"sampledAt"`
-		Position              SourcePosition  `json:"position"`
+		SourceID           string          `json:"sourceId"`
+		SourcePath         SourcePath      `json:"sourcePath"`
+		ExternalEntityType string          `json:"externalEntityType"`
+		ExternalID         string          `json:"externalId"`
+		TelemetryKey       string          `json:"telemetryKey"`
+		Value              json.RawMessage `json:"value"`
+		ValueType          string          `json:"valueType"`
+		Unit               *string         `json:"unit"`
+		SampledAt          time.Time       `json:"sampledAt"`
+		Position           SourcePosition  `json:"position"`
 	}{
-		IntegrationInstanceID: candidate.IntegrationInstanceID, SourcePath: candidate.SourcePath,
+		SourceID: candidate.SourceID, SourcePath: candidate.SourcePath,
 		ExternalEntityType: candidate.ExternalEntityType, ExternalID: candidate.ExternalID,
 		TelemetryKey: candidate.TelemetryKey, Value: candidate.Value, ValueType: candidate.ValueType,
 		Unit: candidate.Unit, SampledAt: candidate.SampledAt, Position: candidate.Position,

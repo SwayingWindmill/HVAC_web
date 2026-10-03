@@ -1,101 +1,27 @@
 package telemetry
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
-	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
 	InternalSourceObservationPath           = "/internal/v1/telemetry/sources/observations:accept"
 	InternalHistoricalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
-	InternalSourceCoveragePath              = "/internal/v1/telemetry/sources/coverage:report"
 	InternalMQTTGatewayEvidencePath         = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
 	InternalMQTTPresenceEvidencePath        = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
 	InternalMQTTRuntimeEventPath            = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumSourceObservationSize            = 96 << 10
 )
-
-type SourceAuthenticator interface {
-	AllowsSource(peerSPIFFE, integrationInstanceID string) bool
-}
-
-type StaticSourceAuthenticator struct {
-	allowed map[string]map[string]struct{}
-}
-
-func NewStaticSourceAuthenticator(bindings map[string][]string) *StaticSourceAuthenticator {
-	authenticator := &StaticSourceAuthenticator{allowed: make(map[string]map[string]struct{}, len(bindings))}
-	for peer, integrations := range bindings {
-		peer = strings.TrimSpace(peer)
-		if peer == "" {
-			continue
-		}
-		set := make(map[string]struct{}, len(integrations))
-		for _, integration := range integrations {
-			integration = strings.TrimSpace(integration)
-			if integration != "" {
-				set[integration] = struct{}{}
-			}
-		}
-		if len(set) > 0 {
-			authenticator.allowed[peer] = set
-		}
-	}
-	return authenticator
-}
-
-func ParseSourceAuthenticatorJSON(raw string) (*StaticSourceAuthenticator, error) {
-	var bindings map[string][]string
-	decoder := json.NewDecoder(bytes.NewBufferString(strings.TrimSpace(raw)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&bindings); err != nil || ensureJSONEOF(decoder) != nil || len(bindings) == 0 {
-		return nil, errors.New("telemetry source bindings JSON is invalid")
-	}
-	for peer, integrations := range bindings {
-		canonicalPeer := strings.TrimSpace(peer)
-		parsed, err := url.Parse(canonicalPeer)
-		if err != nil || parsed.Scheme != "spiffe" || parsed.Host == "" || parsed.Path == "" || parsed.Path == "/" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || len(integrations) == 0 {
-			return nil, errors.New("telemetry source workload binding is invalid")
-		}
-		seen := make(map[string]struct{}, len(integrations))
-		for _, integration := range integrations {
-			integration = strings.TrimSpace(integration)
-			if !uuidV7Pattern.MatchString(integration) {
-				return nil, errors.New("telemetry source integration binding is invalid")
-			}
-			if _, duplicate := seen[integration]; duplicate {
-				return nil, errors.New("telemetry source integration binding is duplicated")
-			}
-			seen[integration] = struct{}{}
-		}
-	}
-	authenticator := NewStaticSourceAuthenticator(bindings)
-	if len(authenticator.allowed) != len(bindings) {
-		return nil, errors.New("telemetry source bindings JSON is incomplete")
-	}
-	return authenticator, nil
-}
-
-func (authenticator *StaticSourceAuthenticator) AllowsSource(peerSPIFFE, integrationInstanceID string) bool {
-	if authenticator == nil {
-		return false
-	}
-	integrations := authenticator.allowed[strings.TrimSpace(peerSPIFFE)]
-	_, allowed := integrations[strings.TrimSpace(integrationInstanceID)]
-	return allowed
-}
 
 type sourcePositionRequest struct {
 	Partition string `json:"partition"`
@@ -103,35 +29,59 @@ type sourcePositionRequest struct {
 	EventID   string `json:"eventId"`
 }
 
+// sourceObservationRequest is one value from Connectivity. Device and Point are what
+// Connectivity resolved from Registry; either is absent when the source key is unregistered.
 type sourceObservationRequest struct {
-	IntegrationInstanceID string                `json:"integrationInstanceId"`
-	SourcePath            string                `json:"sourcePath"`
-	ExternalEntityType    string                `json:"externalEntityType"`
-	ExternalID            string                `json:"externalId"`
-	TelemetryKey          string                `json:"telemetryKey"`
-	Value                 json.RawMessage       `json:"value"`
-	ValueType             string                `json:"valueType"`
-	Unit                  *string               `json:"unit"`
-	WireQuality           uint8                 `json:"wireQuality"`
-	SampledAt             string                `json:"sampledAt"`
-	SourcePosition        sourcePositionRequest `json:"sourcePosition"`
+	SourceID           string                 `json:"sourceId"`
+	SourcePath         string                 `json:"sourcePath"`
+	ExternalEntityType string                 `json:"externalEntityType"`
+	ExternalID         string                 `json:"externalId"`
+	Device             *resolvedDeviceRequest `json:"device"`
+	Point              *resolvedPointRequest  `json:"point"`
+	TelemetryKey       string                 `json:"telemetryKey"`
+	Value              json.RawMessage        `json:"value"`
+	ValueType          string                 `json:"valueType"`
+	Unit               *string                `json:"unit"`
+	WireQuality        uint8                  `json:"wireQuality"`
+	SampledAt          string                 `json:"sampledAt"`
+	SourcePosition     sourcePositionRequest  `json:"sourcePosition"`
+}
+
+type resolvedDeviceRequest struct {
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+	DeviceID string `json:"deviceId"`
+}
+
+type resolvedPointRequest struct {
+	PointID                string   `json:"pointId"`
+	SensorID               *string  `json:"sensorId"`
+	PointType              string   `json:"pointType"`
+	ValueType              string   `json:"valueType"`
+	Unit                   *string  `json:"unit"`
+	CounterDecreaseMode    *string  `json:"counterDecreaseMode"`
+	CounterRolloverModulus *float64 `json:"counterRolloverModulus"`
+	PointRevision          int64    `json:"pointRevision"`
 }
 
 type historicalReplayObservationRequest struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	ReplayDatasetID       string          `json:"replayDatasetId"`
-	DeviceExternalID      string          `json:"deviceExternalId"`
-	TelemetryKey          string          `json:"telemetryKey"`
-	Value                 json.RawMessage `json:"value"`
-	ValueType             string          `json:"valueType"`
-	Unit                  *string         `json:"unit"`
-	WireQuality           uint8           `json:"wireQuality"`
-	SampledAt             string          `json:"sampledAt"`
-	Offset                int64           `json:"offset"`
+	ReplayDatasetID string          `json:"replayDatasetId"`
+	DeviceID        string          `json:"deviceId"`
+	TelemetryKey    string          `json:"telemetryKey"`
+	Value           json.RawMessage `json:"value"`
+	ValueType       string          `json:"valueType"`
+	Unit            *string         `json:"unit"`
+	WireQuality     uint8           `json:"wireQuality"`
+	SampledAt       string          `json:"sampledAt"`
+	Offset          int64           `json:"offset"`
 }
 
+// historicalReplaySourceID is the source of every replayed observation; each dataset and
+// Device replays in its own partition.
+const historicalReplaySourceID = "history-replay"
+
 func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
+	peer, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE)
 	if !ok {
 		return
 	}
@@ -148,11 +98,7 @@ func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *h
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 		return
 	}
-	if !h.sourceAuthenticator.AllowsSource(peer, candidate.IntegrationInstanceID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return
-	}
-	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.IntegrationInstanceID).Allowed {
+	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
 		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The telemetry source observation rate has been exceeded.", true)
 		return
 	}
@@ -176,16 +122,7 @@ func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *h
 }
 
 func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
-	if !ok {
-		return
-	}
-	if h.allowedHistoricalReplaySPIFFE == "" {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_REPLAY_UNAVAILABLE", "The telemetry Historical Replay path is temporarily unavailable.", true)
-		return
-	}
-	if peer != h.allowedHistoricalReplaySPIFFE {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling workload identity is not authorized for Historical Replay.", false)
+	if _, ok := h.trustedSourcePeer(writer, request, h.allowedHistoricalReplaySPIFFE); !ok {
 		return
 	}
 	if h.historicalObservationAcceptor == nil {
@@ -201,11 +138,7 @@ func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, 
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_HISTORY_REPLAY_REQUEST_INVALID", "The Historical Replay observation request is invalid.", false)
 		return
 	}
-	if !h.sourceAuthenticator.AllowsSource(peer, candidate.IntegrationInstanceID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling replay workload identity is not trusted for this integration.", false)
-		return
-	}
-	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.IntegrationInstanceID).Allowed {
+	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
 		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The Historical Replay observation rate has been exceeded.", true)
 		return
 	}
@@ -228,22 +161,37 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 		return ObservationCandidate{}, errors.New("HISTORY_REPLAY requires the dedicated admission path")
 	}
 	candidate := ObservationCandidate{
-		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
-		SourcePath:            sourcePath,
-		ExternalEntityType:    strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)),
-		ExternalID:            strings.TrimSpace(input.ExternalID),
-		TelemetryKey:          strings.TrimSpace(input.TelemetryKey),
-		Value:                 append(json.RawMessage(nil), input.Value...),
-		ValueType:             strings.ToUpper(strings.TrimSpace(input.ValueType)),
-		Unit:                  cloneString(input.Unit),
-		WireQuality:           input.WireQuality,
-		SampledAt:             sampledAt.UTC(),
-		ReceivedAt:            receivedAt.UTC(),
+		SourceID:           strings.TrimSpace(input.SourceID),
+		SourcePath:         sourcePath,
+		ExternalEntityType: strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)),
+		ExternalID:         strings.TrimSpace(input.ExternalID),
+		TelemetryKey:       strings.TrimSpace(input.TelemetryKey),
+		Value:              append(json.RawMessage(nil), input.Value...),
+		ValueType:          strings.ToUpper(strings.TrimSpace(input.ValueType)),
+		Unit:               cloneString(input.Unit),
+		WireQuality:        input.WireQuality,
+		SampledAt:          sampledAt.UTC(),
+		ReceivedAt:         receivedAt.UTC(),
 		Position: SourcePosition{
 			Partition: strings.TrimSpace(input.SourcePosition.Partition),
 			Offset:    input.SourcePosition.Offset,
 			EventID:   strings.TrimSpace(input.SourcePosition.EventID),
 		},
+	}
+	if device := input.Device; device != nil {
+		candidate.Device = &ResolvedDevice{
+			TenantID: strings.ToLower(strings.TrimSpace(device.TenantID)),
+			SiteID:   strings.ToLower(strings.TrimSpace(device.SiteID)),
+			DeviceID: strings.ToLower(strings.TrimSpace(device.DeviceID)),
+		}
+	}
+	if point := input.Point; point != nil {
+		candidate.Point = &ResolvedPoint{
+			PointID: strings.ToLower(strings.TrimSpace(point.PointID)), SensorID: cloneString(point.SensorID),
+			PointType: point.PointType, ValueType: point.ValueType, Unit: cloneString(point.Unit),
+			CounterDecreaseMode: cloneString(point.CounterDecreaseMode), CounterRolloverModulus: point.CounterRolloverModulus,
+			PointRevision: point.PointRevision,
+		}
 	}
 	if err := validateObservationCandidate(candidate); err != nil {
 		return ObservationCandidate{}, err
@@ -253,33 +201,33 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 
 func normalizeHistoricalReplayObservation(input historicalReplayObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
 	datasetID := strings.ToLower(strings.TrimSpace(input.ReplayDatasetID))
-	deviceExternalID := strings.TrimSpace(input.DeviceExternalID)
-	if !uuidV7Pattern.MatchString(datasetID) || deviceExternalID == "" || len(deviceExternalID) > 512 || input.Offset < 0 || receivedAt.IsZero() {
+	deviceID := strings.ToLower(strings.TrimSpace(input.DeviceID))
+	if !uuidV7Pattern.MatchString(datasetID) || !uuidV7Pattern.MatchString(deviceID) || input.Offset < 0 || receivedAt.IsZero() {
 		return ObservationCandidate{}, errors.New("Historical Replay identity is invalid")
 	}
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
 	if err != nil {
 		return ObservationCandidate{}, errors.New("Historical Replay sampledAt is invalid")
 	}
-	deviceDigest := sha256.Sum256([]byte(deviceExternalID))
+	deviceDigest := sha256.Sum256([]byte(deviceID))
 	partition := "history-replay:" + datasetID + ":" + hex.EncodeToString(deviceDigest[:16])
 	eventID, err := deterministicHistoricalReplayEventID(datasetID, partition, input.Offset)
 	if err != nil {
 		return ObservationCandidate{}, err
 	}
 	candidate := ObservationCandidate{
-		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
-		SourcePath:            SourcePathHistoryReplay,
-		ExternalEntityType:    "DEVICE",
-		ExternalID:            deviceExternalID,
-		TelemetryKey:          strings.TrimSpace(input.TelemetryKey),
-		Value:                 append(json.RawMessage(nil), input.Value...),
-		ValueType:             strings.ToUpper(strings.TrimSpace(input.ValueType)),
-		Unit:                  cloneString(input.Unit),
-		WireQuality:           input.WireQuality,
-		SampledAt:             sampledAt.UTC(),
-		ReceivedAt:            receivedAt.UTC(),
-		Position:              SourcePosition{Partition: partition, Offset: input.Offset, EventID: eventID},
+		SourceID:           historicalReplaySourceID,
+		SourcePath:         SourcePathHistoryReplay,
+		ExternalEntityType: "DEVICE",
+		ExternalID:         deviceID,
+		TelemetryKey:       strings.TrimSpace(input.TelemetryKey),
+		Value:              append(json.RawMessage(nil), input.Value...),
+		ValueType:          strings.ToUpper(strings.TrimSpace(input.ValueType)),
+		Unit:               cloneString(input.Unit),
+		WireQuality:        input.WireQuality,
+		SampledAt:          sampledAt.UTC(),
+		ReceivedAt:         receivedAt.UTC(),
+		Position:           SourcePosition{Partition: partition, Offset: input.Offset, EventID: eventID},
 	}
 	if err := validateObservationCandidate(candidate); err != nil {
 		return ObservationCandidate{}, err
@@ -302,65 +250,19 @@ func deterministicHistoricalReplayEventID(datasetID, partition string, offset in
 	return raw[:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:], nil
 }
 
-type sourceCoverageRequest struct {
-	IntegrationInstanceID string  `json:"integrationInstanceId"`
-	ExternalEntityType    string  `json:"externalEntityType"`
-	ExternalID            string  `json:"externalId"`
-	Available             bool    `json:"available"`
-	ContinuousSince       *string `json:"continuousSince"`
-	Reason                string  `json:"reason"`
-	SourceRevision        int64   `json:"sourceRevision"`
-}
-
-func (h *handler) handleSourceCoverage(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
-	if !ok {
-		return
-	}
-	if h.coverageReporter == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
-		return
-	}
-	var input sourceCoverageRequest
-	if !decodeSourceRequest(writer, request, &input) {
-		return
-	}
-	report, err := normalizeSourceCoverage(input, h.now().UTC())
-	if err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
-		return
-	}
-	if !h.sourceAuthenticator.AllowsSource(peer, report.IntegrationInstanceID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return
-	}
-	receipt, err := h.coverageReporter.ReportCoverage(request.Context(), report)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
-		return
-	}
-	if receipt.Status == "QUARANTINED" {
-		receipt.DeviceID = ""
-		h.metrics.observeQuarantine("scope")
-	}
-	writeJSON(writer, http.StatusOK, receipt)
-}
-
 type mqttGatewayEvidenceRequest struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	TenantID              string          `json:"tenantId"`
-	SiteID                string          `json:"siteId"`
-	GatewayID             string          `json:"gatewayId"`
-	MessageID             string          `json:"messageId"`
-	EvidenceType          string          `json:"evidenceType"`
-	ObservedAt            string          `json:"observedAt"`
-	Sequence              int64           `json:"sequence"`
-	Payload               json.RawMessage `json:"payload"`
+	TenantID     string          `json:"tenantId"`
+	SiteID       string          `json:"siteId"`
+	GatewayID    string          `json:"gatewayId"`
+	MessageID    string          `json:"messageId"`
+	EvidenceType string          `json:"evidenceType"`
+	ObservedAt   string          `json:"observedAt"`
+	Sequence     int64           `json:"sequence"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 func (h *handler) handleMQTTGatewayEvidence(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
-	if !ok {
+	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
 		return
 	}
 	if h.mqttEvidenceAcceptor == nil {
@@ -371,18 +273,13 @@ func (h *handler) handleMQTTGatewayEvidence(writer http.ResponseWriter, request 
 	if !decodeSourceRequest(writer, request, &input) {
 		return
 	}
-	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
-	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return
-	}
 	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT evidence request is invalid.", false)
 		return
 	}
 	evidence := GatewayEvidence{
-		IntegrationInstanceID: integrationID, TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID),
+		TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID),
 		GatewayID: strings.TrimSpace(input.GatewayID), MessageID: strings.TrimSpace(input.MessageID), EvidenceType: strings.ToUpper(strings.TrimSpace(input.EvidenceType)),
 		ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), Sequence: input.Sequence, Payload: append(json.RawMessage(nil), input.Payload...),
 	}
@@ -394,17 +291,14 @@ func (h *handler) handleMQTTGatewayEvidence(writer http.ResponseWriter, request 
 }
 
 type mqttPresenceEvidenceRequest struct {
-	IntegrationInstanceID string `json:"integrationInstanceId"`
-	ExternalEntityType    string `json:"externalEntityType"`
-	ExternalID            string `json:"externalId"`
-	SignalType            string `json:"signalType"`
-	ObservedAt            string `json:"observedAt"`
-	SourceEventID         string `json:"sourceEventId"`
+	DeviceID      string `json:"deviceId"`
+	SignalType    string `json:"signalType"`
+	ObservedAt    string `json:"observedAt"`
+	SourceEventID string `json:"sourceEventId"`
 }
 
 func (h *handler) handleMQTTPresenceEvidence(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
-	if !ok {
+	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
 		return
 	}
 	if h.mqttEvidenceAcceptor == nil {
@@ -415,18 +309,13 @@ func (h *handler) handleMQTTPresenceEvidence(writer http.ResponseWriter, request
 	if !decodeSourceRequest(writer, request, &input) {
 		return
 	}
-	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
-	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return
-	}
 	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT Presence evidence request is invalid.", false)
 		return
 	}
 	receipt, err := h.mqttEvidenceAcceptor.AcceptPresenceEvidence(request.Context(), DevicePresenceEvidence{
-		IntegrationInstanceID: integrationID, ExternalEntityType: strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)), ExternalID: strings.TrimSpace(input.ExternalID),
+		DeviceID:   strings.ToLower(strings.TrimSpace(input.DeviceID)),
 		SignalType: strings.ToUpper(strings.TrimSpace(input.SignalType)), ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), SourceEventID: strings.TrimSpace(input.SourceEventID),
 	})
 	if err != nil {
@@ -437,23 +326,21 @@ func (h *handler) handleMQTTPresenceEvidence(writer http.ResponseWriter, request
 }
 
 type mqttRuntimeEventRequest struct {
-	IntegrationInstanceID string          `json:"integrationInstanceId"`
-	TenantID              string          `json:"tenantId"`
-	SiteID                string          `json:"siteId"`
-	GatewayID             string          `json:"gatewayId"`
-	MessageID             string          `json:"messageId"`
-	Sequence              int64           `json:"sequence"`
-	EventType             string          `json:"eventType"`
-	SourceType            string          `json:"sourceType"`
-	SourceID              string          `json:"sourceId"`
-	EventTime             string          `json:"eventTime"`
-	Severity              string          `json:"severity"`
-	Data                  json.RawMessage `json:"data"`
+	TenantID   string          `json:"tenantId"`
+	SiteID     string          `json:"siteId"`
+	GatewayID  string          `json:"gatewayId"`
+	MessageID  string          `json:"messageId"`
+	Sequence   int64           `json:"sequence"`
+	EventType  string          `json:"eventType"`
+	SourceType string          `json:"sourceType"`
+	SourceID   string          `json:"sourceId"`
+	EventTime  string          `json:"eventTime"`
+	Severity   string          `json:"severity"`
+	Data       json.RawMessage `json:"data"`
 }
 
 func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *http.Request) {
-	peer, ok := h.trustedSourcePeer(writer, request)
-	if !ok {
+	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
 		return
 	}
 	if h.mqttEvidenceAcceptor == nil {
@@ -464,18 +351,13 @@ func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *ht
 	if !decodeSourceRequest(writer, request, &input) {
 		return
 	}
-	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
-	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return
-	}
 	eventTime, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.EventTime))
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request is invalid.", false)
 		return
 	}
 	evidence := RuntimeEventEvidence{
-		IntegrationInstanceID: integrationID, TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID), GatewayID: strings.TrimSpace(input.GatewayID),
+		TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID), GatewayID: strings.TrimSpace(input.GatewayID),
 		MessageID: strings.TrimSpace(input.MessageID), Sequence: input.Sequence, EventType: strings.TrimSpace(input.EventType), SourceType: strings.TrimSpace(input.SourceType), SourceID: strings.TrimSpace(input.SourceID),
 		EventTime: eventTime.UTC(), Severity: strings.ToUpper(strings.TrimSpace(input.Severity)), Data: append(json.RawMessage(nil), input.Data...), ReceivedAt: h.now().UTC(),
 	}
@@ -486,7 +368,8 @@ func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *ht
 	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "messageId": evidence.MessageID})
 }
 
-func (h *handler) trustedSourcePeer(writer http.ResponseWriter, request *http.Request) (string, bool) {
+// trustedSourcePeer admits a POST only from the one workload identity allowed on the route.
+func (h *handler) trustedSourcePeer(writer http.ResponseWriter, request *http.Request, allowedSPIFFE string) (string, bool) {
 	if request.Method != http.MethodPost {
 		writer.Header().Set("Allow", http.MethodPost)
 		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry source route only supports POST.", false)
@@ -497,12 +380,8 @@ func (h *handler) trustedSourcePeer(writer http.ResponseWriter, request *http.Re
 		return "", false
 	}
 	peer, ok := verifiedPeerSPIFFE(request)
-	if !ok {
+	if !ok || peer != allowedSPIFFE {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
-		return "", false
-	}
-	if h.sourceAuthenticator == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return "", false
 	}
 	return peer, true
@@ -523,29 +402,3 @@ func decodeSourceRequest(writer http.ResponseWriter, request *http.Request, dest
 	}
 	return true
 }
-
-func normalizeSourceCoverage(input sourceCoverageRequest, reportedAt time.Time) (CoverageReport, error) {
-	report := CoverageReport{
-		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
-		ExternalEntityType:    strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)),
-		ExternalID:            strings.TrimSpace(input.ExternalID),
-		Available:             input.Available,
-		Reason:                telemetryapi.AvailabilityReasonCode(strings.ToUpper(strings.TrimSpace(input.Reason))),
-		SourceRevision:        input.SourceRevision,
-		ReportedAt:            reportedAt.UTC(),
-	}
-	if input.ContinuousSince != nil {
-		value, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*input.ContinuousSince))
-		if err != nil {
-			return CoverageReport{}, errors.New("telemetry coverage continuousSince is invalid")
-		}
-		value = value.UTC()
-		report.ContinuousSince = &value
-	}
-	if err := validateCoverageReport(report); err != nil {
-		return CoverageReport{}, err
-	}
-	return report, nil
-}
-
-var _ SourceAuthenticator = (*StaticSourceAuthenticator)(nil)
