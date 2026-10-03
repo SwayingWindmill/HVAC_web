@@ -62,6 +62,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	retentionContext, retentionCancel := context.WithCancel(context.Background())
+	defer retentionCancel()
+	go runRuntimeRetention(retentionContext, store, logger)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -538,6 +541,27 @@ func runRealtimeRelay(ctx context.Context, service *telemetry.RealtimeService, l
 			if published > 0 {
 				logger.Info("telemetry_realtime_relay_batch_published", "publication_count", published)
 			}
+		}
+	}
+}
+
+// runRuntimeRetention prunes superseded presence signals and delivered publications,
+// which nothing reads once they are past the retention window.
+func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, logger *slog.Logger) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		pruned, err := store.PruneRuntimeHistory(ctx, time.Now())
+		switch {
+		case err != nil && ctx.Err() == nil:
+			logger.Warn("telemetry_runtime_retention_failed", "error_code", "TELEMETRY_RUNTIME_RETENTION_FAILED")
+		case pruned.PresenceSignals > 0 || pruned.Publications > 0:
+			logger.Info("telemetry_runtime_history_pruned", "presence_signals", pruned.PresenceSignals, "publications", pruned.Publications)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

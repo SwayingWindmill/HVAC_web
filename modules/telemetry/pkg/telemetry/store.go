@@ -243,28 +243,23 @@ WHERE device_id = $1::uuid
 		facts.Coverage.Reason = telemetryapi.AvailabilityReasonCode(*coverageReason)
 	}
 
-	rows, err := tx.Query(ctx, `
+	// Presence only depends on the latest accepted signal of an allowed type, so only
+	// that one is read: the table keeps every signal ever received.
+	if facts.PresencePolicy != nil {
+		var signal PresenceSignal
+		err = tx.QueryRow(ctx, `
 SELECT signal_type, observed_at
 FROM telemetry_runtime.presence_signals
-WHERE device_id = $1::uuid AND accepted
-ORDER BY observed_at, signal_id
-`, deviceID)
-	if err != nil {
-		return DeviceFacts{}, fmt.Errorf("query telemetry presence signals: %w", err)
-	}
-	for rows.Next() {
-		var signal PresenceSignal
-		if err := rows.Scan(&signal.Type, &signal.ObservedAt); err != nil {
-			rows.Close()
-			return DeviceFacts{}, fmt.Errorf("scan telemetry presence signal: %w", err)
+WHERE device_id = $1::uuid AND accepted AND signal_type = ANY($2::text[])
+ORDER BY observed_at DESC, signal_id
+LIMIT 1
+`, deviceID, presenceSignalTypes(facts.PresencePolicy.AcceptedSignalTypes)).Scan(&signal.Type, &signal.ObservedAt)
+		if err == nil {
+			facts.PresenceSignals = []PresenceSignal{signal}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return DeviceFacts{}, fmt.Errorf("load latest telemetry presence signal: %w", err)
 		}
-		facts.PresenceSignals = append(facts.PresenceSignals, signal)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return DeviceFacts{}, fmt.Errorf("iterate telemetry presence signals: %w", err)
-	}
-	rows.Close()
 
 	var lastKnownJSON []byte
 	err = tx.QueryRow(ctx, `SELECT last_known FROM telemetry_runtime.device_presence WHERE device_id = $1::uuid`, deviceID).Scan(&lastKnownJSON)
@@ -278,7 +273,7 @@ ORDER BY observed_at, signal_id
 		return DeviceFacts{}, fmt.Errorf("load last-known presence: %w", err)
 	}
 
-	rows, err = tx.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 SELECT telemetry_key, policy_revision, fresh_within_seconds, configured
 FROM telemetry_runtime.freshness_policies
 WHERE device_id = $1::uuid
