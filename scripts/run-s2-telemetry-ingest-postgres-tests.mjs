@@ -86,7 +86,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', '^(TestPostgresConcurrentDevicesDoNotConflict|TestPostgresIngestEndToEnd)$', '-v', './pkg/telemetry/...',
+    'test', '-count=1', '-run', '^(TestPostgresConcurrentDevicesDoNotConflict|TestPostgresIngestEndToEnd|TestPostgresPruneRemovesOnlyFinishedHistory)$', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,

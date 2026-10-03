@@ -425,10 +425,16 @@ func greatestAcceptedSignal(values []PresenceSignal, acceptedTypes []string) *Pr
 }
 
 func signalTypeAllowed(signalType string, acceptedTypes []string) bool {
+	return slices.Contains(presenceSignalTypes(acceptedTypes), signalType)
+}
+
+// presenceSignalTypes is the set of signal types a presence policy accepts; a policy
+// that names none accepts source activity and explicit connects.
+func presenceSignalTypes(acceptedTypes []string) []string {
 	if len(acceptedTypes) == 0 {
-		return signalType == "SOURCE_ACTIVITY" || signalType == "EXPLICIT_CONNECT"
+		return []string{"SOURCE_ACTIVITY", "EXPLICIT_CONNECT"}
 	}
-	return slices.Contains(acceptedTypes, signalType)
+	return acceptedTypes
 }
 
 func instant(value time.Time) telemetryapi.Instant {
