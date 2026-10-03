@@ -289,8 +289,8 @@ CREATE POLICY api_credentials_maintenance_expiry ON iam.api_credentials
 -- Connectivity is installed into the same hvac_s1 database during Phase 1. The
 -- maintenance identity receives read-only certificate metadata, never Secret material.
 GRANT USAGE ON SCHEMA connectivity TO maintenance_runtime;
-GRANT SELECT (id,tenant_id,credential_kind,status,valid_from,valid_until,certificate_fingerprint_sha256) ON connectivity.credential_refs TO maintenance_runtime;
-CREATE POLICY connectivity_credential_refs_maintenance_expiry ON connectivity.credential_refs
+GRANT SELECT (id,tenant_id,gateway_id,status,valid_from,valid_until,certificate_fingerprint_sha256) ON connectivity.gateway_credentials TO maintenance_runtime;
+CREATE POLICY connectivity_gateway_credentials_maintenance_expiry ON connectivity.gateway_credentials
   FOR SELECT TO maintenance_runtime USING (true);
 
 GRANT USAGE ON SCHEMA core_registry TO s1_iam_migrator;

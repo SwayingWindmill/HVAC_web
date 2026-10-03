@@ -7,12 +7,10 @@ services:
       OIDC_REDIRECT_URI: ${PLATFORM_PUBLIC_ORIGIN:-https://localhost:8443}/api/v1/auth/callback
       IDENTITY_POLICY_REVISION: registry-read:1
       QUERY_CUBE_ENDPOINT: http://cube:4000
-      COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/secrets:/run/hvac/secrets:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/tls:/run/hvac/public-tls:ro
-      - ./config/command-runtime-cohorts.local.json:/run/hvac/phase1-config/command-runtime-cohorts.local.json:ro
       - ../../../contracts/ownership/route-ownership.v1.json:/run/hvac/config/route-ownership.v1.json:ro
 
   identity-service:
@@ -37,16 +35,12 @@ services:
     environment:
       ANALYTICS_PROJECTION_ENABLED: "false"
       TELEMETRY_ALARM_CA: /run/hvac/pki/ca.crt
-      TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
 
   connectivity:
-    environment:
-      COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
-      - ./config/command-edge-bindings.local.json:/run/hvac/phase1-config/command-edge-bindings.local.json:ro
     depends_on:
       energy-api:
         condition: service_healthy

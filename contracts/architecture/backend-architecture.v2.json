@@ -79,10 +79,9 @@
     ]
   },
   "mqtt": {
-    "topicTemplate": "energy/v1/{tenant}/{site}/{gateway}/{messageType}",
-    "uplinkMessageTypes": ["telemetry", "state", "event", "heartbeat"],
+    "topicTemplate": "hvac/v1/{gatewayId}/{up|down}/{messageType}",
+    "uplinkMessageTypes": ["telemetry", "event", "reply"],
     "downlinkMessageTypes": ["command"],
-    "replyMessageTypes": ["command/reply"],
     "wireTime": "epoch-milliseconds",
     "gatewayScopedBatch": true,
     "wireQualitySeparatedFromCloudQuality": true,

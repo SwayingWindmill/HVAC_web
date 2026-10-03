@@ -25,6 +25,20 @@ For each message Connectivity:
 
 A message from an unknown Gateway, from a Gateway without an active credential, or that cannot be parsed is written to `connectivity.uplink_quarantine` and acknowledged.
 
+## Commands
+
+When `COMMAND_RUNTIME_IN_PROCESS_ENABLED=true`, Connectivity also dispatches and verifies commands for every Tenant over one MQTT connection (identity `command-dispatcher`). It publishes to `hvac/v1/{gatewayId}/down/command` and reads every reply from `hvac/v1/+/up/reply`; a reply's Tenant comes from the Registry gateway directory.
+
+Where a command goes comes from the Registry read port, inside the command's Tenant. Before anything is sent, a command is rejected with:
+
+| Code | When |
+| --- | --- |
+| `COMMAND_ROUTE_NOT_FOUND` | the Device is not behind an active Gateway (`gateway_device_source_keys_v1`) |
+| `COMMAND_CONTROL_DISABLED` | the command Point is not an active writable Point of the Device (`point_bindings_v1`) |
+| `COMMAND_GATEWAY_CREDENTIAL_INACTIVE` | the Gateway holds no active Gateway Credential |
+
+The device is addressed on the wire by its source key. If the command runtime is enabled but cannot start, the process exits.
+
 ## Ordering and backpressure
 
 Each Gateway has its own queue and worker, created when its first message arrives. A message is acknowledged only after it is processed or quarantined. A transient failure is retried in place, so a Gateway's messages stay in order. When a Gateway's queue is full, Connectivity stops taking messages and the broker holds the backlog; nothing is dropped. `hvac_mqtt_gateway_queue_depth{gateway_id}` shows each Gateway's backlog.
@@ -46,7 +60,12 @@ Environment variables, with defaults for the Phase 1 compose network:
 | `CONNECTIVITY_CA` | `/run/hvac/pki/ca.crt` |
 | `CONNECTIVITY_DATABASE_URL` | required |
 
-Commands still run through one integration instance (`MQTT_COMMAND_INTEGRATION_ID`) on per-Tenant topics until they move to `hvac/v1/{gatewayId}/down/command` (#406).
+| `COMMAND_RUNTIME_IN_PROCESS_ENABLED` | off; `true` runs the command runtime |
+| `COMMAND_DISPATCHER_CERT` / `COMMAND_DISPATCHER_KEY` | `/run/hvac/pki/command-dispatcher/tls.*` (MQTT, command owner, dispatch safety) |
+| `COMMAND_VERIFIER_CERT` / `COMMAND_VERIFIER_KEY` | `/run/hvac/pki/command-verifier/tls.*` (command owner, reported state) |
+| `COMMAND_RUNTIME_CA` | `/run/hvac/pki/ca.crt` |
+| `COMMAND_RUNTIME_URL` / `COMMAND_RUNTIME_SERVER_NAME` | `https://command-service:8447` / `command-service` |
+| `COMMAND_TELEMETRY_URL` / `COMMAND_TELEMETRY_SERVER_NAME` | `https://telemetry-runtime-service:8446` / `telemetry-runtime-service` |
 
 ## Verification
 

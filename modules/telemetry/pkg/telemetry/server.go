@@ -53,10 +53,6 @@ type ServerConfig struct {
 	AllowedIAMSPIFFE               string
 	AllowedCommandVerifierSPIFFE   string
 	AllowedCommandDispatcherSPIFFE string
-	CommandVerifierTenantID        string
-	CommandVerifierSiteID          string
-	CommandVerifierDeviceID        string
-	CommandVerifierDeviceIDs       []string
 	Metrics                        *observability.Registry
 	Now                            func() time.Time
 	RateLimiter                    *limitpolicy.Limiter
@@ -80,10 +76,6 @@ type handler struct {
 	allowedIAMSPIFFE               string
 	allowedCommandVerifierSPIFFE   string
 	allowedCommandDispatcherSPIFFE string
-	commandVerifierTenantID        string
-	commandVerifierSiteID          string
-	commandVerifierDeviceID        string
-	commandVerifierDeviceIDs       map[string]struct{}
 	metrics                        *s2Metrics
 	now                            func() time.Time
 	rateLimiter                    *limitpolicy.Limiter
@@ -93,15 +85,6 @@ func NewHandler(config ServerConfig) http.Handler {
 	now := config.Now
 	if now == nil {
 		now = time.Now
-	}
-	commandVerifierDeviceIDs := make(map[string]struct{}, len(config.CommandVerifierDeviceIDs)+1)
-	if deviceID := strings.TrimSpace(config.CommandVerifierDeviceID); deviceID != "" {
-		commandVerifierDeviceIDs[deviceID] = struct{}{}
-	}
-	for _, rawDeviceID := range config.CommandVerifierDeviceIDs {
-		if deviceID := strings.TrimSpace(rawDeviceID); deviceID != "" {
-			commandVerifierDeviceIDs[deviceID] = struct{}{}
-		}
 	}
 	allowedSnapshotReaderSPIFFEs := map[string]struct{}{}
 	if gateway := strings.TrimSpace(config.AllowedGatewaySPIFFE); gateway != "" {
@@ -130,10 +113,6 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
 		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
 		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
-		commandVerifierTenantID:        strings.TrimSpace(config.CommandVerifierTenantID),
-		commandVerifierSiteID:          strings.TrimSpace(config.CommandVerifierSiteID),
-		commandVerifierDeviceID:        strings.TrimSpace(config.CommandVerifierDeviceID),
-		commandVerifierDeviceIDs:       commandVerifierDeviceIDs,
 		metrics:                        newS2Metrics(config.Metrics, now),
 		now:                            now,
 		rateLimiter:                    config.RateLimiter,

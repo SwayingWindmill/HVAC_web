@@ -28,6 +28,18 @@ func TestPostgresConnectorEvidenceIsDurableIdempotentAndFenceBound(t *testing.T)
 	defer opened.Close()
 	store := NewPostgresStore(opened.pool, fixedPostgresClock(), nil)
 
+	submitted, err := store.Submit(ctx, postgresCommandRequest("target-runtime-evidence", 24))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	envelope, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if envelope.CommandID != submitted.Intent.ID {
+		t.Fatalf("claimed command=%s submitted=%s", envelope.CommandID, submitted.Intent.ID)
+	}
+	// A second, unclaimed command: evidence naming it must not attach to this attempt.
 	otherRequest := postgresCommandRequest("target-runtime-evidence-other", 23)
 	otherRequest.SiteID = "018f3e00-1000-7000-8000-000000000002"
 	otherRequest.DeviceID = "018f3e00-3000-7000-8000-000000000002"
@@ -36,30 +48,6 @@ func TestPostgresConnectorEvidenceIsDurableIdempotentAndFenceBound(t *testing.T)
 	other, err := store.Submit(ctx, otherRequest)
 	if err != nil {
 		t.Fatalf("submit other command: %v", err)
-	}
-	submitted, err := store.Submit(ctx, postgresCommandRequest("target-runtime-evidence", 24))
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	envelope, err := store.ClaimDispatchForCohort(ctx, commandTenantA, commandSiteA, commandDeviceA, commandmodel.CapabilitySetTemperatureSetpoint, "dispatcher-a", 30*time.Second)
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	if envelope.CommandID != submitted.Intent.ID {
-		t.Fatalf("claimed command=%s submitted=%s", envelope.CommandID, submitted.Intent.ID)
-	}
-	var otherStatus string
-	var otherLeaseOwner *string
-	if err := admin.QueryRow(ctx, `
-SELECT i.status, o.lease_owner
-FROM command_runtime.command_intents i
-JOIN command_runtime.command_dispatch_outbox o ON o.command_id = i.command_id
-WHERE i.command_id = $1::uuid
-`, other.Intent.ID).Scan(&otherStatus, &otherLeaseOwner); err != nil {
-		t.Fatal(err)
-	}
-	if otherStatus != string(commandmodel.IntentQueued) || otherLeaseOwner != nil {
-		t.Fatalf("non-cohort command was perturbed: status=%s leaseOwner=%v", otherStatus, otherLeaseOwner)
 	}
 
 	prepared := commandmodel.PreparedConnectorEvidence{

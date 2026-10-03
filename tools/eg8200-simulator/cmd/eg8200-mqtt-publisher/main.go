@@ -124,8 +124,6 @@ func main() {
 	logger.Info(
 		"eg8200_mqtt_publisher_started",
 		"gateway_id", plantConfig.GatewayID,
-		"tenant_id", mqttConfig.TenantID,
-		"site_id", mqttConfig.SiteID,
 		"scheduler_interval", interval.String(),
 		"point_count", len(plantConfig.Points),
 	)

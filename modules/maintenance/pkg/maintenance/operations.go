@@ -71,8 +71,8 @@ FROM (
   WHERE status='ACTIVE' AND expires_at <= $1
   UNION ALL
   SELECT 'CONNECTIVITY_MTLS_CERTIFICATE'::text,id::text,tenant_id::text,valid_until,certificate_fingerprint_sha256
-  FROM connectivity.credential_refs
-  WHERE credential_kind='MTLS_CERTIFICATE' AND status='ACTIVE' AND valid_until <= $1
+  FROM connectivity.gateway_credentials
+  WHERE status='ACTIVE' AND valid_until <= $1
 ) expiry
 ORDER BY expires_at ASC`, now.UTC().Add(horizon))
 	if err != nil {

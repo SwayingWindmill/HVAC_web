@@ -33,25 +33,24 @@ type EvidenceStore interface {
 	Complete(context.Context, commandmodel.CompletedConnectorEvidence) error
 }
 
+// Config is one command connection for every Gateway: commands go to
+// hvac/v1/{gatewayId}/down/command and replies come back on hvac/v1/{gatewayId}/up/reply.
 type Config struct {
-	BrokerURL             string
-	ClientID              string
-	CAFile                string
-	CertFile              string
-	KeyFile               string
-	ServerName            string
-	IntegrationInstanceID string
-	TenantID              string
-	SiteID                string
-	GatewayID             string
-	OwnerID               string
-	OwnerGeneration       uint64
-	TransportState        TransportState
-	EvidenceStore         EvidenceStore
-	LateResultSink        LateResultSink
-	ReplyTimeout          time.Duration
-	Now                   func() time.Time
+	BrokerURL      string
+	ClientID       string
+	CAFile         string
+	CertFile       string
+	KeyFile        string
+	ServerName     string
+	TransportState TransportState
+	EvidenceStore  EvidenceStore
+	LateResultSink LateResultSink
+	ReplyTimeout   time.Duration
+	Now            func() time.Time
 }
+
+// ReplyTopicFilter is every Gateway's command reply topic.
+const ReplyTopicFilter = "hvac/v1/+/up/reply"
 
 type commandPolicy struct {
 	RequiresReadback     bool  `json:"requiresReadback"`
@@ -86,11 +85,9 @@ type commandReply struct {
 }
 
 type Connector struct {
-	rootContext  context.Context
-	config       Config
-	manager      *autopaho.ConnectionManager
-	commandTopic string
-	replyTopic   string
+	rootContext context.Context
+	config      Config
+	manager     *autopaho.ConnectionManager
 
 	mu      sync.Mutex
 	waiters map[string]chan commandmodel.CommandCorrelation
@@ -115,11 +112,9 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 		config.Now = time.Now
 	}
 	connector := &Connector{
-		rootContext:  ctx,
-		config:       config,
-		commandTopic: topic(config, "command"),
-		replyTopic:   topic(config, "command/reply"),
-		waiters:      make(map[string]chan commandmodel.CommandCorrelation),
+		rootContext: ctx,
+		config:      config,
+		waiters:     make(map[string]chan commandmodel.CommandCorrelation),
 	}
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
@@ -139,7 +134,7 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
 		subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if _, subscribeErr := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: connector.replyTopic, QoS: 1}}}); subscribeErr == nil {
+		if _, subscribeErr := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}}}); subscribeErr == nil {
 			go connector.recoverReplies(ctx)
 		}
 	}
@@ -155,20 +150,19 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	if connector == nil || connector.manager == nil {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector is unavailable")
 	}
-	if err := connector.config.TransportState.AssertConnectorOwnership(ctx, connector.config.IntegrationInstanceID, connector.config.OwnerID, connector.config.OwnerGeneration); err != nil {
-		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector ownership is not active")
+	route, err := connector.config.TransportState.ResolveCommandRoute(ctx, envelope)
+	if failureCode := commandmodel.RouteFailureCode(err); failureCode != "" {
+		// Nothing has been prepared or published: the command is provably not sent.
+		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: failureCode}, nil
 	}
-	if envelope.TenantID != connector.config.TenantID || envelope.SiteID != connector.config.SiteID {
-		return commandmodel.ConnectorResult{}, errors.New("command scope is outside MQTT integration")
-	}
-	route, err := connector.config.TransportState.ResolveCommandRoute(ctx, connector.config.IntegrationInstanceID, envelope.TenantID, envelope.SiteID, connector.config.GatewayID, envelope.DeviceID)
 	if err != nil {
-		return commandmodel.ConnectorResult{}, errors.New("command Device has no active MQTT binding")
+		return commandmodel.ConnectorResult{}, fmt.Errorf("resolve command route: %w", err)
 	}
 	externalDeviceID := strings.TrimSpace(route.ExternalDeviceID)
-	if externalDeviceID == "" || route.BindingRevision == 0 {
-		return commandmodel.ConnectorResult{}, errors.New("command Device has invalid MQTT binding")
+	if route.GatewayID == "" || externalDeviceID == "" || route.BindingRevision == 0 {
+		return commandmodel.ConnectorResult{}, errors.New("command route is incomplete")
 	}
+	commandTopic := "hvac/v1/" + route.GatewayID + "/down/command"
 	method, err := capabilityMethod(envelope.Capability)
 	if err != nil {
 		return commandmodel.ConnectorResult{}, err
@@ -205,8 +199,8 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		ExternalDeviceID: externalDeviceID, ExecutionFence: envelope.ExecutionFence,
 		PayloadHash:      envelope.PayloadHash,
 		MappingRevision:  "mqtt-command-v1:" + envelope.CapabilityRevision,
-		BindingRevision:  "connectivity:" + strconv.FormatUint(route.BindingRevision, 10),
-		ProviderEndpoint: connector.commandTopic,
+		BindingRevision:  "registry-source-key:" + strconv.FormatUint(route.BindingRevision, 10),
+		ProviderEndpoint: commandTopic,
 		ProviderMethod:   method,
 		RequestSHA256:    sha256Hex(body),
 		PreparedAt:       now,
@@ -215,8 +209,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return commandmodel.ConnectorResult{}, errors.New("MQTT connector evidence preparation failed")
 	}
 	correlation, err := connector.config.TransportState.PrepareCommandCorrelation(ctx, commandmodel.CommandCorrelation{
-		Envelope: envelope, IntegrationInstanceID: connector.config.IntegrationInstanceID,
-		ExternalDeviceID: externalDeviceID, OwnerGeneration: connector.config.OwnerGeneration,
+		Envelope: envelope, GatewayID: route.GatewayID, ExternalDeviceID: externalDeviceID,
 		MappingRevision: prepared.MappingRevision, BindingRevision: prepared.BindingRevision,
 		ProviderEndpoint: prepared.ProviderEndpoint, ProviderMethod: prepared.ProviderMethod,
 		RequestSHA256: prepared.RequestSHA256, PreparedAt: prepared.PreparedAt,
@@ -251,12 +244,12 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	}()
 
 	armedAt := connector.config.Now().UTC()
-	if err := connector.config.TransportState.ArmCommandCorrelation(ctx, envelope.AttemptID, envelope.ExecutionFence, connector.config.OwnerGeneration, armedAt); err != nil {
+	if err := connector.config.TransportState.ArmCommandCorrelation(ctx, envelope.TenantID, envelope.AttemptID, envelope.ExecutionFence, armedAt); err != nil {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command publish commit-point arm failed")
 	}
 
 	publishContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, publishErr := connector.manager.Publish(publishContext, &paho.Publish{QoS: 1, Retain: false, Topic: connector.commandTopic, Payload: body})
+	_, publishErr := connector.manager.Publish(publishContext, &paho.Publish{QoS: 1, Retain: false, Topic: commandTopic, Payload: body})
 	cancel()
 	if publishErr != nil {
 		// The durable correlation is armed before calling the MQTT client. A process
@@ -292,7 +285,7 @@ func (connector *Connector) FinalizeDispatch(ctx context.Context, envelope comma
 	if connector == nil || !replyBackedResult(result) {
 		return nil
 	}
-	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, envelope.AttemptID, envelope.ExecutionFence, connector.config.Now().UTC())
+	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, envelope.TenantID, envelope.AttemptID, envelope.ExecutionFence, connector.config.Now().UTC())
 }
 
 func replyBackedResult(result commandmodel.ConnectorResult) bool {
@@ -300,7 +293,11 @@ func replyBackedResult(result commandmodel.ConnectorResult) bool {
 }
 
 func (connector *Connector) onReply(received paho.PublishReceived) (bool, error) {
-	if received.Packet == nil || received.Packet.Topic != connector.replyTopic {
+	if received.Packet == nil {
+		return false, nil
+	}
+	gatewayID, ok := replyGatewayID(received.Packet.Topic)
+	if !ok {
 		return false, nil
 	}
 	var reply commandReply
@@ -332,8 +329,12 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	}
 	ctx, cancel := context.WithTimeout(connector.rootContext, 5*time.Second)
 	defer cancel()
+	tenantID, err := connector.config.TransportState.GatewayTenant(ctx, gatewayID)
+	if err != nil {
+		return true, nil
+	}
 	correlation, err := connector.config.TransportState.RecordCommandReply(
-		ctx, connector.config.IntegrationInstanceID, reply.CommandID, reply.ExecutionFence,
+		ctx, tenantID, gatewayID, reply.CommandID, reply.ExecutionFence,
 		sha256Hex(replyBody), status, eventTime, reason, reply.ExecutionEvidence, connector.config.Now().UTC(),
 	)
 	if err != nil {
@@ -360,15 +361,21 @@ func (connector *Connector) recoverReplies(ctx context.Context) {
 	}
 	recoveryContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	correlations, err := connector.config.TransportState.RecoverCommandReplies(recoveryContext, connector.config.IntegrationInstanceID, 50)
+	tenants, err := connector.config.TransportState.Tenants(recoveryContext)
 	if err != nil {
 		return
 	}
-	for _, correlation := range correlations {
-		if recoveryContext.Err() != nil {
-			return
+	for _, tenantID := range tenants {
+		correlations, err := connector.config.TransportState.RecoverCommandReplies(recoveryContext, tenantID, 50)
+		if err != nil {
+			continue
 		}
-		_ = connector.resolveRecoveredReply(recoveryContext, correlation)
+		for _, correlation := range correlations {
+			if recoveryContext.Err() != nil {
+				return
+			}
+			_ = connector.resolveRecoveredReply(recoveryContext, correlation)
+		}
 	}
 }
 
@@ -383,7 +390,7 @@ func (connector *Connector) resolveRecoveredReply(ctx context.Context, correlati
 	if err := connector.config.LateResultSink.ResolveDispatch(ctx, correlation.Envelope, result); err != nil {
 		return err
 	}
-	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, connector.config.Now().UTC())
+	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, correlation.Envelope.TenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, connector.config.Now().UTC())
 }
 
 func (connector *Connector) completeRecoveredReply(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.ConnectorResult, error) {
@@ -479,7 +486,7 @@ func validateConfig(config Config) error {
 	if err != nil || parsed.Scheme != "tls" || parsed.Host == "" {
 		return errors.New("MQTT command brokerUrl must be a tls:// endpoint")
 	}
-	if strings.TrimSpace(config.ClientID) == "" || strings.TrimSpace(config.IntegrationInstanceID) == "" || strings.TrimSpace(config.TenantID) == "" || strings.TrimSpace(config.SiteID) == "" || strings.TrimSpace(config.GatewayID) == "" || strings.TrimSpace(config.OwnerID) == "" || config.OwnerGeneration == 0 {
+	if strings.TrimSpace(config.ClientID) == "" {
 		return errors.New("MQTT command identity is incomplete")
 	}
 	if strings.TrimSpace(config.CAFile) == "" || strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "" || strings.TrimSpace(config.ServerName) == "" {
@@ -535,8 +542,13 @@ func capabilityMethod(capability commandmodel.Capability) (string, error) {
 	}
 }
 
-func topic(config Config, suffix string) string {
-	return "energy/v1/" + strings.TrimSpace(config.TenantID) + "/" + strings.TrimSpace(config.SiteID) + "/" + strings.TrimSpace(config.GatewayID) + "/" + suffix
+// replyGatewayID returns the Gateway of an hvac/v1/{gatewayId}/up/reply topic.
+func replyGatewayID(topic string) (string, bool) {
+	parts := strings.Split(topic, "/")
+	if len(parts) != 5 || parts[0] != "hvac" || parts[1] != "v1" || parts[3] != "up" || parts[4] != "reply" || !commandmodel.IsUUIDv7(parts[2]) {
+		return "", false
+	}
+	return parts[2], true
 }
 
 type resumeAction uint8

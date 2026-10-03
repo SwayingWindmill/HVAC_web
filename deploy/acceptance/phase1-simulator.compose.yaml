@@ -110,27 +110,6 @@ services:
         condition: service_healthy
     networks: [data]
 
-  atv630-connectivity-session:
-    profiles: ["atv630-protocol-acceptance"]
-    restart: "no"
-    security_opt:
-      - no-new-privileges:true
-    build:
-      context: ${ATV630_SOURCE_ROOT:-../..}
-      dockerfile: deploy/acceptance/go-workspace-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./modules/connectivity/cmd/atv630-connectivity-session }
-    image: ${ATV630_CONNECTIVITY_SESSION_IMAGE:-hvac/atv630-connectivity-session:0.1.0-dev}
-    environment:
-      ATV630_CONNECTIVITY_DATABASE_URL: ${ATV630_CONNECTIVITY_DATABASE_URL:-}
-      ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:-}
-      ATV630_INTEGRATION_INSTANCE_ID: ${ATV630_INTEGRATION_INSTANCE_ID:-}
-      ATV630_CONNECTIVITY_CREDENTIAL_REF_ID: ${ATV630_CONNECTIVITY_CREDENTIAL_REF_ID:-}
-      ATV630_GATEWAY_EXTERNAL_ID: ${ATV630_GATEWAY_EXTERNAL_ID:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [data]
-
   atv630-edge:
     profiles: ["atv630-protocol-acceptance"]
     restart: unless-stopped
@@ -154,8 +133,6 @@ services:
       ATV630_EDGE_DIAGNOSTICS_ADDR: :19097
     depends_on:
       atv630-template-release:
-        condition: service_completed_successfully
-      atv630-connectivity-session:
         condition: service_completed_successfully
       virtual-atv630:
         condition: service_healthy

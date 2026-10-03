@@ -111,7 +111,7 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 	return &edgeCommandHandler{
 		edgeRuntime:      edgeRuntime,
 		deviceByWireID:   deviceByWireID,
-		replyTopic:       mqttCommandTopic(config) + "/reply",
+		replyTopic:       mqttReplyTopic(config),
 		now:              time.Now,
 		ledgerPath:       ledgerPath,
 		spool:            spool,

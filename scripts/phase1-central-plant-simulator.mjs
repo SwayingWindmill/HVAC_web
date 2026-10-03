@@ -61,17 +61,6 @@ function psql(database, sql) {
   ], { input: sql });
 }
 
-function psqlScalar(database, sql) {
-  const result = spawnSync('docker', [
-    'exec', '-i', postgresContainer,
-    'psql', '-U', 'postgres', '-d', database,
-    '-v', 'ON_ERROR_STOP=1', '-tA', '-c', sql,
-  ], { cwd: repoRoot, encoding: 'utf8' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`docker psql scalar exited with status ${result.status}: ${result.stderr}`);
-  return result.stdout.trim();
-}
-
 function sqlJson(value) {
   return `${sqlLiteral(JSON.stringify(value))}::jsonb`;
 }
@@ -323,95 +312,6 @@ SET tenant_id=EXCLUDED.tenant_id,
 COMMIT;`;
 }
 
-function buildConnectivitySeed(rig) {
-  const [site] = localSites;
-  const { tenantId, siteId, gatewayDeviceId } = site;
-  const { integrationInstanceId } = centralPlantIdentity;
-  const transportProfileId = localUUID(0x810000000001);
-  const credentialRefId = localUUID(0x810000000002);
-  const sessionId = localUUID(0x810000000003);
-  const { certificateFingerprint, certificateValidFrom, certificateValidUntil } = gatewayCertificate(site);
-  const deviceBindings = centralPlantDevices.map((device, index) => `(
-    ${sqlLiteral(localUUID(0x820000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
-    ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(device.platformDeviceId)},
-    'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
-  )`).join(',\n');
-  const childBindings = centralPlantDevices.map((device, index) => `(
-    ${sqlLiteral(localUUID(0x830000000001 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)},
-    ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(gatewayDeviceId)}, ${sqlLiteral(device.platformDeviceId)},
-    ${sqlLiteral(device.name)}, 'ACTIVE', clock_timestamp(), NULL, 1,
-    clock_timestamp(), clock_timestamp()
-  )`).join(',\n');
-
-  return `BEGIN;
-INSERT INTO connectivity.transport_profiles (
-  id, tenant_id, protocol, broker_origin, topic_namespace, status, revision, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(transportProfileId)}, ${sqlLiteral(tenantId)}, 'MQTT', 'tls://mqtt-broker:8883', 'energy/v1',
-  'ACTIVE', 1, clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET broker_origin=EXCLUDED.broker_origin, topic_namespace='energy/v1', status='ACTIVE', revision=connectivity.transport_profiles.revision+1, updated_at=clock_timestamp();
-
-INSERT INTO connectivity.integration_instances (
-  id, tenant_id, site_id, transport_profile_id, gateway_external_id, status, revision, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(integrationInstanceId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(transportProfileId)},
-  ${sqlLiteral(gatewayDeviceId)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET transport_profile_id=EXCLUDED.transport_profile_id, gateway_external_id=EXCLUDED.gateway_external_id, status='ACTIVE', revision=connectivity.integration_instances.revision+1, updated_at=clock_timestamp();
-
-INSERT INTO connectivity.device_bindings (
-  id, tenant_id, site_id, integration_instance_id, device_id, external_device_id,
-  status, valid_from, valid_to, revision, created_at, updated_at
-) VALUES
-${deviceBindings}
-ON CONFLICT (id) DO UPDATE SET external_device_id=EXCLUDED.external_device_id, status='ACTIVE', valid_to=NULL, revision=connectivity.device_bindings.revision+1, updated_at=clock_timestamp();
-
-INSERT INTO connectivity.gateway_child_bindings (
-  id, tenant_id, site_id, integration_instance_id, gateway_external_id, child_device_id,
-  child_external_id, status, valid_from, valid_to, revision, created_at, updated_at
-) VALUES
-${childBindings}
-ON CONFLICT (id) DO UPDATE SET child_external_id=EXCLUDED.child_external_id, status='ACTIVE', valid_to=NULL, revision=connectivity.gateway_child_bindings.revision+1, updated_at=clock_timestamp();
-
-INSERT INTO connectivity.credential_refs (
-  id, tenant_id, integration_instance_id, credential_kind, secret_ref,
-  certificate_fingerprint_sha256, token_hash_sha256, status, valid_from, valid_until,
-  rotated_from_id, revoked_at, revision, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(credentialRefId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(integrationInstanceId)}, 'MTLS_CERTIFICATE',
-  ${sqlLiteral(`file:///run/hvac/pki/gateways/${gatewayDeviceId}/tls.crt`)}, ${sqlLiteral(certificateFingerprint)}, NULL, 'ACTIVE',
-  ${sqlLiteral(certificateValidFrom)}, ${sqlLiteral(certificateValidUntil)}, NULL, NULL, 1,
-  clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET
-  certificate_fingerprint_sha256=EXCLUDED.certificate_fingerprint_sha256,
-  status='ACTIVE', valid_from=EXCLUDED.valid_from, valid_until=EXCLUDED.valid_until, revoked_at=NULL,
-  revision=CASE
-    WHEN connectivity.credential_refs.certificate_fingerprint_sha256 IS DISTINCT FROM EXCLUDED.certificate_fingerprint_sha256
-      THEN connectivity.credential_refs.revision+1
-    ELSE connectivity.credential_refs.revision
-  END,
-  updated_at=clock_timestamp();
-
-UPDATE connectivity.sessions
-SET status='CLOSED', closed_at=clock_timestamp(), close_reason='LOCAL_BOOTSTRAP_REPLACED', revision=revision+1, updated_at=clock_timestamp()
-WHERE tenant_id=${sqlLiteral(tenantId)}::uuid AND integration_instance_id=${sqlLiteral(integrationInstanceId)}::uuid AND status='ACTIVE';
-
-INSERT INTO connectivity.sessions (
-  id, tenant_id, site_id, integration_instance_id, credential_ref_id, credential_revision,
-  gateway_external_id, status, opened_at, expires_at, closed_at, close_reason, revision, updated_at
-) VALUES (
-  ${sqlLiteral(sessionId)}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(integrationInstanceId)},
-  ${sqlLiteral(credentialRefId)}, (SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(credentialRefId)}::uuid),
-  ${sqlLiteral(gatewayDeviceId)}, 'ACTIVE', clock_timestamp(),
-  LEAST(${sqlLiteral(certificateValidUntil)}::timestamptz, clock_timestamp() + interval '${(rig?.connectivity.sessionLifetimeHours ?? 24)} hours'),
-  NULL, NULL, 1, clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET credential_ref_id=EXCLUDED.credential_ref_id, credential_revision=EXCLUDED.credential_revision, status='ACTIVE', opened_at=EXCLUDED.opened_at, expires_at=EXCLUDED.expires_at, closed_at=NULL, close_reason=NULL, revision=connectivity.sessions.revision+1, updated_at=clock_timestamp();
-COMMIT;`;
-}
-
 function buildS2Seed(site, points, rig) {
   const { tenantId, siteId } = site;
   const plantDevices = siteDevices(site);
@@ -528,14 +428,12 @@ ON CONFLICT (id) DO UPDATE SET certificate_fingerprint_sha256=EXCLUDED.certifica
 COMMIT;`;
 }
 
-function writeSimulatorConfig(site, credentialRevision) {
+function writeSimulatorConfig(site) {
   mkdirSync(runtimeConfigDir, { recursive: true });
   mkdirSync(path.join(runtimeRoot, 'data', site.simulatorQueue), { recursive: true });
   const config = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     gatewayId: site.gatewayDeviceId,
-    tenantId: site.tenantId,
-    siteId: site.siteId,
     brokerUrl: 'tls://mqtt-broker:8883',
     caFile: '/run/hvac/pki/ca.pem',
     certFile: `/run/hvac/pki/gateways/${site.gatewayDeviceId}/tls.crt`,
@@ -543,7 +441,6 @@ function writeSimulatorConfig(site, credentialRevision) {
     serverName: 'mqtt-broker',
     queueDirectory: '/run/hvac/eg8200',
     maximumQueueBytes: 64 * 1024 * 1024,
-    credentialRevision,
   };
   writeFileSync(path.join(runtimeConfigDir, site.simulatorConfig), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o640 });
 }
@@ -572,8 +469,7 @@ const rawControlPoints = buildCentralPlantControlPoints(rawObservedPoints);
 const registryPoints = assignCentralPlantPointIds([...rawObservedPoints, ...rawControlPoints]);
 
 // --rig applies the reviewed live-acceptance profile so the published cadence, the
-// Registry staleness contract, the runtime freshness policy and the MQTT session
-// lifetime come from one source instead of hand-edited runtime state.
+// Registry staleness contract and the runtime freshness policy come from one source instead of hand-edited runtime state.
 const rigArgument = process.argv.indexOf('--rig');
 const rigProfilePath = rigArgument >= 0 ? process.argv[rigArgument + 1] : undefined;
 const rig = rigProfilePath ? await loadAcceptanceRig(repoRoot, rigProfilePath) : undefined;
@@ -587,10 +483,7 @@ for (const site of localSites) {
   psql('hvac_s1', buildGatewayCredentialSeed(site));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
-psql('hvac_s1', buildConnectivitySeed(rig));
-const credentialRevision = Number(psqlScalar('hvac_s1', `SELECT revision FROM connectivity.credential_refs WHERE id=${sqlLiteral(localUUID(0x810000000002))}::uuid`));
-if (!Number.isSafeInteger(credentialRevision) || credentialRevision < 1) throw new Error('simulator CredentialRef revision is invalid');
-for (const site of localSites) writeSimulatorConfig(site, credentialRevision);
+for (const site of localSites) writeSimulatorConfig(site);
 // The local administrator is granted Site A; other Sites are reached through the API.
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));

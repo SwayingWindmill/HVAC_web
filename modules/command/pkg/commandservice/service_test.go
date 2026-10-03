@@ -93,6 +93,31 @@ func TestPreSendFailureCanBeRetriedWithHigherFence(t *testing.T) {
 	}
 }
 
+func TestDisabledControlRejectsCommandWithItsReason(t *testing.T) {
+	clock := fixedClock()
+	service := New(clock)
+	submitted, err := service.Submit(validRequest())
+	if err != nil {
+		t.Fatalf("submit failed: %v", err)
+	}
+	envelope, err := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if err := service.ResolveDispatch(envelope, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "COMMAND_CONTROL_DISABLED",
+	}); err != nil {
+		t.Fatalf("pre-send resolution failed: %v", err)
+	}
+	rejected, _ := service.Get(submitted.Intent.ID)
+	if last := rejected.Transitions[len(rejected.Transitions)-1]; rejected.Status != commandmodel.IntentRejected || last.Reason != "COMMAND_CONTROL_DISABLED" {
+		t.Fatalf("status=%s reason=%s", rejected.Status, last.Reason)
+	}
+	if _, err := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-b", clock().Add(time.Minute)); err == nil {
+		t.Fatal("a rejected command was dispatched again")
+	}
+}
+
 func TestCommittedWithoutOutcomeFreezesCommand(t *testing.T) {
 	clock := fixedClock()
 	service := New(clock)

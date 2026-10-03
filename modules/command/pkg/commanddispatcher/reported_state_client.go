@@ -24,18 +24,13 @@ const (
 type ReportedStateClientConfig struct {
 	BaseURL    string
 	HTTPClient *http.Client
-	TenantID   string
-	SiteID     string
-	DeviceID   string
-	DeviceIDs  []string
 }
 
+// ReportedStateClient reads a Device's authoritative state from Telemetry for any
+// Tenant; each answer must name the Tenant, Site and Device that was asked about.
 type ReportedStateClient struct {
 	baseURL    string
 	httpClient *http.Client
-	tenantID   string
-	siteID     string
-	deviceIDs  map[string]struct{}
 }
 
 type reportedStateResponse struct {
@@ -61,40 +56,17 @@ func NewReportedStateClient(config ReportedStateClientConfig) (*ReportedStateCli
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("S2 reported-state base URL must be an HTTPS service origin")
 	}
-	tenantID := strings.TrimSpace(config.TenantID)
-	siteID := strings.TrimSpace(config.SiteID)
-	deviceIDs := make(map[string]struct{}, len(config.DeviceIDs)+1)
-	if deviceID := strings.TrimSpace(config.DeviceID); deviceID != "" {
-		deviceIDs[deviceID] = struct{}{}
-	}
-	for _, rawDeviceID := range config.DeviceIDs {
-		deviceID := strings.TrimSpace(rawDeviceID)
-		if deviceID != "" {
-			deviceIDs[deviceID] = struct{}{}
-		}
-	}
-	if tenantID == "" || siteID == "" || len(deviceIDs) == 0 {
-		return nil, errors.New("S2 reported-state cohort configuration is incomplete")
-	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &ReportedStateClient{
-		baseURL: baseURL, httpClient: client,
-		tenantID: tenantID, siteID: siteID, deviceIDs: deviceIDs,
-	}, nil
+	return &ReportedStateClient{baseURL: baseURL, httpClient: client}, nil
 }
 
 func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelope commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
-	approvedDevice := false
-	if client != nil {
-		_, approvedDevice = client.deviceIDs[envelope.DeviceID]
-	}
-	if client == nil || envelope.TenantID != client.tenantID || envelope.SiteID != client.siteID || !approvedDevice ||
-		strings.TrimSpace(envelope.CommandID) == "" || strings.TrimSpace(envelope.AttemptID) == "" || envelope.ExecutionFence == 0 ||
+	if strings.TrimSpace(envelope.CommandID) == "" || strings.TrimSpace(envelope.AttemptID) == "" || envelope.ExecutionFence == 0 ||
 		strings.TrimSpace(envelope.VerificationPointKey) == "" {
-		return "", commandmodel.ReportedStateEvidence{}, errors.New("verification envelope is outside the approved cohort")
+		return "", commandmodel.ReportedStateEvidence{}, errors.New("verification envelope is incomplete")
 	}
 	endpoint := client.baseURL + internalCommandReportedStatePath + "?deviceId=" + url.QueryEscape(envelope.DeviceID) + "&key=" + url.QueryEscape(envelope.VerificationPointKey)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -120,9 +92,9 @@ func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelo
 	if err := decoder.Decode(&result); err != nil || ensureReportedStateEOF(decoder) != nil {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is invalid")
 	}
-	if result.SchemaVersion != 1 || result.TenantID != client.tenantID || result.SiteID != client.siteID || result.DeviceID != envelope.DeviceID ||
+	if result.SchemaVersion != 1 || result.TenantID != envelope.TenantID || result.SiteID != envelope.SiteID || result.DeviceID != envelope.DeviceID ||
 		result.ReportedStateKey != envelope.VerificationPointKey || !validS2EvidenceID(result.EvidenceID) || result.ObservedAt.IsZero() {
-		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is outside the approved cohort")
+		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response does not describe the commanded Device")
 	}
 	return result.EvidenceID, commandmodel.ReportedStateEvidence{
 		TenantID: result.TenantID, SiteID: result.SiteID, DeviceID: result.DeviceID,

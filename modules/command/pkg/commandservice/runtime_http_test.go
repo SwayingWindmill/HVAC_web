@@ -28,19 +28,15 @@ type runtimeStoreStub struct {
 	verificationEnvelope commandmodel.VerificationEnvelope
 	claimDispatchErr     error
 	claimVerificationErr error
-	claimedOrganization  string
-	claimedSite          string
-	claimedDevice        string
+	claimedTenant        string
 	resolvedDispatch     bool
 	resolvedVerification bool
 	preparedEvidence     bool
 	completedEvidence    bool
 }
 
-func (stub *runtimeStoreStub) ClaimDispatchForCohort(_ context.Context, organizationID, siteID, deviceID string, _ commandmodel.Capability, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
-	stub.claimedOrganization = organizationID
-	stub.claimedSite = siteID
-	stub.claimedDevice = deviceID
+func (stub *runtimeStoreStub) ClaimDispatch(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
+	stub.claimedTenant = tenantID
 	return stub.dispatchEnvelope, stub.claimDispatchErr
 }
 
@@ -49,10 +45,8 @@ func (stub *runtimeStoreStub) ResolveDispatch(context.Context, commandmodel.Disp
 	return nil
 }
 
-func (stub *runtimeStoreStub) ClaimVerificationForCohort(_ context.Context, organizationID, siteID, deviceID string, _ commandmodel.Capability, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
-	stub.claimedOrganization = organizationID
-	stub.claimedSite = siteID
-	stub.claimedDevice = deviceID
+func (stub *runtimeStoreStub) ClaimVerification(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
+	stub.claimedTenant = tenantID
 	return stub.verificationEnvelope, stub.claimVerificationErr
 }
 
@@ -71,7 +65,7 @@ func (stub *runtimeStoreStub) CompleteConnectorEvidence(context.Context, command
 	return nil
 }
 
-func TestRuntimeHTTPDispatcherCanClaimAndResolveExactCohort(t *testing.T) {
+func TestRuntimeHTTPDispatcherClaimsWithinTheNamedTenantAndResolves(t *testing.T) {
 	stub := &runtimeStoreStub{dispatchEnvelope: commandmodel.DispatchEnvelope{
 		CommandID: "command-1", AttemptID: "attempt-1", TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
@@ -80,14 +74,14 @@ func TestRuntimeHTTPDispatcherCanClaimAndResolveExactCohort(t *testing.T) {
 	}}
 	handler := runtimeTestHandler(t, stub)
 
-	claim := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"dispatcher-a","leaseSeconds":30}`, "spiffe://hvac.local/command-dispatcher")
+	claim := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"tenantId":"`+runtimeTestOrganization+`","leaseOwner":"dispatcher-a","leaseSeconds":30}`, "spiffe://hvac.local/command-dispatcher")
 	claimRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(claimRecorder, claim)
 	if claimRecorder.Code != http.StatusOK {
 		t.Fatalf("claim status=%d body=%s", claimRecorder.Code, claimRecorder.Body.String())
 	}
-	if stub.claimedOrganization != runtimeTestOrganization || stub.claimedSite != runtimeTestSite || stub.claimedDevice != runtimeTestDevice {
-		t.Fatalf("claimed cohort=%s/%s/%s", stub.claimedOrganization, stub.claimedSite, stub.claimedDevice)
+	if stub.claimedTenant != runtimeTestOrganization {
+		t.Fatalf("claimed Tenant=%s", stub.claimedTenant)
 	}
 	var envelope commandmodel.DispatchEnvelope
 	if err := json.NewDecoder(claimRecorder.Body).Decode(&envelope); err != nil || envelope.CommandID != "command-1" {
@@ -118,7 +112,7 @@ func TestRuntimeHTTPNoWorkIsNoContent(t *testing.T) {
 		{InternalDispatchClaimPath, "spiffe://hvac.local/command-dispatcher"},
 		{InternalVerificationClaimPath, "spiffe://hvac.local/command-verifier"},
 	} {
-		request := runtimeRequest(t, http.MethodPost, test.path, `{"leaseOwner":"worker-a","leaseSeconds":15}`, test.spiffe)
+		request := runtimeRequest(t, http.MethodPost, test.path, `{"tenantId":"`+runtimeTestOrganization+`","leaseOwner":"worker-a","leaseSeconds":15}`, test.spiffe)
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusNoContent {
@@ -127,90 +121,25 @@ func TestRuntimeHTTPNoWorkIsNoContent(t *testing.T) {
 	}
 }
 
-func TestRuntimeHTTPRejectsClientSelectedCohortAndCrossCohortResolution(t *testing.T) {
+func TestRuntimeHTTPRejectsAClaimWithoutATenant(t *testing.T) {
 	stub := &runtimeStoreStub{}
 	handler := runtimeTestHandler(t, stub)
-
-	claim := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"organizationId":"other-org","leaseOwner":"dispatcher-a","leaseSeconds":15}`, "spiffe://hvac.local/command-dispatcher")
-	claimRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(claimRecorder, claim)
-	if claimRecorder.Code != http.StatusBadRequest || stub.claimedOrganization != "" {
-		t.Fatalf("claim status=%d claimed=%q body=%s", claimRecorder.Code, stub.claimedOrganization, claimRecorder.Body.String())
-	}
-
-	body, err := json.Marshal(runtimeDispatchResolveRequest{
-		Envelope: commandmodel.DispatchEnvelope{TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: "other-device"},
-		Result:   commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolve := runtimeRequest(t, http.MethodPost, InternalDispatchResolvePath, string(body), "spiffe://hvac.local/command-dispatcher")
-	resolveRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(resolveRecorder, resolve)
-	if resolveRecorder.Code != http.StatusBadRequest || stub.resolvedDispatch {
-		t.Fatalf("resolve status=%d resolved=%v body=%s", resolveRecorder.Code, stub.resolvedDispatch, resolveRecorder.Body.String())
+	claim := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"dispatcher-a","leaseSeconds":15}`, "spiffe://hvac.local/command-dispatcher")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, claim)
+	if recorder.Code != http.StatusBadRequest || stub.claimedTenant != "" {
+		t.Fatalf("claim status=%d claimed=%q body=%s", recorder.Code, stub.claimedTenant, recorder.Body.String())
 	}
 }
 
 func TestRuntimeHTTPRejectsWrongWorkloadIdentity(t *testing.T) {
 	stub := &runtimeStoreStub{claimDispatchErr: errors.New("must not be reached")}
 	handler := runtimeTestHandler(t, stub)
-	request := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"verifier-a","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier")
+	request := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"tenantId":"`+runtimeTestOrganization+`","leaseOwner":"verifier-a","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
-	secondDevice := "018f3e00-3000-7000-8000-000000000002"
-	stub := &runtimeStoreStub{claimDispatchErr: ErrNoDispatchAvailable, claimVerificationErr: ErrVerificationNotAvailable}
-	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
-		Store: stub,
-		Cohorts: []RuntimeCohort{
-			{
-				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/ahu-01",
-				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/ahu-01",
-				TenantID:         runtimeTestOrganization,
-				SiteID:           runtimeTestSite,
-				DeviceID:         runtimeTestDevice,
-				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
-			},
-			{
-				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/fcu-02",
-				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/fcu-02",
-				TenantID:         runtimeTestOrganization,
-				SiteID:           runtimeTestSite,
-				DeviceID:         secondDevice,
-				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dispatch := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"dispatcher-fcu","leaseSeconds":15}`, "spiffe://hvac.local/command-dispatcher/fcu-02")
-	dispatchRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(dispatchRecorder, dispatch)
-	if dispatchRecorder.Code != http.StatusNoContent || stub.claimedDevice != secondDevice {
-		t.Fatalf("dispatch status=%d claimedDevice=%q body=%s", dispatchRecorder.Code, stub.claimedDevice, dispatchRecorder.Body.String())
-	}
-
-	verification := runtimeRequest(t, http.MethodPost, InternalVerificationClaimPath, `{"leaseOwner":"verifier-ahu","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier/ahu-01")
-	verificationRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(verificationRecorder, verification)
-	if verificationRecorder.Code != http.StatusNoContent || stub.claimedDevice != runtimeTestDevice {
-		t.Fatalf("verification status=%d claimedDevice=%q body=%s", verificationRecorder.Code, stub.claimedDevice, verificationRecorder.Body.String())
-	}
-
-	wrongRole := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"wrong-role","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier/fcu-02")
-	wrongRoleRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(wrongRoleRecorder, wrongRole)
-	if wrongRoleRecorder.Code != http.StatusForbidden {
-		t.Fatalf("wrong role status=%d body=%s", wrongRoleRecorder.Code, wrongRoleRecorder.Body.String())
 	}
 }
 
@@ -220,8 +149,6 @@ func TestRuntimeHTTPRecordsBoundedVerificationMetrics(t *testing.T) {
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
 		Store: stub, Metrics: registry,
 		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
-		TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -260,8 +187,6 @@ func runtimeTestHandler(t *testing.T, stub RuntimeStore) http.Handler {
 	t.Helper()
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
 		Store: stub, DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
-		TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

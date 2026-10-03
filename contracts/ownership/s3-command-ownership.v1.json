@@ -8,8 +8,8 @@
   "transport": {
     "type": "MQTT",
     "authority": "transport-only",
-    "commandTopic": "energy/v1/{tenant}/{site}/{gateway}/command",
-    "replyTopic": "energy/v1/{tenant}/{site}/{gateway}/command/reply",
+    "commandTopic": "hvac/v1/{gatewayId}/down/command",
+    "replyTopic": "hvac/v1/{gatewayId}/up/reply",
     "qos": 1,
     "edgeOwner": "EG8200"
   },

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -18,55 +17,18 @@ import (
 
 var (
 	ErrNotFound            = errors.New("connectivity record not found")
-	ErrBindingNotFound     = errors.New("connectivity binding not found")
-	ErrOwnershipHeld       = errors.New("connector ownership is held by another owner")
-	ErrOwnershipLost       = errors.New("connector ownership lease is not active")
-	ErrCredentialInactive  = errors.New("credential is not active")
 	ErrCorrelationMismatch = errors.New("command correlation does not match durable state")
-
-	uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
+// Store is Connectivity's database access for every Tenant. Each call works inside
+// the Tenant it is given, resolved from the Registry gateway directory.
 type Store struct {
-	pool     *pgxpool.Pool
-	tenantID string
-	now      func() time.Time
+	pool *pgxpool.Pool
+	now  func() time.Time
 }
 
-type IntegrationDescriptor struct {
-	ID                       string
-	TenantID                 string
-	SiteID                   string
-	GatewayExternalID        string
-	IntegrationRevision      uint64
-	TransportProfileID       string
-	TransportProfileRevision uint64
-	BrokerOrigin             string
-	TopicNamespace           string
-}
-
-type OwnershipLease struct {
-	OwnerID    string
-	Generation uint64
-	LeaseUntil time.Time
-	Revision   uint64
-}
-
-type SessionInput struct {
-	ID                    string
-	IntegrationInstanceID string
-	CredentialRefID       string
-	GatewayExternalID     string
-	ExpiresAt             time.Time
-}
-
-func Open(ctx context.Context, databaseURL, tenantID string) (*Store, error) {
-	databaseURL = strings.TrimSpace(databaseURL)
-	tenantID = strings.TrimSpace(tenantID)
-	if databaseURL == "" || !uuidV7Pattern.MatchString(tenantID) {
-		return nil, errors.New("connectivity database configuration is invalid")
-	}
-	config, err := pgxpool.ParseConfig(databaseURL)
+func Open(ctx context.Context, databaseURL string) (*Store, error) {
+	config, err := pgxpool.ParseConfig(strings.TrimSpace(databaseURL))
 	if err != nil {
 		return nil, errors.New("parse connectivity database URL")
 	}
@@ -79,7 +41,7 @@ func Open(ctx context.Context, databaseURL, tenantID string) (*Store, error) {
 		pool.Close()
 		return nil, errors.New("connectivity database is unavailable")
 	}
-	return &Store{pool: pool, tenantID: tenantID, now: time.Now}, nil
+	return &Store{pool: pool, now: time.Now}, nil
 }
 
 func (store *Store) Close() {
@@ -88,256 +50,38 @@ func (store *Store) Close() {
 	}
 }
 
-func (store *Store) LoadIntegration(ctx context.Context, integrationInstanceID string) (IntegrationDescriptor, error) {
-	if store == nil || store.pool == nil || !uuidV7Pattern.MatchString(strings.TrimSpace(integrationInstanceID)) {
-		return IntegrationDescriptor{}, ErrNotFound
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return IntegrationDescriptor{}, err
-	}
-	defer tx.Rollback(ctx)
-	var descriptor IntegrationDescriptor
-	err = tx.QueryRow(ctx, `
-SELECT i.id::text, i.tenant_id::text, i.site_id::text, i.gateway_external_id, i.revision,
-       p.id::text, p.revision, p.broker_origin, p.topic_namespace
-FROM connectivity.integration_instances i
-JOIN connectivity.transport_profiles p
-  ON p.tenant_id = i.tenant_id AND p.id = i.transport_profile_id
-WHERE i.tenant_id = $1::uuid AND i.id = $2::uuid
-  AND i.status = 'ACTIVE' AND p.status = 'ACTIVE' AND p.protocol = 'MQTT'
-`, store.tenantID, strings.TrimSpace(integrationInstanceID)).Scan(
-		&descriptor.ID, &descriptor.TenantID, &descriptor.SiteID, &descriptor.GatewayExternalID, &descriptor.IntegrationRevision,
-		&descriptor.TransportProfileID, &descriptor.TransportProfileRevision, &descriptor.BrokerOrigin, &descriptor.TopicNamespace,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return IntegrationDescriptor{}, ErrNotFound
-	}
-	if err != nil {
-		return IntegrationDescriptor{}, fmt.Errorf("load IntegrationInstance: %w", err)
-	}
-	return descriptor, nil
-}
-
-func (store *Store) ResolveCommandRoute(ctx context.Context, integrationInstanceID, tenantID, siteID, gatewayID, deviceID string) (commandmodel.DeviceRoute, error) {
-	if tenantID != store.tenantID {
-		return commandmodel.DeviceRoute{}, ErrBindingNotFound
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return commandmodel.DeviceRoute{}, err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var externalDeviceID string
-	var revision uint64
-	err = tx.QueryRow(ctx, `
-SELECT b.child_external_id, b.revision
-FROM connectivity.gateway_child_bindings b
-JOIN connectivity.integration_instances i
-  ON i.tenant_id = b.tenant_id AND i.id = b.integration_instance_id
-WHERE b.tenant_id = $1::uuid AND b.integration_instance_id = $2::uuid
-  AND b.site_id = $3::uuid AND b.gateway_external_id = $4 AND b.child_device_id = $5::uuid
-  AND b.status = 'ACTIVE' AND b.valid_from <= $6 AND (b.valid_to IS NULL OR b.valid_to > $6)
-  AND i.status = 'ACTIVE' AND i.site_id = b.site_id AND i.gateway_external_id = b.gateway_external_id
-  AND EXISTS (
-    SELECT 1
-    FROM connectivity.sessions s
-    JOIN connectivity.credential_refs c
-      ON c.tenant_id = s.tenant_id AND c.id = s.credential_ref_id
-    WHERE s.tenant_id = i.tenant_id AND s.integration_instance_id = i.id
-      AND s.gateway_external_id = i.gateway_external_id AND s.status = 'ACTIVE'
-      AND s.opened_at <= $6 AND s.expires_at > $6
-      AND c.integration_instance_id = i.id AND c.status = 'ACTIVE'
-      AND c.valid_from <= $6 AND c.valid_until > $6
-  )
-`, store.tenantID, integrationInstanceID, siteID, strings.TrimSpace(gatewayID), deviceID, now).Scan(&externalDeviceID, &revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return commandmodel.DeviceRoute{}, ErrBindingNotFound
-	}
-	if err != nil {
-		return commandmodel.DeviceRoute{}, fmt.Errorf("resolve command GatewayChildBinding: %w", err)
-	}
-	return commandmodel.DeviceRoute{ExternalDeviceID: externalDeviceID, BindingRevision: revision}, nil
-}
-
-func (store *Store) ClaimConnectorOwnership(ctx context.Context, integrationInstanceID, ownerID string, leaseFor time.Duration) (OwnershipLease, error) {
-	ownerID = strings.TrimSpace(ownerID)
-	if ownerID == "" || leaseFor < 5*time.Second || leaseFor > 2*time.Minute {
-		return OwnershipLease{}, errors.New("connector ownership request is invalid")
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return OwnershipLease{}, err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	leaseUntil := now.Add(leaseFor)
-	var lease OwnershipLease
-	err = tx.QueryRow(ctx, `
-INSERT INTO connectivity.connector_ownership_leases (
-  integration_instance_id, tenant_id, owner_id, lease_generation, lease_until, revision, updated_at
-) VALUES ($1::uuid, $2::uuid, $3, 1, $4, 1, $5)
-ON CONFLICT (integration_instance_id) DO UPDATE
-SET owner_id = EXCLUDED.owner_id,
-    lease_generation = CASE
-      WHEN connectivity.connector_ownership_leases.owner_id = EXCLUDED.owner_id THEN connectivity.connector_ownership_leases.lease_generation
-      ELSE connectivity.connector_ownership_leases.lease_generation + 1
-    END,
-    lease_until = EXCLUDED.lease_until,
-    revision = connectivity.connector_ownership_leases.revision + 1,
-    updated_at = EXCLUDED.updated_at
-WHERE connectivity.connector_ownership_leases.owner_id = EXCLUDED.owner_id
-   OR connectivity.connector_ownership_leases.lease_until <= EXCLUDED.updated_at
-RETURNING owner_id, lease_generation, lease_until, revision
-`, integrationInstanceID, store.tenantID, ownerID, leaseUntil, now).Scan(&lease.OwnerID, &lease.Generation, &lease.LeaseUntil, &lease.Revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return OwnershipLease{}, ErrOwnershipHeld
-	}
-	if err != nil {
-		return OwnershipLease{}, fmt.Errorf("claim connector ownership: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return OwnershipLease{}, fmt.Errorf("commit connector ownership: %w", err)
-	}
-	return lease, nil
-}
-
-func (store *Store) AssertConnectorOwnership(ctx context.Context, integrationInstanceID, ownerID string, generation uint64) error {
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	var active bool
-	err = tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM connectivity.connector_ownership_leases
-  WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
-    AND owner_id = $3 AND lease_generation = $4 AND lease_until > $5
-)
-`, store.tenantID, integrationInstanceID, strings.TrimSpace(ownerID), generation, store.clock().UTC()).Scan(&active)
-	if err != nil {
-		return fmt.Errorf("check connector ownership: %w", err)
-	}
-	if !active {
-		return ErrOwnershipLost
-	}
-	return nil
-}
-
-func (store *Store) ExpireDueCredentials(ctx context.Context) (int64, error) {
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	tag, err := tx.Exec(ctx, `
-UPDATE connectivity.credential_refs
-SET status = 'EXPIRED', revision = revision + 1, updated_at = $2
-WHERE tenant_id = $1::uuid AND status = 'ACTIVE' AND valid_until <= $2
-`, store.tenantID, now)
-	if err != nil {
-		return 0, fmt.Errorf("expire CredentialRef: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE connectivity.sessions s
-SET status = 'EXPIRED', closed_at = $2, close_reason = 'CREDENTIAL_EXPIRED', revision = revision + 1, updated_at = $2
-WHERE s.tenant_id = $1::uuid AND s.status = 'ACTIVE'
-  AND (s.expires_at <= $2 OR EXISTS (
-    SELECT 1 FROM connectivity.credential_refs c
-    WHERE c.tenant_id = s.tenant_id AND c.id = s.credential_ref_id AND c.status <> 'ACTIVE'
-  ))
-`, store.tenantID, now); err != nil {
-		return 0, fmt.Errorf("expire connectivity sessions: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
-}
-
-func (store *Store) OpenSession(ctx context.Context, input SessionInput) error {
-	if !uuidV7Pattern.MatchString(input.ID) || !uuidV7Pattern.MatchString(input.CredentialRefID) || input.ExpiresAt.IsZero() {
-		return errors.New("session input is invalid")
-	}
-	tx, err := store.beginTenant(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	now := store.clock().UTC()
-	var siteID string
-	var credentialRevision uint64
-	var credentialValidUntil time.Time
-	err = tx.QueryRow(ctx, `
-SELECT i.site_id::text, c.revision, c.valid_until
-FROM connectivity.credential_refs c
-JOIN connectivity.integration_instances i ON i.tenant_id = c.tenant_id AND i.id = c.integration_instance_id
-WHERE c.tenant_id = $1::uuid AND c.id = $2::uuid AND c.integration_instance_id = $3::uuid
-  AND c.status = 'ACTIVE' AND c.valid_from <= $4 AND c.valid_until > $4
-  AND i.status = 'ACTIVE' AND i.gateway_external_id = $5
-`, store.tenantID, input.CredentialRefID, input.IntegrationInstanceID, now, strings.TrimSpace(input.GatewayExternalID)).Scan(&siteID, &credentialRevision, &credentialValidUntil)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCredentialInactive
-	}
-	if err != nil {
-		return fmt.Errorf("validate session CredentialRef: %w", err)
-	}
-	if !input.ExpiresAt.After(now) || input.ExpiresAt.After(credentialValidUntil) {
-		return errors.New("session expiry must be within the active credential lifetime")
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE connectivity.sessions
-SET status = 'CLOSED', closed_at = $4, close_reason = 'SESSION_REPLACED', revision = revision + 1, updated_at = $4
-WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid AND gateway_external_id = $3 AND status = 'ACTIVE'
-`, store.tenantID, input.IntegrationInstanceID, strings.TrimSpace(input.GatewayExternalID), now); err != nil {
-		return fmt.Errorf("close prior Gateway session: %w", err)
-	}
-	_, err = tx.Exec(ctx, `
-INSERT INTO connectivity.sessions (
-  id, tenant_id, site_id, integration_instance_id, credential_ref_id, credential_revision,
-  gateway_external_id, status, opened_at, expires_at, closed_at, close_reason, revision, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, 'ACTIVE', $8, $9, NULL, NULL, 1, $8)
-`, input.ID, store.tenantID, siteID, input.IntegrationInstanceID, input.CredentialRefID, credentialRevision, strings.TrimSpace(input.GatewayExternalID), now, input.ExpiresAt.UTC())
-	if err != nil {
-		return fmt.Errorf("open connectivity session: %w", err)
-	}
-	return tx.Commit(ctx)
-}
-
 func (store *Store) PrepareCommandCorrelation(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.CommandCorrelation, error) {
-	if correlation.Envelope.TenantID != store.tenantID || correlation.State != commandmodel.CorrelationPrepared {
+	if correlation.State != commandmodel.CorrelationPrepared {
 		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
 	}
-	tx, err := store.beginTenant(ctx)
+	tenantID := correlation.Envelope.TenantID
+	tx, err := store.beginTenant(ctx, tenantID)
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, err
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, `
 INSERT INTO connectivity.command_reply_correlations (
-  attempt_id, execution_fence, command_id, tenant_id, site_id, integration_instance_id,
+  attempt_id, execution_fence, command_id, tenant_id, site_id, gateway_id,
   device_id, point_id, capability, external_device_id, payload_hash, lease_owner, lease_until,
-  owner_generation, mapping_revision, binding_revision, provider_endpoint, provider_method,
+  mapping_revision, binding_revision, provider_endpoint, provider_method,
   request_sha256, state, prepared_at, updated_at
 ) VALUES (
   $1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
   $7::uuid, $8::uuid, $9, $10, $11, $12, $13,
-  $14, $15, $16, $17, $18, $19, 'PREPARED', $20, $20
+  $14, $15, $16, $17, $18, 'PREPARED', $19, $19
 )
 ON CONFLICT (attempt_id, execution_fence) DO NOTHING
 `, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, correlation.Envelope.CommandID,
-		store.tenantID, correlation.Envelope.SiteID, correlation.IntegrationInstanceID,
+		tenantID, correlation.Envelope.SiteID, correlation.GatewayID,
 		correlation.Envelope.DeviceID, correlation.Envelope.PointID, string(correlation.Envelope.Capability), correlation.ExternalDeviceID,
 		correlation.Envelope.PayloadHash, correlation.Envelope.LeaseOwner, correlation.Envelope.LeaseUntil.UTC(),
-		correlation.OwnerGeneration, correlation.MappingRevision, correlation.BindingRevision,
+		correlation.MappingRevision, correlation.BindingRevision,
 		correlation.ProviderEndpoint, correlation.ProviderMethod, correlation.RequestSHA256, correlation.PreparedAt.UTC())
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, fmt.Errorf("prepare durable command correlation: %w", err)
 	}
-	existing, err := loadCorrelation(ctx, tx, store.tenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence)
+	existing, err := loadCorrelation(ctx, tx, tenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence)
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, err
 	}
@@ -350,34 +94,32 @@ ON CONFLICT (attempt_id, execution_fence) DO NOTHING
 	return existing, nil
 }
 
-func (store *Store) ArmCommandCorrelation(ctx context.Context, attemptID string, executionFence, ownerGeneration uint64, armedAt time.Time) error {
-	tx, err := store.beginTenant(ctx)
+// ArmCommandCorrelation records the commit point just before the MQTT publish: from
+// here on the attempt may have reached the Gateway.
+func (store *Store) ArmCommandCorrelation(ctx context.Context, tenantID, attemptID string, executionFence uint64, armedAt time.Time) error {
+	tx, err := store.beginTenant(ctx, tenantID)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 	tag, err := tx.Exec(ctx, `
-UPDATE connectivity.command_reply_correlations c
-SET state = 'MAY_COMMIT', commit_armed_at = $5, updated_at = $5
-FROM connectivity.connector_ownership_leases l
-WHERE c.tenant_id = $1::uuid AND c.attempt_id = $2::uuid AND c.execution_fence = $3
-  AND c.owner_generation = $4 AND c.state = 'PREPARED'
-  AND l.tenant_id = c.tenant_id AND l.integration_instance_id = c.integration_instance_id
-  AND l.lease_generation = c.owner_generation AND l.lease_until > $5
-`, store.tenantID, attemptID, executionFence, ownerGeneration, armedAt.UTC())
+UPDATE connectivity.command_reply_correlations
+SET state = 'MAY_COMMIT', commit_armed_at = $4, updated_at = $4
+WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3 AND state = 'PREPARED'
+`, tenantID, attemptID, executionFence, armedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("arm durable command correlation: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		correlation, loadErr := loadCorrelation(ctx, tx, store.tenantID, attemptID, executionFence)
-		if loadErr != nil || correlation.OwnerGeneration != ownerGeneration || correlation.State == commandmodel.CorrelationPrepared {
+		correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
+		if loadErr != nil || correlation.State == commandmodel.CorrelationPrepared {
 			return ErrCorrelationMismatch
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-func (store *Store) RecordCommandReply(ctx context.Context, integrationInstanceID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, edgeExecution *commandmodel.EdgeExecutionEvidence, repliedAt time.Time) (commandmodel.CommandCorrelation, error) {
+func (store *Store) RecordCommandReply(ctx context.Context, tenantID, gatewayID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, edgeExecution *commandmodel.EdgeExecutionEvidence, repliedAt time.Time) (commandmodel.CommandCorrelation, error) {
 	var edgeExecutionJSON []byte
 	if edgeExecution != nil {
 		if !edgeExecution.Valid() {
@@ -389,7 +131,7 @@ func (store *Store) RecordCommandReply(ctx context.Context, integrationInstanceI
 			return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
 		}
 	}
-	tx, err := store.beginTenant(ctx)
+	tx, err := store.beginTenant(ctx, tenantID)
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, err
 	}
@@ -400,13 +142,15 @@ SET state = 'REPLIED', reply_sha256 = $5, reply_status = $6,
     reply_event_time = $7,
     reply_reason_code = NULLIF($8, ''), reply_execution_evidence = $9::jsonb,
     replied_at = $10, updated_at = $10
-WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
+WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
   AND command_id = $3::uuid AND execution_fence = $4 AND state = 'MAY_COMMIT'
-`, store.tenantID, integrationInstanceID, commandID, executionFence, replySHA256, strings.TrimSpace(replyStatus), nullableTime(replyEventTime), strings.TrimSpace(replyReasonCode), nullableJSON(edgeExecutionJSON), repliedAt.UTC())
+`, tenantID, gatewayID, commandID, executionFence, replySHA256, strings.TrimSpace(replyStatus), nullableTime(replyEventTime), strings.TrimSpace(replyReasonCode), nullableJSON(edgeExecutionJSON), repliedAt.UTC())
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, fmt.Errorf("record durable command reply: %w", err)
 	}
-	correlation, err := loadCorrelationByCommand(ctx, tx, store.tenantID, integrationInstanceID, commandID, executionFence)
+	correlation, err := scanCorrelation(tx.QueryRow(ctx, correlationSelect+`
+WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND command_id = $3::uuid AND execution_fence = $4
+`, tenantID, gatewayID, commandID, executionFence))
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, err
 	}
@@ -423,20 +167,22 @@ WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
 	return correlation, nil
 }
 
-func (store *Store) RecoverCommandReplies(ctx context.Context, integrationInstanceID string, limit int) ([]commandmodel.CommandCorrelation, error) {
+// RecoverCommandReplies returns a Tenant's replies that arrived but were not yet
+// resolved into the Command, for example because the process stopped in between.
+func (store *Store) RecoverCommandReplies(ctx context.Context, tenantID string, limit int) ([]commandmodel.CommandCorrelation, error) {
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	tx, err := store.beginTenant(ctx)
+	tx, err := store.beginTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, correlationSelect+`
-WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid AND state = 'REPLIED'
+WHERE tenant_id = $1::uuid AND state = 'REPLIED'
 ORDER BY replied_at, attempt_id
-LIMIT $3
-`, store.tenantID, integrationInstanceID, limit)
+LIMIT $2
+`, tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("load recoverable command replies: %w", err)
 	}
@@ -452,8 +198,8 @@ LIMIT $3
 	return out, rows.Err()
 }
 
-func (store *Store) MarkCommandCorrelationResolved(ctx context.Context, attemptID string, executionFence uint64, resolvedAt time.Time) error {
-	tx, err := store.beginTenant(ctx)
+func (store *Store) MarkCommandCorrelationResolved(ctx context.Context, tenantID, attemptID string, executionFence uint64, resolvedAt time.Time) error {
+	tx, err := store.beginTenant(ctx, tenantID)
 	if err != nil {
 		return err
 	}
@@ -462,12 +208,12 @@ func (store *Store) MarkCommandCorrelationResolved(ctx context.Context, attemptI
 UPDATE connectivity.command_reply_correlations
 SET state = 'RESOLVED', resolved_at = $4, updated_at = $4
 WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3 AND state = 'REPLIED'
-`, store.tenantID, attemptID, executionFence, resolvedAt.UTC())
+`, tenantID, attemptID, executionFence, resolvedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("resolve durable command correlation: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		correlation, loadErr := loadCorrelation(ctx, tx, store.tenantID, attemptID, executionFence)
+		correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
 		if loadErr != nil || correlation.State != commandmodel.CorrelationResolved {
 			return ErrCorrelationMismatch
 		}
@@ -475,7 +221,7 @@ WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3 AN
 	return tx.Commit(ctx)
 }
 
-func (store *Store) beginTenant(ctx context.Context) (pgx.Tx, error) {
+func (store *Store) beginTenant(ctx context.Context, tenantID string) (pgx.Tx, error) {
 	if store == nil || store.pool == nil {
 		return nil, errors.New("connectivity store is closed")
 	}
@@ -483,7 +229,7 @@ func (store *Store) beginTenant(ctx context.Context) (pgx.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, store.tenantID); err != nil {
+	if err := setTenant(ctx, tx, tenantID); err != nil {
 		tx.Rollback(ctx)
 		return nil, err
 	}
@@ -492,8 +238,8 @@ func (store *Store) beginTenant(ctx context.Context) (pgx.Tx, error) {
 
 const correlationSelect = `
 SELECT attempt_id::text, execution_fence, command_id::text, tenant_id::text, site_id::text,
-       integration_instance_id::text, device_id::text, point_id::text, capability, external_device_id,
-       payload_hash, lease_owner, lease_until, owner_generation, mapping_revision, binding_revision,
+       gateway_id::text, device_id::text, point_id::text, capability, external_device_id,
+       payload_hash, lease_owner, lease_until, mapping_revision, binding_revision,
        provider_endpoint, provider_method, request_sha256, prepared_at, state,
        COALESCE(reply_sha256, ''), COALESCE(reply_status, ''), reply_event_time,
        COALESCE(reply_reason_code, ''), reply_execution_evidence, replied_at
@@ -510,12 +256,6 @@ WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3
 `, tenantID, attemptID, fence))
 }
 
-func loadCorrelationByCommand(ctx context.Context, tx pgx.Tx, tenantID, integrationID, commandID string, fence uint64) (commandmodel.CommandCorrelation, error) {
-	return scanCorrelation(tx.QueryRow(ctx, correlationSelect+`
-WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid AND command_id = $3::uuid AND execution_fence = $4
-`, tenantID, integrationID, commandID, fence))
-}
-
 func scanCorrelation(row rowScanner) (commandmodel.CommandCorrelation, error) {
 	var correlation commandmodel.CommandCorrelation
 	var state, capability string
@@ -523,10 +263,10 @@ func scanCorrelation(row rowScanner) (commandmodel.CommandCorrelation, error) {
 	var edgeExecutionJSON []byte
 	err := row.Scan(
 		&correlation.Envelope.AttemptID, &correlation.Envelope.ExecutionFence, &correlation.Envelope.CommandID,
-		&correlation.Envelope.TenantID, &correlation.Envelope.SiteID, &correlation.IntegrationInstanceID,
+		&correlation.Envelope.TenantID, &correlation.Envelope.SiteID, &correlation.GatewayID,
 		&correlation.Envelope.DeviceID, &correlation.Envelope.PointID, &capability, &correlation.ExternalDeviceID,
 		&correlation.Envelope.PayloadHash, &correlation.Envelope.LeaseOwner, &correlation.Envelope.LeaseUntil,
-		&correlation.OwnerGeneration, &correlation.MappingRevision, &correlation.BindingRevision,
+		&correlation.MappingRevision, &correlation.BindingRevision,
 		&correlation.ProviderEndpoint, &correlation.ProviderMethod, &correlation.RequestSHA256, &correlation.PreparedAt,
 		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &edgeExecutionJSON, &repliedAt,
 	)
@@ -560,8 +300,8 @@ func sameCorrelationIdentity(left, right commandmodel.CommandCorrelation) bool {
 		left.Envelope.SiteID == right.Envelope.SiteID && left.Envelope.DeviceID == right.Envelope.DeviceID &&
 		left.Envelope.PointID == right.Envelope.PointID && left.Envelope.Capability == right.Envelope.Capability &&
 		left.Envelope.PayloadHash == right.Envelope.PayloadHash &&
-		left.Envelope.LeaseOwner == right.Envelope.LeaseOwner && left.IntegrationInstanceID == right.IntegrationInstanceID &&
-		left.ExternalDeviceID == right.ExternalDeviceID && left.OwnerGeneration == right.OwnerGeneration &&
+		left.Envelope.LeaseOwner == right.Envelope.LeaseOwner && left.GatewayID == right.GatewayID &&
+		left.ExternalDeviceID == right.ExternalDeviceID &&
 		left.MappingRevision == right.MappingRevision && left.BindingRevision == right.BindingRevision &&
 		left.ProviderEndpoint == right.ProviderEndpoint && left.ProviderMethod == right.ProviderMethod &&
 		left.RequestSHA256 == right.RequestSHA256

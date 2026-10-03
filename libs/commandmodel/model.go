@@ -1,6 +1,7 @@
 package commandmodel
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -515,9 +516,45 @@ type ConnectorResult struct {
 	EdgeExecution *EdgeExecutionEvidence
 }
 
+// DeviceRoute is where a command for a Device goes: the Gateway the Device is behind and
+// the source key the Gateway knows it by, from the Registry read port.
 type DeviceRoute struct {
+	GatewayID        string
 	ExternalDeviceID string
 	BindingRevision  uint64
+}
+
+// Command routing failures, each known before anything is sent to a Gateway.
+var (
+	ErrCommandRouteNotFound             = errors.New("command Device is not behind a registered Gateway")
+	ErrCommandControlDisabled           = errors.New("command Point is not an active writable Point of the Device")
+	ErrCommandGatewayCredentialInactive = errors.New("command Gateway holds no active credential")
+)
+
+// RouteFailureCode is the operator-facing reason for a routing failure, or "" when err is
+// not one. Dispatching such a command again cannot succeed until the Registry or the
+// Gateway Credential changes, so the command ends rejected with this reason.
+func RouteFailureCode(err error) string {
+	switch {
+	case errors.Is(err, ErrCommandRouteNotFound):
+		return "COMMAND_ROUTE_NOT_FOUND"
+	case errors.Is(err, ErrCommandControlDisabled):
+		return "COMMAND_CONTROL_DISABLED"
+	case errors.Is(err, ErrCommandGatewayCredentialInactive):
+		return "COMMAND_GATEWAY_CREDENTIAL_INACTIVE"
+	default:
+		return ""
+	}
+}
+
+// TerminalPreSendRejection reports whether a command refused before send must end
+// rejected rather than be dispatched again.
+func TerminalPreSendRejection(failureCode string) bool {
+	switch failureCode {
+	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE":
+		return true
+	}
+	return strings.HasPrefix(failureCode, "DISPATCH_SAFETY_")
 }
 
 type CorrelationState string
@@ -530,21 +567,20 @@ const (
 )
 
 type CommandCorrelation struct {
-	Envelope              DispatchEnvelope
-	IntegrationInstanceID string
-	ExternalDeviceID      string
-	OwnerGeneration       uint64
-	MappingRevision       string
-	BindingRevision       string
-	ProviderEndpoint      string
-	ProviderMethod        string
-	RequestSHA256         string
-	PreparedAt            time.Time
-	State                 CorrelationState
-	ReplySHA256           string
-	ReplyStatus           string
-	ReplyEventTime        time.Time
-	ReplyReasonCode       string
-	EdgeExecution         *EdgeExecutionEvidence
-	RepliedAt             time.Time
+	Envelope         DispatchEnvelope
+	GatewayID        string
+	ExternalDeviceID string
+	MappingRevision  string
+	BindingRevision  string
+	ProviderEndpoint string
+	ProviderMethod   string
+	RequestSHA256    string
+	PreparedAt       time.Time
+	State            CorrelationState
+	ReplySHA256      string
+	ReplyStatus      string
+	ReplyEventTime   time.Time
+	ReplyReasonCode  string
+	EdgeExecution    *EdgeExecutionEvidence
+	RepliedAt        time.Time
 }

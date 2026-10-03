@@ -65,7 +65,6 @@ func TestRuntimeClientClaimsAndResolvesDispatch(t *testing.T) {
 
 	client, err := NewRuntimeClient(RuntimeClientConfig{
 		BaseURL: server.URL, HTTPClient: server.Client(),
-		TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,13 +115,9 @@ func TestRuntimeClientMapsNoWorkAndStaleFence(t *testing.T) {
 	defer server.Close()
 	client, err := NewRuntimeClient(RuntimeClientConfig{
 		BaseURL: server.URL, HTTPClient: server.Client(),
-		TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := client.ClaimDispatch(context.Background(), "other-org", "dispatcher-a", 30*time.Second); !errors.Is(err, commandservice.ErrInvalidRequest) {
-		t.Fatalf("expected wrong Organization to fail locally, got %v", err)
 	}
 	if _, err := client.ClaimDispatch(context.Background(), runtimeClientTestOrganization, "dispatcher-a", 30*time.Second); !errors.Is(err, commandservice.ErrNoDispatchAvailable) {
 		t.Fatalf("expected no work, got %v", err)

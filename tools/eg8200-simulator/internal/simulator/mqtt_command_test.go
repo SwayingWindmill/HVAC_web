@@ -55,8 +55,6 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	}
 	wireID := config.Plant.Chiller.ID
 	gatewayConfig := MQTTGatewayConfig{
-		TenantID:       "018f3d00-0000-7000-8000-000000000001",
-		SiteID:         "018f3e00-1000-7000-8000-000000000001",
 		QueueDirectory: t.TempDir(),
 	}
 	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
@@ -116,8 +114,6 @@ func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 	}
 	wireID := config.Plant.Chiller.ID
 	gatewayConfig := MQTTGatewayConfig{
-		TenantID:       "018f3d00-0000-7000-8000-000000000001",
-		SiteID:         "018f3e00-1000-7000-8000-000000000001",
 		QueueDirectory: t.TempDir(),
 	}
 	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))

@@ -51,7 +51,7 @@
     },
     "mqtt": {
       "authority": "transport-only",
-      "telemetryTopic": "energy/v1/{tenant}/{site}/{gateway}/telemetry"
+      "telemetryTopic": "hvac/v1/{gatewayId}/up/telemetry"
     }
   },
   "ownedResources": [
