@@ -1,5 +1,4 @@
 BEGIN;
-SET LOCAL ROLE s5_work_order_migrator;
 
 INSERT INTO work_order_runtime.work_order_current (
   work_order_id, tenant_id, site_id, title, description, priority, status,

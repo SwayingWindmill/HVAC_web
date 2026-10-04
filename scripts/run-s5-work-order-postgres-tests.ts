@@ -15,12 +15,25 @@ const { postgresHostPort, run, compose, psql, pause } = await createPostgresComp
   portAllocatorLabel: 'S5 PostgreSQL',
 });
 
+// The image seeds on a temporary server and then restarts, so the fixture is ready only
+// once the same server has reported it several times in a row.
 async function waitForPostgres() {
+  let stableStart = '';
+  let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT (to_regclass('work_order_runtime.work_order_current') IS NOT NULL)::text || '|' || (SELECT count(*) FROM work_order_runtime.work_order_current)::text");
-      if (state === 'true|4') return;
-    } catch {}
+      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('work_order_runtime.work_order_current') IS NOT NULL)::text || '|' || (SELECT count(*) FROM work_order_runtime.work_order_current)::text");
+      const [startedAt, ...fixture] = state.split('|');
+      if (fixture.join('|') === 'true|4') {
+        stableChecks = startedAt === stableStart ? stableChecks + 1 : 1;
+        stableStart = startedAt;
+        if (stableChecks >= 3) return;
+      } else {
+        stableChecks = 0;
+      }
+    } catch {
+      stableChecks = 0;
+    }
     await pause(250);
   }
   let logs = '';
@@ -61,7 +74,7 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'work_order_runtime' AND c.relkind = 'r'
-  `), '10|10|10', 'table/RLS baseline');
+  `), '9|9|9', 'table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -71,30 +84,19 @@ try {
   if (!directLoginDenied.includes('permission denied')) throw new Error(`runtime login bypassed explicit role activation: ${directLoginDenied}`);
   report.assertions.explicitActivationRequired = true;
 
-  expectEqual(psql("SELECT tenant_id::text FROM work_order_runtime.organization_tenant_scope WHERE organization_id = '01920000-0000-7000-8000-000000000001'::uuid"), '0191f000-0000-7000-8000-000000000001', 'Organization Tenant binding');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
-    SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '3', 'authorized Tenant/Organization visibility');
+  `).split('\n').at(-1), '3', 'authorized Tenant visibility');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
-    SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000002', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '0', 'cross-Tenant invisibility');
-  expectEqual(psql(`
-    SET SESSION AUTHORIZATION s5_work_order_service;
-    SET ROLE s5_work_order_runtime;
-    SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000099', false);
-    SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
-    SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '0', 'cross-Organization invisibility');
-  report.assertions.organizationRls = true;
-  report.assertions.tenantOrganizationRls = true;
+  `).split('\n').at(-1), '1', 'other Tenant sees only its own Work Order');
+  report.assertions.tenantRls = true;
 
   for (const [operation, sql] of [
     ['insert', `INSERT INTO work_order_runtime.work_order_current SELECT * FROM work_order_runtime.work_order_current`],
@@ -104,7 +106,6 @@ try {
     const denied = psql(`
       SET SESSION AUTHORIZATION s5_work_order_service;
       SET ROLE s5_work_order_runtime;
-      SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
       SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
       ${sql};
     `, { expectFailure: true }).toLowerCase();
@@ -115,12 +116,11 @@ try {
 
   for (const [operation, sql] of [
     ['delete current', `DELETE FROM work_order_runtime.work_order_current`],
-    ['insert task', `INSERT INTO work_order_runtime.work_order_task (organization_id, site_id, work_order_id, task_id, position, title, status, version, created_at, updated_at) VALUES ('01920000-0000-7000-8000-000000000001','01920000-0001-7000-8000-000000000001','01920000-1000-7000-8000-000000000001','01930000-4000-7000-8000-000000000099',99,'forbidden','OPEN',1,now(),now())`],
+    ['insert task', `INSERT INTO work_order_runtime.work_order_task (tenant_id, site_id, work_order_id, task_id, position, title, status, version, created_at, updated_at) VALUES ('0191f000-0000-7000-8000-000000000001','01920000-0001-7000-8000-000000000001','01920000-1000-7000-8000-000000000001','01930000-4000-7000-8000-000000000099',99,'forbidden','OPEN',1,now(),now())`],
   ]) {
     const denied = psql(`
       SET SESSION AUTHORIZATION s5_work_order_mutation_service;
       SET ROLE s5_work_order_writer;
-      SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
       SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
       ${sql};
     `, { expectFailure: true }).toLowerCase();

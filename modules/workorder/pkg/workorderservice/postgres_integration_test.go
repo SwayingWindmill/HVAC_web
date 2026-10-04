@@ -13,7 +13,6 @@ import (
 
 const (
 	postgresTenantID            = "0191f000-0000-7000-8000-000000000001"
-	postgresOrganizationID      = "01920000-0000-7000-8000-000000000001"
 	postgresOtherOrganizationID = "01920000-0000-7000-8000-000000000002"
 	postgresSiteID              = "01920000-0001-7000-8000-000000000001"
 	postgresOtherSiteID         = "01920000-0001-7000-8000-000000000002"
@@ -35,45 +34,45 @@ func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
 	}
 	defer store.Close()
 
-	firstPage, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{Limit: 1})
+	firstPage, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(firstPage.Items) != 1 || firstPage.Items[0].WorkOrderID != postgresWorkOrderTwo || !firstPage.HasMore || firstPage.NextCursor == nil {
 		t.Fatalf("unexpected first page: %#v", firstPage)
 	}
-	secondPage, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{Limit: 1, Cursor: *firstPage.NextCursor})
+	secondPage, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{Limit: 1, Cursor: *firstPage.NextCursor})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(secondPage.Items) != 1 || secondPage.Items[0].WorkOrderID != postgresWorkOrderOne || secondPage.HasMore || secondPage.NextCursor != nil {
 		t.Fatalf("unexpected second page: %#v", secondPage)
 	}
-	if _, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{Status: workordermodel.StatusOpen, Limit: 1, Cursor: *firstPage.NextCursor}); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{Status: workordermodel.StatusOpen, Limit: 1, Cursor: *firstPage.NextCursor}); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("cursor filter binding was not enforced: %v", err)
 	}
 
-	openOnly, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{Status: workordermodel.StatusOpen, Limit: 50})
+	openOnly, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{Status: workordermodel.StatusOpen, Limit: 50})
 	if err != nil || len(openOnly.Items) != 1 || openOnly.Items[0].WorkOrderID != postgresWorkOrderOne {
 		t.Fatalf("unexpected status filter: %#v err=%v", openOnly, err)
 	}
-	urgentOnly, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{Priority: workordermodel.PriorityUrgent, Limit: 50})
+	urgentOnly, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{Priority: workordermodel.PriorityUrgent, Limit: 50})
 	if err != nil || len(urgentOnly.Items) != 1 || urgentOnly.Items[0].WorkOrderID != postgresWorkOrderTwo {
 		t.Fatalf("unexpected priority filter: %#v err=%v", urgentOnly, err)
 	}
-	assignedOnly, err := store.List(ctx, postgresOrganizationID, postgresSiteID, Filter{AssigneeID: "principal:operator-a", Limit: 50})
+	assignedOnly, err := store.List(ctx, postgresTenantID, postgresSiteID, Filter{AssigneeID: "principal:operator-a", Limit: 50})
 	if err != nil || len(assignedOnly.Items) != 1 || assignedOnly.Items[0].WorkOrderID != postgresWorkOrderOne {
 		t.Fatalf("unexpected assignee filter: %#v err=%v", assignedOnly, err)
 	}
 
-	detail, err := store.Get(ctx, postgresOrganizationID, postgresSiteID, postgresWorkOrderOne)
+	detail, err := store.Get(ctx, postgresTenantID, postgresSiteID, postgresWorkOrderOne)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if detail.Tasks.Total != 2 || detail.Tasks.Completed != 1 || detail.NoteCount != 1 || detail.AttachmentCount != 1 || len(detail.SourceReferences) != 1 || len(detail.Timeline) != 1 {
 		t.Fatalf("authoritative detail did not converge: %#v", detail)
 	}
-	completed, err := store.Get(ctx, postgresOrganizationID, postgresOtherSiteID, postgresCompletedWorkOrder)
+	completed, err := store.Get(ctx, postgresTenantID, postgresOtherSiteID, postgresCompletedWorkOrder)
 	if err != nil || completed.Status != workordermodel.StatusCompleted || len(completed.CompletionEvidence) != 1 {
 		t.Fatalf("completed Work Order evidence missing: %#v err=%v", completed, err)
 	}
@@ -81,14 +80,14 @@ func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
 	if _, err := store.List(ctx, postgresOtherOrganizationID, postgresSiteID, Filter{Limit: 50}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("cross-Tenant Organization list did not fail closed: %v", err)
 	}
-	crossSite, err := store.List(ctx, postgresOrganizationID, postgresForeignSiteID, Filter{Limit: 50})
+	crossSite, err := store.List(ctx, postgresTenantID, postgresForeignSiteID, Filter{Limit: 50})
 	if err != nil || len(crossSite.Items) != 0 {
 		t.Fatalf("cross-Site rows were visible in list: %#v err=%v", crossSite, err)
 	}
 	if _, err := store.Get(ctx, postgresOtherOrganizationID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("cross-Tenant Organization detail did not fail closed: %v", err)
 	}
-	if _, err := store.Get(ctx, postgresOrganizationID, postgresOtherSiteID, postgresWorkOrderOne); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Get(ctx, postgresTenantID, postgresOtherSiteID, postgresWorkOrderOne); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-Site detail was visible: %v", err)
 	}
 }
@@ -117,7 +116,7 @@ func TestPostgresMalformedProjectionFailsClosed(t *testing.T) {
 	defer func() {
 		_, _ = admin.Exec(ctx, `UPDATE work_order_runtime.work_order_current SET task_total = 2 WHERE work_order_id = $1`, postgresWorkOrderOne)
 	}()
-	if _, err := store.Get(ctx, postgresOrganizationID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
+	if _, err := store.Get(ctx, postgresTenantID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("nonconvergent Work Order projection did not fail closed: %v", err)
 	}
 }

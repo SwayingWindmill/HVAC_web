@@ -125,10 +125,9 @@ test('Operations Agent changes select dedicated domain gates', () => {
 
 test('PR workflow exposes only the stable required checks', async () => {
   const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
-  for (const check of ['pr / static', 'pr / contracts', 'pr / affected-unit']) {
+  for (const check of ['pr / static', 'pr / contracts', 'pr / affected-unit', 'pr / affected-integration']) {
     assert.equal(workflow.split(`name: ${check}`).length - 1, 1, `required check name drifted: ${check}`);
   }
-  assert.ok(!workflow.includes('pr / affected-integration'));
   assert.ok(!workflow.includes('pr / affected-browser'));
 });
 
