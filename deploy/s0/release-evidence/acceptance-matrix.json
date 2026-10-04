@@ -80,8 +80,7 @@
         "scripts/generate-platform-contracts.mjs",
         "scripts/check-session-event-contract.mjs",
         "scripts/check-ownership-registries.mjs",
-        "scripts/run-durable-postgres-tests.mjs",
-        "scripts/check-s24-production-retirement.mjs"
+        "scripts/run-durable-postgres-tests.mjs"
       ],
       "runtimeEvidence": [
         "out/s0-release-evidence/compatibility-report.json"
@@ -221,7 +220,6 @@
         ".github/workflows/s0-supply-chain.yml"
       ],
       "tests": [
-        "scripts/check-production-rollout.mjs",
         "scripts/check-s0-delivery-assets.mjs"
       ],
       "runtimeEvidence": [

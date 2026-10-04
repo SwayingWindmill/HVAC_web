@@ -14,7 +14,21 @@ export const gateCommandMatrix = Object.freeze({
     ]),
   }),
   contracts: Object.freeze({
-    core: Object.freeze([npmRun('contracts:check'), npmRun('ownership:check')]),
+    core: Object.freeze([
+      npmRun('contracts:check'),
+      npmRun('ownership:check'),
+      npmRun('events:check'),
+      npmRun('deployment:phase1:check'),
+      npmRun('acceptance:phase1:check'),
+      npmRun('docs:phase1:consistency:check'),
+      npmRun('architecture:phase1:check'),
+      npmRun('backend:architecture:check'),
+      npmRun('data:architecture:check'),
+      npmRun('observability:phase1:check'),
+      npmRun('security:network-policies'),
+      npmRun('notification:check'),
+      npmRun('analytics:history:check'),
+    ]),
     web: Object.freeze([npmRun('web:principal:contract')]),
     registry: Object.freeze([nodeRun('scripts/check-s1-registry-baseline.mjs')]),
     telemetry: Object.freeze([
@@ -64,6 +78,7 @@ export const gateCommandMatrix = Object.freeze({
     'operations-agent': Object.freeze([
       npmCi('services/operations-agent-service'),
       npmRun('operations-agent-service:check'),
+      nodeRun('scripts/check-operations-agent-service-boundaries.mjs'),
       npmRun('operations-agent:benchmark:test'),
       npmRun('operations-agent:gateway:check'),
       npmRun('test:gateway'),
