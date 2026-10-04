@@ -14,7 +14,8 @@ async function markdownFiles(path) {
   const result = [];
   async function walk(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (['node_modules', 'out', '.git', '.worktrees'].includes(entry.name)) continue;
+      // runtime/ holds generated secrets and service data, never documentation.
+      if (['node_modules', 'out', '.git', '.worktrees', 'runtime'].includes(entry.name)) continue;
       const full = join(directory, entry.name);
       if (entry.isDirectory()) await walk(full);
       else if (entry.isFile() && entry.name.endsWith('.md')) result.push(relative(root, full).replaceAll('\\', '/'));

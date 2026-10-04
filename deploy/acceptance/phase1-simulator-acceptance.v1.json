@@ -32,7 +32,7 @@
     },
     {
       "id": "GATE-CENTRAL-PLANT",
-      "command": "npm run test:central-plant-local",
+      "command": "npm run test:eg8200-simulator",
       "category": "simulator"
     },
     {
@@ -93,13 +93,6 @@
       "command": "node scripts/run-phase1-postgres-restore-test.mjs",
       "category": "recovery",
       "evidence": ["out/phase1-acceptance/restore-report.json"]
-    },
-    {
-      "id": "GATE-CAPACITY-PREFLIGHT",
-      "command": "node scripts/run-s2-capacity-certification.mjs",
-      "category": "performance",
-      "formalMeasurement": false,
-      "evidence": ["out/s2-release-evidence/capacity-report.json"]
     },
     {
       "id": "GATE-LICENSES",
@@ -281,10 +274,10 @@
     },
     {
       "id": "REQ-PERF-001",
-      "class": "SOFTWARE_REQUIRED",
+      "class": "DEFERRED_FORMAL",
       "title": "容量目标与 Failure Scenario 在正式压测前被冻结",
-      "gateIds": ["GATE-CAPACITY-PREFLIGHT"],
-      "acceptance": "仅作为配置 Preflight；不得声称完成 60min/15min 正式容量测试"
+      "gateIds": [],
+      "acceptance": "容量预检脚本已在门禁整合中移除（f08126b5）；容量目标与故障场景随正式压测一起冻结，不得声称已完成 60min/15min 正式容量测试"
     },
     {
       "id": "REQ-HW-001",
