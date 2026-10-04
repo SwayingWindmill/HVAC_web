@@ -83,7 +83,7 @@ func (store *PostgresStore) Close() {
 	}
 }
 
-func (store *PostgresStore) List(ctx context.Context, organizationID, siteID string, filter Filter) (workordermodel.ListResponse, error) {
+func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, filter Filter) (workordermodel.ListResponse, error) {
 	if store == nil || store.readPool == nil || store.cursor == nil {
 		return workordermodel.ListResponse{}, ErrUnavailable
 	}
@@ -91,7 +91,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 || !validSourceFilter(filter) {
 		return workordermodel.ListResponse{}, ErrInvalidFilter
 	}
-	tx, err := store.beginReadTransaction(ctx, organizationID)
+	tx, err := store.beginReadTransaction(ctx, tenantID)
 	if err != nil {
 		return workordermodel.ListResponse{}, err
 	}
@@ -100,7 +100,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	var cursorTime any
 	var cursorID any
 	if filter.Cursor != "" {
-		position, err := store.cursor.Decode(filter.Cursor, organizationID, siteID, filter)
+		position, err := store.cursor.Decode(filter.Cursor, tenantID, siteID, filter)
 		if err != nil {
 			return workordermodel.ListResponse{}, ErrInvalidCursor
 		}
@@ -127,7 +127,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 		  AND ($8::timestamptz IS NULL OR updated_at < $8 OR (updated_at = $8 AND work_order_id > $9::uuid))
 		ORDER BY updated_at DESC, work_order_id ASC
 		LIMIT $10
-	`, organizationID, siteID, string(filter.Status), string(filter.Priority), filter.AssigneeID, string(filter.SourceDomain), filter.SourceRef, cursorTime, cursorID, filter.Limit+1)
+	`, tenantID, siteID, string(filter.Status), string(filter.Priority), filter.AssigneeID, string(filter.SourceDomain), filter.SourceRef, cursorTime, cursorID, filter.Limit+1)
 	if err != nil {
 		return workordermodel.ListResponse{}, fmt.Errorf("list Work Orders: %w", err)
 	}
@@ -161,13 +161,13 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	response := workordermodel.ListResponse{SchemaVersion: workordermodel.SchemaVersion, Items: items, HasMore: hasMore}
 	if hasMore {
 		last := records[len(records)-1]
-		cursor, err := store.cursor.Encode(organizationID, siteID, filter, last.updatedAt, last.workOrder.WorkOrderID)
+		cursor, err := store.cursor.Encode(tenantID, siteID, filter, last.updatedAt, last.workOrder.WorkOrderID)
 		if err != nil {
 			return workordermodel.ListResponse{}, fmt.Errorf("encode Work Order cursor: %w", err)
 		}
 		response.NextCursor = &cursor
 	}
-	if err := response.Validate(organizationID, siteID, filter.Limit); err != nil {
+	if err := response.Validate(tenantID, siteID, filter.Limit); err != nil {
 		return workordermodel.ListResponse{}, fmt.Errorf("%w: validate Work Order list: %v", ErrUnavailable, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -176,16 +176,16 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	return response, nil
 }
 
-func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, workOrderID string) (workordermodel.WorkOrder, error) {
+func (store *PostgresStore) Get(ctx context.Context, tenantID, siteID, workOrderID string) (workordermodel.WorkOrder, error) {
 	if store == nil || store.readPool == nil {
 		return workordermodel.WorkOrder{}, ErrUnavailable
 	}
-	tx, err := store.beginReadTransaction(ctx, organizationID)
+	tx, err := store.beginReadTransaction(ctx, tenantID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	record, err := getCurrentRecord(ctx, tx, organizationID, siteID, workOrderID)
+	record, err := getCurrentRecord(ctx, tx, tenantID, siteID, workOrderID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, err
 	}
@@ -214,12 +214,12 @@ func (store *PostgresStore) beginReadTransaction(ctx context.Context, tenantID s
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("activate Work Order Tenant/Organization scope: %w", err)
+		return nil, fmt.Errorf("activate Work Order Tenant scope: %w", err)
 	}
 	return tx, nil
 }
 
-func getCurrentRecord(ctx context.Context, tx pgx.Tx, organizationID, siteID, workOrderID string) (currentRecord, error) {
+func getCurrentRecord(ctx context.Context, tx pgx.Tx, tenantID, siteID, workOrderID string) (currentRecord, error) {
 	record, err := scanCurrentRecord(tx.QueryRow(ctx, `
 		SELECT work_order_id, tenant_id, site_id, title, description, priority, status,
 		       assignee_id, team_id, scheduled_start, due_at,
@@ -227,7 +227,7 @@ func getCurrentRecord(ctx context.Context, tx pgx.Tx, organizationID, siteID, wo
 		       version, created_at, updated_at
 		FROM work_order_runtime.work_order_current
 		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
-	`, organizationID, siteID, workOrderID))
+	`, tenantID, siteID, workOrderID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return currentRecord{}, ErrNotFound
 	}

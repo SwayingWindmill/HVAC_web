@@ -18,28 +18,28 @@ const (
 	postgresAssignOperation = "ASSIGN"
 )
 
-func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID string, mutation CreateMutation) (MutationResult, error) {
+func (store *PostgresStore) Create(ctx context.Context, tenantID, siteID string, mutation CreateMutation) (MutationResult, error) {
 	if store == nil || store.mutationPool == nil {
 		return MutationResult{}, ErrUnavailable
 	}
 	idempotencyKey := strings.TrimSpace(mutation.IdempotencyKey)
-	if !workordermodel.IsUUIDv7(organizationID) || !workordermodel.IsUUIDv7(siteID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
+	if !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(siteID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return MutationResult{}, workordermodel.ErrInvalidCreate
 	}
 	digest, err := createMutationDigest(mutation)
 	if err != nil {
 		return MutationResult{}, workordermodel.ErrInvalidCreate
 	}
-	tx, err := store.beginWriterTransaction(ctx, organizationID)
+	tx, err := store.beginWriterTransaction(ctx, tenantID)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	resourceKey := "site:" + siteID
-	if err := lockPostgresMutationKey(ctx, tx, organizationID, siteID, postgresCreateOperation, resourceKey, idempotencyKey); err != nil {
+	if err := lockPostgresMutationKey(ctx, tx, tenantID, siteID, postgresCreateOperation, resourceKey, idempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
-	if replay, found, err := readPostgresReplay(ctx, tx, organizationID, siteID, postgresCreateOperation, resourceKey, idempotencyKey, digest, ""); err != nil {
+	if replay, found, err := readPostgresReplay(ctx, tx, tenantID, siteID, postgresCreateOperation, resourceKey, idempotencyKey, digest, ""); err != nil {
 		return MutationResult{}, err
 	} else if found {
 		if err := tx.Commit(ctx); err != nil {
@@ -47,7 +47,7 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 		}
 		return MutationResult{WorkOrder: replay, Replayed: true}, nil
 	}
-	created, err := workordermodel.Create(mutation.createInput(organizationID, siteID))
+	created, err := workordermodel.Create(mutation.createInput(tenantID, siteID))
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -58,7 +58,7 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 			task_total, task_completed, task_blocked, note_count, attachment_count,
 			version, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,0,0,0,0,$12,$13,$13)
-	`, created.WorkOrderID, organizationID, siteID, created.Title, created.Description, string(created.Priority), string(created.Status),
+	`, created.WorkOrderID, tenantID, siteID, created.Title, created.Description, string(created.Priority), string(created.Status),
 		created.AssigneeID, created.TeamID, created.ScheduledStart, created.DueAt, created.Version, created.CreatedAt); err != nil {
 		return MutationResult{}, fmt.Errorf("insert Work Order current projection: %w", err)
 	}
@@ -67,14 +67,14 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 			INSERT INTO work_order_runtime.work_order_source_reference (
 				tenant_id, site_id, work_order_id, source_domain, source_resource_id, relationship, created_at
 			) VALUES ($1,$2,$3,$4,$5,$6,$7)
-		`, organizationID, siteID, created.WorkOrderID, string(reference.Domain), reference.ResourceID, string(reference.Relationship), created.CreatedAt); err != nil {
+		`, tenantID, siteID, created.WorkOrderID, string(reference.Domain), reference.ResourceID, string(reference.Relationship), created.CreatedAt); err != nil {
 			return MutationResult{}, fmt.Errorf("insert Work Order source reference: %w", err)
 		}
 	}
 	if err := insertPostgresTimeline(ctx, tx, created, created.Timeline[0]); err != nil {
 		return MutationResult{}, err
 	}
-	if err := insertPostgresMutationEvidence(ctx, tx, organizationID, siteID, postgresCreateOperation, postgresCreateOperation, resourceKey, idempotencyKey, digest,
+	if err := insertPostgresMutationEvidence(ctx, tx, tenantID, siteID, postgresCreateOperation, postgresCreateOperation, resourceKey, idempotencyKey, digest,
 		mutation.ActorType, mutation.ActorID, mutation.PolicyRevision, mutation.CorrelationID, created.UpdatedAt, created); err != nil {
 		return MutationResult{}, err
 	}
@@ -84,28 +84,28 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 	return MutationResult{WorkOrder: created}, nil
 }
 
-func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, workOrderID string, mutation AssignmentMutation) (MutationResult, error) {
+func (store *PostgresStore) Assign(ctx context.Context, tenantID, siteID, workOrderID string, mutation AssignmentMutation) (MutationResult, error) {
 	if store == nil || store.mutationPool == nil {
 		return MutationResult{}, ErrUnavailable
 	}
 	idempotencyKey := strings.TrimSpace(mutation.IdempotencyKey)
-	if !workordermodel.IsUUIDv7(organizationID) || !workordermodel.IsUUIDv7(siteID) || !workordermodel.IsUUIDv7(workOrderID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
+	if !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(siteID) || !workordermodel.IsUUIDv7(workOrderID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return MutationResult{}, workordermodel.ErrInvalidAssignment
 	}
 	digest, err := assignmentMutationDigest(mutation)
 	if err != nil {
 		return MutationResult{}, workordermodel.ErrInvalidAssignment
 	}
-	tx, err := store.beginWriterTransaction(ctx, organizationID)
+	tx, err := store.beginWriterTransaction(ctx, tenantID)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	resourceKey := "work-order:" + workOrderID
-	if err := lockPostgresMutationKey(ctx, tx, organizationID, siteID, postgresAssignOperation, resourceKey, idempotencyKey); err != nil {
+	if err := lockPostgresMutationKey(ctx, tx, tenantID, siteID, postgresAssignOperation, resourceKey, idempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
-	if replay, found, err := readPostgresReplay(ctx, tx, organizationID, siteID, postgresAssignOperation, resourceKey, idempotencyKey, digest, workOrderID); err != nil {
+	if replay, found, err := readPostgresReplay(ctx, tx, tenantID, siteID, postgresAssignOperation, resourceKey, idempotencyKey, digest, workOrderID); err != nil {
 		return MutationResult{}, err
 	} else if found {
 		if err := tx.Commit(ctx); err != nil {
@@ -113,7 +113,7 @@ func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, 
 		}
 		return MutationResult{WorkOrder: replay, Replayed: true}, nil
 	}
-	record, err := getCurrentRecordForMutation(ctx, tx, organizationID, siteID, workOrderID)
+	record, err := getCurrentRecordForMutation(ctx, tx, tenantID, siteID, workOrderID)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -129,7 +129,7 @@ func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, 
 		UPDATE work_order_runtime.work_order_current
 		SET assignee_id = $5, team_id = $6, version = $7, updated_at = $8
 		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
-	`, organizationID, siteID, workOrderID, mutation.ExpectedVersion, updated.AssigneeID, updated.TeamID, updated.Version, updated.UpdatedAt)
+	`, tenantID, siteID, workOrderID, mutation.ExpectedVersion, updated.AssigneeID, updated.TeamID, updated.Version, updated.UpdatedAt)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("update Work Order assignment: %w", err)
 	}
@@ -139,7 +139,7 @@ func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, 
 	if err := insertPostgresTimeline(ctx, tx, updated, updated.Timeline[len(updated.Timeline)-1]); err != nil {
 		return MutationResult{}, err
 	}
-	if err := insertPostgresMutationEvidence(ctx, tx, organizationID, siteID, postgresAssignOperation, postgresAssignOperation, resourceKey, idempotencyKey, digest,
+	if err := insertPostgresMutationEvidence(ctx, tx, tenantID, siteID, postgresAssignOperation, postgresAssignOperation, resourceKey, idempotencyKey, digest,
 		mutation.ActorType, mutation.ActorID, mutation.PolicyRevision, mutation.CorrelationID, updated.UpdatedAt, updated); err != nil {
 		return MutationResult{}, err
 	}
@@ -149,12 +149,12 @@ func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, 
 	return MutationResult{WorkOrder: updated}, nil
 }
 
-func (store *PostgresStore) Transition(ctx context.Context, organizationID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error) {
+func (store *PostgresStore) Transition(ctx context.Context, tenantID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error) {
 	if store == nil || store.mutationPool == nil {
 		return MutationResult{}, ErrUnavailable
 	}
 	idempotencyKey := strings.TrimSpace(mutation.IdempotencyKey)
-	if !workordermodel.IsUUIDv7(organizationID) || !workordermodel.IsUUIDv7(siteID) || !workordermodel.IsUUIDv7(workOrderID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
+	if !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(siteID) || !workordermodel.IsUUIDv7(workOrderID) || !idempotencyKeyPattern.MatchString(idempotencyKey) {
 		return MutationResult{}, workordermodel.ErrInvalidLifecycle
 	}
 	digest, err := lifecycleMutationDigest(mutation)
@@ -163,16 +163,16 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 	}
 	auditOperation := string(mutation.Operation)
 	idempotencyOperation := lifecycleIdempotencyOperation
-	tx, err := store.beginWriterTransaction(ctx, organizationID)
+	tx, err := store.beginWriterTransaction(ctx, tenantID)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	resourceKey := "work-order:" + workOrderID
-	if err := lockPostgresMutationKey(ctx, tx, organizationID, siteID, idempotencyOperation, resourceKey, idempotencyKey); err != nil {
+	if err := lockPostgresMutationKey(ctx, tx, tenantID, siteID, idempotencyOperation, resourceKey, idempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
-	if replay, found, err := readPostgresReplay(ctx, tx, organizationID, siteID, idempotencyOperation, resourceKey, idempotencyKey, digest, workOrderID); err != nil {
+	if replay, found, err := readPostgresReplay(ctx, tx, tenantID, siteID, idempotencyOperation, resourceKey, idempotencyKey, digest, workOrderID); err != nil {
 		return MutationResult{}, err
 	} else if found {
 		if err := tx.Commit(ctx); err != nil {
@@ -180,7 +180,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 		}
 		return MutationResult{WorkOrder: replay, Replayed: true}, nil
 	}
-	record, err := getCurrentRecordForMutation(ctx, tx, organizationID, siteID, workOrderID)
+	record, err := getCurrentRecordForMutation(ctx, tx, tenantID, siteID, workOrderID)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -196,7 +196,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 		UPDATE work_order_runtime.work_order_current
 		SET status = $5, scheduled_start = $6, due_at = $7, version = $8, updated_at = $9
 		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
-	`, organizationID, siteID, workOrderID, mutation.ExpectedVersion, string(updated.Status), updated.ScheduledStart, updated.DueAt, updated.Version, updated.UpdatedAt)
+	`, tenantID, siteID, workOrderID, mutation.ExpectedVersion, string(updated.Status), updated.ScheduledStart, updated.DueAt, updated.Version, updated.UpdatedAt)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("update Work Order lifecycle: %w", err)
 	}
@@ -210,7 +210,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 				INSERT INTO work_order_runtime.work_order_completion_evidence (
 					tenant_id, site_id, work_order_id, kind, reference, captured_at, completion_version
 				) VALUES ($1,$2,$3,$4,$5,$6,$7)
-			`, organizationID, siteID, workOrderID, reference.Kind, reference.Reference, reference.CapturedAt, updated.Version); err != nil {
+			`, tenantID, siteID, workOrderID, reference.Kind, reference.Reference, reference.CapturedAt, updated.Version); err != nil {
 				return MutationResult{}, fmt.Errorf("insert Work Order completion evidence: %w", err)
 			}
 		}
@@ -218,7 +218,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 	if err := insertPostgresTimeline(ctx, tx, updated, updated.Timeline[len(updated.Timeline)-1]); err != nil {
 		return MutationResult{}, err
 	}
-	if err := insertPostgresMutationEvidence(ctx, tx, organizationID, siteID, idempotencyOperation, auditOperation, resourceKey, idempotencyKey, digest,
+	if err := insertPostgresMutationEvidence(ctx, tx, tenantID, siteID, idempotencyOperation, auditOperation, resourceKey, idempotencyKey, digest,
 		mutation.ActorType, mutation.ActorID, mutation.PolicyRevision, mutation.CorrelationID, updated.UpdatedAt, updated); err != nil {
 		return MutationResult{}, err
 	}
@@ -243,27 +243,27 @@ func (store *PostgresStore) beginWriterTransaction(ctx context.Context, tenantID
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("activate Work Order writer Tenant/Organization scope: %w", err)
+		return nil, fmt.Errorf("activate Work Order writer Tenant scope: %w", err)
 	}
 	return tx, nil
 }
 
-func lockPostgresMutationKey(ctx context.Context, tx pgx.Tx, organizationID, siteID, operation, resourceKey, idempotencyKey string) error {
-	key := strings.Join([]string{organizationID, siteID, operation, resourceKey, idempotencyKey}, "|")
+func lockPostgresMutationKey(ctx context.Context, tx pgx.Tx, tenantID, siteID, operation, resourceKey, idempotencyKey string) error {
+	key := strings.Join([]string{tenantID, siteID, operation, resourceKey, idempotencyKey}, "|")
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
 		return fmt.Errorf("lock Work Order idempotency key: %w", err)
 	}
 	return nil
 }
 
-func readPostgresReplay(ctx context.Context, tx pgx.Tx, organizationID, siteID, operation, resourceKey, idempotencyKey, digest, expectedWorkOrderID string) (workordermodel.WorkOrder, bool, error) {
+func readPostgresReplay(ctx context.Context, tx pgx.Tx, tenantID, siteID, operation, resourceKey, idempotencyKey, digest, expectedWorkOrderID string) (workordermodel.WorkOrder, bool, error) {
 	var storedDigest string
 	var payload []byte
 	err := tx.QueryRow(ctx, `
 		SELECT request_digest, response_payload
 		FROM work_order_runtime.work_order_idempotency
 		WHERE tenant_id = $1 AND site_id = $2 AND operation = $3 AND resource_key = $4 AND idempotency_key = $5
-	`, organizationID, siteID, operation, resourceKey, idempotencyKey).Scan(&storedDigest, &payload)
+	`, tenantID, siteID, operation, resourceKey, idempotencyKey).Scan(&storedDigest, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workordermodel.WorkOrder{}, false, nil
 	}
@@ -274,14 +274,14 @@ func readPostgresReplay(ctx context.Context, tx pgx.Tx, organizationID, siteID, 
 		return workordermodel.WorkOrder{}, false, ErrIdempotencyConflict
 	}
 	var replay workordermodel.WorkOrder
-	if json.Unmarshal(payload, &replay) != nil || replay.Validate() != nil || replay.TenantID != organizationID || replay.SiteID != siteID ||
+	if json.Unmarshal(payload, &replay) != nil || replay.Validate() != nil || replay.TenantID != tenantID || replay.SiteID != siteID ||
 		(expectedWorkOrderID != "" && replay.WorkOrderID != expectedWorkOrderID) {
 		return workordermodel.WorkOrder{}, false, ErrUnavailable
 	}
 	return replay, true, nil
 }
 
-func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, organizationID, siteID, idempotencyOperation, auditOperation, resourceKey, idempotencyKey, digest,
+func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, tenantID, siteID, idempotencyOperation, auditOperation, resourceKey, idempotencyKey, digest,
 	actorType, actorID, policyRevision, correlationID, occurredAt string, workOrder workordermodel.WorkOrder) error {
 	payload, err := json.Marshal(workOrder)
 	if err != nil || len(payload) > 64<<10 {
@@ -291,7 +291,7 @@ func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, organization
 		INSERT INTO work_order_runtime.work_order_idempotency (
 			tenant_id, site_id, operation, resource_key, idempotency_key, request_digest, response_payload, committed_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-	`, organizationID, siteID, idempotencyOperation, resourceKey, idempotencyKey, digest, string(payload), occurredAt); err != nil {
+	`, tenantID, siteID, idempotencyOperation, resourceKey, idempotencyKey, digest, string(payload), occurredAt); err != nil {
 		return fmt.Errorf("insert Work Order idempotency record: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -299,7 +299,7 @@ func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, organization
 			tenant_id, site_id, work_order_id, operation, idempotency_key, request_digest,
 			actor_type, actor_id, policy_revision, correlation_id, committed_version, committed_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	`, organizationID, siteID, workOrder.WorkOrderID, auditOperation, idempotencyKey, digest,
+	`, tenantID, siteID, workOrder.WorkOrderID, auditOperation, idempotencyKey, digest,
 		strings.TrimSpace(actorType), strings.TrimSpace(actorID), strings.TrimSpace(policyRevision), strings.TrimSpace(correlationID), workOrder.Version, occurredAt); err != nil {
 		return fmt.Errorf("insert Work Order mutation audit: %w", err)
 	}
@@ -319,7 +319,7 @@ func insertPostgresTimeline(ctx context.Context, tx pgx.Tx, workOrder workorderm
 	return nil
 }
 
-func getCurrentRecordForMutation(ctx context.Context, tx pgx.Tx, organizationID, siteID, workOrderID string) (currentRecord, error) {
+func getCurrentRecordForMutation(ctx context.Context, tx pgx.Tx, tenantID, siteID, workOrderID string) (currentRecord, error) {
 	record, err := scanCurrentRecord(tx.QueryRow(ctx, `
 		SELECT work_order_id, tenant_id, site_id, title, description, priority, status,
 		       assignee_id, team_id, scheduled_start, due_at,
@@ -328,7 +328,7 @@ func getCurrentRecordForMutation(ctx context.Context, tx pgx.Tx, organizationID,
 		FROM work_order_runtime.work_order_current
 		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 		FOR UPDATE
-	`, organizationID, siteID, workOrderID))
+	`, tenantID, siteID, workOrderID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return currentRecord{}, ErrNotFound
 	}

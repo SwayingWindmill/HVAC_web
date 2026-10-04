@@ -9,17 +9,17 @@ import (
 )
 
 const (
-	testOrganizationID = "01910000-0000-7000-8000-000000000001"
-	testOtherOrgID     = "01910000-0000-7000-8000-000000000002"
-	testSiteID         = "01910000-0001-7000-8000-000000000001"
-	testOtherSiteID    = "01910000-0001-7000-8000-000000000002"
-	testWorkOrderID    = "01910000-5000-7000-8000-000000000001"
+	testTenantID    = "01910000-0000-7000-8000-000000000001"
+	testOtherOrgID  = "01910000-0000-7000-8000-000000000002"
+	testSiteID      = "01910000-0001-7000-8000-000000000001"
+	testOtherSiteID = "01910000-0001-7000-8000-000000000002"
+	testWorkOrderID = "01910000-5000-7000-8000-000000000001"
 )
 
 func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
-	first := validWorkOrder(testWorkOrderID, testOrganizationID, testSiteID, "2026-08-01T02:00:00Z")
-	second := validWorkOrder("01910000-5000-7000-8000-000000000002", testOrganizationID, testSiteID, "2026-08-01T01:00:00Z")
-	third := validWorkOrder("01910000-5000-7000-8000-000000000003", testOrganizationID, testSiteID, "2026-08-01T00:00:00Z")
+	first := validWorkOrder(testWorkOrderID, testTenantID, testSiteID, "2026-08-01T02:00:00Z")
+	second := validWorkOrder("01910000-5000-7000-8000-000000000002", testTenantID, testSiteID, "2026-08-01T01:00:00Z")
+	third := validWorkOrder("01910000-5000-7000-8000-000000000003", testTenantID, testSiteID, "2026-08-01T00:00:00Z")
 	second.SourceReferences[0].ResourceID = "01910000-4000-7000-8000-000000000002"
 	assignee := "principal:operator-1"
 	second.AssigneeID = &assignee
@@ -30,28 +30,28 @@ func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{Limit: 2})
+	page, err := store.List(context.Background(), testTenantID, testSiteID, Filter{Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Items) != 2 || page.Items[0].WorkOrderID != first.WorkOrderID || page.Items[1].WorkOrderID != second.WorkOrderID || !page.HasMore || page.NextCursor == nil {
 		t.Fatalf("unexpected first page: %#v", page)
 	}
-	next, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{Limit: 2, Cursor: *page.NextCursor})
+	next, err := store.List(context.Background(), testTenantID, testSiteID, Filter{Limit: 2, Cursor: *page.NextCursor})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(next.Items) != 1 || next.Items[0].WorkOrderID != third.WorkOrderID || next.HasMore || next.NextCursor != nil {
 		t.Fatalf("unexpected second page: %#v", next)
 	}
-	filtered, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{Priority: workordermodel.PriorityUrgent, AssigneeID: assignee, Limit: 10})
+	filtered, err := store.List(context.Background(), testTenantID, testSiteID, Filter{Priority: workordermodel.PriorityUrgent, AssigneeID: assignee, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(filtered.Items) != 1 || filtered.Items[0].WorkOrderID != second.WorkOrderID {
 		t.Fatalf("unexpected filtered result: %#v", filtered)
 	}
-	byAlarm, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{SourceDomain: workordermodel.SourceAlarm, SourceRef: second.SourceReferences[0].ResourceID, Limit: 10})
+	byAlarm, err := store.List(context.Background(), testTenantID, testSiteID, Filter{SourceDomain: workordermodel.SourceAlarm, SourceRef: second.SourceReferences[0].ResourceID, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,26 +61,26 @@ func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
 }
 
 func TestMemoryStoreRejectsInvalidCursorAndHidesCrossScopeDetail(t *testing.T) {
-	store, err := NewMemoryStore([]workordermodel.WorkOrder{validWorkOrder(testWorkOrderID, testOrganizationID, testSiteID, "2026-08-01T00:00:00Z")})
+	store, err := NewMemoryStore([]workordermodel.WorkOrder{validWorkOrder(testWorkOrderID, testTenantID, testSiteID, "2026-08-01T00:00:00Z")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{Cursor: "not-a-cursor", Limit: 10}); !errors.Is(err, ErrInvalidFilter) {
+	if _, err := store.List(context.Background(), testTenantID, testSiteID, Filter{Cursor: "not-a-cursor", Limit: 10}); !errors.Is(err, ErrInvalidFilter) {
 		t.Fatalf("invalid cursor error=%v", err)
 	}
-	if _, err := store.Get(context.Background(), testOrganizationID, testOtherSiteID, testWorkOrderID); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Get(context.Background(), testTenantID, testOtherSiteID, testWorkOrderID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-Site detail error=%v", err)
 	}
 	if _, err := store.Get(context.Background(), testOtherOrgID, testSiteID, testWorkOrderID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-Organization detail error=%v", err)
+		t.Fatalf("cross-Tenant detail error=%v", err)
 	}
 }
 
-func validWorkOrder(id, organizationID, siteID, updatedAt string) workordermodel.WorkOrder {
+func validWorkOrder(id, tenantID, siteID, updatedAt string) workordermodel.WorkOrder {
 	status := workordermodel.StatusOpen
 	return workordermodel.WorkOrder{
 		SchemaVersion: workordermodel.SchemaVersion,
-		WorkOrderID:   id, TenantID: organizationID, SiteID: siteID,
+		WorkOrderID:   id, TenantID: tenantID, SiteID: siteID,
 		Title: "Inspect air handler", Description: "Authoritative maintenance work order.",
 		Priority: workordermodel.PriorityHigh, Status: status,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: "01910000-4000-7000-8000-000000000001", Relationship: workordermodel.RelationshipOrigin}},

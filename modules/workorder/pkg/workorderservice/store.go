@@ -131,7 +131,7 @@ func NewMemoryStore(items []workordermodel.WorkOrder) (*MemoryStore, error) {
 	return store, nil
 }
 
-func (store *MemoryStore) List(_ context.Context, organizationID, siteID string, filter Filter) (workordermodel.ListResponse, error) {
+func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filter Filter) (workordermodel.ListResponse, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	filter = normalizeFilter(filter)
@@ -140,7 +140,7 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	}
 	var position *cursorPosition
 	if filter.Cursor != "" {
-		decoded, err := store.cursor.Decode(filter.Cursor, organizationID, siteID, filter)
+		decoded, err := store.cursor.Decode(filter.Cursor, tenantID, siteID, filter)
 		if err != nil {
 			return workordermodel.ListResponse{}, ErrInvalidFilter
 		}
@@ -152,7 +152,7 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	}
 	records := make([]memoryRecord, 0, len(store.items))
 	for _, workOrder := range store.items {
-		if workOrder.TenantID != organizationID || workOrder.SiteID != siteID || !matchesFilter(workOrder, filter) {
+		if workOrder.TenantID != tenantID || workOrder.SiteID != siteID || !matchesFilter(workOrder, filter) {
 			continue
 		}
 		updatedAt, err := time.Parse(time.RFC3339Nano, workOrder.UpdatedAt)
@@ -181,29 +181,29 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	}
 	if hasMore {
 		last := records[len(records)-1]
-		cursor, err := store.cursor.Encode(organizationID, siteID, filter, last.updatedAt, last.workOrder.WorkOrderID)
+		cursor, err := store.cursor.Encode(tenantID, siteID, filter, last.updatedAt, last.workOrder.WorkOrderID)
 		if err != nil {
 			return workordermodel.ListResponse{}, ErrUnavailable
 		}
 		response.NextCursor = &cursor
 	}
-	if err := response.Validate(organizationID, siteID, filter.Limit); err != nil {
+	if err := response.Validate(tenantID, siteID, filter.Limit); err != nil {
 		return workordermodel.ListResponse{}, ErrUnavailable
 	}
 	return response, nil
 }
 
-func (store *MemoryStore) Get(_ context.Context, organizationID, siteID, workOrderID string) (workordermodel.WorkOrder, error) {
+func (store *MemoryStore) Get(_ context.Context, tenantID, siteID, workOrderID string) (workordermodel.WorkOrder, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	item, ok := store.items[workOrderID]
-	if !ok || item.TenantID != organizationID || item.SiteID != siteID {
+	if !ok || item.TenantID != tenantID || item.SiteID != siteID {
 		return workordermodel.WorkOrder{}, ErrNotFound
 	}
 	return cloneStoredWorkOrder(item), nil
 }
 
-func (store *MemoryStore) Create(_ context.Context, organizationID, siteID string, mutation CreateMutation) (MutationResult, error) {
+func (store *MemoryStore) Create(_ context.Context, tenantID, siteID string, mutation CreateMutation) (MutationResult, error) {
 	if !idempotencyKeyPattern.MatchString(strings.TrimSpace(mutation.IdempotencyKey)) {
 		return MutationResult{}, workordermodel.ErrInvalidCreate
 	}
@@ -213,14 +213,14 @@ func (store *MemoryStore) Create(_ context.Context, organizationID, siteID strin
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := organizationID + "|" + siteID + "|CREATE|" + strings.TrimSpace(mutation.IdempotencyKey)
+	key := tenantID + "|" + siteID + "|CREATE|" + strings.TrimSpace(mutation.IdempotencyKey)
 	if record, exists := store.idempotency[key]; exists {
 		if record.digest != digest {
 			return MutationResult{}, ErrIdempotencyConflict
 		}
 		return MutationResult{WorkOrder: cloneStoredWorkOrder(record.workOrder), Replayed: true}, nil
 	}
-	created, err := workordermodel.Create(mutation.createInput(organizationID, siteID))
+	created, err := workordermodel.Create(mutation.createInput(tenantID, siteID))
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -232,7 +232,7 @@ func (store *MemoryStore) Create(_ context.Context, organizationID, siteID strin
 	return MutationResult{WorkOrder: cloneStoredWorkOrder(created)}, nil
 }
 
-func (store *MemoryStore) Assign(_ context.Context, organizationID, siteID, workOrderID string, mutation AssignmentMutation) (MutationResult, error) {
+func (store *MemoryStore) Assign(_ context.Context, tenantID, siteID, workOrderID string, mutation AssignmentMutation) (MutationResult, error) {
 	if !idempotencyKeyPattern.MatchString(strings.TrimSpace(mutation.IdempotencyKey)) {
 		return MutationResult{}, workordermodel.ErrInvalidAssignment
 	}
@@ -243,10 +243,10 @@ func (store *MemoryStore) Assign(_ context.Context, organizationID, siteID, work
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, ok := store.items[workOrderID]
-	if !ok || current.TenantID != organizationID || current.SiteID != siteID {
+	if !ok || current.TenantID != tenantID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
-	key := organizationID + "|" + siteID + "|" + workOrderID + "|ASSIGN|" + strings.TrimSpace(mutation.IdempotencyKey)
+	key := tenantID + "|" + siteID + "|" + workOrderID + "|ASSIGN|" + strings.TrimSpace(mutation.IdempotencyKey)
 	if record, exists := store.idempotency[key]; exists {
 		if record.digest != digest {
 			return MutationResult{}, ErrIdempotencyConflict
@@ -262,7 +262,7 @@ func (store *MemoryStore) Assign(_ context.Context, organizationID, siteID, work
 	return MutationResult{WorkOrder: cloneStoredWorkOrder(updated)}, nil
 }
 
-func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error) {
+func (store *MemoryStore) Transition(_ context.Context, tenantID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error) {
 	if !idempotencyKeyPattern.MatchString(strings.TrimSpace(mutation.IdempotencyKey)) {
 		return MutationResult{}, workordermodel.ErrInvalidLifecycle
 	}
@@ -273,10 +273,10 @@ func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, ok := store.items[workOrderID]
-	if !ok || current.TenantID != organizationID || current.SiteID != siteID {
+	if !ok || current.TenantID != tenantID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
-	key := organizationID + "|" + siteID + "|" + workOrderID + "|" + lifecycleIdempotencyOperation + "|" + strings.TrimSpace(mutation.IdempotencyKey)
+	key := tenantID + "|" + siteID + "|" + workOrderID + "|" + lifecycleIdempotencyOperation + "|" + strings.TrimSpace(mutation.IdempotencyKey)
 	if record, exists := store.idempotency[key]; exists {
 		if record.digest != digest {
 			return MutationResult{}, ErrIdempotencyConflict
@@ -292,9 +292,9 @@ func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, 
 	return MutationResult{WorkOrder: cloneStoredWorkOrder(updated)}, nil
 }
 
-func (mutation CreateMutation) createInput(organizationID, siteID string) workordermodel.CreateInput {
+func (mutation CreateMutation) createInput(tenantID, siteID string) workordermodel.CreateInput {
 	return workordermodel.CreateInput{
-		WorkOrderID: mutation.WorkOrderID, TenantID: organizationID, SiteID: siteID,
+		WorkOrderID: mutation.WorkOrderID, TenantID: tenantID, SiteID: siteID,
 		Title: mutation.Title, Description: mutation.Description, Priority: mutation.Priority,
 		SourceReferences: mutation.SourceReferences, AssigneeID: mutation.AssigneeID, TeamID: mutation.TeamID,
 		ScheduledStart: mutation.ScheduledStart, DueAt: mutation.DueAt,
