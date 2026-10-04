@@ -20,7 +20,7 @@ func TestMemoryStoreCreateIsIdempotentAndConflictsOnKeyReuse(t *testing.T) {
 		ActorType:        "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "correlation-create-1",
 		IdempotencyKey: "create-00000001", OccurredAt: "2026-08-01T12:00:00Z",
 	}
-	created, err := store.Create(context.Background(), testOrganizationID, testSiteID, mutation)
+	created, err := store.Create(context.Background(), testTenantID, testSiteID, mutation)
 	if err != nil || created.Replayed || created.WorkOrder.Version != 1 {
 		t.Fatalf("create result=%#v err=%v", created, err)
 	}
@@ -28,23 +28,23 @@ func TestMemoryStoreCreateIsIdempotentAndConflictsOnKeyReuse(t *testing.T) {
 	retry.WorkOrderID = "01930000-1000-7000-8000-000000000011"
 	retry.PolicyRevision = "policy-8"
 	retry.CorrelationID = "correlation-create-retry"
-	replayed, err := store.Create(context.Background(), testOrganizationID, testSiteID, retry)
+	replayed, err := store.Create(context.Background(), testTenantID, testSiteID, retry)
 	if err != nil || !replayed.Replayed || replayed.WorkOrder.WorkOrderID != created.WorkOrder.WorkOrderID {
 		t.Fatalf("replay result=%#v err=%v", replayed, err)
 	}
 	conflict := mutation
 	conflict.Title = "Different request"
-	if _, err := store.Create(context.Background(), testOrganizationID, testSiteID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Create(context.Background(), testTenantID, testSiteID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("conflict error=%v", err)
 	}
-	page, err := store.List(context.Background(), testOrganizationID, testSiteID, Filter{Limit: 10})
+	page, err := store.List(context.Background(), testTenantID, testSiteID, Filter{Limit: 10})
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("idempotent create duplicated projection: %#v err=%v", page, err)
 	}
 }
 
 func TestMemoryStoreAssignmentIsAtomicReplaySafeAndVersioned(t *testing.T) {
-	initial := validWorkOrder(testWorkOrderID, testOrganizationID, testSiteID, "2026-08-01T12:00:00Z")
+	initial := validWorkOrder(testWorkOrderID, testTenantID, testSiteID, "2026-08-01T12:00:00Z")
 	store, err := NewMemoryStore([]workordermodel.WorkOrder{initial})
 	if err != nil {
 		t.Fatal(err)
@@ -56,32 +56,32 @@ func TestMemoryStoreAssignmentIsAtomicReplaySafeAndVersioned(t *testing.T) {
 		ActorType: "PRINCIPAL", ActorID: "principal:dispatcher", PolicyRevision: "policy-8", CorrelationID: "correlation-assign-1",
 		IdempotencyKey: "assign-00000001", OccurredAt: "2026-08-01T12:01:00Z",
 	}
-	assigned, err := store.Assign(context.Background(), testOrganizationID, testSiteID, testWorkOrderID, mutation)
+	assigned, err := store.Assign(context.Background(), testTenantID, testSiteID, testWorkOrderID, mutation)
 	if err != nil || assigned.Replayed || assigned.WorkOrder.Version != 2 {
 		t.Fatalf("assign result=%#v err=%v", assigned, err)
 	}
 	retry := mutation
 	retry.PolicyRevision = "policy-9"
 	retry.CorrelationID = "correlation-assign-retry"
-	replayed, err := store.Assign(context.Background(), testOrganizationID, testSiteID, testWorkOrderID, retry)
+	replayed, err := store.Assign(context.Background(), testTenantID, testSiteID, testWorkOrderID, retry)
 	if err != nil || !replayed.Replayed || replayed.WorkOrder.Version != 2 {
 		t.Fatalf("replay result=%#v err=%v", replayed, err)
 	}
 	stale := mutation
 	stale.IdempotencyKey = "assign-00000002"
-	if _, err := store.Assign(context.Background(), testOrganizationID, testSiteID, testWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
+	if _, err := store.Assign(context.Background(), testTenantID, testSiteID, testWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
 		t.Fatalf("stale error=%v", err)
 	}
-	current, err := store.Get(context.Background(), testOrganizationID, testSiteID, testWorkOrderID)
+	current, err := store.Get(context.Background(), testTenantID, testSiteID, testWorkOrderID)
 	if err != nil || current.Version != 2 || len(current.Timeline) != 2 {
 		t.Fatalf("stale mutation changed state: %#v err=%v", current, err)
 	}
 	conflict := mutation
 	conflict.TeamID = nil
-	if _, err := store.Assign(context.Background(), testOrganizationID, testSiteID, testWorkOrderID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Assign(context.Background(), testTenantID, testSiteID, testWorkOrderID, conflict); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("idempotency conflict error=%v", err)
 	}
-	if _, err := store.Assign(context.Background(), testOrganizationID, testOtherSiteID, testWorkOrderID, mutation); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Assign(context.Background(), testTenantID, testOtherSiteID, testWorkOrderID, mutation); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-site assignment error=%v", err)
 	}
 }

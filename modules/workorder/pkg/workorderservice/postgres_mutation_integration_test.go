@@ -99,8 +99,8 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	if _, err := store.Assign(ctx, postgresTenantID, postgresSiteID, postgresMutationWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
 		t.Fatalf("stale assignment error=%v", err)
 	}
-	if _, err := store.Assign(ctx, postgresOtherOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("cross-Tenant Organization assignment did not fail closed: %v", err)
+	if _, err := store.Assign(ctx, postgresOtherTenantID, postgresSiteID, postgresMutationWorkOrderID, assignment); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant assignment did not fail closed: %v", err)
 	}
 	start := LifecycleMutation{
 		Operation: workordermodel.OperationStart, ExpectedVersion: 2, Reason: "begin repair",

@@ -18,12 +18,11 @@ import (
 )
 
 const (
-	httpTestTenantID       = "0191f000-0000-7000-8000-000000000001"
-	httpTestOrganizationID = "01920000-0000-7000-8000-000000000001"
-	httpTestSiteID         = "01920000-0001-7000-8000-000000000001"
-	httpTestOtherSiteID    = "01920000-0001-7000-8000-000000000002"
-	httpTestWorkOrderID    = "01920000-1000-7000-8000-000000000001"
-	testAlarmID            = "01920000-2000-7000-8000-000000000001"
+	httpTestTenantID    = "01920000-0000-7000-8000-000000000001"
+	httpTestSiteID      = "01920000-0001-7000-8000-000000000001"
+	httpTestOtherSiteID = "01920000-0001-7000-8000-000000000002"
+	httpTestWorkOrderID = "01920000-1000-7000-8000-000000000001"
+	testAlarmID         = "01920000-2000-7000-8000-000000000001"
 )
 
 type fakeStore struct {
@@ -71,7 +70,7 @@ func TestWorkOrderHTTPListAndDetail(t *testing.T) {
 	}
 
 	list := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders?status=OPEN&priority=HIGH&assigneeId=principal%3Aoperator&limit=25", nil)
-	list.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	list.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, ""))
 	listRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(listRecorder, list)
 	if listRecorder.Code != http.StatusOK {
@@ -83,7 +82,7 @@ func TestWorkOrderHTTPListAndDetail(t *testing.T) {
 	}
 
 	detail := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpTestWorkOrderID, nil)
-	detail.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, httpTestWorkOrderID))
+	detail.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestTenantID, httpTestSiteID, httpTestWorkOrderID))
 	detailRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(detailRecorder, detail)
 	if detailRecorder.Code != http.StatusOK {
@@ -102,21 +101,21 @@ func TestWorkOrderHTTPRejectsUntrustedScopeBeforeStore(t *testing.T) {
 
 	missing := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	forged := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	forged.Header.Set("X-Organization-ID", httpTestOrganizationID)
+	forged.Header.Set("X-Organization-ID", httpTestTenantID)
 	forged.Header.Set("X-Work-Order-ID", httpTestWorkOrderID)
-	forged.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	forged.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, ""))
 	crossSite := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	crossSite.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestOtherSiteID, ""))
+	crossSite.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestOtherSiteID, ""))
 	multiAction := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	multiAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction, WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	multiAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction, WorkOrderReadAction}, httpTestTenantID, httpTestSiteID, ""))
 	expandedScope := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	expandedScope.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, "", "site:"+httpTestOtherSiteID))
+	expandedScope.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, "", "site:"+httpTestOtherSiteID))
 	wrongAction := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	wrongAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	wrongAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestTenantID, httpTestSiteID, ""))
 	expired := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	expired.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now.Add(-time.Minute), []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	expired.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now.Add(-time.Minute), []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, ""))
 	tampered := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	tampered.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, "")+"x")
+	tampered.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, "")+"x")
 
 	for index, request := range []*http.Request{missing, forged, crossSite, multiAction, expandedScope, wrongAction, expired, tampered} {
 		recorder := httptest.NewRecorder()
@@ -142,7 +141,7 @@ func TestWorkOrderHTTPRejectsInvalidBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contextValue := signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, "")
+	contextValue := signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, "")
 	for _, target := range []string{
 		InternalSiteWorkOrdersPrefix + httpTestSiteID + "/work-orders?status=ASSIGNED",
 		InternalSiteWorkOrdersPrefix + httpTestSiteID + "/work-orders?status=OPEN&status=BLOCKED",
@@ -188,7 +187,7 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders?priority=HIGH", nil)
-	request.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	request.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, ""))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "WORK_ORDER_RESPONSE_INVALID") {
@@ -196,9 +195,9 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 	}
 }
 
-func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, organizationID, siteID, workOrderID string, extraScopes ...string) string {
+func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, tenantID, siteID, workOrderID string, extraScopes ...string) string {
 	t.Helper()
-	scopes := []string{"tenant:" + organizationID, "site:" + siteID}
+	scopes := []string{"tenant:" + tenantID, "site:" + siteID}
 	if workOrderID != "" {
 		scopes = append(scopes, "work-order:"+workOrderID)
 	}
@@ -206,7 +205,7 @@ func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions 
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test", PrincipalID: "principal:operator",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
-		TenantID: organizationID, Actions: actions, Scopes: scopes,
+		TenantID: tenantID, Actions: actions, Scopes: scopes,
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
 		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "id-1",
 	})
@@ -228,7 +227,7 @@ func newSigner(t *testing.T) *ecdsa.PrivateKey {
 func validHTTPWorkOrder() workordermodel.WorkOrder {
 	assigneeID := "principal:operator"
 	return workordermodel.WorkOrder{
-		SchemaVersion: workordermodel.SchemaVersion, WorkOrderID: httpTestWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		SchemaVersion: workordermodel.SchemaVersion, WorkOrderID: httpTestWorkOrderID, TenantID: httpTestTenantID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan vibration", Description: "Verify the vibration and record the maintenance outcome.",
 		Priority: workordermodel.PriorityHigh, Status: workordermodel.StatusOpen, AssigneeID: &assigneeID,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},

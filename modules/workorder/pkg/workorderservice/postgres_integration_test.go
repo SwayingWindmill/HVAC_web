@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	postgresTenantID            = "0191f000-0000-7000-8000-000000000001"
-	postgresOtherOrganizationID = "01920000-0000-7000-8000-000000000002"
-	postgresSiteID              = "01920000-0001-7000-8000-000000000001"
-	postgresOtherSiteID         = "01920000-0001-7000-8000-000000000002"
-	postgresForeignSiteID       = "01920000-0001-7000-8000-000000000003"
-	postgresWorkOrderOne        = "01920000-1000-7000-8000-000000000001"
-	postgresWorkOrderTwo        = "01920000-1000-7000-8000-000000000002"
-	postgresCompletedWorkOrder  = "01920000-1000-7000-8000-000000000003"
+	postgresTenantID           = "0191f000-0000-7000-8000-000000000001"
+	postgresOtherTenantID      = "01920000-0000-7000-8000-000000000002"
+	postgresSiteID             = "01920000-0001-7000-8000-000000000001"
+	postgresOtherSiteID        = "01920000-0001-7000-8000-000000000002"
+	postgresForeignSiteID      = "01920000-0001-7000-8000-000000000003"
+	postgresWorkOrderOne       = "01920000-1000-7000-8000-000000000001"
+	postgresWorkOrderTwo       = "01920000-1000-7000-8000-000000000002"
+	postgresCompletedWorkOrder = "01920000-1000-7000-8000-000000000003"
 )
 
 func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
@@ -77,15 +77,15 @@ func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
 		t.Fatalf("completed Work Order evidence missing: %#v err=%v", completed, err)
 	}
 
-	if _, err := store.List(ctx, postgresOtherOrganizationID, postgresSiteID, Filter{Limit: 50}); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("cross-Tenant Organization list did not fail closed: %v", err)
+	if _, err := store.List(ctx, postgresOtherTenantID, postgresSiteID, Filter{Limit: 50}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant list did not fail closed: %v", err)
 	}
 	crossSite, err := store.List(ctx, postgresTenantID, postgresForeignSiteID, Filter{Limit: 50})
 	if err != nil || len(crossSite.Items) != 0 {
 		t.Fatalf("cross-Site rows were visible in list: %#v err=%v", crossSite, err)
 	}
-	if _, err := store.Get(ctx, postgresOtherOrganizationID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("cross-Tenant Organization detail did not fail closed: %v", err)
+	if _, err := store.Get(ctx, postgresOtherTenantID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant detail did not fail closed: %v", err)
 	}
 	if _, err := store.Get(ctx, postgresTenantID, postgresOtherSiteID, postgresWorkOrderOne); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-Site detail was visible: %v", err)

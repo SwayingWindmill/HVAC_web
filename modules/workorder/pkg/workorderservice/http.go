@@ -466,18 +466,18 @@ func (handler *httpHandler) authorize(request *http.Request, action string, reso
 	return claims, true
 }
 
-func (handler *httpHandler) list(writer http.ResponseWriter, request *http.Request, organizationID, siteID string) {
+func (handler *httpHandler) list(writer http.ResponseWriter, request *http.Request, tenantID, siteID string) {
 	filter, ok := handler.parseFilter(request)
 	if !ok {
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_FILTER_INVALID", "Work Order filter invalid", "The Work Order list filter exceeds the supported read boundary.", false)
 		return
 	}
-	response, err := handler.store.List(request.Context(), organizationID, siteID, filter)
+	response, err := handler.store.List(request.Context(), tenantID, siteID, filter)
 	if err != nil {
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if err := response.Validate(organizationID, siteID, filter.Limit); err != nil {
+	if err := response.Validate(tenantID, siteID, filter.Limit); err != nil {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a projection outside the requested scope.", true)
 		return
 	}
@@ -490,13 +490,13 @@ func (handler *httpHandler) list(writer http.ResponseWriter, request *http.Reque
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Request, organizationID, siteID, workOrderID string) {
-	workOrder, err := handler.store.Get(request.Context(), organizationID, siteID, workOrderID)
+func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Request, tenantID, siteID, workOrderID string) {
+	workOrder, err := handler.store.Get(request.Context(), tenantID, siteID, workOrderID)
 	if err != nil {
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if workOrder.Validate() != nil || workOrder.TenantID != organizationID || workOrder.SiteID != siteID || workOrder.WorkOrderID != workOrderID {
+	if workOrder.Validate() != nil || workOrder.TenantID != tenantID || workOrder.SiteID != siteID || workOrder.WorkOrderID != workOrderID {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a projection outside the requested scope.", true)
 		return
 	}

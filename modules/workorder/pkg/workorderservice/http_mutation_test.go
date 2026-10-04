@@ -32,7 +32,7 @@ func TestWorkOrderHTTPCreateAndAssignAreAuthorizedIdempotentAndVersioned(t *test
 		request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(createBody))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "create-http-0001")
-		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestOrganizationID, httpTestSiteID, "", mutationKeyScope("create-http-0001")))
+		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestTenantID, httpTestSiteID, "", mutationKeyScope("create-http-0001")))
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		return recorder
@@ -59,7 +59,7 @@ func TestWorkOrderHTTPCreateAndAssignAreAuthorizedIdempotentAndVersioned(t *test
 		request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":assign", strings.NewReader(assignBody))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", key)
-		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderAssignAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
+		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderAssignAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		return recorder
@@ -80,7 +80,7 @@ func TestWorkOrderHTTPCreateAndAssignAreAuthorizedIdempotentAndVersioned(t *test
 	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "VERSION_CONFLICT") {
 		t.Fatalf("stale status=%d body=%s", stale.Code, stale.Body.String())
 	}
-	current, err := store.Get(t.Context(), httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID)
+	current, err := store.Get(t.Context(), httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID)
 	if err != nil || current.Version != 2 || len(current.Timeline) != 2 {
 		t.Fatalf("stale request changed state: %#v err=%v", current, err)
 	}
@@ -104,7 +104,7 @@ func TestWorkOrderHTTPMutationBoundaryFailsClosedBeforeStore(t *testing.T) {
 	readAuthority := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(validBody))
 	readAuthority.Header.Set("Content-Type", "application/json")
 	readAuthority.Header.Set("Idempotency-Key", "create-http-0002")
-	readAuthority.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestOrganizationID, httpTestSiteID, "", mutationKeyScope("create-http-0001")))
+	readAuthority.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestTenantID, httpTestSiteID, "", mutationKeyScope("create-http-0001")))
 	readRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readRecorder, readAuthority)
 	if readRecorder.Code != http.StatusForbidden {
@@ -114,7 +114,7 @@ func TestWorkOrderHTTPMutationBoundaryFailsClosedBeforeStore(t *testing.T) {
 	unknownField := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(strings.TrimSuffix(validBody, "}")+`,"status":"COMPLETED"}`))
 	unknownField.Header.Set("Content-Type", "application/json")
 	unknownField.Header.Set("Idempotency-Key", "create-http-0003")
-	unknownField.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestOrganizationID, httpTestSiteID, "", mutationKeyScope("create-http-0003")))
+	unknownField.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestTenantID, httpTestSiteID, "", mutationKeyScope("create-http-0003")))
 	unknownRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(unknownRecorder, unknownField)
 	if unknownRecorder.Code != http.StatusBadRequest {
@@ -124,14 +124,14 @@ func TestWorkOrderHTTPMutationBoundaryFailsClosedBeforeStore(t *testing.T) {
 	unreviewed := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":link-alarm", strings.NewReader(`{}`))
 	unreviewed.Header.Set("Content-Type", "application/json")
 	unreviewed.Header.Set("Idempotency-Key", "complete-http-01")
-	unreviewed.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{"work-order:complete"}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope("complete-http-01")))
+	unreviewed.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{"work-order:complete"}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope("complete-http-01")))
 	unreviewedRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(unreviewedRecorder, unreviewed)
 	if unreviewedRecorder.Code != http.StatusNotFound {
 		t.Fatalf("unreviewed route status=%d body=%s", unreviewedRecorder.Code, unreviewedRecorder.Body.String())
 	}
 
-	page, err := store.List(t.Context(), httpTestOrganizationID, httpTestSiteID, Filter{Limit: 10})
+	page, err := store.List(t.Context(), httpTestTenantID, httpTestSiteID, Filter{Limit: 10})
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("rejected mutation reached store: %#v err=%v", page, err)
 	}
@@ -155,13 +155,13 @@ func TestWorkOrderHTTPMutationContextIsBoundToIdempotencyKey(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-http-bound-1")
-	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestOrganizationID, httpTestSiteID, "", mutationKeyScope("different-key-value")))
+	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestTenantID, httpTestSiteID, "", mutationKeyScope("different-key-value")))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("wrong key-bound context status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	page, err := store.List(t.Context(), httpTestOrganizationID, httpTestSiteID, Filter{Limit: 10})
+	page, err := store.List(t.Context(), httpTestTenantID, httpTestSiteID, Filter{Limit: 10})
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("wrong key-bound context reached Store: %#v err=%v", page, err)
 	}
@@ -185,14 +185,14 @@ func TestWorkOrderHTTPAssignmentRequiresExplicitOwnershipTuple(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpTestWorkOrderID+":assign", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "assign-http-missing")
-		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderAssignAction}, httpTestOrganizationID, httpTestSiteID, httpTestWorkOrderID, mutationKeyScope("assign-http-missing")))
+		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderAssignAction}, httpTestTenantID, httpTestSiteID, httpTestWorkOrderID, mutationKeyScope("assign-http-missing")))
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d response=%s", body, recorder.Code, recorder.Body.String())
 		}
 	}
-	current, err := store.Get(t.Context(), httpTestOrganizationID, httpTestSiteID, httpTestWorkOrderID)
+	current, err := store.Get(t.Context(), httpTestTenantID, httpTestSiteID, httpTestWorkOrderID)
 	if err != nil || current.Version != 1 {
 		t.Fatalf("invalid tuple changed state: %#v err=%v", current, err)
 	}

@@ -16,7 +16,7 @@ func TestWorkOrderHTTPLifecycleRunsReviewedGraphWithExactContext(t *testing.T) {
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestTenantID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -38,7 +38,7 @@ func TestWorkOrderHTTPLifecycleRunsReviewedGraphWithExactContext(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+suffix, strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", key)
-		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{action}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
+		request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{action}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK {
@@ -86,7 +86,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, _ := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestTenantID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -98,7 +98,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	wrong := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":start", strings.NewReader("{\"expectedVersion\":1,\"reason\":\"start\"}"))
 	wrong.Header.Set("Content-Type", "application/json")
 	wrong.Header.Set("Idempotency-Key", wrongKey)
-	wrong.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderBlockAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(wrongKey)))
+	wrong.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderBlockAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(wrongKey)))
 	wrongRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(wrongRecorder, wrong)
 	if wrongRecorder.Code != http.StatusForbidden {
@@ -110,7 +110,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	start := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":start", strings.NewReader("{\"expectedVersion\":1,\"reason\":\"start\"}"))
 	start.Header.Set("Content-Type", "application/json")
 	start.Header.Set("Idempotency-Key", startKey)
-	start.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(startKey)))
+	start.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(startKey)))
 	startRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(startRecorder, start)
 	if startRecorder.Code != http.StatusOK {
@@ -122,7 +122,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	complete := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":complete", strings.NewReader("{\"expectedVersion\":2,\"reason\":\"complete\"}"))
 	complete.Header.Set("Content-Type", "application/json")
 	complete.Header.Set("Idempotency-Key", completeKey)
-	complete.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCompleteAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(completeKey)))
+	complete.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderCompleteAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(completeKey)))
 	completeRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(completeRecorder, complete)
 	if completeRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(completeRecorder.Body.String(), "WORK_ORDER_LIFECYCLE_INVALID") {
@@ -133,13 +133,13 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 	stale := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":block", strings.NewReader("{\"expectedVersion\":1,\"reason\":\"blocked\"}"))
 	stale.Header.Set("Content-Type", "application/json")
 	stale.Header.Set("Idempotency-Key", staleKey)
-	stale.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderBlockAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(staleKey)))
+	stale.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderBlockAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(staleKey)))
 	staleRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(staleRecorder, stale)
 	if staleRecorder.Code != http.StatusConflict || !strings.Contains(staleRecorder.Body.String(), "VERSION_CONFLICT") {
 		t.Fatalf("stale status=%d body=%s", staleRecorder.Code, staleRecorder.Body.String())
 	}
-	current, _ := store.Get(t.Context(), httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID)
+	current, _ := store.Get(t.Context(), httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID)
 	if current.Version != 2 || current.Status != workordermodel.StatusInProgress || len(current.Timeline) != 2 {
 		t.Fatalf("rejected mutation changed state: %#v", current)
 	}
@@ -150,7 +150,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 	signer := newSigner(t)
 	assignee := "principal:operator-a"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestTenantID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-precondition-http", OccurredAt: now.Format(time.RFC3339Nano),
@@ -171,7 +171,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 	key := "start-precondition-0001"
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.Header.Set("Idempotency-Key", key)
-	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
+	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -184,7 +184,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 
 	wrongKeyRequest := httptest.NewRequest(http.MethodGet, path, nil)
 	wrongKeyRequest.Header.Set("Idempotency-Key", "start-precondition-0002")
-	wrongKeyRequest.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
+	wrongKeyRequest.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{WorkOrderStartAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
 	wrongKeyRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(wrongKeyRecorder, wrongKeyRequest)
 	if wrongKeyRecorder.Code != http.StatusForbidden {
@@ -193,7 +193,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 
 	readContextRequest := httptest.NewRequest(http.MethodGet, path, nil)
 	readContextRequest.Header.Set("Idempotency-Key", key)
-	readContextRequest.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID))
+	readContextRequest.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID))
 	readContextRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readContextRecorder, readContextRequest)
 	if readContextRecorder.Code != http.StatusForbidden {
@@ -206,7 +206,7 @@ func TestWorkOrderHTTPLifecycleRejectsStoreAuditEvidenceDrift(t *testing.T) {
 	signer := newSigner(t)
 	assignee := "principal:operator"
 	initial, err := workordermodel.Create(workordermodel.CreateInput{
-		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestOrganizationID, SiteID: httpTestSiteID,
+		WorkOrderID: httpMutationWorkOrderID, TenantID: httpTestTenantID, SiteID: httpTestSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: workordermodel.PriorityHigh,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:operator", PolicyRevision: "policy-1", CorrelationID: "create-audit-drift", OccurredAt: now.Format(time.RFC3339Nano),
@@ -235,7 +235,7 @@ func TestWorkOrderHTTPLifecycleRejectsStoreAuditEvidenceDrift(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":start", strings.NewReader("{\"expectedVersion\":1,\"reason\":\"begin repair\"}"))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", key)
-	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now.Add(time.Minute), []string{WorkOrderStartAction}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
+	request.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now.Add(time.Minute), []string{WorkOrderStartAction}, httpTestTenantID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope(key)))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "WORK_ORDER_RESPONSE_INVALID") {
