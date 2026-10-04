@@ -89,12 +89,12 @@ type MutationResult struct {
 }
 
 type Store interface {
-	List(context.Context, string, string, Filter) (workordermodel.ListResponse, error)
-	Get(context.Context, string, string, string) (workordermodel.WorkOrder, error)
+	List(ctx context.Context, tenantID, siteID string, filter Filter) (workordermodel.ListResponse, error)
+	Get(ctx context.Context, tenantID, siteID, workOrderID string) (workordermodel.WorkOrder, error)
 
-	Create(context.Context, string, string, CreateMutation) (MutationResult, error)
-	Assign(context.Context, string, string, string, AssignmentMutation) (MutationResult, error)
-	Transition(context.Context, string, string, string, LifecycleMutation) (MutationResult, error)
+	Create(ctx context.Context, tenantID, siteID string, mutation CreateMutation) (MutationResult, error)
+	Assign(ctx context.Context, tenantID, siteID, workOrderID string, mutation AssignmentMutation) (MutationResult, error)
+	Transition(ctx context.Context, tenantID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error)
 }
 
 type idempotencyRecord struct {
