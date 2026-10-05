@@ -15,6 +15,7 @@ import (
 const (
 	OwnerGateway          = "platform-gateway"
 	OwnerCore             = "platform-core-service"
+	OwnerConnectivity     = "connectivity"
 	OwnerTelemetryRuntime = "telemetry-runtime-service"
 	OwnerCommand          = "command-service"
 	OwnerAnalyticsQuery   = "telemetry-query-service"
@@ -195,7 +196,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
+	case OwnerGateway, OwnerCore, OwnerConnectivity, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerPresentation, OwnerRuleRuntime:
 		return true
 	default:
 		return false

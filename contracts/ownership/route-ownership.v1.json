@@ -1,7 +1,10 @@
 {
   "registryVersion": 1,
-  "registryRevision": 33,
+  "registryRevision": 34,
   "routes": [
+    {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/credential", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/enrollment-code", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/revoke", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {
       "method": "GET",
       "path": "/api/v1/health",
@@ -1590,41 +1593,4 @@
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "tenant",
-        "site",
-        "principal"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t",
-      "owner": "fdd-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "all"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "principal"
-      ]
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links",
-      "owner": "fdd-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "all"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "principal"
-      ]
-    }
-  ]
-}
+        "si                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          

@@ -39,6 +39,8 @@ services:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
 
   connectivity:
+    environment:
+      GATEWAY_BROKER_URL: tls://mqtt-broker:8883
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro
     depends_on:

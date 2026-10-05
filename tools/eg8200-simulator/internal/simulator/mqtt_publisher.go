@@ -323,7 +323,7 @@ func mqttReplyTopic(config MQTTGatewayConfig) string {
 }
 
 func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {
-	certificate, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+	_, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 	if err != nil {
 		return nil, errors.New("load MQTT gateway client identity failed")
 	}
@@ -336,10 +336,13 @@ func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {
 		return nil, errors.New("MQTT gateway CA is invalid")
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		RootCAs:      rootCAs,
-		Certificates: []tls.Certificate{certificate},
-		ServerName:   strings.TrimSpace(config.ServerName),
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    rootCAs,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			identity, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+			return &identity, err
+		},
+		ServerName: strings.TrimSpace(config.ServerName),
 	}, nil
 }
 

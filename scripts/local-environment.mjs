@@ -103,6 +103,11 @@ function up() {
   ensureKey(['identity', 'signing-key.pem'], 'identity-keygen');
   ensureKey(['identity', 'mfa-encryption.key'], 'identity-mfa-keygen');
   ensureKey(['iam', 'api-credential.pepper'], 'iam-api-credential-keygen');
+  if (!existsSync(runtimePath('gateway-ca','connectivity.crt'))) {
+    ensureServiceDataDirectory('gateway-ca');
+    // The initializer needs a writable mount; the long-running service receives it read-only.
+    compose('run','--rm','--no-deps','--build','-v',`${runtimePath('gateway-ca')}:/run/hvac/provisioning:rw`, '-e', 'GATEWAY_CA_DIR=/run/hvac/provisioning','connectivity','--initialize-gateway-ca');
+  }
   ensureAdministrator();
   script('phase1-bootstrap-local-foundation.mjs');
   run([launcher, 'run', '--rm', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });

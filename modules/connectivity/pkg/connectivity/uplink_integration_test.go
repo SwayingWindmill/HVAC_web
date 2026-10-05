@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
@@ -43,6 +44,8 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 	)
 	cleanup := func() {
 		for _, statement := range []string{
+			`DELETE FROM connectivity.gateway_credential_audit WHERE gateway_id IN ($1::uuid,$2::uuid)`,
+			`DELETE FROM connectivity.gateway_enrollments WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1, $2, $3)`,
 			`DELETE FROM connectivity.gateway_credentials WHERE gateway_id IN ($1::uuid, $2::uuid)`,
 		} {
@@ -143,7 +146,12 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		t.Fatalf("Tenant B routed Tenant A's Device err=%v", err)
 	}
 
-	if _, err := admin.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED', revoked_at=$2, updated_at=$2 WHERE gateway_id=$1::uuid`, gatewayB, now); err != nil {
+	caPEM, keyPEM := credentialTestCA(t, now)
+	authority, err := NewCertificateAuthority(caPEM, keyPEM, "tls://mqtt-broker:8883")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCredentialService(store, authority).Revoke(ctx, registryauth.GrantClaims{TenantID: tenantB, PrincipalID: gatewayB, AllowedSiteIDs: []string{siteB}}, gatewayB); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandB)); !errors.Is(err, commandmodel.ErrCommandGatewayCredentialInactive) {

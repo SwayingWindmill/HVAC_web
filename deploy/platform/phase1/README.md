@@ -14,6 +14,12 @@ Kubernetes/Kustomize assets elsewhere in the repository are future-stage or cert
 
 ## Public boundary
 
+### Gateway credential authority
+
+Connectivity owns the Gateway CA and HTTPS credential service on internal port 8448. Provision a deployment-specific `GATEWAY_CA_DIR` once with Connectivity's `--initialize-gateway-ca` command, supplying the workload CA via `CONNECTIVITY_CA_FILE`. It creates exclusive files, never overwrites existing keys, and creates a separate server-auth certificate for Connectivity. Normal runtime mounts the directory read-only. Only public trust certificates go to nginx, Mosquitto and the Web BFF; the CA private key stays with Connectivity. Local `npm run local:up` performs first provisioning automatically.
+
+nginx exposes `/gateway/v1/enroll` and `/gateway/v1/renew` over HTTPS and authenticates itself to Connectivity with the platform-gateway workload identity. Renewal forwards only the verified client leaf. Operators use Web 集成管理 to register a Gateway and generate a 24-hour one-time code. Simulator bootstrap uses that Web API and automatic CSR enrollment; it no longer signs or seeds Gateway credentials manually. Revocation is terminal for the Registry Gateway identity. Successful lifecycle records are transactional owner evidence in `connectivity.gateway_credential_audit`; they are not yet displayed in central Audit UI.
+
 The default single-node topology exposes only HTTPS/WSS. MQTT TLS is added only when the optional Integration profile is enabled:
 
 ```text
@@ -121,7 +127,7 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
 
 The PostgreSQL deployment, whether local or external, creates the authentication database boundary `hvac_identity` plus the existing domain database boundaries `hvac_s0` through `hvac_s5`. Credential hashes and IdP authorization requests/codes stay in `hvac_identity`; Gateway OIDC correlation state is a one-time Redis entry with a 10-minute TTL so login can survive Gateway process restart or multi-instance routing. The browser-facing issuer stays on the public HTTPS origin while Gateway server-to-server discovery, token exchange and JWKS retrieval use `OIDC_BACKCHANNEL_BASE_URL` to reach `identity-service` directly on the internal application network. IAM authorization facts remain in `hvac_s1`. BFF Sessions default to an 8-hour absolute lifetime (`SESSION_ABSOLUTE_TTL=8h`) and a 60-minute user-idle timeout (`SESSION_IDLE_TTL=60m`); only explicit browser user activity refreshes the idle timestamp, so background telemetry traffic cannot keep an unattended session alive.
 
-The production-safe Phase 1 migration runner is implemented under `migrations/`. It uses an exact 77-file allowlist, executes the reviewed canonical migration SQL bytes without runtime rewriting, keeps environment fixture and credential material outside the production sources, records migration state and source hashes in each database, and fails closed on drift or incomplete recovery state. Normal service startup first runs the one-shot Product/Schema preflight, which requires the exact product version and migration-manifest digest; there is no production skip switch.
+The production-safe Phase 1 migration runner is implemented under `migrations/`. It uses an exact reviewed migration allowlist in `manifest.v1.json`, executes the reviewed canonical migration SQL bytes without runtime rewriting, keeps environment fixture and credential material outside the production sources, records migration state and source hashes in each database, and fails closed on drift or incomplete recovery state. Normal service startup first runs the one-shot Product/Schema preflight, which requires the exact product version and migration-manifest digest; there is no production skip switch.
 
 `limit-policy.v1.json` is the versioned Phase 1 high-risk LimitPolicy. The first enforced class is Operations Agent request usage: the Gateway reserves the per-Session window atomically in Redis and fails closed if that quota authority is unavailable. The policy is mounted read-only and is referenced by `product-release.v1.json`; it is not a generic runtime policy editor.
 

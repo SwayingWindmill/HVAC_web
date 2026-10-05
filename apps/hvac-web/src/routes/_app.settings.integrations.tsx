@@ -2,8 +2,11 @@ import { Suspense } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { RouteLoading } from '@/app/RouteLoading';
 import { IntegrationsWorkspace } from '@/features/integrations/IntegrationsWorkspace';
+import { zodValidator } from '@tanstack/zod-adapter';
+import { z } from 'zod';
 
 export const Route = createFileRoute('/_app/settings/integrations')({
+  validateSearch: zodValidator(z.object({ site: z.string().uuid().optional() })),
   staticData: {
     title: '集成管理',
     scope: 'platform',

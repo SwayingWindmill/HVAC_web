@@ -61,6 +61,7 @@ type Config struct {
 	RouteManager   *ownershipregistry.Manager
 	RouteAudit     ownershipregistry.AuditSink
 	Registry       *RegistryConfig
+	Connectivity   *ConnectivityConfig
 	Telemetry      *TelemetryConfig
 	Command        *CommandConfig
 	Alarm          *AlarmConfig
@@ -82,6 +83,7 @@ type handler struct {
 	routeManager   *ownershipregistry.Manager
 	routeAudit     ownershipregistry.AuditSink
 	registry       *registryController
+	connectivity   *ConnectivityConfig
 	telemetry      *telemetryController
 	command        *commandController
 	alarm          *alarmController
@@ -127,6 +129,7 @@ func NewHandler(config Config) http.Handler {
 		routeManager:   config.RouteManager,
 		routeAudit:     routeAudit,
 		registry:       newRegistryController(config.Registry),
+		connectivity:   config.Connectivity,
 		telemetry:      newTelemetryController(config.Telemetry),
 		command:        newCommandController(config.Command),
 		alarm:          newAlarmController(config.Alarm),
@@ -232,6 +235,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if siteID, matches := matchPublicDashboardRoute(request.URL.Path); matches {
 			dispatchDashboardRoute(h, writer, request, siteID)
+			return
+		}
+		if h.serveGatewayCredentials(writer, request) {
 			return
 		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {

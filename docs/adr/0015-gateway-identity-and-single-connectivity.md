@@ -18,6 +18,7 @@ Device ingress ran one `iot-service` per Gateway: the connectivity store was pin
 - One Connectivity process serves every Tenant and Gateway. It resolves the Gateway to its Tenant before any Tenant-scoped work.
 - Connectivity holds the Gateway CA. An operator issues an Enrollment Code for a registered Gateway; the Gateway exchanges the code and a CSR once for a 90-day certificate and renews with its current certificate.
 - Revocation is enforced by Connectivity: messages from a Gateway without an active credential are quarantined and no commands are sent to it. The broker carries no CRL.
+- Gateway revocation is terminal for that registered Gateway identity: revoke all overlapping certificates and outstanding Enrollment Codes atomically; generating a new code or renewing afterward is forbidden. A compromised Gateway is replaced with a newly registered identity and explicit source bindings. MQTT consumers receive Gateway topics, not leaf-certificate fingerprints, so re-enabling the same identity could also re-enable a stolen older certificate. This is Gateway isolation, not per-certificate broker disconnect (source review: `docs/architecture/gateway-credentials-source-review-2026-10-05.md`).
 - Removed with no replacement: integration instances and transport profiles, connectivity sessions, the command connector ownership lease, per-Gateway static bindings files and environment lists, and the edge fleet runtime (releases, OTA, snapshots). Edge configuration delivery is designed again with the edge runtime.
 
 ## Considered options

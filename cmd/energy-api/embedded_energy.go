@@ -358,16 +358,17 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		Service: "energy-api-iam", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	config := iamserver.Config{
-		AllowedWorkloadSPIFFE: envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-		CoreWorkloadSPIFFE:    envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
-		Audience:              envOr("IAM_AUDIENCE", "iam-service"),
-		Logger:                logger,
-		Observability:         telemetry,
-		AuthorizationStore:    store,
-		AdminStore:            adminStore,
-		RegistryGrantSigner:   signer,
-		RegistryGrantIssuer:   iamSPIFFEID,
-		RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
+		AllowedWorkloadSPIFFE:    envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+		CoreWorkloadSPIFFE:       envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
+		CredentialWorkloadSPIFFE: "spiffe://hvac.local/mqtt-telemetry-adapter",
+		Audience:                 envOr("IAM_AUDIENCE", "iam-service"),
+		Logger:                   logger,
+		Observability:            telemetry,
+		AuthorizationStore:       store,
+		AdminStore:               adminStore,
+		RegistryGrantSigner:      signer,
+		RegistryGrantIssuer:      iamSPIFFEID,
+		RegistryGrantAudience:    envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
 		AllowedRegistryGrantPresenters: []string{
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		},
@@ -454,7 +455,7 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 	server := &http.Server{
 		Addr: envOr("CORE_SERVICE_ADDR", "127.0.0.1:18445"),
 		Handler: coreservice.NewHandler(coreservice.ServerConfig{
-			Store: store, CursorCodec: cursorCodec, GrantPublicKey: grantPublicKey,
+			Store: store, Writer: store, CursorCodec: cursorCodec, GrantPublicKey: grantPublicKey,
 			GrantIssuer:            envOr("CORE_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
 			AllowedPresenterSPIFFE: envOr("CORE_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AdditionalAllowedPresenterSPIFFEs: []string{

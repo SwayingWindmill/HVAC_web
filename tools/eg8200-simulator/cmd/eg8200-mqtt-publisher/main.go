@@ -58,6 +58,26 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if err := simulator.EnsureGatewayCredential(ctx, &mqttConfig, os.Getenv("EG8200_ENROLLMENT_CODE")); err != nil {
+		logger.Error("eg8200_gateway_credential_failed", "error", err.Error())
+		os.Exit(1)
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Keep transport configuration immutable after publisher startup.
+				credentialConfig := mqttConfig
+				if err := simulator.EnsureGatewayCredential(ctx, &credentialConfig, ""); err != nil {
+					logger.Error("eg8200_gateway_renewal_failed", "error", err.Error())
+				}
+			}
+		}
+	}()
 	lastTick := time.Now().UTC()
 	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, lastTick)
 	atv630Server, err := simulator.NewVirtualATV630Server(*atv630ModbusAddress, plant)
