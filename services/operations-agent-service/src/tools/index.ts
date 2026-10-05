@@ -1,5 +1,3 @@
-import { applicationModule } from '../application/index.js';
-
 export {
   HVAC_READ_TOOL_NAMES,
   createHvacReadTools,
@@ -36,11 +34,3 @@ export {
   type RegistryOwnerReaderConfig,
   type RegistrySiteDto,
 } from './internal/registry-owner-reader.js';
-
-export const toolsModule = Object.freeze({
-  name: 'tools',
-  layer: 'adapter',
-  dependencies: [applicationModule.name],
-} as const);
-
-export type ToolsModule = typeof toolsModule;

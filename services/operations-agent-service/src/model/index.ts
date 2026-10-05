@@ -1,5 +1,3 @@
-import { applicationModule } from '../application/index.js';
-
 export {
   createFakeFindingSynthesizer,
   type FakeFindingSynthesizer,
@@ -12,11 +10,3 @@ export {
   type OpenAiFindingSynthesizer,
   type OpenAiFindingSynthesizerOptions,
 } from './internal/openai-finding-synthesizer.js';
-
-export const modelModule = Object.freeze({
-  name: 'model',
-  layer: 'adapter',
-  dependencies: [applicationModule.name],
-} as const);
-
-export type ModelModule = typeof modelModule;

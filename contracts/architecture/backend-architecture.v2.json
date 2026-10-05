@@ -43,7 +43,7 @@
     { "domain": "Forecast", "implementation": ["services/forecast-service"], "alignment": "ALIGNED" },
     { "domain": "Optimization", "implementation": ["services/optimization-service"], "alignment": "ALIGNED" },
     { "domain": "MLOps Metadata", "implementation": ["infra/registry/postgres/init/009e-forecast-model-v2.sql", "infra/registry/postgres/init/009k-mlops-metadata-v2.sql"], "alignment": "ALIGNED" },
-    { "domain": "Audit", "implementation": ["modules/audit", "libs/domainoutbox"], "alignment": "ALIGNED" }
+    { "domain": "Audit", "implementation": ["modules/audit"], "alignment": "ALIGNED" }
   ],
   "api": {
     "authority": "SE-API-001",

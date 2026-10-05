@@ -1,11 +1,3 @@
-export const runtimePiModule = Object.freeze({
-  name: 'runtime-pi',
-  layer: 'adapter',
-  dependencies: ['agent'],
-} as const);
-
-export type RuntimePiModule = typeof runtimePiModule;
-
 export {
   AGENT_MODEL_ALLOWLIST_ENV,
   AGENT_MODEL_ID_ENV,

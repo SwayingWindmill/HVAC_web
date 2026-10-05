@@ -1,6 +1,3 @@
-import { agentModule } from '../agent/index.js';
-import { domainModule } from '../domain/index.js';
-
 export {
   OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
   OPERATIONS_AGENT_TOOL_CATALOG_VERSION,
@@ -263,11 +260,3 @@ export {
   type ToolAuthorizationGrant,
   type ToolAuthorizationReader,
 } from './internal/ports.js';
-
-export const applicationModule = Object.freeze({
-  name: 'application',
-  layer: 'application',
-  dependencies: [agentModule.name, domainModule.name],
-} as const);
-
-export type ApplicationModule = typeof applicationModule;
