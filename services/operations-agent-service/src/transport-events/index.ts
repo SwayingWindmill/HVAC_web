@@ -1,5 +1,3 @@
-import { applicationModule } from '../application/index.js';
-
 export { createAgentSessionEventStreamResponse } from './internal/agent-session-events.js';
 
 export {
@@ -18,11 +16,3 @@ export {
   type OperationsPlanView,
   type OperationsToolActivityView,
 } from './internal/operations-investigation-events.js';
-
-export const transportEventsModule = Object.freeze({
-  name: 'transport-events',
-  layer: 'adapter',
-  dependencies: [applicationModule.name],
-} as const);
-
-export type TransportEventsModule = typeof transportEventsModule;

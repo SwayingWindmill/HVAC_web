@@ -123,8 +123,8 @@ test('adapters cannot depend on another adapter', async () => {
 test('service modules cannot bypass boundaries through a package self-import', async () => {
   await withTemporaryService(async (root) => {
     await writeSource(root, 'tools/index.ts', [
-      `import { operationsAgentServiceModules } from '${OPERATIONS_AGENT_SERVICE_PACKAGE_NAME}';`,
-      'export const toolsModule = operationsAgentServiceModules;',
+      `import { createAgentSessionService } from '${OPERATIONS_AGENT_SERVICE_PACKAGE_NAME}';`,
+      'export const forbiddenSelfImport = createAgentSessionService;',
       '',
     ].join('\n'));
 

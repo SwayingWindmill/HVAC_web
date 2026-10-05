@@ -78,11 +78,3 @@ export {
   type AgentToolExecutionStatus,
   type InactiveAgentSession,
 } from './internal/session.js';
-
-export const agentModule = Object.freeze({
-  name: 'agent',
-  layer: 'domain',
-  dependencies: [],
-} as const);
-
-export type AgentModule = typeof agentModule;

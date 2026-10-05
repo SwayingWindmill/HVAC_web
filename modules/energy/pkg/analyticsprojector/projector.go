@@ -1,8 +1,6 @@
 package analyticsprojector
 
 import (
-	"net/http"
-
 	clickhouseclient "github.com/quanlaihe/hvac-web/modules/energy/internal/clickhouse"
 	coreclient "github.com/quanlaihe/hvac-web/modules/energy/internal/coreclient"
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
@@ -33,8 +31,4 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 
 func NewBindingResolver(config BindingResolverConfig) (BindingResolver, error) {
 	return coreclient.NewResolver(config)
-}
-
-func DefaultHTTPClient() *http.Client {
-	return &http.Client{}
 }

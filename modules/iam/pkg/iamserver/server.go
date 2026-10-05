@@ -33,14 +33,6 @@ func NewHandler(config Config) http.Handler {
 	return iam.NewHandler(config)
 }
 
-func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
-	return iam.NewS1FixtureAuthorizationStore(subjectIssuer)
-}
-
-func NewDenyAllAuthorizationStore(policyRevision string) AuthorizationStore {
-	return iam.NewDenyAllAuthorizationStore(policyRevision)
-}
-
 func OpenPostgresAuthorizationStore(ctx context.Context, databaseURL string) (*PostgresAuthorizationStore, error) {
 	return iam.OpenPostgresAuthorizationStore(ctx, databaseURL)
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { HVAC_AGENT_EVENT_VERSION } from '../dist/agent/index.js';
-import { createAgentSessionEventStreamResponse } from '../dist/transport-http/index.js';
+import { createAgentSessionEventStreamResponse } from '../dist/transport-events/index.js';
 
 const context = Object.freeze({
   tenantId: 'tenant-1',
