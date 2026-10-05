@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const MQTTGatewayConfigSchemaVersion = 5
+const MQTTGatewayConfigSchemaVersion = 6
 
 var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
@@ -18,15 +18,18 @@ var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3
 // certificate CN and MQTT client id. Devices are named on the wire by their source keys
 // (the simulator device names); Tenant and Site are resolved by the platform.
 type MQTTGatewayConfig struct {
-	SchemaVersion     int    `json:"schemaVersion"`
-	GatewayID         string `json:"gatewayId"`
-	BrokerURL         string `json:"brokerUrl"`
-	CAFile            string `json:"caFile"`
-	CertFile          string `json:"certFile"`
-	KeyFile           string `json:"keyFile"`
-	ServerName        string `json:"serverName"`
-	QueueDirectory    string `json:"queueDirectory"`
-	MaximumQueueBytes int64  `json:"maximumQueueBytes"`
+	SchemaVersion        int    `json:"schemaVersion"`
+	GatewayID            string `json:"gatewayId"`
+	BrokerURL            string `json:"brokerUrl"`
+	EnrollmentURL        string `json:"enrollmentUrl"`
+	EnrollmentCAFile     string `json:"enrollmentCaFile"`
+	EnrollmentServerName string `json:"enrollmentServerName"`
+	CAFile               string `json:"caFile"`
+	CertFile             string `json:"certFile"`
+	KeyFile              string `json:"keyFile"`
+	ServerName           string `json:"serverName"`
+	QueueDirectory       string `json:"queueDirectory"`
+	MaximumQueueBytes    int64  `json:"maximumQueueBytes"`
 }
 
 func DecodeMQTTGatewayConfig(reader io.Reader) (MQTTGatewayConfig, error) {

@@ -44,6 +44,7 @@ const (
 type Config struct {
 	AllowedWorkloadSPIFFE           string
 	CoreWorkloadSPIFFE              string
+	CredentialWorkloadSPIFFE        string
 	Audience                        string
 	Logger                          *slog.Logger
 	Observability                   *observability.Runtime
@@ -85,6 +86,7 @@ type Config struct {
 type handler struct {
 	allowedWorkloadSPIFFE           string
 	coreWorkloadSPIFFE              string
+	credentialWorkloadSPIFFE        string
 	audience                        string
 	logger                          *slog.Logger
 	observability                   *observability.Runtime
@@ -267,6 +269,7 @@ func NewHandler(config Config) http.Handler {
 	return &handler{
 		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
 		coreWorkloadSPIFFE:              config.CoreWorkloadSPIFFE,
+		credentialWorkloadSPIFFE:        config.CredentialWorkloadSPIFFE,
 		audience:                        config.Audience,
 		logger:                          logger,
 		observability:                   telemetry,
@@ -415,7 +418,7 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 		return http.StatusBadRequest
 	}
 	_, spiffeID, ok := peerIdentity(request)
-	if !ok || h.coreWorkloadSPIFFE == "" || spiffeID != h.coreWorkloadSPIFFE {
+	if !ok || (spiffeID != h.coreWorkloadSPIFFE && (h.credentialWorkloadSPIFFE == "" || spiffeID != h.credentialWorkloadSPIFFE)) {
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}

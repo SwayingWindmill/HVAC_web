@@ -43,6 +43,7 @@ hvac_s1|infra/registry/postgres/init/013-s22-intelligence-products.sql
 hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
 hvac_s1|infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 hvac_s1|infra/connectivity/postgres/init/003-gateway-uplink.sql
+hvac_s1|infra/connectivity/postgres/init/004-gateway-enrollment.sql
 hvac_s1|services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
 hvac_s1|services/rule-runtime-service/migrations/002_s21_rule_management.sql
 hvac_s1|infra/registry/postgres/init/013-s23-maintenance-retirement.sql

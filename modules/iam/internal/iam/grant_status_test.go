@@ -73,3 +73,39 @@ func TestRegistryGrantStatusRequiresCoreWorkloadAndReturnsCurrentState(t *testin
 		t.Fatalf("unverified status = %d; body=%s", unverifiedRecorder.Code, unverifiedRecorder.Body.String())
 	}
 }
+
+func TestRegistryGrantStatusLimitsCredentialOwnerWorkload(t *testing.T) {
+	now := time.Now()
+	handler := iam.NewHandler(iam.Config{
+		CoreWorkloadSPIFFE:       "spiffe://hvac.local/platform-core-service",
+		CredentialWorkloadSPIFFE: "spiffe://hvac.local/mqtt-telemetry-adapter",
+		RegistryGrantStatus:      iam.StaticRegistryGrantStatusStore{PolicyRevision: "registry-read:1"},
+	})
+	for _, test := range []struct {
+		identity string
+		want     int
+	}{
+		{"spiffe://hvac.local/mqtt-telemetry-adapter", http.StatusOK},
+		{"spiffe://hvac.local/platform-gateway", http.StatusUnauthorized},
+	} {
+		bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", test.identity, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pair, err := tls.X509KeyPair(bundle.ClientCertPEM, bundle.ClientKeyPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, iam.RegistryGrantStatusPath, bytes.NewBufferString(`{"tenantId":"`+iam.S1FixtureTenantAID+`","tokenId":"test"}`))
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{peer}, VerifiedChains: [][]*x509.Certificate{{peer}}}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != test.want {
+			t.Fatalf("%s: status=%d want=%d", test.identity, recorder.Code, test.want)
+		}
+	}
+}

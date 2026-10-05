@@ -12,6 +12,7 @@ const targetDomainModel = await readJSON('contracts/architecture/target-domain-m
 const errors = [];
 
 const allowedOwners = new Set([
+  'connectivity',
   'platform-gateway', 'platform-core-service', 'telemetry-runtime-service', 'command-service',
   'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'notification-service', 'work-order-service', 'presentation-service',
   'forecast-service', 'fdd-service', 'optimization-service', 'metric-engine-service', 'settlement-service', 'rule-runtime-service',

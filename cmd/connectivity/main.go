@@ -24,7 +24,24 @@ func main() {
 		Service: "mqtt-telemetry-adapter", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	diagnosticsAddress := flag.String("diagnostics-addr", envOr("MQTT_TELEMETRY_ADAPTER_DIAGNOSTICS_ADDR", ":19094"), "health server listen address")
+	initializeCA := flag.Bool("initialize-gateway-ca", false, "initialize new Gateway CA files and exit")
 	flag.Parse()
+	if *initializeCA {
+		workloadCA, err := os.ReadFile(envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt"))
+		if err == nil {
+			err = connectivity.InitializeGatewayCA(envOr("GATEWAY_CA_DIR", "/run/hvac/gateway-ca"), workloadCA, time.Now().UTC())
+		}
+		if err != nil {
+			var fileError *os.PathError
+			if errors.As(err, &fileError) {
+				logger.Error("gateway_ca_initialization_failed", "operation", fileError.Op, "system_error", fileError.Err.Error())
+			} else {
+				logger.Error("gateway_ca_initialization_failed", "error_code", "GATEWAY_CA_INITIALIZATION_FAILED")
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	config := uplinkConfig()
 	if err := config.Validate(); err != nil {
 		logger.Error("connectivity_uplink_config_invalid", "cause", err.Error())
@@ -40,6 +57,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
+	credentials, err := credentialServer(connectivityStore)
+	if err != nil {
+		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
+		os.Exit(1)
+	}
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClient(config.TelemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
@@ -68,6 +90,11 @@ func main() {
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
 	diagnosticsErr := make(chan error, 1)
 	go func() {
+		if err := credentials.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			diagnosticsErr <- err
+		}
+	}()
+	go func() {
 		logger.Info("mqtt_telemetry_adapter_diagnostics_started", "address", *diagnosticsAddress)
 		if serveErr := diagnostics.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			diagnosticsErr <- serveErr
@@ -94,6 +121,7 @@ func main() {
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
+	_ = credentials.Shutdown(shutdownContext)
 	if commands != nil {
 		_ = commands.Close(shutdownContext)
 	}

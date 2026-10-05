@@ -128,6 +128,15 @@ func main() {
 	}
 	defer routing.close()
 	go routing.watch(runContext)
+	var connectivityConfig *gateway.ConnectivityConfig
+	if workloadCertificate != nil {
+		roots, err := loadCertPool(envOr("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt"), "Connectivity server CA")
+		if err != nil {
+			logger.Error("connectivity_client_config_invalid", "error_code", "CONNECTIVITY_CLIENT_CONFIG_INVALID")
+			os.Exit(1)
+		}
+		connectivityConfig = &gateway.ConnectivityConfig{BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"), HTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(roots, workloadCertificate, "connectivity"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	}
 
 	var handler http.Handler = gateway.NewHandler(gateway.Config{
 		Logger:         logger,
@@ -135,6 +144,7 @@ func main() {
 		RouteManager:   routing.manager,
 		RouteAudit:     routing.audit,
 		Registry:       routing.registry,
+		Connectivity:   connectivityConfig,
 		Telemetry:      telemetryConfig,
 		Command:        commandConfig,
 		Alarm:          alarmConfig,

@@ -1,5 +1,13 @@
 # 34 集成管理 Surface Specification v1
 
+## 当前交付切片：Gateway 接入身份（2026-10-05，#407）
+
+ADR 0015 / #397 已删除 integration instance、transport profile 和多 Connectivity 的旧对象；下文相关历史概念不得作为保留演示连接器的理由。当前 `/settings/integrations` 实现真实 Registry Gateway 台账：授权站点选择 → 网关登记 → 凭据 Dialog。台账延续已批准的 tablecn/DataTableBlock 语法，只显示业务名称、业务编码、登记状态和可执行操作。
+
+凭据 Dialog 明确区分未接入、有效、即将到期、已到期和已吊销，显示到期时间并支持刷新。登记使用 RHF/Zod；站点属于 Router URL 状态；服务器记录属于 Query。接入码是 #407 明确授权的一次性初始响应：只在生成时显示，关闭后清除，24 小时且一次有效；不展示或收集私钥。永久吊销必须以 AlertDialog 说明全部重叠证书、未使用码、数据隔离及命令拒绝影响，取消不发送请求。吊销后不能恢复同一身份。
+
+连接器健康、延迟和数量没有真实契约时不显示模拟事实。真实 1440×900 页面与行为验收见 `docs/architecture/gateway-credentials-acceptance-2026-10-05.md`。
+
 > **状态：SELECTED / READY FOR WIREFRAME**  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `34 集成管理`  

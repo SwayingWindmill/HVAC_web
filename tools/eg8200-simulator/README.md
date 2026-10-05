@@ -126,4 +126,8 @@ The current unit tests cover strict config and Scenario parsing, stepwise Scenar
 
 ## MQTT
 
+Use MQTT config schema 6 (`configs/central-plant.mqtt.local.example.json`). Register a Gateway in Web → 集成管理, then generate its one-time code. Set `EG8200_ENROLLMENT_CODE` only for first startup. `enrollmentUrl` must be an HTTPS origin; `enrollmentCaFile` trusts ingress and `enrollmentServerName` identifies it. `caFile` separately trusts the MQTT broker. `certFile` and `keyFile` name one writable identity-bundle path. The simulator generates its private key and CSR, exchanges the code for a 90-day certificate and broker URL, and atomically writes its own bundle; no manual signing or credential SQL seed. The private key stays on the Gateway.
+
+Subsequent starts use the bundle without a code. The publisher checks hourly and renews within the last 14 days using its current certificate; the older certificate retains its original expiry. Expired or terminally revoked identities require a newly registered Gateway and explicit source reassignment. Connectivity enforces Gateway-wide isolation for data and commands; existing broker connections are not guaranteed to disconnect at individual leaf expiry.
+
 One simulator process is one EG8200 Gateway. Its MQTT config names the Gateway by its Registry Device id (`gatewayId`), which is also the certificate CN and the MQTT client id. It publishes telemetry to `hvac/v1/{gatewayId}/up/telemetry` and names each device by its source key, the simulator device name; Connectivity resolves Tenant, Site, Device and Point from the Registry. It receives commands on `hvac/v1/{gatewayId}/down/command` and replies on `hvac/v1/{gatewayId}/up/reply`.

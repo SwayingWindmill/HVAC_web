@@ -1,6 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { X509Certificate } from 'node:crypto';
 import path from 'node:path';
 
 import {
@@ -23,10 +22,10 @@ import {
 } from './central-plant-spatial-model.mjs';
 import { applyRegistryRigToPoints, loadAcceptanceRig } from './lib/acceptance-rig.mjs';
 import { localContainer, repoRoot, runtimeDir } from './lib/local-environment.mjs';
+import { localAdministratorBrowser } from './lib/local-administrator-browser.mjs';
 
 const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
 const runtimeRoot = runtimeDir;
-const internalPkiDir = path.join(runtimeRoot, 'internal-pki');
 const runtimeConfigDir = path.join(runtimeRoot, 'config');
 const pointContractPath = path.join(repoRoot, 'contracts', 'registry', 'central-plant-device-points.v2.json');
 const reconciliationPath = path.join(runtimeRoot, 'identity-reconcile.json');
@@ -365,79 +364,19 @@ RESET ROLE;
 COMMIT;`;
 }
 
-function gatewayPkiDir(site) {
-  return path.join(internalPkiDir, 'gateways', site.gatewayDeviceId);
-}
-
-// A Gateway's certificate CN is its Registry Device id (ADR 0015). Enrollment replaces
-// this local signing (#407).
-function ensureGatewayCertificate(site) {
-  const pkiDir = gatewayPkiDir(site);
-  // Group-readable so the service group (65532) can be given the Gateway identity.
-  mkdirSync(pkiDir, { recursive: true, mode: 0o750 });
-  const keyPath = path.join(pkiDir, 'tls.key');
-  const certPath = path.join(pkiDir, 'tls.crt');
-  const keyReady = existsSync(keyPath) && readFileSync(keyPath).includes('PRIVATE KEY');
-  const certReady = existsSync(certPath) && readFileSync(certPath).includes('BEGIN CERTIFICATE');
-  if (keyReady && certReady) return;
-
-  const csrPath = path.join(pkiDir, 'tls.csr');
-  const extPath = path.join(pkiDir, 'tls.ext');
-  for (const stalePath of [keyPath, certPath, csrPath, extPath]) rmSync(stalePath, { force: true });
-  const caCertPath = path.join(internalPkiDir, 'ca.pem');
-  const caKeyPath = path.join(internalPkiDir, 'ca.key');
-  const caSerialPath = path.join(internalPkiDir, 'ca.srl');
-  if (!existsSync(caCertPath) || !existsSync(caKeyPath)) throw new Error('Phase 1 internal CA is unavailable');
-
-  run('openssl', ['genrsa', '-out', keyPath, '2048']);
-  run('openssl', ['req', '-new', '-key', keyPath, '-out', csrPath, '-subj', `/CN=${site.gatewayDeviceId}`]);
-  writeFileSync(extPath, `extendedKeyUsage=clientAuth\nsubjectAltName=DNS:${site.gatewayDeviceId}\n`, { mode: 0o600 });
-  const serialArgs = existsSync(caSerialPath) ? ['-CAserial', caSerialPath] : ['-CAcreateserial'];
-  run('openssl', [
-    'x509', '-req', '-in', csrPath, '-CA', caCertPath, '-CAkey', caKeyPath,
-    ...serialArgs, '-out', certPath, '-days', '90', '-sha256', '-extfile', extPath,
-  ]);
-  chmodSync(keyPath, 0o640);
-  chmodSync(certPath, 0o644);
-  rmSync(csrPath, { force: true });
-  rmSync(extPath, { force: true });
-}
-
-function gatewayCertificate(site) {
-  const certificate = new X509Certificate(readFileSync(path.join(gatewayPkiDir(site), 'tls.crt')));
-  return {
-    certificateFingerprint: certificate.fingerprint256.replaceAll(':', '').toLowerCase(),
-    certificateValidFrom: new Date(certificate.validFrom).toISOString(),
-    certificateValidUntil: new Date(certificate.validTo).toISOString(),
-  };
-}
-
-// The Gateway Credential Connectivity checks before accepting the Gateway's uplink.
-function buildGatewayCredentialSeed(site) {
-  const { certificateFingerprint, certificateValidFrom, certificateValidUntil } = gatewayCertificate(site);
-  return `BEGIN;
-INSERT INTO connectivity.gateway_credentials (
-  id, tenant_id, gateway_id, certificate_fingerprint_sha256, status, valid_from, valid_until, revoked_at, created_at, updated_at
-) VALUES (
-  ${sqlLiteral(siteUUID(site, 0x840000000001))}, ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.gatewayDeviceId)},
-  ${sqlLiteral(certificateFingerprint)}, 'ACTIVE', ${sqlLiteral(certificateValidFrom)}, ${sqlLiteral(certificateValidUntil)}, NULL,
-  clock_timestamp(), clock_timestamp()
-)
-ON CONFLICT (id) DO UPDATE SET certificate_fingerprint_sha256=EXCLUDED.certificate_fingerprint_sha256, status='ACTIVE',
-  valid_from=EXCLUDED.valid_from, valid_until=EXCLUDED.valid_until, revoked_at=NULL, updated_at=clock_timestamp();
-COMMIT;`;
-}
-
 function writeSimulatorConfig(site) {
   mkdirSync(runtimeConfigDir, { recursive: true });
   mkdirSync(path.join(runtimeRoot, 'data', site.simulatorQueue), { recursive: true });
   const config = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     gatewayId: site.gatewayDeviceId,
     brokerUrl: 'tls://mqtt-broker:8883',
     caFile: '/run/hvac/pki/ca.pem',
-    certFile: `/run/hvac/pki/gateways/${site.gatewayDeviceId}/tls.crt`,
-    keyFile: `/run/hvac/pki/gateways/${site.gatewayDeviceId}/tls.key`,
+    certFile: '/run/hvac/eg8200/gateway-identity.pem',
+    keyFile: '/run/hvac/eg8200/gateway-identity.pem',
+    enrollmentUrl: 'https://nginx',
+    enrollmentServerName: 'localhost',
+    enrollmentCaFile: '/run/hvac/enrollment-ca.pem',
     serverName: 'mqtt-broker',
     queueDirectory: '/run/hvac/eg8200',
     maximumQueueBytes: 64 * 1024 * 1024,
@@ -478,15 +417,26 @@ const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMA
 const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
 for (const site of localSites) {
-  ensureGatewayCertificate(site);
   psql('hvac_s1', buildS1Seed(site, seededPoints));
-  psql('hvac_s1', buildGatewayCredentialSeed(site));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);
-// The local administrator is granted Site A; other Sites are reached through the API.
+// Credential bootstrap uses the local administrator's explicit Gateway write scopes.
 runLocalAdminGrant();
 psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
-startSimulatorService();
+const publicOrigin = process.env.PLATFORM_PUBLIC_ORIGIN || 'https://localhost:8443';
+const { browser, context, principal } = await localAdministratorBrowser(publicOrigin);
+try {
+  for (const site of localSites) {
+    if (existsSync(path.join(runtimeRoot, 'data', site.simulatorQueue, 'gateway-identity.pem'))) continue;
+    const response = await context.request.post(`${publicOrigin}/api/v1/gateways/${site.gatewayDeviceId}/enrollment-code`, {
+      headers: { 'X-CSRF-Token': principal.session.csrfToken, Origin: publicOrigin },
+    });
+    if (!response.ok()) throw new Error(`Gateway enrollment bootstrap failed for ${site.name} (HTTP ${response.status()})`);
+    const { enrollmentCode } = await response.json();
+    process.env[site.index === 0 ? 'EG8200_ENROLLMENT_CODE_A' : 'EG8200_ENROLLMENT_CODE_B'] = enrollmentCode;
+  }
+  startSimulatorService();
+} finally { await browser.close(); }
 
 console.log(`Phase 1 central-plant simulator ready: devices=${centralPlantDevices.length}, spaces=${centralPlantAreas.length}, assets=${centralPlantEquipment.length}, sensors=${centralPlantSensors.length}, observedPoints=${observedPoints.length}, controlPoints=${controlPoints.length}${rig ? `, rig=${rig.profile}` : ''}`);

@@ -3,6 +3,7 @@ services:
     image: eclipse-mosquitto:2.1.2-alpine@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797
     command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     volumes:
+      - ${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}/ca.pem:/mosquitto/config/gateway-ca.pem:ro
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:?MQTT_PKI_DIR is required}:/mosquitto/config/pki:ro

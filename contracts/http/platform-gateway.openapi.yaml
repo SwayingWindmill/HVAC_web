@@ -14,6 +14,30 @@
     }
   ],
   "paths": {
+    "/api/v1/gateways/{gatewayId}/credential": {
+      "get": {
+        "operationId": "getGatewayCredential", "summary": "Read registered Gateway credential status",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}],
+        "responses": {"200": {"description": "Credential status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialStatus"}}}}}
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/enrollment-code": {
+      "post": {
+        "operationId": "generateGatewayEnrollmentCode", "summary": "Generate one-time 24-hour Gateway enrollment code",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}, {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Code shown once; only its hash is persisted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayEnrollmentCode"}}}}}
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/revoke": {
+      "post": {
+        "operationId": "revokeGatewayCredential", "summary": "Terminally revoke this Gateway identity and all overlapping certificates",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}, {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "All credentials and outstanding enrollment codes revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialStatus"}}}}}
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
@@ -1914,6 +1938,14 @@
       }
     },
     "schemas": {
+      "GatewayCredentialStatus": {
+        "type": "object", "additionalProperties": false, "required": ["status"],
+        "properties": {"status": {"type": "string", "enum": ["NOT_ENROLLED", "ACTIVE", "EXPIRING", "EXPIRED", "REVOKED"]}, "expiresAt": {"type": "string", "format": "date-time"}}
+      },
+      "GatewayEnrollmentCode": {
+        "type": "object", "additionalProperties": false, "required": ["enrollmentCode", "expiresAt"],
+        "properties": {"enrollmentCode": {"type": "string", "minLength": 43, "maxLength": 43}, "expiresAt": {"type": "string", "format": "date-time"}}
+      },
       "V212Meta": {
         "type": "object",
         "additionalProperties": true,

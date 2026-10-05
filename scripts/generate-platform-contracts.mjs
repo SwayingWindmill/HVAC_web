@@ -69,6 +69,9 @@ invariant(exactMembers(toolingLock.outputs, [
 invariant(spec.openapi === '3.1.0', 'OpenAPI version must be 3.1.0');
 
 const expectedOperations = {
+  getGatewayCredential: ['get', '/api/v1/gateways/{gatewayId}/credential'],
+  generateGatewayEnrollmentCode: ['post', '/api/v1/gateways/{gatewayId}/enrollment-code'],
+  revokeGatewayCredential: ['post', '/api/v1/gateways/{gatewayId}/revoke'],
   getHealth: ['get', '/api/v1/health'],
   getVersion: ['get', '/api/v1/version'],
   getPlatformStatus: ['get', '/api/v1/platform/status'],
@@ -130,6 +133,9 @@ for (const [operationId, [method, path]] of Object.entries(expectedOperations)) 
 }
 
 const expectedSuccessSchemas = {
+  getGatewayCredential: 'GatewayCredentialStatus',
+  generateGatewayEnrollmentCode: 'GatewayEnrollmentCode',
+  revokeGatewayCredential: 'GatewayCredentialStatus',
   getHealth: 'HealthResponse',
   getVersion: 'BuildInfo',
   getPlatformStatus: 'PlatformStatusResponse',

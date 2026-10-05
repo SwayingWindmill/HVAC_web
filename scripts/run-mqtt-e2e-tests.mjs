@@ -2,11 +2,12 @@
 // Connectivity resolving the Gateway, Devices and Points from a real Registry database,
 // and a stand-in Telemetry Runtime that records what Connectivity sends.
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
-import { createServer as createHTTPSServer } from 'node:https';
+import { createServer as createHTTPSServer, request as httpsRequest } from 'node:https';
 import { dirname, join, resolve } from 'node:path';
 
 import { runDockerCompose } from './lib/docker-cli.mjs';
@@ -35,6 +36,7 @@ const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const connectivityPassword = randomBytes(24).toString('hex');
 const children = new Set();
 let telemetryServer;
+let enrollmentServer;
 
 const report = { schemaVersion: 1, capability: 'mqtt-uplink-e2e', status: 'failed', startedAt: new Date().toISOString(), assertions: {} };
 
@@ -116,8 +118,6 @@ INSERT INTO core_registry.gateway_device_source_keys (id,tenant_id,site_id,gatew
   ${sourceKeys.join(',\n  ')};
 INSERT INTO core_registry.telemetry_points (id,tenant_id,site_id,reporting_device_id,point_code,source_key,display_name,point_type,value_type,unit,sample_interval_ms,publish_interval_ms,stale_after_ms,counter_decrease_mode,status,revision,created_at,updated_at) VALUES
   ${points.join(',\n  ')};
-INSERT INTO connectivity.gateway_credentials (id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at)
-VALUES ('0193f000-5000-7000-8000-000000000001', ${quote(tenantId)}, ${quote(gatewayId)}, repeat('e',64), 'ACTIVE', now() - interval '1 minute', now() + interval '1 day', NULL, now(), now());
 ALTER ROLE connectivity_runtime PASSWORD ${quote(connectivityPassword)};
 COMMIT;`;
 }
@@ -133,11 +133,15 @@ try {
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', connectivityBinary, './cmd/connectivity']);
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher']);
   run(pkiGenerator, [pkiDir]);
+  const gatewayCADir = join(outputDir, 'gateway-ca');
+  await mkdir(gatewayCADir);
+  run(connectivityBinary, ['--initialize-gateway-ca'], { env: { ...process.env, CONNECTIVITY_CA: join(pkiDir, 'ca.pem'), GATEWAY_CA_DIR: gatewayCADir } });
+  await writeFile(join(pkiDir, 'ca.pem'), Buffer.concat([await readFile(join(pkiDir, 'ca.pem')), await readFile(join(gatewayCADir, 'ca.crt'))]));
   // Throwaway test keys: the broker runs as its own user inside the container.
   await chmod(pkiDir, 0o755);
   await chmod(join(pkiDir, 'mqtt-broker-key.pem'), 0o644);
 
-  const [mqttPort, postgresPort, telemetryPort, connectivityPort, publisherPort] = await Promise.all(Array.from({ length: 5 }, findAvailablePort));
+  const [mqttPort, postgresPort, telemetryPort, connectivityPort, publisherPort, credentialPort, enrollmentPort] = await Promise.all(Array.from({ length: 7 }, findAvailablePort));
   const brokerEnv = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: String(mqttPort) };
   const registryEnv = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresPort) };
   runDockerCompose(run, ['-p', registryProject, '-f', registryCompose, 'up', '-d', '--wait', 'postgres'], { env: registryEnv });
@@ -184,6 +188,10 @@ try {
   await once(telemetryServer, 'listening');
 
   const connectivityEnv = {
+    GATEWAY_CA_CERT: join(gatewayCADir, 'ca.crt'), GATEWAY_CA_KEY: join(gatewayCADir, 'ca.key'),
+    GATEWAY_BROKER_URL: `tls://127.0.0.1:${mqttPort}`,
+    CONNECTIVITY_SERVER_CERT: join(gatewayCADir, 'connectivity.crt'), CONNECTIVITY_SERVER_KEY: join(gatewayCADir, 'connectivity.key'),
+    CONNECTIVITY_IAM_CERT: join(pkiDir, 'iam-cert.pem'), CONNECTIVITY_CREDENTIAL_ADDR: `127.0.0.1:${credentialPort}`,
     CONNECTIVITY_MQTT_URL: `tls://127.0.0.1:${mqttPort}`, CONNECTIVITY_MQTT_SERVER_NAME: 'localhost',
     CONNECTIVITY_TLS_CERT: join(pkiDir, 'mqtt-adapter-cert.pem'), CONNECTIVITY_TLS_KEY: join(pkiDir, 'mqtt-adapter-key.pem'), CONNECTIVITY_CA: join(pkiDir, 'ca.pem'),
     CONNECTIVITY_TELEMETRY_URL: `https://127.0.0.1:${telemetryPort}`, CONNECTIVITY_TELEMETRY_SERVER_NAME: 'localhost',
@@ -195,24 +203,42 @@ try {
   const connectivityMetrics = `http://127.0.0.1:${connectivityPort}/metrics`;
   await waitFor(async () => await httpStatus(connectivityReady) === 200, 30000, 'Connectivity readiness');
 
-  // A message Connectivity cannot parse is quarantined with evidence and acknowledged.
+  // Public TLS ingress stand-in forwards only its own verified workload identity.
+  // The lifecycle and issuance run in the real Connectivity process and database.
+  enrollmentServer = createHTTPSServer({
+    key: await readFile(join(pkiDir, 'web-key.pem')), cert: await readFile(join(pkiDir, 'web-cert.pem')),
+    ca: await readFile(join(gatewayCADir, 'ca.crt')), requestCert: true, rejectUnauthorized: false,
+  }, (request, response) => {
+    const upstream = httpsRequest({ host: '127.0.0.1', port: credentialPort, servername: 'connectivity', path: request.url, method: request.method,
+      ca: readFileSync(join(gatewayCADir, 'ca.crt')), cert: readFileSync(join(pkiDir, 'gateway-cert.pem')), key: readFileSync(join(pkiDir, 'gateway-key.pem')),
+      headers: { 'Content-Type': 'application/json' },
+    }, (result) => { response.writeHead(result.statusCode, { 'Content-Type': 'application/json' }); result.pipe(response); });
+    upstream.on('error', () => response.writeHead(502).end());
+    request.pipe(upstream);
+  });
+  enrollmentServer.listen({ host: '127.0.0.1', port: enrollmentPort });
+  await once(enrollmentServer, 'listening');
+  const enrollmentCode = randomBytes(32).toString('base64url');
+  psql(`INSERT INTO connectivity.gateway_enrollments(tenant_id,gateway_id,code_sha256,expires_at,created_at,updated_at) VALUES (${quote(tenantId)},${quote(gatewayId)},${quote(createHash('sha256').update(enrollmentCode).digest('hex'))},now()+interval '24 hours',now(),now())`);
+
+  const gatewayConfigPath = join(outputDir, 'gateway.json');
+  await writeFile(gatewayConfigPath, `${JSON.stringify({
+    schemaVersion: 6, gatewayId, brokerUrl: `tls://127.0.0.1:${mqttPort}`,
+    enrollmentUrl: `https://127.0.0.1:${enrollmentPort}`, enrollmentServerName: 'localhost', enrollmentCaFile: join(pkiDir, 'ca.pem'),
+    caFile: join(pkiDir, 'ca.pem'), certFile: join(queueDir, 'gateway-identity.pem'), keyFile: join(queueDir, 'gateway-identity.pem'),
+    serverName: 'localhost', queueDirectory: queueDir, maximumQueueBytes: 64 * 1024 * 1024,
+  }, null, 2)}\n`);
+  const publisherArgs = ['-plant-config', plantConfigPath, '-mqtt-config', gatewayConfigPath, '-diagnostics-addr', `127.0.0.1:${publisherPort}`];
+  let publisher = start(publisherBinary, publisherArgs, { EG8200_ENROLLMENT_CODE: enrollmentCode });
+  const publisherReady = `http://127.0.0.1:${publisherPort}/health/ready`;
+  const publisherMetrics = `http://127.0.0.1:${publisherPort}/metrics`;
+  await waitFor(async () => await httpStatus(publisherReady) === 200, 30000, 'publisher readiness');
+  // Credential state exists only after the real code/CSR enrollment above.
   run('docker', ['compose', '-p', brokerProject, '-f', brokerCompose, 'exec', '-T', 'mqtt-broker', 'mosquitto_pub',
     '-h', 'localhost', '-p', '8883', '-V', 'mqttv5', '-q', '1', '--cafile', '/mosquitto/config/pki/ca.pem',
     '--cert', '/mosquitto/config/pki/mqtt-gateway-cert.pem', '--key', '/mosquitto/config/pki/mqtt-gateway-key.pem',
     '-t', `hvac/v1/${gatewayId}/up/telemetry`, '-m', '{}'], { env: brokerEnv });
   await waitFor(() => psql(`SELECT count(*) FROM connectivity.uplink_quarantine WHERE gateway_id = ${quote(gatewayId)} AND reason_code = 'MESSAGE_INVALID'`) === '1', 15000, 'poison message quarantine evidence');
-
-  const gatewayConfigPath = join(outputDir, 'gateway.json');
-  await writeFile(gatewayConfigPath, `${JSON.stringify({
-    schemaVersion: 5, gatewayId, brokerUrl: `tls://127.0.0.1:${mqttPort}`,
-    caFile: join(pkiDir, 'ca.pem'), certFile: join(pkiDir, 'mqtt-gateway-cert.pem'), keyFile: join(pkiDir, 'mqtt-gateway-key.pem'),
-    serverName: 'localhost', queueDirectory: queueDir, maximumQueueBytes: 64 * 1024 * 1024,
-  }, null, 2)}\n`);
-  const publisherArgs = ['-plant-config', plantConfigPath, '-mqtt-config', gatewayConfigPath, '-diagnostics-addr', `127.0.0.1:${publisherPort}`];
-  let publisher = start(publisherBinary, publisherArgs);
-  const publisherReady = `http://127.0.0.1:${publisherPort}/health/ready`;
-  const publisherMetrics = `http://127.0.0.1:${publisherPort}/metrics`;
-  await waitFor(async () => await httpStatus(publisherReady) === 200, 30000, 'publisher readiness');
   await waitFor(() => observations.length >= expectedPointCount, 60000, `${expectedPointCount} observations`);
 
   // Every value names the Gateway as its source and carries the Registry identity.
@@ -299,6 +325,7 @@ try {
 } finally {
   for (const child of [...children]) await stopChild(child);
   if (telemetryServer) await new Promise((resolveClose) => telemetryServer.close(resolveClose));
+  if (enrollmentServer) await new Promise((resolveClose) => enrollmentServer.close(resolveClose));
   try { runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'down', '--volumes', '--remove-orphans'], { env: { ...process.env, MQTT_PKI_DIR: pkiDir } }); } catch {}
   try { runDockerCompose(run, ['-p', registryProject, '-f', registryCompose, 'down', '--volumes', '--remove-orphans'], { env: process.env }); } catch {}
   report.finishedAt = new Date().toISOString();

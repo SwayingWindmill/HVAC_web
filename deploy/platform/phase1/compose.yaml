@@ -42,6 +42,10 @@ services:
       - "${HTTPS_PORT:-443}:443"
     volumes:
       - ${PUBLIC_TLS_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/tls}:/run/hvac/tls:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/proxy/tls.crt:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.key:/run/hvac/proxy/tls.key:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/proxy/ca.crt:ro
     networks: [public, application]
     cpus: ${NGINX_CPUS:-0.50}
     mem_limit: ${NGINX_MEMORY_LIMIT:-256m}
@@ -193,6 +197,7 @@ services:
         required: false
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
       - ${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450", "8452"]
     healthcheck:
@@ -610,10 +615,14 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
+      GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
+      CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
+    volumes:
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-    expose: ["19094"]
+    expose: ["19094", "8448"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/health/ready"]
       interval: 10s
@@ -875,6 +884,7 @@ services:
       - ../../../infra/telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../../../infra/telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/mqtt-pki}:/mosquitto/config/pki:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/trusted-client-ca.pem:/mosquitto/config/gateway-ca.pem:ro
       - ${MQTT_DATA_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
     cpus: ${MQTT_CPUS:-0.75}
