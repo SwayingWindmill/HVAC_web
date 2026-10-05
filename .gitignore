@@ -45,7 +45,6 @@ Thumbs.db
 opencode.json
 .codex/
 .pnpm-store/
-.agents/skills/**/agents/
 docs/*.zip
 docs/设备中心_相关页面_打包/
 
@@ -57,7 +56,7 @@ docs/设备中心_相关页面_打包/
 /NUL
 sys_*.png
 bigscreen_*.png
-prototype/
+/prototype/
 .scratch/go-build-cache/
 .scratch/go-path/
 

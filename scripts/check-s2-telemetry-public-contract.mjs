@@ -42,13 +42,13 @@ function operation(spec, operationId) {
   return null;
 }
 
-const [spec, publication, ownership, activeSpecText, adr, context, packageJSON] = await Promise.all([
+const [spec, publication, ownership, activeSpecText, adr, glossary, packageJSON] = await Promise.all([
   readJSON('contracts/http/s2-telemetry-public.openapi.json'),
   readJSON('contracts/events/s2-device-observation-publication.v1.schema.json'),
   readJSON('contracts/ownership/s2-telemetry-ownership.v1.json'),
   readText('contracts/http/platform-gateway.openapi.yaml'),
   readText('docs/adr/0004-s2-public-api-subscription-recovery-contract.md'),
-  readText('CONTEXT.md'),
+  readText('GLOSSARY.md'),
   readJSON('package.json'),
 ]);
 
@@ -314,7 +314,7 @@ for (const phrase of [
   assert(adr.includes(phrase), `ADR is missing required decision phrase: ${phrase}`);
 }
 for (const term of ['## Telemetry Key Selection', '## Subscription Bootstrap', '## Observation Delta']) {
-  assert(context.includes(term), `CONTEXT.md is missing domain term: ${term}`);
+  assert(glossary.includes(term), `GLOSSARY.md is missing domain term: ${term}`);
 }
 assert(packageJSON.scripts?.['telemetry:public-contract:check'] === 'node scripts/check-s2-telemetry-public-contract.mjs', 'telemetry:public-contract:check is not wired');
 

@@ -152,7 +152,7 @@ Eleven source-scanning gates still opened `modules/telemetry/internal/telemetry`
 instead of protecting anything. They now scan the current paths and pass, except that
 `check-s2-telemetry-ownership.mjs` also asserted `decisionRevision === 3` and
 `activationStatus === 'v2-convergence'`, which the v2.1.2 alignment had already moved
-past, and re-asserted CONTEXT.md vocabulary. Those snapshot and documentation
+past, and re-asserted GLOSSARY.md vocabulary. Those snapshot and documentation
 assertions were removed; the storage-authority, ingest-source, semantics and
 source-code assertions remain.
 

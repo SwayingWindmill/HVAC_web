@@ -2,7 +2,7 @@
 
 商用 HVAC 智能节能平台，第一个场景是冷站。React SPA + Go 后端；第一阶段部署形态是单台 Linux 服务器 + Docker Compose。
 
-`docs/` 里带日期或名为 `*-source-review*` 的文档是当时的调研记录，只作背景；当前约定看 `CONTEXT.md`、`docs/adr/` 和 AGENTS.md 列出的权威文档，与代码冲突时以代码为准。AGENTS.md 是更详细的规则来源，本文件是它的精简版。
+`docs/` 里带日期或名为 `*-source-review*` 的文档是当时的调研记录，只作背景；当前约定看 `GLOSSARY.md`、`docs/adr/` 和 AGENTS.md 列出的权威文档，与代码冲突时以代码为准。AGENTS.md 是更详细的规则来源，本文件是它的精简版。
 
 ## 仓库结构
 
@@ -88,4 +88,4 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 
 ### Domain docs
 
-单一上下文：根目录 `CONTEXT.md` 加 `docs/adr/`。见 `docs/agents/domain.md`。
+单一上下文：根目录 `GLOSSARY.md` 加 `docs/adr/`。见 `docs/agents/domain.md`。

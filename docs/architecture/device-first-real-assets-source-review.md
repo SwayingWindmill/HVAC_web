@@ -33,7 +33,7 @@ The existing implementation was re-read before this decision:
 - [`apps/hvac-web/src/real/assets/detail.ts`](../../apps/hvac-web/src/real/assets/detail.ts)
 - [`apps/hvac-web/src/real/site-routing.ts`](../../apps/hvac-web/src/real/site-routing.ts)
 - [`apps/hvac-web/src/real/SiteScopedShell.tsx`](../../apps/hvac-web/src/real/SiteScopedShell.tsx)
-- [`CONTEXT.md`](../../CONTEXT.md), especially Device, Physical Sensor, Point, Registry Lifecycle, Presence Applicability, Device Presence, Evaluation Availability, Telemetry Freshness, Telemetry Quality and Telemetry Readiness.
+- [`GLOSSARY.md`](../../GLOSSARY.md), especially Device, Physical Sensor, Point, Registry Lifecycle, Presence Applicability, Device Presence, Evaluation Availability, Telemetry Freshness, Telemetry Quality and Telemetry Readiness.
 
 ### 2.1 Local conflicts found
 
@@ -124,7 +124,7 @@ Decision:
 
 ## 4. Frozen Device runtime presentation semantics
 
-The Assets workspace must use the canonical domain vocabulary in `CONTEXT.md` and keep these dimensions independent:
+The Assets workspace must use the canonical domain vocabulary in `GLOSSARY.md` and keep these dimensions independent:
 
 | Dimension | Source / values | UI contract |
 | --- | --- | --- |

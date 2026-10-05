@@ -28,7 +28,7 @@
 
 | 本地文件 | 事实 |
 | --- | --- |
-| [`CONTEXT.md`](../../CONTEXT.md) | Telemetry Runtime 拥有当前运行时真相；Telemetry Quality 与 ingest acceptance 分离；Metric 是有定义、单位、质量策略和溯源的版本化派生事实。 |
+| [`GLOSSARY.md`](../../GLOSSARY.md) | Telemetry Runtime 拥有当前运行时真相；Telemetry Quality 与 ingest acceptance 分离；Metric 是有定义、单位、质量策略和溯源的版本化派生事实。 |
 | [`009a-energy-topology-metering-v2.sql`](../../infra/registry/postgres/init/009a-energy-topology-metering-v2.sql) | `energy_meters` 定义物理计量身份；`meter_bindings` 将 Meter、Accounting Edge、Device 和 `COUNTER` Point 通过版本、角色、方向和有效期绑定。还存在 Virtual Meter，但本切片不使用。 |
 | [`002-analytics-energy-interval.sql`](../../infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql) | 当前事实表记录 Site、Device、Point、Telemetry Key、Energy Type、区间、质量、源观察 ID、offset、watermark 和 dataset revision；没有 `meter_id`、`meter_binding_id` 或绑定版本。 |
 | [`projector.go`](../../modules/energy/internal/energy/projector.go) | 当前只接受 `hvac_meter.energy`，把两条累计电量观察转换为 electricity interval fact；负值为 INVALID，回退为 SUSPECT。 |
@@ -83,7 +83,7 @@ Energy Content 是能源业务定义和配置的领域能力。它负责定义�
 | 词汇 | 定义 | 当前证据/状态 |
 | --- | --- | --- |
 | Raw Observation | Telemetry History 保存的、带 sampled/received/quality/ingest 证据的源观察；它是能源处理的输入，不是清洗后的电量事实。 | 当前已有 `telemetry_history.observations` 链路；KEEP |
-| Current | Telemetry Runtime 在某个 key 上最新接受的当前运行时真相。它用于运行态读取，不能代替完整历史区间。 | `CONTEXT.md` 已定义；KEEP |
+| Current | Telemetry Runtime 在某个 key 上最新接受的当前运行时真相。它用于运行态读取，不能代替完整历史区间。 | `GLOSSARY.md` 已定义；KEEP |
 | Energy Processing | 对 Raw/Current 和 Energy Content 输入进行清洗、区间化、归一化、聚合和重算的处理边界。 | 现有 projector 是其第一个局部实现；ADOPT/LOCAL-CHANGE |
 | Energy Content | Meter、MeterBinding、Topology、Category/Item、Tariff、Carbon 等能源业务定义和配置。 | Registry 有部分表，完整 owner 尚未裁决；ADOPT/DEFER |
 | Meter | 物理计量身份。当前 Registry 的 `energy_meters` 以 Site、Device、Energy Type、code 和生命周期状态定义它。 | 已有 SQL 证据；KEEP |
@@ -91,9 +91,9 @@ Energy Content 是能源业务定义和配置的领域能力。它负责定义�
 | Energy Interval Fact | 两个有序累计观察之间的增量电量事实，带区间、质量、质量原因、源观察 ID、源位置和处理元数据。 | 当前 projector/ClickHouse 已实现 electricity 版本；KEEP AS FIRST SLICE |
 | Energy Aggregate | 按 Site、Meter/Binding 语义、Energy Type、时区和固定粒度汇总的可查询结果。它是事实的派生读取结果，不是用户随意编辑的 Meter 内容。 | 当前查询服务直接从 interval facts 做固定聚合；KEEP AS READ MODEL，后续补 Meter 维度 |
 | Dataset Revision | 让消费者知道本次结果基于哪一版查询数据集和事实修订的标识。当前实现形如 `<QUERY_DATASET_REVISION>:<maximum fact revision>`。 | 当前查询 README 已明确；KEEP，但不与 Meter 配置 revision 混用 |
-| Quality | 对 Observation 或 Energy Fact 的可用性/可信度分类。Telemetry 的 `GOOD/PARTIAL/ESTIMATED/MANUAL/STALE/INVALID` 与 Energy Fact 的 `VALID/SUSPECT/INVALID` 是不同层级，不能合并成一个枚举。 | `CONTEXT.md`、projector 和查询合同均有证据；KEEP |
+| Quality | 对 Observation 或 Energy Fact 的可用性/可信度分类。Telemetry 的 `GOOD/PARTIAL/ESTIMATED/MANUAL/STALE/INVALID` 与 Energy Fact 的 `VALID/SUSPECT/INVALID` 是不同层级，不能合并成一个枚举。 | `GLOSSARY.md`、projector 和查询合同均有证据；KEEP |
 | Provenance | 说明结果由什么产生的证据，包括源观察 ID、source offset、sampled interval、watermark、projectedAt 和 dataset revision。 | 当前 fact 与 response 已部分实现；KEEP/EXPAND |
-| Metric | 按显式定义、单位、质量策略和溯源计算的通用版本化派生事实。Energy Interval Fact 不因“派生”二字自动变成 Metric。 | `CONTEXT.md`、`009c` 有证据；KEEP AS SEPARATE BOUNDARY |
+| Metric | 按显式定义、单位、质量策略和溯源计算的通用版本化派生事实。Energy Interval Fact 不因“派生”二字自动变成 Metric。 | `GLOSSARY.md`、`009c` 有证据；KEEP AS SEPARATE BOUNDARY |
 
 ## 5. 首个纵向切片
 
