@@ -1,0 +1,1240 @@
+# Zero-context review artifact: tracked baseline c28a38e1 (same skill source as 8a542fab) to pinned upstream v1.3.1.
+# Ignored local agents/openai.yaml files are installed; metadata hunks denote missing Git tracking.
+# Not a direct-apply recipe. Not applied to the project. Reproduced upstream source license follows.
+# MIT License
+#
+# Copyright (c) 2026 Matt Pocock
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+--- a/.agents/skills/ask-matt/SKILL.md
++++ b/.agents/skills/ask-matt/SKILL.md
+@@ -17 +17 @@
+-1. **`/grill-with-docs`** sharpens the idea by interview. Start here whenever you are **working in a working directory**: it's stateful, retaining what it learns in `CONTEXT.md` and ADRs. (No working directory? Use `/grill-me` instead, covered under Standalone. Both run the same `/grilling` primitive; `grill-with-docs` is the one that leaves a paper trail, which makes it the better of the two whenever a repo is there to leave it in.)
++1. **`/grill-with-docs`** sharpens the idea by interview. Start here whenever you are **working in a working directory**: it's stateful, retaining what it learns in `GLOSSARY.md` and ADRs. (No working directory? Use `/grill-me` instead, covered under Standalone. Both run the same `/grilling` primitive; `grill-with-docs` is the one that leaves a paper trail, which makes it the better of the two whenever a repo is there to leave it in.)
+@@ -23 +23,3 @@
+-   - **Yes** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into tracer-bullet tickets, each declaring its **blocking edges**. On a local tracker that's one file per ticket under `.scratch/<feature>/issues/`, worked blockers-first by hand; on a real tracker the edges become native blocking links, so any ticket whose blockers are done can be grabbed: kick off **`/implement`** per ticket, **`/clear`ing context between each one**. Each ticket is self-contained, so the last one's context is disposable.
++   - **Yes** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into tracer-bullet tickets, each declaring its **blocking edges**. Then work the tickets one of two ways:
++     - **`/implement`** per ticket, **`/clear`ing context between each one**. On a local tracker that's one file per ticket under `.scratch/<feature>/issues/`, worked blockers-first by hand; on a real tracker the edges become native blocking links, so any ticket whose blockers are done can be grabbed. Each ticket is self-contained, so the last one's context is disposable.
++     - **`/implement-spec`** for the whole spec in one run. It reads the tickets as a **task graph**, runs implementer subagents across the ready **frontier** in parallel, and lands everything on one **integration branch**. Reach for it when you'd rather orchestrate the build than drive each ticket yourself.
+@@ -26 +28,5 @@
+-   Either way, **`/implement`** builds each issue by driving **`/tdd`** internally (one red-green slice at a time), then closes out by running **`/code-review`**, a two-axis review (Standards + Spec) of the diff, before committing. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
++   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/code-review`**, a two-axis review (Standards + Spec) of the diff. `/implement` runs both per ticket; `/implement-spec`'s implementers each drive `/tdd`, and it runs one `/code-review` over the integration branch. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
++
++   When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
++
++4. **`/retro`** closes the loop. After a build, and especially one that went sideways, it looks back over the session and suggests changes to the agent's **environment**, not the code: navigation pointers, automated checks, the coding standards `/code-review` enforces, steering files, tooling. Mechanical mistakes become deterministic checks; judgement calls become coding standards. The next build then starts from a better environment.
+@@ -30 +36 @@
+-Keep steps 1–3 in **one unbroken context window** (don't compact or clear until after `/to-tickets`) so the grilling, spec, and tickets all build on the same thinking. Each `/implement` then starts fresh, working from the ticket.
++Keep steps 1–3 in **one unbroken context window** (don't compact or clear until after `/to-tickets`) so the grilling, spec, and tickets all build on the same thinking. Each `/implement` then starts fresh, working from the ticket. Run `/retro` in the session it's looking back on, before you clear; after clearing, point it at that session's log instead.
+@@ -42 +48 @@
+-- **Something's broken** → **`/diagnosing-bugs`**. For the hard ones: the bug that resists a first glance, the intermittent flake, the regression that crept in between two known-good states. It refuses to theorise until it has a **tight feedback loop** (one command that already goes red on *this* bug), then fixes with a regression test. Its post-mortem hands off to **`/improve-codebase-architecture`** when the real finding is that there's no good seam to lock the bug down.
++- **Something's broken** → **`/diagnosing-bugs`**. For the hard ones: the bug that resists a first glance, the intermittent flake, the regression that crept in between two known-good states. It refuses to theorise until it has a **tight feedback loop** (one command that already goes red on *this* bug), then fixes with a regression test. Once the fix is in, run **`/retro`** in the same session to ask what would have prevented the bug; where the real finding is that there's no good seam to lock it down, that's a job for **`/improve-codebase-architecture`**.
+@@ -58 +64 @@
+-- **`/domain-modeling`**: sharpen the project's *domain* language: challenge a fuzzy term, resolve an overloaded word ("account" doing three jobs), record a hard-to-reverse decision as an ADR. It's the active discipline `/grill-with-docs` drives to keep `CONTEXT.md` a clean glossary.
++- **`/domain-modeling`**: sharpen the project's *domain* language: challenge a fuzzy term, resolve an overloaded word ("account" doing three jobs), record a hard-to-reverse decision as an ADR. It's the active discipline `/grill-with-docs` drives to keep `GLOSSARY.md` a clean glossary.
+@@ -77 +83 @@
+-- **`/grill-me`**: the same relentless interview as `/grill-with-docs`, but **stateless**: it saves nothing locally and builds no `CONTEXT.md`. Reach for it when you are **not working in a working directory** (sharpening a plan, a design, a piece of writing, anything with no repo under it). If you are in a working directory, use `/grill-with-docs` instead: it runs the same interview and leaves a paper trail, so it is strictly the better one.
++- **`/grill-me`**: the same relentless interview as `/grill-with-docs`, but **stateless**: it saves nothing locally and builds no `GLOSSARY.md`. Reach for it when you are **not working in a working directory** (sharpening a plan, a design, a piece of writing, anything with no repo under it). If you are in a working directory, use `/grill-with-docs` instead: it runs the same interview and leaves a paper trail, so it is strictly the better one.
+@@ -79 +84,0 @@
+-- **`/resolving-merge-conflicts`** works an in-progress merge or rebase conflict hunk by hunk, resolving by **intent** traced to each side's primary source rather than by picking lines, then finishes the operation. It never runs `--abort`. Standalone and off every flow: reach for it when you are already mid-conflict.
+@@ -84 +89 @@
+-- **`/wait-what`** is the corrective for a message that didn't land. Use it mid-conversation, inside any other skill, and the agent re-pitches what it just said with the context you were missing, in plain English, using the `CONTEXT.md` vocabulary. It works after the fact; `/grill-with-docs` is the upfront cure, because a shared language agreed early is what stops the jargon arriving at all.
++- **`/wait-what`** is the corrective for a message that didn't land. Use it mid-conversation, inside any other skill, and the agent re-pitches what it just said with the context you were missing, in plain English, using the `GLOSSARY.md` vocabulary. It works after the fact; `/grill-with-docs` is the upfront cure, because a shared language agreed early is what stops the jargon arriving at all.
+--- /dev/null
++++ b/.agents/skills/ask-matt/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Ask Matt"
++  short_description: "Find the right skill or workflow"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/claude-handoff/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Claude Handoff"
++  short_description: "Hand off to a background agent"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/code-review/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Code Review"
++  short_description: "Review a diff on standards and spec"
+--- a/.agents/skills/codebase-design/DESIGN-IT-TWICE.md
++++ b/.agents/skills/codebase-design/DESIGN-IT-TWICE.md
+@@ -30 +30 @@
+-Include both [SKILL.md](SKILL.md) vocabulary and CONTEXT.md vocabulary in the brief so each sub-agent names things consistently with the architecture language and the project's domain language.
++Include both [SKILL.md](SKILL.md) vocabulary and GLOSSARY.md vocabulary in the brief so each sub-agent names things consistently with the architecture language and the project's domain language.
+--- /dev/null
++++ b/.agents/skills/codebase-design/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Codebase Design"
++  short_description: "Vocabulary for deep-module design"
+--- a/.agents/skills/diagnosing-bugs/SKILL.md
++++ b/.agents/skills/diagnosing-bugs/SKILL.md
+@@ -10 +10 @@
+-When exploring the codebase, read `CONTEXT.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
++When exploring the codebase, read `GLOSSARY.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
+--- /dev/null
++++ b/.agents/skills/diagnosing-bugs/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Diagnosing Bugs"
++  short_description: "Diagnose hard bugs and regressions"
+--- a/.agents/skills/domain-modeling/CONTEXT-FORMAT.md
++++ /dev/null
+@@ -1,60 +0,0 @@
+-# CONTEXT.md Format
+-
+-## Structure
+-
+-```md
+-# {Context Name}
+-
+-{One or two sentence description of what this context is and why it exists.}
+-
+-## Language
+-
+-**Order**:
+-{A one or two sentence description of the term}
+-_Avoid_: Purchase, transaction
+-
+-**Invoice**:
+-A request for payment sent to a customer after delivery.
+-_Avoid_: Bill, payment request
+-
+-**Customer**:
+-A person or organization that places orders.
+-_Avoid_: Client, buyer, account
+-```
+-
+-## Rules
+-
+-- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
+-- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
+-- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
+-- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
+-
+-## Single vs multi-context repos
+-
+-**Single context (most repos):** One `CONTEXT.md` at the repo root.
+-
+-**Multiple contexts:** A `CONTEXT-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
+-
+-```md
+-# Context Map
+-
+-## Contexts
+-
+-- [Ordering](./src/ordering/CONTEXT.md): receives and tracks customer orders
+-- [Billing](./src/billing/CONTEXT.md): generates invoices and processes payments
+-- [Fulfillment](./src/fulfillment/CONTEXT.md): manages warehouse picking and shipping
+-
+-## Relationships
+-
+-- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
+-- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
+-- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
+-```
+-
+-The skill infers which structure applies:
+-
+-- If `CONTEXT-MAP.md` exists, read it to find contexts
+-- If only a root `CONTEXT.md` exists, single context
+-- If neither exists, create a root `CONTEXT.md` lazily when the first term is resolved
+-
+-When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+--- /dev/null
++++ b/.agents/skills/domain-modeling/GLOSSARY-FORMAT.md
+@@ -0,0 +1,60 @@
++# GLOSSARY.md Format
++
++## Structure
++
++```md
++# {Context Name}
++
++{One or two sentence description of what this context is and why it exists.}
++
++## Language
++
++**Order**:
++{A one or two sentence description of the term}
++_Avoid_: Purchase, transaction
++
++**Invoice**:
++A request for payment sent to a customer after delivery.
++_Avoid_: Bill, payment request
++
++**Customer**:
++A person or organization that places orders.
++_Avoid_: Client, buyer, account
++```
++
++## Rules
++
++- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
++- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
++- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
++- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
++
++## Single vs multi-context repos
++
++**Single context (most repos):** One `GLOSSARY.md` at the repo root.
++
++**Multiple contexts:** A `GLOSSARY-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
++
++```md
++# Glossary Map
++
++## Contexts
++
++- [Ordering](./src/ordering/GLOSSARY.md): receives and tracks customer orders
++- [Billing](./src/billing/GLOSSARY.md): generates invoices and processes payments
++- [Fulfillment](./src/fulfillment/GLOSSARY.md): manages warehouse picking and shipping
++
++## Relationships
++
++- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
++- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
++- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
++```
++
++The skill infers which structure applies:
++
++- If `GLOSSARY-MAP.md` exists, read it to find contexts
++- If only a root `GLOSSARY.md` exists, single context
++- If neither exists, create a root `GLOSSARY.md` lazily when the first term is resolved
++
++When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+--- a/.agents/skills/domain-modeling/SKILL.md
++++ b/.agents/skills/domain-modeling/SKILL.md
+@@ -3 +3 @@
+-description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR.
++description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a GLOSSARY.md, or recording or editing an ADR.
+@@ -8 +8 @@
+-Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
++Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `GLOSSARY.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
+@@ -16 +16 @@
+-├── CONTEXT.md
++├── GLOSSARY.md
+@@ -24 +24 @@
+-If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
++If a `GLOSSARY-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+@@ -28 +28 @@
+-├── CONTEXT-MAP.md
++├── GLOSSARY-MAP.md
+@@ -33 +33 @@
+-│   │   ├── CONTEXT.md
++│   │   ├── GLOSSARY.md
+@@ -36 +36 @@
+-│       ├── CONTEXT.md
++│       ├── GLOSSARY.md
+@@ -40 +40 @@
+-Create files lazily: only when you have something to write. If no `CONTEXT.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
++Create files lazily: only when you have something to write. If no `GLOSSARY.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
+@@ -46 +46 @@
+-When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y. Which is it?"
++When the user uses a term that conflicts with the existing language in `GLOSSARY.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y. Which is it?"
+@@ -60 +60 @@
+-### Update CONTEXT.md inline
++### Update GLOSSARY.md inline
+@@ -62 +62 @@
+-When a term is resolved, update `CONTEXT.md` right there. Don't batch these up: capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
++When a term is resolved, update `GLOSSARY.md` right there. Don't batch these up: capture them as they happen. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
+@@ -64 +64 @@
+-`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
++`GLOSSARY.md` should be totally devoid of implementation details. Do not treat `GLOSSARY.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+--- /dev/null
++++ b/.agents/skills/domain-modeling/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Domain Modeling"
++  short_description: "Build and sharpen a domain model"
+--- /dev/null
++++ b/.agents/skills/git-guardrails-claude-code/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Git Guardrails for Claude Code"
++  short_description: "Block dangerous git commands"
+--- /dev/null
++++ b/.agents/skills/grill-me/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Grill Me"
++  short_description: "Sharpen a plan through interview"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/grill-with-docs/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Grill with Docs"
++  short_description: "Grill a design and write its docs"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/grilling/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Grilling"
++  short_description: "Stress-test thinking a round of questions at a time"
+--- /dev/null
++++ b/.agents/skills/handoff/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Handoff"
++  short_description: "Compact a conversation into a handoff"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/implement/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Implement"
++  short_description: "Build work from a spec or tickets"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/implement-spec/SKILL.md
+@@ -0,0 +1,40 @@
++---
++name: implement-spec
++description: "Implement the result of /to-spec and /to-tickets in code."
++disable-model-invocation: true
++---
++
++You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
++
++The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
++
++The goal is the entire spec implemented on a single **integration branch**, with every ticket resolved the way the issue tracker closes work.
++
++The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
++
++Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
++
++**Implementer subagents** should be run in the background where possible for maximum concurrency.
++
++## Steps
++
++1. Read the spec and tickets to understand the task graph.
++
++2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, accessible by all future subagents. This lets **implementer subagents** focus on implementation rather than exploration.
++
++3. Create the integration branch. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
++
++4. Use **implementer subagents** to implement each ticket, each in its own worktree on its own branch. Each implementer subagent:
++   - confirms its worktree is based on the integration branch before starting, and resets onto it if not;
++   - calls the Skill tool with `tdd` to build the ticket;
++   - merges the integration branch tip into its own branch before reporting done
++
++5. Once an **implementer subagent** completes, merge its work to the integration branch with a **merger subagent**.
++
++6. If this changes the **frontier** of available tickets, kick off more **implementer subagents** to work on the new tickets. This allows for maximum concurrency.
++
++7. Once all tickets are complete, call the Skill tool with `code-review` on the integration branch. Fix all issues raised by the code review in a single **implementer subagent**.
++
++8. If a draft PR exists, mark it ready for review. Otherwise, resolve each ticket the way the issue tracker closes work, and report the integration branch.
++
++9. Clean up all **implementer subagent** worktrees.
+--- /dev/null
++++ b/.agents/skills/implement-spec/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Implement Spec"
++  short_description: "Implement the result of /to-spec and /to-tickets in code."
++policy:
++  allow_implicit_invocation: false
+--- a/.agents/skills/improve-codebase-architecture/SKILL.md
++++ b/.agents/skills/improve-codebase-architecture/SKILL.md
+@@ -14 +14 @@
+-- The domain language in `CONTEXT.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
++- The domain language in `GLOSSARY.md` gives names to good seams; ADRs in `docs/adr/` record decisions this command should not re-litigate.
+@@ -25 +25 @@
+-Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first.
++Read the project's domain glossary (`GLOSSARY.md`) and any ADRs in the area you're touching first.
+@@ -54 +54 @@
+-**Use CONTEXT.md vocabulary for the domain, and the `/codebase-design` vocabulary for the architecture.** If `CONTEXT.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
++**Use GLOSSARY.md vocabulary for the domain, and the `/codebase-design` vocabulary for the architecture.** If `GLOSSARY.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
+@@ -68,2 +68,2 @@
+-- **Naming a deepened module after a concept not in `CONTEXT.md`?** Add the term to `CONTEXT.md`. Create the file lazily if it doesn't exist.
+-- **Sharpening a fuzzy term during the conversation?** Update `CONTEXT.md` right there.
++- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Add the term to `GLOSSARY.md`. Create the file lazily if it doesn't exist.
++- **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
+--- /dev/null
++++ b/.agents/skills/improve-codebase-architecture/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Improve Codebase Architecture"
++  short_description: "Find and grill architecture improvements"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/loop-me/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Loop Me"
++  short_description: "Spec the workflows you want to build"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/migrate-to-shoehorn/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Migrate to Shoehorn"
++  short_description: "Replace test assertions with shoehorn"
+--- /dev/null
++++ b/.agents/skills/pr/CREDITS.md
+@@ -0,0 +1,3 @@
++# Credits
++
++The **Summary** section's menu of visuals (pseudocode, call trees, component trees, file trees, Mermaid, diffs) and its placement guidance come from [Dex Horthy](https://github.com/dexhorthy)'s [`show-me`](https://github.com/humanlayer/humanlayer) skill, reproduced almost word for word and aimed at a diff instead of a live conversation. `pr` does not depend on `show-me` as a skill (it isn't part of this repo, and a hard dependency would break standalone installs), so the content is copied in rather than pointed at; this file is the attribution a dependency would otherwise have carried.
+--- /dev/null
++++ b/.agents/skills/pr/SKILL.md
+@@ -0,0 +1,170 @@
++---
++name: pr
++description: "Use when writing a PR body."
++metadata:
++  credits:
++    skill: show-me
++    author: Dex Horthy
++    organisation: Humanlayer
++    url: "https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md"
++---
++
++Use this template for writing the PR body:
++
++```markdown
++## Summary
++
++<diagram, diff-sketch, or tree>
++
++## Evidence
++
++- **Before:** <screenshot/output/failing test run>
++  **After:** <screenshot/output/passing test run>
++
++## Merge Danger
++
++**Door:** <one-way or two-way>
++
++<optional: description>
++
++**Blast Radius:** <one-word description>
++
++<optional: potential ramifications of merge>
++```
++
++## Sections
++
++Skip all preambles and keep prose brief. Use the user's domain language from `GLOSSARY.md`.
++
++### Summary
++
++Pick the smallest view that makes the key point clear.
++
++- Show logic or an algorithm as pseudocode:
++
++```text
++on(save)
++  if content is unchanged
++    return cached result
++  write new content
++  return fresh result
++```
++
++- Show runtime control flow as a call tree:
++
++```text
++submitForm
++  createSession
++    persistPrompt
++    launchAgent
++  navigateToSession
++```
++
++- Show UI structure as a component tree, including state and module boundaries that matter:
++
++```text
++<SessionPage> (apps/example/src/routes/session.tsx)
++  useSessionEvents()
++  <SessionToolbar>
++    <RunSkillButton> (packages/ui)
++```
++
++- Show file responsibility or a broad refactor as a shallow file tree:
++
++```text
++src/
++├── commands/       # parses user actions
++├── sessions/       # owns session state
++└── transport/      # sends API requests
++```
++
++- Show component interaction, control flow, or data flow with Mermaid:
++
++```mermaid
++sequenceDiagram
++    participant User
++    participant UI
++    participant Daemon
++    User->>UI: choose command
++    UI->>Daemon: send expanded prompt
++    Daemon-->>UI: stream result
++```
++
++- Use `diff` when the point is what changes and the surrounding shape already exists. Match the diff shape to the topic.
++
++For a component change:
++
++```diff
++ <SessionPage>
++   useSessionEvents()
++   <SessionToolbar>
+++    <RunSkillButton />
++   <SessionTimeline>
+++    <SkillResultCard />
++```
++
++For a file-layout change:
++
++```diff
++ src/
++ ├── commands/
+++│   └── show-me.ts       # expands the slash command
++ ├── sessions/
++-└── transport.ts
+++└── transport/
+++    ├── client.ts
+++    └── stream.ts
++```
++
++For a call-tree or call-stack change:
++
++```diff
++ submitForm
++   createSession
++     persistPrompt
+++    expandSkillMention
++     launchAgent
++-  navigateToSession
+++  navigateToSession
+++    subscribeToEvents
++```
++
++For a state or control-flow change:
++
++```diff
++ on(save)
++-  write content
+++  if content is unchanged
+++    return cached result
+++  write new content
+++  invalidate cache
++```
++
++- Show the whole block when most of it is new, when omitted context would hide ownership or order, or when the user needs a copyable target shape:
++
++```ts
++function expandSkill(command: string): string {
++  const skillName = command.slice(1);
++  return `use the ${skillName} skill`;
++}
++```
++
++#### Guidance
++
++Place each visual next to the short text it supports. Keep only the calls, files, props, states, and boundaries needed to answer the user's current question or the options to resolve the current discussion point.
++
++You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user.
++
++### Evidence
++
++Concrete evidence that the change works. Show a before and after.
++
++Screenshots are S-tier - when the environment is set up for it and the change is visual.
++
++Execution-based evidence is A-tier. Test results, console output. Show the exact test that now fails and passes, using pseudocode.
++
++### Merge Danger
++
++Describe whether it's a one-way or two-way door. You can walk back through two-way doors, but not one-way doors. A PR that is cheap to roll back is lower risk. Changes that involve destructive actions or hard-to-reverse decisions are one-way doors.
++
++The blast radius is the potential impact or scope of the changes introduced by this PR. Consider all possibilities. Examples are layout shift, breakages for consumers, mobile responsiveness, etc.
+--- /dev/null
++++ b/.agents/skills/pr/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "PR"
++  short_description: "Write a PR body that's fast to review"
+--- /dev/null
++++ b/.agents/skills/prototype/LOGIC.md
+@@ -0,0 +1,67 @@
++# Logic Prototype
++
++A single, self-contained HTML file (a **shareable demo**) that lets anyone drive a state model by clicking buttons. Use this when the question is about **business logic, state transitions, or data shape**: the kind of thing that looks reasonable on paper but only feels wrong once you push it through real cases.
++
++Because it's one file with nothing to install, you can hand it to a non-developer (a designer, a PM, a domain expert) and let them feel the model for themselves. So it speaks their language, not the code's.
++
++## When this is the right shape
++
++- "I'm not sure if this state machine handles the edge case where X then Y."
++- "Does this data model actually let me represent the case where..."
++- "I want to feel out what the API should look like before writing it."
++- Anything where someone wants to **press buttons and watch state change**.
++
++If the question is "what should this look like," this is the wrong branch. Use [UI.md](UI.md).
++
++## Process
++
++### 1. State the question
++
++Before writing code, write down what state model and what question you're prototyping. One paragraph, at the top of the demo (in a visible intro, not just a comment). A logic prototype that answers the wrong question is pure waste, so make the question explicit so it can be checked later, whether the user is watching now or returning to it AFK.
++
++### 2. Isolate the logic in a portable module
++
++Put the actual logic (the bit that's answering the question) in a single `<script>` block written as a small, pure module that could be lifted out and dropped into the real codebase later. The page around it is throwaway; this module isn't.
++
++The right shape depends on the question:
++
++- **A pure reducer**: `(state, action) => state`. Good when actions are discrete events and state is a single value.
++- **A state machine**: explicit states and transitions. Good when "which actions are even legal right now" is part of the question.
++- **A small set of pure functions** over a plain data type. Good when there's no implicit current state, just transformations.
++- **A class or module with a clear method surface** when the logic genuinely owns ongoing internal state.
++
++Pick whichever shape best fits the question being asked, *not* whichever is easiest to wire to a page. Keep it pure: no DOM, no `document`, no button handlers reaching inside it. The page calls into it; nothing flows the other direction. This is what makes the prototype useful past its own lifetime: once the question's answered, the validated reducer / machine / function set lifts into the real module on its own.
++
++### 3. Build the shareable HTML file
++
++One file, plain HTML/CSS/JS: no framework, no bundler, no server, everything inline so it opens by double-click and survives being emailed around. Anyone should be able to run it by opening it.
++
++Write it for a non-developer. Every label is in **domain language**, not code: buttons and state read like the business, not the reducer. Explain in plain words what's happening.
++
++Lay it out with a clean hierarchy, top to bottom:
++
++1. **Title and one-line explanation** of what this demo lets you explore (the question from step 1).
++2. **Current state**: the full relevant state, rendered as a readable panel (labelled fields, not a raw JSON dump), re-rendered after every click so the change is visible. Where it helps a non-developer follow, call out what just changed.
++3. **Free-play buttons**: one button per action, always available, so anyone can poke at the model in any order. Each click dispatches its action and re-renders the state.
++4. **Guided walkthroughs**: a set of **scenarios**, one per tab. Each tab holds a short plain-language description of the scenario (the situation it sets up and what to watch for) and underneath it, the ordered **buttons to press** for that scenario. Each step is a real button: clicking it performs that action and moves to the next step. Starting a walkthrough resets to a known initial state so the scenario runs the same way every time.
++
++Choose scenarios that demonstrate the awkward cases, the ones hard to reason about on paper: the happy path, a tricky edge case, an attempt at something that should be illegal.
++
++Keep it beautiful but restrained: clean typography, generous spacing, one accent colour. No animations, no gimmicks: nothing that competes with the state and the buttons.
++
++### 4. Hand it over
++
++Send them the file, or open it for them. They'll click through the walkthroughs and free-play whenever they get to it; the interesting moments are when they say "wait, that shouldn't be possible" or "huh, I assumed X would be different"; those are the bugs in the _idea_, which is the whole point. If they want new actions or a new scenario, add them. Prototypes evolve.
++
++### 5. Capture the answer and the prototype
++
++Once the prototype has answered its question, capture the answer, then capture the prototype the way the [SKILL](SKILL.md) describes. The logic-specific mapping: the validated reducer / machine / function set lifts into the real module (the decision, absorbed); the HTML shell rides along to the throwaway branch that keeps the prototype as a primary source, and being one self-contained file, it stays trivially re-runnable there.
++
++## Anti-patterns
++
++- **Don't add tests.** A prototype that needs tests is no longer a prototype.
++- **Don't wire it to the real database.** Use in-memory state unless the question is specifically about persistence.
++- **Don't generalise.** No "what if we wanted to support X later." The prototype answers one question.
++- **Don't blur the logic and the page together.** If the pure module references the DOM, `document`, or button handlers, it's no longer liftable. Keep the page as a thin shell over a pure module.
++- **Don't reach for a framework, bundler, or server.** One file the recipient double-clicks; a React app or a dev server defeats "shareable".
++- **Don't ship the HTML shell into production.** The page is optimised for being clicked through by hand. The logic module behind it is the bit worth keeping.
+--- /dev/null
++++ b/.agents/skills/prototype/SKILL.md
+@@ -0,0 +1,26 @@
++---
++name: prototype
++description: Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like.
++---
++
++# Prototype
++
++A prototype is **throwaway code that answers a question**. The question decides the shape.
++
++## Pick a branch
++
++Identify which question is being answered, using the user's prompt, the surrounding code, or by asking if the user is around:
++
++- **"Does this logic / state model feel right?"** → [LOGIC.md](LOGIC.md). Build a single shareable HTML file (free-play buttons plus tabbed guided walkthroughs) that pushes the state machine through cases that are hard to reason about on paper, and that a non-developer can drive.
++- **"What should this look like?"** → [UI.md](UI.md). Generate several radically different UI variations on a single route, switchable via a URL search param and a floating bottom bar.
++
++The two branches produce very different artifacts, so getting this wrong wastes the whole prototype. If the question is genuinely ambiguous and the user isn't reachable, default to whichever branch better matches the surrounding code (a backend module → logic; a page or component → UI) and state the assumption at the top of the prototype.
++
++## Rules that apply to both
++
++1. **Throwaway from day one, and clearly marked as such.** Locate the prototype code close to where it will actually be used (next to the module or page it's prototyping for) so context is obvious, but name it so a casual reader can see it's a prototype, not production. For throwaway UI routes, obey whatever routing convention the project already uses; don't invent a new top-level structure.
++2. **Trivial to run.** A UI prototype starts from one command in the project's task runner: `pnpm <name>`, `python <path>`, `bun <path>`, etc. A logic demo is a single HTML file the user double-clicks. Either way, no thinking required to start it.
++3. **No persistence by default.** State lives in memory. Persistence is the thing the prototype is _checking_, not something it should depend on. If the question explicitly involves a database, hit a scratch DB or a local file with a clear "PROTOTYPE, wipe me" name.
++4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
++5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
++6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: commit it to a throwaway branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too (the verdict and the question it settled) in the issue or a commit. The main branch keeps only the validated decision.
+--- /dev/null
++++ b/.agents/skills/prototype/UI.md
+@@ -0,0 +1,112 @@
++# UI Prototype
++
++Generate **several radically different UI variations** on a single route, switchable from a floating bottom bar. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
++
++If the question is about logic/state rather than what something looks like, this is the wrong branch. Use [LOGIC.md](LOGIC.md).
++
++## When this is the right shape
++
++- "What should this page look like?"
++- "I want to see a few options for this dashboard before committing."
++- "Try a different layout for the settings screen."
++- Any time the user would otherwise spend a day picking between three vague mockups in their head.
++
++## Two sub-shapes: strongly prefer sub-shape A
++
++A UI prototype is much easier to judge when it's **butting up against the rest of the app**: real header, real sidebar, real data, real density. A throwaway route on its own is a vacuum: every variant looks fine in isolation. Default to sub-shape A whenever there's a plausible existing page to host the variants. Only reach for sub-shape B if the prototype genuinely has no nearby home.
++
++### Sub-shape A: adjustment to an existing page (preferred)
++
++The route already exists. Variants are rendered **on the same route**, gated by a `?variant=` URL search param. The existing data fetching, params, and auth all stay. Only the rendering swaps. This is the default; pick it unless there's a specific reason not to.
++
++If the prototype is for something that doesn't yet have a page but *would naturally live inside one* (a new section of the dashboard, a new card on the settings screen, a new step in an existing flow), it's still sub-shape A. Mount the variants inside the host page.
++
++### Sub-shape B: a new page (last resort)
++
++Only use this when the thing being prototyped genuinely has no existing page to live inside (e.g. an entirely new top-level surface, or a flow that can't be embedded anywhere sensible).
++
++Create a **throwaway route** following whatever routing convention the project already uses. Don't invent a new top-level structure. Name it so it's obviously a prototype (e.g. include the word `prototype` in the path or filename). Same `?variant=` pattern.
++
++Before committing to sub-shape B, sanity-check: is there really no existing page this could be embedded in? An empty route hides design problems that a populated one would expose.
++
++In both sub-shapes the floating bottom bar is identical.
++
++## Process
++
++### 1. State the question and pick N
++
++Default to **3 variants**. More than 5 stops being radically different and starts being noise, so cap there.
++
++Write down the plan in one line, in the prototype's location or a top-of-file comment:
++
++> "Three variants of the settings page, switchable via `?variant=`, on the existing `/settings` route."
++
++This works whether the user is here to push back or not.
++
++### 2. Generate radically different variants
++
++Draft each variant. Hold each one to:
++
++- The page's purpose and the data it has access to.
++- The project's component library / styling system (TailwindCSS, shadcn, MUI, plain CSS, whatever).
++- A clear exported component name, e.g. `VariantA`, `VariantB`, `VariantC`.
++
++Variants must be **structurally different**: different layout, different information hierarchy, different primary affordance, not just different colours. Three slightly-tweaked card grids isn't a UI prototype, it's wallpaper. If two drafts come out too similar, redo one with explicit "do not use a card grid" guidance.
++
++### 3. Wire them together
++
++Create a single switcher component on the route:
++
++```tsx
++// pseudo-code, adapt to the project's framework
++const variant = searchParams.get('variant') ?? 'A';
++return (
++  <>
++    {variant === 'A' && <VariantA {...data} />}
++    {variant === 'B' && <VariantB {...data} />}
++    {variant === 'C' && <VariantC {...data} />}
++    <PrototypeSwitcher variants={['A','B','C']} current={variant} />
++  </>
++);
++```
++
++For sub-shape A (existing page): keep all the existing data fetching above the switcher; only the rendered subtree changes per variant.
++
++For sub-shape B (new page): the throwaway route under `/prototype/<name>` mounts the same switcher.
++
++### 4. Build the floating switcher
++
++A small fixed-position bar at the bottom-centre of the screen with three pieces:
++
++- **Left arrow**: cycles to the previous variant (wraps around).
++- **Variant label**: shows the current variant key and, if the variant exports a name, that name too. e.g. `B (Sidebar layout)`.
++- **Right arrow**: cycles forward (wraps around).
++
++Behaviour:
++
++- Clicking an arrow updates the URL search param (use the framework's router, e.g. `router.replace` on Next, `navigate` on React Router, etc) so the variant is shareable and reload-stable.
++- Keyboard: `←` and `→` arrow keys also cycle. Don't intercept arrow keys when an `<input>`, `<textarea>`, or `[contenteditable]` is focused.
++- Visually distinct from the page (e.g. high-contrast pill, subtle shadow) so it's obviously not part of the design being evaluated.
++- Hidden in production builds: gate on `process.env.NODE_ENV !== 'production'` or an equivalent check, so a stray prototype merge can't ship the bar to users.
++
++Put the switcher in a single shared component so both sub-shapes can reuse it. Locate it wherever shared UI lives in the project.
++
++### 5. Hand it over
++
++Surface the URL (and the `?variant=` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"**, which is the actual design they want.
++
++### 6. Capture the answer and clean up
++
++Once a variant has won, capture the answer (which variant and why), then capture the prototype the way the [SKILL](SKILL.md) describes. Fold the winner into the real code and move the rest onto the throwaway branch, not into main:
++
++- **Sub-shape A**: fold the winner into the existing page; drop the losing variants and the switcher from main.
++- **Sub-shape B**: promote the winning variant to a real route; drop the throwaway route and the switcher from main.
++
++The full set of variants is the primary source, so it lands on the throwaway branch, not the bin, since variant components and the switcher left in the main branch rot fast and confuse the next reader.
++
++## Anti-patterns
++
++- **Variants that differ only in colour or copy.** That's a tweak, not a prototype. Real variants disagree about structure.
++- **Sharing too much code between variants.** A shared `<Header>` is fine; a shared `<Layout>` defeats the point. Each variant should be free to throw out the layout.
++- **Wiring variants to real mutations.** Read-only prototypes are fine. If a variant needs to mutate, point it at a stub: the question is "what should this look like", not "does the backend work".
++- **Promoting the prototype directly to production.** The variant code was written under prototype constraints (no tests, minimal error handling). Rewrite it properly when you fold it in.
+--- /dev/null
++++ b/.agents/skills/prototype/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Prototype"
++  short_description: "Prototype to answer a design question"
+--- /dev/null
++++ b/.agents/skills/research/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Research"
++  short_description: "Research from high-trust sources"
+--- a/.agents/skills/resolving-merge-conflicts/SKILL.md
++++ /dev/null
+@@ -1,14 +0,0 @@
+----
+-name: resolving-merge-conflicts
+-description: "Use when you need to resolve an in-progress git merge/rebase conflict."
+----
+-
+-1. **See the current state** of the merge/rebase. Check git history, and the conflicting files.
+-
+-2. **Find the primary sources** for each conflict. Understand deeply why each change was made, and what the original intent was. Read the commit messages, check the PRs, check original issues/tickets.
+-
+-3. **Resolve each hunk.** Preserve both intents where possible. Where incompatible, pick the one matching the merge's stated goal and note the trade-off. Do **not** invent new behaviour. Always resolve; never `--abort`.
+-
+-4. Discover the project's **automated checks** and run them, typically typecheck, then tests, then format. Fix anything the merge broke.
+-
+-5. **Finish the merge/rebase.** Stage everything and commit. If rebasing, continue the rebase process until all commits are rebased.
+--- /dev/null
++++ b/.agents/skills/retro/SKILL.md
+@@ -0,0 +1,44 @@
++---
++name: retro
++description: "Conduct a retrospective on a coding session."
++disable-model-invocation: true
++---
++
++The user has asked for a **retrospective**. You are suggesting improvements to the coding agent's **environment** to improve future runs.
++
++## Steps
++
++1. Call the Skill tool with `writing-for-agents` for the writing style guide.
++
++2. Read the primary sources for the session the user specifies. This may mean searching through session logs on this machine. If the user doesn't specify a session, default to the current one.
++
++3. Look for candidates for improvement in these categories.
++
++- **Navigation**: how easy was it for the agent to find the right files? Are there hidden dependencies between files? Would a **navigation pointer** make it easier? _Use when_ the session took a long time to find a piece of information.
++- **Automated checks**: are there automated checks that could catch errors the agent made? Linting, typing, tests, filesystem linters? Read the repo's own check command first (its `package.json`/build-tool `lint`/`check` scripts, its CI workflow), so a check that already exists but sits unwired or silently broken is the finding, not a reinvention. A repo with no **guardrail** (no pre-commit hook and no CI job running its lint/typecheck/test command) is itself a finding: an un-linted repo is a standing missed opportunity, not a neutral default. _Use when_ the agent made a mistake an automated check could have caught, or the repo has no guardrail at all.
++- **Coding standards**: should the **reviewer agent** be given a new rule to enforce? Should an existing rule be removed or clarified? Classify the violation first: a **mechanical** one (a fixed syntactic pattern, a banned API, an import shape, a file-location rule) gets a deterministic check, full stop: a custom rule in the repo's own linter, a new pre-commit hook, or a new CI job, whichever the repo's language and existing guardrail make cheapest. Default to building the check over writing the rule. Reserve `CODING_STANDARDS.md` for genuine **judgement calls** (cross-file consistency, "matches the surrounding style," anything no guardrail could ever substitute for). _Use when_ the reviewer agent failed to catch a mistake.
++- **Global AGENTS.md**: are there any steering instructions that should be moved to coding standards (or automated checks) instead? _Use when_ the AGENTS.md file is particularly large - in the repo OR the user's global scope.
++- **Tool economy**: did the agent make expensive tool calls that could be streamlined? Is there any custom tooling (CLI's, MCP's) that is particularly token-inefficient? _Use when_ the agent made an expensive tool call.
++- **No-ops**: look for instructions in steering files that don't modify the agent's behavior. _Use when_ the steering files are large and unwieldy.
++- **Information access**: look for opportunities to increase the agent's access to information. Teeing dev server logs, readonly access to third-party services. _Use when_ a crucial piece of information was not available to the agent.
++
++4. Present these candidates to the user, in order of severity.
++
++## Reference
++
++### Implementation vs Review
++
++Remember that all work goes through two stages: implementation and review. The implementation agent has the most **context pressure**. They are responsible for exploration, writing code, and debugging failures.
++
++The review agent has the least context pressure - it receives a diff, so no exploration needed. It often does not need to write code or debug.
++
++This means that the review agent should be responsible for imposing coding standards, not the implementation agent.
++
++### Files
++
++You have access to several files in the repo:
++
++- `CLAUDE.md`/`AGENTS.md`: these files are pushed to the context window of any agent working in this repo. They should be used incredibly sparingly, usually only for **navigation pointers** to other files.
++- `CODING_STANDARDS.md`: this file is read during review, not implementation. Add **navigation pointers** to docs folders if the standards file gets more than 1,000 lines long.
++- Docs: use docs as references files, pointed to by other files. Look for existing docs before writing new ones.
++- Skills: use skills for docs (since their description goes into the agent's context window), or for user-invoked commands. Follow the advice in the `writing-for-agents` skill.
+--- /dev/null
++++ b/.agents/skills/retro/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Retro"
++  short_description: "Conduct a retrospective on a coding session."
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/scaffold-exercises/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Scaffold Exercises"
++  short_description: "Scaffold lint-ready course exercises"
+--- a/.agents/skills/setup-matt-pocock-skills/SKILL.md
++++ b/.agents/skills/setup-matt-pocock-skills/SKILL.md
+@@ -13 +13 @@
+-- **Domain docs**: where `CONTEXT.md` and ADRs live, and the consumer rules for reading them
++- **Domain docs**: where `GLOSSARY.md` and ADRs live, and the consumer rules for reading them
+@@ -25 +25 @@
+-- `CONTEXT.md` and `CONTEXT-MAP.md` at the repo root
++- `GLOSSARY.md` and `GLOSSARY-MAP.md` at the repo root
+@@ -59 +59 @@
+-**Section C: Domain docs.** Default to **single-context** (one `CONTEXT.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
++**Section C: Domain docs.** Default to **single-context** (one `GLOSSARY.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
+@@ -61 +61 @@
+-Offer **multi-context** (a root `CONTEXT-MAP.md` pointing to per-context `CONTEXT.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
++Offer **multi-context** (a root `GLOSSARY-MAP.md` pointing to per-context `GLOSSARY.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
+--- /dev/null
++++ b/.agents/skills/setup-matt-pocock-skills/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Setup Matt Pocock Skills"
++  short_description: "Configure a repo for the skills"
++policy:
++  allow_implicit_invocation: false
+--- a/.agents/skills/setup-matt-pocock-skills/domain.md
++++ b/.agents/skills/setup-matt-pocock-skills/domain.md
+@@ -7,2 +7,2 @@
+-- **`CONTEXT.md`** at the repo root, or
+-- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
++- **`GLOSSARY.md`** at the repo root, or
++- **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
+@@ -19 +19 @@
+-├── CONTEXT.md
++├── GLOSSARY.md
+@@ -26 +26 @@
+-Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
++Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
+@@ -30 +30 @@
+-├── CONTEXT-MAP.md
++├── GLOSSARY-MAP.md
+@@ -34 +34 @@
+-    │   ├── CONTEXT.md
++    │   ├── GLOSSARY.md
+@@ -37 +37 @@
+-        ├── CONTEXT.md
++        ├── GLOSSARY.md
+@@ -43 +43 @@
+-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
++When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
+--- /dev/null
++++ b/.agents/skills/setup-pre-commit/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Setup Pre-Commit"
++  short_description: "Add pre-commit quality checks"
+--- /dev/null
++++ b/.agents/skills/setup-ts-deep-modules/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Setup TS Deep Modules"
++  short_description: "Enforce deep TypeScript modules"
++policy:
++  allow_implicit_invocation: false
+--- a/.agents/skills/tdd/SKILL.md
++++ b/.agents/skills/tdd/SKILL.md
+@@ -10 +10 @@
+-When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
++When exploring the codebase, read `GLOSSARY.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
+--- /dev/null
++++ b/.agents/skills/tdd/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "TDD"
++  short_description: "Test-driven red-green-refactor"
+--- /dev/null
++++ b/.agents/skills/teach/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Teach"
++  short_description: "Learn a concept in a guided workspace"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/to-questionnaire/SKILL.md
+@@ -0,0 +1,54 @@
++---
++name: to-questionnaire
++description: Turn a decision you can't fully answer into a questionnaire for someone else to fill in.
++disable-model-invocation: true
++---
++
++Turn something the user can't answer alone into a **questionnaire**: a Markdown document they hand to one person to fill in async, or fill out together over a meeting. The recipient holds knowledge the user lacks; the questionnaire pulls it out of them.
++
++**Grill the send, not the subject.** Interview the user only about the _send_, which they can always answer: who it goes to, and what they need back. The questions in the document then target the **gap** between what the recipient knows and what the user needs.
++
++
++1. **Who is it going to?** Ask, in one exchange, the recipient's role, expertise, and relationship to the user. This fixes the questionnaire's tone and how much context it must carry. Done when you know who the recipient is and what they know that the user doesn't.
++
++2. **What do you need back?** Ask, in one exchange, the specific decisions or facts the user can't resolve alone and needs from this person. Done when you have a concrete list of what the user must walk away able to do or decide.
++
++3. **Write the questionnaire.** Draft questions aimed at the gap from steps 1–2, following the Document structure below. Write it to `to-questionnaire-<slug>.md` in the current directory (slug from the topic) and report the path. Done when the file exists and every item the user named in step 2 is covered by a question.
++
++## Document structure
++
++Frame the document as a **discovery questionnaire**: the user lacks context, the recipient holds it. Order questions most-important-first, since async means you may only get one pass, and group them under `##` headings by theme once there are more than a handful. Write it using the template below.
++
++<questionnaire-template>
++
++# <Questionnaire title>
++
++**Purpose:** why this questionnaire exists and the decision riding on it.
++
++**From:** <the user>, **To:** <the recipient>, **How your answers will be used:** <where they go>
++
++## Context
++
++One paragraph orienting a recipient who wasn't in the user's head. Enough to answer well, not a page.
++
++## How to answer
++
++Deadline and rough effort. Partial answers and "I don't know" are useful: flag anything you're unsure of rather than skipping it.
++
++## <Theme heading>
++
++One `##` section per theme. Under each, its questions, most-important-first. Every question is one idea, never compound, with an answer stub directly beneath, and a one-line _why this matters_ only where the question could be misread or invite a throwaway answer.
++
++<question-example>
++### What load is the system expected to handle at launch?
++
++_Why this matters: it decides whether we provision for burst traffic now or defer it._
++
++>
++</question-example>
++
++## Anything else?
++
++A closing catch-all: anything we didn't ask that we should know?
++
++</questionnaire-template>
+--- /dev/null
++++ b/.agents/skills/to-questionnaire/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "To Questionnaire"
++  short_description: "Front-load questions into a doc for someone to answer"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/to-spec/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "To Spec"
++  short_description: "Turn a conversation into a spec"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/to-tickets/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "To Tickets"
++  short_description: "Split a plan into tracer-bullet tickets"
++policy:
++  allow_implicit_invocation: false
+--- a/.agents/skills/triage/SKILL.md
++++ b/.agents/skills/triage/SKILL.md
+@@ -76 +76 @@
+-4. **Grill (if needed).** If the request needs fleshing out, call the Skill tool twice, for "grilling" and "domain-modeling", and grill it into shape a round of questions at a time, sharpening domain terms and updating `CONTEXT.md`/ADRs inline as decisions land.
++4. **Grill (if needed).** If the request needs fleshing out, call the Skill tool twice, for "grilling" and "domain-modeling", and grill it into shape a round of questions at a time, sharpening domain terms and updating `GLOSSARY.md`/ADRs inline as decisions land.
+--- /dev/null
++++ b/.agents/skills/triage/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Triage"
++  short_description: "Move issues through triage roles"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/wait-what/SKILL.md
+@@ -0,0 +1,7 @@
++---
++name: wait-what
++description: "Stop. That last message did not land: re-pitch it."
++disable-model-invocation: true
++---
++
++Wait, I don't understand where you've got to here. Re-pitch that: give me a little bit of context, talk in ASD-STE100 Simplified Technical English, and use the ubiquitous language from `GLOSSARY.md` (follow `GLOSSARY-MAP.md` to the right one if the repo has more than one).
+--- /dev/null
++++ b/.agents/skills/wait-what/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Wait What"
++  short_description: "Re-pitch that: simpler, with the context I'm missing"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/wayfinder/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Wayfinder"
++  short_description: "Map a large effort as decision tickets"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/wizard/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Wizard"
++  short_description: "Generate an interactive setup wizard"
+--- /dev/null
++++ b/.agents/skills/writing-beats/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Writing Beats"
++  short_description: "Assemble raw material into beats"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/writing-for-agents/SKILL-MECHANICS.md
+@@ -0,0 +1,22 @@
++# Skill mechanics
++
++The skill-specific branch of [`writing-for-agents`](SKILL.md): what changes when the document is a skill (frontmatter, the invocation choice, and router skills). Everything else about writing it is the universal reference in `SKILL.md`.
++
++## Invocation
++
++Two choices, trading the two loads:
++
++- A **model-invoked** skill keeps a `description`, so the agent can fire it autonomously, and other skills can reach it. You can still type its name: model-invocation always _includes_ user reach; a description only ever adds agent discovery, never removes the human's. The description is the skill's top-level context pointer, forced to stay loaded at all times: permanent context load in exchange for discoverability. A model-invoked skill whose content is all reference is also one home for shared reference: another skill can invoke it, so reference needed by several skills lives in one place. Mechanics: omit `disable-model-invocation`, and write a model-facing description carrying the trigger branches (the pointer-writing rules in `SKILL.md` apply in full).
++- A **user-invoked** skill strips the description from the agent's reach: only the human typing its name can invoke it, and no other skill can. Zero context load, but it spends cognitive load: you are the index that must remember it exists. Mechanics: set `disable-model-invocation: true`; the `description` becomes human-facing: a one-line summary, trigger lists stripped.
++
++Pick model-invocation only when the agent must reach the skill on its own, or another skill must. If it only ever fires by hand, make it user-invoked and pay no context load.
++
++Shared reference that two user-invoked skills both need can live in neither: with no descriptions, neither can fire the other. Push it to a plain file outside the skill system: external reference any skill can point at.
++
++## Splitting by invocation
++
++The invocation cut of splitting (the sequence cut lives in `SKILL.md`): split off a model-invoked skill when you have a distinct leading word that should trigger it on its own (a trigger word you actually use in your prompts), or another skill must reach it. You pay context load for the new always-loaded description, so that independent reach has to be worth it.
++
++## Router skills
++
++When user-invoked skills multiply past what you can remember, that piled-up cognitive load is cured by a **router skill**: one user-invoked skill that names the others and when to reach for each, so the human has one skill to remember instead of many. It can only hint, never fire them: user-invoked skills have no description, so nothing but the human can reach them.
+--- /dev/null
++++ b/.agents/skills/writing-for-agents/SKILL.md
+@@ -0,0 +1,81 @@
++---
++name: writing-for-agents
++description: Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md.
++---
++
++Reference for writing any document an agent consumes: a skill, an `AGENTS.md` / `CLAUDE.md`, a doc reached by a pointer. The packaging differs; the writing does not: the same levers make each one predictable, since the agent takes the same _process_ every run rather than producing the same output.
++
++When the document you're writing is a skill, read [`SKILL-MECHANICS.md`](SKILL-MECHANICS.md) for frontmatter, invocation choice, and router skills.
++
++## Context pointers
++
++A **context pointer** is a reference held in the agent's context that names some out-of-context material and encodes the condition for reaching it. A skill's description is one; a line in `AGENTS.md` naming a doc is the same object. The pointer's _wording_, not its target, decides when the agent reaches the material, and how reliably. A must-have target behind a weakly worded pointer is a variance bug: sharpen the wording first, and inline the material only if sharpening fails.
++
++A pointer does two jobs: state what the material is, and list the **branches** that should trigger reaching it (a branch is a distinct case the document handles, so different runs take different paths through it). Every word of an always-loaded pointer costs on every turn, so it earns even harder pruning than the body:
++
++- **Front-load the leading word**: the pointer is where it does its triggering work.
++- **One trigger per branch.** Synonyms that rename a single branch are one branch written twice; collapse them and keep only genuinely distinct branches.
++- **Cut identity the body already carries.**
++
++## The two loads
++
++Every document and pointer you add spends one of two budgets:
++
++- **Context load** is the cost of always-loaded material on the agent's window: an `AGENTS.md` line, a skill description, anything sitting in context every turn, spending tokens and attention whether or not it fires.
++- **Cognitive load** is the cost on the human: which documents exist and when to reach for each. The human is the index. Not a cost to minimise: it is the price of human agency; spend it where human judgement matters, remove it where it does not.
++
++Material reached only through a pointer escapes context load at the price of the pointer's own line; material with no pointer at all rides entirely on cognitive load.
++
++## Information hierarchy
++
++A document is built from two content types: **steps** (the ordered actions the agent performs) and **reference** (definitions, rules, facts consulted on demand). The two mix freely: all steps (a recipe), all reference (a review's rules, this skill), or both. The core decision is where each piece sits on the **information hierarchy**, a ladder ranked by how immediately the agent needs the material:
++
++1. **In-file step** is the primary tier: what the agent does, in order.
++2. **In-file reference** is consulted on demand. Often a legitimately flat peer-set (every rule of a review on one rung), which is a fine arrangement, not a smell.
++3. **Disclosed reference** is pushed out into a separate file, reached by a context pointer, loaded only when the pointer fires. Spans a sibling file in the same folder through fully external reference that lives anywhere and any document can point at.
++
++Push too little down and the top bloats; push too much and you hide material the agent actually needs. That tension is the whole decision.
++
++**Progressive disclosure** is the move down the ladder (out of the main file and behind a pointer) so the top stays legible. Not primarily a token optimisation: it is how the hierarchy is protected. Branching is the cleanest disclosure test: inline what every branch needs, and push behind a pointer what only some branches reach. When a document has steps, in-file reference that should be disclosed buries them and turns attending to them into a coin-flip: a variance lever, not just a legibility one.
++
++**Co-location** is the within-file companion: where the ladder decides _how far down_ a piece sits, co-location decides _what sits beside it_ once there. Keep a concept's definition, rules, and caveats under one heading rather than scattered, so reading one part brings its neighbours with it. The test: the document should read like documentation written for the agent. Grouped material reads that way; scattered material does not. (Distinct from duplication: that repeats one meaning in two places; scattering fragments one meaning across many.)
++
++**Sprawl** is the failure mode here: a document simply too long, even when every line is live and unique. Attention thins across the excess, and every extra line is one more to keep relevant. The cure is the ladder: disclose reference behind pointers, and split by branch or sequence so each path carries only what it needs.
++
++## Steps and completion criteria
++
++Every step ends on a **completion criterion**, the condition that tells the agent the work is done. Two properties make it a lever:
++
++- **Clarity**: can the agent tell done from not-done? A vague bound ("understanding reached") invites **premature completion**: ending the step before it is genuinely done, attention slipping to _being done_. The visible steps still ahead (the **post-completion steps**) supply the pull; the criterion's clarity is the resistance. Defend in order: **sharpen the bound first** (local and cheap); only if it is irreducibly fuzzy _and_ you observe the rush, hide the later steps by splitting the sequence. Hiding only works across a real context boundary (a hand-off or a subagent dispatch; an inline call leaves the later steps in context and clears nothing).
++- **Demand**: how much it requires. "Every modified model accounted for" forces thorough work where "produce a change list" does not. Demand drives **legwork** (the digging the agent does within the work, latent in the wording rather than written as its own step), and it is not step-bound: "every rule applied" binds a body of flat reference just as "every step done" binds a sequence, which is how an all-reference document still carries an exhaustiveness bar.
++
++The strongest criteria are both checkable and exhaustive.
++
++## When to split
++
++Splitting one document into two spends one of the two loads, so split only when the cut earns it:
++
++- **By sequence**: split a run of steps where the post-completion steps tempt the agent to rush the one in front of it. Keeping them out of view drives more legwork on the current task. Beware the reverse: merging sequences exposes each step's later steps to what follows, inviting premature completion.
++- **By invocation**, skill-specific: see [`SKILL-MECHANICS.md`](SKILL-MECHANICS.md).
++
++## Leading words
++
++A **leading word** is a compact concept already living in the model's pretraining that the agent thinks with while running the document (_lesson_, _fog of war_, _tracer bullets_). Repeated as a token, never as a sentence, it accumulates a distributed definition and anchors a whole region of behaviour in the fewest tokens, by recruiting priors the model already holds. Coining your own works if you define it clearly, but a made-up word recruits no priors: you pay in definition tokens what a pretrained word gives free; reach for an existing word first.
++
++It anchors twice. In the body, _execution_: the agent reaches for the same behaviour every time the word appears, and inside flat reference it focuses attention on a class of thing to look for. In a pointer, _invocation_: when the same word lives in your prompts, your docs, and your codebase, the agent links that shared language to the material and reaches it more reliably.
++
++Hunt for opportunities to refactor with leading words. A triad spelled out at three sites, a pointer spending a sentence to gesture at one idea. Each is a passage begging to collapse into a single token:
++
++- "fast, deterministic, low-overhead" → _tight_ (a _tight_ loop).
++- "a loop you believe in" → _red_, turning a fuzzy gate into a binary observable state (the loop goes _red_ on the bug, or it doesn't).
++
++You win twice: fewer tokens, and a sharper hook for the agent to hang its thinking on. Assume every document is carrying restatements that leading words retire. Go find them.
++
++**Negation** is the failure mode beside this lever: steering by prohibition drags the forbidden behaviour into context and makes it _more_ available, not less. _Don't think of an elephant_, and the elephant is all there is; the negation is a weak modifier the strongly-activated concept overruns, so the ban half-reads as an instruction to do the thing. Prompt the **positive**: state the target behaviour ("write one-line comments") so the banned one is never spoken. A prohibition earns its place only as a hard guardrail you cannot phrase positively; even then, pair it with the positive target so attention lands on what to do.
++
++## Pruning
++
++- Keep each meaning in a **single source of truth**: one authoritative place, so changing the behaviour is a one-place edit. **Duplication** (the same meaning in more than one place) costs maintenance and tokens, and inflates a meaning's prominence on the ladder past its real rank. (The accidental inverse of a leading word, which repeats a token on purpose, never the meaning.)
++- The **environment** is a source of truth too (`package.json` scripts, config files, the directory layout, `--help` output), and a document that restates it is a **cache**: a copy of a lookup, earning its load only when the lookup is expensive. Cache what the agent cannot find by looking: the unwritten convention, the reason behind a choice, the gotcha no config confesses. Leave the one-file, one-command lookups to the environment, where they cannot go stale.
++- Check every line for **relevance**: does it still bear on what the document does? A line loses relevance by never bearing on the task (mere exposition, or a branch that should be disclosed) or by going stale as the behaviour or world it describes changes. Shorter documents are easier to keep relevant. Without a pruning discipline the default fate is **sediment**: stale layers that settle because adding feels safe and removing feels risky, until you must core down through them to find what is still live.
++- Hunt **no-ops** sentence by sentence: an instruction the model already obeys by default pays load to say nothing. The test (does it change behaviour versus the default?) is model-relative, not reader-relative: two people disagreeing about a no-op disagree about the default, and settle it by running the document, not by debate. When a sentence fails, delete the whole sentence rather than trim words from it. The test also grades leading words: a word too weak to beat the default (_be thorough_ when the agent is already thorough-ish) is a no-op, and the fix is a stronger word (_relentless_), not a different technique.
+--- /dev/null
++++ b/.agents/skills/writing-for-agents/agents/openai.yaml
+@@ -0,0 +1,3 @@
++interface:
++  display_name: "Writing for Agents"
++  short_description: "Write documents agents consume"
+--- /dev/null
++++ b/.agents/skills/writing-fragments/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Writing Fragments"
++  short_description: "Mine raw writing fragments"
++policy:
++  allow_implicit_invocation: false
+--- /dev/null
++++ b/.agents/skills/writing-shape/agents/openai.yaml
+@@ -0,0 +1,5 @@
++interface:
++  display_name: "Writing Shape"
++  short_description: "Shape raw material into an article"
++policy:
++  allow_implicit_invocation: false

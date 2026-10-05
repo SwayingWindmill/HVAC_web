@@ -16,8 +16,8 @@ func TestSyntheticAcknowledgementCompletesOnlyAfterReportedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	dispatcher := New(store, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-a", clock)
-	if err := dispatcher.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
+	dispatcher := newSyntheticDurableDispatcher(store, submitted.Intent.ID, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-a", clock)
+	if err := dispatcher.RunOnce(context.Background(), "org-1"); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	acknowledged, err := store.Get(submitted.Intent.ID)
@@ -47,8 +47,8 @@ func TestCommittedTimeoutBecomesOutcomeUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	dispatcher := New(store, syntheticConnector{mode: syntheticCommittedThenTimeout}, "dispatcher-a", clock)
-	if err := dispatcher.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
+	dispatcher := newSyntheticDurableDispatcher(store, submitted.Intent.ID, syntheticConnector{mode: syntheticCommittedThenTimeout}, "dispatcher-a", clock)
+	if err := dispatcher.RunOnce(context.Background(), "org-1"); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 	intent, err := store.Get(submitted.Intent.ID)
@@ -67,12 +67,12 @@ func TestPreSendFailureCanBeRetriedByAnotherDispatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	first := New(store, syntheticConnector{mode: syntheticPreSendRejected}, "dispatcher-a", clock)
-	if err := first.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
+	first := newSyntheticDurableDispatcher(store, submitted.Intent.ID, syntheticConnector{mode: syntheticPreSendRejected}, "dispatcher-a", clock)
+	if err := first.RunOnce(context.Background(), "org-1"); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := New(store, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-b", clock)
-	if err := second.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
+	second := newSyntheticDurableDispatcher(store, submitted.Intent.ID, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-b", clock)
+	if err := second.RunOnce(context.Background(), "org-1"); err != nil {
 		t.Fatalf("second dispatch failed: %v", err)
 	}
 	completeSyntheticVerification(t, store, submitted.Intent.ID, clock)
@@ -177,4 +177,30 @@ func testClock() func() time.Time {
 	return func() time.Time {
 		return time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
 	}
+}
+
+// Exercise the production durable seam with the real Command Service's
+// acknowledgement, verification and fencing behavior behind a test adapter.
+type syntheticDurableStore struct {
+	service   *commandservice.Service
+	commandID string
+	now       func() time.Time
+}
+
+func (s syntheticDurableStore) ClaimDispatch(_ context.Context, _ string, owner string, lease time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return s.service.PrepareDispatch(s.commandID, owner, s.now().Add(lease))
+}
+
+func (s syntheticDurableStore) ResolveDispatch(_ context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
+	return s.service.ResolveDispatch(envelope, result)
+}
+
+type syntheticSafeDispatch struct{}
+
+func (syntheticSafeDispatch) VerifyBeforeDispatch(context.Context, commandmodel.DispatchEnvelope) (DispatchSafetyResult, error) {
+	return DispatchSafetyResult{Safe: true}, nil
+}
+
+func newSyntheticDurableDispatcher(service *commandservice.Service, commandID string, connector Connector, workerID string, now func() time.Time) *DurableDispatcher {
+	return NewDurable(syntheticDurableStore{service, commandID, now}, syntheticSafeDispatch{}, connector, workerID, 30*time.Second)
 }

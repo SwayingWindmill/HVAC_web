@@ -11,7 +11,7 @@ What are the current authoritative seams between the EG8200 simulator, `DeviceAd
 
 ## Primary local source reviewed
 
-- `CONTEXT.md` — `Device Observation Snapshot`, `Business Revision`, `Source Position`.
+- `GLOSSARY.md` — `Device Observation Snapshot`, `Business Revision`, `Source Position`.
 - `libs/edgecontrol/driver.go` — production-facing `DeviceAdapter`, `DeviceHost`, poll and write boundaries.
 - `libs/edgecontrol/cycle.go` — Process Image, Scheduler, Controller and write phase ordering.
 - `tools/eg8200-simulator/internal/simulator/edge_driver.go` — simulated device implementation of `DeviceAdapter`.
@@ -116,7 +116,7 @@ Only after this transaction may an incoming MQTT value become authoritative curr
 
 #### Simulator `businessRevision` conflicts with the platform domain language
 
-`CONTEXT.md` defines **Business Revision** as the monotonic owner-authored revision of one Telemetry `Device Observation Snapshot`, advancing only when committed current runtime state changes.
+`GLOSSARY.md` defines **Business Revision** as the monotonic owner-authored revision of one Telemetry `Device Observation Snapshot`, advancing only when committed current runtime state changes.
 
 The older central-plant simulator independently increments per-equipment `revision` fields, returns them as `CommandResult.BusinessRevision`, emits them from Plant snapshots as `businessRevision`, registers them as telemetry points such as `chiller.business_revision`, and the frontend displays those source points as “业务版本”. These values are not Telemetry Business Revisions: they are local simulated equipment-state counters.
 
@@ -124,7 +124,7 @@ This is not merely a naming nit. It creates two different facts with the same ub
 
 **Decision:**
 
-- `Business Revision` remains exclusively owned by Telemetry Runtime as defined in `CONTEXT.md`.
+- `Business Revision` remains exclusively owned by Telemetry Runtime as defined in `GLOSSARY.md`.
 - Virtual Plant internal state counters must not be called `BusinessRevision`.
 - If an internal counter is still useful, call it a simulator/physical/device state revision inside the simulator.
 - Unless a real device protocol exposes an equivalent register with independent operational meaning, do not publish that internal counter as a canonical central-plant telemetry Point.

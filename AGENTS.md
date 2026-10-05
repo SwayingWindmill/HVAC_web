@@ -1,5 +1,7 @@
 - Do not preserve backward compatibility. Remove obsolete paths instead of
   adding compatibility layers, fallbacks, or migrations.
+- Read `GLOSSARY.md` for domain terminology and the relevant `docs/adr/` decisions
+  before exploring a domain. Skill configuration lives in `docs/agents/`.
 - Choose the simplest implementation that fully meets the current
   requirements. Avoid speculative abstractions, configuration, and
   indirection.

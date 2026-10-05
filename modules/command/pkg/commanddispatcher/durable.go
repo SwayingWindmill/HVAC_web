@@ -8,6 +8,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
+type Connector interface {
+	Execute(ctx context.Context, envelope commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error)
+}
+
 // DurableCommandStore is implemented by Command Service. Dispatcher never owns
 // command_runtime credentials and only receives a fenced DispatchEnvelope.
 type DurableCommandStore interface {

@@ -160,4 +160,4 @@ node scripts/run-capability-task.mjs --task=s3:command-ux --dry-run=true
 - `libs/*/go.mod`：共享领域与安全能力的窄模块依赖。
 - 根目录 `go.work`：仅负责本地 Go workspace 编排。
 
-设计规则见 `DESIGN.md`，总体架构基线见 `docs/architecture/phase1-overall-architecture.md`，文档作用域与旧认证资产表述规则见 `docs/architecture/document-scope-policy.md`，架构决策见 `docs/adr/`，当前领域上下文见 `CONTEXT.md`。
+设计规则见 `DESIGN.md`，总体架构基线见 `docs/architecture/phase1-overall-architecture.md`，文档作用域与旧认证资产表述规则见 `docs/architecture/document-scope-policy.md`，架构决策见 `docs/adr/`，当前领域上下文见 `GLOSSARY.md`。

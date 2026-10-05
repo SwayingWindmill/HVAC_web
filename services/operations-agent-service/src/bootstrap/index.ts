@@ -1,12 +1,8 @@
-import { applicationModule } from '../application/index.js';
-import { domainModule } from '../domain/index.js';
-import { modelModule } from '../model/index.js';
 import {
   createMemoryOperationsTelemetryExporter,
   createOperationsOtlpHttpExporter,
   createOperationsTelemetryRuntime,
   hashOperationsTelemetryIdentity,
-  observabilityModule,
   type OperationsOtlpHttpExporterOptions,
   type OperationsTelemetryExporter,
   type OperationsTelemetryMetricPoint,
@@ -15,19 +11,13 @@ import {
   type OperationsTelemetryRuntimeOptions,
   type OperationsTelemetrySpanData,
 } from '../observability/index.js';
-import { persistenceModule } from '../persistence/index.js';
-import { runtimeLanggraphModule } from '../runtime-langgraph/index.js';
-import { schedulingModule } from '../scheduling/index.js';
-import { toolsModule } from '../tools/index.js';
 import {
   createAgentSessionEventStreamResponse,
   createOperationsAgentEventStreamResponse,
-  transportEventsModule,
 } from '../transport-events/index.js';
 import {
   createAgentSessionHttpHandler as createAgentSessionHttpTransportHandler,
   createOperationsAgentHttpHandler as createOperationsAgentHttpTransportHandler,
-  transportHttpModule,
   type AgentSessionHttpAuthorizationInput,
   type AgentSessionHttpAuthorizer,
   type AgentSessionHttpHandler,
@@ -103,36 +93,3 @@ export {
   type OperationsAgentFindingModelRuntime,
   type OperationsAgentFindingModelRuntimeOptions,
 } from './internal/finding-model-runtime.js';
-
-export const bootstrapModule = Object.freeze({
-  name: 'bootstrap',
-  layer: 'composition',
-  dependencies: [
-    domainModule.name,
-    applicationModule.name,
-    runtimeLanggraphModule.name,
-    modelModule.name,
-    toolsModule.name,
-    persistenceModule.name,
-    transportHttpModule.name,
-    transportEventsModule.name,
-    schedulingModule.name,
-    observabilityModule.name,
-  ],
-} as const);
-
-export const operationsAgentServiceModules = Object.freeze([
-  domainModule,
-  applicationModule,
-  runtimeLanggraphModule,
-  modelModule,
-  toolsModule,
-  persistenceModule,
-  transportHttpModule,
-  transportEventsModule,
-  schedulingModule,
-  observabilityModule,
-  bootstrapModule,
-] as const);
-
-export type OperationsAgentServiceModules = typeof operationsAgentServiceModules;

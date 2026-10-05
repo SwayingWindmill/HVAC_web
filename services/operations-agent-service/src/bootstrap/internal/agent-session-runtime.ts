@@ -27,8 +27,8 @@ import {
   type GatewayToolAuthorizationReaderConfig,
   type RegistryOwnerReaderConfig,
 } from '../../tools/index.js';
+import { createAgentSessionEventStreamResponse } from '../../transport-events/index.js';
 import {
-  createAgentSessionEventStreamResponse,
   createAgentSessionHttpHandler,
   type AgentSessionHttpAuthorizer,
   type AgentSessionHttpHandler,

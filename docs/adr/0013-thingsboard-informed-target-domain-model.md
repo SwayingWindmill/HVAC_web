@@ -274,6 +274,6 @@ Primary decision inputs:
 - `docs/architecture/thingsboard-ai-analytics-integrations-adjudication.md`
 - `docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md`
 - `docs/architecture/thingsboard-hvac-module-reverse-audit.md`
-- `CONTEXT.md`
+- `GLOSSARY.md`
 - `contracts/registry/s1-registry-model.v1.json`
 - ADR 0003, 0006, 0009, 0010, 0011 and 0012.

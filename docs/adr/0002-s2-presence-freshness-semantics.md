@@ -470,4 +470,4 @@ Changing the canonical states, their derivation precedence, the meaning of Last 
 | upstream/platform failure versus Device offline | Evaluation Availability and Presence state machine |
 | UI, FDD, alert and future-control invariants | Consumer invariants |
 | edge cases | Boundary scenarios |
-| canonical terminology | Root `CONTEXT.md` |
+| canonical terminology | Root `GLOSSARY.md` |

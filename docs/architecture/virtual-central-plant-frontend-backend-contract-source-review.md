@@ -56,7 +56,7 @@ The frontend already supports the correct first-slice flow: an Alarm detail navi
 
 ### 1. Source-provided `*.business_revision` is not Business Revision
 
-Prior authority research found the central-plant Registry contract and frontend point catalogue expose simulator-local equipment counters as telemetry points named `*.business_revision`, while `CONTEXT.md` defines Business Revision as the Telemetry-owned Device Observation Snapshot revision.
+Prior authority research found the central-plant Registry contract and frontend point catalogue expose simulator-local equipment counters as telemetry points named `*.business_revision`, while `GLOSSARY.md` defines Business Revision as the Telemetry-owned Device Observation Snapshot revision.
 
 **Unified correction:** remove/rename the source telemetry points and frontend presentation together. The authoritative Business Revision must come from the Telemetry read model/API only. Do not retain aliases or interpret the old device point differently in frontend code.
 
