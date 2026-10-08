@@ -64,3 +64,9 @@ Provision only the required real operator/Device/capability/purpose/risk tuples 
 Reuse the IAM PostgreSQL test runner and current domain task matrix. Small direct tests should prove an actual stored exact permission allows submission; absent/wrong Device, Site, capability revision or purpose denies; submit never authorizes approval; suspended/expired membership or permission denies; exact DENY overrides ALLOW; risk ceiling survives signing and is enforced by Command; runtime cannot read another principal/Tenant's permission; a mismatched declared policy/emergency revision is rejected by existing Command grant validation.
 
 Then demonstrate real authenticated public API command flow for both existing Sites through the production PostgreSQL IAM store, Connectivity and accepted readback. Until that evidence exists, stories 23/26 remain incomplete. This record is a source-grounded implementation recommendation, not proof that the missing adapter has been implemented or that the live command succeeds.
+
+## Implementation and live verification
+
+The narrow adapter, exact permission table and embedded/standalone assembly are implemented. The existing Registry PostgreSQL runner passes its new current-permission and principal/Tenant isolation regression. The local bootstrap explicitly provisions current A/B control-Point tuples for the local administrator with COMMAND_SUBMIT and maximum risk MEDIUM; it grants no approval purpose. Production permissions remain IAM-owned PostgreSQL records, never inferred from authentication or telemetry-read access.
+
+On 2026-10-08, both Sites' authenticated public commands returned 202 and reached SUCCEEDED with authoritative reported-state verification. See [#397 acceptance](connectivity-397-acceptance-2026-10-08.md). This verifies the actual production adapter path; the configured policy/emergency revision and grant TTL limits above remain unchanged.

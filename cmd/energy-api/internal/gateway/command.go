@@ -307,7 +307,7 @@ func (h *handler) getCommand(writer http.ResponseWriter, request *http.Request, 
 	if !ok {
 		return
 	}
-	if !isLowerUUIDv7(commandID) {
+	if !isLowerUUID(commandID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
@@ -328,7 +328,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
 		return
 	}
-	if !isLowerUUIDv7(commandID) {
+	if !isLowerUUID(commandID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
@@ -1007,7 +1007,7 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	}
 	profile, supported := commandCapabilityProfile(view.Capability)
 	if !supported || view.SchemaVersion != 1 ||
-		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
+		!isLowerUUID(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
 		!isLowerUUIDv7(view.DeviceID) || !isLowerUUIDv7(view.PointID) || view.CapabilityRevision != profile.Revision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		!validCommandParameters(view.Capability, map[string]any{"parameterKey": profile.ParameterKey}, view.Parameters) || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||

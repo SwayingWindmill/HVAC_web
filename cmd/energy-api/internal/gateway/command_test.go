@@ -298,7 +298,7 @@ func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGat
 		tenantID:              "018f3d00-1000-7000-8000-000000000001",
 		siteID:                "018f3e00-2000-7000-8000-000000000001",
 		deviceID:              "018f3e00-3000-7000-8000-000000000001",
-		commandID:             "018f3e00-4000-7000-8000-000000000001",
+		commandID:             "50f5012a-fe6b-47d6-b3df-62ca69a98885",
 		principalID:           "018f3e00-5000-7000-8000-000000000001",
 		assetID:               "018f3e00-6000-7000-8000-000000000001",
 		commandPointID:        "018f3e00-7000-7000-8000-000000000001",

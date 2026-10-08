@@ -93,6 +93,12 @@ func TestCommandHTTPCreateRequiresExactIAMGrant(t *testing.T) {
 	if authority.submitted.TenantID != "tenant-1" || authority.submitted.Authorization.Purpose != commandmodel.AuthorizationCommandSubmit || authority.submitted.Authorization.PrincipalID != "principal-1" {
 		t.Fatalf("unexpected submitted request %#v", authority.submitted)
 	}
+	var view struct {
+		Status commandmodel.IntentStatus `json:"status"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&view); err != nil || view.Status != commandmodel.IntentQueued {
+		t.Fatalf("owner response does not match public Command status contract: %#v err=%v", view, err)
+	}
 	if recorder.Header().Get("Location") != "/api/v1/commands/command-1" {
 		t.Fatalf("location=%s", recorder.Header().Get("Location"))
 	}

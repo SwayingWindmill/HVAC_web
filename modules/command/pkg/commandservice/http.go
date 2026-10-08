@@ -77,31 +77,13 @@ type internalApproveCommandRequest struct {
 	ApproverRole string `json:"approverRole"`
 }
 
-type ControlStatus string
-
-const (
-	ControlCreated         ControlStatus = "CREATED"
-	ControlValidating      ControlStatus = "VALIDATING"
-	ControlApprovalPending ControlStatus = "APPROVAL_PENDING"
-	ControlApproved        ControlStatus = "APPROVED"
-	ControlSent            ControlStatus = "SENT"
-	ControlAcked           ControlStatus = "ACKED"
-	ControlExecuting       ControlStatus = "EXECUTING"
-	ControlVerified        ControlStatus = "VERIFIED"
-	ControlFailed          ControlStatus = "FAILED"
-	ControlRejected        ControlStatus = "REJECTED"
-	ControlExpired         ControlStatus = "EXPIRED"
-	ControlUnknown         ControlStatus = "UNKNOWN"
-	ControlCancelled       ControlStatus = "CANCELLED"
-)
-
 type CommandTransitionView struct {
-	FromStatus *ControlStatus `json:"fromStatus,omitempty"`
-	ToStatus   ControlStatus  `json:"toStatus"`
-	Reason     string         `json:"reason"`
-	ActorType  string         `json:"actorType"`
-	OccurredAt time.Time      `json:"occurredAt"`
-	Version    uint64         `json:"version"`
+	FromStatus *commandmodel.IntentStatus `json:"fromStatus,omitempty"`
+	ToStatus   commandmodel.IntentStatus  `json:"toStatus"`
+	Reason     string                     `json:"reason"`
+	ActorType  string                     `json:"actorType"`
+	OccurredAt time.Time                  `json:"occurredAt"`
+	Version    uint64                     `json:"version"`
 }
 
 type CommandView struct {
@@ -113,7 +95,7 @@ type CommandView struct {
 	PointID               string                         `json:"pointId"`
 	Capability            commandmodel.Capability        `json:"capability"`
 	CapabilityRevision    string                         `json:"capabilityRevision"`
-	Status                ControlStatus                  `json:"status"`
+	Status                commandmodel.IntentStatus      `json:"status"`
 	Risk                  commandmodel.RiskLevel         `json:"risk"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
 	ApprovalCount         int                            `json:"approvalCount"`
@@ -349,61 +331,25 @@ func validInternalCreate(input internalCreateCommandRequest) bool {
 func commandView(intent commandmodel.CommandIntent) CommandView {
 	transitions := make([]CommandTransitionView, 0, len(intent.Transitions))
 	for _, transition := range intent.Transitions {
-		var from *ControlStatus
+		var from *commandmodel.IntentStatus
 		if transition.From != "" {
-			value := controlStatus(transition.From, "")
+			value := transition.From
 			from = &value
 		}
 		transitions = append(transitions, CommandTransitionView{
-			FromStatus: from, ToStatus: controlStatus(transition.To, transition.Reason), Reason: transition.Reason,
+			FromStatus: from, ToStatus: transition.To, Reason: transition.Reason,
 			ActorType: actorType(transition.Actor, intent.PrincipalID), OccurredAt: transition.At.UTC(), Version: transition.Version,
 		})
-	}
-	lastReason := ""
-	if len(intent.Transitions) > 0 {
-		lastReason = intent.Transitions[len(intent.Transitions)-1].Reason
 	}
 	return CommandView{
 		SchemaVersion: 1, CommandID: intent.ID, TenantID: intent.TenantID,
 		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
-		Status: controlStatus(intent.Status, lastReason), Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
+		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),
 		Parameters: cloneParameters(intent.Parameters), DeviceCommandSequence: intent.DeviceCommandSequence,
 		Version: intent.Version, SnapshotRevision: intent.SnapshotRevision, Transitions: transitions,
 		CreatedAt: intent.CreatedAt.UTC(), UpdatedAt: intent.UpdatedAt.UTC(),
-	}
-}
-
-func controlStatus(status commandmodel.IntentStatus, reason string) ControlStatus {
-	switch status {
-	case commandmodel.IntentSubmitted:
-		return ControlCreated
-	case commandmodel.IntentValidating:
-		return ControlValidating
-	case commandmodel.IntentAwaitingApproval:
-		return ControlApprovalPending
-	case commandmodel.IntentApproved, commandmodel.IntentQueued:
-		return ControlApproved
-	case commandmodel.IntentDispatching:
-		if reason == "PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE" {
-			return ControlAcked
-		}
-		return ControlSent
-	case commandmodel.IntentSucceeded:
-		return ControlVerified
-	case commandmodel.IntentFailed:
-		return ControlFailed
-	case commandmodel.IntentRejected:
-		return ControlRejected
-	case commandmodel.IntentExpired:
-		return ControlExpired
-	case commandmodel.IntentOutcomeUnknown:
-		return ControlUnknown
-	case commandmodel.IntentCancelled:
-		return ControlCancelled
-	default:
-		return ControlUnknown
 	}
 }
 
