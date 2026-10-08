@@ -63,4 +63,10 @@ All raw logs, temporary probes/build files, browser screenshots and runtime cred
 
 ## Limits retained
 
+## Two-axis review
+
+Matt code-review skill reviewed the fixed `2d9744fa…380a5d6c` diff in parallel. **Standards: 0 findings**; the earlier unregistered manual-check finding was resolved by retaining only ignored ad hoc evidence, not a new repository gate. **Spec: 0 findings**; the previously missing actual A/B command and full local-startup evidence is now present. The axes were assessed separately against repository standards and all #397 stories. This review metadata is the only post-review change.
+
+## Limits retained
+
 No CRL was added. Gateway-wide revocation/quarantine and command denial are the current credential contract; selective leaf revocation/disconnection is not claimed. A DB permission change affects the next authorization decision; an already issued grant remains bounded by existing TTL/emergency-revision checks. No administrative permission-management UI, broker HA, second Connectivity deployment or batch-Telemetry redesign was added. Existing platform-wide baseline limitations and the #407 certificate-overlap transport limitation remain documented.
