@@ -115,7 +115,6 @@ Operations Agent 通过 `energy-api`/Platform Gateway 边界暴露受保护调�
 
 ```bash
 npm run repo:check
-npm run repo:governance:test
 npm run architecture:phase1:check
 npm run docs:phase1:consistency:check
 npm run data:phase1:check

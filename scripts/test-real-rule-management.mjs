@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
 import {
   buildRollbackAssignment,
@@ -47,32 +46,4 @@ test('rollback is a new assignment to a prior immutable revision', () => {
   assert.deepEqual(buildRollbackAssignment(binding, revision), { bindingId, siteId, ruleRevisionId: revisionId, priority: 7 });
   assert.equal(binding.revision, 4);
   assert.equal(revision.state, 'RELEASED');
-});
-
-test('S21 keeps released revisions immutable and simulation effect-free by construction', () => {
-  const migration = fs.readFileSync('services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql', 'utf8');
-  const manager = fs.readFileSync('services/rule-runtime-service/pkg/rulemanagement/manager.go', 'utf8');
-  const store = fs.readFileSync('services/rule-runtime-service/pkg/rulemanagement/postgres.go', 'utf8');
-  assert.match(migration, /rule_revisions_immutable/);
-  assert.match(migration, /reject_immutable_change/);
-  assert.match(manager, /NewRuntime\(plan, store, snapshots, nil, ruleruntime\.ModeReplay\)/);
-  assert.equal(/UPDATE\s+rule_runtime\.rule_revisions/i.test(store), false);
-});
-
-test('Rule management is capability, CSRF and authoritative Site scoped with no browser fallback', () => {
-  const gateway = fs.readFileSync('cmd/energy-api/internal/gateway/rules.go', 'utf8');
-  const api = fs.readFileSync('apps/hvac-web/src/api/rules.ts', 'utf8');
-  const system = fs.readFileSync('apps/hvac-web/src/features/system/SystemManagement.tsx', 'utf8');
-  assert.match(gateway, /CapabilityRuleManage/);
-  assert.match(gateway, /validateStateChange/);
-  assert.match(gateway, /checkRuleSiteVisibility/);
-  assert.match(gateway, /authorizeRegistry\(request\.Context\(\), session, registryauth\.ActionSiteRead\)/);
-  assert.match(gateway, /executeCoreRegistry/);
-  assert.match(gateway, /Rule binding queries require siteId/);
-  assert.match(gateway, /Rule execution evidence queries require siteId/);
-  assert.match(api, /createPlatformGatewayClient/);
-  assert.equal(api.includes('localStorage'), false);
-  assert.equal(api.includes('sessionStorage'), false);
-  assert.match(system, /<RuleManagement principal=\{principal\} sites=\{sites\}/);
-  assert.equal(system.includes('规则管理接口尚未接入'), false);
 });

@@ -38,7 +38,7 @@ export const gateCommandMatrix = Object.freeze({
     command: Object.freeze([nodeRun('scripts/check-s3-command-gateway.mjs')]),
   }),
   unit: Object.freeze({
-    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:e2e')]),
+    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
     platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
     registry: Object.freeze([npmRun('test:registry-routing')]),
     telemetry: Object.freeze([

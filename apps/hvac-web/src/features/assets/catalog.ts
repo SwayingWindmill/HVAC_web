@@ -135,7 +135,3 @@ export function listPointDefinitions(resolution: AssetsProfileResolution): reado
     ? resolution.profile.points.filter((definition) => definition.showInList)
     : [];
 }
-
-export function listTelemetryKeys(resolution: AssetsProfileResolution): readonly string[] {
-  return listPointDefinitions(resolution).map((definition) => definition.key);
-}

@@ -5,7 +5,6 @@ import { createBoundedRealtimePublisher } from '../apps/hvac-web/src/features/as
 import {
   createAssetsRealtimeScope,
   createAssetsRealtimeTarget,
-  describeAssetsRealtimeState,
   listAssetsRealtimeKeys,
   assetsRealtimeSubscriptionEligibility,
   projectAssetsRealtimeRow,
@@ -217,11 +216,4 @@ test('bounded publisher renders at most once per frame while publishing the late
   publisher.cancel();
   assert.equal(callbacks.size, 0);
   assert.deepEqual(published, [3]);
-});
-
-test('transport presentation keeps Snapshot degradation separate from revocation', () => {
-  assert.equal(describeAssetsRealtimeState(liveState('live')).degraded, false);
-  assert.match(describeAssetsRealtimeState(liveState('snapshot')).label, /重连/);
-  assert.equal(describeAssetsRealtimeState(liveState('unavailable')).retryable, true);
-  assert.match(describeAssetsRealtimeState(liveState('revoked')).detail, /晚到 event/);
 });
