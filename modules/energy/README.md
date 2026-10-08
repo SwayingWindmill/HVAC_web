@@ -10,9 +10,10 @@ telemetry_history.counter_deltas
 ```
 
 The projector does not calculate counter lag, reset, rollover or recovery
-semantics in Go. Those rules belong to the canonical ClickHouse view. The
-first slice accepts only a uniquely resolved RELEASED/ACTIVE PRIMARY
-electricity COUNTER binding.
+semantics in Go. Those rules belong to the canonical ClickHouse view. It
+accepts only a uniquely resolved RELEASED/ACTIVE PRIMARY COUNTER binding of
+any energy type; a counter without such a binding stops projection with an
+explicit error.
 
 For each accepted canonical delta, the projector writes one interval whose
 energy is exactly `delta_value`. `GOOD`, `PARTIAL`/`ESTIMATED`/`MANUAL`, and
@@ -26,9 +27,9 @@ Initial facts use `fact_revision=0`. Late-arrival corrections increment the prio
 RUN_STARTED/RUN_PERSISTED_CHUNK/RUN_COMPLETED or RUN_FAILED rebuild evidence.
 
 The Core resolver is a private mTLS route and requires a short-lived Registry
-delegation grant with the dedicated `meter-binding.resolve` permission. A
-grant file is preferred so IAM can rotate the grant without restarting the
-projector.
+grant with the dedicated `meter-binding.resolve` permission. The projector is
+its own Workload Principal (ADR 0017): it asks IAM for one grant per Tenant over
+mTLS and renews it before it expires.
 
 The `counter_deltas` view uses ClickHouse `SQL SECURITY DEFINER`; the projector
 reader can query the canonical view without receiving direct raw-observation
@@ -87,7 +88,7 @@ projection pass is idempotent.
 
 ## Current limitations
 
-- only electricity PRIMARY COUNTER facts are implemented;
+- Energy Series queries read electricity facts only; other energy types are projected but not queried;
 - late-arrival predecessor corrections and rebuild evidence are implemented; arbitrary operator-selected historical backfill/rebuild scopes are not;
 - no durable projector checkpoint exists yet;
 - tariff, cost, carbon, baseline, reporting and optimization slices remain on

@@ -394,7 +394,6 @@ WHERE mb.site_id = $1::uuid
   AND mb.point_id = $3::uuid
   AND mb.point_type = 'COUNTER'
   AND mb.meter_role = 'PRIMARY'
-  AND et.energy_code = 'electricity'
   AND mb.status IN ('RELEASED', 'ACTIVE')
   AND mb.effective_from <= $4
   AND (mb.effective_to IS NULL OR $4 < mb.effective_to)

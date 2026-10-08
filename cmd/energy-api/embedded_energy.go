@@ -468,6 +468,8 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 			AllowedPresenterSPIFFE: envOr("CORE_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AdditionalAllowedPresenterSPIFFEs: []string{
 				envOr("CORE_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+				// Phase 1 runs the energy projector inside the Telemetry Runtime (ADR 0017).
+				envOr("CORE_ANALYTICS_PROJECTOR_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
 			},
 			Audience: envOr("CORE_AUDIENCE", "platform-core-service"), GrantStatus: grantStatus, Logger: logger, Observability: telemetry,
 		}),

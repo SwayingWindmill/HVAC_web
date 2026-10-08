@@ -103,6 +103,25 @@ func TestProjectorProcessesOneCanonicalBatch(t *testing.T) {
 	}
 }
 
+func TestProjectorWritesFactsForPrimaryCoolingMeter(t *testing.T) {
+	binding := validBinding()
+	binding.EnergyType = "cooling"
+	sink := &fakeSink{}
+	projector, err := NewProjector(ProjectorConfig{
+		CounterSource: &fakeSource{deltas: []CounterDelta{validDelta()}}, BindingResolver: &fakeResolver{resolution: binding}, FactSink: sink, BatchSize: 10,
+		Now: func() time.Time { return time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projector.ProjectOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.facts) != 1 || sink.facts[0].EnergyType != "cooling" || sink.facts[0].EnergyKWh != 2.75 {
+		t.Fatalf("facts=%#v", sink.facts)
+	}
+}
+
 func TestProjectorDoesNotWriteWhenBindingIsNotUnique(t *testing.T) {
 	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
 	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingAmbiguous}}
