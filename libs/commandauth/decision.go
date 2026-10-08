@@ -35,7 +35,7 @@ func (request DecisionRequest) Validate() error {
 			return errors.New("command decision scope is invalid")
 		}
 	}
-	if request.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+	if _, supported := commandmodel.CapabilityProfileFor(request.Capability); !supported {
 		return errors.New("command decision capability is invalid")
 	}
 	if request.Purpose != commandmodel.AuthorizationCommandSubmit && request.Purpose != commandmodel.AuthorizationCommandApprove {

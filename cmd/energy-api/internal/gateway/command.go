@@ -280,7 +280,7 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
 	}
-	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.SourceKey)
+	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointCode)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -578,7 +578,7 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 	capability := commandmodel.Capability(strings.TrimSpace(capabilityName))
 	profile, supported := commandCapabilityProfile(capability)
 	declaredRevision, _ := point.SourceMetadata["capabilityRevision"].(string)
-	feedbackPointKey, _ := point.SourceMetadata["feedbackSourceKey"].(string)
+	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
 	if !supported || strings.TrimSpace(declaredRevision) != profile.Revision || strings.TrimSpace(feedbackPointKey) == "" {
 		failure := commandUnavailable("The COMMAND Point does not declare a supported authoritative capability contract.")
 		return assetCommandTarget{}, &failure
@@ -600,12 +600,12 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 	var feedbackPoint *platformapi.TelemetryPoint
 	for index := range assetModel.TelemetryPoints {
 		candidate := &assetModel.TelemetryPoints[index]
-		if candidate.ReportingDeviceID == device.ID && candidate.SourceKey == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
+		if candidate.ReportingDeviceID == device.ID && candidate.PointCode == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
 			feedbackPoint = candidate
 			break
 		}
 	}
-	if feedbackPoint == nil || (feedbackPoint.PointType != "STATE" && feedbackPoint.PointType != "TELEMETRY") {
+	if feedbackPoint == nil || (feedbackPoint.PointType != "STATE" && feedbackPoint.PointType != "TELEMETRY" && feedbackPoint.PointType != "SETTING") {
 		failure := commandUnavailable("The COMMAND Point has no active authoritative feedback Point.")
 		return assetCommandTarget{}, &failure
 	}

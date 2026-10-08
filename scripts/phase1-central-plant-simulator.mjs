@@ -283,19 +283,48 @@ function localAdminPrincipalId() {
   return principalId;
 }
 
-function buildTelemetryKeyGrants(points, principalId) {
-  const { tenantId } = centralPlantIdentity;
-  const deviceByName = new Map(centralPlantDevices.map((device) => [device.name, device]));
+function buildTelemetryGrants(points, principalId) {
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]::text[]`;
-  const rows = points.map((point, index) => {
-    const device = deviceByName.get(point.deviceId);
-    return `(
-      ${sqlLiteral(localUUID(0x700000000000 + index + 1))}, ${sqlLiteral(tenantId)},
-      ${sqlLiteral(principalId)}, ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)},
-      ${actions}, 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
-    )`;
+  const scopes = localSites.map((site) => `(
+    ${sqlLiteral(`01a006a0-0000-7000-8000-${String(site.index + 1).padStart(12, '0')}`)},
+    ${sqlLiteral(site.tenantId)}, ${sqlLiteral(principalId)}, ${sqlLiteral(site.siteId)},
+    NULL, ${actions}, 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+  )`).join(',\n');
+  const sites = localSites.map((site) => `(
+    ${sqlLiteral(`01a006a0-0030-7000-8000-${String(site.index + 1).padStart(12, '0')}`)},
+    ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, ${sqlLiteral(principalId)},
+    ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+  )`).join(',\n');
+  const rows = localSites.flatMap((site) => {
+    const deviceByName = new Map(siteDevices(site).map((device) => [device.name, device]));
+    return points.map((point, index) => {
+      const device = deviceByName.get(point.deviceId);
+      return `(
+        ${sqlLiteral(siteUUID(site, 0x700000000000 + index + 1))}, ${sqlLiteral(site.tenantId)},
+        ${sqlLiteral(principalId)}, ${sqlLiteral(device.platformDeviceId)}, ${sqlLiteral(point.pointCode)},
+        ${actions}, 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+      )`;
+    });
   }).join(',\n');
   return `BEGIN;
+INSERT INTO iam.site_bindings (id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at) VALUES
+${sites}
+ON CONFLICT (tenant_id, site_id, principal_id) DO UPDATE SET
+actions=(SELECT array_agg(DISTINCT action ORDER BY action) FROM unnest(iam.site_bindings.actions || EXCLUDED.actions) AS action),
+effect='ALLOW', valid_to=NULL, revision=iam.site_bindings.revision+1, updated_at=clock_timestamp()
+WHERE NOT EXCLUDED.actions <@ iam.site_bindings.actions
+   OR iam.site_bindings.effect IS DISTINCT FROM 'ALLOW' OR iam.site_bindings.valid_to IS NOT NULL;
+INSERT INTO iam.telemetry_scope_bindings (id, tenant_id, principal_id, site_id, device_id, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+${scopes}
+ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, principal_id=EXCLUDED.principal_id,
+site_id=EXCLUDED.site_id, device_id=NULL, actions=EXCLUDED.actions, effect='ALLOW', status='ACTIVE',
+valid_to=NULL, revision=iam.telemetry_scope_bindings.revision+1, updated_at=clock_timestamp()
+WHERE (iam.telemetry_scope_bindings.tenant_id, iam.telemetry_scope_bindings.principal_id,
+       iam.telemetry_scope_bindings.site_id, iam.telemetry_scope_bindings.device_id,
+       iam.telemetry_scope_bindings.actions, iam.telemetry_scope_bindings.effect,
+       iam.telemetry_scope_bindings.status, iam.telemetry_scope_bindings.valid_to)
+  IS DISTINCT FROM (EXCLUDED.tenant_id, EXCLUDED.principal_id, EXCLUDED.site_id, NULL::uuid,
+                    EXCLUDED.actions, 'ALLOW', 'ACTIVE', NULL::timestamptz);
 INSERT INTO iam.telemetry_key_bindings (id, tenant_id, principal_id, device_id, telemetry_key, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${rows}
 ON CONFLICT (id) DO UPDATE
@@ -307,7 +336,14 @@ SET tenant_id=EXCLUDED.tenant_id,
     effect='ALLOW',
     status='ACTIVE',
     valid_to=NULL,
-    updated_at=clock_timestamp();
+    revision=iam.telemetry_key_bindings.revision+1,
+    updated_at=clock_timestamp()
+WHERE (iam.telemetry_key_bindings.tenant_id, iam.telemetry_key_bindings.principal_id,
+       iam.telemetry_key_bindings.device_id, iam.telemetry_key_bindings.telemetry_key,
+       iam.telemetry_key_bindings.actions, iam.telemetry_key_bindings.effect,
+       iam.telemetry_key_bindings.status, iam.telemetry_key_bindings.valid_to)
+  IS DISTINCT FROM (EXCLUDED.tenant_id, EXCLUDED.principal_id, EXCLUDED.device_id, EXCLUDED.telemetry_key,
+                    EXCLUDED.actions, 'ALLOW', 'ACTIVE', NULL::timestamptz);
 COMMIT;`;
 }
 
@@ -416,6 +452,13 @@ const seededPoints = rig ? applyRegistryRigToPoints(rig, registryPoints) : regis
 const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMAND');
 const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
+// Reapply only the local simulator's explicit read permissions without reseeding
+// Registry/Telemetry or restarting a running plant.
+if (process.argv.includes('--authorization-only')) {
+  psql('hvac_s1', buildTelemetryGrants(observedPoints, localAdminPrincipalId()));
+  process.exit(0);
+}
+
 for (const site of localSites) {
   psql('hvac_s1', buildS1Seed(site, seededPoints));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
@@ -423,7 +466,7 @@ for (const site of localSites) {
 for (const site of localSites) writeSimulatorConfig(site);
 // Credential bootstrap uses the local administrator's explicit Gateway write scopes.
 runLocalAdminGrant();
-psql('hvac_s1', buildTelemetryKeyGrants(observedPoints, localAdminPrincipalId()));
+psql('hvac_s1', buildTelemetryGrants(observedPoints, localAdminPrincipalId()));
 const publicOrigin = process.env.PLATFORM_PUBLIC_ORIGIN || 'https://localhost:8443';
 const { browser, context, principal } = await localAdministratorBrowser(publicOrigin);
 try {

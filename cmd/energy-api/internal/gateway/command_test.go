@@ -69,6 +69,28 @@ func TestGatewayCreateCommandFailsBeforeUpstreamsWithoutCSRF(t *testing.T) {
 	}
 }
 
+func TestGatewayCreateCommandUsesReportedSettingAsFeedback(t *testing.T) {
+	fixture := newCommandGatewayFixture(t, "SETTING")
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(`{"assetId":"`+fixture.assetID+`","commandPointId":"`+fixture.commandPointID+`","parameters":{"setpointC":24.5}}`))
+	fixture.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "reported-setpoint-command")
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("reported setpoint feedback rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(`{"assetId":"`+fixture.assetID+`","commandPointId":"`+fixture.feedbackPointID+`","parameters":{"setpointC":24.5}}`))
+	fixture.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "direct-reported-setpoint")
+	recorder = httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound || fixture.commandCalls.Load() != 1 {
+		t.Fatalf("reported SETTING became a command target: status=%d commands=%d", recorder.Code, fixture.commandCalls.Load())
+	}
+}
+
 func TestGatewayRejectsBrowserCommandAuthorityHeaders(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(`{}`))
@@ -242,6 +264,7 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 }
 
 type commandGatewayFixture struct {
+	feedbackPointType     string
 	handler               *handler
 	sessionID             string
 	tenantID              string
@@ -266,7 +289,7 @@ type commandGatewayFixture struct {
 	approvalCompleted     atomic.Bool
 }
 
-func newCommandGatewayFixture(t *testing.T) *commandGatewayFixture {
+func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGatewayFixture {
 	t.Helper()
 	now := time.Date(2026, 7, 26, 15, 0, 0, 0, time.UTC)
 	gatewaySigner := commandTestSigner(t)
@@ -283,6 +306,9 @@ func newCommandGatewayFixture(t *testing.T) *commandGatewayFixture {
 		controlRelationshipID: "018f3e00-9000-7000-8000-000000000001",
 		gatewaySigner:         gatewaySigner,
 		iamSigner:             iamSigner,
+	}
+	if len(feedbackTypes) > 0 {
+		fixture.feedbackPointType = feedbackTypes[0]
 	}
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
@@ -394,7 +420,7 @@ func (fixture *commandGatewayFixture) telemetryDecisionResponse(t *testing.T, re
 		TenantID: fixture.tenantID, Action: input.Action, ScopeDigest: digest,
 		PolicyRevision: "identity-policy-1", ReasonCode: telemetryauth.ReasonAllowExactScope,
 		DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{{
-			TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID, Keys: []string{defaultCommandTemperatureKey},
+			TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID, Keys: []string{"zone_temperature"},
 		}},
 	}
 	claims := telemetryauth.GrantClaims{
@@ -461,7 +487,7 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 		PointType: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
 		SourceMetadata: map[string]any{
 			"capability": commandmodel.CapabilitySetTemperatureSetpoint, "capabilityRevision": "capability:set-temperature-setpoint:v1",
-			"feedbackSourceKey": defaultCommandTemperatureKey, "parameterKey": commandmodel.ParameterSetpointC,
+			"feedbackSourceKey": "zoneTemperatureC", "feedbackPointKey": "zone_temperature", "parameterKey": commandmodel.ParameterSetpointC,
 		},
 		Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
@@ -470,6 +496,9 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 		PointCode: "zone_temperature", SourceKey: defaultCommandTemperatureKey, DisplayName: "Zone temperature",
 		PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
 		SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	if fixture.feedbackPointType != "" {
+		feedbackPoint.PointType = fixture.feedbackPointType
 	}
 	assetModel := platformapi.SiteAssetModel{
 		SchemaVersion: 2, TenantID: fixture.tenantID, SiteID: fixture.siteID, Assets: []platformapi.Asset{asset}, Devices: []platformapi.Device{device},
@@ -506,7 +535,7 @@ func (fixture *commandGatewayFixture) commandTelemetryClient(t *testing.T, now t
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.telemetryCalls.Add(1)
 		assertCommandInternalHeaders(t, request)
-		if request.URL.Path != internalTelemetrySinglePrefix+fixture.deviceID+"/observation-snapshot" || request.URL.Query().Get("key") != defaultCommandTemperatureKey {
+		if request.URL.Path != internalTelemetrySinglePrefix+fixture.deviceID+"/observation-snapshot" || request.URL.Query().Get("key") != "zone_temperature" {
 			t.Fatalf("unexpected Telemetry Runtime request %s?%s", request.URL.Path, request.URL.RawQuery)
 		}
 		state := s2telemetryapi.DevicePresenceStateOnline
@@ -528,7 +557,7 @@ func (fixture *commandGatewayFixture) commandTelemetryClient(t *testing.T, now t
 			TelemetryReadiness: readiness,
 			DisplayState:       &display,
 			Values: []s2telemetryapi.TelemetryKeyState{{Present: &s2telemetryapi.TelemetryPresentState{
-				Key: s2telemetryapi.TelemetryKey(defaultCommandTemperatureKey), State: "PRESENT", Value: json.RawMessage(`23.0`), ValueType: "NUMBER", Unit: &unit,
+				Key: s2telemetryapi.TelemetryKey("zone_temperature"), State: "PRESENT", Value: json.RawMessage(`23.0`), ValueType: "NUMBER", Unit: &unit,
 				SampledAt: instant, ReceivedAt: instant, Freshness: freshness, Quality: s2telemetryapi.TelemetryQualityGood,
 				QualityReasons: []s2telemetryapi.QualityReasonCode{}, PolicyRevision: policy,
 			}}},
