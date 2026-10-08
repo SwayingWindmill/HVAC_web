@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependency-security-${{ github.event.pull_request.number || github.ref }}
+  group: dependency-security-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
