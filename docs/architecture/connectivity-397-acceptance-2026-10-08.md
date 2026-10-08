@@ -61,8 +61,6 @@ Earlier public POST returned 503 after the owner had accepted intents because of
 
 All raw logs, temporary probes/build files, browser screenshots and runtime credentials stay Git-ignored under `out/` or the existing runtime directory. This record retains reproducible commands, bounded claims and non-secret outcome identifiers.
 
-## Limits retained
-
 ## Two-axis review
 
 Matt code-review skill reviewed the fixed `2d9744fa…380a5d6c` diff in parallel. **Standards: 0 findings**; the earlier unregistered manual-check finding was resolved by retaining only ignored ad hoc evidence, not a new repository gate. **Spec: 0 findings**; the previously missing actual A/B command and full local-startup evidence is now present. The axes were assessed separately against repository standards and all #397 stories. This review metadata is the only post-review change.
