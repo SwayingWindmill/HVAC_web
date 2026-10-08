@@ -7,10 +7,7 @@ import type {
   SiteAssetModel,
   TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
-import {
-  formatTelemetryUnit,
-  telemetryPointDefinition,
-} from '../../domain/centralPlantTelemetry.ts';
+import { formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
 import {
   listPointDefinitions,
   resolveAssetsProfile,
@@ -88,11 +85,6 @@ export interface AssetsTelemetryPointRow {
   readonly space: AssetsSpaceState;
   readonly label: string;
   readonly current: AssetsPointView | null;
-}
-
-export interface BuildAssetsPointRowsInput {
-  readonly assetModel: SiteAssetModel;
-  readonly deviceRows: readonly AssetsDeviceRow[];
 }
 
 export interface BuildAssetsAssetRowsInput {
@@ -205,11 +197,6 @@ export function assetsPointTypeLabel(value: string): string {
 
 export function assetsRegistryStatusLabel(value: string): string {
   return localizedType(value, REGISTRY_STATUS_LABELS, value);
-}
-
-export function assetsTelemetryPointLabel(point: TelemetryPoint): string {
-  const definition = telemetryPointDefinition(point.sourceKey);
-  return definition.label === point.sourceKey ? point.displayName : definition.label;
 }
 
 export function assetsTelemetryPointMeta(point: TelemetryPoint): string {
@@ -430,32 +417,6 @@ export function buildAssetsAssetRows(input: BuildAssetsAssetRowsInput): AssetsAs
     if (rightSpace) return 1;
     return compareRegistryIdentity(left.asset, right.asset);
   });
-}
-
-export function buildAssetsPointRows(input: BuildAssetsPointRowsInput): AssetsTelemetryPointRow[] {
-  const deviceRowById = new Map(input.deviceRows.map((row) => [row.device.id, row]));
-  const deviceOrder = new Map(input.deviceRows.map((row, index) => [row.device.id, index]));
-  const sensorById = new Map(input.assetModel.sensors.map((sensor) => [sensor.id, sensor]));
-  const rows = input.assetModel.telemetryPoints.map((point): AssetsTelemetryPointRow => {
-    const deviceRow = deviceRowById.get(point.reportingDeviceId);
-    if (!deviceRow) throw new Error(`Telemetry Point ${point.id} has no visible Device Endpoint row`);
-    const current = deviceRow.operational.points.find((value) => value.pointId === point.id) ?? null;
-    return {
-      point,
-      device: deviceRow.device,
-      sensor: point.sensorId ? sensorById.get(point.sensorId) ?? null : null,
-      binding: deviceRow.binding,
-      space: deviceRow.space,
-      label: assetsTelemetryPointLabel(point),
-      current,
-    };
-  });
-  return rows.sort((left, right) => (
-    (deviceOrder.get(left.device.id) ?? Number.MAX_SAFE_INTEGER) - (deviceOrder.get(right.device.id) ?? Number.MAX_SAFE_INTEGER)
-    || compareText(left.label, right.label)
-    || compareText(left.point.pointCode, right.point.pointCode)
-    || left.point.id.localeCompare(right.point.id)
-  ));
 }
 
 function oneCurrentTargetId(

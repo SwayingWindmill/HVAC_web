@@ -233,7 +233,7 @@ for (const file of files) {
       'scripts/test-pr-gate-classifier.mjs',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
-    scriptMatch(lower.includes('rms') || lower.includes('browser-audit'), () => selectWeb(file, 'browser or RMS automation changed'));
+    scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {

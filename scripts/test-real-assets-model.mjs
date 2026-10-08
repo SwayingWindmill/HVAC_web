@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  listTelemetryKeys,
+  listPointDefinitions,
   resolveAssetsProfile,
 } from '../apps/hvac-web/src/features/assets/catalog.ts';
 import {
   buildAssetsHierarchy,
-  buildAssetsPointRows,
   buildAssetsRows,
   resolveDeviceBinding,
 } from '../apps/hvac-web/src/features/assets/model.ts';
@@ -290,7 +289,7 @@ test('Device operational projection never presents a value as current when evalu
 });
 
 const chillerProfile = resolveAssetsProfile('water cooled chiller');
-const chillerKeys = listTelemetryKeys(chillerProfile);
+const chillerKeys = listPointDefinitions(chillerProfile).map((definition) => definition.key);
 const chillerPoints = chillerKeys.map((key, index) => ({
   ...telemetryPoint(`01900000-0007-7000-8000-00000000001${index}`, deviceId, null),
   pointCode: key,
@@ -309,7 +308,7 @@ test('catalog resolves aliases but does not silently fallback unknown Device typ
   ]);
   const unknown = resolveAssetsProfile('vendor-special-controller');
   assert.equal(unknown.state, 'unconfigured');
-  assert.deepEqual(listTelemetryKeys(unknown), []);
+  assert.deepEqual(listPointDefinitions(unknown), []);
 });
 
 test('operational projection preserves zero and keeps connection independent from stale telemetry', () => {
@@ -514,49 +513,6 @@ test('Operations hierarchy stops at Device and keeps Sensor/Point inside detail'
   assert.equal(kinds.includes('sensor'), false);
   assert.equal(kinds.includes('point'), false);
   assert.equal(kinds.includes('virtual-sensor'), false);
-});
-
-test('Point projection keeps every registered Point available for entity detail', () => {
-  const plantSpace = space();
-  const plantAsset = asset(assetAId, 'Alpha Chiller');
-  const endpoint = device();
-  const measurementSensor = sensor();
-  const points = [
-    telemetryPoint('01900000-0007-7000-8000-000000000010', endpoint.id, measurementSensor.id),
-    telemetryPoint('01900000-0007-7000-8000-000000000011', endpoint.id, null),
-    telemetryPoint('01900000-0007-7000-8000-000000000012', endpoint.id, null),
-    telemetryPoint('01900000-0007-7000-8000-000000000013', endpoint.id, null, 'STATE'),
-  ].map((point, index) => ({
-    ...point,
-    pointCode: ['chiller_power', 'chiller_cooling_capacity', 'chiller_cop', 'chiller_run_state'][index],
-    sourceKey: ['chiller.power', 'chiller.cooling_capacity', 'chiller.cop', 'chiller.run_state'][index],
-    displayName: ['chiller power', 'chiller cooling capacity', 'chiller cop', 'chiller run state'][index],
-    unit: index < 2 ? 'kW' : null,
-  }));
-  const model = siteAssetModel({
-    spaces: [plantSpace],
-    assets: [plantAsset],
-    devices: [endpoint],
-    sensors: [measurementSensor],
-    telemetryPoints: points,
-    relationships: [
-      relationship('01900000-0004-7000-8000-000000000030', 'ASSET', plantAsset.id, 'SPACE', plantSpace.id),
-      relationship('01900000-0004-7000-8000-000000000031', 'DEVICE', endpoint.id, 'ASSET', plantAsset.id),
-      relationship('01900000-0004-7000-8000-000000000032', 'SENSOR', measurementSensor.id, 'DEVICE', endpoint.id),
-    ],
-  });
-  const currentValues = points.map((point, index) => present(point.pointCode, index + 1, { unit: point.unit }));
-  const rows = buildAssetsRows({
-    assetModel: model,
-    snapshots: new Map([[endpoint.id, { status: 'ok', snapshot: snapshot(currentValues) }]]),
-    now,
-  });
-  const pointRows = buildAssetsPointRows({ assetModel: model, deviceRows: rows });
-
-  assert.equal(pointRows.length, 4);
-  assert.deepEqual(pointRows.map((row) => row.point.id).sort(), points.map((point) => point.id).sort());
-  assert.ok(pointRows.every((row) => row.device.id === endpoint.id));
-  assert.equal(pointRows.find((row) => row.point.pointCode === 'chiller_power').current?.displayValue, '1');
 });
 
 test('multi-Asset Device binding is represented under each Asset with unique hierarchy keys', () => {
