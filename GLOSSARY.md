@@ -272,6 +272,11 @@ The repository-owned deterministic evaluator registered for one Operations Agent
 
 The versioned machine-readable result produced by the repository Benchmark Runner. It records discovery status, scenario and contract versions, ordered structure and blocker phases, scored criteria that remain unevaluated or blocked, and stable failure codes by scenario and dimension. A passing score can never replace or offset a failed blocker phase.
 
+## Workload Principal
+
+An IAM principal that is one of the platform's own unattended workloads, identified by its workload identity rather than by a person. It is authorized by the same Tenant memberships and role bindings as a person and acts only on its own behalf, never through a user session. It is not a tenant-created integration account.
+_Avoid_: service account, system user, robot user
+
 ## Domain Owner
 
 The single bounded context that is authoritative for creating and changing one class of business fact. Physical co-location with another module never transfers Domain Ownership; other contexts interact through governed commands, queries, owner-authored events or rebuildable projections.
