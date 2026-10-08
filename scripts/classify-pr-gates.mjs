@@ -165,7 +165,6 @@ for (const file of files) {
     'scripts/run-pr-gate.mjs',
     'scripts/test-domain-task-matrix.mjs',
     'scripts/test-pr-gate-classifier.mjs',
-    'scripts/test-repository-governance.ts',
     'scripts/update-package-script-long-chain-baseline.mjs',
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
@@ -232,7 +231,6 @@ for (const file of files) {
       'scripts/run-pr-gate.mjs',
       'scripts/test-domain-task-matrix.mjs',
       'scripts/test-pr-gate-classifier.mjs',
-      'scripts/test-repository-governance.ts',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit'), () => selectWeb(file, 'browser or RMS automation changed'));

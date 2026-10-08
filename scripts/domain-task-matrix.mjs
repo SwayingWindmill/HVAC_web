@@ -19,6 +19,7 @@ export const gateCommandMatrix = Object.freeze({
       npmRun('ownership:check'),
       npmRun('events:check'),
       npmRun('deployment:phase1:check'),
+      npmRun('deployment:phase1:tier:test'),
       npmRun('acceptance:phase1:check'),
       npmRun('docs:phase1:consistency:check'),
       npmRun('architecture:phase1:check'),
@@ -38,7 +39,7 @@ export const gateCommandMatrix = Object.freeze({
     command: Object.freeze([nodeRun('scripts/check-s3-command-gateway.mjs')]),
   }),
   unit: Object.freeze({
-    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:e2e')]),
+    web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
     platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
     registry: Object.freeze([npmRun('test:registry-routing')]),
     telemetry: Object.freeze([

@@ -62,7 +62,6 @@ Any static previews under this directory are reference artifacts only. They are 
 ## Automated checks
 
 ```bash
-npm run design:test
 npm run design:check
 npm run web:design:changed
 ```
