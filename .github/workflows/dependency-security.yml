@@ -19,6 +19,9 @@ on:
       - "scripts/check-npm-production-audit.mjs"
       - "scripts/check-production-licenses.mjs"
       - "scripts/test-npm-production-audit-retry.mjs"
+  schedule:
+    # New advisories land without any dependency change; audit main daily.
+    - cron: "23 2 * * *"
   workflow_dispatch:
 
 permissions:
