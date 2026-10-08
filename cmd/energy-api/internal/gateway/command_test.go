@@ -493,7 +493,7 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 	}
 	feedbackPoint := platformapi.TelemetryPoint{
 		ID: fixture.feedbackPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
-		PointCode: "zone_temperature", SourceKey: defaultCommandTemperatureKey, DisplayName: "Zone temperature",
+		PointCode: "zone_temperature", SourceKey: "zone.temperature", DisplayName: "Zone temperature",
 		PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
 		SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}

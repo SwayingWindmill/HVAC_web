@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
@@ -320,6 +321,67 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	}
 	if !allowed || policyRevision != "work-order-access:1/iam:1" || reasonCode != string(workorderauth.ReasonAllowExactScope) || workOrderID != "01910000-1000-7000-8000-000000000001" {
 		t.Fatalf("durable Work Order decision = allowed=%v policy=%q reason=%q workOrder=%q", allowed, policyRevision, reasonCode, workOrderID)
+	}
+}
+
+func TestPostgresCommandAuthorizationLoadsScopedCurrentPermissions(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	const permissionID = "01910000-7100-7000-8000-000000000001"
+	_, err = admin.Exec(ctx, `INSERT INTO iam.command_permissions
+(id,principal_id,tenant_id,site_id,device_id,capability,capability_revision,purpose,maximum_risk,effect,status,valid_from,revision,created_at,updated_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'01910000-4000-7000-8000-000000000001','SET_CHILLED_WATER_TEMPERATURE_SETPOINT','capability:set-chilled-water-temperature-setpoint:v1','COMMAND_SUBMIT','MEDIUM','ALLOW','ACTIVE',now()-interval '1 hour',1,now(),now())`, permissionID, postgresOwnerAPrincipalID, postgresTenantAID, postgresOwnerASite1ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Exec(context.Background(), `DELETE FROM iam.command_permissions WHERE id=$1::uuid`, permissionID)
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	commands := store.CommandAuthorization("command-policy-7", 3)
+	lookup := iam.AuthorizationLookup{SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantAID}
+	facts, err := commands.LookupCommandAuthorization(ctx, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || len(facts.Memberships) != 1 || len(facts.Permissions) != 1 || facts.PolicyRevision != "command-policy-7" || facts.EmergencyRevocationRevision != 3 {
+		t.Fatalf("unexpected Command authority: %#v", facts)
+	}
+	permission := facts.Permissions[0]
+	if permission.Capability != commandmodel.CapabilitySetChilledWaterTemperatureSetpoint || permission.Purpose != commandmodel.AuthorizationCommandSubmit || permission.MaximumRisk != commandmodel.RiskMedium || permission.Status != iam.FactStatusActive {
+		t.Fatalf("lost exact Command permission: %#v", permission)
+	}
+	for _, other := range []iam.AuthorizationLookup{
+		{SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantBID},
+		{SubjectIssuer: postgresFixtureIssuer, Subject: "delegated-engineer", TenantID: postgresTenantAID},
+		{SubjectIssuer: "https://wrong-issuer.example", Subject: "owner-a", TenantID: postgresTenantAID},
+	} {
+		facts, err := commands.LookupCommandAuthorization(ctx, other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(facts.Permissions) != 0 {
+			t.Fatalf("Command permissions leaked across identity/Tenant: %#v", facts)
+		}
+	}
+	if _, err := admin.Exec(ctx, `UPDATE iam.command_permissions SET status='REVOKED',revision=revision+1,updated_at=now() WHERE id=$1::uuid`, permissionID); err != nil {
+		t.Fatal(err)
+	}
+	facts, err = commands.LookupCommandAuthorization(ctx, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Permissions) != 1 || facts.Permissions[0].Status != iam.FactStatusRevoked {
+		t.Fatalf("revoked permission was cached: %#v", facts)
 	}
 }
 

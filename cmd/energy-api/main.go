@@ -500,7 +500,6 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		BackendBaseURL:    serviceURL,
 		BackendAudience:   envOr("COMMAND_SERVICE_AUDIENCE", "command-service"),
 		IAMGrantIssuer:    envOr("IAM_COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
-		TemperatureKey:    envOr("COMMAND_TEMPERATURE_KEY", "zone.temperature"),
 		Timeout:           10 * time.Second,
 		MaxResponseBytes:  256 << 10,
 		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},

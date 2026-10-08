@@ -26,12 +26,11 @@ import (
 )
 
 const (
-	publicCommandsPath           = "/api/v1/commands"
-	internalCommandsPath         = "/internal/v1/commands"
-	commandDecisionPath          = "/internal/v1/command/decision"
-	defaultCommandTemperatureKey = "zone.temperature"
-	maximumCommandRequestBody    = int64(16 << 10)
-	defaultCommandResponseLimit  = int64(256 << 10)
+	publicCommandsPath          = "/api/v1/commands"
+	internalCommandsPath        = "/internal/v1/commands"
+	commandDecisionPath         = "/internal/v1/command/decision"
+	maximumCommandRequestBody   = int64(16 << 10)
+	defaultCommandResponseLimit = int64(256 << 10)
 )
 
 type CommandConfig struct {
@@ -39,7 +38,6 @@ type CommandConfig struct {
 	BackendHTTPClient *http.Client
 	BackendAudience   string
 	IAMGrantIssuer    string
-	TemperatureKey    string
 	Timeout           time.Duration
 	MaxResponseBytes  int64
 }
@@ -49,7 +47,6 @@ type commandController struct {
 	httpClient       *http.Client
 	backendAudience  string
 	iamGrantIssuer   string
-	temperatureKey   string
 	timeout          time.Duration
 	maxResponseBytes int64
 }
@@ -172,9 +169,6 @@ func newCommandController(config *CommandConfig) *commandController {
 	if resolved.IAMGrantIssuer == "" {
 		resolved.IAMGrantIssuer = "spiffe://hvac.local/iam-service"
 	}
-	if resolved.TemperatureKey == "" {
-		resolved.TemperatureKey = defaultCommandTemperatureKey
-	}
 	if resolved.Timeout <= 0 || resolved.Timeout > 30*time.Second {
 		resolved.Timeout = 10 * time.Second
 	}
@@ -184,7 +178,7 @@ func newCommandController(config *CommandConfig) *commandController {
 	return &commandController{
 		baseURL: resolved.BackendBaseURL, httpClient: resolved.BackendHTTPClient,
 		backendAudience: resolved.BackendAudience, iamGrantIssuer: resolved.IAMGrantIssuer,
-		temperatureKey: resolved.TemperatureKey, timeout: resolved.Timeout,
+		timeout:          resolved.Timeout,
 		maxResponseBytes: resolved.MaxResponseBytes,
 	}
 }

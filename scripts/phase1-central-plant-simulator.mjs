@@ -283,7 +283,7 @@ function localAdminPrincipalId() {
   return principalId;
 }
 
-function buildTelemetryGrants(points, principalId) {
+function buildLocalGrants(points, controlPoints, principalId) {
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]::text[]`;
   const scopes = localSites.map((site) => `(
     ${sqlLiteral(`01a006a0-0000-7000-8000-${String(site.index + 1).padStart(12, '0')}`)},
@@ -306,7 +306,28 @@ function buildTelemetryGrants(points, principalId) {
       )`;
     });
   }).join(',\n');
+  const commands = localSites.flatMap((site) => {
+    const deviceByName = new Map(siteDevices(site).map((device) => [device.name, device]));
+    return controlPoints.map((point, index) => `(
+      ${sqlLiteral(siteUUID(site, 0x710000000000 + index + 1))}, ${sqlLiteral(principalId)},
+      ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, ${sqlLiteral(deviceByName.get(point.deviceId).platformDeviceId)},
+      ${sqlLiteral(point.sourceMetadata.capability)}, ${sqlLiteral(point.sourceMetadata.capabilityRevision)},
+      'COMMAND_SUBMIT', 'MEDIUM', 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+    )`);
+  }).join(',\n');
   return `BEGIN;
+INSERT INTO iam.command_permissions (id,principal_id,tenant_id,site_id,device_id,capability,capability_revision,purpose,maximum_risk,effect,status,valid_from,valid_to,revision,created_at,updated_at) VALUES
+${commands}
+ON CONFLICT (id) DO UPDATE SET principal_id=EXCLUDED.principal_id,tenant_id=EXCLUDED.tenant_id,
+site_id=EXCLUDED.site_id,device_id=EXCLUDED.device_id,capability=EXCLUDED.capability,
+capability_revision=EXCLUDED.capability_revision,purpose=EXCLUDED.purpose,maximum_risk=EXCLUDED.maximum_risk,
+effect='ALLOW',status='ACTIVE',valid_to=NULL,revision=iam.command_permissions.revision+1,updated_at=clock_timestamp()
+WHERE (iam.command_permissions.principal_id,iam.command_permissions.tenant_id,iam.command_permissions.site_id,
+       iam.command_permissions.device_id,iam.command_permissions.capability,iam.command_permissions.capability_revision,
+       iam.command_permissions.purpose,iam.command_permissions.maximum_risk,iam.command_permissions.effect,
+       iam.command_permissions.status,iam.command_permissions.valid_to)
+IS DISTINCT FROM (EXCLUDED.principal_id,EXCLUDED.tenant_id,EXCLUDED.site_id,EXCLUDED.device_id,EXCLUDED.capability,
+                  EXCLUDED.capability_revision,EXCLUDED.purpose,EXCLUDED.maximum_risk,'ALLOW','ACTIVE',NULL::timestamptz);
 INSERT INTO iam.site_bindings (id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${sites}
 ON CONFLICT (tenant_id, site_id, principal_id) DO UPDATE SET
@@ -452,10 +473,10 @@ const seededPoints = rig ? applyRegistryRigToPoints(rig, registryPoints) : regis
 const observedPoints = seededPoints.filter((point) => point.pointType !== 'COMMAND');
 const controlPoints = seededPoints.filter((point) => point.pointType === 'COMMAND');
 
-// Reapply only the local simulator's explicit read permissions without reseeding
+// Reapply only the local simulator's explicit permissions without reseeding
 // Registry/Telemetry or restarting a running plant.
 if (process.argv.includes('--authorization-only')) {
-  psql('hvac_s1', buildTelemetryGrants(observedPoints, localAdminPrincipalId()));
+  psql('hvac_s1', buildLocalGrants(observedPoints, controlPoints, localAdminPrincipalId()));
   process.exit(0);
 }
 
@@ -466,7 +487,7 @@ for (const site of localSites) {
 for (const site of localSites) writeSimulatorConfig(site);
 // Credential bootstrap uses the local administrator's explicit Gateway write scopes.
 runLocalAdminGrant();
-psql('hvac_s1', buildTelemetryGrants(observedPoints, localAdminPrincipalId()));
+psql('hvac_s1', buildLocalGrants(observedPoints, controlPoints, localAdminPrincipalId()));
 const publicOrigin = process.env.PLATFORM_PUBLIC_ORIGIN || 'https://localhost:8443';
 const { browser, context, principal } = await localAdministratorBrowser(publicOrigin);
 try {

@@ -34,6 +34,7 @@ hvac_s1|infra/registry/postgres/init/009g-object-storage-governance-v2.sql
 hvac_s1|infra/registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s1|infra/registry/postgres/init/009l-scheduler-job-v1.sql
 hvac_s1|infra/registry/postgres/init/009-s04-tenant-iam-admin.sql
+hvac_s1|infra/registry/postgres/init/010-command-authorization.sql
 hvac_s1|services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 hvac_s1|services/notification-service/migrations/001_s16_notification.sql
 hvac_s1|infra/registry/postgres/init/010-s05-registry-writer.sql

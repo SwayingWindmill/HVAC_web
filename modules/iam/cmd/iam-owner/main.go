@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +59,7 @@ func main() {
 	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
 	authorizationStore := iam.NewDenyAllAuthorizationStore(policyRevision)
 	var telemetryAuthorizationStore iam.TelemetryAuthorizationStore
+	var commandAuthorizationStore iam.CommandAuthorizationStore
 	var alarmAuthorizationStore iam.AlarmAuthorizationStore
 	var alarmAuditSink iam.AlarmDecisionAuditSink
 	var workOrderAuthorizationStore iam.WorkOrderAuthorizationStore
@@ -82,6 +84,12 @@ func main() {
 		}
 		defer postgresStore.Close()
 		authorizationStore = postgresStore
+		commandRevocationRevision, err := strconv.ParseUint(requiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION"), 10, 64)
+		if err != nil {
+			logger.Error("iam_command_revocation_revision_invalid")
+			os.Exit(1)
+		}
+		commandAuthorizationStore = postgresStore.CommandAuthorization(requiredEnv("COMMAND_POLICY_REVISION"), commandRevocationRevision)
 		telemetryAuthorizationStore = postgresStore
 		alarmAuthorizationStore = postgresStore
 		alarmAuditSink = postgresStore
@@ -164,11 +172,12 @@ func main() {
 			AllowedTelemetryGrantPresenters: []string{
 				envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 			},
-			TelemetryRuntimeSPIFFE: envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
-			TelemetryGrantStore:    telemetryGrantStore,
-			CommandGrantSigner:     registryGrantSigner,
-			CommandGrantIssuer:     iamSPIFFEID,
-			CommandGrantAudience:   envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
+			TelemetryRuntimeSPIFFE:    envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
+			TelemetryGrantStore:       telemetryGrantStore,
+			CommandAuthorizationStore: commandAuthorizationStore,
+			CommandGrantSigner:        registryGrantSigner,
+			CommandGrantIssuer:        iamSPIFFEID,
+			CommandGrantAudience:      envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
