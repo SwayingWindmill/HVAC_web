@@ -23,8 +23,8 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 	}
 	facts := commandFacts(now, []CommandPermission{{
 		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
-		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
-		CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1",
 		Purpose:            commandmodel.AuthorizationCommandSubmit, MaximumRisk: commandmodel.RiskMedium,
 		Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
 	}})
@@ -36,8 +36,8 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 
 	input := commandauth.DecisionRequest{
 		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
-		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
-		CapabilityRevision: "capability:set-temperature-setpoint:v1", Purpose: commandmodel.AuthorizationCommandSubmit,
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1", Purpose: commandmodel.AuthorizationCommandSubmit,
 	}
 	body, _ := json.Marshal(input)
 	recorder := httptest.NewRecorder()

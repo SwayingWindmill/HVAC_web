@@ -37,6 +37,7 @@ services:
       - ./postgres/init/009k-mlops-metadata-v2.sql:/docker-entrypoint-initdb.d/238.sql:ro
       - ./postgres/init/009l-scheduler-job-v1.sql:/docker-entrypoint-initdb.d/240.sql:ro
       - ./postgres/init/009-s04-tenant-iam-admin.sql:/docker-entrypoint-initdb.d/250.sql:ro
+      - ./postgres/init/010-command-authorization.sql:/docker-entrypoint-initdb.d/255.sql:ro
       - ./postgres/init/010-s05-registry-writer.sql:/docker-entrypoint-initdb.d/260.sql:ro
       - ./postgres/init/011-s08-metric-lifecycle.sql:/docker-entrypoint-initdb.d/270.sql:ro
       - ./postgres/init/012-s19-settlement-projections.sql:/docker-entrypoint-initdb.d/280.sql:ro

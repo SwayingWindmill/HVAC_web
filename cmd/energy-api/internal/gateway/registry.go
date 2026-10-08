@@ -1112,6 +1112,10 @@ func structurallyValidRegistryGrant(value string) bool {
 }
 
 func isLowerUUIDv7(value string) bool {
+	return isLowerUUID(value) && value[14] == '7' && strings.ContainsRune("89ab", rune(value[19]))
+}
+
+func isLowerUUID(value string) bool {
 	if value != strings.ToLower(value) || len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
 		return false
 	}
@@ -1120,7 +1124,7 @@ func isLowerUUIDv7(value string) bool {
 	if _, err := hex.Decode(decoded, []byte(compact)); err != nil {
 		return false
 	}
-	return decoded[6]>>4 == 7 && decoded[8]>>6 == 2
+	return decoded[8]>>6 == 2
 }
 
 func sha256Hex(value []byte) string {

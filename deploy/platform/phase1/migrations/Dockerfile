@@ -44,6 +44,7 @@ COPY infra/registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hva
 COPY infra/registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/registry/postgres/init/009i-backend-integration-v2.sql
 COPY infra/registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/registry/postgres/init/009l-scheduler-job-v1.sql
 COPY infra/registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/registry/postgres/init/009-s04-tenant-iam-admin.sql
+COPY infra/registry/postgres/init/010-command-authorization.sql /opt/hvac/repo/infra/registry/postgres/init/010-command-authorization.sql
 COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac/repo/services/notification-service/migrations/001_s16_notification.sql
 COPY infra/registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/registry/postgres/init/010-s05-registry-writer.sql

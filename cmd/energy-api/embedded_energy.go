@@ -357,6 +357,13 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-iam", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
+	commandRevocationRevision, err := strconv.ParseUint(energyRequiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION"), 10, 64)
+	if err != nil {
+		for _, closeStore := range closeFuncs {
+			closeStore()
+		}
+		return nil, nil, func() {}, errors.New("Command emergency revocation revision is invalid")
+	}
 	config := iamserver.Config{
 		AllowedWorkloadSPIFFE:    envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 		CoreWorkloadSPIFFE:       envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
@@ -386,9 +393,10 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		AllowedTelemetryGrantPresenters: []string{
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		},
-		CommandGrantSigner:   signer,
-		CommandGrantIssuer:   iamSPIFFEID,
-		CommandGrantAudience: envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
+		CommandAuthorizationStore: store.CommandAuthorization(energyRequiredEnv("COMMAND_POLICY_REVISION"), commandRevocationRevision),
+		CommandGrantSigner:        signer,
+		CommandGrantIssuer:        iamSPIFFEID,
+		CommandGrantAudience:      envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
 	}
 	server := &http.Server{
 		Addr:    envOr("IAM_SERVICE_ADDR", "127.0.0.1:8444"),

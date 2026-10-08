@@ -60,6 +60,7 @@
         "infra/registry/postgres/init/009i-backend-integration-v2.sql",
         "infra/registry/postgres/init/009l-scheduler-job-v1.sql",
         "infra/registry/postgres/init/009-s04-tenant-iam-admin.sql",
+        "infra/registry/postgres/init/010-command-authorization.sql",
         "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
         "services/notification-service/migrations/001_s16_notification.sql",
         "infra/registry/postgres/init/010-s05-registry-writer.sql",

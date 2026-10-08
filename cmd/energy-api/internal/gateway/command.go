@@ -26,12 +26,11 @@ import (
 )
 
 const (
-	publicCommandsPath           = "/api/v1/commands"
-	internalCommandsPath         = "/internal/v1/commands"
-	commandDecisionPath          = "/internal/v1/command/decision"
-	defaultCommandTemperatureKey = "zone.temperature"
-	maximumCommandRequestBody    = int64(16 << 10)
-	defaultCommandResponseLimit  = int64(256 << 10)
+	publicCommandsPath          = "/api/v1/commands"
+	internalCommandsPath        = "/internal/v1/commands"
+	commandDecisionPath         = "/internal/v1/command/decision"
+	maximumCommandRequestBody   = int64(16 << 10)
+	defaultCommandResponseLimit = int64(256 << 10)
 )
 
 type CommandConfig struct {
@@ -39,7 +38,6 @@ type CommandConfig struct {
 	BackendHTTPClient *http.Client
 	BackendAudience   string
 	IAMGrantIssuer    string
-	TemperatureKey    string
 	Timeout           time.Duration
 	MaxResponseBytes  int64
 }
@@ -49,7 +47,6 @@ type commandController struct {
 	httpClient       *http.Client
 	backendAudience  string
 	iamGrantIssuer   string
-	temperatureKey   string
 	timeout          time.Duration
 	maxResponseBytes int64
 }
@@ -172,9 +169,6 @@ func newCommandController(config *CommandConfig) *commandController {
 	if resolved.IAMGrantIssuer == "" {
 		resolved.IAMGrantIssuer = "spiffe://hvac.local/iam-service"
 	}
-	if resolved.TemperatureKey == "" {
-		resolved.TemperatureKey = defaultCommandTemperatureKey
-	}
 	if resolved.Timeout <= 0 || resolved.Timeout > 30*time.Second {
 		resolved.Timeout = 10 * time.Second
 	}
@@ -184,7 +178,7 @@ func newCommandController(config *CommandConfig) *commandController {
 	return &commandController{
 		baseURL: resolved.BackendBaseURL, httpClient: resolved.BackendHTTPClient,
 		backendAudience: resolved.BackendAudience, iamGrantIssuer: resolved.IAMGrantIssuer,
-		temperatureKey: resolved.TemperatureKey, timeout: resolved.Timeout,
+		timeout:          resolved.Timeout,
 		maxResponseBytes: resolved.MaxResponseBytes,
 	}
 }
@@ -280,7 +274,7 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
 	}
-	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.SourceKey)
+	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointCode)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -313,7 +307,7 @@ func (h *handler) getCommand(writer http.ResponseWriter, request *http.Request, 
 	if !ok {
 		return
 	}
-	if !isLowerUUIDv7(commandID) {
+	if !isLowerUUID(commandID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
@@ -334,7 +328,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
 		return
 	}
-	if !isLowerUUIDv7(commandID) {
+	if !isLowerUUID(commandID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
 		return
 	}
@@ -578,7 +572,7 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 	capability := commandmodel.Capability(strings.TrimSpace(capabilityName))
 	profile, supported := commandCapabilityProfile(capability)
 	declaredRevision, _ := point.SourceMetadata["capabilityRevision"].(string)
-	feedbackPointKey, _ := point.SourceMetadata["feedbackSourceKey"].(string)
+	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
 	if !supported || strings.TrimSpace(declaredRevision) != profile.Revision || strings.TrimSpace(feedbackPointKey) == "" {
 		failure := commandUnavailable("The COMMAND Point does not declare a supported authoritative capability contract.")
 		return assetCommandTarget{}, &failure
@@ -600,12 +594,12 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 	var feedbackPoint *platformapi.TelemetryPoint
 	for index := range assetModel.TelemetryPoints {
 		candidate := &assetModel.TelemetryPoints[index]
-		if candidate.ReportingDeviceID == device.ID && candidate.SourceKey == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
+		if candidate.ReportingDeviceID == device.ID && candidate.PointCode == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
 			feedbackPoint = candidate
 			break
 		}
 	}
-	if feedbackPoint == nil || (feedbackPoint.PointType != "STATE" && feedbackPoint.PointType != "TELEMETRY") {
+	if feedbackPoint == nil || (feedbackPoint.PointType != "STATE" && feedbackPoint.PointType != "TELEMETRY" && feedbackPoint.PointType != "SETTING") {
 		failure := commandUnavailable("The COMMAND Point has no active authoritative feedback Point.")
 		return assetCommandTarget{}, &failure
 	}
@@ -1013,7 +1007,7 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	}
 	profile, supported := commandCapabilityProfile(view.Capability)
 	if !supported || view.SchemaVersion != 1 ||
-		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
+		!isLowerUUID(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
 		!isLowerUUIDv7(view.DeviceID) || !isLowerUUIDv7(view.PointID) || view.CapabilityRevision != profile.Revision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		!validCommandParameters(view.Capability, map[string]any{"parameterKey": profile.ParameterKey}, view.Parameters) || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||
