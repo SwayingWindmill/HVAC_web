@@ -449,13 +449,13 @@ function runLocalAdminGrant() {
 function startSimulatorService() {
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
-    'up', '-d', '--build', 'connectivity',
+    'up', '-d', '--no-deps', 'connectivity',
   ]);
   run(process.execPath, [
     path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs'),
     '--simulator-acceptance',
     '--profile', 'simulator-acceptance',
-    'up', '-d', '--build', ...localSites.map((site) => site.simulatorService),
+    'up', '-d', '--build', '--no-deps', ...localSites.map((site) => site.simulatorService),
   ]);
 }
 

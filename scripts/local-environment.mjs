@@ -111,7 +111,7 @@ function up() {
   ensureAdministrator();
   script('phase1-bootstrap-local-foundation.mjs');
   run([launcher, 'run', '--rm', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
-  compose('--source-deploy', '--intelligence', 'up', '-d');
+  compose('--source-deploy', '--integration', '--intelligence', 'up', '-d');
   ensureServiceDataDirectory('data', 'eg8200');
   ensureServiceDataDirectory('data', 'eg8200-b');
   script('phase1-central-plant-simulator.mjs');

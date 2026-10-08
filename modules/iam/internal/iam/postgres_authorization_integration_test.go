@@ -362,7 +362,7 @@ VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'01910000-4000-7000-8000-00000000000
 	}
 	for _, other := range []iam.AuthorizationLookup{
 		{SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantBID},
-		{SubjectIssuer: postgresFixtureIssuer, Subject: "delegated-engineer", TenantID: postgresTenantAID},
+		{SubjectIssuer: postgresFixtureIssuer, Subject: "delegated", TenantID: postgresTenantAID},
 		{SubjectIssuer: "https://wrong-issuer.example", Subject: "owner-a", TenantID: postgresTenantAID},
 	} {
 		facts, err := commands.LookupCommandAuthorization(ctx, other)
@@ -371,6 +371,9 @@ VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'01910000-4000-7000-8000-00000000000
 		}
 		if len(facts.Permissions) != 0 {
 			t.Fatalf("Command permissions leaked across identity/Tenant: %#v", facts)
+		}
+		if other.Subject == "delegated" && (!facts.Found || facts.Principal.ID != postgresDelegatedPrincipalID) {
+			t.Fatalf("principal isolation test did not resolve the other principal: %#v", facts)
 		}
 	}
 	if _, err := admin.Exec(ctx, `UPDATE iam.command_permissions SET status='REVOKED',revision=revision+1,updated_at=now() WHERE id=$1::uuid`, permissionID); err != nil {
