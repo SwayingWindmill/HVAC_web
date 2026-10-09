@@ -107,7 +107,15 @@ func requiredApprovalCount(policy commandmodel.ApprovalPolicy) int {
 	}
 }
 
+// ApprovalWindow bounds how long a command may wait for approval after submission. Risk
+// was assessed against the state at submission, and an unapproved command must not hold
+// the Device's command sequence indefinitely.
+const ApprovalWindow = 5 * time.Minute
+
 func validateApproval(intent commandmodel.CommandIntent, approval commandmodel.ApprovalEvidence, now time.Time) error {
+	if !now.Before(intent.CreatedAt.Add(ApprovalWindow)) {
+		return ErrApprovalInvalid
+	}
 	if strings.TrimSpace(approval.ApprovalID) == "" || strings.TrimSpace(approval.ApproverID) == "" ||
 		strings.TrimSpace(approval.ApproverRole) == "" || approval.ApproverID == intent.PrincipalID {
 		return ErrApprovalInvalid

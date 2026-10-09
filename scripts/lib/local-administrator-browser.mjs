@@ -3,9 +3,9 @@ import { chromium } from '@playwright/test';
 import { runtimePath } from './local-environment.mjs';
 import { resolveLinuxBrowserExecutable } from './browser-runtime.mjs';
 
-// Uses the one existing local Identity account; credentials never leave this process.
-export async function localAdministratorBrowser(origin) {
-  const credentials = Object.fromEntries(readFileSync(runtimePath('local-admin.credentials'), 'utf8')
+// Signs in a local Identity account (the administrator by default); credentials never leave this process.
+export async function localAdministratorBrowser(origin, credentialsFile = runtimePath('local-admin.credentials')) {
+  const credentials = Object.fromEntries(readFileSync(credentialsFile, 'utf8')
     .trim().split(/\r?\n/).map((line) => { const index = line.indexOf('='); return [line.slice(0, index), line.slice(index + 1)]; }));
   const browser = await chromium.launch({ headless: true, executablePath: resolveLinuxBrowserExecutable() });
   try {

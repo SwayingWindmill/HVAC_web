@@ -79,8 +79,6 @@ services:
     volumes:
       - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
     expose: ["1502", "19096"]
-    ports:
-      - "127.0.0.1:${ATV630_VIRTUAL_DIAGNOSTICS_PORT:-19096}:19096"
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19096/health/ready"]
       interval: 2s
@@ -106,9 +104,9 @@ services:
       S1_CORE_DATABASE_URL: ${ATV630_REGISTRY_DATABASE_URL:-}
       ATV630_TEMPLATE_TENANT_ID: ${ATV630_TEMPLATE_TENANT_ID:-}
       ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID: ${ATV630_TEMPLATE_RELEASE_PRINCIPAL_ID:-}
-      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
+      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/atv630-edge/atv630-template-revision-id
     volumes:
-      - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config
+      - ${ATV630_EDGE_QUEUE_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/data/atv630-edge}:/run/hvac/atv630-edge
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,9 +129,10 @@ services:
     image: ${ATV630_EDGE_IMAGE:-hvac/atv630-edge:0.1.0-dev}
     environment:
       EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
-      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
+      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/atv630-edge-mqtt.json
+      EG8200_ENROLLMENT_CODE: ${ATV630_EDGE_ENROLLMENT_CODE:-}
       ATV630_MODBUS_ENDPOINT: virtual-atv630:1502
-      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
+      ATV630_TEMPLATE_REVISION_FILE: /run/hvac/eg8200/atv630-template-revision-id
       ATV630_EDGE_DIAGNOSTICS_ADDR: :19097
     depends_on:
       atv630-template-release:
@@ -148,16 +147,15 @@ services:
       - ${ATV630_PLANT_CONFIG_PATH:-../../tools/eg8200-simulator/configs/central-plant.local.json}:/run/hvac/config/plant.json:ro
       - ${PHASE1_RUNTIME_CONFIG_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/config}:/run/hvac/runtime-config:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/internal-pki}:/run/hvac/pki:ro
+      - ${PUBLIC_TLS_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/tls}/public.crt:/run/hvac/enrollment-ca.pem:ro
       - ${ATV630_EDGE_QUEUE_DIR:-${PHASE1_RUNTIME_DIR:-../platform/phase1/runtime}/data/atv630-edge}:/run/hvac/eg8200
-    ports:
-      - "127.0.0.1:${ATV630_EDGE_DIAGNOSTICS_PORT:-19097}:19097"
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19097/health/ready"]
       interval: 2s
       timeout: 2s
       retries: 30
       start_period: 5s
-    networks: [mqtt]
+    networks: [mqtt, application]
     cpus: ${ATV630_EDGE_CPUS:-0.50}
     mem_limit: ${ATV630_EDGE_MEMORY_LIMIT:-256m}
     mem_reservation: ${ATV630_EDGE_MEMORY_RESERVATION:-64m}

@@ -57,6 +57,8 @@ export const gateCommandMatrix = Object.freeze({
         './libs/commandauth/...',
         './libs/commandmodel/...',
         './modules/command/...',
+        './libs/edgecontrol/...',
+        './tools/eg8200-simulator/...',
       ),
     ]),
     alarm: Object.freeze([
