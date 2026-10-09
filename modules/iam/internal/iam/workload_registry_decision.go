@@ -3,7 +3,6 @@ package iam
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -29,11 +28,6 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}
-	trustDomain, err := url.Parse(workload)
-	if err != nil || trustDomain.Host == "" {
-		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
-		return http.StatusUnauthorized
-	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
 	var decisionRequest registryauth.DecisionRequest
 	decoder := json.NewDecoder(request.Body)
@@ -43,6 +37,6 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		return http.StatusBadRequest
 	}
 	return h.issueRegistryDecision(writer, request, decisionRequest, registryGrantActor{
-		subjectIssuer: "spiffe://" + trustDomain.Host, subject: workload, presenter: workload,
+		subjectIssuer: "spiffe://" + strings.SplitN(strings.TrimPrefix(workload, "spiffe://"), "/", 2)[0], subject: workload, presenter: workload,
 	})
 }

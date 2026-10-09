@@ -136,7 +136,7 @@ func main() {
 			span.SetStatus("ok", "")
 			span.End()
 			if projected > 0 {
-				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"energy_type": energy.EnergyTypeElectricity}, float64(projected))
+				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}

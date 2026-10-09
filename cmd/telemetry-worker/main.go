@@ -447,7 +447,7 @@ func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.P
 			span.SetStatus("ok", "")
 			span.End()
 			if projected > 0 {
-				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"energy_type": analyticsprojector.EnergyTypeElectricity}, float64(projected))
+				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}

@@ -51,10 +51,10 @@ Required:
 |---|---|
 | `ANALYTICS_CLICKHOUSE_HTTP_URL` | ClickHouse HTTP origin |
 | `ANALYTICS_CORE_REGISTRY_URL` | Platform Core HTTP origin |
-| `ANALYTICS_CORE_CA` | Core server CA bundle |
-| `ANALYTICS_CORE_TLS_CERT` | Projector mTLS certificate |
-| `ANALYTICS_CORE_TLS_KEY` | Projector mTLS private key |
-| `ANALYTICS_CORE_REGISTRY_GRANT` or `ANALYTICS_CORE_REGISTRY_GRANT_FILE` | Registry delegation grant |
+| `ANALYTICS_IAM_URL` | IAM HTTP origin that issues the projector's Registry grants |
+| `ANALYTICS_INTERNAL_CA` | Internal CA bundle for Core and IAM |
+| `ANALYTICS_INTERNAL_TLS_CERT` | Projector mTLS certificate (its Workload Principal identity) |
+| `ANALYTICS_INTERNAL_TLS_KEY` | Projector mTLS private key |
 
 Optional defaults:
 

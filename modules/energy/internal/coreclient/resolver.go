@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -33,14 +32,14 @@ type Config struct {
 }
 
 // Resolver resolves meter bindings from Core Registry as the projector's own
-// Workload Principal, holding one short-lived IAM grant per Tenant (ADR 0017).
+// Workload Principal, holding one short-lived IAM grant per Tenant (ADR 0017). The
+// projector calls it sequentially, so the grant cache is not synchronized.
 type Resolver struct {
 	endpoint    *url.URL
 	iamEndpoint *url.URL
 	httpClient  *http.Client
 	now         func() time.Time
 
-	mutex  sync.Mutex
 	grants map[string]workloadGrant
 }
 
@@ -137,8 +136,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 }
 
 func (resolver *Resolver) grantFor(ctx context.Context, tenantID string) (string, error) {
-	resolver.mutex.Lock()
-	defer resolver.mutex.Unlock()
 	if held, ok := resolver.grants[tenantID]; ok && resolver.now().Add(grantRefreshMargin).Before(held.expiresAt) {
 		return held.token, nil
 	}
@@ -161,7 +158,7 @@ func (resolver *Resolver) grantFor(ctx context.Context, tenantID string) (string
 	if err := json.Unmarshal(payload, &response); err != nil {
 		return "", fmt.Errorf("decode Registry workload decision: %w", err)
 	}
-	if !response.Decision.Allowed || response.DelegationGrant == "" {
+	if !response.Decision.Allowed {
 		return "", fmt.Errorf("IAM denied Registry meter binding resolution for tenant %s: %s", tenantID, response.Decision.ReasonCode)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, response.DelegationGrantExpiresAt)

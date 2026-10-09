@@ -365,6 +365,7 @@ func validateBindingResolution(delta CounterDelta, binding BindingResolution) er
 		"meter_binding_id":    binding.MeterBindingID,
 		"topology_version_id": binding.TopologyVersionID,
 		"energy_type_id":      binding.EnergyTypeID,
+		"energy_type":         binding.EnergyType,
 		"device_id":           binding.DeviceID,
 		"point_id":            binding.PointID,
 	} {
