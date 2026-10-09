@@ -2,6 +2,7 @@ package commandmodel
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -143,11 +144,9 @@ func ScalarMatches(actual, expected ScalarValue, tolerance float64) bool {
 		if actual.Number == nil {
 			return false
 		}
-		delta := *actual.Number - *expected.Number
-		if delta < 0 {
-			delta = -delta
-		}
-		return delta <= tolerance
+		// The relative term absorbs binary representation error, as numpy.isclose's rtol does,
+		// so a reading exactly at the tolerance (48.1 against 48 within 0.1) matches.
+		return math.Abs(*actual.Number-*expected.Number) <= tolerance+1e-9*math.Abs(*expected.Number)
 	}
 	if expected.Text != nil {
 		return actual.Text != nil && *actual.Text == *expected.Text
