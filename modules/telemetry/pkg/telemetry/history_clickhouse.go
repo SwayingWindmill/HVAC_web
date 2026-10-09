@@ -60,7 +60,7 @@ func NewClickHouseHistorySink(config ClickHouseHistoryConfig) (*ClickHouseHistor
 	}, nil
 }
 
-func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, observations []HistoryObservation) error {
+func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, sequence uint64, observations []HistoryObservation) error {
 	if sink == nil || sink.baseURL == nil || sink.httpClient == nil {
 		return errors.New("ClickHouse history sink is closed")
 	}
@@ -70,12 +70,16 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, obser
 	if len(observations) > 4096 {
 		return errors.New("ClickHouse history insert batch exceeds 4096 observations")
 	}
+	if sequence == 0 {
+		return errors.New("ClickHouse history insert requires the batch History Sequence")
+	}
 	// PostgreSQL UPDATE RETURNING has no order guarantee. Retries must produce
 	// identical rows, order and block boundaries, including after a worker restart.
 	observations = slices.Clone(observations)
 	slices.SortFunc(observations, func(a, b HistoryObservation) int { return strings.Compare(a.ObservationID, b.ObservationID) })
 	var encoded bytes.Buffer
 	for _, observation := range observations {
+		observation.HistorySequence = sequence
 		if !uuidV7Pattern.MatchString(observation.ObservationID) {
 			return errors.New("ClickHouse history observation ID must be UUIDv7")
 		}

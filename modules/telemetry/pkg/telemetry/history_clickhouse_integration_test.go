@@ -85,10 +85,10 @@ func TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry(t *testing.T) 
 		t.Fatal(err)
 	}
 	batch, err := repository.ClaimHistoryBatch(ctx, 16, clock, 30*time.Second, 4)
-	if err != nil || len(batch.Observations) != 1 {
+	if err != nil || len(batch.Observations) != 1 || batch.Sequence == 0 {
 		t.Fatalf("claim=%+v err=%v", batch, err)
 	}
-	if err := sink.InsertObservations(ctx, batch.Observations); err != nil {
+	if err := sink.InsertObservations(ctx, batch.Sequence, batch.Observations); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a process dying after ClickHouse succeeds but before PG acknowledgement.
@@ -101,6 +101,24 @@ func TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry(t *testing.T) 
 	}
 	assertClickHouseObservation(t, clickHouseURL, candidate.Position.EventID, "1\t24.75\tACCEPTED\tGOOD")
 	assertClickHouseHourly(t, clickHouseURL, "1\t24.75\t24.75\t24.75")
+	// The retry keeps the batch's History Sequence, so the row is deduplicated, not re-sequenced.
+	assertClickHouseHistorySequence(t, clickHouseURL, candidate.Position.EventID, batch.Sequence)
+
+	next := ingestCandidate(
+		"018f2e00-9300-7000-8000-000000000003", sourceA, partition, 2, SourcePathPoll,
+		"mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`25`), "NUMBER", "Cel",
+		observedAt.Add(time.Hour-time.Second), observedAt.Add(time.Hour),
+	)
+	if _, err := store.AcceptObservation(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Hour)
+	if projected, err := relay.RelayOnce(ctx); err != nil || projected != 1 {
+		t.Fatalf("next projection=%d err=%v", projected, err)
+	}
+	if sequence := clickHouseHistorySequence(t, clickHouseURL, next.Position.EventID); sequence <= batch.Sequence {
+		t.Fatalf("later batch History Sequence=%d, want above %d", sequence, batch.Sequence)
+	}
 
 	var state string
 	var attempts int
@@ -127,6 +145,23 @@ FORMAT TSVRaw
 	if actual := clickHouseQuery(t, baseURL, query); actual != expected {
 		t.Fatalf("ClickHouse observation=%q expected=%q", actual, expected)
 	}
+}
+
+func assertClickHouseHistorySequence(t *testing.T, baseURL, sourceEventID string, expected uint64) {
+	t.Helper()
+	if actual := clickHouseHistorySequence(t, baseURL, sourceEventID); actual != expected {
+		t.Fatalf("ClickHouse History Sequence=%d expected=%d", actual, expected)
+	}
+}
+
+func clickHouseHistorySequence(t *testing.T, baseURL, sourceEventID string) uint64 {
+	t.Helper()
+	value := clickHouseQuery(t, baseURL, fmt.Sprintf(`SELECT any(history_sequence) FROM telemetry_history.observations WHERE source_event_id = toUUID('%s') FORMAT TSVRaw`, sourceEventID))
+	var sequence uint64
+	if _, err := fmt.Sscan(value, &sequence); err != nil {
+		t.Fatalf("ClickHouse History Sequence %q: %v", value, err)
+	}
+	return sequence
 }
 
 func assertClickHouseHourly(t *testing.T, baseURL, expected string) {

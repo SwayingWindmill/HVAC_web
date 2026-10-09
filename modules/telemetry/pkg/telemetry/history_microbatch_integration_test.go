@@ -144,7 +144,7 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 		rows[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-9500-7000-8000-%012d", i), TenantID: stringPointer(tenantA), SiteID: stringPointer(siteA), DeviceID: stringPointer(deviceA), PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SourceID: sourceA, SourceEventID: fmt.Sprintf("018f2e00-9600-7000-8000-%012d", i), SourcePartition: "microbatch-mv", SourceOffset: int64(i), SourcePath: "POLL", TelemetryKey: "temperature", PointType: stringPointer("TELEMETRY"), PointRevision: &revision, ValueType: stringPointer("NUMBER"), ValueNumber: &value, SampledAt: time.Date(2026, 7+time.Month(i), 1, 0, 0, 0, 0, time.UTC), ReceivedAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64)}
 	}
 	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_hourly ADD CONSTRAINT injected_failure CHECK 0`)
-	if err := sink.InsertObservations(t.Context(), rows); err == nil {
+	if err := sink.InsertObservations(t.Context(), 1, rows); err == nil {
 		t.Fatal("MV failure was acknowledged as success")
 	}
 	if count := clickHouseQuery(t, baseURL, `SELECT count() FROM telemetry_history.microbatch_raw FORMAT TSVRaw`); count == "0" {
@@ -153,7 +153,7 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 	clickHouseQuery(t, baseURL, `ALTER TABLE telemetry_history.microbatch_hourly DROP CONSTRAINT injected_failure`)
 	errors := make(chan error, 2)
 	for range 2 {
-		go func() { errors <- sink.InsertObservations(t.Context(), rows) }()
+		go func() { errors <- sink.InsertObservations(t.Context(), 1, rows) }()
 	}
 	for range 2 {
 		if err := <-errors; err != nil {

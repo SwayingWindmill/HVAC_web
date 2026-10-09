@@ -159,7 +159,7 @@ type historySinkStub struct {
 	err      error
 }
 
-func (sink *historySinkStub) InsertObservations(_ context.Context, observations []HistoryObservation) error {
+func (sink *historySinkStub) InsertObservations(_ context.Context, _ uint64, observations []HistoryObservation) error {
 	sink.inserted = append([]HistoryObservation(nil), observations...)
 	return sink.err
 }

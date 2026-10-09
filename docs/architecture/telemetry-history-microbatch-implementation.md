@@ -5,6 +5,7 @@ Scope: PostgreSQL history outbox → ClickHouse observations → numeric hourly 
 ## Delivered behavior
 
 - One persistent unresolved batch per outbox. Claim transactions use the existing PostgreSQL advisory-lock pattern; only actual selected members determine batch identity. New arrivals cannot change an existing batch.
+- The first claim also takes the batch's History Sequence from a `NO CYCLE` PostgreSQL sequence, and every row of the batch is written with it as `history_sequence`. A retry keeps it, so the request body and its deduplication token are unchanged. Because batches reach ClickHouse one at a time, the sequence is visibility order; the energy projection uses it as its checkpoint (#441).
 - First claim caps both rows (configured, maximum 4,096) and exact encoded JSONEachRow bytes (8 MiB). A retry keeps the entire persisted batch even if the configured row limit shrinks.
 - One synchronous HTTP INSERT per batch. Observations are sorted by identity and the encoded body SHA-256 is the deduplication token. Parser/block settings are explicit. The writer propagates materialized-view errors and enables dependent-view deduplication.
 - PostgreSQL is acknowledged only after synchronous INSERT succeeds. Retry delay is measured after the failed attempt; an expired attempt still counts toward the attempt limit even if its process could not persist a retry.

@@ -124,6 +124,10 @@ A monotonic owner-authored revision for one Device Observation Snapshot. It adva
 
 The upstream event identity or offset used to detect duplicate, replayed and out-of-order source delivery. Source Position is evidence about ingest order, not a public recovery cursor or Business Revision.
 
+## History Sequence
+
+The number Telemetry assigns to a history batch when it claims it, stored on every history observation the batch writes. Batches become visible one at a time, so History Sequence orders history by visibility, which downstream projections use as a durable cursor. It is not Source Position, Sampled At or Business Revision.
+
 ## Transport Position
 
 The delivery position used by a realtime transport for bounded reconnect recovery. A Transport Position does not establish business ordering or Snapshot authority.
