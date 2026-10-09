@@ -175,8 +175,11 @@ type CounterBatch struct {
 	Through *ProjectionCursor
 }
 
+// CounterSource reads the projection's checkpoint and the next batch after it. The checkpoint
+// is advanced by FactSink instead: the reader and writer are separate ClickHouse identities,
+// and only the writer may write.
 type CounterSource interface {
-	ListDeltas(context.Context, int) (CounterBatch, error)
+	NextBatch(context.Context, int) (CounterBatch, error)
 }
 
 type BindingResolver interface {
@@ -238,7 +241,7 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 }
 
 func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
-	batch, err := p.source.ListDeltas(ctx, p.batchSize)
+	batch, err := p.source.NextBatch(ctx, p.batchSize)
 	if err != nil {
 		return 0, fmt.Errorf("list counter deltas: %w", err)
 	}

@@ -23,6 +23,12 @@ Scope: #441. Every poll of the energy projector found its work by aggregating al
 
 **ADOPT:** a database sequence as the read order, and advancing the stored position only after the page is processed (at-least-once, idempotent consumer). **ADAPT:** the sequence is assigned per History batch at claim time, because batches reach ClickHouse one at a time; that makes it the visibility order without ThingsBoard's misordering compensation. The first observation's `event_id`, used as `batch_id`, was rejected as the cursor: a transaction committed late can put a smaller UUIDv7 into a later batch. **REJECT:** `SET CYCLE` and cycle detection; a `bigint NO CYCLE` sequence does not wrap.
 
+### OpenEMS 2026.9.0 (`14f0dedf5fe279845281bafaf0e48ea0ab51333a`)
+
+- [`ResendHistoricDataWorker.java`](https://github.com/OpenEMS/openems/blob/14f0dedf5fe279845281bafaf0e48ea0ab51333a/io.openems.edge.controller.api.backend/src/io/openems/edge/controller/api/backend/ResendHistoricDataWorker.java): reads the last successful resend timestamp from a Channel, resends the missing time ranges in chunks of at most `MAX_RESEND_TIMESPAN_SECONDS` (5 min), and calls `onLastSuccessfulResendUpdated` only after a chunk was sent successfully.
+
+**ADOPT:** bounded chunks and advancing the stored position only after the chunk succeeded. **REJECT:** an event-time position; it holds for OpenEMS because the Edge is the only writer of its own history, while here a DEAD batch or Historical Replay makes older samples visible later.
+
 ### MyEMS v6.9.0 (`b360f5bb4c2be4fd15854057963531b2e8d1bc0a`)
 
 - [`myems-normalization/meter.py`](https://github.com/MyEMS/myems/blob/b360f5bb4c2be4fd15854057963531b2e8d1bc0a/myems-normalization/meter.py): resumes each meter from `MAX(start_datetime_utc)` of its output, and takes the baseline from the latest raw value before that time (`ORDER BY utc_date_time DESC LIMIT 1`).

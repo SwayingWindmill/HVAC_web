@@ -49,9 +49,9 @@ WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
 -- equals the unbounded computation while the window only holds rows from {since}:
 --   ANCHOR      each Point's last observation before {since}, the first delta's predecessor;
 --   PREFIX_MAX  each Point revision and unit's maximum before {since}, for INVALID decreases.
--- PREFIX_MAX rows take part in revision maxima only, never as a predecessor. UNION ALL
--- matches columns by position; the aggregate aliases differ from the source columns because
--- ClickHouse would otherwise resolve sampled_at in WHERE and argMax keys to the aggregate.
+-- PREFIX_MAX rows take part in revision maxima only, never as a predecessor. Each stand-in
+-- takes the whole last row as one tuple: argMax skips NULL arguments, so per-column argMax
+-- would borrow an older row's NULL-able unit or revision.
 CREATE OR REPLACE VIEW telemetry_history.counter_deltas_from
 DEFINER = CURRENT_USER
 SQL SECURITY DEFINER AS
@@ -91,50 +91,56 @@ window_input AS (
     tenant_id,
     site_id,
     point_id,
-    argMax(device_id, (sampled_at, observation_id)) AS last_device_id,
-    argMax(sensor_id, (sampled_at, observation_id)) AS last_sensor_id,
-    argMax(telemetry_key, (sampled_at, observation_id)) AS last_telemetry_key,
-    argMax(unit, (sampled_at, observation_id)) AS last_unit,
-    argMax(point_revision, (sampled_at, observation_id)) AS last_point_revision,
-    argMax(counter_decrease_mode, (sampled_at, observation_id)) AS last_counter_decrease_mode,
-    argMax(counter_rollover_modulus, (sampled_at, observation_id)) AS last_counter_rollover_modulus,
-    argMax(sampled_at, (sampled_at, observation_id)) AS last_sampled_at,
-    argMax(received_at, (sampled_at, observation_id)) AS last_received_at,
-    argMax(observation_id, (sampled_at, observation_id)) AS last_observation_id,
-    argMax(source_event_id, (sampled_at, observation_id)) AS last_source_event_id,
-    argMax(source_partition, (sampled_at, observation_id)) AS last_source_partition,
-    argMax(source_offset, (sampled_at, observation_id)) AS last_source_offset,
-    argMax(quality, (sampled_at, observation_id)) AS last_quality,
-    argMax(quality_reasons, (sampled_at, observation_id)) AS last_quality_reasons,
-    argMax(value_number, (sampled_at, observation_id)) AS last_value_number
-  FROM scoped
-  WHERE sampled_at < {since:DateTime64(3, 'UTC')}
-  GROUP BY tenant_id, site_id, point_id
+    last.1 AS device_id,
+    last.2 AS sensor_id,
+    last.3 AS telemetry_key,
+    last.4 AS unit,
+    last.5 AS point_revision,
+    last.6 AS counter_decrease_mode,
+    last.7 AS counter_rollover_modulus,
+    last.8 AS sampled_at,
+    last.9 AS received_at,
+    last.10 AS observation_id,
+    last.11 AS source_event_id,
+    last.12 AS source_partition,
+    last.13 AS source_offset,
+    last.14 AS quality,
+    last.15 AS quality_reasons,
+    last.16 AS value_number
+  FROM (
+    SELECT tenant_id, site_id, point_id, argMax(tuple(device_id, sensor_id, telemetry_key, unit, point_revision, counter_decrease_mode, counter_rollover_modulus, sampled_at, received_at, observation_id, source_event_id, source_partition, source_offset, quality, quality_reasons, value_number), (sampled_at, observation_id)) AS last
+    FROM scoped
+    WHERE sampled_at < {since:DateTime64(3, 'UTC')}
+    GROUP BY tenant_id, site_id, point_id
+  )
   UNION ALL
   SELECT
     'PREFIX_MAX' AS row_kind,
     tenant_id,
     site_id,
     point_id,
-    argMax(device_id, (sampled_at, observation_id)) AS last_device_id,
-    argMax(sensor_id, (sampled_at, observation_id)) AS last_sensor_id,
-    argMax(telemetry_key, (sampled_at, observation_id)) AS last_telemetry_key,
-    unit,
-    point_revision,
-    argMax(counter_decrease_mode, (sampled_at, observation_id)) AS last_counter_decrease_mode,
-    argMax(counter_rollover_modulus, (sampled_at, observation_id)) AS last_counter_rollover_modulus,
-    argMax(sampled_at, (sampled_at, observation_id)) AS last_sampled_at,
-    argMax(received_at, (sampled_at, observation_id)) AS last_received_at,
-    argMax(observation_id, (sampled_at, observation_id)) AS last_observation_id,
-    argMax(source_event_id, (sampled_at, observation_id)) AS last_source_event_id,
-    argMax(source_partition, (sampled_at, observation_id)) AS last_source_partition,
-    argMax(source_offset, (sampled_at, observation_id)) AS last_source_offset,
-    argMax(quality, (sampled_at, observation_id)) AS last_quality,
-    argMax(quality_reasons, (sampled_at, observation_id)) AS last_quality_reasons,
-    max(value_number) AS max_value_number
-  FROM scoped
-  WHERE sampled_at < {since:DateTime64(3, 'UTC')}
-  GROUP BY tenant_id, site_id, point_id, point_revision, unit
+    last.1 AS device_id,
+    last.2 AS sensor_id,
+    last.3 AS telemetry_key,
+    last.4 AS unit,
+    last.5 AS point_revision,
+    last.6 AS counter_decrease_mode,
+    last.7 AS counter_rollover_modulus,
+    last.8 AS sampled_at,
+    last.9 AS received_at,
+    last.10 AS observation_id,
+    last.11 AS source_event_id,
+    last.12 AS source_partition,
+    last.13 AS source_offset,
+    last.14 AS quality,
+    last.15 AS quality_reasons,
+    prefix_max_value AS value_number
+  FROM (
+    SELECT tenant_id, site_id, point_id, argMax(tuple(device_id, sensor_id, telemetry_key, unit, point_revision, counter_decrease_mode, counter_rollover_modulus, sampled_at, received_at, observation_id, source_event_id, source_partition, source_offset, quality, quality_reasons, value_number), (sampled_at, observation_id)) AS last, max(value_number) AS prefix_max_value
+    FROM scoped
+    WHERE sampled_at < {since:DateTime64(3, 'UTC')}
+    GROUP BY tenant_id, site_id, point_id, point_revision, unit
+  )
 ),
 ordered AS (
   SELECT

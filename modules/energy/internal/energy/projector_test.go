@@ -221,7 +221,7 @@ type fakeSource struct {
 
 var fakeThrough = ProjectionCursor{HistorySequence: 7, ObservationID: "018f2e00-0000-7000-8000-000000000099"}
 
-func (source *fakeSource) ListDeltas(_ context.Context, limit int) (CounterBatch, error) {
+func (source *fakeSource) NextBatch(_ context.Context, limit int) (CounterBatch, error) {
 	source.limit = limit
 	through := fakeThrough
 	return CounterBatch{Deltas: append([]CounterDelta(nil), source.deltas...), Through: &through}, source.err

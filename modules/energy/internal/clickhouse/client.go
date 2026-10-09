@@ -141,27 +141,37 @@ func validateClientConfig(rawURL string, client *http.Client) (*url.URL, *http.C
 	return parsed, client, nil
 }
 
-// energyProjection names the energy fact projection's checkpoint.
-const energyProjection = "energy_interval_facts"
+const (
+	// energyProjection names the energy fact projection's checkpoint.
+	energyProjection = "energy_interval_facts"
+	// maximumArrivals keeps a batch's deltas, at most two per arrival, within one fact insert.
+	maximumArrivals = maximumBatchSize / 2
+	// historyStart is the cursor before the first History observation.
+	historyStart = "00000000-0000-0000-0000-000000000000"
+)
 
-type arrivalRow struct {
+type cursorRow struct {
 	HistorySequence uint64 `json:"history_sequence"`
 	ObservationID   string `json:"observation_id"`
-	TenantID        string `json:"tenant_id"`
-	SiteID          string `json:"site_id"`
-	PointID         string `json:"point_id"`
-	SampledAt       string `json:"sampled_at"`
 }
 
-// ListDeltas reads up to limit Counter observations that History made visible after the
+type arrivalRow struct {
+	cursorRow
+	TenantID  string `json:"tenant_id"`
+	SiteID    string `json:"site_id"`
+	PointID   string `json:"point_id"`
+	SampledAt string `json:"sampled_at"`
+}
+
+// NextBatch reads up to limit Counter observations that History made visible after the
 // checkpoint, and the deltas they change: each arrival's own delta and, when it arrived late,
 // its successor's. Both reads are bounded by the arrivals' Points and earliest sample (#441).
-func (reader *Reader) ListDeltas(ctx context.Context, limit int) (energy.CounterBatch, error) {
+func (reader *Reader) NextBatch(ctx context.Context, limit int) (energy.CounterBatch, error) {
 	if reader == nil || reader.endpoint == nil || reader.httpClient == nil {
 		return energy.CounterBatch{}, errors.New("ClickHouse analytics reader is closed")
 	}
-	if limit < 1 || limit > maximumBatchSize/2 {
-		return energy.CounterBatch{}, errors.New("ClickHouse counter arrival limit must be between 1 and 2048")
+	if limit < 1 || limit > maximumArrivals {
+		return energy.CounterBatch{}, fmt.Errorf("ClickHouse counter arrival limit must be between 1 and %d", maximumArrivals)
 	}
 	checkpoint, err := reader.checkpoint(ctx)
 	if err != nil {
@@ -187,11 +197,10 @@ FORMAT JSONEachRow`, reader.analyticsDatabase), url.Values{"param_projection": {
 	if err != nil {
 		return energy.ProjectionCursor{}, err
 	}
-	cursor := energy.ProjectionCursor{ObservationID: "00000000-0000-0000-0000-000000000000"}
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return cursor, nil
+		return energy.ProjectionCursor{ObservationID: historyStart}, nil
 	}
-	var row arrivalRow
+	var row cursorRow
 	if err := json.Unmarshal(payload, &row); err != nil {
 		return energy.ProjectionCursor{}, fmt.Errorf("decode energy projection checkpoint: %w", err)
 	}
@@ -407,14 +416,19 @@ func (writer *Writer) AdvanceCheckpoint(ctx context.Context, cursor energy.Proje
 	if err != nil {
 		return fmt.Errorf("encode energy projection checkpoint: %w", err)
 	}
+	return writer.insert(ctx, "checkpoint insert", url.Values{
+		"query":             {"INSERT INTO " + writer.database + ".energy_projection_checkpoints (projection_name, history_sequence, observation_id) FORMAT JSONEachRow"},
+		"wait_end_of_query": {"1"},
+	}, append(body, '\n'))
+}
+
+// insert posts JSONEachRow rows to one of the writer's tables and waits for the result.
+func (writer *Writer) insert(ctx context.Context, operation string, settings url.Values, body []byte) error {
 	endpoint := *writer.endpoint
-	query := endpoint.Query()
-	query.Set("query", "INSERT INTO "+writer.database+".energy_projection_checkpoints (projection_name, history_sequence, observation_id) FORMAT JSONEachRow")
-	query.Set("wait_end_of_query", "1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(append(body, '\n')))
+	endpoint.RawQuery = settings.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create ClickHouse checkpoint request: %w", err)
+		return fmt.Errorf("create ClickHouse analytics %s request: %w", operation, err)
 	}
 	request.Header.Set("Content-Type", "application/x-ndjson")
 	if writer.username != "" {
@@ -423,15 +437,15 @@ func (writer *Writer) AdvanceCheckpoint(ctx context.Context, cursor energy.Proje
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := writer.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("insert ClickHouse energy projection checkpoint: %w", err)
+		return fmt.Errorf("ClickHouse analytics %s: %w", operation, err)
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
 	if err != nil {
-		return fmt.Errorf("read ClickHouse checkpoint response: %w", err)
+		return fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return clickHouseStatusError("checkpoint insert", response.StatusCode, payload)
+		return clickHouseStatusError(operation, response.StatusCode, payload)
 	}
 	return nil
 }
@@ -466,38 +480,15 @@ func (writer *Writer) InsertFacts(ctx context.Context, facts []energy.EnergyInte
 		digest.Write([]byte{'\n'})
 	}
 
-	endpoint := *writer.endpoint
-	query := endpoint.Query()
-	query.Set("query", "INSERT INTO "+writer.database+"."+writer.table+" FORMAT JSONEachRow")
-	query.Set("date_time_input_format", "best_effort")
-	query.Set("insert_deduplication_token", hex.EncodeToString(digest.Sum(nil)))
-	query.Set("async_insert", "1")
-	query.Set("wait_for_async_insert", "1")
-	query.Set("async_insert_deduplicate", "1")
-	query.Set("wait_end_of_query", "1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
-	if err != nil {
-		return fmt.Errorf("create ClickHouse analytics insert request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/x-ndjson")
-	if writer.username != "" {
-		request.SetBasicAuth(writer.username, writer.password)
-	}
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := writer.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("insert ClickHouse energy interval facts: %w", err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	if err != nil {
-		return fmt.Errorf("read ClickHouse analytics insert response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return clickHouseStatusError("fact insert", response.StatusCode, payload)
-	}
-	return nil
+	return writer.insert(ctx, "fact insert", url.Values{
+		"query":                      {"INSERT INTO " + writer.database + "." + writer.table + " FORMAT JSONEachRow"},
+		"date_time_input_format":     {"best_effort"},
+		"insert_deduplication_token": {hex.EncodeToString(digest.Sum(nil))},
+		"async_insert":               {"1"},
+		"wait_for_async_insert":      {"1"},
+		"async_insert_deduplicate":   {"1"},
+		"wait_end_of_query":          {"1"},
+	}, body.Bytes())
 }
 
 func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.RebuildEvent) error {
@@ -512,37 +503,14 @@ func (writer *Writer) AppendRebuildEvent(ctx context.Context, event energy.Rebui
 		return fmt.Errorf("encode energy rebuild event: %w", err)
 	}
 	digest := sha256.Sum256([]byte(event.EventID))
-	endpoint := *writer.endpoint
-	query := endpoint.Query()
-	query.Set("query", "INSERT INTO "+writer.database+".energy_rebuild_runs FORMAT JSONEachRow")
-	query.Set("date_time_input_format", "best_effort")
-	query.Set("insert_deduplication_token", hex.EncodeToString(digest[:]))
-	query.Set("async_insert", "1")
-	query.Set("wait_for_async_insert", "1")
-	query.Set("wait_end_of_query", "1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(append(body, '\n')))
-	if err != nil {
-		return fmt.Errorf("create ClickHouse rebuild event request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/x-ndjson")
-	if writer.username != "" {
-		request.SetBasicAuth(writer.username, writer.password)
-	}
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := writer.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("insert ClickHouse rebuild event: %w", err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	if err != nil {
-		return fmt.Errorf("read ClickHouse rebuild event response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return clickHouseStatusError("rebuild event insert", response.StatusCode, payload)
-	}
-	return nil
+	return writer.insert(ctx, "rebuild event insert", url.Values{
+		"query":                      {"INSERT INTO " + writer.database + ".energy_rebuild_runs FORMAT JSONEachRow"},
+		"date_time_input_format":     {"best_effort"},
+		"insert_deduplication_token": {hex.EncodeToString(digest[:])},
+		"async_insert":               {"1"},
+		"wait_for_async_insert":      {"1"},
+		"wait_end_of_query":          {"1"},
+	}, append(body, '\n'))
 }
 
 func optionalRebuildRunID(value *string) string {
