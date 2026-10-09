@@ -59,6 +59,21 @@ projector poll
   -> advance checkpoint
 ```
 
+## Evidence
+
+Correctness: `TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint` (late arrival, successor revision, replay after a lost checkpoint) and the analytics runner's assertion that `counter_deltas_from(points, since)` equals `counter_deltas` from `since` on for reset, rollover, INVALID decrease and recovery, revision boundary and NULL-unit Points. That assertion failed on the NULL-unit Point while ANCHOR used per-column `argMax`, which skips NULL arguments; ANCHOR and PREFIX_MAX now take the last row as one tuple.
+
+Cost, local WSL stack rebuilt from this branch (2026-10-09), `system.query_log` for `analytics_projector_reader`:
+
+| History | Query | Max memory | Duration | Failures |
+| --- | --- | --- | --- | --- |
+| 289k Counter observations, 289k facts (before, old query) | candidate query | 333 MiB | 3.4 s | about 1 in 15 polls (Code 241) |
+| about 800 Counter observations | deltas / arrivals / checkpoint | 18.6 / 7.0 / 6.6 MiB | avg 70 / 9 / 3 ms | 0 |
+| plus 3,000,000 earlier rows on one active electricity Point | old candidate query, once | 892 MiB when killed | 2.0 s | Code 241 |
+| same | deltas / arrivals / checkpoint | 34.4 / 7.1 / 6.6 MiB | avg 1,057 / 11 / 3 ms (152 polls) | 0 |
+
+Memory stays bounded as history grows 3,700-fold. Duration grows with the affected Point's history: ANCHOR and PREFIX_MAX scan it once each (6.1M rows read), the known limit of decision 4. The checkpoint stayed at the latest History Sequence throughout. The synthetic rows were removed afterwards.
+
 ## Found while implementing
 
 `Writer.AppendRebuildEvent` never set `date_time_input_format=best_effort`, so ClickHouse rejected every rebuild event: any late-arrival correction failed in production at its RUN_STARTED event. The new late-arrival integration test is the first to run that path against ClickHouse.
