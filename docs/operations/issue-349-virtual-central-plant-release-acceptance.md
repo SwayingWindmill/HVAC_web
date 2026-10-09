@@ -54,5 +54,5 @@ Limits of this evidence:
 
 - Command verification latency (#443) is fixed: a frequency command now verifies 1–3 s after acknowledgement ([source review](../architecture/command-verification-latency-source-review-2026-10-09.md)). A verification still waiting after 12 s is logged as a failed pass; that is recorded there as deferred.
 - An `OUTCOME_UNKNOWN` command blocks every later command for its Device with no way to resolve it (#444). This is why the stuck-high step sends no command.
-- Once, before the clean runs above, the MEDIUM 45 Hz command ended `OUTCOME_UNKNOWN` although the drive reached 45 Hz. It followed manual unblocking of the acceptance drive in `hvac_s3` and did not recur in eleven later commands and runs; the cause is not established.
+- Once, before the clean runs above, the MEDIUM 45 Hz command ended `OUTCOME_UNKNOWN` although the drive reached 45 Hz. It followed manual unblocking of the acceptance drive in `hvac_s3` and did not recur in eleven later commands and runs; the cause is not established (noted on #444).
 - The projector's candidate query memory growth is tracked in #441.
