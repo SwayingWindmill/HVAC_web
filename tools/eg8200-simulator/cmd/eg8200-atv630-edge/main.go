@@ -110,6 +110,12 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if err := simulator.MaintainGatewayCredential(ctx, &mqttConfig, os.Getenv("EG8200_ENROLLMENT_CODE"), func(err error) {
+		logger.Error("atv630_edge_gateway_renewal_failed", "error", err.Error())
+	}); err != nil {
+		logger.Error("atv630_edge_gateway_credential_failed", "error", err.Error())
+		os.Exit(1)
+	}
 	publisher, err := simulator.NewMQTTPublisher(ctx, fullConfig, mqttConfig, edgeRuntime, telemetry.Metrics)
 	if err != nil {
 		logger.Error("atv630_edge_mqtt_publisher_invalid", "error", err.Error())
@@ -134,7 +140,7 @@ func main() {
 	}
 
 	state := &edgeAcceptanceState{}
-	diagnostics := edgeDiagnosticsServer(*diagnosticsAddress, templateRevisionID, edgeRuntime, publisher, state)
+	diagnostics := edgeDiagnosticsServer(*diagnosticsAddress, templateRevisionID, publisher, state)
 	go func() {
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("atv630_edge_diagnostics_failed", "error", err.Error())
@@ -204,7 +210,7 @@ func main() {
 	}
 }
 
-func edgeDiagnosticsServer(address, templateRevisionID string, runtime *simulator.EdgeControlRuntime, publisher *simulator.MQTTPublisher, state *edgeAcceptanceState) *http.Server {
+func edgeDiagnosticsServer(address, templateRevisionID string, publisher *simulator.MQTTPublisher, state *edgeAcceptanceState) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/ready", func(writer http.ResponseWriter, _ *http.Request) {
 		if !publisher.Ready() || !state.modbusReady.Load() {
@@ -223,36 +229,6 @@ func edgeDiagnosticsServer(address, templateRevisionID string, runtime *simulato
 			"templateKey": atv630TemplateKey, "templateRevisionId": templateRevisionID,
 			"modbusReady": state.modbusReady.Load(), "mqttReady": publisher.Ready(), "snapshot": snapshot,
 		})
-	})
-	mux.HandleFunc("POST /acceptance/commands/{capability}", func(writer http.ResponseWriter, request *http.Request) {
-		var body struct {
-			CommandID string             `json:"commandId"`
-			Params    map[string]float64 `json:"params"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4096))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&body); err != nil || strings.TrimSpace(body.CommandID) == "" {
-			http.Error(writer, "invalid command payload", http.StatusBadRequest)
-			return
-		}
-		now := time.Now().UTC()
-		outcomeCh, err := runtime.SubmitCommand(simulator.EdgeCommandIntentRequest{
-			CommandID: body.CommandID, DeviceID: "CHWP-01", CommandCode: request.PathValue("capability"), Params: body.Params,
-			IssuedAt: now, ExpiresAt: now.Add(30 * time.Second),
-		})
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusConflict)
-			return
-		}
-		select {
-		case outcome := <-outcomeCh:
-			writer.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(writer).Encode(outcome)
-		case <-request.Context().Done():
-			http.Error(writer, "command request cancelled", http.StatusRequestTimeout)
-		case <-time.After(25 * time.Second):
-			http.Error(writer, "command outcome timed out", http.StatusGatewayTimeout)
-		}
 	})
 	return &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second}
 }

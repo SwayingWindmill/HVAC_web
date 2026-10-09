@@ -131,7 +131,8 @@ services:
     image: ${ATV630_EDGE_IMAGE:-hvac/atv630-edge:0.1.0-dev}
     environment:
       EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
-      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
+      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/atv630-edge-mqtt.json
+      EG8200_ENROLLMENT_CODE: ${ATV630_EDGE_ENROLLMENT_CODE:-}
       ATV630_MODBUS_ENDPOINT: virtual-atv630:1502
       ATV630_TEMPLATE_REVISION_FILE: /run/hvac/runtime-config/atv630-template-revision-id
       ATV630_EDGE_DIAGNOSTICS_ADDR: :19097

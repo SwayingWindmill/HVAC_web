@@ -21,6 +21,31 @@ import (
 	"time"
 )
 
+// MaintainGatewayCredential ensures the Gateway Credential before the transport
+// starts, then re-checks it hourly so it is renewed within its final fourteen days.
+// The config passed to the transport is never mutated by renewals.
+func MaintainGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, code string, renewalFailed func(error)) error {
+	if err := EnsureGatewayCredential(ctx, config, code); err != nil {
+		return err
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				credentialConfig := *config
+				if err := EnsureGatewayCredential(ctx, &credentialConfig, ""); err != nil {
+					renewalFailed(err)
+				}
+			}
+		}
+	}()
+	return nil
+}
+
 // EnsureGatewayCredential enrolls once, or renews a current identity within its
 // final fourteen days. The private key is generated and retained on the Gateway.
 func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, code string) error {
