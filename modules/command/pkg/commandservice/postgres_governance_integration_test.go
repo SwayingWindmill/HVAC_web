@@ -197,6 +197,57 @@ func TestPostgresExecutionExpiresWhenAnyApprovalAuthorizationExpires(t *testing.
 	}
 }
 
+func TestPostgresUnapprovedCommandExpiresAndReleasesTheDevice(t *testing.T) {
+	runtimeURL, adminURL := commandPostgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetCommandFixture(t, admin)
+
+	opened, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	store := NewPostgresStore(opened.pool, func() time.Time { return now }, nil)
+
+	awaiting, err := store.Submit(ctx, postgresCommandRequest("postgres-never-approved", 24.5))
+	if err != nil || awaiting.Intent.Status != commandmodel.IntentAwaitingApproval {
+		t.Fatalf("medium-risk submit result=%#v err=%v", awaiting.Intent, err)
+	}
+
+	// Nobody approves within the approval window.
+	now = now.Add(ApprovalWindow)
+	lateApproval := postgresApproval(awaiting.Intent, now,
+		"018f3e00-a000-7000-8000-000000000031",
+		"018f3e00-5000-7000-8000-000000000031",
+		"approval-grant-too-late")
+	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: awaiting.Intent.ID, Approval: lateApproval}); !errors.Is(err, ErrApprovalInvalid) {
+		t.Fatalf("approval after the window was accepted: %v", err)
+	}
+	later := postgresCommandRequest("postgres-after-lapsed-approval", 23.5)
+	later.CurrentState.ObservedAt = now
+	later.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	later.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	queued, err := store.Submit(ctx, later)
+	if err != nil || queued.Intent.Status != commandmodel.IntentQueued {
+		t.Fatalf("low-risk submit result=%#v err=%v", queued.Intent, err)
+	}
+
+	envelope, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil || envelope.CommandID != queued.Intent.ID {
+		t.Fatalf("a lapsed unapproved command still blocks the device: envelope=%#v err=%v", envelope, err)
+	}
+	readBack, err := store.Get(ctx, commandTenantA, awaiting.Intent.ID)
+	if err != nil || readBack.Status != commandmodel.IntentExpired {
+		t.Fatalf("unapproved command status=%s err=%v", readBack.Status, err)
+	}
+}
+
 func postgresApproval(intent commandmodel.CommandIntent, now time.Time, approvalID, approverID, grantID string) commandmodel.ApprovalEvidence {
 	return commandmodel.ApprovalEvidence{
 		ApprovalID:         approvalID,

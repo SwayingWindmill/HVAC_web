@@ -54,6 +54,9 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	if err := store.expireGovernanceInvalidQueued(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
+	if err := store.expireUnapprovedCommands(ctx, tx, tenantID, now); err != nil {
+		return commandmodel.DispatchEnvelope{}, err
+	}
 
 	var outboxID string
 	var intent commandmodel.CommandIntent
@@ -616,6 +619,63 @@ WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_EXECUTION_GOVERNANCE_EXPIRED", map[string]any{
 			"reason": "EXECUTION_AUTHORIZATION_OR_APPROVAL_EXPIRED",
+		}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// expireUnapprovedCommands ends commands still awaiting approval after ApprovalWindow, so
+// they stop holding back later commands in the Device's sequence (including STOP).
+func (store *PostgresStore) expireUnapprovedCommands(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
+	rows, err := tx.Query(ctx, `
+SELECT command_id::text, site_id::text, device_id::text, payload_hash, version
+FROM command_runtime.command_intents
+WHERE tenant_id = $1::uuid AND status = 'AWAITING_APPROVAL' AND created_at <= $2
+FOR UPDATE SKIP LOCKED
+LIMIT 50
+`, tenantID, now.Add(-ApprovalWindow))
+	if err != nil {
+		return fmt.Errorf("select unapproved commands past the approval window: %w", err)
+	}
+	expired := make([]commandmodel.CommandIntent, 0)
+	for rows.Next() {
+		intent := commandmodel.CommandIntent{TenantID: tenantID}
+		if err := rows.Scan(&intent.ID, &intent.SiteID, &intent.DeviceID, &intent.PayloadHash, &intent.Version); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan unapproved command: %w", err)
+		}
+		expired = append(expired, intent)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate unapproved commands: %w", err)
+	}
+	rows.Close()
+	for _, intent := range expired {
+		transitionID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		auditID, err := store.newID(now)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE command_runtime.command_intents
+SET status = 'EXPIRED', version = $3, updated_at = $4
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, tenantID, intent.ID, intent.Version+1, now); err != nil {
+			return fmt.Errorf("expire unapproved command: %w", err)
+		}
+		if err := insertDispatchTransition(ctx, tx, transitionID, intent, intent.Version+1,
+			commandmodel.IntentAwaitingApproval, commandmodel.IntentExpired,
+			"APPROVAL_WINDOW_EXPIRED", "command-service", intent.ID, "", now); err != nil {
+			return err
+		}
+		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_APPROVAL_WINDOW_EXPIRED", map[string]any{
+			"reason": "APPROVAL_WINDOW_EXPIRED",
 		}, now); err != nil {
 			return err
 		}
