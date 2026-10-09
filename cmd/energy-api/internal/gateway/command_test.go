@@ -166,7 +166,7 @@ func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 2 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 0 || fixture.commandCalls.Load() != 2 {
+	if fixture.iamCalls.Load() != 3 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 0 || fixture.commandCalls.Load() != 2 {
 		t.Fatalf("approval calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 	var view commandView
@@ -330,7 +330,7 @@ func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGat
 		t.Fatal(err)
 	}
 	created, err := store.CreateSession(context.Background(), sessionstore.Session{
-		ID: "command-session", Principal: identitycontext.UserPrincipal{Subject: "command-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}},
+		ID: "command-session", Principal: identitycontext.UserPrincipal{Subject: "command-user", Issuer: "https://issuer.example.test", Roles: []string{}},
 		TenantID: fixture.tenantID, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour),
 	}, sessionstore.MutationContext{
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "command-fixture",
@@ -376,6 +376,20 @@ func (fixture *commandGatewayFixture) commandIAMClient(t *testing.T, now time.Ti
 			return fixture.telemetryDecisionResponse(t, request, parent, now), nil
 		case commandDecisionPath:
 			return fixture.commandDecisionResponse(t, request, parent, now), nil
+		case "/internal/v1/principal/current":
+			principal := identitycontext.UserPrincipal{Subject: parent.Subject, Issuer: parent.SubjectIssuer, Roles: []string{"operator"}}
+			return telemetryJSONResponse(http.StatusOK, identitycontext.InternalPrincipalResponse{
+				PrincipalID: fixture.principalID, Principal: principal,
+				Context: identitycontext.PrincipalContext{
+					InitiatingPrincipal: principal, ExecutingServicePrincipal: identitycontext.ServicePrincipal{Service: "platform-gateway", SPIFFEID: parent.ExecutingService},
+					TenantID: parent.TenantID, Audience: parent.Audience, PolicyRevision: parent.PolicyRevision,
+					DelegationExpiresAt: time.Unix(parent.ExpiresAt, 0).UTC().Format(time.RFC3339),
+				},
+				Authorization: identitycontext.EffectiveAuthorization{
+					CapabilitySetVersion: identitycontext.CapabilitySetVersion, PolicyRevision: "registry-read:1/iam:1",
+					Capabilities: []identitycontext.Capability{identitycontext.CapabilitySiteRead},
+				},
+			}), nil
 		default:
 			t.Fatalf("unexpected IAM path %s", request.URL.Path)
 			return nil, io.EOF

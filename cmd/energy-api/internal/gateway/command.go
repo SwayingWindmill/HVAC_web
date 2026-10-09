@@ -366,7 +366,13 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		h.writeCommandFailure(writer, request, commandUnavailable("Registry returned a Device outside the Command approval boundary."))
 		return
 	}
-	approverRole, ok := trustedCommandApproverRole(session.Principal.Roles)
+	// Sign-in stores no roles on the Session; the approver's current roles come from IAM.
+	principal, identityFailure := h.identity.fetchPrincipal(request.Context(), session)
+	if identityFailure != nil {
+		writeIdentityFailure(writer, request, *identityFailure)
+		return
+	}
+	approverRole, ok := trustedCommandApproverRole(principal.Principal.Roles)
 	if !ok {
 		writeProblem(writer, request, http.StatusForbidden, "COMMAND_CAPABILITY_DENIED", "Command approval denied", "The authenticated principal has no trusted approval role.", false, nil)
 		return
