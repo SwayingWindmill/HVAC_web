@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22.22.0-bookworm-slim
 FROM ${NODE_IMAGE} AS build
+ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src
 COPY services/operations-agent-service/package.json services/operations-agent-service/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund --registry=${NPM_REGISTRY}
 COPY services/operations-agent-service/tsconfig.json services/operations-agent-service/tsconfig.build.json ./
 COPY services/operations-agent-service/src ./src
 RUN npm run build && npm prune --omit=dev --no-audit --no-fund
