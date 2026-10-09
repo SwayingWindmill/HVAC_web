@@ -269,15 +269,22 @@ async function main() {
     await waitFor('telemetry STOPPED', async () => { const values = await telemetry(admin); return { ok: values.run_state?.value === 'STOPPED', run_state: values.run_state?.value }; });
     record('stop', stop);
 
-    await disturb('stuck-high', { active: true });
-    const stuck = await waitFor('stuck-high frequency rise in the drive state', async () => { const chwp = await virtualDriveState(); return { ok: chwp.frequencyHz > 5, frequencyHz: chwp.frequencyHz }; });
-    const stuckTelemetry = await waitFor('stuck-high frequency in telemetry', async () => { const values = await telemetry(admin); return { ok: Number(values.frequency?.value) > 5, frequency: values.frequency?.value }; });
-    await disturb('stuck-high', { active: false });
-    record('stuck-high', { driveFrequencyHz: stuck.frequencyHz, telemetryFrequency: stuckTelemetry.frequency });
-
     const startCommand = await command(admin, approver, 'START', {}, true);
     await waitFor('telemetry RUNNING', async () => { const values = await telemetry(admin); return { ok: values.run_state?.value === 'RUNNING', run_state: values.run_state?.value }; });
     record('start', startCommand);
+
+    // Stuck-high acts on a running pump (#334): the drive leaves its governed reference for the
+    // nominal 50 Hz. No command is sent here, because an unprovable command would block the drive.
+    const governed = await waitFor('drive settled at its governed reference', async () => {
+      const first = (await virtualDriveState()).frequencyHz;
+      const second = (await virtualDriveState()).frequencyHz;
+      return { ok: first === second && first >= 20 && first < 49, frequencyHz: second };
+    });
+    await disturb('stuck-high', { active: true });
+    const stuck = await waitFor('stuck-high drive above its governed reference', async () => { const chwp = await virtualDriveState(); return { ok: chwp.frequencyHz >= 49.5, frequencyHz: chwp.frequencyHz }; });
+    const stuckTelemetry = await waitFor('stuck-high frequency in telemetry', async () => { const values = await telemetry(admin); return { ok: Number(values.frequency?.value) >= 49.5, frequency: values.frequency?.value }; });
+    await disturb('stuck-high', { active: false });
+    record('stuck-high', { governedFrequencyHz: governed.frequencyHz, driveFrequencyHz: stuck.frequencyHz, telemetryFrequency: stuckTelemetry.frequency });
 
     await disturb('fault', { code: '16' });
     await waitFor('telemetry FAULT 16', async () => { const values = await telemetry(admin); return { ok: values.run_state?.value === 'FAULT' && values.fault_code?.value === '16', run_state: values.run_state?.value, fault_code: values.fault_code?.value }; });
