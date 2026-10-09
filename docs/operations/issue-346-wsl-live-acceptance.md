@@ -236,56 +236,59 @@ The first implementation looked the findings up by the origin Alarm and could ne
 worked: a finding only carries `alarmId` *after* an association is recorded, so listing by
 that Alarm returns exactly the findings that are already associated.
 
-### Energy projection needs a code change, not configuration
+### Energy projection: the projector reads Registry as its own Workload Principal
 
-`ANALYTICS_PROJECTION_ENABLED` stays `false` in the WSL override, and no configuration can
-change that. The analytics read-model projector presents a static delegation grant to the
-Registry owner (`X-Delegation-Grant` against
-`/internal/v1/registry/sites/{siteId}/meter-bindings/resolve`, see
-`modules/energy/internal/coreclient/resolver.go`), and its only inputs are
-`ANALYTICS_CORE_REGISTRY_GRANT` or `ANALYTICS_CORE_REGISTRY_GRANT_FILE`
-(`cmd/telemetry-worker/main.go`, `modules/energy/cmd/energy-projector/main.go`). A Registry
-delegation grant expires after at most thirty seconds — `registryauth.MaximumGrantLifetime
-= 30 * time.Second`, enforced when IAM signs and when the Registry verifies
-(`libs/registryauth/registry.go`). A statically configured grant is therefore expired before
-the projector's second poll (`ANALYTICS_PROJECTOR_POLL_INTERVAL` defaults to 500ms), so the
-projection can never sustain itself from configuration in any environment.
+Root cause (2026-09-29): the projector only had a static Registry grant input, and a Registry
+grant lives at most thirty seconds (`registryauth.MaximumGrantLifetime`); IAM issued grants
+only from a user session, which an unattended workload never has. ADR 0017 resolves it: the
+projector is its own Workload Principal (issuer `spiffe://hvac.local`, subject its SPIFFE
+ID) with an ordinary Tenant membership and an `energy-projection` role limited to
+`meter-binding.resolve`. It asks IAM over mTLS at
+`POST /internal/v1/registry/workload-decision` for one grant per Tenant and renews it with
+less than ten seconds left. In Phase 1 the projector runs inside the Telemetry Runtime, so the
+principal is `spiffe://hvac.local/telemetry-runtime-service`, seeded by `local:up`.
 
-Nor can the projector obtain one today. IAM issues Registry delegations only from a decision
-request that carries a principal's signed claims together with the calling workload identity
-(`modules/iam/internal/iam/server.go`, `RegistryDecisionPath`), and it refuses to name a
-different presenter unless that presenter is in `AllowedRegistryGrantPresenters`; the
-platform gateway is the only caller and it asks on behalf of a user session
-(`cmd/energy-api/internal/gateway/registry.go`). A background workload has no session, which
-is why the projector was given a static-grant input that the thirty-second lifetime
-invalidates.
+Two further gaps appeared once grants worked:
 
-Everything downstream is already provisioned: `analytics.energy_interval_facts` exists,
-`telemetry_history.counter_deltas` holds 15,956 rows, and the
-`analytics_projector_reader`/`analytics_projector_writer` ClickHouse users exist with
-their grants (`infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql`). The
-Registry owner already expects the presenter identity
-(`CORE_ANALYTICS_PROJECTOR_SPIFFE` defaults to
-`spiffe://hvac.local/analytics-read-model-projector`), but the issuing side has no path for
-it, and the standalone projector compose does not even set `ANALYTICS_CORE_REGISTRY_URL` or
-`ANALYTICS_CORE_CA` (`infra/telemetry/compose.yaml`), so that service has never been
-runnable either.
+- The plant had no meters. `local:up` now registers both COUNTER points as PRIMARY meters on
+  an active energy topology: METER-HVAC-TOTAL `energyKwh` as electricity and BTU-METER-01
+  `accumulatedCoolingEnergyKwh` as cooling.
+- Projection accepted only electricity, so the first BTU delta stopped every batch. Core,
+  the projector and the ClickHouse writer now accept a PRIMARY counter of any energy type;
+  Energy Series and the Dashboard still query electricity only.
 
-Closing this needs: an IAM-mediated, refreshable delegation for the read-model workload
-(short-lived and renewed, not a static file), the presenter allowed on the issuing side, and
-`ANALYTICS_CORE_CA`/`ANALYTICS_CORE_REGISTRY_URL` wired for the projector. Minting a grant
-locally and writing it to the grant file would expire within thirty seconds, and minting one
-outside the authorization path would be a security shortcut, so Dashboard/Energy
-completeness remains uncertified rather than asserted.
+Live evidence, 2026-10-09 (UTC), isolated `hvac-local` stack built from this branch:
+
+| Observation | Result |
+| --- | --- |
+| IAM workload decision | `POST /internal/v1/registry/workload-decision` HTTP 200 every ~20 s (30 s grant, renewed with <10 s left) |
+| Core meter-binding resolve | HTTP 200 for every resolution (12,621 in the first five minutes of backfill) |
+| Energy facts | `analytics.energy_interval_facts` filled from the full counter history, electricity and cooling in equal counts |
+| Dashboard local-day energy | `GET /api/v1/sites/{siteId}/dashboard-summary` HTTP 200, `siteLocalDayEnergy` PARTIAL 833.92 kWh from `ANALYTICS_ENERGY`; the overview at 1440 px shows 实际用电 0.8 MWh (11:17 Site-local) |
+
+Environment events during the run, not product defects:
+
+- WSL crashed three times on Windows low virtual memory (event 2004, `vmmemWSL` at
+  13–14.5 GB) while building or starting the full stack; capping WSL at 12 GB in
+  `.wslconfig` stopped it.
+- One crash left history batch `01a11e87-…` DEAD after twelve failed ClickHouse inserts,
+  which, as designed, blocks all later history. None of its 84 observations were in
+  `telemetry_history.observations`, so it was reconciled by the documented manual recovery:
+  telemetry-worker stopped, batch set back to PENDING with unchanged rows and token, worker
+  restarted; it published and history resumed.
+- The EG8200 simulators had buffered telemetry during the outage and replayed it at about
+  four times wall-clock speed, so "today" only filled once the replay passed the Site-local
+  midnight.
+
+Open: the projector's candidate query aggregates the whole facts table on every poll and
+now intermittently exceeds the ClickHouse 1.5 GiB memory limit (`Code: 241`,
+`AggregatingTransform`); projection retries and advances, but the cost grows with history.
 
 ## Remaining acceptance
 
 The fault-to-maintenance chain is complete and was observed end to end on the merged
 stack with the current frontend (run 3). What remains open is outside this chain:
 
-- Energy/Dashboard completeness stays uncertified until the analytics read-model workload
-  can obtain a refreshable Registry delegation; the thirty-second grant lifetime makes the
-  current static-grant input unusable, so this is a code change rather than a setting.
 - The Work Orders ledger does not display existing Work Orders: the owner API returns them
   (`GET /api/v1/sites/{siteId}/work-orders?limit=10` → 200 with the Work Order) while the
   ledger and its summary counts render empty, so an operator cannot reach an existing Work
