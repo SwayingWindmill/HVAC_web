@@ -93,7 +93,7 @@ func TestEdgeTelemetryPublishesProcessImageBeforeCurrentCycleWrite(t *testing.T)
 	if got := plant.Snapshot().Devices[deviceID]["frequencyHz"]; got != before {
 		t.Fatalf("device actual readback changed before physical time advanced: got=%v want=%v", got, before)
 	}
-	plant.Tick(time.Second)
+	plant.Tick(50 * time.Millisecond)
 	next := runtime.RunCycle(context.Background(), at.Add(2*time.Second))
 	nextFrequency := next.TelemetrySnapshot.Devices[deviceID]["frequencyHz"].(float64)
 	if !(nextFrequency < before && nextFrequency > target) {
@@ -129,7 +129,7 @@ func TestNumericRemoteIntentPersistsUntilLeaseExpiry(t *testing.T) {
 	}
 	drifted := plant.Tick(20 * time.Second).Devices[deviceID]["frequencyHz"].(float64)
 	runtime.RunCycle(context.Background(), at.Add(2*time.Second))
-	reasserted := plant.Tick(20 * time.Second).Devices[deviceID]["frequencyHz"].(float64)
+	reasserted := plant.Tick(500 * time.Millisecond).Devices[deviceID]["frequencyHz"].(float64)
 	if reasserted <= drifted || reasserted >= target {
 		t.Fatalf("active remote lease did not restore the physical target: drifted=%v reasserted=%v target=%v", drifted, reasserted, target)
 	}

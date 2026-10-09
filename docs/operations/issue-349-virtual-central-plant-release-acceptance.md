@@ -19,19 +19,21 @@ Date: 2026-10-09. Stack: the local WSL `hvac-local` deployment built from the #3
 
 The ATV630 Edge is its own Gateway (ADR 0015) on a dedicated acceptance Site (`atv630-protocol-acceptance`): one GATEWAY device and one drive device behind it with Device Source Key `CHWP-01`. The Edge enrolls its own Gateway Credential with an Enrollment Code issued through the platform API. The runner seeds the Site, issues the code, starts `virtual-atv630` and `atv630-edge`, and drives the drive through Command Governance as the local administrator, with a second local account (`local-approver`, role `command-approver` with `device.read` only, plus COMMAND_APPROVE on the drive) approving because Command Governance rejects self-approval.
 
-Run 2026-10-09 07:23–07:27 UTC, all steps passed:
+Run 2026-10-09 12:34–12:36 UTC after #443, all steps passed (three consecutive runs passed):
 
 | Step | Result |
 | --- | --- |
 | Edge ready | Gateway Credential enrolled; Modbus and MQTT ready; released TemplateRevision `01a11f50-9594-78f5-85f0-1e8db21d2c71` |
 | Public telemetry fresh | `run_state` RUNNING, `frequency` 50 Hz via `GET /api/v1/devices/{id}/observation-snapshot` |
-| SET_FREQUENCY 48 Hz | LOW risk, no approval, SUCCEEDED; Virtual ATV630 drive at 48.49 Hz |
-| SET_FREQUENCY 45 Hz | MEDIUM risk, single approver, SUCCEEDED; drive at 45.48 Hz |
+| SET_FREQUENCY 48 Hz | LOW risk, no approval, SUCCEEDED; Virtual ATV630 drive at 48 Hz |
+| SET_FREQUENCY 45 Hz | MEDIUM risk, single approver, SUCCEEDED; drive at 45 Hz |
 | STOP | MEDIUM risk, approved, SUCCEEDED; telemetry STOPPED |
-| Stuck-high while stopped | drive rose to 27.3 Hz; telemetry frequency 30.2 Hz |
 | START | MEDIUM risk, approved, SUCCEEDED; telemetry RUNNING |
+| Stuck-high while running | governed reference 45 Hz; drive and telemetry at 50 Hz |
 | Fault 16 then RESET_FAULT | telemetry FAULT / `16`; RESET_FAULT LOW risk SUCCEEDED; fault cleared |
 | Modbus outage | stopping `virtual-atv630` made the Edge report Modbus down; restarting it restored Modbus without fallback |
+
+The first run of this record (07:23 UTC) placed stuck-high after STOP and reported the drive "rising" to 27.3 Hz. That was the coast-down from 45 Hz under the old 20 s first-order pump model, not the disturbance: stuck-high only acts while the pump is requested to run (#334). The step now runs after START and checks the drive leaves its governed reference.
 
 Frequency setpoints are lease-bound: an expired cloud intent returns the drive to local control (ADR 0012), so the runner samples the drive while each command is live.
 
@@ -50,5 +52,7 @@ Limits of this evidence:
 
 ## Open
 
-- Command result verification in connectivity times out (`context deadline exceeded`, 12 s per pass) and retries with backoff, so reported-state verification took about 75 s per command in this run.
+- Command verification latency (#443) is fixed: a frequency command now verifies 1–3 s after acknowledgement ([source review](../architecture/command-verification-latency-source-review-2026-10-09.md)). A verification still waiting after 12 s is logged as a failed pass; that is recorded there as deferred.
+- An `OUTCOME_UNKNOWN` command blocks every later command for its Device with no way to resolve it (#444). This is why the stuck-high step sends no command.
+- Once, before the clean runs above, the MEDIUM 45 Hz command ended `OUTCOME_UNKNOWN` although the drive reached 45 Hz. It followed manual unblocking of the acceptance drive in `hvac_s3` and did not recur in eleven later commands and runs; the cause is not established (noted on #444).
 - The projector's candidate query memory growth is tracked in #441.

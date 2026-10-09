@@ -98,7 +98,7 @@ func TestVirtualATV630WritesDrivePlantAndLaterReadsPhysicalState(t *testing.T) {
 	if before >= 1 {
 		t.Fatalf("START mutated physical readback before Plant time advanced: %.3f Hz", before)
 	}
-	plant.Tick(20 * time.Second)
+	plant.Tick(4 * time.Second)
 	readback, err := client.ReadRegister(3202, modbus.HOLDING_REGISTER)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestVirtualATV630StuckHighRemainsPhysicalAndAppearsOnlyInLaterRFR(t *testin
 	}
 
 	plant.SetCHWPStuckHighDisturbance(false)
-	plant.Tick(time.Minute)
+	plant.Tick(2 * time.Second)
 	recoveredReadback, err := client.ReadRegister(3202, modbus.HOLDING_REGISTER)
 	if err != nil {
 		t.Fatal(err)

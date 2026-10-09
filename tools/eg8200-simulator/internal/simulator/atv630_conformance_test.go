@@ -95,7 +95,7 @@ func TestATV630ProductionBridgeAdapterConformanceOverRealTCP(t *testing.T) {
 		t.Fatalf("protocol writes mutated physical readback before Plant time advanced: before=%.3f after=%.3f Hz", physicalBeforeWrites, physical)
 	}
 
-	plant.Tick(20 * time.Second)
+	plant.Tick(4 * time.Second)
 	running := runATV630ConformanceCycle(t, host, at.Add(5*time.Second))
 	assertATV630ProcessValue(t, running, "chwp01/RunState", edgecontrol.StringValue("RUNNING"))
 	frequency := atv630ProcessDouble(t, running, "chwp01/Frequency")

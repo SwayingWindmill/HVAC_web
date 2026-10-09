@@ -102,11 +102,15 @@ func TestActuatorCommandsChangePhysicalReadbackOverTime(t *testing.T) {
 		t.Fatalf("tower actual fan speed changed before physical time advanced: got %v want %v", got, want)
 	}
 
-	mid := plant.Tick(5 * time.Second)
+	// The drive ramps its output frequency linearly at 5 Hz/s, as a VFD's ACC/DEC ramp does.
+	mid := plant.Tick(2 * time.Second)
 	midPump := mid.Devices[config.ChilledWaterPump.ID]["frequencyHz"].(float64)
 	midFan := mid.Devices[config.CoolingTower.ID]["fanSpeedPct"].(float64)
-	if !(midPump > 30 && midPump < 50) || !(midFan > 40 && midFan < 80) {
-		t.Fatalf("actuators did not ramp toward targets: pump %.3f Hz fan %.3f%%", midPump, midFan)
+	if midPump != 40 || !(midFan > 40 && midFan < 80) {
+		t.Fatalf("actuators did not ramp toward targets: pump %.3f Hz (want 40) fan %.3f%%", midPump, midFan)
+	}
+	if got := plant.Tick(2 * time.Second).Devices[config.ChilledWaterPump.ID]["frequencyHz"].(float64); got != 30 {
+		t.Fatalf("pump did not finish its ramp at the commanded frequency: %.3f Hz (want 30)", got)
 	}
 
 	settled := plant.Tick(3 * time.Minute)
