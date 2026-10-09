@@ -9,7 +9,7 @@ import (
 const (
 	waterHeatCapacityKWPerM3HDeltaC = 1.163
 	pumpNominalFrequencyHz          = 50.0
-	pumpSpeedTimeConstant           = 20 * time.Second
+	pumpRampHzPerSecond             = 5.0 // a VFD ACC/DEC ramp of 10 s from 0 to 50 Hz
 	coolingTowerFanTimeConstant     = 30 * time.Second
 	coolingTowerWaterTimeConstant   = 2 * time.Minute
 	chillerCapacityTimeConstant     = 90 * time.Second
@@ -198,7 +198,7 @@ func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time
 			targetFrequencyHz = pumpNominalFrequencyHz
 		}
 	}
-	state.frequencyHz = approach(state.frequencyHz, targetFrequencyHz, elapsed, pumpSpeedTimeConstant)
+	state.frequencyHz = ramp(state.frequencyHz, targetFrequencyHz, pumpRampHzPerSecond*elapsed.Seconds())
 	state.running = state.frequencyHz > 0.5
 
 	speedFraction := clamp(state.frequencyHz/pumpNominalFrequencyHz, 0, 1)
@@ -388,4 +388,8 @@ func clamp(value, lower, upper float64) float64 {
 func round(value float64, places int) float64 {
 	power := math.Pow10(places)
 	return math.Round(value*power) / power
+}
+
+func ramp(current, target, maximumStep float64) float64 {
+	return current + clamp(target-current, -maximumStep, maximumStep)
 }
