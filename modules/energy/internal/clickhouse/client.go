@@ -402,7 +402,7 @@ func validateFact(fact energy.EnergyIntervalFact) error {
 		strings.TrimSpace(fact.PointID) == "" || strings.TrimSpace(fact.PreviousObservationID) == "" || strings.TrimSpace(fact.CurrentObservationID) == "" {
 		return errors.New("ClickHouse energy interval fact identifiers are required")
 	}
-	if fact.EnergyType != energy.EnergyTypeElectricity || fact.MeterRole != energy.MeterRolePrimary || fact.EnergyKWh < 0 ||
+	if strings.TrimSpace(fact.EnergyType) == "" || fact.MeterRole != energy.MeterRolePrimary || fact.EnergyKWh < 0 ||
 		fact.PeriodStart.IsZero() || fact.PeriodEnd.IsZero() || !fact.PeriodStart.Before(fact.PeriodEnd) || fact.ProjectedAt.IsZero() ||
 		fact.DatasetRevision != fact.SourceOffset || fact.DataWatermark.IsZero() || !fact.DataWatermark.Equal(fact.PeriodEnd) ||
 		fact.FactID != fact.CurrentObservationID || !fact.TransitionType.ProducesFact() {

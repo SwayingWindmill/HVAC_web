@@ -50,6 +50,16 @@ func TestRegistryGrantIsBoundToCorePolicyRevocationAndScope(t *testing.T) {
 	}
 }
 
+func TestWorkloadPrincipalGrantIsAcceptedWithoutSession(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	claims := workloadClaims(now)
+	validation := validValidation(now)
+	validation.Presenter = projectorWorkload
+	if err := registryauth.ValidateGrant(claims, validation); err != nil {
+		t.Fatalf("Workload Principal grant rejected: %v", err)
+	}
+}
+
 func TestRegistryGrantFailsClosedForBoundaryAndFreshnessChanges(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
@@ -76,6 +86,11 @@ func TestRegistryGrantFailsClosedForBoundaryAndFreshnessChanges(t *testing.T) {
 			validation.IsRevoked = func(string) (bool, error) { return false, errRevocationUnavailable{} }
 		}},
 		{name: "revocation omitted", validation: func(validation *registryauth.GrantValidation) { validation.IsRevoked = nil }},
+		{name: "sessionless grant for another subject", mutate: func(claims *registryauth.GrantClaims) {
+			claims.SessionID = ""
+			claims.ParentTokenID = ""
+		}},
+		{name: "session without parent token", mutate: func(claims *registryauth.GrantClaims) { claims.ParentTokenID = "" }},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -182,6 +197,18 @@ func validClaims(now time.Time) registryauth.GrantClaims {
 		TokenID:        fixtureIdentifier,
 		Transitive:     false,
 	}
+}
+
+const projectorWorkload = "spiffe://hvac.local/analytics-read-model-projector"
+
+func workloadClaims(now time.Time) registryauth.GrantClaims {
+	claims := validClaims(now)
+	claims.Presenter = projectorWorkload
+	claims.SubjectIssuer = "spiffe://hvac.local"
+	claims.Subject = projectorWorkload
+	claims.SessionID = ""
+	claims.ParentTokenID = ""
+	return claims
 }
 
 func validValidation(now time.Time) registryauth.GrantValidation {

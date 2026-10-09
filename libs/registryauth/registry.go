@@ -188,8 +188,9 @@ type Decision struct {
 }
 
 type DecisionResponse struct {
-	Decision        Decision `json:"decision"`
-	DelegationGrant string   `json:"delegationGrant,omitempty"`
+	Decision                 Decision `json:"decision"`
+	DelegationGrant          string   `json:"delegationGrant,omitempty"`
+	DelegationGrantExpiresAt string   `json:"delegationGrantExpiresAt,omitempty"`
 }
 
 type GrantClaims struct {
@@ -305,7 +306,13 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if claims.ExpiresAt <= validation.Now.Unix() || time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaximumGrantLifetime {
 		return errors.New("registry grant is expired or too long-lived")
 	}
-	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.TenantID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
+	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.TenantID == "" || claims.TokenID == "" {
+		return errors.New("registry grant identity fields are incomplete")
+	}
+	// A grant either delegates a user session or is a Workload Principal's own (ADR 0017).
+	delegated := claims.SessionID != "" && claims.ParentTokenID != ""
+	workloadOwn := claims.SessionID == "" && claims.ParentTokenID == "" && claims.Subject == claims.Presenter
+	if !delegated && !workloadOwn {
 		return errors.New("registry grant identity fields are incomplete")
 	}
 	if !validUUIDv7(claims.TenantID) {

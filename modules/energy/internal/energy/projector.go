@@ -365,6 +365,7 @@ func validateBindingResolution(delta CounterDelta, binding BindingResolution) er
 		"meter_binding_id":    binding.MeterBindingID,
 		"topology_version_id": binding.TopologyVersionID,
 		"energy_type_id":      binding.EnergyTypeID,
+		"energy_type":         binding.EnergyType,
 		"device_id":           binding.DeviceID,
 		"point_id":            binding.PointID,
 	} {
@@ -375,8 +376,8 @@ func validateBindingResolution(delta CounterDelta, binding BindingResolution) er
 	if binding.TenantID != delta.TenantID || binding.SiteID != delta.SiteID || binding.DeviceID != delta.DeviceID || binding.PointID != delta.PointID {
 		return errors.New("binding snapshot does not match counter delta scope")
 	}
-	if binding.EnergyType != EnergyTypeElectricity || binding.MeterRole != MeterRolePrimary || binding.PointType != PointTypeCounter {
-		return errors.New("binding snapshot is not a released PRIMARY electricity counter")
+	if binding.MeterRole != MeterRolePrimary || binding.PointType != PointTypeCounter {
+		return errors.New("binding snapshot is not a released PRIMARY counter")
 	}
 	if binding.EffectiveFrom.IsZero() || delta.CurrentSampledAt.Before(binding.EffectiveFrom) || (binding.EffectiveTo != nil && !delta.CurrentSampledAt.Before(*binding.EffectiveTo)) {
 		return errors.New("binding snapshot is outside its effective interval")

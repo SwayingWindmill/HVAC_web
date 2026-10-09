@@ -275,6 +275,66 @@ ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED
 COMMIT;`;
 }
 
+// Every plant COUNTER is a PRIMARY meter on the Site's energy topology, so the
+// energy projector can resolve each counter delta to an Energy Fact.
+const counterEnergy = Object.freeze({
+  energyKwh: { energyTypeId: '01990000-0000-7000-8000-000000000001', from: 'grid', to: 'plant', direction: 'IMPORT' },
+  accumulatedCoolingEnergyKwh: { energyTypeId: '01990000-0000-7000-8000-000000000006', from: 'plant', to: 'building', direction: 'CONSUME' },
+});
+
+function buildEnergyTopologySeed(site, points) {
+  const { tenantId, siteId } = site;
+  const ids = buildIdentities(site, points);
+  const deviceByName = new Map(siteDevices(site).map((device) => [device.name, device]));
+  let sequence = 0x600000000001;
+  const nextID = () => siteUUID(site, sequence++);
+  const topologyVersionId = nextID();
+  const nodes = [
+    { key: 'grid', type: 'GRID', name: '电网' },
+    { key: 'plant', type: 'HVAC', name: '中央冷站' },
+    { key: 'building', type: 'BUILDING', name: '建筑冷负荷' },
+  ].map((node) => ({ ...node, id: nextID() }));
+  const nodeId = new Map(nodes.map((node) => [node.key, node.id]));
+  const meters = points.filter((point) => point.pointType === 'COUNTER').map((point) => {
+    const energy = counterEnergy[point.sourceKey];
+    if (!energy) throw new Error(`COUNTER ${point.deviceId}/${point.sourceKey} has no energy metering role`);
+    const device = deviceByName.get(point.deviceId);
+    return {
+      ...energy, edgeId: nextID(), meterId: nextID(), bindingId: nextID(), deviceId: device.platformDeviceId,
+      pointId: ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`),
+      code: `${device.slug.replaceAll('-', '_')}_${point.pointCode}`, name: `${device.name} ${point.name}`,
+    };
+  });
+  const scope = `${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}`;
+  const draft = `WHERE EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE id = ${sqlLiteral(topologyVersionId)} AND status = 'DRAFT')`;
+  // A released topology graph is immutable, so nodes and edges are written only
+  // while the version is still DRAFT; reruns leave the active version alone.
+  return `BEGIN;
+INSERT INTO core_registry.energy_topology_versions (id, tenant_id, site_id, version, status, revision, created_at, updated_at)
+VALUES (${sqlLiteral(topologyVersionId)}, ${scope}, 1, 'DRAFT', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_nodes (id, tenant_id, site_id, topology_version_id, node_type, name, status, revision, created_at, updated_at)
+SELECT node.* FROM (VALUES
+${nodes.map((node) => `  (${sqlLiteral(node.id)}::uuid, ${sqlLiteral(tenantId)}::uuid, ${sqlLiteral(siteId)}::uuid, ${sqlLiteral(topologyVersionId)}::uuid, ${sqlLiteral(node.type)}, ${sqlLiteral(node.name)}, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS node ${draft}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_edges (id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id, energy_type_id, direction, enabled, revision, created_at, updated_at)
+SELECT edge.* FROM (VALUES
+${meters.map((meter) => `  (${sqlLiteral(meter.edgeId)}::uuid, ${sqlLiteral(tenantId)}::uuid, ${sqlLiteral(siteId)}::uuid, ${sqlLiteral(topologyVersionId)}::uuid, ${sqlLiteral(nodeId.get(meter.from))}::uuid, ${sqlLiteral(nodeId.get(meter.to))}::uuid, ${sqlLiteral(meter.energyTypeId)}::uuid, ${sqlLiteral(meter.direction)}, true, 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS edge ${draft}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_meters (id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at) VALUES
+${meters.map((meter) => `  (${sqlLiteral(meter.meterId)}, ${scope}, ${sqlLiteral(meter.code)}, ${sqlLiteral(meter.name)}, ${sqlLiteral(meter.deviceId)}, ${sqlLiteral(meter.energyTypeId)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.meter_bindings (id, tenant_id, site_id, topology_version_id, energy_edge_id, energy_type_id, meter_id, device_id, point_id, point_type, meter_role, direction, priority, effective_from, version, status, revision, created_at, updated_at) VALUES
+${meters.map((meter) => `  (${sqlLiteral(meter.bindingId)}, ${scope}, ${sqlLiteral(topologyVersionId)}, ${sqlLiteral(meter.edgeId)}, ${sqlLiteral(meter.energyTypeId)}, ${sqlLiteral(meter.meterId)}, ${sqlLiteral(meter.deviceId)}, ${sqlLiteral(meter.pointId)}, 'COUNTER', 'PRIMARY', ${sqlLiteral(meter.direction)}, 0, '2026-01-01T00:00:00Z', 1, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.energy_topology_versions
+SET status = 'ACTIVE', effective_from = '2026-01-01T00:00:00Z', released_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${sqlLiteral(topologyVersionId)} AND status = 'DRAFT';
+COMMIT;`;
+}
+
 function localAdminPrincipalId() {
   if (!existsSync(reconciliationPath)) throw new Error('identity-reconcile.json is required before simulator authorization bootstrap');
   const reconciliation = JSON.parse(readFileSync(reconciliationPath, 'utf8'));
@@ -482,6 +542,7 @@ if (process.argv.includes('--authorization-only')) {
 
 for (const site of localSites) {
   psql('hvac_s1', buildS1Seed(site, seededPoints));
+  psql('hvac_s1', buildEnergyTopologySeed(site, seededPoints));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);

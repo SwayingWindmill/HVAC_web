@@ -385,21 +385,21 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	coreRoots, err := loadCertPool(requiredEnv("ANALYTICS_CORE_CA"))
+	internalRoots, err := loadCertPool(requiredEnv("ANALYTICS_INTERNAL_CA"))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	coreClient := &http.Client{
+	internalClient := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			Proxy:              http.ProxyFromEnvironment,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: coreRoots, Certificates: []tls.Certificate{certificate}},
+			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: internalRoots, Certificates: []tls.Certificate{certificate}},
 			DisableCompression: true,
 		},
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
-		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), Grant: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT"), GrantFile: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT_FILE"), HTTPClient: coreClient,
+		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -447,7 +447,7 @@ func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.P
 			span.SetStatus("ok", "")
 			span.End()
 			if projected > 0 {
-				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"energy_type": analyticsprojector.EnergyTypeElectricity}, float64(projected))
+				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}

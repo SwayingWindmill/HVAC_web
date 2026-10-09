@@ -346,6 +346,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleTelemetryRuntimeRoute(writer, request)
 		return
 	}
+	if request.URL.Path == RegistryWorkloadDecisionPath {
+		status = h.handleRegistryWorkloadDecision(writer, request)
+		return
+	}
 
 	expectedAction, knownRoute := expectedInboundAction(request.URL.Path)
 	if !knownRoute {
@@ -572,9 +576,25 @@ func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *ht
 		}
 		grantPresenter = decisionRequest.GrantPresenter
 	}
+	return h.issueRegistryDecision(writer, request, decisionRequest, registryGrantActor{
+		subjectIssuer: inbound.SubjectIssuer, subject: inbound.Subject, presenter: grantPresenter,
+		sessionID: inbound.SessionID, parentTokenID: inbound.TokenID,
+	})
+}
 
+// registryGrantActor is who a Registry grant names: a delegated user session,
+// or a Workload Principal acting for itself with no session (ADR 0017).
+type registryGrantActor struct {
+	subjectIssuer string
+	subject       string
+	presenter     string
+	sessionID     string
+	parentTokenID string
+}
+
+func (h *handler) issueRegistryDecision(writer http.ResponseWriter, request *http.Request, decisionRequest registryauth.DecisionRequest, actor registryGrantActor) int {
 	now := h.now()
-	decision, err := evaluateRegistryAuthorization(request.Context(), h.authorizationStore, now, inbound.SubjectIssuer, inbound.Subject, decisionRequest)
+	decision, err := evaluateRegistryAuthorization(request.Context(), h.authorizationStore, now, actor.subjectIssuer, actor.subject, decisionRequest)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_UNAVAILABLE", "The IAM authorization facts are unavailable.")
 		return http.StatusServiceUnavailable
@@ -601,9 +621,10 @@ func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *ht
 			writeProblem(writer, http.StatusServiceUnavailable, "IAM_REGISTRY_GRANT_ID_UNAVAILABLE", "The Registry delegation identifier is unavailable.")
 			return http.StatusServiceUnavailable
 		}
+		expiresAt := now.Add(h.registryGrantLifetime).Unix()
 		grant, err := registryauth.SignGrant(h.registryGrantSigner, registryauth.GrantClaims{
 			Issuer:         h.registryGrantIssuer,
-			Presenter:      grantPresenter,
+			Presenter:      actor.presenter,
 			Audience:       h.registryGrantAudience,
 			PrincipalID:    decision.PrincipalID,
 			SubjectIssuer:  decision.SubjectIssuer,
@@ -614,10 +635,10 @@ func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *ht
 			Actions:        append([]registryauth.Action(nil), decision.Actions...),
 			PolicyRevision: decision.PolicyRevision,
 			DecisionReason: decision.ReasonCode,
-			SessionID:      inbound.SessionID,
-			ParentTokenID:  inbound.TokenID,
+			SessionID:      actor.sessionID,
+			ParentTokenID:  actor.parentTokenID,
 			IssuedAt:       now.Unix(),
-			ExpiresAt:      now.Add(h.registryGrantLifetime).Unix(),
+			ExpiresAt:      expiresAt,
 			TokenID:        grantID,
 			Transitive:     false,
 		})
@@ -631,6 +652,7 @@ func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *ht
 			return http.StatusServiceUnavailable
 		}
 		response.DelegationGrant = grant
+		response.DelegationGrantExpiresAt = time.Unix(expiresAt, 0).UTC().Format(time.RFC3339)
 		deliveryCode = "GRANT_SIGNED"
 	}
 	if !h.recordRegistryDecision(request, decision, response.DelegationGrant != "", deliveryCode) {
@@ -713,7 +735,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath:
 		return path
 	default:
 		return "unmatched"

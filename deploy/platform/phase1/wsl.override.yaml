@@ -33,7 +33,7 @@ services:
 
   telemetry-worker:
     environment:
-      ANALYTICS_PROJECTION_ENABLED: "false"
+      ANALYTICS_INTERNAL_CA: /run/hvac/pki/ca.crt
       TELEMETRY_ALARM_CA: /run/hvac/pki/ca.crt
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki:/run/hvac/pki:ro

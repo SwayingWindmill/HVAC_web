@@ -1,6 +1,7 @@
 package coreclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,27 +9,43 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
 
-const maximumResponseBodySize = int64(1 << 20)
+const (
+	maximumResponseBodySize = int64(1 << 20)
+	workloadDecisionPath    = "/internal/v1/registry/workload-decision"
+	// grantRefreshMargin renews a grant while enough of it remains for the
+	// Core call it is about to authorize.
+	grantRefreshMargin = 10 * time.Second
+)
 
 type Config struct {
 	BaseURL    string
-	Grant      string
-	GrantFile  string
+	IAMURL     string
 	HTTPClient *http.Client
+	Now        func() time.Time
 }
 
+// Resolver resolves meter bindings from Core Registry as the projector's own
+// Workload Principal, holding one short-lived IAM grant per Tenant (ADR 0017). The
+// projector calls it sequentially, so the grant cache is not synchronized.
 type Resolver struct {
-	endpoint   *url.URL
-	grant      string
-	grantFile  string
-	httpClient *http.Client
+	endpoint    *url.URL
+	iamEndpoint *url.URL
+	httpClient  *http.Client
+	now         func() time.Time
+
+	grants map[string]workloadGrant
+}
+
+type workloadGrant struct {
+	token     string
+	expiresAt time.Time
 }
 
 type resolveResponse struct {
@@ -52,12 +69,13 @@ type resolveResponse struct {
 }
 
 func NewResolver(config Config) (*Resolver, error) {
-	endpoint, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || endpoint == nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.Path != "" && endpoint.Path != "/" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return nil, errors.New("Core Registry resolver base URL must be an HTTP(S) origin")
+	endpoint, err := parseOrigin(config.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("Core Registry resolver base URL: %w", err)
 	}
-	if strings.TrimSpace(config.Grant) == "" && strings.TrimSpace(config.GrantFile) == "" {
-		return nil, errors.New("Core Registry resolver grant or grant file is required")
+	iamEndpoint, err := parseOrigin(config.IAMURL)
+	if err != nil {
+		return nil, fmt.Errorf("Core Registry resolver IAM URL: %w", err)
 	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{
@@ -65,14 +83,22 @@ func NewResolver(config Config) (*Resolver, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return &Resolver{endpoint: endpoint, grant: strings.TrimSpace(config.Grant), grantFile: strings.TrimSpace(config.GrantFile), httpClient: config.HTTPClient}, nil
+	if config.Now == nil {
+		config.Now = time.Now
+	}
+	return &Resolver{endpoint: endpoint, iamEndpoint: iamEndpoint, httpClient: config.HTTPClient, now: config.Now, grants: map[string]workloadGrant{}}, nil
+}
+
+func parseOrigin(raw string) (*url.URL, error) {
+	endpoint, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || endpoint == nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.Path != "" && endpoint.Path != "/" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, errors.New("must be an HTTP(S) origin")
+	}
+	return endpoint, nil
 }
 
 func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResolveInput) (energy.BindingResolution, error) {
-	if resolver == nil || resolver.endpoint == nil || resolver.httpClient == nil {
-		return energy.BindingResolution{}, errors.New("Core Registry resolver is closed")
-	}
-	grant, err := resolver.readGrant()
+	grant, err := resolver.grantFor(ctx, input.TenantID)
 	if err != nil {
 		return energy.BindingResolution{}, err
 	}
@@ -89,24 +115,9 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Delegation-Grant", grant)
-	response, err := resolver.httpClient.Do(request)
+	payload, err := resolver.exchange(request, "Core meter binding resolution")
 	if err != nil {
-		return energy.BindingResolution{}, fmt.Errorf("resolve Core meter binding: %w", err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBodySize+1))
-	if err != nil {
-		return energy.BindingResolution{}, fmt.Errorf("read Core meter binding resolution: %w", err)
-	}
-	if int64(len(payload)) > maximumResponseBodySize {
-		return energy.BindingResolution{}, errors.New("Core meter binding resolution response exceeds 1 MiB")
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		message := strings.TrimSpace(string(payload))
-		if len(message) > 512 {
-			message = message[:512]
-		}
-		return energy.BindingResolution{}, fmt.Errorf("Core meter binding resolution returned %d: %s", response.StatusCode, message)
+		return energy.BindingResolution{}, err
 	}
 	var decoded resolveResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -124,19 +135,61 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 	}, nil
 }
 
-func (resolver *Resolver) readGrant() (string, error) {
-	if resolver.grantFile != "" {
-		content, err := os.ReadFile(resolver.grantFile)
-		if err != nil {
-			return "", fmt.Errorf("read Core Registry grant file: %w", err)
-		}
-		grant := strings.TrimSpace(string(content))
-		if grant == "" {
-			return "", errors.New("Core Registry grant file is empty")
-		}
-		return grant, nil
+func (resolver *Resolver) grantFor(ctx context.Context, tenantID string) (string, error) {
+	if held, ok := resolver.grants[tenantID]; ok && resolver.now().Add(grantRefreshMargin).Before(held.expiresAt) {
+		return held.token, nil
 	}
-	return resolver.grant, nil
+	body, err := json.Marshal(registryauth.DecisionRequest{TenantID: tenantID, Action: registryauth.ActionMeterBindingResolve})
+	if err != nil {
+		return "", fmt.Errorf("encode Registry workload decision request: %w", err)
+	}
+	endpoint := *resolver.iamEndpoint
+	endpoint.Path = workloadDecisionPath
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create Registry workload decision request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	payload, err := resolver.exchange(request, "Registry workload decision")
+	if err != nil {
+		return "", err
+	}
+	var response registryauth.DecisionResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return "", fmt.Errorf("decode Registry workload decision: %w", err)
+	}
+	if !response.Decision.Allowed {
+		return "", fmt.Errorf("IAM denied Registry meter binding resolution for tenant %s: %s", tenantID, response.Decision.ReasonCode)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, response.DelegationGrantExpiresAt)
+	if err != nil {
+		return "", fmt.Errorf("decode Registry workload grant expiry: %w", err)
+	}
+	resolver.grants[tenantID] = workloadGrant{token: response.DelegationGrant, expiresAt: expiresAt}
+	return response.DelegationGrant, nil
+}
+
+func (resolver *Resolver) exchange(request *http.Request, operation string) ([]byte, error) {
+	response, err := resolver.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", operation, err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBodySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", operation, err)
+	}
+	if int64(len(payload)) > maximumResponseBodySize {
+		return nil, fmt.Errorf("%s response exceeds 1 MiB", operation)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		message := strings.TrimSpace(string(payload))
+		if len(message) > 512 {
+			message = message[:512]
+		}
+		return nil, fmt.Errorf("%s returned %d: %s", operation, response.StatusCode, message)
+	}
+	return payload, nil
 }
 
 var _ energy.BindingResolver = (*Resolver)(nil)

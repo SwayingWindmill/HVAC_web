@@ -6,8 +6,6 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
 
-const EnergyTypeElectricity = energy.EnergyTypeElectricity
-
 type ReaderConfig = clickhouseclient.ReaderConfig
 type WriterConfig = clickhouseclient.WriterConfig
 type ProjectorConfig = energy.ProjectorConfig

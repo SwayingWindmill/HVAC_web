@@ -118,6 +118,35 @@ func TestWriterBatchesEnergyFactsWithDeterministicDeduplication(t *testing.T) {
 	}
 }
 
+func TestWriterInsertsCoolingMeterFacts(t *testing.T) {
+	var energyType any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var row map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&row); err != nil {
+			t.Fatal(err)
+		}
+		energyType = row["energy_type"]
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	sink, err := NewWriter(WriterConfig{BaseURL: server.URL, Database: "analytics", Table: "energy_interval_facts", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := validBinding()
+	binding.EnergyType = "cooling"
+	fact, err := energy.BuildFact(validDelta(), binding, time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.InsertFacts(context.Background(), []energy.EnergyIntervalFact{fact}); err != nil {
+		t.Fatal(err)
+	}
+	if energyType != "cooling" {
+		t.Fatalf("energy_type=%v", energyType)
+	}
+}
+
 func TestWriterRejectsInconsistentFactMetadata(t *testing.T) {
 	fact, err := energy.BuildFact(validDelta(), validBinding(), time.Now())
 	if err != nil {

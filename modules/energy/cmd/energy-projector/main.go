@@ -64,13 +64,13 @@ func main() {
 		logger.Error("analytics_clickhouse_writer_invalid", "error_code", "ANALYTICS_CLICKHOUSE_WRITER_INVALID")
 		os.Exit(1)
 	}
-	coreClient, err := newCoreHTTPClient(requiredEnv("ANALYTICS_CORE_CA"), requiredEnv("ANALYTICS_CORE_TLS_CERT"), requiredEnv("ANALYTICS_CORE_TLS_KEY"))
+	internalClient, err := newInternalHTTPClient(requiredEnv("ANALYTICS_INTERNAL_CA"), requiredEnv("ANALYTICS_INTERNAL_TLS_CERT"), requiredEnv("ANALYTICS_INTERNAL_TLS_KEY"))
 	if err != nil {
-		logger.Error("analytics_core_client_invalid", "error_code", "ANALYTICS_CORE_CLIENT_INVALID")
+		logger.Error("analytics_internal_client_invalid", "error_code", "ANALYTICS_INTERNAL_CLIENT_INVALID")
 		os.Exit(1)
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
-		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), Grant: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT"), GrantFile: os.Getenv("ANALYTICS_CORE_REGISTRY_GRANT_FILE"), HTTPClient: coreClient,
+		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
 	})
 	if err != nil {
 		logger.Error("analytics_core_binding_resolver_invalid", "error_code", "ANALYTICS_CORE_BINDING_RESOLVER_INVALID")
@@ -136,7 +136,7 @@ func main() {
 			span.SetStatus("ok", "")
 			span.End()
 			if projected > 0 {
-				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"energy_type": energy.EnergyTypeElectricity}, float64(projected))
+				_ = telemetry.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}
@@ -159,7 +159,7 @@ func newClickHouseHTTPClient(caPath string) (*http.Client, error) {
 	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
 }
 
-func newCoreHTTPClient(caPath, certPath, keyPath string) (*http.Client, error) {
+func newInternalHTTPClient(caPath, certPath, keyPath string) (*http.Client, error) {
 	roots, err := loadCertPool(caPath)
 	if err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ func loadCertPool(path string) (*x509.CertPool, error) {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(content) {
-		return nil, errors.New("Core CA pool is empty")
+		return nil, errors.New("internal CA pool is empty")
 	}
 	return pool, nil
 }
