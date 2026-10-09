@@ -1,6 +1,7 @@
 // The one local environment: its Compose project and the runtime directory holding its
 // generated keys, certificates, credentials and configuration (Git-ignored).
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,6 +11,23 @@ export const localProject = process.env.HVAC_LOCAL_PROJECT?.trim() || 'hvac-loca
 export const runtimeDir = path.resolve(process.env.PHASE1_RUNTIME_DIR?.trim() || path.join(phase1Dir, 'runtime', 'local'));
 export const runtimePath = (...segments) => path.join(runtimeDir, ...segments);
 export const localContainer = (service) => `${localProject}-${service}-1`;
+// Runtime files hold credentials; they are written atomically and readable only by the owner.
+export function writePrivate(file, content) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, content, { mode: 0o600 });
+  chmodSync(temporary, 0o600);
+  renameSync(temporary, file);
+}
+
+// Hands a runtime data directory to the containers' non-root service user.
+export function ensureServiceDataDirectory(...segments) {
+  const directory = runtimePath(...segments);
+  mkdirSync(directory, { recursive: true });
+  const result = spawnSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'chown', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '65532:65532', '/data'], { stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`could not hand ${directory} to the service user`);
+  return directory;
+}
+
 export const localEnvFile = path.resolve(process.env.PHASE1_ENV_FILE?.trim() || path.join(phase1Dir, 'environments', 'development.runtime.env'));
 
 // The development tier per deployment-tiers.v1.json; it fits integration and intelligence.

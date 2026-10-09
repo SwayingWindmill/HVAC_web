@@ -3,11 +3,11 @@
 // `up` is idempotent: it migrates, bootstraps identity, seeds the central-plant simulator and
 // starts every service from the current checkout.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
-import { localContainer, localEnvFile, localProject, repoRoot, runtimeDir, runtimePath } from './lib/local-environment.mjs';
+import { ensureServiceDataDirectory, localContainer, localEnvFile, localProject, repoRoot, runtimeDir, runtimePath, writePrivate } from './lib/local-environment.mjs';
 
 const launcher = path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs');
 
@@ -26,13 +26,6 @@ function psqlScalar(database, sql) {
   return result.stdout.trim();
 }
 
-function writePrivate(file, content) {
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, content, { mode: 0o600 });
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, file);
-}
-
 // Every database role in the reviewed credential template gets a local password; existing ones are kept.
 function ensureRoleCredentials() {
   const template = readFileSync(path.join(repoRoot, 'deploy', 'platform', 'phase1', 'migrations', 'role-credentials.sql.example'), 'utf8');
@@ -47,18 +40,11 @@ function ensureRoleCredentials() {
 }
 
 // Data directories bind-mounted into services that run as 65532 must be writable by them.
-function ensureServiceDataDirectory(...segments) {
-  const directory = runtimePath(...segments);
-  mkdirSync(directory, { recursive: true });
-  const result = spawnSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'chown', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '65532:65532', '/data'], { stdio: 'inherit' });
-  if (result.status !== 0) throw new Error(`could not hand ${directory} to the service user`);
-}
-
 // The simulators are the Edge: their command ledger, measurement sequences and outbound
 // spool belong to the platform state they talk to. Resetting the platform without them
 // leaves the Edge rejecting fresh commands as stale and replaying old measurements.
 function clearSimulatorState() {
-  for (const name of ['eg8200', 'eg8200-b']) {
+  for (const name of ['eg8200', 'eg8200-b', 'atv630-edge']) {
     const directory = runtimePath('data', name);
     if (!existsSync(directory)) continue;
     const result = spawnSync('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'find', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '/data', '-mindepth', '1', '-delete'], { stdio: 'inherit' });

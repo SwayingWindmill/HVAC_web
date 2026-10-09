@@ -7,7 +7,7 @@ Date: 2026-10-09. Stack: the local WSL `hvac-local` deployment built from the #3
 | Criterion | Result | Evidence |
 | --- | --- | --- |
 | Live fault-to-maintenance acceptance is green with production APIs/frontend and durable recovery history | Met | #346 (closed): CHWP stuck-high → Alarm ACTIVE → FDD `CHILLED_WATER_LOW_DELTA_T` → ALARM-origin Work Order from the frontend → recovery with history retained ([record](issue-346-wsl-live-acceptance.md)); Site-local energy on the overview from projected facts (2026-10-09) |
-| Deployed ATV630 real-TCP acceptance is green with the immutable released Device Template and production Bridge/DeviceAdapter | Met | `node scripts/run-atv630-protocol-acceptance.mjs`, report `out/atv630-protocol-acceptance/report.json`, below |
+| Deployed ATV630 real-TCP acceptance is green with the immutable released Device Template and production Bridge/DeviceAdapter | Met, with limits below | `node scripts/run-atv630-protocol-acceptance.mjs`, report `out/atv630-protocol-acceptance/report.json`, below |
 | Historical Replay/intelligence acceptance is green without current-state mutation or downstream direct writes | Met | `node scripts/run-historical-replay-intelligence-acceptance.mjs` re-run on current main: status passed; eventTime `5\|5\|1\|1`, energyFacts `10,15,15,20`, metricFacts `760,790,800,820`, forecastPoints `96\|96`, currentTruth `2\|2\|2`, optimizationStore `SEALED\|true\|PUBLISHED` |
 | Production deployment does not start Virtual Central Plant, Historical Replay or Virtual ATV630 and does not depend on their data | Met | Rendered service lists: default and `--integration --intelligence` contain no `eg8200`/`virtual`/`atv630`/`replay` service; those exist only in `deploy/acceptance/phase1-simulator.compose.yaml` behind `--simulator-acceptance` / `--atv630-protocol-acceptance` |
 | No old-field, old-path, protocol-profile, register, fixture or simulator fallback | Met | The ATV630 Edge's `POST /acceptance/commands` back door, which submitted intents around Command Governance, was deleted; acceptance commands go through `POST /api/v1/commands` |
@@ -17,23 +17,30 @@ Date: 2026-10-09. Stack: the local WSL `hvac-local` deployment built from the #3
 
 ## ATV630 deployed protocol path
 
-The ATV630 Edge is its own Gateway (ADR 0015) on a dedicated acceptance Site (`atv630-protocol-acceptance`): one GATEWAY device and one drive device behind it with Device Source Key `CHWP-01`. The Edge enrolls its own Gateway Credential with an Enrollment Code issued through the platform API. The runner seeds the Site, issues the code, starts `virtual-atv630` and `atv630-edge`, and drives the drive through Command Governance as the local administrator, with a second local account (`local-approver`) approving because Command Governance rejects self-approval.
+The ATV630 Edge is its own Gateway (ADR 0015) on a dedicated acceptance Site (`atv630-protocol-acceptance`): one GATEWAY device and one drive device behind it with Device Source Key `CHWP-01`. The Edge enrolls its own Gateway Credential with an Enrollment Code issued through the platform API. The runner seeds the Site, issues the code, starts `virtual-atv630` and `atv630-edge`, and drives the drive through Command Governance as the local administrator, with a second local account (`local-approver`, role `command-approver` with `device.read` only, plus COMMAND_APPROVE on the drive) approving because Command Governance rejects self-approval.
 
-Run 2026-10-09 07:10–07:14 UTC, all steps passed:
+Run 2026-10-09 07:23–07:27 UTC, all steps passed:
 
 | Step | Result |
 | --- | --- |
 | Edge ready | Gateway Credential enrolled; Modbus and MQTT ready; released TemplateRevision `01a11f50-9594-78f5-85f0-1e8db21d2c71` |
 | Public telemetry fresh | `run_state` RUNNING, `frequency` 50 Hz via `GET /api/v1/devices/{id}/observation-snapshot` |
-| SET_FREQUENCY 48 Hz | LOW risk, no approval, SUCCEEDED; independent Modbus readback 48.47 Hz |
-| SET_FREQUENCY 45 Hz | MEDIUM risk, single approver, SUCCEEDED; Modbus readback 45.45 Hz |
+| SET_FREQUENCY 48 Hz | LOW risk, no approval, SUCCEEDED; Virtual ATV630 drive at 48.49 Hz |
+| SET_FREQUENCY 45 Hz | MEDIUM risk, single approver, SUCCEEDED; drive at 45.48 Hz |
 | STOP | MEDIUM risk, approved, SUCCEEDED; telemetry STOPPED |
-| Stuck-high while stopped | Modbus readback rose to 28.7 Hz; telemetry frequency 30.2 Hz |
+| Stuck-high while stopped | drive rose to 27.3 Hz; telemetry frequency 30.2 Hz |
 | START | MEDIUM risk, approved, SUCCEEDED; telemetry RUNNING |
 | Fault 16 then RESET_FAULT | telemetry FAULT / `16`; RESET_FAULT LOW risk SUCCEEDED; fault cleared |
 | Modbus outage | stopping `virtual-atv630` made the Edge report Modbus down; restarting it restored Modbus without fallback |
 
-Frequency setpoints are lease-bound: an expired cloud intent returns the drive to local control (ADR 0012), so the runner samples the Modbus readback while each command is live.
+Frequency setpoints are lease-bound: an expired cloud intent returns the drive to local control (ADR 0012), so the runner samples the drive while each command is live.
+
+Limits of this evidence:
+
+- "Drive" values are the Virtual ATV630's own state from its diagnostics endpoint, independent of the Edge and the platform. The Edge itself reaches the drive only over Modbus/TCP, so the commanded values arriving there prove the Bridge and DeviceAdapter wrote the registers.
+- The Edge runs the code adapter built from `edgecontrol.ATV630ProtocolReleaseCandidate()`, the same mapping `atv630-template-release` released as the immutable revision; the Edge loads and reports that revision ID but does not read the register map from Registry, and the drive Device carries no template assignment.
+- Polling and the semantic Process Image are shown through FRESH public telemetry and the commanded run states, not asserted separately.
+- Only the network failure (Modbus outage) is scripted. Identity failure was observed while fixing the profile (an Edge without a Gateway Credential kept failing enrollment and never published), but it is not part of the runner.
 
 ## Defects found and fixed during acceptance
 

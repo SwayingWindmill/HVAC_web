@@ -1,7 +1,7 @@
 // Release acceptance for the deployed ATV630 protocol path (#347, #349). It needs the
 // running local stack (`npm run local:up`) and is not a PR gate. The ATV630 Edge is its
 // own Gateway on a dedicated acceptance Site; commands go through Command Governance and
-// are checked against independent Modbus readback and public telemetry.
+// are checked against the Virtual ATV630's own drive state and public telemetry.
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { centralPlantIdentity, localUUID, sqlLiteral } from './central-plant-local-contract.mjs';
 import { localAdministratorBrowser } from './lib/local-administrator-browser.mjs';
-import { localContainer, localEnvFile, localProject, repoRoot, runtimePath } from './lib/local-environment.mjs';
+import { ensureServiceDataDirectory, localContainer, localEnvFile, localProject, repoRoot, runtimePath, writePrivate } from './lib/local-environment.mjs';
 
 const launcher = path.join(repoRoot, 'scripts', 'phase1-wsl-compose.mjs');
 const profileFlags = ['--integration', '--intelligence', '--atv630-protocol-acceptance'];
@@ -115,14 +115,16 @@ COMMIT;`;
 // The administrator submits; a second local account approves, because Command
 // Governance rejects self-approval.
 function ensureApprover() {
-  if (existsSync(approverCredentials)) return readFileSync(approverCredentials, 'utf8').match(/^userId=(.+)$/m)[1];
+  if (psql('hvac_identity', "SELECT count(*) FROM identity.users WHERE username = 'local-approver'") !== '0') {
+    return readFileSync(approverCredentials, 'utf8').match(/^userId=(.+)$/m)[1];
+  }
   const password = randomBytes(24).toString('base64url');
   const created = run('node', [launcher, 'run', '--rm', '-T', 'identity-admin'], {
     input: '',
     env: { ...process.env, IDENTITY_ADMIN_OPERATION: 'create', IDENTITY_ADMIN_USERNAME: 'local-approver', IDENTITY_ADMIN_DISPLAY_NAME: '本地审批人', IDENTITY_ADMIN_EMAIL: 'local-approver@hvac.local', IDENTITY_ADMIN_PASSWORD: password },
   });
   const user = JSON.parse(created.trim().split('\n').at(-1));
-  writeFileSync(approverCredentials, `username=local-approver\npassword=${password}\nuserId=${user.id}\n`, { mode: 0o600 });
+  writePrivate(approverCredentials, `username=local-approver\npassword=${password}\nuserId=${user.id}\n`);
   return user.id;
 }
 
@@ -140,9 +142,12 @@ ON CONFLICT (external_issuer, external_subject) DO NOTHING;
 INSERT INTO iam.tenant_memberships (id, tenant_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at)
 SELECT ${sqlLiteral(id(71))}, ${sqlLiteral(tenantId)}, ${approver}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
 ON CONFLICT (tenant_id, principal_id) DO NOTHING;
+INSERT INTO iam.role_templates (id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at)
+VALUES (${sqlLiteral(id(73))}, ${sqlLiteral(tenantId)}, 'command-approver', '命令审批人', ARRAY['device.read']::text[], 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (tenant_id, role_key) DO NOTHING;
 INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, status, valid_from, valid_to, revision, created_at, updated_at)
 SELECT ${sqlLiteral(id(72))}, ${sqlLiteral(tenantId)}, ${approver}, template.id, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
-FROM iam.role_templates template WHERE template.tenant_id = ${sqlLiteral(tenantId)} AND template.role_key = 'local-admin'
+FROM iam.role_templates template WHERE template.tenant_id = ${sqlLiteral(tenantId)} AND template.role_key = 'command-approver'
 ON CONFLICT (tenant_id, principal_id, role_template_id) DO NOTHING;
 INSERT INTO iam.site_bindings (id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
 VALUES (${sqlLiteral(id(30))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(ids.site)}, ${sqlLiteral(adminPrincipalId)}, ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())
@@ -164,13 +169,6 @@ function writeEdgeMQTTConfig() {
   writeFileSync(runtimePath('config', 'atv630-edge-mqtt.json'), `${JSON.stringify({ ...config, gatewayId: ids.gateway }, null, 2)}\n`);
 }
 
-function ensureEdgeDataDirectory() {
-  const directory = runtimePath('data', 'atv630-edge');
-  mkdirSync(directory, { recursive: true });
-  run('docker', ['run', '--rm', '--user', '0', '--entrypoint', 'chown', '-v', `${directory}:/data`, 'postgres:16.4-bookworm', '65532:65532', '/data']);
-  return directory;
-}
-
 function diagnostics(method, url, body) {
   const script = `const r = await fetch(${JSON.stringify(url)}, ${JSON.stringify({ method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) })}); console.log(JSON.stringify({ status: r.status, text: await r.text() }));`;
   const output = run('docker', ['run', '--rm', '--network', `${localProject}_mqtt`, '--entrypoint', 'node', 'hvac/operations-agent-service:0.1.0-dev', '--input-type=module', '-e', script]);
@@ -183,7 +181,8 @@ async function getJSON(url) {
   return JSON.parse(text);
 }
 
-const modbusReadback = () => getJSON(`${virtualDiagnostics}/acceptance/chwp`);
+// The Virtual ATV630's own drive state, observed independently of the Edge and the platform.
+const virtualDriveState = () => getJSON(`${virtualDiagnostics}/acceptance/chwp`);
 const disturb = async (route, body) => {
   const { status } = diagnostics('PUT', `${virtualDiagnostics}/acceptance/chwp/${route}`, body);
   if (status !== 204) throw new Error(`virtual ATV630 ${route} returned ${status}`);
@@ -230,7 +229,7 @@ async function main() {
   const approverSubject = ensureApprover();
   psql('hvac_s1', authorizationSeed(adminPrincipalId, approverSubject));
   writeEdgeMQTTConfig();
-  const edgeData = ensureEdgeDataDirectory();
+  const edgeData = ensureServiceDataDirectory('data', 'atv630-edge');
 
   const admin = await localAdministratorBrowser(origin);
   const approver = await localAdministratorBrowser(origin, approverCredentials);
@@ -260,10 +259,10 @@ async function main() {
     const start = Number(baseline.values.frequency.value);
     for (const [delta, approval] of [[-2, false], [-5, true]]) {
       const target = Math.round(start + delta);
-      const { samples, ...outcome } = await command(admin, approver, 'SET_FREQUENCY', { frequencyHz: target }, approval, async () => (await modbusReadback()).frequencyHz);
+      const { samples, ...outcome } = await command(admin, approver, 'SET_FREQUENCY', { frequencyHz: target }, approval, async () => (await virtualDriveState()).frequencyHz);
       const reached = samples.find((frequencyHz) => Math.abs(frequencyHz - target) <= 0.5);
-      if (reached === undefined) throw new Error(`Modbus readback never reached ${target} Hz: ${samples.join(',')}`);
-      record(`set-frequency-${target}`, { ...outcome, modbusFrequencyHz: reached });
+      if (reached === undefined) throw new Error(`drive state never reached ${target} Hz: ${samples.join(',')}`);
+      record(`set-frequency-${target}`, { ...outcome, driveFrequencyHz: reached });
     }
 
     const stop = await command(admin, approver, 'STOP', {}, true);
@@ -271,10 +270,10 @@ async function main() {
     record('stop', stop);
 
     await disturb('stuck-high', { active: true });
-    const stuck = await waitFor('stuck-high frequency rise in Modbus readback', async () => { const chwp = await modbusReadback(); return { ok: chwp.frequencyHz > 5, frequencyHz: chwp.frequencyHz }; });
+    const stuck = await waitFor('stuck-high frequency rise in the drive state', async () => { const chwp = await virtualDriveState(); return { ok: chwp.frequencyHz > 5, frequencyHz: chwp.frequencyHz }; });
     const stuckTelemetry = await waitFor('stuck-high frequency in telemetry', async () => { const values = await telemetry(admin); return { ok: Number(values.frequency?.value) > 5, frequency: values.frequency?.value }; });
     await disturb('stuck-high', { active: false });
-    record('stuck-high', { modbusFrequencyHz: stuck.frequencyHz, telemetryFrequency: stuckTelemetry.frequency });
+    record('stuck-high', { driveFrequencyHz: stuck.frequencyHz, telemetryFrequency: stuckTelemetry.frequency });
 
     const startCommand = await command(admin, approver, 'START', {}, true);
     await waitFor('telemetry RUNNING', async () => { const values = await telemetry(admin); return { ok: values.run_state?.value === 'RUNNING', run_state: values.run_state?.value }; });
