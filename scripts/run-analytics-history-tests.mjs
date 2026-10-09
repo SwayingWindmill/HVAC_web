@@ -447,7 +447,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/energy',
-    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
+    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', '-v', './internal/clickhouse/...',
   ], {
     env: {
       ...process.env,
@@ -476,7 +476,7 @@ try {
       FORECAST_CLICKHOUSE_TEST_URL: clickHouseURL,
     },
   });
-  report.assertions.factCount = clickHouse(`SELECT count() FROM analytics.energy_interval_facts`);
+  report.assertions.factCount = clickHouse(`SELECT count() FROM analytics.energy_interval_facts WHERE tenant_id = toUUID('018f4f00-0100-7000-8000-000000000001')`);
   if (report.assertions.factCount !== '3') throw new Error(`unexpected energy interval fact count ${report.assertions.factCount}`);
 
   const rollupPointId = '01990000-1000-7000-8000-000000000001';
@@ -628,7 +628,7 @@ try {
   const expectedForecastTraceability = '4|15|60|VALID|3|7|01990000-1720-7000-8000-000000000001|01990000-1740-7000-8000-000000000001|01990000-1760-7000-8000-000000000001|01990000-1770-7000-8000-000000000001|4';
   if (report.assertions.forecastSeriesTraceability !== expectedForecastTraceability) throw new Error(`unexpected Forecast traceability ${report.assertions.forecastSeriesTraceability}`);
 
-  report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', 'SELECT count() FROM telemetry_history.counter_deltas']);
+  report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', "SELECT count() FROM telemetry_history.counter_deltas_from(points = [], since = '1970-01-01 00:00:00.000')"]);
   report.assertions.readerCannotSelectRaw = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'analytics_projector_reader');
   report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);

@@ -4,9 +4,11 @@
 Energy slice. Phase 1 composes its projector package into `cmd/telemetry-worker`; `cmd/energy-projector` is an explicit standalone build/integration entrypoint, not an additional default deployable:
 
 ```text
-telemetry_history.counter_deltas
+telemetry_history.counter_arrivals        (after the checkpoint, History order)
+    -> telemetry_history.counter_deltas_from (the arrivals' Points, from their earliest sample)
     -> Core MeterBinding resolver
     -> analytics.energy_interval_facts
+    -> analytics.energy_projection_checkpoints
 ```
 
 The projector does not calculate counter lag, reset, rollover or recovery
@@ -31,16 +33,23 @@ grant with the dedicated `meter-binding.resolve` permission. The projector is
 its own Workload Principal (ADR 0017): it asks IAM for one grant per Tenant over
 mTLS and renews it before it expires.
 
-The `counter_deltas` view uses ClickHouse `SQL SECURITY DEFINER`; the projector
-reader can query the canonical view without receiving direct raw-observation
-access.
+Each poll reads at most the batch size of Counter observations that Telemetry History made
+visible after the checkpoint, ordered by `history_sequence`. For each it projects its own delta
+and, when it arrived late, its successor's corrected delta. Reads are bounded by the arrivals'
+Points and earliest sample, not by all history (#441). The checkpoint advances only after the
+facts are written; a lost advance replays one batch, and deltas whose fact already has the same
+predecessor are skipped.
+
+The Counter views use ClickHouse `SQL SECURITY DEFINER`; the projector reader can
+query the bounded views without receiving direct raw-observation access.
 
 ## Data ownership
 
 | Dataset | Access |
 |---|---|
-| `telemetry_history.counter_deltas` | Projector read only |
+| `telemetry_history.counter_arrivals`, `counter_deltas_from` | Projector read only |
 | `analytics.energy_interval_facts` | Projector insert and idempotency read |
+| `analytics.energy_projection_checkpoints` | Projector read and advance |
 | Core `meter_bindings` | Core-owned resolver read |
 
 ## Environment
@@ -61,7 +70,6 @@ Optional defaults:
 | Variable | Default |
 |---|---|
 | `ANALYTICS_SOURCE_DATABASE` | `telemetry_history` |
-| `ANALYTICS_SOURCE_TABLE` | `counter_deltas` |
 | `ANALYTICS_DATABASE` | `analytics` |
 | `ANALYTICS_ENERGY_TABLE` | `energy_interval_facts` |
 | `ANALYTICS_CLICKHOUSE_READER_USERNAME` | Empty |
@@ -90,6 +98,8 @@ projection pass is idempotent.
 
 - Energy Series queries read electricity facts only; other energy types are projected but not queried;
 - late-arrival predecessor corrections and rebuild evidence are implemented; arbitrary operator-selected historical backfill/rebuild scopes are not;
-- no durable projector checkpoint exists yet;
+- each poll still scans the affected Points' history before the earliest arrival once, for
+  their last observation and per-revision maximum; memory stays bounded, time grows with that
+  history (#441);
 - tariff, cost, carbon, baseline, reporting and optimization slices remain on
   the Wayfinder frontier.

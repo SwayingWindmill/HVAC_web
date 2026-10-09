@@ -60,7 +60,6 @@ CREATE USER IF NOT EXISTS cube_analytics_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS telemetry_query_history_reader IDENTIFIED WITH no_password;
 CREATE USER IF NOT EXISTS settlement_reader IDENTIFIED WITH no_password;
 
-GRANT SELECT ON telemetry_history.counter_deltas TO analytics_projector_reader;
 GRANT SELECT ON analytics.energy_interval_facts TO analytics_projector_reader;
 GRANT INSERT ON analytics.energy_interval_facts TO analytics_projector_writer;
 GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader;

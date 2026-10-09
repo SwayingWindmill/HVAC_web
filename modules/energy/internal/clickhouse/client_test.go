@@ -14,60 +14,6 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
 
-func TestReaderListsCanonicalCounterDeltas(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		username, _, ok := request.BasicAuth()
-		if !ok || username != "analytics_reader" {
-			t.Fatalf("BasicAuth username = %q, present = %v", username, ok)
-		}
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		query := string(body)
-		for _, required := range []string{
-			"FROM telemetry_history.counter_deltas",
-			"analytics.energy_interval_facts",
-			"delta.transition_type IN ('INCREASE', 'UNCHANGED', 'RECOVERY', 'RESET', 'ROLLOVER')",
-			"delta.source_event_id",
-			"delta.previous_quality_reasons",
-			"ORDER BY delta.sampled_at, delta.source_offset, delta.observation_id",
-			"LIMIT 32",
-			"FORMAT JSONEachRow",
-		} {
-			if !strings.Contains(query, required) {
-				t.Fatalf("query missing %q:\n%s", required, query)
-			}
-		}
-		writer.Header().Set("Content-Type", "application/x-ndjson")
-		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","tenant_id":"018f4d00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","point_id":"018f4e00-2100-7000-8000-000000000001","sensor_id":"018f4e00-2200-7000-8000-000000000001","telemetry_key":"site.energy.total","point_revision":3,"unit":"kWh","counter_decrease_mode":"RESET_TO_ZERO","counter_rollover_modulus":null,"previous_value":100.25,"previous_quality":"GOOD","previous_quality_reasons":[],"previous_sampled_at":"2026-07-29T12:55:00.000Z","current_sampled_at":"2026-07-29T13:00:00.000Z","current_received_at":"2026-07-29T13:00:01.000Z","current_quality":"PARTIAL","current_quality_reasons":["SOURCE_LAG_EXCEEDED"],"source_event_id":"018f4e00-3100-7000-8000-000000000001","source_partition":"telemetry-0","source_offset":1722258003000,"transition_type":"INCREASE","delta_value":2.75}`+"\n")
-	}))
-	defer server.Close()
-
-	reader, err := NewReader(ReaderConfig{
-		BaseURL: server.URL, SourceDatabase: "telemetry_history", SourceTable: "counter_deltas",
-		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
-		Username: "analytics_reader", HTTPClient: server.Client(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deltas, err := reader.ListDeltas(context.Background(), 32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deltas) != 1 {
-		t.Fatalf("deltas=%#v", deltas)
-	}
-	delta := deltas[0]
-	if delta.CurrentObservationID != "018f4e00-3000-7000-8000-000000000002" || delta.DeltaValue == nil || *delta.DeltaValue != 2.75 || delta.CurrentSourceOffset != 1722258003000 {
-		t.Fatalf("delta=%#v", delta)
-	}
-	if delta.CurrentQuality != energy.SourceQualityPartial || !delta.CurrentSampledAt.Equal(time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)) {
-		t.Fatalf("delta=%#v", delta)
-	}
-}
-
 func TestWriterBatchesEnergyFactsWithDeterministicDeduplication(t *testing.T) {
 	var captured []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -167,7 +113,7 @@ func TestWriterRejectsInconsistentFactMetadata(t *testing.T) {
 }
 
 func TestReaderAndWriterRejectUnsafeConfiguration(t *testing.T) {
-	if _, err := NewReader(ReaderConfig{BaseURL: "https://clickhouse.example/path", SourceDatabase: "telemetry_history", SourceTable: "counter_deltas", AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts"}); err == nil {
+	if _, err := NewReader(ReaderConfig{BaseURL: "https://clickhouse.example/path", SourceDatabase: "telemetry_history", AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts"}); err == nil {
 		t.Fatal("NewReader() error = nil")
 	}
 	if _, err := NewWriter(WriterConfig{BaseURL: "https://clickhouse.example", Database: "analytics; DROP DATABASE analytics", Table: "energy_interval_facts"}); err == nil {

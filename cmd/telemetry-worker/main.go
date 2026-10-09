@@ -364,7 +364,6 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
 		BaseURL:           baseURL,
 		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
-		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "counter_deltas"),
 		AnalyticsDatabase: envOr("ANALYTICS_DATABASE", "analytics"),
 		AnalyticsTable:    envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
 		Username:          strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_READER_USERNAME")),

@@ -48,4 +48,3 @@ ALTER TABLE analytics.energy_interval_facts
     source_current_observation_id
   );
 
-GRANT SELECT ON telemetry_history.counter_deltas TO analytics_projector_reader;
