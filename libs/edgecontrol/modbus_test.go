@@ -322,9 +322,8 @@ func startModbusTestServer(t *testing.T) (string, *modbusTestHandler) {
 
 	handler := &modbusTestHandler{registers: map[uint16]uint16{}}
 	server, err := modbus.NewServer(&modbus.ServerConfiguration{
-		URL:        "tcp://" + address,
-		Timeout:    time.Second,
-		MaxClients: 1,
+		URL:     "tcp://" + address,
+		Timeout: time.Second,
 	}, handler)
 	if err != nil {
 		t.Fatal(err)
