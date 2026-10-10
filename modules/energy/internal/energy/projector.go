@@ -162,8 +162,24 @@ func (f EnergyIntervalFact) LogicalKey() string {
 	return strings.Join([]string{f.TenantID, f.SiteID, f.MeterBindingID, f.CurrentObservationID}, "|")
 }
 
+// ProjectionCursor is a position in the order Telemetry History made Counter observations visible.
+type ProjectionCursor struct {
+	HistorySequence uint64
+	ObservationID   string
+}
+
+// CounterBatch holds the deltas changed by the Counter observations that arrived after the
+// checkpoint, up to and including Through. Through is nil when nothing arrived.
+type CounterBatch struct {
+	Deltas  []CounterDelta
+	Through *ProjectionCursor
+}
+
+// CounterSource reads the projection's checkpoint and the next batch after it. The checkpoint
+// is advanced by FactSink instead: the reader and writer are separate ClickHouse identities,
+// and only the writer may write.
 type CounterSource interface {
-	ListDeltas(context.Context, int) ([]CounterDelta, error)
+	NextBatch(context.Context, int) (CounterBatch, error)
 }
 
 type BindingResolver interface {
@@ -172,6 +188,8 @@ type BindingResolver interface {
 
 type FactSink interface {
 	InsertFacts(context.Context, []EnergyIntervalFact) error
+	// AdvanceCheckpoint records that every arrival up to the cursor is projected.
+	AdvanceCheckpoint(context.Context, ProjectionCursor) error
 }
 
 type RebuildEventSink interface {
@@ -223,13 +241,14 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 }
 
 func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
-	deltas, err := p.source.ListDeltas(ctx, p.batchSize)
+	batch, err := p.source.NextBatch(ctx, p.batchSize)
 	if err != nil {
 		return 0, fmt.Errorf("list counter deltas: %w", err)
 	}
-	if len(deltas) == 0 {
+	if batch.Through == nil {
 		return 0, nil
 	}
+	deltas := batch.Deltas
 
 	projectedAt := p.now().UTC()
 	facts := make([]EnergyIntervalFact, 0, len(deltas))
@@ -270,7 +289,16 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 		facts = append(facts, fact)
 	}
 
-	return p.persistFacts(ctx, facts)
+	projected, err := p.persistFacts(ctx, facts)
+	if err != nil {
+		return 0, err
+	}
+	// Advancing only after the facts are written replays this batch if the process stops in
+	// between; the source skips deltas whose fact already has the same predecessor.
+	if err := p.sink.AdvanceCheckpoint(ctx, *batch.Through); err != nil {
+		return 0, fmt.Errorf("advance energy projection checkpoint: %w", err)
+	}
+	return projected, nil
 }
 
 func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.Time) (EnergyIntervalFact, error) {

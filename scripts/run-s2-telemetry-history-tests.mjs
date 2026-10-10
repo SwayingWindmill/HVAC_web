@@ -132,7 +132,7 @@ try {
   report.assertions.outbox = psql(`
     SELECT delivery_state || '|' || attempts::text || '|' || (published_at IS NOT NULL)::text
     FROM telemetry_runtime.telemetry_history_outbox
-    WHERE payload ->> 'source_partition' = 'tb-history-clickhouse-integration'
+    WHERE payload ->> 'source_partition' = 'tb-history-clickhouse-integration' AND payload ->> 'source_offset' = '1'
   `);
   if (report.assertions.outbox !== 'PUBLISHED|2|true') {
     throw new Error(`unexpected history outbox state ${report.assertions.outbox}`);
@@ -142,7 +142,7 @@ try {
       || countIf(acceptance_status = 'ACCEPTED')::String || '|'
       || toString(any(value_number))
     FROM telemetry_history.observations
-    WHERE source_partition = 'tb-history-clickhouse-integration'
+    WHERE source_partition = 'tb-history-clickhouse-integration' AND source_offset = 1
   `);
   if (report.assertions.clickHouse !== '1|1|24.75') {
     throw new Error(`unexpected ClickHouse history state ${report.assertions.clickHouse}`);

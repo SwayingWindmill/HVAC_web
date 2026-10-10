@@ -185,18 +185,19 @@ func (repository *HistoryPostgresRepository) ClaimHistoryBatch(ctx context.Conte
 		return HistoryBatch{}, fmt.Errorf("serialize telemetry history batch claim: %w", err)
 	}
 	var batchID, state string
+	var sequence uint64
 	var leasedUntil *time.Time
 	var availableAt time.Time
 	var attempts int
 	newBatch := false
 	err = tx.QueryRow(ctx, `
-SELECT batch_id::text, delivery_state, leased_until, available_at, attempts
+SELECT batch_id::text, batch_sequence, delivery_state, leased_until, available_at, attempts
 FROM telemetry_runtime.telemetry_history_outbox
 WHERE batch_id IS NOT NULL AND delivery_state IN ('PENDING', 'IN_FLIGHT', 'DEAD')
 ORDER BY batch_id
 LIMIT 1
 FOR UPDATE
-`).Scan(&batchID, &state, &leasedUntil, &availableAt, &attempts)
+`).Scan(&batchID, &sequence, &state, &leasedUntil, &availableAt, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		newBatch = true
 		state = "PENDING"
@@ -287,17 +288,20 @@ ORDER BY available_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED`
 	}
 	if newBatch {
 		batchID = eventIDs[0]
+		if err := tx.QueryRow(ctx, `SELECT nextval('telemetry_runtime.telemetry_history_batch_sequence')`).Scan(&sequence); err != nil {
+			return HistoryBatch{}, fmt.Errorf("allocate telemetry history sequence: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE telemetry_runtime.telemetry_history_outbox
-SET batch_id = $1::uuid, delivery_state = 'IN_FLIGHT', lease_id = $2::uuid, leased_until = $3,
+SET batch_id = $1::uuid, batch_sequence = $5, delivery_state = 'IN_FLIGHT', lease_id = $2::uuid, leased_until = $3,
     attempts = attempts + 1, last_error_code = NULL
-WHERE event_id = ANY($4::uuid[])`, batchID, leaseID, now.UTC().Add(leaseFor), eventIDs); err != nil {
+WHERE event_id = ANY($4::uuid[])`, batchID, leaseID, now.UTC().Add(leaseFor), eventIDs, sequence); err != nil {
 		return HistoryBatch{}, fmt.Errorf("lease telemetry history batch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return HistoryBatch{}, fmt.Errorf("commit telemetry history claim: %w", err)
 	}
-	return HistoryBatch{LeaseID: leaseID, BatchID: batchID, Observations: observations}, nil
+	return HistoryBatch{LeaseID: leaseID, BatchID: batchID, Sequence: sequence, Observations: observations}, nil
 }
 
 func (repository *HistoryPostgresRepository) MarkHistoryBatchPublished(ctx context.Context, leaseID string, publishedAt time.Time) error {

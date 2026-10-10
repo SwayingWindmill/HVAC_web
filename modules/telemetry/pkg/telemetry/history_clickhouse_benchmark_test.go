@@ -30,7 +30,7 @@ func BenchmarkClickHouseHistoryTransport(b *testing.B) {
 		rows[i] = HistoryObservation{ObservationID: fmt.Sprintf("018f2e00-9100-7000-8000-%012d", i), PayloadSHA256: strings.Repeat("a", 64)}
 	}
 	for b.Loop() {
-		if err := sink.InsertObservations(b.Context(), rows); err != nil {
+		if err := sink.InsertObservations(b.Context(), 1, rows); err != nil {
 			b.Fatal(err)
 		}
 	}

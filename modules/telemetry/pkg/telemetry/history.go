@@ -38,11 +38,17 @@ type HistoryObservation struct {
 	Quality                string    `json:"quality"`
 	QualityReasons         []string  `json:"quality_reasons"`
 	PayloadSHA256          string    `json:"payload_sha256"`
+	// HistorySequence is the batch's History Sequence, assigned when the batch is claimed.
+	// It is absent from outbox payloads and set only on the ClickHouse insert.
+	HistorySequence uint64 `json:"history_sequence,omitempty"`
 }
 
 type HistoryBatch struct {
-	LeaseID      string
-	BatchID      string
+	LeaseID string
+	BatchID string
+	// Sequence increases with every new batch. Batches reach ClickHouse one at a time, so it
+	// orders history by visibility, which readers use as a durable cursor.
+	Sequence     uint64
 	Observations []HistoryObservation
 }
 
@@ -53,7 +59,7 @@ type HistoryRepository interface {
 }
 
 type HistorySink interface {
-	InsertObservations(context.Context, []HistoryObservation) error
+	InsertObservations(context.Context, uint64, []HistoryObservation) error
 }
 
 type HistoryRelayConfig struct {
@@ -117,7 +123,7 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 	if batch.LeaseID == "" {
 		return 0, errors.New("claimed telemetry history batch has no lease ID")
 	}
-	if err := relay.sink.InsertObservations(ctx, batch.Observations); err != nil {
+	if err := relay.sink.InsertObservations(ctx, batch.Sequence, batch.Observations); err != nil {
 		retryAt := relay.now().UTC().Add(relay.retryAfter)
 		if retryErr := relay.repository.RetryHistoryBatch(ctx, batch.LeaseID, retryAt, historyInsertFailureCode, relay.maxAttempts); retryErr != nil {
 			return 0, errors.Join(fmt.Errorf("insert telemetry history: %w", err), fmt.Errorf("retry telemetry history batch: %w", retryErr))

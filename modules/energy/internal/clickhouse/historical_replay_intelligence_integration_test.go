@@ -20,7 +20,7 @@ func TestHistoricalReplayCounterHistoryProjectsEnergyFacts(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	reader, err := NewReader(ReaderConfig{
-		BaseURL: baseURL, SourceDatabase: "telemetry_history", SourceTable: "counter_deltas",
+		BaseURL: baseURL, SourceDatabase: "telemetry_history",
 		AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts",
 		Username: "analytics_projector_reader", HTTPClient: client,
 	})

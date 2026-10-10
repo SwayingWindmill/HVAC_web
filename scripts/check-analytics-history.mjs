@@ -67,7 +67,6 @@ for (const source of [ddl, historyDDL, rollupDDL]) {
 }
 assert(!rollupDDL.includes('numeric_daily') && !rollupDDL.includes('toStartOfDay(sampled_at)'), 'UTC daily rollup is incorrectly treated as a Site business day');
 assert(historyDDL.includes('tenant_id Nullable(UUID)') && historyDDL.includes('site_id Nullable(UUID)'), 'raw history Tenant/Site fact scope is missing');
-assert(ddl.includes('GRANT SELECT ON telemetry_history.counter_deltas TO analytics_projector_reader'), 'analytics reader must have canonical counter-delta read access');
 assert(counterDDL.includes('SQL SECURITY DEFINER'), 'counter delta view must not expose raw observations through invoker permissions');
 assert(ddl.includes('GRANT INSERT ON analytics.energy_interval_facts TO analytics_projector_writer'), 'analytics writer must only insert facts');
 assert(ddl.includes('GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader'), 'Cube must use a read-only analytics identity');
@@ -109,7 +108,7 @@ for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-ti
 for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
   assert(compose.includes(marker), `missing analytics compose marker ${marker}`);
 }
-for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '3'", 'readerCanSelectCanonical', 'readerCannotSelectRaw', 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
+for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', 'TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '3'", 'readerCanSelectCanonical', 'readerCannotSelectRaw', 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
 for (const marker of [

@@ -36,11 +36,11 @@ func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
 		{ObservationID: "018f2e00-9100-7000-8000-000000000001", PayloadSHA256: strings.Repeat("a", 64)},
 		{ObservationID: "018f2e00-9100-7000-8000-000000000002", PayloadSHA256: strings.Repeat("b", 64)},
 	}
-	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+	if err := sink.InsertObservations(t.Context(), 1, rows); err != nil {
 		t.Fatal(err)
 	}
 	slices.Reverse(rows)
-	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+	if err := sink.InsertObservations(t.Context(), 1, rows); err != nil {
 		t.Fatal(err)
 	}
 	mutex.Lock()
@@ -53,7 +53,7 @@ func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
 		t.Fatal("sink mutated caller data")
 	}
 	rows[0].SourceOffset++
-	if err := sink.InsertObservations(t.Context(), rows); err != nil {
+	if err := sink.InsertObservations(t.Context(), 1, rows); err != nil {
 		t.Fatal(err)
 	}
 	mutex.Lock()
@@ -63,7 +63,7 @@ func TestClickHouseHistorySinkRetryPreservesPayloadAndToken(t *testing.T) {
 		t.Fatal("different payload reused token")
 	}
 	rows[0].ValueString = stringPointer(strings.Repeat("x", maxHistoryBatchBytes))
-	if err := sink.InsertObservations(t.Context(), rows); err == nil {
+	if err := sink.InsertObservations(t.Context(), 1, rows); err == nil {
 		t.Fatal("oversized request accepted")
 	}
 	mutex.Lock()
@@ -144,7 +144,7 @@ func TestClickHouseHistorySinkWritesStableMicrobatch(t *testing.T) {
 			AcceptanceStatus: "REJECTED", Quality: "REJECTED", QualityReasons: []string{"OUT_OF_RANGE"}, PayloadSHA256: strings.Repeat("b", 64),
 		},
 	}
-	if err := sink.InsertObservations(t.Context(), observations); err != nil {
+	if err := sink.InsertObservations(t.Context(), 1, observations); err != nil {
 		t.Fatal(err)
 	}
 	mutex.Lock()
@@ -198,7 +198,7 @@ func TestClickHouseHistorySinkValidatesEntireBatchBeforeInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = sink.InsertObservations(t.Context(), []HistoryObservation{
+	err = sink.InsertObservations(t.Context(), 1, []HistoryObservation{
 		{ObservationID: "018f2e00-9100-7000-8000-000000000003", PayloadSHA256: strings.Repeat("c", 64)},
 		{ObservationID: "018f2e00-9100-7000-8000-000000000004", PayloadSHA256: "INVALID"},
 	})
@@ -221,7 +221,7 @@ func TestClickHouseHistorySinkRejectsAcceptedObservationWithoutTenantScope(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = sink.InsertObservations(t.Context(), []HistoryObservation{{
+	err = sink.InsertObservations(t.Context(), 1, []HistoryObservation{{
 		ObservationID: "018f2e00-9100-7000-8000-000000000006", AcceptanceStatus: "ACCEPTED",
 		PayloadSHA256: strings.Repeat("e", 64),
 	}})
@@ -241,7 +241,7 @@ func TestClickHouseHistorySinkRejectsFailedInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = sink.InsertObservations(t.Context(), []HistoryObservation{{
+	err = sink.InsertObservations(t.Context(), 1, []HistoryObservation{{
 		ObservationID: "018f2e00-9100-7000-8000-000000000005",
 		PayloadSHA256: strings.Repeat("d", 64),
 	}})

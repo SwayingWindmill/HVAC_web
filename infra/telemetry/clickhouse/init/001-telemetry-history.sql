@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   quality_reasons Array(String),
   payload_sha256 FixedString(64),
   projected_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  -- History Sequence of the Telemetry batch that wrote the row; increases in visibility order.
+  history_sequence UInt64,
+  INDEX history_sequence_minmax history_sequence TYPE minmax GRANULARITY 1,
   CONSTRAINT accepted_tenant_scope CHECK acceptance_status != 'ACCEPTED' OR (tenant_id IS NOT NULL AND site_id IS NOT NULL AND device_id IS NOT NULL AND point_id IS NOT NULL)
 )
 ENGINE = MergeTree

@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_history_outbox (
   event_id uuid PRIMARY KEY REFERENCES telemetry_runtime.source_observations(observation_id) ON DELETE CASCADE
     CHECK (telemetry_runtime.is_uuid_v7(event_id)),
   batch_id uuid CHECK (batch_id IS NULL OR telemetry_runtime.is_uuid_v7(batch_id)),
+  -- History Sequence: assigned once per batch when it is claimed. Batches reach ClickHouse one
+  -- at a time, so it orders history by visibility for downstream cursors.
+  batch_sequence bigint CHECK ((batch_id IS NULL) = (batch_sequence IS NULL) AND (batch_sequence IS NULL OR batch_sequence > 0)),
   payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
   outbox_payload_sha256 text NOT NULL CHECK (outbox_payload_sha256 ~ '^[a-f0-9]{64}$'),
   delivery_state text NOT NULL CHECK (delivery_state IN ('PENDING', 'IN_FLIGHT', 'PUBLISHED', 'DEAD')),
@@ -19,6 +22,8 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_history_outbox (
   CHECK ((delivery_state = 'PUBLISHED' AND published_at IS NOT NULL) OR (delivery_state <> 'PUBLISHED' AND published_at IS NULL)),
   CHECK (last_error_code IS NULL OR char_length(last_error_code) BETWEEN 1 AND 128)
 );
+
+CREATE SEQUENCE IF NOT EXISTS telemetry_runtime.telemetry_history_batch_sequence AS bigint NO CYCLE;
 
 CREATE INDEX IF NOT EXISTS telemetry_history_outbox_pending_idx
   ON telemetry_runtime.telemetry_history_outbox (available_at, event_id)
@@ -48,7 +53,8 @@ CREATE POLICY telemetry_history_outbox_history_update
 
 GRANT INSERT ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_runtime;
 GRANT SELECT ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_history;
-GRANT UPDATE (batch_id, delivery_state, available_at, attempts, last_error_code, lease_id, leased_until, published_at)
+GRANT USAGE ON SEQUENCE telemetry_runtime.telemetry_history_batch_sequence TO s2_telemetry_history;
+GRANT UPDATE (batch_id, batch_sequence, delivery_state, available_at, attempts, last_error_code, lease_id, leased_until, published_at)
   ON telemetry_runtime.telemetry_history_outbox TO s2_telemetry_history;
 REVOKE ALL ON telemetry_runtime.telemetry_history_outbox FROM PUBLIC;
 

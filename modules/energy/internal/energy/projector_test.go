@@ -98,7 +98,7 @@ func TestProjectorProcessesOneCanonicalBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || source.limit != 100 || resolver.calls != 1 || len(sink.facts) != 1 {
+	if count != 1 || source.limit != 100 || resolver.calls != 1 || len(sink.facts) != 1 || len(sink.advanced) != 1 || sink.advanced[0] != fakeThrough {
 		t.Fatalf("count=%d source=%#v resolver=%#v sink=%#v", count, source, resolver, sink)
 	}
 }
@@ -171,17 +171,18 @@ func TestProjectorRejectsDuplicateLogicalFactKey(t *testing.T) {
 	}
 }
 
-func TestProjectorReturnsSinkFailure(t *testing.T) {
+func TestProjectorReturnsSinkFailureWithoutAdvancingTheCheckpoint(t *testing.T) {
+	sink := &fakeSink{err: errors.New("write failed")}
 	projector, err := NewProjector(ProjectorConfig{
 		CounterSource:   &fakeSource{deltas: []CounterDelta{validDelta()}},
 		BindingResolver: &fakeResolver{resolution: validBinding()},
-		FactSink:        &fakeSink{err: errors.New("write failed")}, BatchSize: 10,
+		FactSink:        sink, BatchSize: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := projector.ProjectOnce(context.Background()); err == nil {
-		t.Fatal("ProjectOnce() error = nil")
+	if _, err := projector.ProjectOnce(context.Background()); err == nil || len(sink.advanced) != 0 {
+		t.Fatalf("ProjectOnce() err=%v advanced=%v", err, sink.advanced)
 	}
 }
 
@@ -218,9 +219,12 @@ type fakeSource struct {
 	err    error
 }
 
-func (source *fakeSource) ListDeltas(_ context.Context, limit int) ([]CounterDelta, error) {
+var fakeThrough = ProjectionCursor{HistorySequence: 7, ObservationID: "018f2e00-0000-7000-8000-000000000099"}
+
+func (source *fakeSource) NextBatch(_ context.Context, limit int) (CounterBatch, error) {
 	source.limit = limit
-	return append([]CounterDelta(nil), source.deltas...), source.err
+	through := fakeThrough
+	return CounterBatch{Deltas: append([]CounterDelta(nil), source.deltas...), Through: &through}, source.err
 }
 
 type fakeResolver struct {
@@ -235,9 +239,15 @@ func (resolver *fakeResolver) Resolve(_ context.Context, _ BindingResolveInput) 
 }
 
 type fakeSink struct {
-	facts  []EnergyIntervalFact
-	called bool
-	err    error
+	facts    []EnergyIntervalFact
+	called   bool
+	err      error
+	advanced []ProjectionCursor
+}
+
+func (sink *fakeSink) AdvanceCheckpoint(_ context.Context, cursor ProjectionCursor) error {
+	sink.advanced = append(sink.advanced, cursor)
+	return nil
 }
 
 func (sink *fakeSink) InsertFacts(_ context.Context, facts []EnergyIntervalFact) error {
