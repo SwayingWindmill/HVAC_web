@@ -152,7 +152,12 @@ func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	prefix := InternalCommandsPath + "/"
 	if strings.HasPrefix(request.URL.Path, prefix) {
 		raw := strings.TrimPrefix(request.URL.Path, prefix)
-		if commandID, found := strings.CutSuffix(raw, "/reconcile"); found && commandID != "" && !strings.Contains(commandID, "/") {
+		if strings.HasSuffix(raw, "/reconcile") {
+			commandID := strings.TrimSuffix(raw, "/reconcile")
+			if commandID == "" || strings.Contains(commandID, "/") {
+				writeCommandProblem(writer, http.StatusNotFound, "COMMAND_ROUTE_NOT_FOUND", false)
+				return
+			}
 			if request.Method != http.MethodPost {
 				writer.Header().Set("Allow", http.MethodPost)
 				writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
@@ -317,7 +322,9 @@ func (h *HTTPHandler) reconcileCommand(writer http.ResponseWriter, request *http
 		writeAuthorityError(writer, err)
 		return
 	}
-	if intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID {
+	// The grant is for the Capability's current revision, as the Gateway requests it.
+	currentRevision, _, _, supported := commandCapabilityProfile(intent.Capability)
+	if intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID || !supported {
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
 		return
 	}
@@ -325,7 +332,7 @@ func (h *HTTPHandler) reconcileCommand(writer http.ResponseWriter, request *http
 		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
 		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
 		PrincipalID: input.PrincipalID, TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID,
-		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
+		Capability: intent.Capability, CapabilityRevision: currentRevision,
 		Risk: intent.Risk, UseChecker: h.config.CommandGrantUseChecker,
 	}
 	if commandauth.ValidateGrant(claims, validation) != nil {

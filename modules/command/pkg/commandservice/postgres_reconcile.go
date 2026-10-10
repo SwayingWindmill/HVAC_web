@@ -14,7 +14,8 @@ var ErrReconciliationInvalid = errors.New("command outcome reconciliation is inv
 
 // Reconcile settles an OUTCOME_UNKNOWN command on a person's statement of whether it took
 // effect (#444). The Attempt keeps OUTCOME_UNKNOWN as evidence; the Intent becomes SUCCEEDED
-// or FAILED, and the Device's control group is released once no unknown outcome remains.
+// or FAILED, and the Device's control group is released. Dispatch runs one command per Device
+// at a time, so a Device holds at most one unknown outcome.
 func (store *PostgresStore) Reconcile(ctx context.Context, request commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error) {
 	if store == nil || store.pool == nil {
 		return commandmodel.CommandIntent{}, errors.New("command store is closed")
@@ -67,9 +68,12 @@ FOR UPDATE
 	if intent.Status != commandmodel.IntentOutcomeUnknown {
 		return commandmodel.CommandIntent{}, ErrReconciliationInvalid
 	}
+	// Control authority is checked at the Capability's current revision: a revision released
+	// while the outcome was unknown must not lock the Device for good.
+	currentRevision, _, _, _ := commandCapabilityProfile(intent.Capability)
 	if err := validateAuthorizationScope(request.Authorization, commandmodel.AuthorizationCommandSubmit,
 		request.Authorization.PrincipalID, intent.TenantID, intent.SiteID, intent.DeviceID,
-		intent.Capability, intent.CapabilityRevision, intent.Risk, now); err != nil {
+		intent.Capability, currentRevision, intent.Risk, now); err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
 
@@ -113,10 +117,6 @@ INSERT INTO command_runtime.command_audit_intents (
 UPDATE command_runtime.device_control_state
 SET frozen_control_groups = frozen_control_groups - $3, updated_at = $4
 WHERE tenant_id = $1::uuid AND device_id = $2::uuid
-  AND NOT EXISTS (
-    SELECT 1 FROM command_runtime.command_intents
-    WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND status = 'OUTCOME_UNKNOWN'
-  )
 `, intent.TenantID, intent.DeviceID, setpointControlGroup, now); err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("release reconciled control group: %w", err)
 	}

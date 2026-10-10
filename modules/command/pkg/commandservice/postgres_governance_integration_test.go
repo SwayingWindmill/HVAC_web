@@ -287,6 +287,18 @@ func TestPostgresReconciledUnknownOutcomeReleasesTheDevice(t *testing.T) {
 		t.Fatalf("reconcile result=%#v err=%v", reconciled, err)
 	}
 	assertDispatchDatabaseState(t, admin, unknown.Intent.ID, "FAILED", "OUTCOME_UNKNOWN", 1, false)
+	var reason, actorType, actorID string
+	var audits int
+	if err := admin.QueryRow(ctx, `
+SELECT t.reason, t.actor_type, t.actor_id,
+       (SELECT count(*) FROM command_runtime.command_audit_intents a WHERE a.command_id = t.command_id AND a.event_kind = 'COMMAND_OUTCOME_RECONCILED')
+FROM command_runtime.command_transitions t
+WHERE t.command_id = $1::uuid AND t.from_status = 'OUTCOME_UNKNOWN'`, unknown.Intent.ID).Scan(&reason, &actorType, &actorID, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "OPERATOR_RECONCILED_NOT_APPLIED" || actorType != "PRINCIPAL" || actorID != commandPrincipalA || audits != 1 {
+		t.Fatalf("reconciliation evidence reason=%s actor=%s/%s audits=%d", reason, actorType, actorID, audits)
+	}
 	envelope, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second)
 	if err != nil || envelope.CommandID != queued.Intent.ID {
 		t.Fatalf("reconciled Device still blocks later commands: envelope=%#v err=%v", envelope, err)

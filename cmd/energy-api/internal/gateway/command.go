@@ -987,23 +987,23 @@ func (h *handler) reconcileCommand(writer http.ResponseWriter, request *http.Req
 }
 
 func (h *handler) executeCommandApproval(ctx context.Context, commandID string, input internalCommandApproval, grant string) (commandView, *commandFailure) {
-	return h.executeCommandAction(ctx, commandID, "approve", "approval", input, input.TenantID, input.SiteID, input.DeviceID, grant)
+	return h.executeCommandAction(ctx, commandID, "approve", input, input.TenantID, input.SiteID, input.DeviceID, grant)
 }
 
 func (h *handler) executeCommandReconciliation(ctx context.Context, commandID string, input internalCommandReconciliation, grant string) (commandView, *commandFailure) {
-	return h.executeCommandAction(ctx, commandID, "reconcile", "reconciliation", input, input.TenantID, input.SiteID, input.DeviceID, grant)
+	return h.executeCommandAction(ctx, commandID, "reconcile", input, input.TenantID, input.SiteID, input.DeviceID, grant)
 }
 
 // executeCommandAction posts a governed action on one Command to Command Service and checks
 // that the returned Command is still the one in the caller's scope.
-func (h *handler) executeCommandAction(ctx context.Context, commandID, action, label string, input any, tenantID, siteID, deviceID, grant string) (commandView, *commandFailure) {
+func (h *handler) executeCommandAction(ctx context.Context, commandID, action string, input any, tenantID, siteID, deviceID, grant string) (commandView, *commandFailure) {
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
 		failure := commandUnavailable("Command Service is not configured.")
 		return commandView{}, &failure
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		failure := commandUnavailable("The Command " + label + " request could not be encoded.")
+		failure := commandUnavailable("The Command " + action + " request could not be encoded.")
 		return commandView{}, &failure
 	}
 	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
@@ -1011,7 +1011,7 @@ func (h *handler) executeCommandAction(ctx context.Context, commandID, action, l
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost,
 		h.command.baseURL+internalCommandsPath+"/"+url.PathEscape(commandID)+"/"+action, bytes.NewReader(body))
 	if err != nil {
-		failure := commandUnavailable("The Command " + label + " request could not be constructed.")
+		failure := commandUnavailable("The Command " + action + " request could not be constructed.")
 		return commandView{}, &failure
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -1021,7 +1021,7 @@ func (h *handler) executeCommandAction(ctx context.Context, commandID, action, l
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := h.command.httpClient.Do(request)
 	if err != nil {
-		failure := commandUnavailable("Command Service " + label + " is temporarily unavailable.")
+		failure := commandUnavailable("Command Service " + action + " is temporarily unavailable.")
 		return commandView{}, &failure
 	}
 	defer response.Body.Close()
@@ -1031,7 +1031,7 @@ func (h *handler) executeCommandAction(ctx context.Context, commandID, action, l
 	}
 	view, ok := h.decodeCommandView(response.Body)
 	if !ok || view.CommandID != commandID || view.TenantID != tenantID || view.SiteID != siteID || view.DeviceID != deviceID {
-		failure := commandUnavailable("Command Service returned an invalid Command after " + label + ".")
+		failure := commandUnavailable("Command Service returned an invalid Command after " + action + ".")
 		return commandView{}, &failure
 	}
 	return view, nil
