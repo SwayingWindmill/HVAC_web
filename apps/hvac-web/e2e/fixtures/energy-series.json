@@ -1,0 +1,78 @@
+{
+  "electricity": {
+    "schemaVersion": 1,
+    "points": [
+      {
+        "periodStart": "2026-10-10T02:00:00Z",
+        "periodEnd": "2026-10-10T03:00:00Z",
+        "energyKWh": 177.5407170000002
+      },
+      {
+        "periodStart": "2026-10-10T03:00:00Z",
+        "periodEnd": "2026-10-10T04:00:00Z",
+        "energyKWh": 247.169254
+      },
+      {
+        "periodStart": "2026-10-10T04:00:00Z",
+        "periodEnd": "2026-10-10T05:00:00Z",
+        "energyKWh": 247.16427599999997
+      },
+      {
+        "periodStart": "2026-10-10T05:00:00Z",
+        "periodEnd": "2026-10-10T06:00:00Z",
+        "energyKWh": 247.065425
+      }
+    ],
+    "metadata": {
+      "requestedGranularity": "hour",
+      "actualGranularity": "hour",
+      "dataWatermark": "2026-10-10T07:06:35.61Z",
+      "aggregateWatermark": "2026-10-10T07:06:35.61Z",
+      "datasetRevision": "local-development-v1:17464",
+      "partial": true,
+      "qualitySummary": {
+        "valid": 6715,
+        "suspect": 0,
+        "invalid": 0
+      }
+    }
+  },
+  "cooling": {
+    "schemaVersion": 1,
+    "points": [
+      {
+        "periodStart": "2026-10-10T02:00:00Z",
+        "periodEnd": "2026-10-10T03:00:00Z",
+        "energyKWh": 607.068714999999
+      },
+      {
+        "periodStart": "2026-10-10T03:00:00Z",
+        "periodEnd": "2026-10-10T04:00:00Z",
+        "energyKWh": 863.928317
+      },
+      {
+        "periodStart": "2026-10-10T04:00:00Z",
+        "periodEnd": "2026-10-10T05:00:00Z",
+        "energyKWh": 863.9109240000003
+      },
+      {
+        "periodStart": "2026-10-10T05:00:00Z",
+        "periodEnd": "2026-10-10T06:00:00Z",
+        "energyKWh": 863.5654059999997
+      }
+    ],
+    "metadata": {
+      "requestedGranularity": "hour",
+      "actualGranularity": "hour",
+      "dataWatermark": "2026-10-10T07:06:35.61Z",
+      "aggregateWatermark": "2026-10-10T07:06:35.61Z",
+      "datasetRevision": "local-development-v1:17464",
+      "partial": true,
+      "qualitySummary": {
+        "valid": 6715,
+        "suspect": 0,
+        "invalid": 0
+      }
+    }
+  }
+}

@@ -128,6 +128,10 @@ The upstream event identity or offset used to detect duplicate, replayed and out
 
 The number Telemetry assigns to a history batch when it claims it, stored on every history observation the batch writes. Batches become visible one at a time, so History Sequence orders history by visibility, which downstream projections use as a durable cursor. It is not Source Position, Sampled At or Business Revision.
 
+## Plant Efficiency
+
+Cooling energy delivered divided by HVAC electricity over the same Site-local period (shown as COP, 冷站综合能效). Both come from projected meter energy; a period missing either has no Plant Efficiency, never zero.
+
 ## Transport Position
 
 The delivery position used by a realtime transport for bounded reconnect recovery. A Transport Position does not establish business ordering or Snapshot authority.

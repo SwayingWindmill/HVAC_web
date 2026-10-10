@@ -92,6 +92,26 @@ export const auditSearchFilterSchema = z.object({
   limit: z.number().int().min(1).max(100),
 }).partial().strict();
 
+const energyGranularitySchema = z.enum(['hour', 'day', 'month']);
+export const energySeriesQuerySchema = z.object({
+  tenantId: z.string().uuid(), siteId: z.string().uuid(), energyType: z.enum(['electricity', 'cooling']),
+  granularity: energyGranularitySchema, timezone: z.string().min(1),
+  from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }),
+  qualityPolicy: z.enum(['VALID_ONLY', 'VALID_AND_SUSPECT']),
+}).strict();
+export const energySeriesResponseSchema = z.object({
+  schemaVersion: z.literal(1),
+  points: z.array(z.object({
+    periodStart: z.string().datetime({ offset: true }), periodEnd: z.string().datetime({ offset: true }), energyKWh: z.number().min(0),
+  }).strict()),
+  metadata: z.object({
+    requestedGranularity: energyGranularitySchema, actualGranularity: energyGranularitySchema,
+    dataWatermark: z.string().datetime({ offset: true }).optional(), aggregateWatermark: z.string().datetime({ offset: true }).optional(),
+    datasetRevision: z.string(), partial: z.boolean(),
+    qualitySummary: z.object({ valid: z.number().int().min(0), suspect: z.number().int().min(0), invalid: z.number().int().min(0) }).strict(),
+  }).strict(),
+}).strict();
+
 export const uuidV7Schema = z.string().uuid().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 export const revisionSchema = z.number().int().positive();
 export const opaqueCursorSchema = z.string().min(16).max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
@@ -629,6 +649,8 @@ export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type AuditSearchRecord = z.infer<typeof auditSearchRecordSchema>;
 export type AuditSearchResult = z.infer<typeof auditSearchResultSchema>;
 export type AuditSearchFilter = z.infer<typeof auditSearchFilterSchema>;
+export type EnergySeriesQuery = z.infer<typeof energySeriesQuerySchema>;
+export type EnergySeriesResponse = z.infer<typeof energySeriesResponseSchema>;
 export type Site = z.infer<typeof siteSchema>;
 export type Asset = z.infer<typeof assetSchema>;
 export type Device = z.infer<typeof deviceSchema>;
@@ -783,6 +805,10 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     searchAudit: (filter: AuditSearchFilter, init?: RequestInit) => request('__AUDIT_SEARCH_PATH__', auditSearchResultSchema, {
       ...init, method: 'POST', body: JSON.stringify(auditSearchFilterSchema.parse(filter)), headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json' },
+    }),
+    queryEnergySeries: (query: EnergySeriesQuery, csrfToken: string, init?: RequestInit) => request('__ENERGY_SERIES_PATH__', energySeriesResponseSchema, {
+      ...init, method: 'POST', body: JSON.stringify(energySeriesQuerySchema.parse(query)),
+      headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
     }),
     listSites: (params: RegistryListParams = {}, init?: RequestInit) => request(
       listPath('__SITES_PATH__', params), siteCollectionSchema, { ...init, method: 'GET' },

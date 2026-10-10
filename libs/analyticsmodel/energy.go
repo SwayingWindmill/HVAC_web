@@ -20,10 +20,11 @@ type EnergyType string
 
 const (
 	EnergyTypeElectricity EnergyType = "electricity"
+	EnergyTypeCooling     EnergyType = "cooling"
 )
 
 func (value EnergyType) Valid() bool {
-	return value == EnergyTypeElectricity
+	return value == EnergyTypeElectricity || value == EnergyTypeCooling
 }
 
 type Granularity string
