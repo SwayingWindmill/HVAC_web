@@ -30,6 +30,7 @@ Run 2026-10-09 12:34–12:36 UTC after #443, all steps passed (three consecutive
 | STOP | MEDIUM risk, approved, SUCCEEDED; telemetry STOPPED |
 | START | MEDIUM risk, approved, SUCCEEDED; telemetry RUNNING |
 | Stuck-high while running | governed reference 45 Hz; drive and telemetry at 50 Hz |
+| Command the stuck drive cannot follow | SET_FREQUENCY 48 Hz ended `OUTCOME_UNKNOWN`; reconciled `NOT_APPLIED` (#444, 2026-10-10), the command became FAILED and the next command (RESET_FAULT) succeeded |
 | Fault 16 then RESET_FAULT | telemetry FAULT / `16`; RESET_FAULT LOW risk SUCCEEDED; fault cleared |
 | Modbus outage | stopping `virtual-atv630` made the Edge report Modbus down; restarting it restored Modbus without fallback |
 
@@ -53,6 +54,6 @@ Limits of this evidence:
 ## Open
 
 - Command verification latency (#443) is fixed: a frequency command now verifies 1–3 s after acknowledgement ([source review](../architecture/command-verification-latency-source-review-2026-10-09.md)). A verification still waiting after 12 s is logged as a failed pass; that is recorded there as deferred.
-- An `OUTCOME_UNKNOWN` command blocks every later command for its Device with no way to resolve it (#444). This is why the stuck-high step sends no command.
+- An `OUTCOME_UNKNOWN` command blocked every later command for its Device with no way to resolve it. #444 added Outcome Reconciliation ([ADR 0018](../adr/0018-operator-reconciliation-of-unknown-command-outcomes.md)), and the runner now exercises it.
 - Once, before the clean runs above, the MEDIUM 45 Hz command ended `OUTCOME_UNKNOWN` although the drive reached 45 Hz. It followed manual unblocking of the acceptance drive in `hvac_s3` and did not recur in eleven later commands and runs; the cause is not established (noted on #444).
 - The projector's candidate query memory growth (#441) is fixed: it reads from a History Sequence checkpoint with bounded counter reads ([source review](../architecture/energy-projection-checkpoint-source-review-2026-10-09.md)).
