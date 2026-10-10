@@ -82,6 +82,7 @@ COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql
 COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
 COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
+COPY modules/command/migrations/006_s3_drop_approver_role.sql /opt/hvac/repo/modules/command/migrations/006_s3_drop_approver_role.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

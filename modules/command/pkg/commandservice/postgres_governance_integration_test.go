@@ -312,7 +312,6 @@ func postgresApproval(intent commandmodel.CommandIntent, now time.Time, approval
 	return commandmodel.ApprovalEvidence{
 		ApprovalID:         approvalID,
 		ApproverID:         approverID,
-		ApproverRole:       "CONTROL_APPROVER",
 		Policy:             intent.ApprovalPolicy,
 		PayloadHash:        intent.PayloadHash,
 		CapabilityRevision: intent.CapabilityRevision,

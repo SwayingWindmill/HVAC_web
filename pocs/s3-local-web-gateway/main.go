@@ -123,11 +123,10 @@ type internalCreateCommandRequest struct {
 }
 
 type internalApproveCommandRequest struct {
-	TenantID     string `json:"tenantId"`
-	SiteID       string `json:"siteId"`
-	DeviceID     string `json:"deviceId"`
-	PrincipalID  string `json:"principalId"`
-	ApproverRole string `json:"approverRole"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	DeviceID    string `json:"deviceId"`
+	PrincipalID string `json:"principalId"`
 }
 
 type commandProjection struct {
@@ -451,11 +450,10 @@ func (g *gateway) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	upstream := internalApproveCommandRequest{
-		TenantID:     g.config.tenantID,
-		SiteID:       g.config.siteID,
-		DeviceID:     projection.DeviceID,
-		PrincipalID:  g.config.approverID,
-		ApproverRole: "s3-local-independent-approver",
+		TenantID:    g.config.tenantID,
+		SiteID:      g.config.siteID,
+		DeviceID:    projection.DeviceID,
+		PrincipalID: g.config.approverID,
 	}
 	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands/"+url.PathEscape(commandID)+"/approve", upstream, map[string]string{"X-Command-Grant": grant})
 }

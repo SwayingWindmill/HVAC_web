@@ -103,11 +103,10 @@ type internalCommandCreate struct {
 }
 
 type internalCommandApproval struct {
-	TenantID     string `json:"tenantId"`
-	SiteID       string `json:"siteId"`
-	DeviceID     string `json:"deviceId"`
-	PrincipalID  string `json:"principalId"`
-	ApproverRole string `json:"approverRole"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	DeviceID    string `json:"deviceId"`
+	PrincipalID string `json:"principalId"`
 }
 
 type internalCommandReconciliation struct {
@@ -384,17 +383,6 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		h.writeCommandFailure(writer, request, commandUnavailable("Registry returned a Device outside the Command approval boundary."))
 		return
 	}
-	// Sign-in stores no roles on the Session; the approver's current roles come from IAM.
-	principal, identityFailure := h.identity.fetchPrincipal(request.Context(), session)
-	if identityFailure != nil {
-		writeIdentityFailure(writer, request, *identityFailure)
-		return
-	}
-	approverRole, ok := trustedCommandApproverRole(principal.Principal.Roles)
-	if !ok {
-		writeProblem(writer, request, http.StatusForbidden, "COMMAND_CAPABILITY_DENIED", "Command approval denied", "The authenticated principal has no trusted approval role.", false, nil)
-		return
-	}
 	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, commandmodel.AuthorizationCommandApprove)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
@@ -402,7 +390,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	}
 	approved, failure := h.executeCommandApproval(request.Context(), commandID, internalCommandApproval{
 		TenantID: session.TenantID, SiteID: device.SiteID, DeviceID: device.ID,
-		PrincipalID: principalID, ApproverRole: approverRole,
+		PrincipalID: principalID,
 	}, grant)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
@@ -425,20 +413,6 @@ func freshMFAAssurance(session bffSession, now time.Time) bool {
 	}
 	age := now.UTC().Sub(session.AuthenticationTime.UTC())
 	return age >= 0 && age <= 10*time.Minute
-}
-
-func trustedCommandApproverRole(roles []string) (string, bool) {
-	selected := ""
-	for _, role := range roles {
-		role = strings.TrimSpace(role)
-		if role == "" || len(role) > 128 {
-			continue
-		}
-		if selected == "" || role < selected {
-			selected = role
-		}
-	}
-	return selected, selected != ""
 }
 
 func (h *handler) commandSession(writer http.ResponseWriter, request *http.Request, requireCSRF bool) (bffSession, bool) {

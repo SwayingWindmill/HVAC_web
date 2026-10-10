@@ -107,7 +107,6 @@
           "siteId",
           "deviceId",
           "principalId",
-          "approverRole",
           "payloadHash",
           "risk",
           "riskRuleRevision",

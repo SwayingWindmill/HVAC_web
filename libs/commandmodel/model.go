@@ -250,7 +250,6 @@ type RiskSnapshot struct {
 type ApprovalEvidence struct {
 	ApprovalID         string
 	ApproverID         string
-	ApproverRole       string
 	Policy             ApprovalPolicy
 	PayloadHash        string
 	CapabilityRevision string
