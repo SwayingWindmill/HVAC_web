@@ -40,14 +40,19 @@ test('electricity and cooling join per Site-local bucket into plant efficiency',
   assert.equal(summary.cop, 15000 / 4500);
   assert.equal(summary.peak?.label, '10/9 周五');
   assert.equal(summary.dataWatermark, '2026-10-10T06:28:00Z');
-  assert.equal(summary.partial, true);
+  assert.equal(summary.granularity, 'day');
   assert.equal(summary.excludedIntervals, 3);
 });
 
-test('a bucket without cooling has no efficiency rather than zero', () => {
-  const summary = summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai');
-  assert.deepEqual(summary.rows.map((row) => [row.label, row.coolingKWh, row.cop]), [['10:00', null, null]]);
-  assert.equal(summary.coolingKWh, null);
-  assert.equal(summary.cop, null);
-  assert.equal(summary.dataWatermark, null);
+test('a bucket without cooling has no efficiency and stays out of the period efficiency', () => {
+  const summary = summarizeEnergy(
+    series([['2026-10-10T02:00:00Z', 180], ['2026-10-10T03:00:00Z', 250]]),
+    series([['2026-10-10T03:00:00Z', 875]]),
+    'hour',
+    'Asia/Shanghai',
+  );
+  assert.deepEqual(summary.rows.map((row) => [row.label, row.coolingKWh, row.cop]), [['10:00', null, null], ['11:00', 875, 3.5]]);
+  assert.equal(summary.electricityKWh, 430);
+  assert.equal(summary.cop, 3.5);
+  assert.equal(summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai').cop, null);
 });

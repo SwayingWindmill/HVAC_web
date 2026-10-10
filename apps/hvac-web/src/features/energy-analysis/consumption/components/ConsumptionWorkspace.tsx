@@ -1,7 +1,7 @@
 import { Download, RefreshCw } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { DataTableBlock } from "@/blocks/data-table";
 import { FactStrip } from "@/blocks/fact-strip";
 import { DataTable } from "@/components/data-table/data-table";
@@ -22,13 +22,13 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useDataTable } from "@/hooks/use-data-table";
 import { useWorkspaceScope } from "@/hooks/use-scope";
 import { formatTime } from "@/lib/operator-format";
-import { ENERGY_PERIODS, type EnergyPeriod, type EnergyRow } from "../model";
+import { BUCKET_NOUN, ENERGY_PERIODS, type EnergyPeriod, type EnergyRow } from "../model";
 import { useEnergySummary } from "../query";
 
 const decimal = (value: number, digits: number) =>
   value.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-/** Energy in kWh, switching to MWh once it reaches four digits. */
+/** Energy in kWh, switching to MWh from 10,000 kWh. */
 function energy(value: number | null): { value: string; unit: string } {
   if (value === null) return { value: "暂无数据", unit: "" };
   return value >= 10_000 ? { value: decimal(value / 1000, 2), unit: "MWh" } : { value: decimal(value, 1), unit: "kWh" };
@@ -47,7 +47,7 @@ const columns: ColumnDef<DataTableFeatures, EnergyRow>[] = [
 const chartConfig = {
   electricityKWh: { label: "空调用电", color: "var(--chart-1)" },
   coolingKWh: { label: "供冷量", color: "var(--chart-2)" },
-  cop: { label: "综合能效", color: "var(--foreground)" },
+  cop: { label: "综合能效", color: "var(--chart-1)" },
 };
 
 export function ConsumptionWorkspace() {
@@ -67,11 +67,11 @@ export function ConsumptionWorkspace() {
   const exportCsv = () => {
     if (!summary) return;
     const lines = [
-      [currentScope.name, ENERGY_PERIODS[period], `站点时间 ${currentScope.timezone}`],
+      [currentScope.name, ENERGY_PERIODS[period], "站点当地时间"],
       ["时段", "空调用电 kWh", "供冷量 kWh", "综合能效 COP"],
       ...summary.rows.map((row) => [row.label, row.electricityKWh ?? "", row.coolingKWh ?? "", row.cop?.toFixed(2) ?? ""]),
     ];
-    const url = URL.createObjectURL(new Blob(["﻿" + lines.map((line) => line.join(",")).join("\n")], { type: "text/csv;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + lines.map((line) => line.join(",")).join("\n")], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `${currentScope.name}-能耗-${ENERGY_PERIODS[period]}.csv`;
@@ -131,8 +131,7 @@ export function ConsumptionWorkspace() {
         <>
           <p className="text-xs text-muted-foreground" data-testid="energy-freshness">
             {summary.dataWatermark ? `数据截至 ${formatTime(summary.dataWatermark, currentScope.timezone)}` : "本期间还没有计量数据"}
-            {summary.partial && summary.dataWatermark ? " · 当前时段仍在累计" : ""}
-            {summary.excludedIntervals > 0 ? ` · ${summary.excludedIntervals} 个质量存疑的计量区间未计入` : ""}
+            {summary.excludedIntervals > 0 ? ` · ${summary.excludedIntervals} 个质量存疑或无效的计量区间未计入` : ""}
           </p>
           <FactStrip
             ariaLabel="期间用能概况"
@@ -145,44 +144,58 @@ export function ConsumptionWorkspace() {
                 value: summary.cop === null ? "暂无数据" : decimal(summary.cop, 2),
                 suffix: summary.cop === null ? undefined : "COP",
                 detail: "供冷量 ÷ 空调用电",
-                tone: summary.cop === null ? "default" : "accent",
               },
               {
                 key: "peak",
-                label: period === "today" ? "用电最高时段" : "用电最高日",
+                label: `用电最高${BUCKET_NOUN[summary.granularity]}`,
                 value: peak ? peak.label : "暂无数据",
-                detail: peak?.electricityKWh != null ? `${decimal(peak.electricityKWh, 1)} kWh` : undefined,
+                detail: peak ? `${decimal(peak.electricityKWh!, 1)} kWh` : undefined,
               },
               { key: "cost", label: "电费", value: "未接入", detail: "电价与结算尚未接入" },
             ]}
           />
-          <Card>
-            <CardHeader>
-              <CardTitle>用电、供冷与能效</CardTitle>
-              <CardDescription>
-                左轴：每{summary.granularity === "hour" ? "小时" : summary.granularity === "day" ? "日" : "月"}用电与供冷（kWh）；右轴：综合能效（COP）
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {summary.rows.length === 0 ? (
-                <p className="py-16 text-center text-sm text-muted-foreground">本期间还没有能耗数据</p>
-              ) : (
-                <ChartContainer className="aspect-auto h-[300px] w-full" config={chartConfig}>
-                  <ComposedChart accessibilityLayer data={[...summary.rows]} margin={{ left: 4, right: 4 }}>
-                    <CartesianGrid vertical={false} />
-                    <XAxis dataKey="label" axisLine={false} tickLine={false} minTickGap={24} />
-                    <YAxis yAxisId="energy" axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => value.toLocaleString("zh-CN")} />
-                    <YAxis yAxisId="cop" orientation="right" axisLine={false} tickLine={false} width={36} domain={[0, "auto"]} />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <Bar yAxisId="energy" dataKey="electricityKWh" fill="var(--color-electricityKWh)" radius={[3, 3, 0, 0]} maxBarSize={40} isAnimationActive={false} />
-                    <Bar yAxisId="energy" dataKey="coolingKWh" fill="var(--color-coolingKWh)" radius={[3, 3, 0, 0]} maxBarSize={40} isAnimationActive={false} />
-                    <Line yAxisId="cop" dataKey="cop" stroke="var(--color-cop)" strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                  </ComposedChart>
-                </ChartContainer>
-              )}
-            </CardContent>
-          </Card>
+          {summary.rows.length === 0 ? (
+            <p className="rounded-lg border py-16 text-center text-sm text-muted-foreground">本期间还没有能耗数据</p>
+          ) : (
+            <div className="grid gap-5 xl:grid-cols-[2fr_1fr]">
+              <Card>
+                <CardHeader>
+                  <CardTitle>用电与供冷</CardTitle>
+                  <CardDescription>每{BUCKET_NOUN[summary.granularity]}能量（kWh）</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer className="aspect-auto h-[280px] w-full" config={chartConfig}>
+                    <BarChart accessibilityLayer data={[...summary.rows]} margin={{ left: 4, right: 4 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis dataKey="label" axisLine={false} tickLine={false} minTickGap={24} />
+                      <YAxis axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => value.toLocaleString("zh-CN")} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Bar dataKey="electricityKWh" fill="var(--color-electricityKWh)" radius={[3, 3, 0, 0]} maxBarSize={40} isAnimationActive={false} />
+                      <Bar dataKey="coolingKWh" fill="var(--color-coolingKWh)" radius={[3, 3, 0, 0]} maxBarSize={40} isAnimationActive={false} />
+                      <ChartLegend content={<ChartLegendContent />} />
+                    </BarChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>综合能效</CardTitle>
+                  <CardDescription>每{BUCKET_NOUN[summary.granularity]}供冷量 ÷ 空调用电（COP）</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer className="aspect-auto h-[280px] w-full" config={chartConfig}>
+                    <LineChart accessibilityLayer data={[...summary.rows]} margin={{ left: 4, right: 12 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis dataKey="label" axisLine={false} tickLine={false} minTickGap={24} />
+                      <YAxis axisLine={false} tickLine={false} width={32} domain={[0, "auto"]} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Line dataKey="cop" stroke="var(--color-cop)" strokeWidth={2} dot={summary.rows.length === 1} connectNulls={false} isAnimationActive={false} />
+                    </LineChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+            </div>
+          )}
           <DataTableBlock title="时段能耗" description="每个时段的空调用电、供冷量与综合能效。">
             <DataTable table={table} tableAriaLabel="分时段能耗明细" />
           </DataTableBlock>

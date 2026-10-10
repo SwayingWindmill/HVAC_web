@@ -1,8 +1,9 @@
-import type { EnergySeriesResponse } from '../../../api/generated/platformGateway.gen';
+import type { EnergySeriesQuery, EnergySeriesResponse } from '../../../api/generated/platformGateway.gen';
 
 export const ENERGY_PERIODS = { today: '今日', '7d': '近 7 天', month: '本月', year: '本年' } as const;
 export type EnergyPeriod = keyof typeof ENERGY_PERIODS;
-export type Granularity = 'hour' | 'day' | 'month';
+export type Granularity = EnergySeriesQuery['granularity'];
+export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '日', month: '月' };
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
 
@@ -46,6 +47,7 @@ export interface EnergyRow {
 }
 
 export interface EnergySummary {
+  readonly granularity: Granularity;
   readonly rows: readonly EnergyRow[];
   readonly electricityKWh: number | null;
   readonly coolingKWh: number | null;
@@ -53,7 +55,7 @@ export interface EnergySummary {
   readonly peak: EnergyRow | null;
   /** Latest instant both energies are known up to; null when either has no data. */
   readonly dataWatermark: string | null;
-  readonly partial: boolean;
+  /** Suspect or invalid meter intervals left out of every total. */
   readonly excludedIntervals: number;
 }
 
@@ -101,21 +103,20 @@ export function summarizeEnergy(
       coolingKWh: energy.cooling,
       cop: ratio(energy.cooling, energy.electricity),
     }));
-  const electricityKWh = total(electricity);
-  const coolingKWh = total(cooling);
-  const peak = rows.reduce<EnergyRow | null>(
-    (best, row) => row.electricityKWh !== null && (best === null || row.electricityKWh > (best.electricityKWh ?? 0)) ? row : best,
-    null,
-  );
+  const complete = rows.filter((row) => row.cop !== null);
+  const sum = (values: readonly (number | null)[]) => values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
+  let peak: EnergyRow | null = null;
+  for (const row of rows) if (row.electricityKWh !== null && (peak === null || row.electricityKWh > peak.electricityKWh!)) peak = row;
   const excluded = (series: EnergySeriesResponse) => series.metadata.qualitySummary.suspect + series.metadata.qualitySummary.invalid;
   return {
+    granularity,
     rows,
-    electricityKWh,
-    coolingKWh,
-    cop: ratio(coolingKWh, electricityKWh),
+    electricityKWh: total(electricity),
+    coolingKWh: total(cooling),
+    // Only buckets with both energies count, so a cooling meter gap does not understate efficiency.
+    cop: complete.length === 0 ? null : ratio(sum(complete.map((row) => row.coolingKWh)), sum(complete.map((row) => row.electricityKWh))),
     peak,
     dataWatermark: earlier(electricity.metadata.dataWatermark, cooling.metadata.dataWatermark),
-    partial: electricity.metadata.partial || cooling.metadata.partial,
     excludedIntervals: excluded(electricity) + excluded(cooling),
   };
 }
