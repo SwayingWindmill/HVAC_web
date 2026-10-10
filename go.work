@@ -22,7 +22,6 @@ use (
 	./libs/operationsauditevent
 	./libs/oidctest
 	./libs/ownershipregistry
-	./libs/presentationmodel
 	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
