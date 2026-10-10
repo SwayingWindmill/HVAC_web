@@ -10,7 +10,7 @@ test('the default view lists active alarms only', async ({ page }) => {
   await expect(rows.first()).toContainText('冷冻水回水温度过低');
   await expect(rows.first()).toContainText('活动 · 未确认');
 
-  await page.getByRole('tab', { name: '已恢复' }).click();
+  await page.getByRole('radio', { name: '已恢复' }).click();
   await expect(page).toHaveURL(/view=cleared/);
   await expect(rows.first()).toContainText('已恢复 · 已确认');
 });

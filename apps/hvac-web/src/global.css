@@ -91,6 +91,12 @@
   --chart-4: #c026d3;
   --chart-5: #64748b;
 
+  --severity-critical: #dc2626;
+  --severity-major: #ea580c;
+  --severity-minor: #d97706;
+  --severity-warning: #0284c7;
+  --severity-info: #94a3b8;
+
   --sidebar: #fafafa;
   --sidebar-foreground: #27272a;
   --sidebar-primary: #18181b;
@@ -131,6 +137,12 @@
   --chart-3: #a78bfa;
   --chart-4: #e879f9;
   --chart-5: #94a3b8;
+
+  --severity-critical: #f87171;
+  --severity-major: #fb923c;
+  --severity-minor: #fbbf24;
+  --severity-warning: #38bdf8;
+  --severity-info: #64748b;
 
   --sidebar: #18181b;
   --sidebar-foreground: #f4f4f5;

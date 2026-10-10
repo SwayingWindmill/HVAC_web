@@ -139,3 +139,27 @@ export function alarmDetailQuery(siteId: string, alarmId: string) {
     queryFn: ({ signal }) => getAlarm(alarmId, signal),
   });
 }
+
+const HISTORY_DAYS = 14;
+const HISTORY_PAGE_LIMIT = 10;
+
+/** Alarms raised in the last 14 days, newest first; \`complete\` is false when the page cap cut the history short. */
+export function alarmHistoryQuery(siteId: string) {
+  return queryOptions({
+    queryKey: [...alarmKeys.all(siteId), 'history', HISTORY_DAYS] as const,
+    queryFn: async ({ signal }) => {
+      const since = Date.now() - HISTORY_DAYS * 86_400_000;
+      const alarms: Alarm[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < HISTORY_PAGE_LIMIT; page += 1) {
+        const result = await listAlarms(siteId, {}, cursor, signal);
+        alarms.push(...result.items.filter((alarm) => Date.parse(alarm.firstOccurredAt) >= since));
+        const reachedStart = result.items.some((alarm) => Date.parse(alarm.firstOccurredAt) < since);
+        if (!result.hasMore || reachedStart) return { alarms, complete: true, days: HISTORY_DAYS };
+        cursor = result.nextCursor ?? undefined;
+      }
+      return { alarms, complete: false, days: HISTORY_DAYS };
+    },
+    refetchInterval: 60_000,
+  });
+}

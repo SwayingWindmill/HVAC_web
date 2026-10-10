@@ -40,7 +40,12 @@ export function alarmStatusLabel(alarm: Alarm): string {
 }
 
 export function formatDuration(from: string, to: string | undefined, now: number): string {
-  const minutes = Math.max(0, Math.round(((to ? Date.parse(to) : now) - Date.parse(from)) / 60_000));
+  return formatSpan((to ? Date.parse(to) : now) - Date.parse(from));
+}
+
+/** A length of time in the units an operator reads: minutes, then hours and minutes, then days and hours. */
+export function formatSpan(milliseconds: number): string {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
   if (minutes < 60) return `${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} 小时 ${minutes % 60} 分`;
@@ -64,3 +69,11 @@ export function sortAlarmsForOperators(alarms: readonly Alarm[]): Alarm[] {
   return [...alarms].sort((left, right) => severityRank(left.currentSeverity) - severityRank(right.currentSeverity)
     || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt));
 }
+
+export const SEVERITY_COLORS: Readonly<Record<AlarmSeverity, string>> = {
+  CRITICAL: 'var(--severity-critical)',
+  MAJOR: 'var(--severity-major)',
+  MINOR: 'var(--severity-minor)',
+  WARNING: 'var(--severity-warning)',
+  INFO: 'var(--severity-info)',
+};

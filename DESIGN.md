@@ -771,6 +771,7 @@ Current fact
 - **反面模式**：把系统运行做成 5～6 张独立 KPI Card 的通用 Dashboard，再把真正的过程状态、设备群和对象调查压到第二屏。
 - **根因分析**：把运行工作区误当成统计首页，而不是 ISA-101 风格的 situational-awareness workspace。
 - **精进法则**：
+  - （2026-10-11 用户放开：运行页可以使用 `MetricCard` 指标卡，只要每张卡有说明性的 footer 且指标彼此不重复；以下为原规则，作为背景保留。）
   - **运行 Workspace 不使用 KPI Card Wall**。站点、时区、更新时间、功率、COP、设备群、告警和数据延迟采用紧凑 `FactStrip` / context facts 表达，不制造一排独立 Card；
   - 视觉主角必须是 **当前过程事实 + 设备群**；选中对象后用右侧 Detail Sheet 补充详情，不能常驻压缩主工作区；
   - `FactStrip` 只做快速扫读，不承载“正常/优秀/自动优化”等前端结论；异常才获得 warning / critical 视觉权重；

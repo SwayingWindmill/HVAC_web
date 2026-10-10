@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { BellRing, CheckCheck, CircleCheck, EyeOff, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Fact } from '@/components/common/Fact';
 import { Button } from '@/components/ui/button';
@@ -10,14 +11,19 @@ import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
+import { alarmDetailQuery, type AlarmOperation, type AlarmSeverity } from '../alarm-api';
+import { useAlarmActions } from '../use-alarm-actions';
 import {
-  acknowledgeAlarm,
-  alarmDetailQuery,
-  alarmKeys,
-  assignAlarm,
-  type Alarm,
-  type AlarmSeverity,
-} from '../alarm-api';
+  Timeline,
+  TimelineConnector,
+  TimelineContent,
+  TimelineHeader,
+  TimelineItem,
+  TimelineMarker,
+  TimelineRail,
+  TimelineTime,
+  TimelineTitle,
+} from '@/components/ui/timeline';
 import {
   alarmStatusLabel,
   formatDuration,
@@ -28,6 +34,15 @@ import { formatTime, personLabel } from '@/lib/operator-format';
 import { SeverityBadge } from '../alarm-presentation';
 
 const siteRoute = getRouteApi('/_app/_site');
+
+const OPERATION_ICONS: Partial<Record<AlarmOperation, LucideIcon>> = {
+  PUBLISH: BellRing,
+  ACKNOWLEDGE: CheckCheck,
+  ASSIGN: UserCheck,
+  UNASSIGN: UserMinus,
+  SUPPRESS: EyeOff,
+  CLEAR: CircleCheck,
+};
 
 const PRIORITY_BY_SEVERITY: Readonly<Record<AlarmSeverity, WorkOrderPriority>> = {
   CRITICAL: 'URGENT',
@@ -48,7 +63,6 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
   const [creatingWorkOrder, setCreatingWorkOrder] = useState(false);
   const myId = principal.principalId;
   const capabilities = principal.authorization.capabilities;
-  const csrfToken = principal.session.csrfToken;
 
   const detail = useQuery({ ...alarmDetailQuery(site.id, alarmId ?? ''), enabled: Boolean(alarmId) });
   const workOrders = useQuery({
@@ -57,21 +71,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
     enabled: Boolean(alarmId) && capabilities.includes('work-order.list'),
   });
 
-  const applyUpdate = (alarm: Alarm) => {
-    queryClient.setQueryData(alarmKeys.detail(site.id, alarm.alarmId), alarm);
-    void queryClient.invalidateQueries({ queryKey: alarmKeys.all(site.id) });
-  };
-  const acknowledge = useMutation({
-    mutationFn: (alarm: Alarm) => acknowledgeAlarm(alarm.alarmId, comment, csrfToken),
-    onSuccess: (alarm) => {
-      setComment('');
-      applyUpdate(alarm);
-    },
-  });
-  const claim = useMutation({
-    mutationFn: (alarm: Alarm) => assignAlarm(alarm, myId, csrfToken),
-    onSuccess: applyUpdate,
-  });
+  const { acknowledge, claim, canClaim, canCreateWorkOrder } = useAlarmActions();
 
   const alarm = detail.data;
   const deviceName = alarm?.deviceId ? deviceNames.get(alarm.deviceId) : undefined;
@@ -111,7 +111,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
                 <Fact label="持续">{formatDuration(alarm.firstOccurredAt, alarm.clearedAt, Date.now())}</Fact>
                 <Fact label="发生次数">{alarm.occurrenceCount}</Fact>
                 {alarm.peakSeverity !== alarm.currentSeverity ? <Fact label="最高严重度">{SEVERITY_LABELS[alarm.peakSeverity]}</Fact> : null}
-                <Fact label="负责人">{personLabel(alarm.assigneeId, myId)}</Fact>
+                <Fact label="负责人">{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未认领'}</Fact>
                 <Fact label="确认">
                   {alarm.acknowledgement
                     ? `${personLabel(alarm.acknowledgement.acknowledgedBy, myId)} · ${formatTime(alarm.acknowledgement.acknowledgedAt, site.timezone)}`
@@ -133,12 +133,12 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                   {!alarm.acknowledgement ? (
-                    <Button size="sm" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate(alarm)}>确认告警</Button>
+                    <Button size="sm" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate({ alarm, comment }, { onSuccess: () => setComment('') })}>确认告警</Button>
                   ) : null}
-                  {capabilities.includes('alarm.assign') && alarm.assigneeId !== myId ? (
+                  {canClaim && alarm.assigneeId !== myId ? (
                     <Button size="sm" variant="outline" disabled={claim.isPending} onClick={() => claim.mutate(alarm)}>由我处理</Button>
                   ) : null}
-                  {capabilities.includes('work-order.create') ? (
+                  {canCreateWorkOrder ? (
                     <Button size="sm" variant="outline" onClick={() => setCreatingWorkOrder(true)}>创建工单</Button>
                   ) : null}
                 </div>
@@ -171,17 +171,29 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
               ) : null}
 
               <section>
-                <h3 className="mb-2 text-sm font-medium">处理记录</h3>
-                <ol className="space-y-2 border-l pl-4">
-                  {[...alarm.timeline].reverse().map((entry) => (
-                    <li key={entry.version} className="text-sm">
-                      <span className="font-medium">{operationLabel(entry.operation)}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        {formatTime(entry.occurredAt, site.timezone)} · {entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
+                <h3 className="mb-3 text-sm font-medium">处理记录</h3>
+                <Timeline>
+                  {[...alarm.timeline].reverse().map((entry, index) => {
+                    const Icon = OPERATION_ICONS[entry.operation];
+                    return (
+                      <TimelineItem key={entry.version} status={index === 0 ? 'current' : 'done'}>
+                        <TimelineRail>
+                          <TimelineMarker>{Icon ? <Icon /> : null}</TimelineMarker>
+                          <TimelineConnector />
+                        </TimelineRail>
+                        <TimelineContent>
+                          <TimelineHeader>
+                            <TimelineTitle>{operationLabel(entry.operation)}</TimelineTitle>
+                            <TimelineTime dateTime={entry.occurredAt}>{formatTime(entry.occurredAt, site.timezone)}</TimelineTime>
+                          </TimelineHeader>
+                          <p className="text-xs text-muted-foreground">
+                            {entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId)} · {SEVERITY_LABELS[entry.currentSeverity]}
+                          </p>
+                        </TimelineContent>
+                      </TimelineItem>
+                    );
+                  })}
+                </Timeline>
               </section>
             </div>
 
