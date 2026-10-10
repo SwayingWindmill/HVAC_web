@@ -105,7 +105,6 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_approval_snapshots (
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   approver_id uuid NOT NULL,
-  approver_role text NOT NULL,
   approval_policy text NOT NULL,
   payload_hash text NOT NULL,
   capability_revision text NOT NULL,

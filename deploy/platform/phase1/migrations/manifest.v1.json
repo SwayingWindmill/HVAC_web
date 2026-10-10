@@ -105,8 +105,7 @@
         "modules/command/migrations/002_s3_target_runtime.sql",
         "modules/command/migrations/003_s3_tenant_scope.sql",
         "modules/command/migrations/004_s3_command_point_identity.sql",
-        "modules/command/migrations/005_s11_edge_execution_evidence.sql",
-        "modules/command/migrations/006_s3_drop_approver_role.sql"
+        "modules/command/migrations/005_s11_edge_execution_evidence.sql"
       ]
     },
     {
