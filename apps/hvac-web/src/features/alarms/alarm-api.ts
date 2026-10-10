@@ -124,6 +124,15 @@ export const alarmKeys = {
   detail: (siteId: string, alarmId: string) => ['alarms', siteId, 'detail', alarmId] as const,
 };
 
+// The Alarm owner has no stream yet; views follow it on a short interval.
+export function activeAlarmsQuery(siteId: string) {
+  return queryOptions({
+    queryKey: alarmKeys.activeSummary(siteId),
+    queryFn: ({ signal }) => listAlarms(siteId, { condition: 'ACTIVE' }, undefined, signal),
+    refetchInterval: 15_000,
+  });
+}
+
 export function alarmDetailQuery(siteId: string, alarmId: string) {
   return queryOptions({
     queryKey: alarmKeys.detail(siteId, alarmId),

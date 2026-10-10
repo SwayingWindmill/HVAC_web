@@ -1,4 +1,6 @@
+import { queryOptions } from '@tanstack/react-query';
 import { listWorkOrders, type WorkOrderStatus } from '@/api/work-orders';
+import { OPEN_STATUSES } from './work-order-presentation';
 
 export const workOrderKeys = {
   all: (siteId: string) => ['work-orders', siteId] as const,
@@ -13,4 +15,12 @@ export async function listView(siteId: string, statuses: readonly WorkOrderStatu
   const pages = await Promise.all(filters.map((filter) =>
     listWorkOrders({ ...filter, assigneeId, limit: 100 }, { siteId, signal })));
   return pages.flatMap((page) => page.items);
+}
+
+export function openWorkOrdersQuery(siteId: string) {
+  return queryOptions({
+    queryKey: workOrderKeys.view(siteId, OPEN_STATUSES),
+    queryFn: ({ signal }) => listView(siteId, OPEN_STATUSES, undefined, signal),
+    refetchInterval: 15_000,
+  });
 }

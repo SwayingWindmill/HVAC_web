@@ -1,4 +1,5 @@
-import type { WorkOrderPriority, WorkOrderStatus } from '@/api/work-orders';
+import type { WorkOrder, WorkOrderPriority, WorkOrderStatus } from '@/api/work-orders';
+import { cn } from '@/lib/utils';
 
 export const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
   URGENT: '紧急',
@@ -24,3 +25,19 @@ export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
 };
 
 export const OPEN_STATUSES: readonly WorkOrderStatus[] = ['OPEN', 'IN_PROGRESS', 'BLOCKED'];
+
+const PRIORITY_ORDER: readonly WorkOrderPriority[] = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
+
+export function PriorityBadge({ priority }: { readonly priority: WorkOrderPriority }) {
+  return (
+    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', PRIORITY_CLASSES[priority])}>
+      {PRIORITY_LABELS[priority]}
+    </span>
+  );
+}
+
+/** Most urgent first, then the newest. */
+export function sortWorkOrdersForOperators(workOrders: readonly WorkOrder[]): WorkOrder[] {
+  return [...workOrders].sort((left, right) => PRIORITY_ORDER.indexOf(left.priority) - PRIORITY_ORDER.indexOf(right.priority)
+    || Date.parse(right.createdAt) - Date.parse(left.createdAt));
+}

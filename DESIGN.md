@@ -798,12 +798,14 @@ Current fact
   - 彩色仅保留给**需要值班人员立即干预的异常与偏离**（Critical/Major/Minor 语义色）；
   - 统计图表使用品牌与主题色系的低刺激度阶梯色，并提供平滑过渡与 Hover 状态，保持工业级沉稳感。
 
-## 21. 节能运营总览（2026-09-30 当前方向）
+## 21. 总览看板（2026-10-10 当前方向）
 
-用户本轮指定的首页是节能运营 Dashboard：基线 → 实际 → 节省 → 策略 → 舒适度 → 机会。
-以 `docs/product/surface-specifications/03-site-overview.md` 与 `docs/design-system/dashboard-layout-specification.md` 为本 Surface 当前合同；固定上游源和取舍见 `docs/architecture/energy-dashboard-source-review-2026-09-30.md`。
+2026-09-30 的「基线 → 实际 → 节省」首页依赖基线、节能量与电价 owner，三者均未接入，真实构建只剩「未接入」。2026-10-10 起首页按 shadcn dashboard-01 构图，只展示站点已有的真实事实：
 
-首页采用单一四项成果带（实际、节省、节能率、费用）、全宽双线基线图、策略/舒适度、机会/关注、短系统指标带。成果数字只汇总一次；舒适度集中到约束卡，基线方法进入图表详情。中性底色、克制细边框、清楚数字层级；绿色强调正节省，风险色仅表达真实风险，未知值不表现为成功。
-不保留旧六卡/四卡 KPI、Donut/Gauge、装饰火花线、图标入口墙、等高留白或待办/接入质量拼盘要求。其他 Surface 继续遵循其已批准合同。
-期间与范围要改变事实并保留 URL 上下文；详情使用非模态 Sheet；导出真实 CSV。示例明确标记，生产依赖现有事实 owner，未接入历史/核证不能以 UI 估算冒充。
-桌面渲染与交互已评审，详见本轮实施记录。该完成状态仅覆盖首页 UI 与当前 owner 能力边界。
+- 四张指标卡（`CardDescription → CardTitle → CardAction`，footer 两行说明）：冷站实时功率（附瞬时制冷量）、今日空调用电（附供冷量）、今日冷站综合能效（附实时 COP）、主要设备运行（冷机、水泵、冷却塔；离线优先于运行状态）。卡片为纯白底，不加渐变。
+- 全宽用电与供冷面积图，期间（今日 / 近 7 天 / 本月 / 本年）写入 URL；窄卡片用 Select 代替 ToggleGroup。
+- 未结告警与待办工单两张列表卡，按告警严重度、工单优先级排序各取前 5 条，链接到对应页面的 `?inspect=` 详情；查询与排序复用告警、工单 owner 的共享 query options。
+- 节能量、节能率与节约费用以一条虚线框明确「未接入」，接入基线与电价 owner 后再回到首页。
+- 过期或质量降级的读数置灰并说明，设备台账未就绪时不显示 0 台。
+
+`docs/design-system/dashboard-layout-specification.md` 与 `03-site-overview.md` 的 2026-09-30 构图仅作背景。

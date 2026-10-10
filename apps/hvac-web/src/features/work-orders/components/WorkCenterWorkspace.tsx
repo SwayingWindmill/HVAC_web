@@ -11,12 +11,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MetricStrip } from '@/components/analysis/workspace-parts';
-import type { WorkOrder, WorkOrderPriority } from '@/api/work-orders';
+import type { WorkOrder } from '@/api/work-orders';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { CreateWorkOrderDialog } from '../CreateWorkOrderDialog';
-import { OPEN_STATUSES, PRIORITY_CLASSES, PRIORITY_LABELS, STATUS_LABELS } from '../work-order-presentation';
-import { listView, workOrderKeys } from '../work-order-queries';
+import { OPEN_STATUSES, PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from '../work-order-presentation';
+import { listView, openWorkOrdersQuery, workOrderKeys } from '../work-order-queries';
 import { WorkOrderInspector } from './WorkOrderInspector';
 
 export type WorkCenterView = 'open' | 'mine' | 'done' | 'all';
@@ -28,19 +28,10 @@ const VIEW_LABELS: Readonly<Record<WorkCenterView, string>> = {
   all: '全部',
 };
 
-const PRIORITY_ORDER: readonly WorkOrderPriority[] = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
 const REFRESH_MS = 15_000;
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/work-center');
-
-export function PriorityBadge({ priority }: { readonly priority: WorkOrderPriority }) {
-  return (
-    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', PRIORITY_CLASSES[priority])}>
-      {PRIORITY_LABELS[priority]}
-    </span>
-  );
-}
 
 export function WorkCenterWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
@@ -54,20 +45,14 @@ export function WorkCenterWorkspace() {
 
   const statuses = view === 'done' ? ['COMPLETED', 'CANCELLED'] as const : view === 'all' ? [] : OPEN_STATUSES;
   const assigneeId = view === 'mine' ? myId : undefined;
-  const open = useQuery({
-    queryKey: workOrderKeys.view(site.id, OPEN_STATUSES),
-    queryFn: ({ signal }) => listView(site.id, OPEN_STATUSES, undefined, signal),
-    refetchInterval: REFRESH_MS,
-  });
+  const open = useQuery(openWorkOrdersQuery(site.id));
   const list = useQuery({
     queryKey: workOrderKeys.view(site.id, statuses, assigneeId),
     queryFn: ({ signal }) => listView(site.id, statuses, assigneeId, signal),
     refetchInterval: REFRESH_MS,
   });
 
-  const workOrders = useMemo(() => [...(list.data ?? [])].sort((left, right) =>
-    PRIORITY_ORDER.indexOf(left.priority) - PRIORITY_ORDER.indexOf(right.priority)
-      || Date.parse(right.createdAt) - Date.parse(left.createdAt)), [list.data]);
+  const workOrders = useMemo(() => sortWorkOrdersForOperators(list.data ?? []), [list.data]);
   const openItems = open.data ?? [];
   const count = (predicate: (workOrder: WorkOrder) => boolean) => (open.data ? openItems.filter(predicate).length : '—');
   const setSearch = (patch: { view?: WorkCenterView; inspect?: string }) =>

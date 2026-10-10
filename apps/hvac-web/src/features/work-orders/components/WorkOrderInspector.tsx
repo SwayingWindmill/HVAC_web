@@ -17,7 +17,7 @@ import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { STATUS_LABELS } from '../work-order-presentation';
 import { workOrderKeys } from '../work-order-queries';
-import { PriorityBadge } from './WorkCenterWorkspace';
+import { PriorityBadge } from '../work-order-presentation';
 
 const siteRoute = getRouteApi('/_app/_site');
 

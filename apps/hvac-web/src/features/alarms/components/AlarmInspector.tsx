@@ -25,7 +25,7 @@ import {
   SEVERITY_LABELS,
 } from '../alarm-presentation';
 import { formatTime, personLabel } from '@/lib/operator-format';
-import { SeverityBadge } from './AlarmsWorkspace';
+import { SeverityBadge } from '../alarm-presentation';
 
 const siteRoute = getRouteApi('/_app/_site');
 

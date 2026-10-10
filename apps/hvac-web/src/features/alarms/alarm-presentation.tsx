@@ -1,3 +1,4 @@
+import { cn } from '@/lib/utils';
 import type { Alarm, AlarmOperation, AlarmSeverity } from './alarm-api';
 
 export const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
@@ -48,4 +49,18 @@ export function formatDuration(from: string, to: string | undefined, now: number
 
 export function severityRank(severity: AlarmSeverity): number {
   return SEVERITY_ORDER.indexOf(severity);
+}
+
+export function SeverityBadge({ severity }: { readonly severity: AlarmSeverity }) {
+  return (
+    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', SEVERITY_CLASSES[severity])}>
+      {SEVERITY_LABELS[severity]}
+    </span>
+  );
+}
+
+/** Most severe first, then the most recent. */
+export function sortAlarmsForOperators(alarms: readonly Alarm[]): Alarm[] {
+  return [...alarms].sort((left, right) => severityRank(left.currentSeverity) - severityRank(right.currentSeverity)
+    || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt));
 }

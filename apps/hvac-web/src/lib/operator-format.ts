@@ -1,5 +1,10 @@
 // Formatting shared by operator workspaces.
 
+/** A measured value with a fixed number of decimals, grouped the Chinese way. */
+export function formatDecimal(value: number, digits: number): string {
+  return value.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
 /** Platform principals are shown relative to the viewer until IAM offers a user directory. */
 export function personLabel(principalId: string | undefined, myId: string): string {
   if (!principalId) return '—';
