@@ -244,7 +244,7 @@ No Cloud/Edge dual writer exists for the same field. Edge-side edits are proposa
 
 ## 12. Presentation boundary
 
-The first production Dashboard/BigScreen contract is a coherent `SiteDashboardSummary`, not a client-side join over partial Device lists.
+The first production Dashboard/BigScreen contract is a coherent `SiteDashboardSummary`, not a client-side join over partial Device lists. (Amended by [ADR 0019](../adr/0019-overview-reads-owners-directly.md): the Site overview reads each owner directly with per-fact freshness; the summary was removed.)
 
 Presentation may own:
 

@@ -199,6 +199,8 @@ Dashboard/BigScreen/other presentation definitions may own layout, view state, t
 
 The primary Site dashboard consumes a coherent SiteDashboardSummary with explicit as-of time, watermarks, completeness, quality and denominator policy. BigScreen consumes the same authoritative summary/projection family.
 
+Amended by [ADR 0019](0019-overview-reads-owners-directly.md): the Site overview reads each owner directly and states freshness on the facts that age; there is no Site dashboard summary.
+
 A presentation action that leads toward control navigates to Command Preview; Command Domain re-authorizes and creates the Intent. Presentation code never directly dispatches control.
 
 ### 13. Platform Operations owns reliability mechanisms, not domain facts

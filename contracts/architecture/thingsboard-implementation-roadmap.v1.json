@@ -243,6 +243,7 @@
     {
       "id": "S17",
       "name": "site-dashboard-summary-bigscreen-truthfulness",
+      "supersededBy": "docs/adr/0019-overview-reads-owners-directly.md",
       "owner": "presentation",
       "dependsOn": ["S05", "S06", "S07", "S08", "S13"],
       "priority": "P1",

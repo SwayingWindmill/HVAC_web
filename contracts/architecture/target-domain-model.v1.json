@@ -108,7 +108,7 @@
     },
     {
       "id": "presentation",
-      "owns": ["dashboard-view-definition", "presentation-layout", "typed-datasource-reference", "site-dashboard-summary-projection"],
+      "owns": ["dashboard-view-definition", "presentation-layout", "typed-datasource-reference"],
       "mustNotOwn": ["device-truth", "metric-truth", "alarm-truth", "command-truth", "authorization"]
     },
     {
