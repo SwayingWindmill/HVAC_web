@@ -42,3 +42,21 @@ test('a work order created from an alarm references it as its origin', async ({ 
     sourceReferences: [{ domain: 'ALARM', resourceId: ACTIVE_ALARM, relationship: 'ORIGIN' }],
   });
 });
+
+test('search and severity filters narrow the ledger and say when nothing matches', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=all`);
+  const rows = page.getByRole('table', { name: '告警记录' }).locator('tbody tr');
+  await expect(rows).toHaveCount(2);
+
+  await page.getByRole('textbox', { name: '搜索告警' }).fill('不存在的告警');
+  await expect(page).toHaveURL(/q=/);
+  await expect(page.getByText('没有符合条件的告警')).toBeVisible();
+
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(rows).toHaveCount(2);
+
+  await page.getByRole('toolbar').getByRole('button', { name: '严重度' }).click();
+  await page.getByRole('option', { name: '紧急' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('没有符合条件的告警')).toBeVisible();
+});

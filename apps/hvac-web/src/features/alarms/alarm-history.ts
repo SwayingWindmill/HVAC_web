@@ -35,3 +35,9 @@ export function meanTimeToClear(alarms: readonly Alarm[]): number | null {
     .map((alarm) => Date.parse(alarm.clearedAt!) - Date.parse(alarm.firstOccurredAt));
   return durations.length === 0 ? null : durations.reduce((sum, value) => sum + value, 0) / durations.length;
 }
+
+/** Alarms raised on the last `days` Site-local days, today included: the window the trend, ranking and recovery time share. */
+export function alarmsInWindow(alarms: readonly Alarm[], timeZone: string, days: number, now: number): Alarm[] {
+  const first = siteDay(now - (days - 1) * 86_400_000, timeZone);
+  return alarms.filter((alarm) => siteDay(Date.parse(alarm.firstOccurredAt), timeZone) >= first);
+}

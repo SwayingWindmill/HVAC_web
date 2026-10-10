@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { alarmDailyCounts, alarmsByDevice, meanTimeToClear } from '../apps/hvac-web/src/features/alarms/alarm-history.ts';
+import { alarmDailyCounts, alarmsByDevice, alarmsInWindow, meanTimeToClear } from '../apps/hvac-web/src/features/alarms/alarm-history.ts';
 import { formatRelative } from '../apps/hvac-web/src/lib/operator-format.ts';
 
 const now = Date.parse('2026-10-10T06:00:00Z'); // 14:00 in Asia/Shanghai
@@ -47,4 +47,12 @@ test('mean time to clear counts only alarms that have cleared', () => {
     alarm('2026-10-10T04:00:00Z', 'MINOR', { condition: 'ACTIVE' }),
   ]), 60 * 60_000);
   assert.equal(meanTimeToClear([alarm('2026-10-10T04:00:00Z', 'MINOR', { condition: 'ACTIVE' })]), null);
+});
+
+test('the window is whole Site-local days, the same days the trend draws', () => {
+  const kept = alarmsInWindow([
+    alarm('2026-10-07T16:00:00Z', 'MINOR'), // 10/8 00:00 local: first day of a 3-day window
+    alarm('2026-10-07T15:59:00Z', 'MINOR'), // 10/7 23:59 local: outside
+  ], 'Asia/Shanghai', 3, now);
+  assert.deepEqual(kept.map((item) => item.firstOccurredAt), ['2026-10-07T16:00:00Z']);
 });
