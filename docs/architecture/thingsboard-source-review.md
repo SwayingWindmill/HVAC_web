@@ -409,6 +409,14 @@ The implementation read these files directly from the pinned ThingsBoard CE `v4.
 
 Presentation becomes a logical owner of derived presentation projections only; Registry, Telemetry, Metric/Analytics, Alarm, Command and authorization facts remain with their existing owners. Phase 1 may physically co-locate the projection with `energy-api/platform-gateway`, but the Summary implementation consumes owner query ports rather than write/read owner schemas directly. Live presentation uses a bounded `text/event-stream` replacement stream only after a REST `SiteDashboardSummary` handshake: the browser supplies that Snapshot's `generatedAt` as `baseGeneratedAt`, accepts an owner-issued replacement only when the base still matches its current Snapshot, and performs a fresh REST reconciliation before reopening the stream after disconnect, malformed data or base mismatch. The Gateway revalidates the durable BFF Session on the configured revocation objective independently of the lower-frequency Summary refresh, so stream lifetime cannot weaken Session revocation. The stream is recovery acceleration, not a new durable fact authority or a browser-side recomputation path.
 
+### S17 revision (2026-10-10, ADR 0019)
+
+Reviewed again at ThingsBoard v4.4 (`6d46786579c8b29caf5102f95ddb133674bed68b`), `ui-ngx/src/app/shared/models/widget.models.ts`: `WidgetConfig.datasources` (line 974) binds each widget to its own entity datasources and data keys.
+
+- `ADOPT`: per-widget datasources. The Site overview reads each owner directly (Telemetry Snapshot and stream, `energy-series`, Alarm, Work Order, Registry) and states freshness on the facts that age.
+- `REJECT`: the single versioned `SiteDashboardSummary` projection and its replacement stream. The route, stream, `presentationmodel` and `presentation-service` owner are removed.
+- `KEEP`: the explicit `READY / … / NOT_INTEGRATED` truthfulness rules, applied per fact instead of per summary.
+
 ## S20 — Rule Runtime core
 
 Date: 2026-08-19
