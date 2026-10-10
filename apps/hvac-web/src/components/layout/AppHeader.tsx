@@ -212,7 +212,7 @@ export function AppHeader({
               <DropdownMenuGroup>
                 <DropdownMenuItem
                   className="cursor-pointer gap-2 text-xs"
-                  onSelect={() => onNavigate('/settings/access')}
+                  onSelect={() => onNavigate('/system?tab=users')}
                 >
                   <ShieldCheck className="size-3.5 text-muted-foreground" />
                   <span>权限与组织</span>

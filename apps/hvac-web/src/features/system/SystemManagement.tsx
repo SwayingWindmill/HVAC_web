@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Building2, LockKeyhole, Plug, ScrollText, UserRound, Wifi } from 'lucide-react';
+import { Building2, LockKeyhole, Plug, UserRound, Wifi } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
 import { FactStrip } from '@/blocks/fact-strip';
 import type { ProtectedScopeDraft } from '@/app/protected-scope';
@@ -16,6 +16,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { StatusBadge } from '@/components/status-badge';
 import { useDataTable } from '@/hooks/use-data-table';
+import { AuditLog } from './audit/AuditLog';
+import { EmptyGovernanceState } from './EmptyGovernanceState';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { RuleManagement } from './rule-management/RuleManagement';
 
@@ -42,13 +44,6 @@ type SiteRow = {
 
 const systemRouteApi = getRouteApi('/_app/system');
 
-function EmptyGovernanceState({ description }: { readonly description: string }) {
-  return (
-    <div className="grid min-h-32 place-items-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-      {description}
-    </div>
-  );
-}
 
 function FactGrid({ items }: { readonly items: ReadonlyArray<{ label: string; value: string }> }) {
   return (
@@ -119,6 +114,8 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     paginate: false,
     getRowId: (row) => row.key,
   });
+
+  const auditViewer = useMemo(() => ({ subject: principal.principal.subject, displayName: principal.principal.displayName }), [principal]);
 
   const overview = (
     <div className="space-y-4">
@@ -223,19 +220,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     </div>
   );
 
-  const audit = (
-    <Card>
-      <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><ScrollText className="size-4" />审计日志 <span className="text-sm font-normal text-muted-foreground">服务器审计查询待接入</span></CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <Input disabled placeholder="搜索操作人、动作或目标" className="max-w-72" />
-          <div className="flex h-9 min-w-36 items-center rounded-md border bg-muted/30 px-3 text-sm text-muted-foreground">全部事件</div>
-          <div className="flex h-9 min-w-28 items-center rounded-md border bg-muted/30 px-3 text-sm text-muted-foreground">全部结果</div>
-        </div>
-        <EmptyGovernanceState description="审计日志接口尚未接入；未使用演示审计记录替代" />
-      </CardContent>
-    </Card>
-  );
+  const audit = <AuditLog viewer={auditViewer} canRead={principal.authorization.capabilities.includes('audit.read')} active={activeTab === 'audit'} />;
 
   const items = [
     { key: 'overview', label: '系统概览', children: overview },

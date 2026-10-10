@@ -16,9 +16,7 @@ import { Route as AppNotificationsRouteImport } from './routes/_app.notification
 import { Route as AppSystemRouteImport } from './routes/_app.system'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
 import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
-import { Route as AppSettingsAccessRouteImport } from './routes/_app.settings.access'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
-import { Route as AppSettingsSitesRouteImport } from './routes/_app.settings.sites'
 import { Route as AppSiteEnergyAnalysisBenchmarkingRouteImport } from './routes/_app._site.energy-analysis.benchmarking'
 import { Route as AppSiteEnergyAnalysisBreakdownRouteImport } from './routes/_app._site.energy-analysis.breakdown'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
@@ -66,19 +64,9 @@ const AppSiteReportsRoute = AppSiteReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => AppSiteRoute,
 } as any)
-const AppSettingsAccessRoute = AppSettingsAccessRouteImport.update({
-  id: '/settings/access',
-  path: '/settings/access',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSettingsIntegrationsRoute = AppSettingsIntegrationsRouteImport.update({
   id: '/settings/integrations',
   path: '/settings/integrations',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSettingsSitesRoute = AppSettingsSitesRouteImport.update({
-  id: '/settings/sites',
-  path: '/settings/sites',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSiteEnergyAnalysisBenchmarkingRoute =
@@ -164,9 +152,7 @@ export interface FileRoutesByFullPath {
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
-  '/settings/access': typeof AppSettingsAccessRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/settings/sites': typeof AppSettingsSitesRoute
   '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -187,9 +173,7 @@ export interface FileRoutesByTo {
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
-  '/settings/access': typeof AppSettingsAccessRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/settings/sites': typeof AppSettingsSitesRoute
   '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -213,9 +197,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/_site/overview': typeof AppSiteOverviewRoute
   '/_app/_site/reports': typeof AppSiteReportsRoute
-  '/_app/settings/access': typeof AppSettingsAccessRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/_app/settings/sites': typeof AppSettingsSitesRoute
   '/_app/_site/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/_app/_site/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -238,9 +220,7 @@ export interface FileRouteTypes {
     | '/system'
     | '/overview'
     | '/reports'
-    | '/settings/access'
     | '/settings/integrations'
-    | '/settings/sites'
     | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -261,9 +241,7 @@ export interface FileRouteTypes {
     | '/system'
     | '/overview'
     | '/reports'
-    | '/settings/access'
     | '/settings/integrations'
-    | '/settings/sites'
     | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -286,9 +264,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/_site/overview'
     | '/_app/_site/reports'
-    | '/_app/settings/access'
     | '/_app/settings/integrations'
-    | '/_app/settings/sites'
     | '/_app/_site/energy-analysis/benchmarking'
     | '/_app/_site/energy-analysis/breakdown'
     | '/_app/_site/energy-analysis/consumption'
@@ -359,25 +335,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteReportsRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/settings/access': {
-      id: '/_app/settings/access'
-      path: '/settings/access'
-      fullPath: '/settings/access'
-      preLoaderRoute: typeof AppSettingsAccessRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/settings/integrations': {
       id: '/_app/settings/integrations'
       path: '/settings/integrations'
       fullPath: '/settings/integrations'
       preLoaderRoute: typeof AppSettingsIntegrationsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/settings/sites': {
-      id: '/_app/settings/sites'
-      path: '/settings/sites'
-      fullPath: '/settings/sites'
-      preLoaderRoute: typeof AppSettingsSitesRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/_site/energy-analysis/benchmarking': {
@@ -519,9 +481,7 @@ interface AppRouteChildren {
   AppNotificationsRoute: typeof AppNotificationsRoute
   AppSystemRoute: typeof AppSystemRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppSettingsAccessRoute: typeof AppSettingsAccessRoute
   AppSettingsIntegrationsRoute: typeof AppSettingsIntegrationsRoute
-  AppSettingsSitesRoute: typeof AppSettingsSitesRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -529,9 +489,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppNotificationsRoute: AppNotificationsRoute,
   AppSystemRoute: AppSystemRoute,
   AppIndexRoute: AppIndexRoute,
-  AppSettingsAccessRoute: AppSettingsAccessRoute,
   AppSettingsIntegrationsRoute: AppSettingsIntegrationsRoute,
-  AppSettingsSitesRoute: AppSettingsSitesRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

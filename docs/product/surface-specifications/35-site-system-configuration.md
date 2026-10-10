@@ -4,6 +4,7 @@
 > **日期：2026-09-15**  
 > **Surface Catalog：** `35 站点与系统配置`  
 > **Route intent：** `/settings/sites`、`/settings/sites/:siteId`  
+> **当前实现（2026-10-10）：** 未实现。原先用示例数据填充的 `/settings/sites` 已删除（#449）；当前真实的站点列表在系统管理 `/system?tab=site`。  
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → `DESIGN.md` → 本文件  
 > **产品语言：** 中文优先；`IANA Time Zone`、`BACnet Schedule/Calendar`、`ASHRAE 223`、`ISO 50001` 等标准术语只作为专业辅助。  
 > **设计输入声明：** 本文件不参考当前项目旧站点设置、旧 Registry、旧组织树、旧系统配置页面或旧 Ant/ProComponents 页面。现有实现只能在实施阶段作为真实 Site / Building / Space / System / Calendar / Timezone / Weather / Capability / Commissioning contract 的候选证据来源。
