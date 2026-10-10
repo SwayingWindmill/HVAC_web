@@ -126,7 +126,7 @@ function cubeToken(overrides = {}) {
   return `${unsigned}.${signature}`;
 }
 
-function energyQuery() {
+function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'] } = {}) {
   return {
     measures: [
       'energy_usage.energy_valid_kwh',
@@ -143,20 +143,20 @@ function energyQuery() {
     ],
     timeDimensions: [{
       dimension: 'energy_usage.period_end',
-      dateRange: ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'],
+      dateRange,
       granularity: 'hour',
     }],
     order: { 'energy_usage.period_end.hour': 'asc' },
-    timezone: 'UTC',
+    timezone,
     limit: 100,
   };
 }
 
-async function queryCube(token) {
+async function queryCube(token, query = energyQuery()) {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: energyQuery() }),
+    body: JSON.stringify({ query }),
   });
   const text = await response.text();
   let decoded;
@@ -233,6 +233,16 @@ try {
   if (new Date(firstWatermarkUTC).toISOString() !== '2026-07-29T12:58:00.000Z' ||
       new Date(secondWatermarkUTC).toISOString() !== '2026-07-29T13:05:00.000Z') {
     throw new Error(`unexpected Cube watermark ${JSON.stringify(rows)}`);
+  }
+
+  // Cube reads dateRange and returns buckets as wall time in the query timezone (Telemetry Query Service relies on both).
+  const local = (await queryCube(cubeToken(), energyQuery({ timezone: 'Asia/Shanghai', dateRange: ['2026-07-29T20:00:00.000', '2026-07-29T21:59:59.999'] }))).data ?? [];
+  if (local.map((row) => `${row['energy_usage.period_end.hour']}=${Number(row['energy_usage.energy_valid_kwh'])}`).join(',') !==
+      '2026-07-29T20:00:00.000=2,2026-07-29T21:00:00.000=2') {
+    throw new Error(`unexpected Asia/Shanghai Cube buckets ${JSON.stringify(local)}`);
+  }
+  if (local.map((row) => String(row['energy_usage.max_data_watermark'])).join(',') !== rows.map((row) => String(row['energy_usage.max_data_watermark'])).join(',')) {
+    throw new Error(`Asia/Shanghai Cube watermark differs from UTC ${JSON.stringify(local)}`);
   }
 
   const denied = await queryCube(cubeToken({ siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] }));
