@@ -40,7 +40,7 @@ func TestMediumRiskRequiresBoundIndependentApproval(t *testing.T) {
 	}
 
 	approval := commandmodel.ApprovalEvidence{
-		ApprovalID: "approval-1", ApproverID: "principal-2", ApproverRole: "SITE_OPERATOR",
+		ApprovalID: "approval-1", ApproverID: "principal-2",
 		Policy: commandmodel.ApprovalSingleApprover, PayloadHash: created.Intent.PayloadHash,
 		CapabilityRevision: created.Intent.CapabilityRevision, Risk: created.Intent.Risk,
 		RiskRuleRevision: created.Intent.RiskSnapshot.RuleRevision,
@@ -89,7 +89,7 @@ func TestFreshApprovalAuthorizationReplacesExpiredSubmitAuthorization(t *testing
 	}
 	clockNow = clockNow.Add(26 * time.Second)
 	approval := commandmodel.ApprovalEvidence{
-		ApprovalID: "approval-fresh", ApproverID: "principal-2", ApproverRole: "SITE_OPERATOR",
+		ApprovalID: "approval-fresh", ApproverID: "principal-2",
 		Policy: commandmodel.ApprovalSingleApprover, PayloadHash: created.Intent.PayloadHash,
 		CapabilityRevision: created.Intent.CapabilityRevision, Risk: created.Intent.Risk,
 		RiskRuleRevision: created.Intent.RiskSnapshot.RuleRevision,
@@ -123,7 +123,7 @@ func TestHighRiskRequiresTwoDistinctApprovers(t *testing.T) {
 	}
 	approval := func(id, approver string) commandmodel.ApprovalEvidence {
 		return commandmodel.ApprovalEvidence{
-			ApprovalID: id, ApproverID: approver, ApproverRole: "CONTROL_APPROVER",
+			ApprovalID: id, ApproverID: approver,
 			Policy: commandmodel.ApprovalTwoPerson, PayloadHash: created.Intent.PayloadHash,
 			CapabilityRevision: created.Intent.CapabilityRevision, Risk: created.Intent.Risk,
 			RiskRuleRevision: created.Intent.RiskSnapshot.RuleRevision,
@@ -154,7 +154,7 @@ func TestExecutionRejectsExpiredEarlierApprovalAuthorization(t *testing.T) {
 	}
 	approval := func(id, approver string) commandmodel.ApprovalEvidence {
 		return commandmodel.ApprovalEvidence{
-			ApprovalID: id, ApproverID: approver, ApproverRole: "CONTROL_APPROVER",
+			ApprovalID: id, ApproverID: approver,
 			Policy: commandmodel.ApprovalTwoPerson, PayloadHash: created.Intent.PayloadHash,
 			CapabilityRevision: created.Intent.CapabilityRevision, Risk: created.Intent.Risk,
 			RiskRuleRevision: created.Intent.RiskSnapshot.RuleRevision,

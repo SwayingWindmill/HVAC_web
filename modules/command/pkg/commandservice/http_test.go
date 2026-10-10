@@ -195,7 +195,7 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
 	body, _ := json.Marshal(internalApproveCommandRequest{
 		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
-		PrincipalID: "approver-2", ApproverRole: "operations-approver",
+		PrincipalID: "approver-2",
 	})
 	request := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/approve", bytes.NewReader(body))
 	request.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandApprove, "approver-2", "device-1"))
@@ -206,7 +206,7 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 	}
 	approval := authority.approved.Approval
 	if authority.approved.TenantID != "tenant-1" || authority.approved.CommandID != "command-1" ||
-		approval.ApproverID != "approver-2" || approval.ApproverRole != "operations-approver" ||
+		approval.ApproverID != "approver-2" ||
 		approval.Policy != commandmodel.ApprovalSingleApprover || approval.PayloadHash != "payload-hash" ||
 		approval.Risk != commandmodel.RiskMedium || approval.RiskRuleRevision != "risk-v1" ||
 		approval.Authorization.Purpose != commandmodel.AuthorizationCommandApprove {

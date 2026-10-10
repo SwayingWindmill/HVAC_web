@@ -155,7 +155,8 @@ func TestGatewayGetCommandRejectsCrossTenantProjection(t *testing.T) {
 	}
 }
 
-func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
+// Approval is authorized by the approver's COMMAND_APPROVE grant alone; no role is read (#448).
+func TestGatewayApproveCommandDerivesIdentityAndExactGrant(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	fixture.approvalPending.Store(true)
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{}`))
@@ -166,7 +167,7 @@ func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 3 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 0 || fixture.commandCalls.Load() != 2 {
+	if fixture.iamCalls.Load() != 2 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 0 || fixture.commandCalls.Load() != 2 {
 		t.Fatalf("approval calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 	var view commandView
@@ -646,9 +647,9 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandApprove || claims.DeviceID != fixture.deviceID {
 					t.Fatalf("invalid backend approval grant claims=%#v err=%v", claims, err)
 				}
-				var input internalCommandApproval
-				if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID ||
-					input.DeviceID != fixture.deviceID || input.PrincipalID != fixture.principalID || input.ApproverRole != "operator" {
+				var input map[string]string
+				if json.NewDecoder(request.Body).Decode(&input) != nil || len(input) != 4 || input["tenantId"] != fixture.tenantID || input["siteId"] != fixture.siteID ||
+					input["deviceId"] != fixture.deviceID || input["principalId"] != fixture.principalID {
 					t.Fatalf("unexpected internal approval input %#v", input)
 				}
 				fixture.approvalPending.Store(false)

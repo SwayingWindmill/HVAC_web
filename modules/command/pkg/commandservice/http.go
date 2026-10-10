@@ -71,11 +71,10 @@ type internalCurrentState struct {
 }
 
 type internalApproveCommandRequest struct {
-	TenantID     string `json:"tenantId"`
-	SiteID       string `json:"siteId"`
-	DeviceID     string `json:"deviceId"`
-	PrincipalID  string `json:"principalId"`
-	ApproverRole string `json:"approverRole"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	DeviceID    string `json:"deviceId"`
+	PrincipalID string `json:"principalId"`
 }
 
 type internalReconcileCommandRequest struct {
@@ -286,7 +285,7 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 		TenantID:  input.TenantID,
 		CommandID: commandID,
 		Approval: commandmodel.ApprovalEvidence{
-			ApprovalID: approvalID, ApproverID: input.PrincipalID, ApproverRole: input.ApproverRole,
+			ApprovalID: approvalID, ApproverID: input.PrincipalID,
 			Policy: intent.ApprovalPolicy, PayloadHash: intent.PayloadHash,
 			CapabilityRevision: intent.CapabilityRevision, Risk: intent.Risk,
 			RiskRuleRevision: intent.RiskSnapshot.RuleRevision, Authorization: authorization,
@@ -375,7 +374,7 @@ func validInternalApproval(commandID string, input internalApproveCommandRequest
 	if strings.TrimSpace(commandID) == "" || len(commandID) > 256 {
 		return false
 	}
-	for _, value := range []string{input.TenantID, input.SiteID, input.DeviceID, input.PrincipalID, input.ApproverRole} {
+	for _, value := range []string{input.TenantID, input.SiteID, input.DeviceID, input.PrincipalID} {
 		if strings.TrimSpace(value) == "" || len(value) > 256 {
 			return false
 		}

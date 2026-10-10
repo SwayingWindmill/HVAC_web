@@ -541,7 +541,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	}
 
 	approvalRows, err := tx.Query(ctx, `
-SELECT approval_id::text, approver_id::text, approver_role, approval_policy,
+SELECT approval_id::text, approver_id::text, approval_policy,
        payload_hash, capability_revision, risk_level, risk_rule_revision,
        authorization_grant_id, authorization_policy_revision, authorization_purpose, authorization_maximum_risk,
        authorization_emergency_revocation_revision, authorization_issued_at, authorization_expires_at,
@@ -556,7 +556,7 @@ ORDER BY created_at, approval_id
 	for approvalRows.Next() {
 		var approval commandmodel.ApprovalEvidence
 		var policy, approvalRisk, approvalMaximumRisk string
-		if err := approvalRows.Scan(&approval.ApprovalID, &approval.ApproverID, &approval.ApproverRole,
+		if err := approvalRows.Scan(&approval.ApprovalID, &approval.ApproverID,
 			&policy, &approval.PayloadHash, &approval.CapabilityRevision, &approvalRisk,
 			&approval.RiskRuleRevision, &approval.Authorization.GrantID,
 			&approval.Authorization.PolicyRevision, &approval.Authorization.Purpose, &approvalMaximumRisk,

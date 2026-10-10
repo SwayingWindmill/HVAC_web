@@ -1493,7 +1493,7 @@ Approval owner 提供：
 
 ```text
 Required
-Approver Role
+Approver
 Status
 Approved Scope
 Approved Value / Range

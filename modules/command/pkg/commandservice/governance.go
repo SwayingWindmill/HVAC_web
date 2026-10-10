@@ -117,7 +117,7 @@ func validateApproval(intent commandmodel.CommandIntent, approval commandmodel.A
 		return ErrApprovalInvalid
 	}
 	if strings.TrimSpace(approval.ApprovalID) == "" || strings.TrimSpace(approval.ApproverID) == "" ||
-		strings.TrimSpace(approval.ApproverRole) == "" || approval.ApproverID == intent.PrincipalID {
+		approval.ApproverID == intent.PrincipalID {
 		return ErrApprovalInvalid
 	}
 	if approval.Policy != intent.ApprovalPolicy || approval.PayloadHash != intent.PayloadHash ||

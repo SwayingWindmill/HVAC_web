@@ -91,7 +91,7 @@ S3-08 adds the disabled Command operations experience without new execution auth
 - HVAC Web registers `/commands` and `/commands/{commandId}` for Operations and R&D roles only;
 - the public client accepts only Canonical Device ID, `SET_TEMPERATURE_SETPOINT` and `setpointC`; browser Organization, Principal, risk, approval role and provider fields are absent;
 - Command Detail returns setpoint, approval threshold, S2 Snapshot Revision and a strictly versioned Timeline with only `PRINCIPAL` or `WORKLOAD` actor classes;
-- public approval accepts an empty JSON object; Gateway derives Principal and Approver Role from the authenticated Session, resolves the Device through Registry and requests an exact `COMMAND_APPROVE` Grant;
+- public approval accepts an empty JSON object; Gateway derives Principal from the authenticated Session, resolves the Device through Registry and requests an exact `COMMAND_APPROVE` Grant, which alone authorizes the approval (#448);
 - Command Service independently reconstructs approval evidence from its authoritative Intent, Payload Hash, Capability Revision and risk snapshot;
 - Mock mode supports UX audit with zero provider or Device side effects;
 - real mode shows an explicit production-disabled state and does not attempt to bypass the disabled Route Ownership Registry.

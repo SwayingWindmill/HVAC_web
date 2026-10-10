@@ -67,21 +67,21 @@ FOR UPDATE
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_approval_snapshots (
   approval_id, command_id, tenant_id, site_id, device_id, approver_id,
-  approver_role, approval_policy, payload_hash, capability_revision,
+  approval_policy, payload_hash, capability_revision,
   risk_level, risk_rule_revision, authorization_grant_id,
   authorization_policy_revision, authorization_purpose, authorization_maximum_risk,
   authorization_emergency_revocation_revision, authorization_issued_at,
   authorization_expires_at, issued_at, expires_at, created_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
-  $7, $8, $9, $10,
-  $11, $12, $13,
-  $14, $15, $16,
-  $17, $18,
-  $19, $20, $21, $22
+  $7, $8, $9,
+  $10, $11, $12,
+  $13, $14, $15,
+  $16, $17,
+  $18, $19, $20, $21
 )
 `, request.Approval.ApprovalID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
-		request.Approval.ApproverID, request.Approval.ApproverRole, request.Approval.Policy,
+		request.Approval.ApproverID, request.Approval.Policy,
 		request.Approval.PayloadHash, request.Approval.CapabilityRevision, request.Approval.Risk,
 		request.Approval.RiskRuleRevision, request.Approval.Authorization.GrantID,
 		request.Approval.Authorization.PolicyRevision, request.Approval.Authorization.Purpose,
@@ -149,7 +149,6 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		"approvalPolicy": intent.ApprovalPolicy,
 		"approvalCount":  approvalCount,
 		"requiredCount":  required,
-		"approverRole":   request.Approval.ApproverRole,
 		"risk":           intent.Risk,
 	})
 	if _, err := tx.Exec(ctx, `
