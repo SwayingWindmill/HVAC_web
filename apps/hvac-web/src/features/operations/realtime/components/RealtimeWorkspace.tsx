@@ -5,7 +5,8 @@ import { RefreshCw, Waves } from 'lucide-react';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
+import { FactStrip } from '@/blocks/fact-strip';
+import { MetricValue } from '@/blocks/metric-card';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -18,7 +19,7 @@ import {
 } from '@/components/ui/table';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { plantReading, type PlantReading, type PlantView } from '../plant-model';
+import { equipmentStatus, plantReading, type EquipmentStatus, type PlantCategory, type PlantReading, type PlantView } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import {
   CATEGORY_ICONS,
@@ -31,6 +32,23 @@ import {
   ReadingValue,
 } from '../device-presentation';
 import { PlantDiagram } from './PlantDiagram';
+
+/** The summed current value of a key across a category; null unless every device reports it as current. */
+function sumCurrent(plant: PlantView, category: PlantCategory, sourceKey: string): number | null {
+  const readings = plant.devices.filter((device) => device.category === category).map((device) => device.reading(sourceKey));
+  if (readings.length === 0 || readings.some((reading) => !reading?.current || reading.numeric === null)) return null;
+  return readings.reduce((sum, reading) => sum + reading!.numeric!, 0);
+}
+
+function equipmentDetail(status: EquipmentStatus): string {
+  const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
+  return issues.length > 0 ? issues.join('，') : '冷机、水泵与冷却塔';
+}
+
+function freshnessDetail(status: EquipmentStatus): string {
+  const issues = [status.withoutData > 0 ? `${status.withoutData} 台无数据` : null, status.stale > 0 ? `${status.stale} 台数据过期` : null].filter(Boolean);
+  return issues.length > 0 ? issues.join('，') : '数据均为最新';
+}
 
 function ConditionRow({ label, reading }: { readonly label: string; readonly reading: PlantReading | null }) {
   return (
@@ -146,6 +164,8 @@ function DeviceSnapshot({ plant, siteId, timezone }: { readonly plant: PlantView
 export function RealtimeWorkspace() {
   const { site, plant, mode, registry, current, currentUnavailable, refresh } = useRealtimePlant();
   const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
+  const equipment = equipmentStatus(plant);
+  const chillerPower = sumCurrent(plant, 'CHILLER', 'chiller.power');
 
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
@@ -184,32 +204,16 @@ export function RealtimeWorkspace() {
 
       {!loading && plant.devices.length > 0 ? (
         <>
-          <MetricGrid ariaLabel="冷站实时概况">
-            <MetricCard
-              label="冷站总功率"
-              value={<ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />}
-              lead={<>冷水机组 <ReadingValue reading={plantReading(plant, 'chiller.power')} /></>}
-              detail="空调总电表"
-            />
-            <MetricCard
-              label="瞬时制冷量"
-              value={<ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />}
-              lead={<>供回水温差 <ReadingValue reading={plantReading(plant, 'btu_meter.temperature_difference')} /></>}
-              detail="冷量表"
-            />
-            <MetricCard
-              label="冷站 COP"
-              value={<MetricValue value={plant.plantCop === null ? null : formatDecimal(plant.plantCop, 2)} />}
-              lead={<>主机 COP <ReadingValue reading={plantReading(plant, 'chiller.cop')} /></>}
-              detail="制冷量 ÷ 总功率"
-            />
-            <MetricCard
-              label="设备在线"
-              value={<MetricValue value={`${plant.onlineCount} / ${plant.devices.length}`} unit="台" />}
-              lead={`${plant.devices.filter((device) => device.connection !== 'OFFLINE' && device.runState === 'RUNNING').length} 台运行`}
-              detail={plant.devices.some((device) => device.hasStaleData) ? '部分设备数据过期' : '全部设备数据为最新'}
-            />
-          </MetricGrid>
+          <FactStrip
+            ariaLabel="冷站实时概况"
+            items={[
+              { key: 'power', label: '冷站总功率', value: <ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />, detail: chillerPower === null ? '空调总电表' : `其中冷水机组 ${formatDecimal(chillerPower, 1)} kW` },
+              { key: 'cooling', label: '瞬时制冷量', value: <ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />, detail: '冷量表' },
+              { key: 'cop', label: '冷站 COP', value: <MetricValue value={plant.plantCop === null ? null : formatDecimal(plant.plantCop, 2)} />, detail: '制冷量 ÷ 总功率' },
+              { key: 'equipment', label: '主要设备运行', value: <MetricValue value={`${equipment.running} / ${equipment.total}`} unit="台" />, detail: equipmentDetail(equipment) },
+              { key: 'online', label: '设备在线', value: <MetricValue value={`${plant.onlineCount} / ${plant.devices.length}`} unit="台" />, detail: freshnessDetail(equipment) },
+            ]}
+          />
           <div className="grid gap-4 md:gap-6 @6xl/main:grid-cols-[minmax(0,3fr)_minmax(18rem,1fr)]">
             <Card className="min-w-0">
               <CardHeader>

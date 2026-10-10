@@ -23,6 +23,7 @@ export const MY_ID: string = principal.principalId;
 export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly workOrders = fixture<Json[]>('work-orders.json');
+  readonly snapshots = fixture<Json>('snapshots.json');
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -51,7 +52,7 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
-    if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: fixture('snapshots.json') };
+    if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshots };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: fixture<Json>('energy-series.json')[body?.energyType] };
 

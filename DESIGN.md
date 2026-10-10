@@ -14,7 +14,7 @@ architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 
 2026-09-13 起，全站视觉与页面布局采用 **Shadcn Application System**。
 
-2026-10-10 用户再次确认：采用企业能源 SaaS 的标准做法，坚持 shadcn 风格，高级感来自完成度而不是标新立异；不引入行业主题化视觉（如能效标识、线网图）。完成度标杆是 shadcn 官方 Blocks（dashboard-01 等）与 Vercel 控制台：
+2026-10-10 用户再次确认：采用企业能源 SaaS 的标准做法，坚持 shadcn 风格，高级感来自完成度而不是标新立异；不引入行业主题化视觉（如能效标识、线网图）作为整体视觉风格；功能性的工程示意（如冷站两环路系统图）不受此限制，按 §10 规则绘制。完成度标杆是 shadcn 官方 Blocks（dashboard-01 等）与 Vercel 控制台：
 
 - 字体自托管 Geist / Geist Mono（`@fontsource-variable`），中文回退 PingFang SC / Microsoft YaHei；不依赖 Google Fonts 等境外字体服务。
 - 浅色为默认场景（办公室桌面 1440–1920），页面底为白色、侧栏为浅灰，inset 布局；页眉为 48px 实底，不用毛玻璃。
@@ -602,7 +602,8 @@ Supporting Evidence Cards
 
 规则：
 
-- X6 只负责真实固定工程拓扑；
+- X6 只负责真实固定工程拓扑（来自 Registry 的实际连接关系）；
+- 冷站实时页的两环路系统图按设备类别排布（冷却塔 → 冷却水泵 → 冷水机组 → 冷冻水泵 → 建筑负荷），是 HTML 卡片与 SVG 管段的组合示意，图注注明「不代表实际管路」；测点读数只标在其测点所在管段且不在节点重复，同类多台设备时各节点显示自己的探头；管道流动只在对应水泵运行时出现并遵守减少动态效果设置；
 - anomaly 保持空间记忆；
 - energy flow 不伪造流量/分配；
 - 设备/对象选择后的详情使用 Sheet 展示业务事实，不泄漏 raw enum / UUID / trace；

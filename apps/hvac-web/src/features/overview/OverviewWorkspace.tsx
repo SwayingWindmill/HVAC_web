@@ -34,7 +34,7 @@ import { ENERGY_PERIODS, type EnergyPeriod } from "@/features/energy-analysis/co
 import { useEnergySummary } from "@/features/energy-analysis/consumption/query";
 import { ReadingMetric } from "@/features/operations/realtime/device-presentation";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
-import type { PlantDevice, PlantView } from "@/features/operations/realtime/plant-model";
+import { equipmentStatus, type EquipmentStatus } from "@/features/operations/realtime/plant-model";
 import { PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
 import { formatDecimal, formatTime, personLabel } from "@/lib/operator-format";
@@ -46,21 +46,7 @@ const PERIODS = Object.keys(ENERGY_PERIODS) as EnergyPeriod[];
 
 const decimal = formatDecimal;
 
-const EQUIPMENT: ReadonlySet<PlantDevice["category"]> = new Set(["CHILLER", "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER"]);
-
-/** Running and fault counts follow the realtime page: an offline device is offline whatever it last reported. */
-function equipmentStatus(plant: PlantView) {
-  const equipment = plant.devices.filter((device) => EQUIPMENT.has(device.category));
-  const online = equipment.filter((device) => device.connection !== "OFFLINE");
-  return {
-    total: equipment.length,
-    running: online.filter((device) => device.runState === "RUNNING").length,
-    faults: online.filter((device) => device.runState === "FAULT").length,
-    offline: plant.devices.filter((device) => device.connection === "OFFLINE").length,
-  };
-}
-
-function equipmentLead(status: ReturnType<typeof equipmentStatus>): string {
+function equipmentLead(status: EquipmentStatus): string {
   const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
   return issues.length > 0 ? issues.join("，") : "没有故障或离线设备";
 }

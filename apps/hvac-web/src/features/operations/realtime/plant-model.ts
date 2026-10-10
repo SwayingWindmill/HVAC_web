@@ -229,3 +229,39 @@ export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
 export function plantReading(view: PlantView, sourceKey: string): PlantReading | null {
   return firstReading(view.devices, sourceKey);
 }
+
+/** The plant's moving equipment; meters and the weather station never run. */
+export const EQUIPMENT_CATEGORIES: ReadonlySet<PlantCategory> = new Set(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER']);
+
+/** Running means reporting RUNNING while not offline: an offline device is offline whatever it last reported. */
+export function isRunning(device: PlantDevice): boolean {
+  return device.connection !== 'OFFLINE' && device.runState === 'RUNNING';
+}
+
+export interface EquipmentStatus {
+  readonly total: number;
+  readonly running: number;
+  readonly faults: number;
+  /** Devices of any kind. */
+  readonly offline: number;
+  readonly withoutData: number;
+  readonly stale: number;
+}
+
+export function equipmentStatus(view: PlantView): EquipmentStatus {
+  const equipment = view.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+  return {
+    total: equipment.length,
+    running: equipment.filter(isRunning).length,
+    faults: equipment.filter((device) => device.connection !== 'OFFLINE' && device.runState === 'FAULT').length,
+    offline: view.devices.filter((device) => device.connection === 'OFFLINE').length,
+    withoutData: view.devices.filter((device) => device.latestSampleAt === null).length,
+    stale: view.devices.filter((device) => device.hasStaleData).length,
+  };
+}
+
+/** A device probe read as its pipe's value only when the category has one device; with several, each node shows its own. */
+export function soleReading(view: PlantView, category: PlantCategory, sourceKey: string): PlantReading | null {
+  const devices = view.devices.filter((device) => device.category === category);
+  return devices.length === 1 ? devices[0].reading(sourceKey) : null;
+}
