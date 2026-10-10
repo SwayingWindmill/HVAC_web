@@ -100,13 +100,17 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err := productQuery.Validate(); err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
+	location, err := time.LoadLocation(productQuery.Timezone)
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, err
+	}
 	queryContext, cancel := context.WithTimeout(ctx, maximumCubeQueryDuration)
 	defer cancel()
 	token, err := client.tokenFactory.Token(queryContext, caller, productQuery)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("create Cube token: %w", err)
 	}
-	series, err := client.load(queryContext, token, buildSeriesQuery(productQuery))
+	series, err := client.load(queryContext, token, buildSeriesQuery(productQuery, location))
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy series: %w", err)
 	}
@@ -159,7 +163,11 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 	return decoded, nil
 }
 
-func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
+// Cube reads dateRange as wall time in the query timezone and ignores any offset,
+// so an RFC 3339 instant would shift the range by the zone's UTC offset.
+const cubeWallTime = "2006-01-02T15:04:05.000"
+
+func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
 	return cubeQuery{
 		Measures: []string{
@@ -171,7 +179,7 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
 		Filters: energyFilters(productQuery),
 		TimeDimensions: []cubeTimeDimension{{
 			Dimension:   "energy_usage.period_end",
-			DateRange:   []string{productQuery.From.UTC().Format(time.RFC3339Nano), productQuery.To.UTC().Add(-time.Millisecond).Format(time.RFC3339Nano)},
+			DateRange:   []string{productQuery.From.In(location).Format(cubeWallTime), productQuery.To.In(location).Add(-time.Millisecond).Format(cubeWallTime)},
 			Granularity: string(productQuery.Granularity),
 		}},
 		Order:    map[string]string{periodMember: "asc"},
@@ -347,12 +355,13 @@ func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
 	return watermark.UTC(), revision, nil
 }
 
-func parseCubeTime(value string, _ *time.Location) (time.Time, error) {
+// Cube returns time dimension buckets as wall time in the query timezone.
+func parseCubeTime(value string, location *time.Location) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed, nil
 	}
-	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+	for _, layout := range []string{cubeWallTime, "2006-01-02T15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, value, location); err == nil {
 			return parsed, nil
 		}
 	}

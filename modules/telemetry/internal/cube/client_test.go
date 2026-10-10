@@ -46,8 +46,8 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 		}
 		_, _ = writer.Write([]byte(`{
 			"data":[
-				{"energy_usage.period_end.day":"2026-06-30T16:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"2","energy_usage.invalid_count":"1"},
-				{"energy_usage.period_end.day":"2026-07-01T16:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"1","energy_usage.invalid_count":"0"}
+				{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"2","energy_usage.invalid_count":"1"},
+				{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"1","energy_usage.invalid_count":"0"}
 			]
 		}`))
 	}))
@@ -79,9 +79,10 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "energy_usage.period_end" {
 		t.Fatalf("time dimensions = %#v", seriesQuery.TimeDimensions)
 	}
-	expectedExclusiveEnd := productQuery.To.UTC().Add(-time.Millisecond).Format(time.RFC3339Nano)
-	if seriesQuery.TimeDimensions[0].DateRange[1] != expectedExclusiveEnd {
-		t.Fatalf("exclusive date range end = %q", seriesQuery.TimeDimensions[0].DateRange[1])
+	// Cube reads dateRange as wall time in the query timezone and ignores any offset.
+	if dateRange := seriesQuery.TimeDimensions[0].DateRange; len(dateRange) != 2 ||
+		dateRange[0] != "2026-07-01T00:00:00.000" || dateRange[1] != "2026-07-02T23:59:59.999" {
+		t.Fatalf("date range = %#v, want Asia/Shanghai wall time", dateRange)
 	}
 	if !hasCubeFilter(seriesQuery.Filters, "energy_usage.tenant_id", testCubeTenantID) ||
 		!hasCubeFilter(seriesQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
@@ -158,12 +159,12 @@ func TestRequestedBucketCoverageRejectsGap(t *testing.T) {
 
 func TestCubeQuerySelectsQualitySpecificEnergyMeasure(t *testing.T) {
 	productQuery := validCubeEnergyQuery()
-	validOnly := buildSeriesQuery(productQuery)
+	validOnly := buildSeriesQuery(productQuery, time.UTC)
 	if validOnly.Measures[0] != "energy_usage.energy_valid_kwh" {
 		t.Fatalf("valid-only measure = %q", validOnly.Measures[0])
 	}
 	productQuery.QualityPolicy = analyticsmodel.QualityPolicyValidAndSuspect
-	withSuspect := buildSeriesQuery(productQuery)
+	withSuspect := buildSeriesQuery(productQuery, time.UTC)
 	if withSuspect.Measures[0] != "energy_usage.energy_valid_and_suspect_kwh" {
 		t.Fatalf("valid-and-suspect measure = %q", withSuspect.Measures[0])
 	}
