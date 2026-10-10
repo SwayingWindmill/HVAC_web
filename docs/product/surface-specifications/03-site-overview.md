@@ -1,6 +1,8 @@
 # 03 站点与所选范围节能运营总览 Surface Specification
 
 状态：SELECTED / BROWSER REVIEWED。日期：2026-09-30。
+
+> **当前实现（2026-10-10）：** 按 shadcn dashboard-01 结构展示单站点的冷站实时功率与制冷量、今日空调用电与供冷量、今日与实时冷站综合能效、设备运行与在线、可切换期间的用电/供冷趋势、未结告警与待办工单（各取前 5 条，点击进入对应页面详情）。数据来自实时遥测快照与推送、`energy-series`、告警与工单 owner；节能量、节能率与节约费用缺少基线与电价 owner，显示「未接入」。集团/区域范围与基线对比尚未实现。
 Route intent：`/overview`，使用应用全局所选范围；既有 `/sites/:siteId/overview` 为独立站点专业入口，本轮未重写该路由。
 权威：PRODUCT.md → 当前页面架构 v3 → 全局导航上下文合同 v2 → 本规范 → DESIGN.md。
 本次用户明确将首页定位为美观、高级、实用的节能运营 Dashboard；本规范替换本 Surface 历史 attention-router-only 及 wireframe 要求，不扩展到其他 Surface。
