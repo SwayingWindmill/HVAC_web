@@ -44,6 +44,10 @@ Every route page starts with `PageHeader` inside the `Main` container: one `h1`,
 </Main>
 ```
 
+## Metric card block
+
+`MetricGrid` holds peer `MetricCard`s in the dashboard-01 grammar: label, value (`MetricValue` says 暂无数据 instead of zero and dims a stale figure), an optional badge, then a lead line that explains the value and a detail line for its time, source or a link onward. The grid reflows by the page container (`@container/main`), so put it inside a `Main` with that class.
+
 ## Fact strip block
 
 Use `FactStrip` for a small set of genuinely peer-level operational facts that benefit from rapid horizontal scanning.

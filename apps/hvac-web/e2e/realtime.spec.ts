@@ -11,7 +11,19 @@ test('the plant view shows current plant figures from the Snapshot', async ({ pa
 
 test('a device in the plant snapshot opens its detail in the equipment ledger', async ({ page }) => {
   await page.goto(`/operations/realtime?site=${SITE_ID}`);
-  await page.getByRole('link', { name: 'CHWP-01' }).click();
+  await page.getByRole('figure', { name: '冷站系统图' }).getByRole('link', { name: /CHWP-01/ }).click();
   await expect(page).toHaveURL(/\/operations\/systems-devices\?.*inspect=/);
   await expect(page.getByRole('dialog').getByRole('heading', { name: 'CHWP-01' })).toBeVisible();
+});
+
+test('the plant diagram puts each measured temperature on its loop and shows flow while pumps run', async ({ page }) => {
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+  const diagram = page.getByRole('figure', { name: '冷站系统图' });
+  await expect(diagram).toContainText('出塔30.7°C');
+  await expect(diagram).toContainText('34.1°C回塔');
+  await expect(diagram).toContainText('供水7°C');
+  await expect(diagram).toContainText('12.6°C回水');
+  await expect(diagram).toContainText('建筑负荷');
+  // Both pumps run in the Snapshot, so all four pipe runs carry a flow line on supply and return.
+  await expect(diagram.locator('line[stroke-dasharray="4 8"]')).toHaveCount(8);
 });

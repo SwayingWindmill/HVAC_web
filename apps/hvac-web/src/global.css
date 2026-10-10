@@ -180,3 +180,10 @@
     scrollbar-color: var(--border) transparent;
   }
 }
+
+/* Water moving along a plant pipe; the diagram applies it only while a pump runs and motion is allowed. */
+@keyframes pipe-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}

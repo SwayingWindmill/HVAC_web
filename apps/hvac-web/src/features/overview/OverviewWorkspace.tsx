@@ -3,6 +3,7 @@ import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, CircleCheck, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { MetricCard, MetricGrid, MetricValue } from "@/blocks/metric-card";
 import { PageHeader } from "@/blocks/page-header";
 import { Main } from "@/components/layout/Main";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,6 @@ import {
   CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -32,12 +32,12 @@ import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
 import { ENERGY_PERIODS, type EnergyPeriod } from "@/features/energy-analysis/consumption/model";
 import { useEnergySummary } from "@/features/energy-analysis/consumption/query";
+import { ReadingMetric } from "@/features/operations/realtime/device-presentation";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
-import type { PlantDevice, PlantReading, PlantView } from "@/features/operations/realtime/plant-model";
+import type { PlantDevice, PlantView } from "@/features/operations/realtime/plant-model";
 import { PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
 import { formatDecimal, formatTime, personLabel } from "@/lib/operator-format";
-import { cn } from "@/lib/utils";
 
 const siteRoute = getRouteApi("/_app/_site");
 const pageRoute = getRouteApi("/_app/_site/overview");
@@ -45,22 +45,6 @@ const LIST_LIMIT = 5;
 const PERIODS = Object.keys(ENERGY_PERIODS) as EnergyPeriod[];
 
 const decimal = formatDecimal;
-
-function Figure({ value, unit, stale = false }: { readonly value: string | null; readonly unit?: string; readonly stale?: boolean }) {
-  if (value === null) return <span className="text-muted-foreground">暂无数据</span>;
-  return (
-    <span className={cn(stale && "text-muted-foreground")} title={stale ? "数据过期或质量降级" : undefined}>
-      {value}
-      {unit ? <span className="ml-1.5 text-sm font-normal text-muted-foreground">{unit}</span> : null}
-    </span>
-  );
-}
-
-/** A plant reading as a figure; a stale or degraded value is shown dimmed, never as current. */
-function ReadingFigure({ reading, digits, unit }: { readonly reading: PlantReading | null; readonly digits: number; readonly unit: string }) {
-  const present = reading && reading.state === "PRESENT" && reading.numeric !== null ? reading : null;
-  return <Figure value={present ? decimal(present.numeric!, digits) : null} unit={unit} stale={present ? !present.current : false} />;
-}
 
 const EQUIPMENT: ReadonlySet<PlantDevice["category"]> = new Set(["CHILLER", "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER"]);
 
@@ -79,28 +63,6 @@ function equipmentStatus(plant: PlantView) {
 function equipmentLead(status: ReturnType<typeof equipmentStatus>): string {
   const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
   return issues.length > 0 ? issues.join("，") : "没有故障或离线设备";
-}
-
-function SummaryCard({ label, value, badge, lead, detail }: {
-  readonly label: string;
-  readonly value: ReactNode;
-  readonly badge?: ReactNode;
-  readonly lead: ReactNode;
-  readonly detail: ReactNode;
-}) {
-  return (
-    <Card className="@container/card">
-      <CardHeader>
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">{value}</CardTitle>
-        {badge ? <CardAction>{badge}</CardAction> : null}
-      </CardHeader>
-      <CardFooter className="flex-col items-start gap-1.5 text-sm">
-        <div className="line-clamp-1 font-medium">{lead}</div>
-        <div className="line-clamp-1 text-muted-foreground">{detail}</div>
-      </CardFooter>
-    </Card>
-  );
 }
 
 const energyChartConfig = {
@@ -245,33 +207,30 @@ export function OverviewWorkspace() {
         }
       />
 
-      <section
-        aria-label="冷站概况"
-        className="grid grid-cols-1 gap-4 *:data-[slot=card]:shadow-xs @xl/main:grid-cols-2 @5xl/main:grid-cols-4"
-      >
-        <SummaryCard
+      <MetricGrid ariaLabel="冷站概况">
+        <MetricCard
           label="冷站实时功率"
-          value={<ReadingFigure reading={plant.totalPower} digits={1} unit="kW" />}
+          value={<ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />}
           lead={coolingPresent ? `瞬时制冷量 ${decimal(cooling.numeric!, 0)} kW${cooling.current ? "" : "（数据过期）"}` : "瞬时制冷量暂无数据"}
           detail={asOf(plant.latestSampleAt)}
         />
-        <SummaryCard
+        <MetricCard
           label="今日空调用电"
-          value={<Figure value={energy?.electricityKWh == null ? null : decimal(energy.electricityKWh, 1)} unit="kWh" />}
+          value={<MetricValue value={energy?.electricityKWh == null ? null : decimal(energy.electricityKWh, 1)} unit="kWh" />}
           lead={energy?.coolingKWh == null ? "供冷量暂无数据" : `供冷量 ${decimal(energy.coolingKWh, 1)} kWh`}
           detail={energy?.dataWatermark ? `截至 ${formatTime(energy.dataWatermark, site.timezone)}` : "站点当地时间今日"}
         />
-        <SummaryCard
+        <MetricCard
           label="今日冷站综合能效"
-          value={<Figure value={energy?.cop == null ? null : decimal(energy.cop, 2)} unit="COP" />}
+          value={<MetricValue value={energy?.cop == null ? null : decimal(energy.cop, 2)} unit="COP" />}
           lead={plant.plantCop === null ? "实时能效暂无数据" : `实时 COP ${decimal(plant.plantCop, 2)}`}
           detail="供冷量 ÷ 空调用电"
         />
-        <SummaryCard
+        <MetricCard
           label="主要设备运行"
           value={registry.isPending ? <Skeleton className="h-8 w-24" /> : registry.isError ? <span className="text-muted-foreground">暂不可用</span>
             : equipment.total === 0 ? <span className="text-muted-foreground">未登记设备</span>
-            : <Figure value={`${equipment.running} / ${equipment.total}`} unit="台运行" />}
+            : <MetricValue value={`${equipment.running} / ${equipment.total}`} unit="台运行" />}
           badge={registry.isSuccess ? <Badge variant="outline">{plant.onlineCount} / {plant.devices.length} 在线</Badge> : undefined}
           lead={registry.isSuccess ? equipmentLead(equipment) : "正在读取设备台账"}
           detail={
@@ -280,7 +239,7 @@ export function OverviewWorkspace() {
             </Link>
           }
         />
-      </section>
+      </MetricGrid>
 
       <EnergyTrend period={period} onPeriodChange={(next) => void navigate({ search: (previous) => ({ ...previous, period: next }) })} />
 
