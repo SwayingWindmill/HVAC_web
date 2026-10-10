@@ -4,6 +4,7 @@
 > **日期：2026-09-15**  
 > **Surface Catalog：** `36 用户、权限与审计`  
 > **Route intent：** `/settings/access`、`/settings/access/principals/:principalId`、`/settings/access/roles/:roleId`、`/settings/access/audit/:auditEventId`  
+> **当前实现（2026-10-10）：** 未实现。原先用示例数据填充的 `/settings/access` 已删除（#449）；当前真实的用户与角色、审计日志在系统管理 `/system?tab=users`、`/system?tab=audit`。  
 > **上游权威：** `PRODUCT.md` → `smart-energy-system-page-architecture-v3-research-backed.md` → `global-navigation-context-interaction-contract-v2.md` → `DESIGN.md` → 本文件  
 > **产品语言：** 中文优先；`RBAC`、`ABAC`、`MFA`、`SSO`、`OIDC`、`SAML`、`SCIM`、`PAM`、`Zero Trust` 等标准术语只作为专业辅助。  
 > **设计输入声明：** 本文件不参考当前项目旧用户管理、旧权限树、旧 admin 页面或旧 Ant/ProComponents 页面。现有实现只能在实施阶段作为真实 Identity / Principal / Role / Permission / Scope / Session / Approval / Audit contract 的候选证据来源。

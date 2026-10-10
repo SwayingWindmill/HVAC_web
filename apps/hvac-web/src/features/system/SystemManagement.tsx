@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Building2, LockKeyhole, Plug, ScrollText, UserRound, Wifi } from 'lucide-react';
+import { Building2, LockKeyhole, Plug, UserRound, Wifi } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
 import { FactStrip } from '@/blocks/fact-strip';
 import type { ProtectedScopeDraft } from '@/app/protected-scope';
@@ -16,8 +16,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { StatusBadge } from '@/components/status-badge';
 import { useDataTable } from '@/hooks/use-data-table';
-import { useAuditSearch } from '@/api/audit';
-import { presentAuditRecord, type AuditRow } from './audit/model';
+import { AuditLog } from './audit/AuditLog';
+import { EmptyGovernanceState } from './EmptyGovernanceState';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { RuleManagement } from './rule-management/RuleManagement';
 
@@ -44,17 +44,6 @@ type SiteRow = {
 
 const systemRouteApi = getRouteApi('/_app/system');
 
-const AUDIT_SEARCH_LIMIT = 100;
-
-const auditTimeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' });
-
-function EmptyGovernanceState({ description }: { readonly description: string }) {
-  return (
-    <div className="grid min-h-32 place-items-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-      {description}
-    </div>
-  );
-}
 
 function FactGrid({ items }: { readonly items: ReadonlyArray<{ label: string; value: string }> }) {
   return (
@@ -126,29 +115,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     getRowId: (row) => row.key,
   });
 
-  const canReadAudit = principal.authorization.capabilities.includes('audit.read');
-  const auditQuery = useAuditSearch({ limit: AUDIT_SEARCH_LIMIT }, canReadAudit && activeTab === 'audit');
-  const [auditSearch, setAuditSearch] = useState('');
-  const auditRows = useMemo<AuditRow[]>(() => {
-    const viewer = { subject: principal.principal.subject, displayName: principal.principal.displayName };
-    const rows = (auditQuery.data ?? []).map((record) => presentAuditRecord(record, viewer));
-    const query = auditSearch.trim();
-    return query ? rows.filter((row) => [row.actor, row.action, row.resource].some((value) => value.includes(query))) : rows;
-  }, [auditQuery.data, auditSearch, principal]);
-  const auditColumns = useMemo<Array<ColumnDef<DataTableFeatures, AuditRow>>>(() => [
-    { id: 'occurredAt', header: '时间', cell: ({ row }) => <span className="tabular-nums">{auditTimeFormat.format(new Date(row.original.occurredAt))}</span> },
-    { id: 'actor', header: '操作人', cell: ({ row }) => row.original.actor },
-    { id: 'action', header: '动作', cell: ({ row }) => row.original.action },
-    { id: 'resource', header: '对象', cell: ({ row }) => row.original.resource },
-    { id: 'outcome', header: '结果', cell: ({ row }) => <StatusBadge tone={row.original.tone} label={row.original.outcome} /> },
-  ], []);
-  const auditTable = useDataTable({
-    key: 'system-management-audit',
-    data: auditRows,
-    columns: auditColumns,
-    paginate: false,
-    getRowId: (row) => row.key,
-  });
+  const auditViewer = useMemo(() => ({ subject: principal.principal.subject, displayName: principal.principal.displayName }), [principal]);
 
   const overview = (
     <div className="space-y-4">
@@ -253,23 +220,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     </div>
   );
 
-  const audit = (
-    <Card>
-      <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><ScrollText className="size-4" />审计日志 <span className="text-sm font-normal text-muted-foreground">本租户最近 {AUDIT_SEARCH_LIMIT} 条</span></CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        {!canReadAudit ? <EmptyGovernanceState description="当前账号没有审计查询权限" />
-          : __HVAC_WEB_FRONTEND_REVIEW__ ? <EmptyGovernanceState description="评审构建不连接审计服务" />
-          : auditQuery.isPending ? <EmptyGovernanceState description="正在读取审计记录" />
-          : auditQuery.isError ? <EmptyGovernanceState description="审计服务暂时不可用，未显示任何替代记录" />
-          : (
-            <>
-              <Input value={auditSearch} onChange={(event) => setAuditSearch(event.target.value)} placeholder="搜索操作人、动作或对象" className="max-w-72" aria-label="搜索审计记录" />
-              {auditRows.length ? <DataTable table={auditTable} tableAriaLabel="审计日志" /> : <EmptyGovernanceState description={auditSearch ? '没有匹配的审计记录' : '本租户还没有审计记录'} />}
-            </>
-          )}
-      </CardContent>
-    </Card>
-  );
+  const audit = <AuditLog viewer={auditViewer} canRead={principal.authorization.capabilities.includes('audit.read')} active={activeTab === 'audit'} />;
 
   const items = [
     { key: 'overview', label: '系统概览', children: overview },

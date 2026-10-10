@@ -86,6 +86,11 @@ export const auditSearchRecordSchema = z.object({
   occurredAt: z.string().datetime({ offset: true }),
 }).strict();
 export const auditSearchResultSchema = z.object({ items: z.array(auditSearchRecordSchema).max(100) }).strict();
+export const auditSearchFilterSchema = z.object({
+  actor: z.string().max(512), action: z.string().max(128), resourceType: z.string().max(128), resourceId: z.string().max(256),
+  outcome: z.string().max(64), from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }),
+  limit: z.number().int().min(1).max(100),
+}).partial().strict();
 
 export const uuidV7Schema = z.string().uuid().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 export const revisionSchema = z.number().int().positive();
@@ -623,16 +628,7 @@ export type SessionRevocationResponse = z.infer<typeof sessionRevocationResponse
 export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type AuditSearchRecord = z.infer<typeof auditSearchRecordSchema>;
 export type AuditSearchResult = z.infer<typeof auditSearchResultSchema>;
-export interface AuditSearchFilter {
-  readonly actor?: string;
-  readonly action?: string;
-  readonly resourceType?: string;
-  readonly resourceId?: string;
-  readonly outcome?: string;
-  readonly from?: string;
-  readonly to?: string;
-  readonly limit?: number;
-}
+export type AuditSearchFilter = z.infer<typeof auditSearchFilterSchema>;
 export type Site = z.infer<typeof siteSchema>;
 export type Asset = z.infer<typeof assetSchema>;
 export type Device = z.infer<typeof deviceSchema>;
@@ -786,7 +782,7 @@ export function createPlatformGatewayClient(baseUrl = '') {
       { ...init, method: 'GET' },
     ),
     searchAudit: (filter: AuditSearchFilter, init?: RequestInit) => request('__AUDIT_SEARCH_PATH__', auditSearchResultSchema, {
-      ...init, method: 'POST', body: JSON.stringify(filter), headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json' },
+      ...init, method: 'POST', body: JSON.stringify(auditSearchFilterSchema.parse(filter)), headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json' },
     }),
     listSites: (params: RegistryListParams = {}, init?: RequestInit) => request(
       listPath('__SITES_PATH__', params), siteCollectionSchema, { ...init, method: 'GET' },
