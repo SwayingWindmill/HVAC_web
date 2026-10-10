@@ -118,7 +118,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
 	}
-	return mapEnergySeries(series, metadata, productQuery, client.datasetRevision)
+	return mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
 }
 
 func (client *Client) load(ctx context.Context, token string, query cubeQuery) (loadResponse, error) {
@@ -215,11 +215,7 @@ func energyMeasure(policy analyticsmodel.QualityPolicy) string {
 	return "energy_usage.energy_valid_kwh"
 }
 
-func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
-	location, err := time.LoadLocation(productQuery.Timezone)
-	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, err
-	}
+func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
 	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
 	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(series.Data))
 	quality := analyticsmodel.QualitySummary{}
@@ -273,7 +269,7 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		watermark := maximumWatermark.UTC()
 		dataWatermark = &watermark
 		aggregateWatermark = &watermark
-		partial = watermark.Before(productQuery.To.UTC()) || !coversRequestedBuckets(points, productQuery)
+		partial = watermark.Before(productQuery.To.UTC()) || !coversRequestedBuckets(points, productQuery, location)
 	}
 	responseMetadata := analyticsmodel.EnergySeriesMetadata{
 		RequestedGranularity: productQuery.Granularity,
@@ -287,11 +283,7 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, Metadata: responseMetadata}, nil
 }
 
-func coversRequestedBuckets(points []analyticsmodel.EnergySeriesPoint, productQuery analyticsmodel.EnergySeriesQuery) bool {
-	location, err := time.LoadLocation(productQuery.Timezone)
-	if err != nil {
-		return false
-	}
+func coversRequestedBuckets(points []analyticsmodel.EnergySeriesPoint, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) bool {
 	available := make(map[int64]struct{}, len(points))
 	for _, point := range points {
 		available[point.PeriodStart.UTC().UnixNano()] = struct{}{}
@@ -355,7 +347,8 @@ func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
 	return watermark.UTC(), revision, nil
 }
 
-// Cube returns time dimension buckets as wall time in the query timezone.
+// An offset-less Cube time is wall time in location: the query timezone for time
+// dimension buckets, UTC for measures over time columns.
 func parseCubeTime(value string, location *time.Location) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed, nil

@@ -241,6 +241,9 @@ try {
       '2026-07-29T20:00:00.000=2,2026-07-29T21:00:00.000=2') {
     throw new Error(`unexpected Asia/Shanghai Cube buckets ${JSON.stringify(local)}`);
   }
+  if (local.map((row) => String(row['energy_usage.max_data_watermark'])).join(',') !== rows.map((row) => String(row['energy_usage.max_data_watermark'])).join(',')) {
+    throw new Error(`Asia/Shanghai Cube watermark differs from UTC ${JSON.stringify(local)}`);
+  }
 
   const denied = await queryCube(cubeToken({ siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] }));
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');

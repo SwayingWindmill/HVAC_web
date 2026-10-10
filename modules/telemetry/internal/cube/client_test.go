@@ -79,7 +79,6 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "energy_usage.period_end" {
 		t.Fatalf("time dimensions = %#v", seriesQuery.TimeDimensions)
 	}
-	// Cube reads dateRange as wall time in the query timezone and ignores any offset.
 	if dateRange := seriesQuery.TimeDimensions[0].DateRange; len(dateRange) != 2 ||
 		dateRange[0] != "2026-07-01T00:00:00.000" || dateRange[1] != "2026-07-02T23:59:59.999" {
 		t.Fatalf("date range = %#v, want Asia/Shanghai wall time", dateRange)
@@ -152,7 +151,7 @@ func TestRequestedBucketCoverageRejectsGap(t *testing.T) {
 		{PeriodStart: time.Date(2026, 7, 3, 0, 0, 0, 0, location).UTC()},
 	}
 	query.To = time.Date(2026, 7, 4, 0, 0, 0, 0, location).UTC()
-	if coversRequestedBuckets(points, query) {
+	if coversRequestedBuckets(points, query, location) {
 		t.Fatal("coversRequestedBuckets() = true with a missing day bucket")
 	}
 }
