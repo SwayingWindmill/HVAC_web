@@ -76,7 +76,7 @@ components:
           format: uuid
         energyType:
           type: string
-          enum: [electricity]
+          enum: [electricity, cooling]
         granularity:
           type: string
           enum: [hour, day, month]

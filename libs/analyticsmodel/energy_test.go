@@ -24,6 +24,10 @@ func TestEnergySeriesQueryValidatesProductBoundary(t *testing.T) {
 	if err := query.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	query.EnergyType = EnergyTypeCooling
+	if err := query.Validate(); err != nil {
+		t.Fatalf("Validate() cooling error = %v", err)
+	}
 }
 
 func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {

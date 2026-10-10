@@ -54,6 +54,7 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/dashboard-summary`) return { body: fixture('dashboard-summary.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: fixture('snapshots.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
+    if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: fixture<Json>('energy-series.json')[body?.energyType] };
 
     if (method === 'GET' && path === '/api/v1/alarms') {
       const items = this.alarms.filter((alarm) =>

@@ -67,7 +67,7 @@
     "web:auth": "npm run web:principal:contract && npm run test:identity && npm run build:energy-api",
     "web:e2e": "node node_modules/@playwright/test/cli.js test --config apps/hvac-web/playwright.config.ts",
     "web:shell:test": "node --test --test-concurrency=1 scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-protected-scope.mjs scripts/test-rms-realtime-status.mjs scripts/test-rms-shell-runtime.mjs",
-    "web:model:test": "node --experimental-strip-types --test scripts/test-real-assets-model.mjs scripts/test-real-assets-data.mjs scripts/test-real-assets-realtime.mjs scripts/test-real-registry-admin.mjs scripts/test-real-rule-management.mjs scripts/test-rms-real-runtime-config.mjs scripts/test-real-audit-presentation.mjs",
+    "web:model:test": "node --experimental-strip-types --test scripts/test-real-assets-model.mjs scripts/test-real-assets-data.mjs scripts/test-real-assets-realtime.mjs scripts/test-real-registry-admin.mjs scripts/test-real-rule-management.mjs scripts/test-rms-real-runtime-config.mjs scripts/test-real-audit-presentation.mjs scripts/test-real-energy-consumption.mjs",
     "web:design:detect": "node scripts/run-impeccable-design-audit.mjs --scope=web",
     "web:design:changed": "node scripts/run-impeccable-design-audit.mjs --scope=changed",
     "web:design:device-center": "node scripts/run-impeccable-design-audit.mjs --scope=device-center",

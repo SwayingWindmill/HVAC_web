@@ -1,6 +1,7 @@
 # 14 能源分析 Surface Specification v1
 
 > **状态：SELECTED / READY FOR WIREFRAME**  
+> **当前实现（2026-10-10）：** `/energy-analysis/consumption` 按站点当地时间展示今日、近 7 天、本月、本年的空调用电、供冷量与冷站综合能效（Plant Efficiency），数据来自 `POST /api/v1/analytics/energy-series`（`electricity`、`cooling`）；电费、基线、分项与分时电价仍未接入。  
 > **日期：2026-09-14**  
 > **Surface Catalog：** `14 能源分析`  
 > **Route intent：** `/sites/:siteId/energy`  
