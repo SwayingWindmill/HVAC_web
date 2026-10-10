@@ -91,7 +91,7 @@ function principalRoleLabel(role: string | undefined): string {
   if (normalized === 'admin' || normalized === 'administrator') return '管理员';
   if (normalized === 'operator') return '运维员';
   if (normalized === 'viewer') return '查看员';
-  return role;
+  return '授权用户';
 }
 
 export function ShellChrome({ children }: { readonly children: ReactNode }) {
@@ -120,7 +120,10 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar
         title="智慧能源 SaaS 平台"
+        principalName={principal.principal.displayName}
+        principalRole={principalRole}
         onNavigate={navigate}
+        onLogout={() => { void runtime.logout(); }}
       />
       <SidebarInset
         className="min-w-0"
@@ -137,13 +140,10 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         data-realtime-site={realtime.siteId}
       >
         <AppHeader
-          principalName={principal.principal.displayName}
           principalSubject={principal.principal.subject}
-          principalRole={principalRole}
           themeMode={themeMode}
           onThemeToggle={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
           onNavigate={navigate}
-          onLogout={() => { void runtime.logout(); }}
         />
 
         <span className="sr-only" role="status" aria-live="polite" data-testid="real-realtime-status" data-realtime-state={realtime.state} data-realtime-site={realtime.siteId}>

@@ -1,4 +1,6 @@
 import { optimizationFlowQueryOptions } from "@/features/optimization-flow/api/optimization-flow";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { ArrowUpRight, Download, RefreshCw, Search } from "lucide-react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -49,7 +51,6 @@ export const statusNames: Record<EcoOpportunity["status"], string> = {
   VERIFYING: "验证中",
   CLOSED: "已关闭",
 };
-const example = __HVAC_WEB_FRONTEND_REVIEW__;
 const number = (value: number) =>
   value.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
 
@@ -212,13 +213,12 @@ export function OpportunitiesWorkspace() {
     URL.revokeObjectURL(url);
   };
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">节能机会</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <div className="flex gap-2">
+    <Main className="space-y-5">
+      <PageHeader
+        title="节能机会"
+        actions={
+          <>
+            <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -237,7 +237,9 @@ export function OpportunitiesWorkspace() {
             导出机会
           </Button>
         </div>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -492,6 +494,6 @@ export function OpportunitiesWorkspace() {
           })
         }
       />
-    </main>
+    </Main>
   );
 }

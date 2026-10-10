@@ -6,8 +6,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-sans: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "WenQuanYi Micro Hei", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -53,7 +53,7 @@
 }
 
 :root {
-  --background: #fafafa;
+  --background: #ffffff;
   --foreground: #18181b;
   --card: #ffffff;
   --card-foreground: #18181b;
@@ -77,23 +77,18 @@
   --information: #0f766e;
   --unknown: #71717a;
 
-  --chart-1: #2b7fff;
-  --chart-2: #8ec5ff;
-  --chart-3: #155dfc;
-  --chart-4: #1447e6;
-  --chart-5: #193cb8;
+  --chart-1: #2563eb;
+  --chart-2: #0d9488;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #e11d48;
 
-  --energy-chart-1: var(--chart-1);
-  --energy-chart-2: var(--chart-2);
-  --energy-chart-3: var(--chart-3);
-  --energy-chart-4: var(--chart-4);
-  --energy-chart-5: var(--chart-5);
 
-  --sidebar: #ffffff;
+  --sidebar: #fafafa;
   --sidebar-foreground: #27272a;
   --sidebar-primary: #18181b;
   --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f4f4f5;
+  --sidebar-accent: #f0f0f1;
   --sidebar-accent-foreground: #18181b;
   --sidebar-border: #e4e4e7;
   --sidebar-ring: #a1a1aa;
@@ -124,17 +119,12 @@
   --information: #2dd4bf;
   --unknown: #a1a1aa;
 
-  --chart-1: #3b82f6;
-  --chart-2: #93c5fd;
-  --chart-3: #60a5fa;
-  --chart-4: #2563eb;
-  --chart-5: #1d4ed8;
+  --chart-1: #60a5fa;
+  --chart-2: #2dd4bf;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #fb7185;
 
-  --energy-chart-1: var(--chart-1);
-  --energy-chart-2: var(--chart-2);
-  --energy-chart-3: var(--chart-3);
-  --energy-chart-4: var(--chart-4);
-  --energy-chart-5: var(--chart-5);
 
   --sidebar: #18181b;
   --sidebar-foreground: #f4f4f5;
@@ -170,7 +160,6 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     font-variant-numeric: tabular-nums;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -182,5 +171,14 @@
   textarea,
   select {
     font: inherit;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--chart-1) 24%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
   }
 }

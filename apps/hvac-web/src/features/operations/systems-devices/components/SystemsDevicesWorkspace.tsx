@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
+import { PageHeader } from '@/blocks/page-header';
+import { Main } from '@/components/layout/Main';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, RefreshCw, Search } from 'lucide-react';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
+import { MetricStrip } from '@/components/analysis/workspace-parts';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -84,8 +86,8 @@ export function SystemsDevicesWorkspace() {
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="系统与设备"
         actions={(
           <div className="flex items-center gap-4">
@@ -243,6 +245,6 @@ export function SystemsDevicesWorkspace() {
         categoryLabel={inspected ? PLANT_CATEGORY_LABELS[inspected.category] : ''}
         onClose={() => setSearch({ inspect: undefined })}
       />
-    </main>
+    </Main>
   );
 }

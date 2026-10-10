@@ -1,4 +1,6 @@
 import { ArrowUpRight, RefreshCw, Search } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { ChartLegend, ChartLegendContent } from "@/components/ui/chart";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useState } from "react";
@@ -119,20 +121,21 @@ export function BenchmarkingWorkspace() {
     getRowId: (item) => item.id,
   });
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">绩效与对标</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <Button
+    <Main className="space-y-5">
+      <PageHeader
+        title="绩效与对标"
+        actions={
+          <>
+            <Button
           variant="outline"
           size="sm"
           onClick={() => void query.refetch()}
         >
           <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
         </Button>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -393,6 +396,6 @@ export function BenchmarkingWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }

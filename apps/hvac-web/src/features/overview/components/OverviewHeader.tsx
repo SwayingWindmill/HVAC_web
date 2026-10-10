@@ -1,6 +1,6 @@
 import { ArrowDownToLine, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/blocks/page-header";
 import { OVERVIEW_PERIODS, type OverviewPeriod } from "../api/overview-types";
 export function OverviewHeader({
   period,
@@ -8,7 +8,6 @@ export function OverviewHeader({
   onExport,
   onRefresh,
   refreshing,
-  example,
   hasData,
 }: {
   readonly period: OverviewPeriod;
@@ -16,26 +15,12 @@ export function OverviewHeader({
   readonly onExport: () => void;
   readonly onRefresh: () => void;
   readonly refreshing: boolean;
-  readonly example: boolean;
   readonly hasData: boolean;
 }) {
   return (
-    <header className="flex items-center justify-between gap-6">
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            节能运营总览
-          </h1>
-          {example && (
-            <Badge
-              variant="outline"
-              className="font-normal text-muted-foreground"
-            >
-              示例数据
-            </Badge>
-          )}
-        </div>
-      </div>
+    <PageHeader
+      title="节能运营总览"
+      actions={
       <div className="flex items-center gap-3">
         <div
           className="flex gap-1 rounded-lg bg-muted/70 p-1"
@@ -73,6 +58,7 @@ export function OverviewHeader({
           导出摘要
         </Button>
       </div>
-    </header>
+      }
+    />
   );
 }

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { PageHeader } from '@/blocks/page-header';
 
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -242,9 +243,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
   return (
     <section data-testid="real-route-system" data-route-state="READY" data-business-state="POPULATED">
       <Main className="space-y-4">
-        <div className="flex justify-end">
-          <Badge variant="outline">权威数据</Badge>
-        </div>
+        <PageHeader title="系统管理" description="平台服务、用户与权限、站点、数据接入与审计。" />
         <Tabs value={normalizedActiveTab} onValueChange={handleTabChange}>
           <TabsList className="max-w-full overflow-x-auto">
             {items.map((item) => <TabsTrigger key={item.key} value={item.key}>{item.label}</TabsTrigger>)}

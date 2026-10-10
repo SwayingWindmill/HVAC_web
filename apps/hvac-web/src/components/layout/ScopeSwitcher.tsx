@@ -31,7 +31,7 @@ export function ScopeSwitcher({ className }: { readonly className?: string }) {
           aria-label="切换站点"
           disabled={availableScopes.length === 0}
           className={cn(
-            'flex h-9 w-60 items-center justify-between gap-2 rounded-md border-border/80 bg-background/80 px-2.5 text-xs font-normal shadow-xs transition-colors hover:bg-accent/60',
+            'h-8 w-56 justify-between gap-2 px-2.5 text-sm font-normal',
             className
           )}
         >

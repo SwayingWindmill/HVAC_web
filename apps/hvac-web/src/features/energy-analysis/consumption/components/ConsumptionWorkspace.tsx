@@ -3,6 +3,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { DataTableBlock } from "@/blocks/data-table";
+import { PageHeader } from "@/blocks/page-header";
 import { FactStrip } from "@/blocks/fact-strip";
 import { DataTable } from "@/components/data-table/data-table";
 import type { DataTableFeatures } from "@/components/data-table/data-table-features";
@@ -83,14 +84,11 @@ export function ConsumptionWorkspace() {
   const peak = summary?.peak;
   return (
     <Main className="space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">能耗与成本</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {currentScope.name} · 按站点当地时间统计
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader
+        title="能耗与成本"
+        description={`${currentScope.name} · 按站点当地时间统计`}
+        actions={
+          <>
           <ToggleGroup
             type="single"
             variant="outline"
@@ -113,8 +111,9 @@ export function ConsumptionWorkspace() {
             <Download aria-hidden="true" data-icon="inline-start" />
             导出明细
           </Button>
-        </div>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-[480px]" />
       ) : query.isError || !summary ? (

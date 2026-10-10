@@ -1,4 +1,6 @@
 import { optimizationFlowQueryOptions } from "@/features/optimization-flow/api/optimization-flow";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { ArrowUpRight, Kanban, List, RefreshCw, Search } from "lucide-react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -32,7 +34,6 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import type { EnergySavingProject, ProjectStage } from "../api/project-types";
 import {
   Timeline,
@@ -137,13 +138,12 @@ export function ProjectsWorkspace() {
     getRowId: (item) => item.id,
   });
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">节能项目</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <Button
+    <Main className="space-y-5">
+      <PageHeader
+        title="节能项目"
+        actions={
+          <>
+            <Button
           variant="outline"
           size="sm"
           onClick={() => void query.refetch()}
@@ -151,7 +151,9 @@ export function ProjectsWorkspace() {
           <RefreshCw aria-hidden="true" data-icon="inline-start" />
           刷新
         </Button>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -583,6 +585,6 @@ export function ProjectsWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }

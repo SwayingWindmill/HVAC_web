@@ -1,4 +1,6 @@
 import { optimizationFlowQueryOptions } from "@/features/optimization-flow/api/optimization-flow";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import {
   ArrowUpRight,
   ChartColumn,
@@ -40,7 +42,6 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-const example = __HVAC_WEB_FRONTEND_REVIEW__;
 import type { MvProjectRecord } from "../api/verification-types";
 import {
   LineChart,
@@ -192,13 +193,12 @@ export function VerificationWorkspace() {
     URL.revokeObjectURL(url);
   };
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">节能验证</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <div className="flex gap-2">
+    <Main className="space-y-5">
+      <PageHeader
+        title="节能验证"
+        actions={
+          <>
+            <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -212,7 +212,9 @@ export function VerificationWorkspace() {
             导出核算
           </Button>
         </div>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -651,6 +653,6 @@ export function VerificationWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }

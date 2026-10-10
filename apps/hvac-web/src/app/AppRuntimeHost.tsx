@@ -124,8 +124,10 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   }, [resources]);
 
   const showSignInPage = window.location.pathname === '/sign-in' || snapshot.state === 'LOGIN_REQUIRED';
+  // The authenticated shell's SidebarInset is the page's main landmark; other states are their own.
+  const Root = snapshot.state === 'READY' && !showSignInPage ? 'div' : 'main';
   return (
-    <main
+    <Root
       className={`real-shell-state${snapshot.state === 'READY' && !showSignInPage ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
       aria-label={WEB_SHELL_MARKER}
       data-build-graph={WEB_GRAPH_MARKER}
@@ -144,6 +146,6 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
           <RouterProvider router={resources.router} />
         </ShellRuntimeProvider>
       ) : null}
-    </main>
+    </Root>
   );
 }

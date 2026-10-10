@@ -1,26 +1,8 @@
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 export const isWorkspaceExample =
   __HVAC_WEB_FRONTEND_REVIEW__;
-export function WorkspaceHeader({
-  title,
-  actions,
-}: {
-  title: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <header className="flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold">{title}</h1>
-        {isWorkspaceExample && <Badge variant="outline">示例数据</Badge>}
-      </div>
-      {actions}
-    </header>
-  );
-}
 export function MetricStrip({
   items,
 }: {

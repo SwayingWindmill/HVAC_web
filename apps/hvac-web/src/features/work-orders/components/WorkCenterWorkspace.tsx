@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { PageHeader } from '@/blocks/page-header';
+import { Main } from '@/components/layout/Main';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, Plus, RefreshCw } from 'lucide-react';
@@ -8,7 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
+import { MetricStrip } from '@/components/analysis/workspace-parts';
 import type { WorkOrder, WorkOrderPriority } from '@/api/work-orders';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
@@ -72,8 +74,8 @@ export function WorkCenterWorkspace() {
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="工作中心"
         actions={(
           <div className="flex gap-2">
@@ -183,6 +185,6 @@ export function WorkCenterWorkspace() {
           }}
         />
       ) : null}
-    </main>
+    </Main>
   );
 }

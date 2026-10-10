@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { PageHeader } from '@/blocks/page-header';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Link } from '@tanstack/react-router';
 import { Check, RefreshCw } from 'lucide-react';
@@ -179,10 +180,11 @@ export function NotificationCenter({ snapshot }: NotificationCenterProps) {
     <section data-testid="real-route-notifications" data-route-state="READY" data-business-state="POPULATED">
       <Main>
         <div className="space-y-4">
-          <div className="flex justify-end gap-2">
-            <Badge variant={unreadCount > 0 ? 'default' : 'outline'}>{unreadCount} 未读</Badge>
-            <Button variant="outline" onClick={() => setReloadKey((value) => value + 1)} disabled={loading}><RefreshCw className={loading ? 'animate-spin' : undefined} />刷新</Button>
-          </div>
+          <PageHeader
+            title="通知中心"
+            meta={<Badge variant={unreadCount > 0 ? 'default' : 'outline'}>{unreadCount} 未读</Badge>}
+            actions={<Button variant="outline" onClick={() => setReloadKey((value) => value + 1)} disabled={loading}><RefreshCw className={loading ? 'animate-spin' : undefined} />刷新</Button>}
+          />
           <Alert>
             <AlertTitle>通知与告警生命周期相互独立</AlertTitle>
             <AlertDescription>这里只展示服务器投递给当前用户的通知。将通知标记为已读，不会改变告警确认、恢复或工单状态。</AlertDescription>

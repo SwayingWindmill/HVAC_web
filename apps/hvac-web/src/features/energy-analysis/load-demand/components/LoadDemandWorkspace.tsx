@@ -1,4 +1,6 @@
 import { ArrowUpRight, RefreshCw } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { useMemo, useState } from "react";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -7,7 +9,6 @@ import { useWorkspaceScope } from "@/hooks/use-scope";
 import { EngineeringChart } from "@/components/analysis/EngineeringChart";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -117,20 +118,21 @@ export function LoadDemandWorkspace() {
     [data, view, contract, peak],
   );
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">负荷与需量</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <Button
+    <Main className="space-y-5">
+      <PageHeader
+        title="负荷与需量"
+        actions={
+          <>
+            <Button
           variant="outline"
           size="sm"
           onClick={() => void query.refetch()}
         >
           <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
         </Button>
-      </header>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -300,6 +302,6 @@ export function LoadDemandWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }

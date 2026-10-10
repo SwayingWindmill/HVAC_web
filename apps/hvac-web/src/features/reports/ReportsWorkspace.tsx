@@ -1,4 +1,6 @@
 import { ArrowUpRight, CalendarDays, Download, FileChartColumn, FileCheck2, RefreshCw, Search, UserRound } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -24,7 +26,6 @@ import {
 } from "@/components/ui/select";
 
 import {
-  WorkspaceHeader,
   MetricStrip,
   WorkspaceQueryState,
   isWorkspaceExample,
@@ -111,8 +112,8 @@ export function ReportsWorkspace() {
     URL.revokeObjectURL(url);
   }
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="报表中心"
         actions={
           <Button
@@ -285,6 +286,6 @@ export function ReportsWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }
