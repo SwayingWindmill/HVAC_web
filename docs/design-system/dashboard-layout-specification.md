@@ -1,5 +1,7 @@
 # 节能运营 Dashboard 布局规范
 
+> **2026-10-10 已被取代：** 首页改为 shadcn dashboard-01 构图的「总览看板」，当前规则见 `DESIGN.md` §21。本文件的基线/节省构图在基线、节能量与电价 owner 接入前不再适用。
+
 生效日期：2026-09-30。状态：SELECTED / BROWSER REVIEWED。
 依据：PRODUCT.md、当前页面架构与全局上下文合同、用户上传的商业建筑 HVAC 产品方案、本轮源码审查与桌面评审。
 源审查：`docs/architecture/energy-dashboard-source-review-2026-09-30.md`。

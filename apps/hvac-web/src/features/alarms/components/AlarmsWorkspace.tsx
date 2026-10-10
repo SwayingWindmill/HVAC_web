@@ -14,14 +14,14 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MetricStrip } from '@/components/analysis/workspace-parts';
 import { useDeviceNames } from '@/features/assets/use-device-names';
 import { cn } from '@/lib/utils';
-import { alarmKeys, listAlarms, type Alarm, type AlarmListFilter, type AlarmSeverity } from '../alarm-api';
+import { activeAlarmsQuery, alarmKeys, listAlarms, type Alarm, type AlarmListFilter, type AlarmSeverity } from '../alarm-api';
 import {
   alarmStatusLabel,
   formatDuration,
-  SEVERITY_CLASSES,
   SEVERITY_LABELS,
   SEVERITY_ORDER,
-  severityRank,
+  SeverityBadge,
+  sortAlarmsForOperators,
 } from '../alarm-presentation';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { AlarmInspector } from './AlarmInspector';
@@ -48,14 +48,6 @@ const REFRESH_MS = 15_000;
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
 
-export function SeverityBadge({ severity }: { readonly severity: AlarmSeverity }) {
-  return (
-    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', SEVERITY_CLASSES[severity])}>
-      {SEVERITY_LABELS[severity]}
-    </span>
-  );
-}
-
 export function AlarmsWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
@@ -66,11 +58,7 @@ export function AlarmsWorkspace() {
   const myId = principal.principalId;
   const now = Date.now();
 
-  const active = useQuery({
-    queryKey: alarmKeys.activeSummary(site.id),
-    queryFn: ({ signal }) => listAlarms(site.id, VIEW_FILTERS.active, undefined, signal),
-    refetchInterval: REFRESH_MS,
-  });
+  const active = useQuery(activeAlarmsQuery(site.id));
   const list = useInfiniteQuery({
     queryKey: alarmKeys.list(site.id, filter),
     queryFn: ({ pageParam, signal }) => listAlarms(site.id, filter, pageParam, signal),
@@ -79,12 +67,7 @@ export function AlarmsWorkspace() {
     refetchInterval: REFRESH_MS,
   });
 
-  const alarms = useMemo(() => {
-    const items = list.data?.pages.flatMap((page) => page.items) ?? [];
-    // Most severe first, then the most recent.
-    return [...items].sort((left, right) => severityRank(left.currentSeverity) - severityRank(right.currentSeverity)
-      || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt));
-  }, [list.data]);
+  const alarms = useMemo(() => sortAlarmsForOperators(list.data?.pages.flatMap((page) => page.items) ?? []), [list.data]);
 
   const activeItems = active.data?.items ?? [];
   const setSearch = (patch: { view?: AlarmView; severity?: AlarmSeverity; inspect?: string }) =>

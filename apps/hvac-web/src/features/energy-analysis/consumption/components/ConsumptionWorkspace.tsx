@@ -22,12 +22,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useDataTable } from "@/hooks/use-data-table";
 import { useWorkspaceScope } from "@/hooks/use-scope";
-import { formatTime } from "@/lib/operator-format";
+import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { BUCKET_NOUN, ENERGY_PERIODS, type EnergyPeriod, type EnergyRow } from "../model";
 import { useEnergySummary } from "../query";
 
-const decimal = (value: number, digits: number) =>
-  value.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const decimal = formatDecimal;
 
 /** Energy in kWh, switching to MWh from 10,000 kWh. */
 function energy(value: number | null): { value: string; unit: string } {

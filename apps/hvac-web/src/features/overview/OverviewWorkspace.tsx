@@ -28,38 +28,57 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useDeviceNames } from "@/features/assets/use-device-names";
-import { alarmKeys, listAlarms } from "@/features/alarms/alarm-api";
-import { SeverityBadge } from "@/features/alarms/components/AlarmsWorkspace";
+import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
+import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
 import { ENERGY_PERIODS, type EnergyPeriod } from "@/features/energy-analysis/consumption/model";
 import { useEnergySummary } from "@/features/energy-analysis/consumption/query";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
-import type { PlantReading } from "@/features/operations/realtime/plant-model";
-import { PriorityBadge } from "@/features/work-orders/components/WorkCenterWorkspace";
-import { OPEN_STATUSES, STATUS_LABELS } from "@/features/work-orders/work-order-presentation";
-import { listView, workOrderKeys } from "@/features/work-orders/work-order-queries";
-import { formatTime, personLabel } from "@/lib/operator-format";
+import type { PlantDevice, PlantReading, PlantView } from "@/features/operations/realtime/plant-model";
+import { PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from "@/features/work-orders/work-order-presentation";
+import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
+import { formatDecimal, formatTime, personLabel } from "@/lib/operator-format";
+import { cn } from "@/lib/utils";
 
 const siteRoute = getRouteApi("/_app/_site");
 const pageRoute = getRouteApi("/_app/_site/overview");
-// Same intervals and query keys as the alarm and work pages, so they share one cache.
-const REFRESH_MS = 15_000;
 const LIST_LIMIT = 5;
 const PERIODS = Object.keys(ENERGY_PERIODS) as EnergyPeriod[];
 
-const decimal = (value: number, digits: number) =>
-  value.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const decimal = formatDecimal;
 
-const reading = (value: PlantReading | null) =>
-  value && value.state === "PRESENT" && value.numeric !== null ? value.numeric : null;
-
-function Figure({ value, unit }: { readonly value: string | null; readonly unit?: string }) {
+function Figure({ value, unit, stale = false }: { readonly value: string | null; readonly unit?: string; readonly stale?: boolean }) {
   if (value === null) return <span className="text-muted-foreground">暂无数据</span>;
   return (
-    <>
+    <span className={cn(stale && "text-muted-foreground")} title={stale ? "数据过期或质量降级" : undefined}>
       {value}
       {unit ? <span className="ml-1.5 text-sm font-normal text-muted-foreground">{unit}</span> : null}
-    </>
+    </span>
   );
+}
+
+/** A plant reading as a figure; a stale or degraded value is shown dimmed, never as current. */
+function ReadingFigure({ reading, digits, unit }: { readonly reading: PlantReading | null; readonly digits: number; readonly unit: string }) {
+  const present = reading && reading.state === "PRESENT" && reading.numeric !== null ? reading : null;
+  return <Figure value={present ? decimal(present.numeric!, digits) : null} unit={unit} stale={present ? !present.current : false} />;
+}
+
+const EQUIPMENT: ReadonlySet<PlantDevice["category"]> = new Set(["CHILLER", "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER"]);
+
+/** Running and fault counts follow the realtime page: an offline device is offline whatever it last reported. */
+function equipmentStatus(plant: PlantView) {
+  const equipment = plant.devices.filter((device) => EQUIPMENT.has(device.category));
+  const online = equipment.filter((device) => device.connection !== "OFFLINE");
+  return {
+    total: equipment.length,
+    running: online.filter((device) => device.runState === "RUNNING").length,
+    faults: online.filter((device) => device.runState === "FAULT").length,
+    offline: plant.devices.filter((device) => device.connection === "OFFLINE").length,
+  };
+}
+
+function equipmentLead(status: ReturnType<typeof equipmentStatus>): string {
+  const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
+  return issues.length > 0 ? issues.join("，") : "没有故障或离线设备";
 }
 
 function SummaryCard({ label, value, badge, lead, detail }: {
@@ -193,28 +212,18 @@ export function OverviewWorkspace() {
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: "/overview" });
   const period: EnergyPeriod = search.period ?? "today";
-  const { plant, mode, refresh } = useRealtimePlant();
+  const { plant, mode, registry, refresh } = useRealtimePlant();
   const today = useEnergySummary("today");
   const deviceNames = useDeviceNames(site.id);
-  const alarms = useQuery({
-    queryKey: alarmKeys.activeSummary(site.id),
-    queryFn: ({ signal }) => listAlarms(site.id, { condition: "ACTIVE" }, undefined, signal),
-    refetchInterval: REFRESH_MS,
-  });
-  const workOrders = useQuery({
-    queryKey: workOrderKeys.view(site.id, OPEN_STATUSES),
-    queryFn: ({ signal }) => listView(site.id, OPEN_STATUSES, undefined, signal),
-    refetchInterval: REFRESH_MS,
-  });
+  const alarms = useQuery(activeAlarmsQuery(site.id));
+  const workOrders = useQuery(openWorkOrdersQuery(site.id));
 
-  const power = reading(plant.totalPower);
-  const cooling = reading(plant.coolingCapacity);
-  const running = plant.devices.filter((device) => device.runState === "RUNNING").length;
-  const faults = plant.devices.filter((device) => device.runState === "FAULT").length;
-  const offline = plant.devices.length - plant.onlineCount;
+  const cooling = plant.coolingCapacity;
+  const coolingPresent = cooling && cooling.state === "PRESENT" && cooling.numeric !== null;
+  const equipment = equipmentStatus(plant);
   const energy = today.data;
-  const activeAlarms = alarms.data?.items ?? [];
-  const openOrders = workOrders.data ?? [];
+  const activeAlarms = sortAlarmsForOperators(alarms.data?.items ?? []);
+  const openOrders = sortWorkOrdersForOperators(workOrders.data ?? []);
   const asOf = (instant: string | null | undefined) => (instant ? `数据时间 ${formatTime(instant, site.timezone)}` : "等待数据");
 
   return (
@@ -238,12 +247,12 @@ export function OverviewWorkspace() {
 
       <section
         aria-label="冷站概况"
-        className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs @xl/main:grid-cols-2 @5xl/main:grid-cols-4 dark:*:data-[slot=card]:bg-card"
+        className="grid grid-cols-1 gap-4 *:data-[slot=card]:shadow-xs @xl/main:grid-cols-2 @5xl/main:grid-cols-4"
       >
         <SummaryCard
           label="冷站实时功率"
-          value={<Figure value={power === null ? null : decimal(power, 1)} unit="kW" />}
-          lead={cooling === null ? "瞬时制冷量暂无数据" : `瞬时制冷量 ${decimal(cooling, 0)} kW`}
+          value={<ReadingFigure reading={plant.totalPower} digits={1} unit="kW" />}
+          lead={coolingPresent ? `瞬时制冷量 ${decimal(cooling.numeric!, 0)} kW${cooling.current ? "" : "（数据过期）"}` : "瞬时制冷量暂无数据"}
           detail={asOf(plant.latestSampleAt)}
         />
         <SummaryCard
@@ -259,10 +268,12 @@ export function OverviewWorkspace() {
           detail="供冷量 ÷ 空调用电"
         />
         <SummaryCard
-          label="设备运行"
-          value={<Figure value={`${running} / ${plant.devices.length}`} unit="台运行" />}
-          badge={<Badge variant="outline">{plant.onlineCount} 台在线</Badge>}
-          lead={faults > 0 ? `${faults} 台故障` : offline > 0 ? `${offline} 台离线或状态未知` : "全部设备在线"}
+          label="主要设备运行"
+          value={registry.isPending ? <Skeleton className="h-8 w-24" /> : registry.isError ? <span className="text-muted-foreground">暂不可用</span>
+            : equipment.total === 0 ? <span className="text-muted-foreground">未登记设备</span>
+            : <Figure value={`${equipment.running} / ${equipment.total}`} unit="台运行" />}
+          badge={registry.isSuccess ? <Badge variant="outline">{plant.onlineCount} / {plant.devices.length} 在线</Badge> : undefined}
+          lead={registry.isSuccess ? equipmentLead(equipment) : "正在读取设备台账"}
           detail={
             <Link to="/operations/systems-devices" search={{ site: site.id }} className="hover:text-foreground hover:underline">
               查看系统与设备
@@ -285,18 +296,20 @@ export function OverviewWorkspace() {
           ) : activeAlarms.length === 0 ? <EmptyList text="当前没有活动告警" /> : (
             <ItemGroup className="gap-1">
               {activeAlarms.slice(0, LIST_LIMIT).map((alarm) => (
-                <Item key={alarm.alarmId} size="sm" asChild className="hover:bg-muted/60">
-                  <Link role="listitem" to="/operations/alarms" search={{ site: site.id, inspect: alarm.alarmId }}>
-                    <SeverityBadge severity={alarm.currentSeverity} />
-                    <ItemContent>
-                      <ItemTitle className="truncate">{alarm.title}</ItemTitle>
-                      <ItemDescription className="truncate text-xs">
-                        {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? "—" : "站点"} · {formatTime(alarm.firstOccurredAt, site.timezone)} 开始
-                      </ItemDescription>
-                    </ItemContent>
-                    <ItemActions className="text-xs text-muted-foreground">{alarm.acknowledgement ? "已确认" : "未确认"}</ItemActions>
-                  </Link>
-                </Item>
+                <div role="listitem" key={alarm.alarmId}>
+                  <Item size="sm" asChild className="hover:bg-muted/60">
+                    <Link to="/operations/alarms" search={{ site: site.id, inspect: alarm.alarmId }}>
+                      <SeverityBadge severity={alarm.currentSeverity} />
+                      <ItemContent>
+                        <ItemTitle className="truncate">{alarm.title}</ItemTitle>
+                        <ItemDescription className="truncate text-xs">
+                          {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? "—" : "站点"} · {formatTime(alarm.firstOccurredAt, site.timezone)} 开始
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="text-xs text-muted-foreground">{alarm.acknowledgement ? "已确认" : "未确认"}</ItemActions>
+                    </Link>
+                  </Item>
+                </div>
               ))}
             </ItemGroup>
           )}
@@ -312,18 +325,20 @@ export function OverviewWorkspace() {
           ) : openOrders.length === 0 ? <EmptyList text="当前没有未完成工单" /> : (
             <ItemGroup className="gap-1">
               {openOrders.slice(0, LIST_LIMIT).map((order) => (
-                <Item key={order.workOrderId} size="sm" asChild className="hover:bg-muted/60">
-                  <Link role="listitem" to="/operations/work-center" search={{ site: site.id, inspect: order.workOrderId }}>
-                    <PriorityBadge priority={order.priority} />
-                    <ItemContent>
-                      <ItemTitle className="truncate">{order.title}</ItemTitle>
-                      <ItemDescription className="truncate text-xs">
-                        {order.assigneeId ? personLabel(order.assigneeId, principal.principalId) : "未指派"} · {formatTime(order.createdAt, site.timezone)} 创建
-                      </ItemDescription>
-                    </ItemContent>
-                    <ItemActions className="text-xs text-muted-foreground">{STATUS_LABELS[order.status]}</ItemActions>
-                  </Link>
-                </Item>
+                <div role="listitem" key={order.workOrderId}>
+                  <Item size="sm" asChild className="hover:bg-muted/60">
+                    <Link to="/operations/work-center" search={{ site: site.id, inspect: order.workOrderId }}>
+                      <PriorityBadge priority={order.priority} />
+                      <ItemContent>
+                        <ItemTitle className="truncate">{order.title}</ItemTitle>
+                        <ItemDescription className="truncate text-xs">
+                          {order.assigneeId ? personLabel(order.assigneeId, principal.principalId) : "未指派"} · {formatTime(order.createdAt, site.timezone)} 创建
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="text-xs text-muted-foreground">{STATUS_LABELS[order.status]}</ItemActions>
+                    </Link>
+                  </Item>
+                </div>
               ))}
             </ItemGroup>
           )}

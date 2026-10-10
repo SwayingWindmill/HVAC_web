@@ -13,8 +13,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { OPEN_STATUSES } from '@/features/work-orders/work-order-presentation';
-import { listView, workOrderKeys } from '@/features/work-orders/work-order-queries';
+import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { cn } from '@/lib/utils';
 import {
   CATEGORY_ICONS,
@@ -56,8 +55,7 @@ export function SystemsDevicesWorkspace() {
   // Open work orders raised against equipment, counted per Asset. Shares the work
   // center's open view and its cache.
   const workOrders = useQuery({
-    queryKey: workOrderKeys.view(site.id, OPEN_STATUSES),
-    queryFn: ({ signal }) => listView(site.id, OPEN_STATUSES, undefined, signal),
+    ...openWorkOrdersQuery(site.id),
     enabled: principal.authorization.capabilities.includes('work-order.list'),
   });
   const openWorkOrdersByAsset = useMemo(() => {
