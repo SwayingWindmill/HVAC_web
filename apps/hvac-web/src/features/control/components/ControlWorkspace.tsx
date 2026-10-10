@@ -1,4 +1,6 @@
 import { ArrowUpRight, History, RefreshCw, Search, ShieldCheck, Workflow } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -27,7 +29,6 @@ import {
 } from "@/components/ui/table";
 
 import {
-  WorkspaceHeader,
   MetricStrip,
   WorkspaceQueryState,
   isWorkspaceExample,
@@ -135,8 +136,8 @@ export function ControlWorkspace() {
     getRowId: (x) => x.id,
   });
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="控制与策略"
         actions={
           <Button
@@ -374,6 +375,6 @@ export function ControlWorkspace() {
           )}
         </SheetContent>
       </Sheet>
-    </main>
+    </Main>
   );
 }

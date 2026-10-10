@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { PageHeader } from '@/blocks/page-header';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -55,10 +56,11 @@ export function IntegrationsWorkspace() {
   ], []);
   const table = useDataTable({ key: 'registered-gateways', data: devices, columns, pageSize: 10, getRowId: (row) => row.id });
   return <Main className="space-y-6">
-    <div className="flex items-start justify-between gap-4">
-      <div><h1 className="text-2xl font-semibold tracking-tight">集成管理</h1><p className="mt-1 text-sm text-muted-foreground">登记现场网关，管理接入身份与证书生命周期。</p></div>
-      <Button disabled={!canWrite || !siteId} onClick={() => { registration.reset(); setRegistering(true); }}><Plus />登记网关</Button>
-    </div>
+    <PageHeader
+      title="集成管理"
+      description="登记现场网关，管理接入身份与证书生命周期。"
+      actions={<Button disabled={!canWrite || !siteId} onClick={() => { registration.reset(); setRegistering(true); }}><Plus />登记网关</Button>}
+    />
     <div className="flex items-center gap-3"><label htmlFor="gateway-site" className="text-sm font-medium">站点</label>
       <Select value={siteId ?? ''} onValueChange={(site) => { setSelected(null); void navigate({ search: { site } }); }}>
         <SelectTrigger id="gateway-site" className="w-64"><SelectValue placeholder="选择站点" /></SelectTrigger>

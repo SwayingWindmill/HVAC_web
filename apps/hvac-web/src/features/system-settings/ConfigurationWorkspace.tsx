@@ -1,4 +1,6 @@
 import { Building2, Clock3 } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { useWorkspaceScope } from "@/hooks/use-scope";
@@ -24,7 +26,6 @@ import {
 } from "@/components/ui/chart";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
-  WorkspaceHeader,
   WorkspaceQueryState,
   isWorkspaceExample,
 } from "@/components/analysis/workspace-parts";
@@ -49,8 +50,8 @@ export function ConfigurationWorkspace() {
   });
   const profile = query.data;
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader title="系统配置" />
+    <Main className="space-y-5">
+      <PageHeader title="系统配置" />
       <WorkspaceQueryState pending={query.isPending} error={query.error} />
       {profile && (
         <Tabs
@@ -167,6 +168,6 @@ export function ConfigurationWorkspace() {
           </TabsContent>
         </Tabs>
       )}
-    </main>
+    </Main>
   );
 }

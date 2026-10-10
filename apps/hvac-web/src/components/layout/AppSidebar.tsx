@@ -3,6 +3,7 @@ import { Zap } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -14,6 +15,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { useScope } from '@/hooks/use-scope';
+import { NavUser } from './NavUser';
 import {
   APP_NAVIGATION_CONFIG,
   isNavActive,
@@ -22,7 +24,10 @@ import {
 
 interface AppSidebarProps {
   readonly title?: string;
+  readonly principalName: string;
+  readonly principalRole: string;
   readonly onNavigate: (target: string) => void;
+  readonly onLogout: () => void;
 }
 
 function NavItem({
@@ -48,7 +53,6 @@ function NavItem({
         asChild
         isActive={active}
         tooltip={item.title}
-        className="transition-colors hover:bg-sidebar-accent/80 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-medium"
       >
         <a
           href={targetUrl}
@@ -59,8 +63,8 @@ function NavItem({
             onNavigate(targetUrl);
           }}
         >
-          <Icon className="size-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">{item.title}</span>
+          <Icon aria-hidden="true" />
+          <span>{item.title}</span>
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -69,7 +73,10 @@ function NavItem({
 
 export function AppSidebar({
   title = '智慧能源 SaaS 平台',
+  principalName,
+  principalRole,
   onNavigate,
+  onLogout,
 }: AppSidebarProps) {
   const location = useLocation();
   const currentPath = location.pathname;
@@ -77,8 +84,8 @@ export function AppSidebar({
   const siteQuery = currentScope ? `?site=${currentScope.siteId}` : '';
 
   return (
-    <Sidebar collapsible="icon" variant="inset" className="border-r border-border/60">
-      <SidebarHeader className="border-b border-border/50 pb-2">
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -102,10 +109,10 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent className="px-2 py-2">
+      <SidebarContent>
         {APP_NAVIGATION_CONFIG.map((group) => (
-          <SidebarGroup key={group.id} className="py-1">
-            <SidebarGroupLabel className="text-[11px] tracking-wider text-muted-foreground/80 group-data-[collapsible=icon]:hidden">
+          <SidebarGroup key={group.id}>
+            <SidebarGroupLabel>
               {group.label}
             </SidebarGroupLabel>
             <SidebarGroupContent>
@@ -125,6 +132,9 @@ export function AppSidebar({
         ))}
       </SidebarContent>
 
+      <SidebarFooter>
+        <NavUser name={principalName} role={principalRole} onNavigate={onNavigate} onLogout={onLogout} />
+      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );

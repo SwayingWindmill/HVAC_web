@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { PageHeader } from '@/blocks/page-header';
+import { Main } from '@/components/layout/Main';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, ArrowRight, RefreshCw, Snowflake, Waves } from 'lucide-react';
 import { StatusBadge } from '@/components/common/StatusBadge';
@@ -14,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
+import { MetricStrip } from '@/components/analysis/workspace-parts';
 import { cn } from '@/lib/utils';
 import {
   plantReading,
@@ -259,8 +261,8 @@ export function RealtimeWorkspace() {
   const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
 
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="实时运行"
         actions={(
           <div className="flex items-center gap-4">
@@ -315,6 +317,6 @@ export function RealtimeWorkspace() {
           <DeviceSnapshot plant={plant} siteId={site.id} timezone={site.timezone} />
         </>
       ) : null}
-    </main>
+    </Main>
   );
 }

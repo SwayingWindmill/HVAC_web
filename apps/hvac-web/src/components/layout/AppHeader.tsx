@@ -1,16 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useMatches } from '@tanstack/react-router';
-import {
-  Bell,
-  ChevronDown,
-  LogOut,
-  Moon,
-  Search,
-  Settings2,
-  ShieldCheck,
-  Sun,
-} from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Bell, Moon, Search, Sun } from 'lucide-react';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -19,14 +9,6 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Kbd } from '@/components/ui/kbd';
 import { Separator } from '@/components/ui/separator';
 import { SidebarTrigger } from '@/components/ui/sidebar';
@@ -36,13 +18,10 @@ import { APP_NAVIGATION_CONFIG } from './app-navigation';
 import { useShellNotifications } from './use-shell-notifications';
 
 interface AppHeaderProps {
-  readonly principalName: string;
   readonly principalSubject: string;
-  readonly principalRole: string;
   readonly themeMode: 'light' | 'dark';
   readonly onThemeToggle: () => void;
   readonly onNavigate: (target: string) => void;
-  readonly onLogout?: () => void;
 }
 
 function resolveBreadcrumbs(pathname: string, routeTitle: string | undefined) {
@@ -57,13 +36,10 @@ function resolveBreadcrumbs(pathname: string, routeTitle: string | undefined) {
 }
 
 export function AppHeader({
-  principalName,
   principalSubject,
-  principalRole,
   themeMode,
   onThemeToggle,
   onNavigate,
-  onLogout,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const commandTriggerRef = useRef<HTMLButtonElement>(null);
@@ -88,7 +64,7 @@ export function AppHeader({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4">
+      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background px-3 sm:px-4 lg:px-6">
         {/* Left: SidebarTrigger + Scope Switcher + Breadcrumb */}
         <div className="flex min-w-0 items-center gap-2.5">
           <SidebarTrigger className="-ml-1" />
@@ -176,66 +152,6 @@ export function AppHeader({
               <span className="absolute right-1 top-1 size-1.5 rounded-full bg-destructive" />
             ) : null}
           </Button>
-
-          <Separator orientation="vertical" className="h-4" />
-
-          {/* User Profile Dropdown */}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-8 gap-2 px-1.5 hover:bg-accent/80"
-                aria-label="用户账户菜单"
-              >
-                <Avatar className="size-6 border border-border/60">
-                  <AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">
-                    {principalName.slice(0, 1)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="hidden min-w-0 text-left md:block">
-                  <span className="block truncate text-xs font-medium leading-none text-foreground">
-                    {principalName}
-                  </span>
-                  <span className="block truncate text-[10px] leading-tight text-muted-foreground">
-                    {principalRole}
-                  </span>
-                </div>
-                <ChevronDown className="hidden size-3 text-muted-foreground md:block" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <div className="px-2.5 py-1.5">
-                <p className="text-xs font-medium text-foreground">{principalName}</p>
-                <p className="text-[11px] text-muted-foreground">{principalRole}</p>
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuItem
-                  className="cursor-pointer gap-2 text-xs"
-                  onSelect={() => onNavigate('/system?tab=users')}
-                >
-                  <ShieldCheck className="size-3.5 text-muted-foreground" />
-                  <span>权限与组织</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer gap-2 text-xs"
-                  onSelect={() => onNavigate('/settings')}
-                >
-                  <Settings2 className="size-3.5 text-muted-foreground" />
-                  <span>平台配置</span>
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                className="cursor-pointer gap-2 text-xs"
-                onSelect={() => onLogout?.()}
-              >
-                <LogOut className="size-3.5" />
-                <span>退出登录</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </header>
 

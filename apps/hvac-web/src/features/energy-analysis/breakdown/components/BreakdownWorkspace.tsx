@@ -1,4 +1,6 @@
 import { RefreshCw, Search } from "lucide-react";
+import { PageHeader } from "@/blocks/page-header";
+import { Main } from "@/components/layout/Main";
 import { DataTableBlock } from "@/blocks/data-table";
 import { useMemo } from "react";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -128,20 +130,19 @@ export function BreakdownWorkspace() {
     getRowId: (item) => item.id,
   });
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">分项与能流</h1>
-          {example && <Badge variant="outline">示例数据</Badge>}
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void query.refetch()}
-        >
-          <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-        </Button>
-      </header>
+    <Main className="space-y-5">
+      <PageHeader
+        title="分项与能流"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-96" />
       ) : query.isError ? (
@@ -269,6 +270,6 @@ export function BreakdownWorkspace() {
           </>
         )
       )}
-    </main>
+    </Main>
   );
 }

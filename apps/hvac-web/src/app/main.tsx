@@ -6,6 +6,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { AppRuntimeHost, ConfigurationBlocked } from './AppRuntimeHost';
 import { ThemeGate } from './ThemeGate';
 import { validateRuntimeConfig } from './runtime-config';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 import '@/global.css';
 
 const runtimeConfig = validateRuntimeConfig();

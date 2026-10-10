@@ -109,7 +109,7 @@ Rules:
 
 - default page padding follows the shell: approximately `px-4 py-6`, growing to `px-6` where desktop density benefits;
 - ordinary content uses a purposeful max-width; engineering canvases may be fluid;
-- do not recreate a universal boxed `PageHeader`;
+- use the flat `@/blocks/page-header` `PageHeader` (semantic header, h1, supporting line, actions; no Card, border or background); do not recreate a universal boxed `PageHeader`;
 - do not put each paragraph or metric in a Card;
 - do not create page-specific shadow/radius systems;
 - Tailwind composition is preferred over large feature CSS files;

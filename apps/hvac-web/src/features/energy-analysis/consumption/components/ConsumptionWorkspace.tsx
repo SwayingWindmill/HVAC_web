@@ -3,6 +3,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { DataTableBlock } from "@/blocks/data-table";
+import { PageHeader } from "@/blocks/page-header";
 import { FactStrip } from "@/blocks/fact-strip";
 import { DataTable } from "@/components/data-table/data-table";
 import type { DataTableFeatures } from "@/components/data-table/data-table-features";
@@ -83,38 +84,36 @@ export function ConsumptionWorkspace() {
   const peak = summary?.peak;
   return (
     <Main className="space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">能耗与成本</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {currentScope.name} · 按站点当地时间统计
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={period}
-            onValueChange={(value) => {
-              if (value) void navigate({ search: (previous) => ({ ...previous, period: value as EnergyPeriod }) });
-            }}
-            aria-label="统计期间"
-          >
-            {(Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((key) => (
-              <ToggleGroupItem key={key} value={key} className="px-3">
-                {ENERGY_PERIODS[key]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => void query.refetch()}>
-            <RefreshCw />
-          </Button>
-          <Button variant="outline" disabled={!summary?.rows.length} onClick={exportCsv}>
-            <Download aria-hidden="true" data-icon="inline-start" />
-            导出明细
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        title="能耗与成本"
+        description={`${currentScope.name} · 按站点当地时间统计`}
+        actions={
+          <>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={period}
+              onValueChange={(value) => {
+                if (value) void navigate({ search: (previous) => ({ ...previous, period: value as EnergyPeriod }) });
+              }}
+              aria-label="统计期间"
+            >
+              {(Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((key) => (
+                <ToggleGroupItem key={key} value={key} className="px-3">
+                  {ENERGY_PERIODS[key]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => void query.refetch()}>
+              <RefreshCw />
+            </Button>
+            <Button variant="outline" disabled={!summary?.rows.length} onClick={exportCsv}>
+              <Download aria-hidden="true" data-icon="inline-start" />
+              导出明细
+            </Button>
+          </>
+        }
+      />
       {query.isPending ? (
         <Skeleton className="h-[480px]" />
       ) : query.isError || !summary ? (

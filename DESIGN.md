@@ -14,6 +14,14 @@ architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 
 2026-09-13 起，全站视觉与页面布局采用 **Shadcn Application System**。
 
+2026-10-10 用户再次确认：采用企业能源 SaaS 的标准做法，坚持 shadcn 风格，高级感来自完成度而不是标新立异；不引入行业主题化视觉（如能效标识、线网图）。完成度标杆是 shadcn 官方 Blocks（dashboard-01 等）与 Vercel 控制台：
+
+- 字体自托管 Geist / Geist Mono（`@fontsource-variable`），中文回退 PingFang SC / Microsoft YaHei；不依赖 Google Fonts 等境外字体服务。
+- 浅色为默认场景（办公室桌面 1440–1920），页面底为白色、侧栏为浅灰，inset 布局；页眉为 48px 实底，不用毛玻璃。
+- 图表系列色为可区分的五色（蓝、青、紫、品红、石板灰），避开状态色相（青绿信息、琥珀警告、红色危险）；状态色只表达状态。
+- 每个路由页面使用 `@/blocks/page-header` 的 `PageHeader` 与 `@/components/layout/Main` 容器；页面内不得再出现 `<main>`。
+- 用户菜单位于侧栏底部（dashboard-01 `NavUser` 模式），页眉只放侧栏开关、站点切换、面包屑、搜索、主题与通知。
+
 主要视觉参考：
 
 - `satnaing/shadcn-admin`：应用壳、Sidebar、Header、Command Search、页面密度、后台产品布局与响应式处理。
@@ -488,7 +496,7 @@ Breadcrumb 与 Page Header 是不同职责，因此可以同时存在：
 - `h1` 页面主标题使用 `text-xl font-semibold tracking-tight sm:text-2xl text-foreground`；
 - supporting line 使用 `text-sm text-muted-foreground` 或更紧凑的 `text-xs` 元信息；
 - 右侧动作优先使用紧凑 Button / Dropdown / period control，不堆满状态徽章；
-- Page Header 保持扁平语义结构，不建设万能 boxed `PageHeader` component。
+- Page Header 保持扁平语义结构：统一使用 `@/blocks/page-header` 的 `PageHeader`（`header` + `h1` + supporting line + actions，无 Card、边框或背景），不建设万能 boxed `PageHeader` component。
 
 #### 2. 严禁的反模式（Anti-patterns & Lessons Learned）
 - **禁止 route title 向下重复**：Page Header 已表达“工单中心”时，第一张 Card/Section 应写“待处理工作”“SLA 风险”等真实 section task，而不是再次写“工单中心”；

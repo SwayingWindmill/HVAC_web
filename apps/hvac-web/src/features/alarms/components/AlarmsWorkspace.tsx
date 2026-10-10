@@ -1,4 +1,6 @@
 import { useMemo } from 'react';
+import { PageHeader } from '@/blocks/page-header';
+import { Main } from '@/components/layout/Main';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, RefreshCw } from 'lucide-react';
@@ -9,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MetricStrip, WorkspaceHeader } from '@/components/analysis/workspace-parts';
+import { MetricStrip } from '@/components/analysis/workspace-parts';
 import { useDeviceNames } from '@/features/assets/use-device-names';
 import { cn } from '@/lib/utils';
 import { alarmKeys, listAlarms, type Alarm, type AlarmListFilter, type AlarmSeverity } from '../alarm-api';
@@ -89,8 +91,8 @@ export function AlarmsWorkspace() {
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 p-6">
-      <WorkspaceHeader
+    <Main className="space-y-5">
+      <PageHeader
         title="异常与告警"
         actions={(
           <Button variant="outline" size="sm" onClick={() => { void active.refetch(); void list.refetch(); }}>
@@ -205,6 +207,6 @@ export function AlarmsWorkspace() {
         deviceNames={deviceNames}
         onClose={() => setSearch({ inspect: undefined })}
       />
-    </main>
+    </Main>
   );
 }

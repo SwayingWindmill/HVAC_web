@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Main } from "@/components/layout/Main";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CircleAlert } from "lucide-react";
 import { useWorkspaceScope } from "@/hooks/use-scope";
@@ -170,10 +171,9 @@ export function OverviewDashboard() {
       action: "进入节能机会",
     });
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-5 p-6">
+    <Main className="flex min-h-full flex-col gap-5">
       <OverviewHeader
         period={period}
-        example={isOverviewExample}
         onPeriodChange={(next) => {
           setDetail(null);
           void navigate({
@@ -376,6 +376,6 @@ export function OverviewDashboard() {
           )}
         </SheetContent>
       </Sheet>
-    </div>
+    </Main>
   );
 }

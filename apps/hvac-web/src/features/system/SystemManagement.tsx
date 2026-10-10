@@ -1,4 +1,8 @@
 import { useMemo } from 'react';
+import { roleLabels } from '@/lib/role-labels';
+import { assetsRegistryStatusLabel } from '@/features/assets/model';
+import { createIdleRealtimeStatus, realtimeStatusPresentation } from '@/app/realtime-status';
+import { PageHeader } from '@/blocks/page-header';
 
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -30,7 +34,6 @@ type PrincipalRow = {
   key: string;
   displayName: string;
   roles: readonly string[];
-  policyRevision: string;
 };
 
 type SiteRow = {
@@ -39,7 +42,6 @@ type SiteRow = {
   code: string;
   timezone: string;
   status: string;
-  revision: number;
 };
 
 const systemRouteApi = getRouteApi('/_app/system');
@@ -58,6 +60,14 @@ function FactGrid({ items }: { readonly items: ReadonlyArray<{ label: string; va
   );
 }
 
+const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分降级', unavailable: '不可用' } as const;
+const DIRECTORY_STATE = { checking: '读取中', available: '已同步', forbidden: '无权读取', unavailable: '暂不可用' } as const;
+
+/** The timezone's own name, e.g. 中国标准时间, instead of its IANA identifier. */
+function timezoneName(timeZone: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone, timeZoneName: 'long' }).formatToParts(new Date()).find((part) => part.type === 'timeZoneName')?.value ?? timeZone;
+}
+
 export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManagementProps) {
   const search = systemRouteApi.useSearch();
   const navigate = systemRouteApi.useNavigate();
@@ -65,12 +75,12 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
   const platform = snapshot.platform?.status;
   const sites = snapshot.sites?.items ?? [];
   const activeTab = search.tab ?? 'overview';
+  const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分降级') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
 
   const principalRows = useMemo<PrincipalRow[]>(() => [{
     key: principal.principal.subject,
     displayName: principal.principal.displayName,
     roles: principal.principal.roles,
-    policyRevision: principal.authorization.policyRevision,
   }], [principal]);
   const siteRows = useMemo<SiteRow[]>(() => sites.map((site) => ({
     key: site.id,
@@ -78,13 +88,11 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     code: site.code,
     timezone: site.timezone,
     status: site.status,
-    revision: site.revision,
   })), [sites]);
 
   const principalColumns = useMemo<Array<ColumnDef<DataTableFeatures, PrincipalRow>>>(() => [
     { id: 'user', header: '用户', cell: ({ row }) => <span className="font-medium text-foreground">{row.original.displayName}</span> },
-    { id: 'roles', header: '角色', cell: ({ row }) => <div className="flex flex-wrap gap-1">{row.original.roles.map((role) => <Badge key={role} variant="outline">{role}</Badge>)}</div> },
-    { id: 'policyRevision', header: '策略修订', cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.policyRevision}</span> },
+    { id: 'roles', header: '角色', cell: ({ row }) => <div className="flex flex-wrap gap-1">{roleLabels(row.original.roles).map((label) => <Badge key={label} variant="outline">{label}</Badge>)}</div> },
     { id: 'status', header: '状态', cell: () => <StatusBadge tone="success" label="当前会话" /> },
   ], []);
 
@@ -102,9 +110,8 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
       header: '站点',
       cell: ({ row }) => <div><strong className="block text-sm font-medium text-foreground">{row.original.displayName}</strong><span className="text-xs text-muted-foreground">{row.original.code}</span></div>,
     },
-    { id: 'timezone', header: '时区', cell: ({ row }) => row.original.timezone },
-    { id: 'status', header: '状态', cell: ({ row }) => <StatusBadge tone={row.original.status === 'ACTIVE' ? 'success' : 'neutral'} label={row.original.status === 'ACTIVE' ? '启用' : row.original.status} /> },
-    { id: 'revision', header: '修订', cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.revision}</span> },
+    { id: 'timezone', header: '时区', cell: ({ row }) => timezoneName(row.original.timezone) },
+    { id: 'status', header: '状态', cell: ({ row }) => <StatusBadge tone={row.original.status === 'ACTIVE' ? 'success' : 'neutral'} label={assetsRegistryStatusLabel(row.original.status)} /> },
   ], []);
 
   const siteTable = useDataTable({
@@ -121,21 +128,17 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     <div className="space-y-4">
       <FactStrip items={[
         { label: '授权用户', value: 1, detail: principal.principal.displayName, icon: <UserRound />, tone: 'accent' },
-        { label: '授权站点', value: sites.length, detail: snapshot.sites?.state ?? 'checking', icon: <Building2 />, tone: sites.length ? 'positive' : 'warning' },
-        { label: '授权能力', value: principal.authorization.capabilities.length, detail: `策略修订 ${principal.authorization.policyRevision}`, icon: <LockKeyhole /> },
-        { label: '平台状态', value: platform?.status ?? snapshot.platform?.state ?? 'checking', detail: platform?.version ?? '等待状态响应', icon: <Wifi />, tone: platform?.status === 'ok' ? 'positive' : 'warning' },
+        { label: '授权站点', value: sites.length, detail: DIRECTORY_STATE[snapshot.sites?.state ?? 'checking'], icon: <Building2 />, tone: sites.length ? 'positive' : 'warning' },
+        { label: '授权能力', value: principal.authorization.capabilities.length, detail: '当前会话可用的操作', icon: <LockKeyhole /> },
+        { label: '平台状态', value: platformState, detail: platform?.version ? `版本 ${platform.version}` : '等待状态响应', icon: <Wifi />, tone: platform?.status === 'ok' ? 'positive' : 'warning' },
       ]} />
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card>
           <CardHeader><CardTitle>平台服务</CardTitle></CardHeader>
           <CardContent>
             <FactGrid items={[
-              { label: '服务', value: platform?.service ?? '未提供' },
-              { label: '状态', value: platform?.status ?? snapshot.platform?.state ?? '检查中' },
+              { label: '状态', value: platformState },
               { label: '版本', value: platform?.version ?? '未提供' },
-              { label: '实现', value: platform?.implementation ?? '未提供' },
-              { label: '路由策略修订', value: platform?.routePolicyRevision == null ? '未提供' : String(platform.routePolicyRevision) },
-              { label: '兼容模式', value: platform?.compatibilityMode ?? '未提供' },
             ]} />
           </CardContent>
         </Card>
@@ -144,9 +147,8 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
           <CardContent>
             <FactGrid items={[
               { label: '显示名称', value: principal.principal.displayName },
-              { label: '角色', value: principal.principal.roles.join('、') || '无' },
+              { label: '角色', value: roleLabels(principal.principal.roles).join('、') },
               { label: '授权能力', value: `${principal.authorization.capabilities.length} 项` },
-              { label: '策略修订', value: principal.authorization.policyRevision },
             ]} />
           </CardContent>
         </Card>
@@ -189,10 +191,10 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
           table={siteTable}
           tableAriaLabel="授权站点"
           getHeaderCellProps={(header) => ({
-            className: header.id === 'status' ? 'w-28 text-center' : header.id === 'revision' ? 'text-right' : undefined,
+            className: header.id === 'status' ? 'w-28 text-center' : undefined,
           })}
           getCellProps={(cell) => ({
-            className: cell.column.id === 'status' ? 'text-center' : cell.column.id === 'revision' ? 'text-right' : undefined,
+            className: cell.column.id === 'status' ? 'text-center' : undefined,
           })}
         />
       ) : <EmptyGovernanceState description="当前租户没有授权站点" />}
@@ -209,11 +211,9 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
         <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><Plug className="size-4" />数据接入 <span className="text-sm font-normal text-muted-foreground">当前可验证端点</span></CardTitle></CardHeader>
         <CardContent>
           <FactGrid items={[
-            { label: '平台服务', value: platform?.status ?? '检查中' },
-            { label: '站点目录', value: snapshot.sites?.state ?? '检查中' },
-            { label: '实时数据', value: snapshot.realtime?.state ?? '空闲' },
-            { label: '策略修订', value: principal.authorization.policyRevision },
-            { label: '受保护范围', value: snapshot.protectedScope?.state ?? '空闲' },
+            { label: '平台服务', value: platformState },
+            { label: '站点目录', value: DIRECTORY_STATE[snapshot.sites?.state ?? 'checking'] },
+            { label: '实时数据', value: realtimeStatusPresentation(snapshot.realtime ?? createIdleRealtimeStatus()).label },
           ]} />
         </CardContent>
       </Card>
@@ -242,9 +242,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
   return (
     <section data-testid="real-route-system" data-route-state="READY" data-business-state="POPULATED">
       <Main className="space-y-4">
-        <div className="flex justify-end">
-          <Badge variant="outline">权威数据</Badge>
-        </div>
+        <PageHeader title="系统管理" description="平台服务、用户与权限、站点、数据接入与审计。" />
         <Tabs value={normalizedActiveTab} onValueChange={handleTabChange}>
           <TabsList className="max-w-full overflow-x-auto">
             {items.map((item) => <TabsTrigger key={item.key} value={item.key}>{item.label}</TabsTrigger>)}
