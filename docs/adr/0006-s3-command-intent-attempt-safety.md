@@ -101,6 +101,8 @@ Only `PRE_SEND_REJECTED` proves that no request was written and may safely retur
 
 `ACKNOWLEDGED` becomes `SUCCEEDED` only when the Capability verification also passes. Otherwise it becomes `OUTCOME_UNKNOWN`.
 
+Amended by [ADR 0018](0018-operator-reconciliation-of-unknown-command-outcomes.md): an `OUTCOME_UNKNOWN` Intent leaves that state only through Outcome Reconciliation, a person's recorded statement that moves it to `SUCCEEDED` or `FAILED` and releases the Device. Such a `SUCCEEDED` is not verification; its transition names the person. The Attempt keeps `OUTCOME_UNKNOWN`.
+
 ### Persistence and activation
 
 PostgreSQL Schema `command_runtime` is the planned authority. Its first tables are capability profiles, intents, attempts, transitions, idempotency, device control state, dispatch outbox and audit intents.

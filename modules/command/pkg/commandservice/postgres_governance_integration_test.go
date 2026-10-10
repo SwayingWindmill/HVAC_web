@@ -248,6 +248,66 @@ func TestPostgresUnapprovedCommandExpiresAndReleasesTheDevice(t *testing.T) {
 	}
 }
 
+// An OUTCOME_UNKNOWN command holds its Device until a person with control authority states
+// whether it took effect (#444). The Attempt keeps its uncertainty; the Device is released.
+func TestPostgresReconciledUnknownOutcomeReleasesTheDevice(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+	unknown, err := store.Submit(ctx, postgresCommandRequest("reconcile-unknown", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(3 * time.Second)
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+		t.Fatalf("expired attempt was reassigned: %v", err)
+	}
+	later := postgresCommandRequest("reconcile-later", 23.5)
+	later.CurrentState.ObservedAt = *now
+	later.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	later.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	queued, err := store.Submit(ctx, later)
+	if err != nil || queued.Intent.Status != commandmodel.IntentQueued {
+		t.Fatalf("later submit result=%#v err=%v", queued.Intent, err)
+	}
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+		t.Fatalf("a command behind an unknown outcome was dispatched: %v", err)
+	}
+
+	reconcile := commandmodel.ReconcileRequest{
+		TenantID: commandTenantA, CommandID: unknown.Intent.ID, Outcome: commandmodel.ReconciledNotApplied,
+		Authorization: later.Authorization,
+	}
+	reconcile.Authorization.GrantID = "reconcile-grant"
+	reconciled, err := store.Reconcile(ctx, reconcile)
+	if err != nil || reconciled.Status != commandmodel.IntentFailed {
+		t.Fatalf("reconcile result=%#v err=%v", reconciled, err)
+	}
+	assertDispatchDatabaseState(t, admin, unknown.Intent.ID, "FAILED", "OUTCOME_UNKNOWN", 1, false)
+	var reason, actorType, actorID string
+	var audits int
+	if err := admin.QueryRow(ctx, `
+SELECT t.reason, t.actor_type, t.actor_id,
+       (SELECT count(*) FROM command_runtime.command_audit_intents a WHERE a.command_id = t.command_id AND a.event_kind = 'COMMAND_OUTCOME_RECONCILED')
+FROM command_runtime.command_transitions t
+WHERE t.command_id = $1::uuid AND t.from_status = 'OUTCOME_UNKNOWN'`, unknown.Intent.ID).Scan(&reason, &actorType, &actorID, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "OPERATOR_RECONCILED_NOT_APPLIED" || actorType != "PRINCIPAL" || actorID != commandPrincipalA || audits != 1 {
+		t.Fatalf("reconciliation evidence reason=%s actor=%s/%s audits=%d", reason, actorType, actorID, audits)
+	}
+	envelope, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second)
+	if err != nil || envelope.CommandID != queued.Intent.ID {
+		t.Fatalf("reconciled Device still blocks later commands: envelope=%#v err=%v", envelope, err)
+	}
+	if _, err := store.Reconcile(ctx, reconcile); !errors.Is(err, ErrReconciliationInvalid) {
+		t.Fatalf("a settled command was reconciled again: %v", err)
+	}
+}
+
 func postgresApproval(intent commandmodel.CommandIntent, now time.Time, approvalID, approverID, grantID string) commandmodel.ApprovalEvidence {
 	return commandmodel.ApprovalEvidence{
 		ApprovalID:         approvalID,

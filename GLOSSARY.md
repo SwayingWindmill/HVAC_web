@@ -305,6 +305,10 @@ A versioned derived fact computed from authoritative inputs under an explicit de
 
 A governed request for a physical or logical control change after authorization and before execution. A Command Intent remains distinct from approval, transport delivery, Edge arbitration, device acknowledgment, readback and verified physical outcome.
 
+## Outcome Reconciliation
+
+A person with control authority over a Device stating whether a Command whose outcome is unknown took effect (APPLIED or NOT_APPLIED). It settles the Command Intent and releases the Device's hold, while its Attempt keeps the unknown outcome as evidence. It is a recorded statement, not a verified physical outcome (ADR 0018).
+
 ## Alarm Incident
 
 One durable occurrence of an Alarm condition for a stable fingerprint. Its condition state, acknowledgment, suppression, assignment, Work Order links and Notification disposition are separate facts; recurrence after recovery creates a new Incident rather than reopening the historical occurrence.

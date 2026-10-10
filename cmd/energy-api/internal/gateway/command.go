@@ -110,6 +110,14 @@ type internalCommandApproval struct {
 	ApproverRole string `json:"approverRole"`
 }
 
+type internalCommandReconciliation struct {
+	TenantID    string                         `json:"tenantId"`
+	SiteID      string                         `json:"siteId"`
+	DeviceID    string                         `json:"deviceId"`
+	PrincipalID string                         `json:"principalId"`
+	Outcome     commandmodel.ReconciledOutcome `json:"outcome"`
+}
+
 type commandTransitionView struct {
 	FromStatus *commandmodel.IntentStatus `json:"fromStatus,omitempty"`
 	ToStatus   commandmodel.IntentStatus  `json:"toStatus"`
@@ -152,6 +160,7 @@ const (
 	commandRouteCollection commandRouteKind = iota + 1
 	commandRouteItem
 	commandRouteApproval
+	commandRouteReconciliation
 )
 
 func newCommandController(config *CommandConfig) *commandController {
@@ -199,6 +208,9 @@ func matchPublicCommandRoute(path string) (commandRouteKind, string, bool) {
 	if strings.HasSuffix(raw, "/approve") {
 		kind = commandRouteApproval
 		raw = strings.TrimSuffix(raw, "/approve")
+	} else if strings.HasSuffix(raw, "/reconcile") {
+		kind = commandRouteReconciliation
+		raw = strings.TrimSuffix(raw, "/reconcile")
 	}
 	if raw == "" || strings.Contains(raw, "/") {
 		return 0, "", false
@@ -234,6 +246,12 @@ func dispatchCommandRoute(h *handler, writer http.ResponseWriter, request *http.
 			return
 		}
 		h.approveCommand(writer, request, commandID)
+	case commandRouteReconciliation:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.reconcileCommand(writer, request, commandID)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -904,22 +922,96 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 	return view, http.StatusAccepted, response.Header.Get("Location"), nil
 }
 
+// reconcileCommand settles an OUTCOME_UNKNOWN Command on the caller's statement of whether it
+// took effect. The caller needs control authority for the Device: a COMMAND_SUBMIT grant for
+// the Command's Capability (#444).
+func (h *handler) reconcileCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
+	session, ok := h.commandSession(writer, request, true)
+	if !ok {
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
+		return
+	}
+	if !isLowerUUID(commandID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_RECONCILIATION_REQUEST_INVALID", "Command reconciliation invalid", "The Command reconciliation request must use application/json.", false, nil)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 1024)
+	var input struct {
+		Outcome commandmodel.ReconciledOutcome `json:"outcome"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
+		(input.Outcome != commandmodel.ReconciledApplied && input.Outcome != commandmodel.ReconciledNotApplied) {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_RECONCILIATION_REQUEST_INVALID", "Command reconciliation invalid", "The request must state the outcome as APPLIED or NOT_APPLIED and nothing else.", false, nil)
+		return
+	}
+	current, failure := h.executeCommandRead(request, session, commandID)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if current.Status != commandmodel.IntentOutcomeUnknown {
+		writeProblem(writer, request, http.StatusConflict, "COMMAND_RECONCILIATION_INVALID", "Command reconciliation invalid", "Only a Command whose outcome is unknown can be reconciled.", false, nil)
+		return
+	}
+	device, failure := h.resolveCommandDevice(request, session, current.DeviceID)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if device.ID != current.DeviceID {
+		h.writeCommandFailure(writer, request, commandUnavailable("Registry returned a Device outside the Command reconciliation boundary."))
+		return
+	}
+	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, commandmodel.AuthorizationCommandSubmit)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	reconciled, failure := h.executeCommandReconciliation(request.Context(), commandID, internalCommandReconciliation{
+		TenantID: session.TenantID, SiteID: device.SiteID, DeviceID: device.ID, PrincipalID: principalID, Outcome: input.Outcome,
+	}, grant)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, reconciled)
+}
+
 func (h *handler) executeCommandApproval(ctx context.Context, commandID string, input internalCommandApproval, grant string) (commandView, *commandFailure) {
+	return h.executeCommandAction(ctx, commandID, "approve", input, input.TenantID, input.SiteID, input.DeviceID, grant)
+}
+
+func (h *handler) executeCommandReconciliation(ctx context.Context, commandID string, input internalCommandReconciliation, grant string) (commandView, *commandFailure) {
+	return h.executeCommandAction(ctx, commandID, "reconcile", input, input.TenantID, input.SiteID, input.DeviceID, grant)
+}
+
+// executeCommandAction posts a governed action on one Command to Command Service and checks
+// that the returned Command is still the one in the caller's scope.
+func (h *handler) executeCommandAction(ctx context.Context, commandID, action string, input any, tenantID, siteID, deviceID, grant string) (commandView, *commandFailure) {
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
 		failure := commandUnavailable("Command Service is not configured.")
 		return commandView{}, &failure
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		failure := commandUnavailable("The Command approval request could not be encoded.")
+		failure := commandUnavailable("The Command " + action + " request could not be encoded.")
 		return commandView{}, &failure
 	}
 	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost,
-		h.command.baseURL+internalCommandsPath+"/"+url.PathEscape(commandID)+"/approve", bytes.NewReader(body))
+		h.command.baseURL+internalCommandsPath+"/"+url.PathEscape(commandID)+"/"+action, bytes.NewReader(body))
 	if err != nil {
-		failure := commandUnavailable("The Command approval request could not be constructed.")
+		failure := commandUnavailable("The Command " + action + " request could not be constructed.")
 		return commandView{}, &failure
 	}
 	request.Header.Set("Content-Type", "application/json")
@@ -929,7 +1021,7 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := h.command.httpClient.Do(request)
 	if err != nil {
-		failure := commandUnavailable("Command Service approval is temporarily unavailable.")
+		failure := commandUnavailable("Command Service " + action + " is temporarily unavailable.")
 		return commandView{}, &failure
 	}
 	defer response.Body.Close()
@@ -938,9 +1030,8 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.CommandID != commandID || view.TenantID != input.TenantID || view.SiteID != input.SiteID ||
-		view.DeviceID != input.DeviceID {
-		failure := commandUnavailable("Command Service returned an invalid approved Command.")
+	if !ok || view.CommandID != commandID || view.TenantID != tenantID || view.SiteID != siteID || view.DeviceID != deviceID {
+		failure := commandUnavailable("Command Service returned an invalid Command after " + action + ".")
 		return commandView{}, &failure
 	}
 	return view, nil

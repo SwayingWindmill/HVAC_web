@@ -152,6 +152,62 @@
           "503": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/commands/{commandId}/reconcile": {
+      "post": {
+        "operationId": "reconcileCommand",
+        "summary": "Settle an OUTCOME_UNKNOWN Command on the caller's statement of whether it took effect",
+        "description": "The platform could not prove the outcome, and the Device holds later Commands until it is settled. The caller needs control authority for the Device: a COMMAND_SUBMIT grant for the Command's Capability. APPLIED records SUCCEEDED and NOT_APPLIED records FAILED; the Attempt keeps OUTCOME_UNKNOWN as evidence.",
+        "x-activation-status": "expand-baseline",
+        "x-production-traffic-percent": 0,
+        "x-client-forbidden-fields": [
+          "tenantId",
+          "siteId",
+          "deviceId",
+          "principalId",
+          "payloadHash",
+          "risk",
+          "providerMethod",
+          "providerParams"
+        ],
+        "parameters": [
+          {
+            "name": "commandId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "minLength": 16 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReconcileCommandRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Outcome recorded; the Device is released once no other outcome is unknown.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Command" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -176,6 +232,15 @@
         "additionalProperties": false,
         "maxProperties": 0,
         "description": "Empty by design. Principal, role and resource scope are derived from the authenticated Session, Registry and IAM."
+      },
+      "ReconcileCommandRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outcome"],
+        "properties": {
+          "outcome": { "type": "string", "enum": ["APPLIED", "NOT_APPLIED"] }
+        },
+        "description": "Principal and resource scope are derived from the authenticated Session, Registry and IAM."
       },
       "Command": {
         "type": "object",

@@ -27,6 +27,7 @@ type HTTPAuthority interface {
 	Submit(context.Context, commandmodel.SubmitRequest) (SubmitResult, error)
 	Get(context.Context, string, string) (commandmodel.CommandIntent, error)
 	Approve(context.Context, commandmodel.ApproveRequest) (commandmodel.CommandIntent, error)
+	Reconcile(context.Context, commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error)
 }
 
 type HTTPConfig struct {
@@ -75,6 +76,14 @@ type internalApproveCommandRequest struct {
 	DeviceID     string `json:"deviceId"`
 	PrincipalID  string `json:"principalId"`
 	ApproverRole string `json:"approverRole"`
+}
+
+type internalReconcileCommandRequest struct {
+	TenantID    string                         `json:"tenantId"`
+	SiteID      string                         `json:"siteId"`
+	DeviceID    string                         `json:"deviceId"`
+	PrincipalID string                         `json:"principalId"`
+	Outcome     commandmodel.ReconciledOutcome `json:"outcome"`
 }
 
 type CommandTransitionView struct {
@@ -143,6 +152,20 @@ func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	prefix := InternalCommandsPath + "/"
 	if strings.HasPrefix(request.URL.Path, prefix) {
 		raw := strings.TrimPrefix(request.URL.Path, prefix)
+		if strings.HasSuffix(raw, "/reconcile") {
+			commandID := strings.TrimSuffix(raw, "/reconcile")
+			if commandID == "" || strings.Contains(commandID, "/") {
+				writeCommandProblem(writer, http.StatusNotFound, "COMMAND_ROUTE_NOT_FOUND", false)
+				return
+			}
+			if request.Method != http.MethodPost {
+				writer.Header().Set("Allow", http.MethodPost)
+				writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
+				return
+			}
+			h.reconcileCommand(writer, request, commandID)
+			return
+		}
 		if strings.HasSuffix(raw, "/approve") {
 			commandID := strings.TrimSuffix(raw, "/approve")
 			if commandID != "" && !strings.Contains(commandID, "/") {
@@ -277,6 +300,55 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 	writeCommandJSON(writer, http.StatusOK, commandView(approved))
 }
 
+// reconcileCommand settles an OUTCOME_UNKNOWN command. The reconciler needs the same
+// COMMAND_SUBMIT grant for the command's Device and Capability as submitting it (#444).
+func (h *HTTPHandler) reconcileCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumInternalRequestBody)
+	var input internalReconcileCommandRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil || len(commandID) > 256 ||
+		(input.Outcome != commandmodel.ReconciledApplied && input.Outcome != commandmodel.ReconciledNotApplied) {
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_RECONCILIATION_REQUEST_INVALID", false)
+		return
+	}
+	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
+	if err != nil {
+		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
+		return
+	}
+	intent, err := h.config.Authority.Get(request.Context(), input.TenantID, commandID)
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return
+	}
+	// The grant is for the Capability's current revision, as the Gateway requests it.
+	currentRevision, _, _, supported := commandCapabilityProfile(intent.Capability)
+	if intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID || !supported {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
+		return
+	}
+	validation := commandauth.Validation{
+		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
+		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
+		PrincipalID: input.PrincipalID, TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID,
+		Capability: intent.Capability, CapabilityRevision: currentRevision,
+		Risk: intent.Risk, UseChecker: h.config.CommandGrantUseChecker,
+	}
+	if commandauth.ValidateGrant(claims, validation) != nil {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
+		return
+	}
+	reconciled, err := h.config.Authority.Reconcile(request.Context(), commandmodel.ReconcileRequest{
+		TenantID: input.TenantID, CommandID: commandID, Outcome: input.Outcome, Authorization: commandauth.Snapshot(claims),
+	})
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return
+	}
+	writeCommandJSON(writer, http.StatusOK, commandView(reconciled))
+}
+
 func (h *HTTPHandler) getCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
 	tenantID := strings.TrimSpace(request.Header.Get(tenantHeader))
 	if tenantID == "" || commandID == "" || len(commandID) > 256 {
@@ -359,6 +431,8 @@ func writeAuthorityError(writer http.ResponseWriter, err error) {
 		writeCommandProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", false)
 	case errors.Is(err, ErrAuthorizationDenied):
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_AUTHORIZATION_DENIED", false)
+	case errors.Is(err, ErrReconciliationInvalid):
+		writeCommandProblem(writer, http.StatusConflict, "COMMAND_RECONCILIATION_INVALID", false)
 	case errors.Is(err, ErrApprovalInvalid), errors.Is(err, ErrApprovalRequired):
 		writeCommandProblem(writer, http.StatusConflict, "COMMAND_APPROVAL_INVALID", false)
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCapabilityDenied), errors.Is(err, ErrCurrentStateUnsafe):

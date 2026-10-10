@@ -409,6 +409,24 @@ type ApproveRequest struct {
 	Approval  ApprovalEvidence
 }
 
+// ReconciledOutcome is what a person with control authority states about a command whose
+// outcome the platform could not prove.
+type ReconciledOutcome string
+
+const (
+	ReconciledApplied    ReconciledOutcome = "APPLIED"
+	ReconciledNotApplied ReconciledOutcome = "NOT_APPLIED"
+)
+
+// ReconcileRequest settles an OUTCOME_UNKNOWN command. Authorization is the reconciler's
+// COMMAND_SUBMIT grant for the command's Device and Capability.
+type ReconcileRequest struct {
+	TenantID      string
+	CommandID     string
+	Outcome       ReconciledOutcome
+	Authorization AuthorizationSnapshot
+}
+
 type DispatchEnvelope struct {
 	CommandID             string
 	AttemptID             string
