@@ -72,6 +72,7 @@
       "POST /api/v1/commands",
       "GET /api/v1/commands/{commandId}",
       "POST /api/v1/commands/{commandId}/approve",
+      "POST /api/v1/commands/{commandId}/reconcile",
       "GET /api/v1/sites/{siteId}/forecast/load",
       "GET /api/v1/sites/{siteId}/forecast/pv",
       "POST /api/v1/optimization/runs",

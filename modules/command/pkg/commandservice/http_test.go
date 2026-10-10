@@ -19,12 +19,13 @@ import (
 )
 
 type fakeHTTPAuthority struct {
-	submitted commandmodel.SubmitRequest
-	approved  commandmodel.ApproveRequest
-	intent    commandmodel.CommandIntent
-	getOrg    string
-	getID     string
-	err       error
+	submitted  commandmodel.SubmitRequest
+	approved   commandmodel.ApproveRequest
+	reconciled commandmodel.ReconcileRequest
+	intent     commandmodel.CommandIntent
+	getOrg     string
+	getID      string
+	err        error
 }
 
 func (authority *fakeHTTPAuthority) Submit(_ context.Context, request commandmodel.SubmitRequest) (SubmitResult, error) {
@@ -64,6 +65,50 @@ func (authority *fakeHTTPAuthority) Approve(_ context.Context, request commandmo
 	intent.Version++
 	intent.UpdatedAt = request.Approval.IssuedAt
 	return intent, nil
+}
+
+func (authority *fakeHTTPAuthority) Reconcile(_ context.Context, request commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error) {
+	authority.reconciled = request
+	intent := authority.intent
+	intent.Status = commandmodel.IntentFailed
+	return intent, authority.err
+}
+
+func TestCommandHTTPReconciliationRequiresTheDevicesSubmitGrant(t *testing.T) {
+	now := time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC)
+	iamSigner := newECDSASigner(t)
+	gatewaySigner := newECDSASigner(t)
+	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
+		ID: "command-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "initiator-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
+		Status: commandmodel.IntentOutcomeUnknown, Risk: commandmodel.RiskLow,
+		DeviceCommandSequence: 2, Version: 5, CreatedAt: now, UpdatedAt: now,
+	}}
+	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
+	body, _ := json.Marshal(internalReconcileCommandRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PrincipalID: "operator-2", Outcome: commandmodel.ReconciledNotApplied,
+	})
+	request := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/reconcile", bytes.NewReader(body))
+	request.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "operator-2", "device-1"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if authority.reconciled.TenantID != "tenant-1" || authority.reconciled.CommandID != "command-1" ||
+		authority.reconciled.Outcome != commandmodel.ReconciledNotApplied ||
+		authority.reconciled.Authorization.PrincipalID != "operator-2" ||
+		authority.reconciled.Authorization.Purpose != commandmodel.AuthorizationCommandSubmit {
+		t.Fatalf("reconciliation drifted %#v", authority.reconciled)
+	}
+
+	approveGrant := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/reconcile", bytes.NewReader(body))
+	approveGrant.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandApprove, "operator-2", "device-1"))
+	approveRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(approveRecorder, approveGrant)
+	if approveRecorder.Code != http.StatusForbidden {
+		t.Fatalf("approve grant reconciled command status=%d body=%s", approveRecorder.Code, approveRecorder.Body.String())
+	}
 }
 
 func TestCommandHTTPCreateRequiresExactIAMGrant(t *testing.T) {

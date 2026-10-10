@@ -175,6 +175,46 @@ func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 	}
 }
 
+// An OUTCOME_UNKNOWN command is settled with the caller's own Session-derived identity and a
+// COMMAND_SUBMIT grant for its Device (#444).
+func TestGatewayReconcileCommandUsesTheDevicesSubmitGrant(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.outcomeUnknown.Store(true)
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/reconcile", strings.NewReader(`{"outcome":"NOT_APPLIED"}`))
+	fixture.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var view commandView
+	if json.NewDecoder(recorder.Body).Decode(&view) != nil || view.Status != commandmodel.IntentFailed || !fixture.reconciled.Load() {
+		t.Fatalf("unexpected reconciled view %#v", view)
+	}
+
+	settled := newCommandGatewayFixture(t)
+	request = httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+settled.commandID+"/reconcile", strings.NewReader(`{"outcome":"APPLIED"}`))
+	settled.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	settled.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict || settled.iamCalls.Load() != 0 {
+		t.Fatalf("a command without an unknown outcome: status=%d iam=%d body=%s", recorder.Code, settled.iamCalls.Load(), recorder.Body.String())
+	}
+
+	forged := newCommandGatewayFixture(t)
+	forged.outcomeUnknown.Store(true)
+	request = httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+forged.commandID+"/reconcile", strings.NewReader(`{"outcome":"APPLIED","principalId":"caller-supplied"}`))
+	forged.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	forged.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || forged.totalUpstreamCalls() != 0 {
+		t.Fatalf("browser reconciliation authority: status=%d upstream=%d", recorder.Code, forged.totalUpstreamCalls())
+	}
+}
+
 func TestGatewayHighRiskApprovalRequiresStepUpBeforeAuthorizationUpstreams(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	fixture.approvalPending.Store(true)
@@ -286,6 +326,8 @@ type commandGatewayFixture struct {
 	crossTenantView       atomic.Bool
 	approvalPending       atomic.Bool
 	highRiskApproval      atomic.Bool
+	outcomeUnknown        atomic.Bool
+	reconciled            atomic.Bool
 	approvalCompleted     atomic.Bool
 }
 
@@ -588,6 +630,18 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 		switch request.Method {
 		case http.MethodPost:
 			claims, err := commandauth.VerifyGrant(&fixture.iamSigner.PublicKey, request.Header.Get("X-Command-Grant"))
+			if strings.HasSuffix(request.URL.Path, "/reconcile") {
+				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandSubmit || claims.DeviceID != fixture.deviceID {
+					t.Fatalf("invalid backend reconciliation grant claims=%#v err=%v", claims, err)
+				}
+				var input internalCommandReconciliation
+				if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID ||
+					input.DeviceID != fixture.deviceID || input.PrincipalID != fixture.principalID || input.Outcome != commandmodel.ReconciledNotApplied {
+					t.Fatalf("unexpected internal reconciliation input %#v", input)
+				}
+				fixture.reconciled.Store(true)
+				return telemetryJSONResponse(http.StatusOK, fixture.commandView(now)), nil
+			}
 			if strings.HasSuffix(request.URL.Path, "/approve") {
 				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandApprove || claims.DeviceID != fixture.deviceID {
 					t.Fatalf("invalid backend approval grant claims=%#v err=%v", claims, err)
@@ -664,6 +718,19 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 			commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentAwaitingApproval), ToStatus: commandmodel.IntentApproved, Reason: "APPROVAL_THRESHOLD_MET", ActorType: "PRINCIPAL", OccurredAt: now, Version: 4},
 			commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentApproved), ToStatus: commandmodel.IntentQueued, Reason: "COMMAND_QUEUED", ActorType: "WORKLOAD", OccurredAt: now, Version: 5},
 		)
+	}
+	if fixture.outcomeUnknown.Load() {
+		status = commandmodel.IntentOutcomeUnknown
+		version = 5
+		transitions = append(transitions,
+			commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentQueued), ToStatus: commandmodel.IntentDispatching, Reason: "DISPATCH_ATTEMPT_PREPARED", ActorType: "WORKLOAD", OccurredAt: now, Version: 4},
+			commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentDispatching), ToStatus: commandmodel.IntentOutcomeUnknown, Reason: "LEASE_EXPIRED_WITHOUT_SEND_PROOF", ActorType: "WORKLOAD", OccurredAt: now, Version: 5},
+		)
+		if fixture.reconciled.Load() {
+			status = commandmodel.IntentFailed
+			version = 6
+			transitions = append(transitions, commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentOutcomeUnknown), ToStatus: commandmodel.IntentFailed, Reason: "OPERATOR_RECONCILED_NOT_APPLIED", ActorType: "PRINCIPAL", OccurredAt: now, Version: 6})
+		}
 	}
 	return commandView{
 		SchemaVersion: 1, CommandID: fixture.commandID, TenantID: tenantID,

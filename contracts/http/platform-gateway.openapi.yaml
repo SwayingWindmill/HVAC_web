@@ -1546,6 +1546,15 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/commands/{commandId}/reconcile": {
+      "post": {
+        "operationId": "reconcileCommandV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "parameters": [{ "name": "commandId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/forecast/load": {
       "get": {
         "operationId": "getSiteLoadForecastV212",
