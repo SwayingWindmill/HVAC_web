@@ -1,5 +1,7 @@
 import { Fan, Gauge, Snowflake, ThermometerSun, Waves } from 'lucide-react';
 import type { StatusTone } from '@/components/common/StatusBadge';
+import { MetricValue } from '@/blocks/metric-card';
+import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import type { PlantCategory, PlantDevice, PlantReading } from './plant-model';
 import type { PlantLiveMode } from './use-realtime-plant';
@@ -104,4 +106,10 @@ export function KeyReadings({ device }: { readonly device: PlantDevice }) {
       ))}
     </span>
   );
+}
+
+/** A plant reading as a headline figure; a stale or degraded value is dimmed, never shown as current. */
+export function ReadingMetric({ reading, digits, unit }: { readonly reading: PlantReading | null; readonly digits: number; readonly unit: string }) {
+  const present = reading && reading.state === 'PRESENT' && reading.numeric !== null ? reading : null;
+  return <MetricValue value={present ? formatDecimal(present.numeric!, digits) : null} unit={unit} stale={present ? !present.current : false} />;
 }

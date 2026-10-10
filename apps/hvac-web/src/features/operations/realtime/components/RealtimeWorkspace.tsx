@@ -1,12 +1,13 @@
-import type { ReactNode } from 'react';
 import { PageHeader } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { Link } from '@tanstack/react-router';
-import { ArrowLeft, ArrowRight, RefreshCw, Snowflake, Waves } from 'lucide-react';
+import { RefreshCw, Waves } from 'lucide-react';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { FactStrip } from '@/blocks/fact-strip';
+import { MetricValue } from '@/blocks/metric-card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -16,128 +17,37 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { MetricStrip } from '@/components/analysis/workspace-parts';
+import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import {
-  plantReading,
-  type PlantCategory,
-  type PlantDevice,
-  type PlantReading,
-  type PlantView,
-} from '../plant-model';
+import { equipmentStatus, plantReading, type EquipmentStatus, type PlantCategory, type PlantReading, type PlantView } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import {
   CATEGORY_ICONS,
   deviceStatus,
   formatClock,
-  KEY_READINGS,
   KeyReadings,
   LiveIndicator,
   POWER_KEY,
+  ReadingMetric,
   ReadingValue,
 } from '../device-presentation';
+import { PlantDiagram } from './PlantDiagram';
 
-// Inside a plant node the equipment is already named, so readings use short labels.
-const NODE_LABELS: Readonly<Record<string, string>> = {
-  power: '功率',
-  flow_rate: '流量',
-  frequency: '频率',
-  compressor_load: '负载率',
-  leaving_chilled_water_temperature: '出水温度',
-  fan_speed: '风机转速',
-  leaving_water_temperature: '出塔水温',
-};
-
-function nodeLabel(sourceKey: string, fallback: string): string {
-  return NODE_LABELS[sourceKey.slice(sourceKey.indexOf('.') + 1)] ?? fallback;
+/** The summed current value of a key across a category; null unless every device reports it as current. */
+function sumCurrent(plant: PlantView, category: PlantCategory, sourceKey: string): number | null {
+  const readings = plant.devices.filter((device) => device.category === category).map((device) => device.reading(sourceKey));
+  if (readings.length === 0 || readings.some((reading) => !reading?.current || reading.numeric === null)) return null;
+  return readings.reduce((sum, reading) => sum + reading!.numeric!, 0);
 }
 
-function PlantNode({ device }: { readonly device: PlantDevice }) {
-  const status = deviceStatus(device);
-  const powerKey = POWER_KEY[device.category];
-  const readings = [powerKey, ...KEY_READINGS[device.category].slice(0, 2)]
-    .filter((key): key is string => Boolean(key))
-    .flatMap((key) => {
-      const reading = device.reading(key);
-      return reading ? [{ ...reading, label: nodeLabel(key, reading.label) }] : [];
-    });
-  return (
-    <div className="rounded-lg border bg-background p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="text-sm font-medium">{device.name}</span>
-        <StatusBadge tone={status.tone} label={status.label} />
-      </div>
-      <dl className="mt-2 space-y-1 text-xs">
-        {readings.map((reading) => (
-          <div key={reading.label} className="flex items-baseline justify-between gap-3">
-            <dt className="whitespace-nowrap text-muted-foreground">{reading.label}</dt>
-            <dd className="whitespace-nowrap text-sm font-medium"><ReadingValue reading={reading} /></dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
+function equipmentDetail(status: EquipmentStatus): string {
+  const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
+  return issues.length > 0 ? issues.join('，') : '冷机、水泵与冷却塔';
 }
 
-function PlantColumn({ title, devices }: { readonly title: string; readonly devices: readonly PlantDevice[] }) {
-  return (
-    <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
-      {devices.length > 0
-        ? devices.map((device) => <PlantNode key={device.deviceId} device={device} />)
-        : <p className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">未登记设备</p>}
-    </section>
-  );
-}
-
-function LoopConnector({ label, supply, ret }: {
-  readonly label: string;
-  readonly supply: PlantReading | null;
-  readonly ret: PlantReading | null;
-}) {
-  return (
-    <div className="flex w-28 flex-col items-center justify-center gap-2 self-center text-sm">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="flex items-center gap-1.5">
-        <span className="text-xs text-muted-foreground">供</span>
-        <ReadingValue reading={supply} className="font-medium" />
-        <ArrowRight className="size-3.5 text-muted-foreground" aria-hidden="true" />
-      </span>
-      <span className="flex items-center gap-1.5">
-        <ArrowLeft className="size-3.5 text-muted-foreground" aria-hidden="true" />
-        <span className="text-xs text-muted-foreground">回</span>
-        <ReadingValue reading={ret} className="font-medium" />
-      </span>
-    </div>
-  );
-}
-
-function PlantFlow({ plant }: { readonly plant: PlantView }) {
-  const byCategory = (category: PlantCategory) => plant.groups.find((group) => group.category === category)?.devices ?? [];
-  return (
-    <Card className="col-span-12 xl:col-span-8">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Snowflake className="size-4" aria-hidden="true" />冷站系统</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2">
-          <PlantColumn title="冷却侧" devices={[...byCategory('COOLING_TOWER'), ...byCategory('COOLING_WATER_PUMP')]} />
-          <LoopConnector
-            label="冷却水"
-            supply={plantReading(plant, 'cooling_tower.leaving_water_temperature')}
-            ret={plantReading(plant, 'cooling_tower.entering_water_temperature')}
-          />
-          <PlantColumn title="冷水机组" devices={byCategory('CHILLER')} />
-          <LoopConnector
-            label="冷冻水"
-            supply={plantReading(plant, 'btu_meter.supply_water_temperature')}
-            ret={plantReading(plant, 'btu_meter.return_water_temperature')}
-          />
-          <PlantColumn title="冷冻侧" devices={byCategory('CHILLED_WATER_PUMP')} />
-        </div>
-      </CardContent>
-    </Card>
-  );
+function freshnessDetail(status: EquipmentStatus): string {
+  const issues = [status.withoutData > 0 ? `${status.withoutData} 台无数据` : null, status.stale > 0 ? `${status.stale} 台数据过期` : null].filter(Boolean);
+  return issues.length > 0 ? issues.join('，') : '数据均为最新';
 }
 
 function ConditionRow({ label, reading }: { readonly label: string; readonly reading: PlantReading | null }) {
@@ -151,11 +61,11 @@ function ConditionRow({ label, reading }: { readonly label: string; readonly rea
 
 function WaterSide({ plant }: { readonly plant: PlantView }) {
   return (
-    <Card className="col-span-12 xl:col-span-4">
+    <Card className="@container/card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Waves className="size-4" aria-hidden="true" />水侧与室外工况</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="grid gap-4 @3xl/card:grid-cols-3 @3xl/card:gap-8">
         <section>
           <h3 className="text-xs font-medium text-muted-foreground">冷冻水</h3>
           <div className="mt-2 grid grid-cols-3 gap-2">
@@ -172,12 +82,12 @@ function WaterSide({ plant }: { readonly plant: PlantView }) {
           </div>
           <ConditionRow label="冷冻水流量" reading={plantReading(plant, 'btu_meter.flow_rate')} />
         </section>
-        <section className="border-t pt-3">
+        <section className="border-t pt-3 @3xl/card:border-t-0 @3xl/card:pt-0">
           <h3 className="text-xs font-medium text-muted-foreground">冷却水</h3>
           <ConditionRow label="进机组" reading={plantReading(plant, 'chiller.entering_cooling_water_temperature')} />
           <ConditionRow label="冷却塔逼近温度" reading={plantReading(plant, 'cooling_tower.approach_temperature')} />
         </section>
-        <section className="border-t pt-3">
+        <section className="border-t pt-3 @3xl/card:border-t-0 @3xl/card:pt-0">
           <h3 className="text-xs font-medium text-muted-foreground">室外</h3>
           <ConditionRow label="干球温度" reading={plantReading(plant, 'weather.ambient_dry_bulb_temperature')} />
           <ConditionRow label="湿球温度" reading={plantReading(plant, 'weather.ambient_wet_bulb_temperature')} />
@@ -187,7 +97,6 @@ function WaterSide({ plant }: { readonly plant: PlantView }) {
     </Card>
   );
 }
-
 
 function DeviceSnapshot({ plant, siteId, timezone }: { readonly plant: PlantView; readonly siteId: string; readonly timezone: string }) {
   return (
@@ -252,26 +161,22 @@ function DeviceSnapshot({ plant, siteId, timezone }: { readonly plant: PlantView
   );
 }
 
-function metricValue(reading: PlantReading | null): ReactNode {
-  return <ReadingValue reading={reading ? { ...reading, unit: null } : null} />;
-}
-
 export function RealtimeWorkspace() {
   const { site, plant, mode, registry, current, currentUnavailable, refresh } = useRealtimePlant();
   const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
+  const equipment = equipmentStatus(plant);
+  const chillerPower = sumCurrent(plant, 'CHILLER', 'chiller.power');
 
   return (
-    <Main className="space-y-5">
+    <Main className="@container/main flex flex-col gap-4 md:gap-6">
       <PageHeader
         title="实时运行"
+        description={`${site.displayName} · 数据时间 ${formatClock(plant.latestSampleAt, site.timezone)}`}
+        meta={<LiveIndicator mode={mode} />}
         actions={(
-          <div className="flex items-center gap-4">
-            <LiveIndicator mode={mode} />
-            <span className="text-xs text-muted-foreground">数据时间 <span className="tabular-nums text-foreground">{formatClock(plant.latestSampleAt, site.timezone)}</span></span>
-            <Button variant="outline" size="sm" onClick={refresh}>
-              <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
         )}
       />
 
@@ -299,19 +204,26 @@ export function RealtimeWorkspace() {
 
       {!loading && plant.devices.length > 0 ? (
         <>
-          <MetricStrip
+          <FactStrip
+            ariaLabel="冷站实时概况"
             items={[
-              { label: '冷站总功率', value: metricValue(plant.totalPower), unit: 'kW' },
-              { label: '瞬时制冷量', value: metricValue(plant.coolingCapacity), unit: 'kW' },
-              {
-                label: '冷站 COP',
-                value: plant.plantCop === null ? <span className="text-muted-foreground">—</span> : plant.plantCop.toFixed(2),
-              },
-              { label: '设备在线', value: `${plant.onlineCount} / ${plant.devices.length}`, unit: '台' },
+              { key: 'power', label: '冷站总功率', value: <ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />, detail: chillerPower === null ? '空调总电表' : `其中冷水机组 ${formatDecimal(chillerPower, 1)} kW` },
+              { key: 'cooling', label: '瞬时制冷量', value: <ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />, detail: '冷量表' },
+              { key: 'cop', label: '冷站 COP', value: <MetricValue value={plant.plantCop === null ? null : formatDecimal(plant.plantCop, 2)} />, detail: '制冷量 ÷ 总功率' },
+              { key: 'equipment', label: '主要设备运行', value: <MetricValue value={`${equipment.running} / ${equipment.total}`} unit="台" />, detail: equipmentDetail(equipment) },
+              { key: 'online', label: '设备在线', value: <MetricValue value={`${plant.onlineCount} / ${plant.devices.length}`} unit="台" />, detail: freshnessDetail(equipment) },
             ]}
           />
-          <div className="grid grid-cols-12 gap-5">
-            <PlantFlow plant={plant} />
+          <div className="grid gap-4 md:gap-6 @6xl/main:grid-cols-[minmax(0,3fr)_minmax(18rem,1fr)]">
+            <Card className="min-w-0">
+              <CardHeader>
+                <CardTitle>冷站系统</CardTitle>
+                <CardDescription>冷却水与冷冻水两个环路，点击设备查看详情</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PlantDiagram plant={plant} siteId={site.id} />
+              </CardContent>
+            </Card>
             <WaterSide plant={plant} />
           </div>
           <DeviceSnapshot plant={plant} siteId={site.id} timezone={site.timezone} />
