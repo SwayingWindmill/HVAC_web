@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { getRouteApi } from '@tanstack/react-router';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -16,6 +16,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
 import { StatusBadge } from '@/components/status-badge';
 import { useDataTable } from '@/hooks/use-data-table';
+import { useAuditSearch } from '@/api/audit';
+import { presentAuditRecord, type AuditRow } from './audit/model';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { RuleManagement } from './rule-management/RuleManagement';
 
@@ -41,6 +43,10 @@ type SiteRow = {
 };
 
 const systemRouteApi = getRouteApi('/_app/system');
+
+const AUDIT_SEARCH_LIMIT = 100;
+
+const auditTimeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' });
 
 function EmptyGovernanceState({ description }: { readonly description: string }) {
   return (
@@ -116,6 +122,30 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     key: 'system-management-sites',
     data: siteRows,
     columns: siteColumns,
+    paginate: false,
+    getRowId: (row) => row.key,
+  });
+
+  const canReadAudit = principal.authorization.capabilities.includes('audit.read');
+  const auditQuery = useAuditSearch({ limit: AUDIT_SEARCH_LIMIT }, canReadAudit && activeTab === 'audit');
+  const [auditSearch, setAuditSearch] = useState('');
+  const auditRows = useMemo<AuditRow[]>(() => {
+    const viewer = { subject: principal.principal.subject, displayName: principal.principal.displayName };
+    const rows = (auditQuery.data ?? []).map((record) => presentAuditRecord(record, viewer));
+    const query = auditSearch.trim();
+    return query ? rows.filter((row) => [row.actor, row.action, row.resource].some((value) => value.includes(query))) : rows;
+  }, [auditQuery.data, auditSearch, principal]);
+  const auditColumns = useMemo<Array<ColumnDef<DataTableFeatures, AuditRow>>>(() => [
+    { id: 'occurredAt', header: '时间', cell: ({ row }) => <span className="tabular-nums">{auditTimeFormat.format(new Date(row.original.occurredAt))}</span> },
+    { id: 'actor', header: '操作人', cell: ({ row }) => row.original.actor },
+    { id: 'action', header: '动作', cell: ({ row }) => row.original.action },
+    { id: 'resource', header: '对象', cell: ({ row }) => row.original.resource },
+    { id: 'outcome', header: '结果', cell: ({ row }) => <StatusBadge tone={row.original.tone} label={row.original.outcome} /> },
+  ], []);
+  const auditTable = useDataTable({
+    key: 'system-management-audit',
+    data: auditRows,
+    columns: auditColumns,
     paginate: false,
     getRowId: (row) => row.key,
   });
@@ -225,14 +255,18 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
 
   const audit = (
     <Card>
-      <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><ScrollText className="size-4" />审计日志 <span className="text-sm font-normal text-muted-foreground">服务器审计查询待接入</span></CardTitle></CardHeader>
+      <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><ScrollText className="size-4" />审计日志 <span className="text-sm font-normal text-muted-foreground">本租户最近 {AUDIT_SEARCH_LIMIT} 条</span></CardTitle></CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <Input disabled placeholder="搜索操作人、动作或目标" className="max-w-72" />
-          <div className="flex h-9 min-w-36 items-center rounded-md border bg-muted/30 px-3 text-sm text-muted-foreground">全部事件</div>
-          <div className="flex h-9 min-w-28 items-center rounded-md border bg-muted/30 px-3 text-sm text-muted-foreground">全部结果</div>
-        </div>
-        <EmptyGovernanceState description="审计日志接口尚未接入；未使用演示审计记录替代" />
+        {!canReadAudit ? <EmptyGovernanceState description="当前账号没有审计查询权限" />
+          : __HVAC_WEB_FRONTEND_REVIEW__ ? <EmptyGovernanceState description="评审构建不连接审计服务" />
+          : auditQuery.isPending ? <EmptyGovernanceState description="正在读取审计记录" />
+          : auditQuery.isError ? <EmptyGovernanceState description="审计服务暂时不可用，未显示任何替代记录" />
+          : (
+            <>
+              <Input value={auditSearch} onChange={(event) => setAuditSearch(event.target.value)} placeholder="搜索操作人、动作或对象" className="max-w-72" aria-label="搜索审计记录" />
+              {auditRows.length ? <DataTable table={auditTable} tableAriaLabel="审计日志" /> : <EmptyGovernanceState description={auditSearch ? '没有匹配的审计记录' : '本租户还没有审计记录'} />}
+            </>
+          )}
       </CardContent>
     </Card>
   );

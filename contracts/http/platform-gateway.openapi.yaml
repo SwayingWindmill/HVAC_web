@@ -552,7 +552,10 @@
           }
         },
         "responses": {
-          "200": { "description": "Redacted Tenant-scoped audit records." },
+          "200": {
+            "description": "Redacted Tenant-scoped audit records, newest first.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuditSearchResult" } } }
+          },
           "401": { "$ref": "#/components/responses/Problem" },
           "403": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
@@ -2412,6 +2415,32 @@
           "auditMessageId": {
             "type": "string"
           }
+        }
+      },
+      "AuditSearchResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/AuditSearchRecord" } }
+        }
+      },
+      "AuditSearchRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ledgerSequence", "messageId", "tenantId", "actor", "action", "resourceType", "resourceId", "outcome", "policyRevision", "correlationId", "occurredAt"],
+        "properties": {
+          "ledgerSequence": { "type": "integer", "minimum": 1 },
+          "messageId": { "type": "string" },
+          "tenantId": { "type": "string" },
+          "actor": { "type": "string" },
+          "action": { "type": "string" },
+          "resourceType": { "type": "string" },
+          "resourceId": { "type": "string" },
+          "outcome": { "type": "string" },
+          "policyRevision": { "type": "string" },
+          "correlationId": { "type": "string" },
+          "occurredAt": { "type": "string", "format": "date-time" }
         }
       },
       "AuditRecord": {
