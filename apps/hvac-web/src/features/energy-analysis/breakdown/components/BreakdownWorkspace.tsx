@@ -134,15 +134,13 @@ export function BreakdownWorkspace() {
       <PageHeader
         title="分项与能流"
         actions={
-          <>
-            <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void query.refetch()}
-        >
-          <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-        </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
         }
       />
       {query.isPending ? (

@@ -138,6 +138,11 @@ async function validateContentGrammar(root, errors) {
       const line = source.slice(0, match.index).split('\n').length;
       errors.push(`${relativePath}:${line} DataTableBlock title must name the business object, not the UI container: ${JSON.stringify(title)}`);
     }
+    // The shell's SidebarInset is the page landmark; pages use Main and PageHeader.
+    for (const match of source.matchAll(/<main[\s>]/g)) {
+      const line = source.slice(0, match.index).split('\n').length;
+      errors.push(`${relativePath}:${line} pages must not render <main>; use Main from @/components/layout/Main`);
+    }
   }
 }
 

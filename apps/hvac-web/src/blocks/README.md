@@ -33,6 +33,17 @@ The block intentionally does not own columns, filters, pagination state, queries
 
 Do not wrap `DataTableBlock` in a Card. A page-level DataTable is already the bounded surface.
 
+## Page header block
+
+Every route page starts with `PageHeader` inside the `Main` container: one `h1`, an optional supporting line (scope, freshness or task), optional `meta` beside the title and local `actions`. It is flat semantic markup with no Card, border or background. Pages never render their own `<main>`; the shell's `SidebarInset` is the page landmark.
+
+```tsx
+<Main className="space-y-5">
+  <PageHeader title="能耗与成本" description="中央机房 · 按站点当地时间统计" actions={...} />
+  ...
+</Main>
+```
+
 ## Fact strip block
 
 Use `FactStrip` for a small set of genuinely peer-level operational facts that benefit from rapid horizontal scanning.

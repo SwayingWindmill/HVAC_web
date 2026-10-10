@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
+import { primaryRoleLabel } from '@/lib/role-labels';
 import { useLocation } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppSidebar } from '@/components/layout/AppSidebar';
@@ -85,14 +86,6 @@ function sidebarDefaultOpen(): boolean {
   return value !== 'false';
 }
 
-function principalRoleLabel(role: string | undefined): string {
-  if (!role) return '授权用户';
-  const normalized = role.trim().toLowerCase();
-  if (normalized === 'admin' || normalized === 'administrator') return '管理员';
-  if (normalized === 'operator') return '运维员';
-  if (normalized === 'viewer') return '查看员';
-  return '授权用户';
-}
 
 export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const runtime = useShellRuntime();
@@ -107,7 +100,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const realtimePresentation = realtimeStatusPresentation(realtime);
   const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? '暂无活动站点' : '平台范围');
-  const principalRole = principalRoleLabel(principal.principal.roles[0]);
+  const principalRole = primaryRoleLabel(principal.principal.roles);
   const defaultSidebarOpen = useMemo(sidebarDefaultOpen, []);
 
   const navigate = (target: string) => {

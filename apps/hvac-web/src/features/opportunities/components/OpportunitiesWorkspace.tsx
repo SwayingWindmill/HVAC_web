@@ -218,25 +218,23 @@ export function OpportunitiesWorkspace() {
         title="节能机会"
         actions={
           <>
-            <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="刷新机会"
-            onClick={() => void query.refetch()}
-          >
-            <RefreshCw />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!items.length}
-            onClick={exportCsv}
-          >
-            <Download aria-hidden="true" data-icon="inline-start" />
-            导出机会
-          </Button>
-        </div>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="刷新机会"
+              onClick={() => void query.refetch()}
+            >
+              <RefreshCw />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!items.length}
+              onClick={exportCsv}
+            >
+              <Download aria-hidden="true" data-icon="inline-start" />
+              导出机会
+            </Button>
           </>
         }
       />

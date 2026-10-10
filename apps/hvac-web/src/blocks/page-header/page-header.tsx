@@ -18,7 +18,7 @@ export function PageHeader({ title, description, meta, actions, className }: Pag
     <header className={cn('flex flex-wrap items-start justify-between gap-x-6 gap-y-3', className)}>
       <div className="min-w-0 space-y-1">
         <div className="flex flex-wrap items-center gap-2.5">
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">{title}</h1>
           {__HVAC_WEB_FRONTEND_REVIEW__ ? <Badge variant="outline">评审构建</Badge> : null}
           {meta}
         </div>

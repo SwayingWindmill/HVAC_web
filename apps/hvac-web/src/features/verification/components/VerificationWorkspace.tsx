@@ -198,20 +198,18 @@ export function VerificationWorkspace() {
         title="节能验证"
         actions={
           <>
-            <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void query.refetch()}
-          >
-            <RefreshCw aria-hidden="true" data-icon="inline-start" />
-            刷新
-          </Button>
-          <Button variant="outline" size="sm" onClick={csv} disabled={!focus}>
-            <Download aria-hidden="true" data-icon="inline-start" />
-            导出核算
-          </Button>
-        </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void query.refetch()}
+            >
+              <RefreshCw aria-hidden="true" data-icon="inline-start" />
+              刷新
+            </Button>
+            <Button variant="outline" size="sm" onClick={csv} disabled={!focus}>
+              <Download aria-hidden="true" data-icon="inline-start" />
+              导出核算
+            </Button>
           </>
         }
       />

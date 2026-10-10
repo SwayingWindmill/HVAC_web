@@ -129,7 +129,7 @@ export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig;
   return (
     <Root
       className={`real-shell-state${snapshot.state === 'READY' && !showSignInPage ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
-      aria-label={WEB_SHELL_MARKER}
+      aria-label={Root === 'main' ? WEB_SHELL_MARKER : undefined}
       data-build-graph={WEB_GRAPH_MARKER}
       data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : snapshot.state}
       data-protected-route-mounted={snapshot.state === 'READY' && !showSignInPage ? 'true' : 'false'}

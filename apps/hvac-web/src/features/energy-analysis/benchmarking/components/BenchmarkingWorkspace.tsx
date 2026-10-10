@@ -125,15 +125,13 @@ export function BenchmarkingWorkspace() {
       <PageHeader
         title="绩效与对标"
         actions={
-          <>
-            <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void query.refetch()}
-        >
-          <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-        </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
         }
       />
       {query.isPending ? (

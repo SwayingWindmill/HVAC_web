@@ -89,28 +89,28 @@ export function ConsumptionWorkspace() {
         description={`${currentScope.name} · 按站点当地时间统计`}
         actions={
           <>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={period}
-            onValueChange={(value) => {
-              if (value) void navigate({ search: (previous) => ({ ...previous, period: value as EnergyPeriod }) });
-            }}
-            aria-label="统计期间"
-          >
-            {(Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((key) => (
-              <ToggleGroupItem key={key} value={key} className="px-3">
-                {ENERGY_PERIODS[key]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => void query.refetch()}>
-            <RefreshCw />
-          </Button>
-          <Button variant="outline" disabled={!summary?.rows.length} onClick={exportCsv}>
-            <Download aria-hidden="true" data-icon="inline-start" />
-            导出明细
-          </Button>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={period}
+              onValueChange={(value) => {
+                if (value) void navigate({ search: (previous) => ({ ...previous, period: value as EnergyPeriod }) });
+              }}
+              aria-label="统计期间"
+            >
+              {(Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((key) => (
+                <ToggleGroupItem key={key} value={key} className="px-3">
+                  {ENERGY_PERIODS[key]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => void query.refetch()}>
+              <RefreshCw />
+            </Button>
+            <Button variant="outline" disabled={!summary?.rows.length} onClick={exportCsv}>
+              <Download aria-hidden="true" data-icon="inline-start" />
+              导出明细
+            </Button>
           </>
         }
       />

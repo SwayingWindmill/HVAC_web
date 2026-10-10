@@ -122,15 +122,13 @@ export function LoadDemandWorkspace() {
       <PageHeader
         title="负荷与需量"
         actions={
-          <>
-            <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void query.refetch()}
-        >
-          <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-        </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
         }
       />
       {query.isPending ? (

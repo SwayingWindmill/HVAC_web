@@ -41,7 +41,7 @@ export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
               size="lg"
-              aria-label="用户账户菜单"
+              tooltip={name}
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Identity name={name} role={role} />

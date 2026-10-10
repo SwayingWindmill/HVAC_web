@@ -142,16 +142,14 @@ export function ProjectsWorkspace() {
       <PageHeader
         title="节能项目"
         actions={
-          <>
-            <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void query.refetch()}
-        >
-          <RefreshCw aria-hidden="true" data-icon="inline-start" />
-          刷新
-        </Button>
-          </>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />
+            刷新
+          </Button>
         }
       />
       {query.isPending ? (

@@ -1011,7 +1011,7 @@ Do not compress a 12-column engineering ledger into unreadable mobile columns.
 | App navigation | shadcn Sidebar |
 | Breadcrumb | shadcn Breadcrumb |
 | Page actions | shadcn Button / Dropdown Menu |
-| Standard Page Header | semantic markup + shadcn controls |
+| Standard Page Header | `@/blocks/page-header` (semantic markup) + shadcn controls |
 | KPI / summary | shadcn Card or semantic section |
 | Simple date/status control | shadcn primitives |
 | Table filters | tablecn/project DataTable filters |
