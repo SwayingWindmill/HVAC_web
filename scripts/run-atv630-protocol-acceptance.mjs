@@ -197,7 +197,7 @@ async function telemetry(admin) {
 
 // sample runs on every status poll so a lease-bound effect (ADR 0012: an expired cloud
 // intent returns the drive to local control) is observed while the command is live.
-async function command(admin, approver, capability, parameters, expectApproval, sample) {
+async function command(admin, approver, capability, parameters, expectApproval, sample, expectedStatus = 'SUCCEEDED') {
   const samples = [];
   const point = commandPoint(capability);
   const headers = { 'X-CSRF-Token': admin.principal.session.csrfToken, Origin: origin, 'Idempotency-Key': randomUUID() };
@@ -218,7 +218,7 @@ async function command(admin, approver, capability, parameters, expectApproval, 
     const current = await response.json();
     return { ok: ['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED', 'OUTCOME_UNKNOWN'].includes(current.status), status: current.status };
   }, 180_000);
-  if (terminal.status !== 'SUCCEEDED') throw new Error(`${capability} ended ${terminal.status}`);
+  if (terminal.status !== expectedStatus) throw new Error(`${capability} ended ${terminal.status}, expected ${expectedStatus}`);
   return { commandId: accepted.commandId, risk: accepted.risk, approvalPolicy: accepted.approvalPolicy, status: terminal.status, ...(sample ? { samples } : {}) };
 }
 
@@ -283,8 +283,20 @@ async function main() {
     await disturb('stuck-high', { active: true });
     const stuck = await waitFor('stuck-high drive above its governed reference', async () => { const chwp = await virtualDriveState(); return { ok: chwp.frequencyHz >= 49.5, frequencyHz: chwp.frequencyHz }; });
     const stuckTelemetry = await waitFor('stuck-high frequency in telemetry', async () => { const values = await telemetry(admin); return { ok: Number(values.frequency?.value) >= 49.5, frequency: values.frequency?.value }; });
-    await disturb('stuck-high', { active: false });
     record('stuck-high', { governedFrequencyHz: governed.frequencyHz, driveFrequencyHz: stuck.frequencyHz, telemetryFrequency: stuckTelemetry.frequency });
+
+    // A lower frequency the stuck drive cannot follow ends OUTCOME_UNKNOWN and holds the drive
+    // until a person with control authority states it did not take effect (#444).
+    const unprovable = Math.round(Number(stuckTelemetry.frequency)) - 2;
+    const unknown = await command(admin, approver, 'SET_FREQUENCY', { frequencyHz: unprovable }, false, undefined, 'OUTCOME_UNKNOWN');
+    await disturb('stuck-high', { active: false });
+    const reconciled = await admin.context.request.post(`${origin}/api/v1/commands/${unknown.commandId}/reconcile`, {
+      headers: { 'X-CSRF-Token': admin.principal.session.csrfToken, Origin: origin }, data: { outcome: 'NOT_APPLIED' },
+    });
+    if (!reconciled.ok()) throw new Error(`reconcile returned ${reconciled.status()}: ${await reconciled.text()}`);
+    const settled = await reconciled.json();
+    if (settled.status !== 'FAILED') throw new Error(`reconciled command is ${settled.status}`);
+    record('unknown-outcome-reconciled', { commandId: unknown.commandId, governedFrequencyHz: unprovable, outcome: 'NOT_APPLIED', status: settled.status });
 
     await disturb('fault', { code: '16' });
     await waitFor('telemetry FAULT 16', async () => { const values = await telemetry(admin); return { ok: values.run_state?.value === 'FAULT' && values.fault_code?.value === '16', run_state: values.run_state?.value, fault_code: values.fault_code?.value }; });
