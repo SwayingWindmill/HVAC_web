@@ -51,3 +51,31 @@ func TestCounterAggregateQueryKeepsResetRolloverRevisionAndQualitySemantics(t *t
 		t.Fatalf("usable quality policy missing:\n%s", sql)
 	}
 }
+
+// Demand is billed on quarter-hour average power, so quarter-hours follow the Site's clock.
+func TestQuarterHourPeriodsFollowTheSiteClock(t *testing.T) {
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys: []string{"hvac_meter.active_power"}, Granularity: telemetryhistorymodel.AggregateGranularityQuarterHour,
+		Timezone: "Asia/Kolkata", QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
+		// 05:37–06:30 Site time (UTC+05:30).
+		From: time.Date(2026, 10, 11, 0, 7, 0, 0, time.UTC), To: time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC),
+	}
+	periods, err := buildCalendarPeriods(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := []time.Time{query.From, time.Date(2026, 10, 11, 0, 15, 0, 0, time.UTC), time.Date(2026, 10, 11, 0, 30, 0, 0, time.UTC), time.Date(2026, 10, 11, 0, 45, 0, 0, time.UTC)}
+	if len(periods) != len(starts) {
+		t.Fatalf("periods=%#v", periods)
+	}
+	for index, period := range periods {
+		if !period.Start.Equal(starts[index]) || !period.End.Equal(starts[index].Add(15*time.Minute).Truncate(15*time.Minute)) {
+			t.Fatalf("period %d=%#v", index, period)
+		}
+	}
+	bucket, next := aggregateBucketExpressions(query)
+	if bucket != "toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, 'Asia/Kolkata')" || next != "addMinutes(bucket, 15)" {
+		t.Fatalf("bucket=%s next=%s", bucket, next)
+	}
+}

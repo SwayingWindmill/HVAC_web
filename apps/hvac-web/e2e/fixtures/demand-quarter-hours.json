@@ -1,0 +1,200 @@
+{
+  "recordedAt": "2026-10-11T14:34:14.327Z",
+  "schemaVersion": 1,
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "deviceId": "018f3e00-4000-7000-8000-000000000005",
+  "buckets": [
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T13:00:00Z",
+      "periodEnd": "2026-10-11T13:15:00Z",
+      "quality": {
+        "good": 271,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 205.1140848708487,
+        "minimum": 91.637,
+        "maximum": 246.129,
+        "first": 91.637,
+        "last": 246.129,
+        "sampleCount": 271
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T13:15:00Z",
+      "periodEnd": "2026-10-11T13:30:00Z",
+      "quality": {
+        "good": 450,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.0851688888888,
+        "minimum": 246.152,
+        "maximum": 247.19,
+        "first": 246.152,
+        "last": 247.19,
+        "sampleCount": 450
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T13:30:00Z",
+      "periodEnd": "2026-10-11T13:45:00Z",
+      "quality": {
+        "good": 450,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.1900000000006,
+        "minimum": 247.19,
+        "maximum": 247.19,
+        "first": 247.19,
+        "last": 247.19,
+        "sampleCount": 450
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T13:45:00Z",
+      "periodEnd": "2026-10-11T14:00:00Z",
+      "quality": {
+        "good": 450,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.19000000000145,
+        "minimum": 247.19,
+        "maximum": 247.19,
+        "first": 247.19,
+        "last": 247.19,
+        "sampleCount": 450
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T14:00:00Z",
+      "periodEnd": "2026-10-11T14:15:00Z",
+      "quality": {
+        "good": 450,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.19000000000145,
+        "minimum": 247.19,
+        "maximum": 247.19,
+        "first": 247.19,
+        "last": 247.19,
+        "sampleCount": 450
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T14:15:00Z",
+      "periodEnd": "2026-10-11T14:30:00Z",
+      "quality": {
+        "good": 450,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.19000000000145,
+        "minimum": 247.19,
+        "maximum": 247.19,
+        "first": 247.19,
+        "last": 247.19,
+        "sampleCount": 450
+      }
+    },
+    {
+      "telemetryKey": "active_power",
+      "pointId": "01910000-0000-7000-8000-000000000035",
+      "pointRevision": 1,
+      "pointType": "TELEMETRY",
+      "unit": "kW",
+      "periodStart": "2026-10-11T14:30:00Z",
+      "periodEnd": "2026-10-11T14:45:00Z",
+      "quality": {
+        "good": 126,
+        "partial": 0,
+        "estimated": 0,
+        "manual": 0,
+        "stale": 0,
+        "invalid": 0
+      },
+      "completeness": 1,
+      "gauge": {
+        "average": 247.18999999999969,
+        "minimum": 247.19,
+        "maximum": 247.19,
+        "first": 247.19,
+        "last": 247.19,
+        "sampleCount": 126
+      }
+    }
+  ],
+  "metadata": {
+    "requestedFrom": "2026-10-10T16:00:00Z",
+    "requestedTo": "2026-10-11T14:34:14.53Z",
+    "granularity": "QUARTER_HOUR",
+    "timezone": "Asia/Shanghai",
+    "qualityPolicy": "USABLE",
+    "projectionWatermark": "2026-10-11T14:34:13.285Z",
+    "returnedBuckets": 7
+  }
+}

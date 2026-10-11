@@ -20,15 +20,16 @@ const (
 type AggregateGranularity string
 
 const (
-	AggregateGranularityHour  AggregateGranularity = "HOUR"
-	AggregateGranularityDay   AggregateGranularity = "DAY"
-	AggregateGranularityWeek  AggregateGranularity = "WEEK"
-	AggregateGranularityMonth AggregateGranularity = "MONTH"
+	AggregateGranularityQuarterHour AggregateGranularity = "QUARTER_HOUR"
+	AggregateGranularityHour        AggregateGranularity = "HOUR"
+	AggregateGranularityDay         AggregateGranularity = "DAY"
+	AggregateGranularityWeek        AggregateGranularity = "WEEK"
+	AggregateGranularityMonth       AggregateGranularity = "MONTH"
 )
 
 func (value AggregateGranularity) Valid() bool {
 	switch value {
-	case AggregateGranularityHour, AggregateGranularityDay, AggregateGranularityWeek, AggregateGranularityMonth:
+	case AggregateGranularityQuarterHour, AggregateGranularityHour, AggregateGranularityDay, AggregateGranularityWeek, AggregateGranularityMonth:
 		return true
 	default:
 		return false
