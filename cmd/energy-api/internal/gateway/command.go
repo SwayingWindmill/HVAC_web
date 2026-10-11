@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -228,11 +229,14 @@ func dispatchCommandRoute(h *handler, writer http.ResponseWriter, request *http.
 	}
 	switch kind {
 	case commandRouteCollection:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
+		switch request.Method {
+		case http.MethodPost:
+			h.createCommand(writer, request)
+		case http.MethodGet:
+			h.listCommands(writer, request)
+		default:
+			writeMethodNotAllowedFor(writer, request, "GET, POST")
 		}
-		h.createCommand(writer, request)
 	case commandRouteItem:
 		if request.Method != http.MethodGet {
 			writeMethodNotAllowedFor(writer, request, http.MethodGet)
@@ -335,6 +339,103 @@ func (h *handler) getCommand(writer http.ResponseWriter, request *http.Request, 
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, view)
+}
+
+const (
+	defaultListedCommands = 50
+	maximumListedCommands = 100
+)
+
+// listCommands returns a visible Site's newest Commands, read under a context scoped to that Site.
+func (h *handler) listCommands(writer http.ResponseWriter, request *http.Request) {
+	session, ok := h.commandSession(writer, request, false)
+	if !ok {
+		return
+	}
+	query := request.URL.Query()
+	siteID := query.Get("siteId")
+	limit := defaultListedCommands
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > maximumListedCommands {
+			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_LIST_REQUEST_INVALID", "Command list request invalid", "limit must be between 1 and 100.", false, nil)
+			return
+		}
+		limit = parsed
+	}
+	if !isLowerUUIDv7(siteID) {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_LIST_REQUEST_INVALID", "Command list request invalid", "siteId must be a Site UUID.", false, nil)
+		return
+	}
+	visibility := h.siteVisibility(request, session, siteID)
+	if visibility.unavailable != "" {
+		h.writeCommandFailure(writer, request, commandUnavailable(visibility.unavailable))
+		return
+	}
+	if visibility.hidden {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	views, failure := h.executeCommandList(request, session, siteID, limit)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, struct {
+		Data []commandView `json:"data"`
+	}{Data: views})
+}
+
+func (h *handler) executeCommandList(publicRequest *http.Request, session bffSession, siteID string, limit int) ([]commandView, *commandFailure) {
+	if h.identity == nil || h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
+		failure := commandUnavailable("Command Service is not configured.")
+		return nil, &failure
+	}
+	readContext, failure := h.signCommandReadContext(session, "site:"+siteID)
+	if failure != nil {
+		return nil, failure
+	}
+	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.command.timeout)
+	defer cancel()
+	target := h.command.baseURL + internalCommandsPath + "?" + url.Values{"siteId": {siteID}, "limit": {strconv.Itoa(limit)}}.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		failure := commandUnavailable("The Command list request could not be constructed.")
+		return nil, &failure
+	}
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set("X-Tenant-ID", session.TenantID)
+	request.Header.Set("X-Command-Read-Context", readContext)
+	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
+	observability.InjectHTTP(publicRequest.Context(), request.Header)
+	response, err := h.command.httpClient.Do(request)
+	if err != nil {
+		failure := commandUnavailable("Command Service is temporarily unavailable.")
+		return nil, &failure
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		failure := commandBackendFailure(response.StatusCode)
+		return nil, &failure
+	}
+	body, err := readBoundedBody(response.Body, h.command.maxResponseBytes*int64(limit))
+	var page struct {
+		Data []commandView `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err != nil || decoder.Decode(&page) != nil || ensureCommandJSONEOF(decoder) != nil || page.Data == nil || len(page.Data) > limit {
+		failure := commandUnavailable("Command Service returned an invalid Command list.")
+		return nil, &failure
+	}
+	for _, view := range page.Data {
+		if !validCommandView(view) || view.TenantID != session.TenantID || view.SiteID != siteID {
+			failure := commandUnavailable("Command Service returned an invalid Command projection.")
+			return nil, &failure
+		}
+	}
+	return page.Data, nil
 }
 
 func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
@@ -1016,24 +1117,9 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		failure := commandUnavailable("Command Service is not configured.")
 		return commandView{}, &failure
 	}
-	now := h.identity.now().UTC()
-	expiresAt := now.Add(h.identity.config.DelegationTTL)
-	if expiresAt.After(session.ExpiresAt) {
-		expiresAt = session.ExpiresAt
-	}
-	claims := identitycontext.DelegationClaims{
-		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
-		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
-		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.command.backendAudience,
-		TenantID: session.TenantID, Actions: []string{"command:read"},
-		Scopes:         []string{"tenant:" + session.TenantID, "command:" + commandID},
-		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
-		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
-	}
-	readContext, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
-	if err != nil {
-		failure := commandUnavailable("The Command read context could not be signed.")
-		return commandView{}, &failure
+	readContext, failure := h.signCommandReadContext(session, "command:"+commandID)
+	if failure != nil {
+		return commandView{}, failure
 	}
 	ctx, cancel := context.WithTimeout(publicRequest.Context(), h.command.timeout)
 	defer cancel()
@@ -1065,6 +1151,30 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 	return view, nil
 }
 
+// signCommandReadContext signs a tenant read of Commands, narrowed to one Command or one Site.
+func (h *handler) signCommandReadContext(session bffSession, scope string) (string, *commandFailure) {
+	now := h.identity.now().UTC()
+	expiresAt := now.Add(h.identity.config.DelegationTTL)
+	if expiresAt.After(session.ExpiresAt) {
+		expiresAt = session.ExpiresAt
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
+		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.command.backendAudience,
+		TenantID: session.TenantID, Actions: []string{"command:read"},
+		Scopes:         []string{"tenant:" + session.TenantID, scope},
+		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
+		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
+	}
+	readContext, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	if err != nil {
+		failure := commandUnavailable("The Command read context could not be signed.")
+		return "", &failure
+	}
+	return readContext, nil
+}
+
 func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	body, err := readBoundedBody(reader, h.command.maxResponseBytes)
 	if err != nil {
@@ -1073,9 +1183,13 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	var view commandView
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&view) != nil || ensureCommandJSONEOF(decoder) != nil {
+	if decoder.Decode(&view) != nil || ensureCommandJSONEOF(decoder) != nil || !validCommandView(view) {
 		return commandView{}, false
 	}
+	return view, true
+}
+
+func validCommandView(view commandView) bool {
 	profile, supported := commandCapabilityProfile(view.Capability)
 	if !supported || view.SchemaVersion != 1 ||
 		!isLowerUUID(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
@@ -1083,9 +1197,9 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		!validCommandParameters(view.Capability, map[string]any{"parameterKey": profile.ParameterKey}, view.Parameters) || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||
 		view.CreatedAt.IsZero() || view.UpdatedAt.IsZero() || view.UpdatedAt.Before(view.CreatedAt) || !validCommandTimeline(view) {
-		return commandView{}, false
+		return false
 	}
-	return view, true
+	return true
 }
 
 func validCommandIntentStatus(status commandmodel.IntentStatus) bool {
