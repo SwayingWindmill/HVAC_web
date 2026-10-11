@@ -230,9 +230,12 @@ export function hourlyHeatmap(series: EnergySeriesResponse, timeZone: string, da
 }
 
 /** The last `count` Site-local days as YYYY-MM-DD, oldest first, today last. */
+/** The Site-local calendar day an instant falls on, as YYYY-MM-DD. */
+export function siteDayKey(instant: Date, timeZone: string): string {
+  const local = wallTime(instant, timeZone);
+  return `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+}
+
 export function siteDays(now: Date, timeZone: string, count: number): string[] {
-  return Array.from({ length: count }, (_, index) => {
-    const local = wallTime(new Date(now.getTime() - (count - 1 - index) * 86_400_000), timeZone);
-    return `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
-  });
+  return Array.from({ length: count }, (_, index) => siteDayKey(new Date(now.getTime() - (count - 1 - index) * 86_400_000), timeZone));
 }

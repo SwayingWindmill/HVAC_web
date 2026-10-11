@@ -670,7 +670,7 @@
           "metadata": { "$ref": "#/components/schemas/DeviceHistoryMetadata" }
         }
       },
-      "DeviceHistoryAggregateGranularity": { "type": "string", "enum": ["HOUR", "DAY", "WEEK", "MONTH"] },
+      "DeviceHistoryAggregateGranularity": { "type": "string", "enum": ["QUARTER_HOUR", "HOUR", "DAY", "WEEK", "MONTH"] },
       "DeviceHistoryAggregateQualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "USABLE"] },
       "DeviceHistoryAggregateRequest": {
         "type": "object",

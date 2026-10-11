@@ -43,6 +43,15 @@ function replayEnergy(series: Json, query: Json): Json {
   return { ...series, points };
 }
 
+// Recorded quarter-hours answer each window the page asks for; tests pin the page clock to the recording.
+function replayDemand(recorded: Json, query: Json): Json {
+  const { recordedAt: _recordedAt, ...response } = recorded;
+  const from = Date.parse(query.from);
+  const to = Date.parse(query.to);
+  const buckets = recorded.buckets.filter((bucket: Json) => Date.parse(bucket.periodStart) >= from && Date.parse(bucket.periodStart) < to);
+  return { ...response, buckets, metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length } };
+}
+
 function advance(command: Json, status: string, at: string) {
   command.transitions.push({
     ...(command.transitions.length ? { fromStatus: command.status } : {}),
@@ -135,7 +144,9 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
-    if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
+    if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
+      return { body: body?.granularity === 'QUARTER_HOUR' ? replayDemand(fixture<Json>('demand-quarter-hours.json'), body) : fixture('history.json') };
+    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
