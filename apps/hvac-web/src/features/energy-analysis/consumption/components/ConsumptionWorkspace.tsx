@@ -1,7 +1,7 @@
 import { Download, RefreshCw } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { PageHeader } from "@/blocks/page-header";
 import { MetricTabsChartCard } from "@/components/metric-tabs-chart-card";
@@ -126,7 +126,7 @@ export function ConsumptionWorkspace() {
   const table = useDataTable({
     key: "energy-consumption-ledger",
     data: comparison?.buckets ?? [],
-    columns: ledgerColumns(previousLabel),
+    columns: useMemo(() => ledgerColumns(previousLabel), [previousLabel]),
     paginate: false,
     getRowId: (row) => row.label,
   });
