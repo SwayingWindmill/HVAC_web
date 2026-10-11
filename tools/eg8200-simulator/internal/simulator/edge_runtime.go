@@ -54,6 +54,13 @@ type EdgeControlCycleResult struct {
 	TimedataError     error
 }
 
+// Publishable reports whether the cycle switched a process image. A cycle halted by a clock
+// regression (the host clock stepped behind the previous cycle) has none, so its telemetry is
+// empty; the next cycle past the previous one publishes again.
+func (result EdgeControlCycleResult) Publishable() bool {
+	return result.Cycle.ClockError == nil
+}
+
 type EdgeControlRuntime struct {
 	mu sync.Mutex
 

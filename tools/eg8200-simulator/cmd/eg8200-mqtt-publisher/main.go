@@ -177,6 +177,10 @@ func main() {
 		if edgeCycle.TimedataError != nil {
 			logger.Error("eg8200_edge_timedata_record_failed", "cycle", edgeCycle.Cycle.Image.Cycle())
 		}
+		if !edgeCycle.Publishable() {
+			logger.Warn("eg8200_edge_clock_regressed", "cycle_at", snapshot.ObservedAt.UTC().Format(time.RFC3339Nano))
+			return
+		}
 		publish(edgeCycle.TelemetrySnapshot)
 	}
 

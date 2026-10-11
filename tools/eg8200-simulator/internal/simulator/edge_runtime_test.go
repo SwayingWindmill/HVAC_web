@@ -194,3 +194,27 @@ func TestEdgeSafetyRejectsStartWhenInterlockEvidenceIsStale(t *testing.T) {
 		t.Fatalf("stale safety evidence did not block start: %#v", outcome)
 	}
 }
+
+// A WSL clock resync once stepped the host clock back mid-run; the cycle that followed halted
+// on the regression with no process image, and publishing its empty snapshot killed the
+// publisher, restarting the plant from its initial state 14 times in an evening.
+func TestACycleHaltedByAClockRegressionIsNotPublished(t *testing.T) {
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Unix(3500, 0).UTC()
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cycle := runtime.RunCycle(context.Background(), at.Add(2*time.Second)); !cycle.Publishable() {
+		t.Fatalf("a normal cycle must be publishable: %#v", cycle.Cycle.ClockError)
+	}
+	regressed := runtime.RunCycle(context.Background(), at.Add(time.Second))
+	if regressed.Publishable() || regressed.Cycle.ClockError == nil {
+		t.Fatalf("a cycle behind the previous one must not be published: %#v", regressed.Cycle.ClockError)
+	}
+	resumed := runtime.RunCycle(context.Background(), at.Add(3*time.Second))
+	if !resumed.Publishable() || resumed.TelemetrySnapshot.Devices[config.Plant.Chiller.ID] == nil {
+		t.Fatal("cycles resume publishing once the clock passes the last cycle")
+	}
+}
