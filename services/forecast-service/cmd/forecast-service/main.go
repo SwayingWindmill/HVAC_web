@@ -19,11 +19,13 @@ func main() {
 	ctx := context.Background()
 	clickHouseURL := requiredEnv("FORECAST_CLICKHOUSE_HTTP_URL")
 	sink, err := forecast.NewClickHouseSink(forecast.ClickHouseConfig{
-		BaseURL:  clickHouseURL,
-		Database: envOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
-		Table:    envOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
-		Username: envOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
-		Password: os.Getenv("FORECAST_CLICKHOUSE_PASSWORD"),
+		BaseURL:        clickHouseURL,
+		Database:       envOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
+		Table:          envOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
+		Username:       envOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
+		Password:       os.Getenv("FORECAST_CLICKHOUSE_PASSWORD"),
+		ReaderUsername: envOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
+		ReaderPassword: os.Getenv("FORECAST_CLICKHOUSE_READER_PASSWORD"),
 	})
 	if err != nil {
 		log.Fatal(err)

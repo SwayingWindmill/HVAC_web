@@ -75,7 +75,7 @@ func TestHistoricalReplayMetricFactsPrepareAndPublishDayAheadForecast(t *testing
 		}
 	}
 
-	writer, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_writer"})
+	writer, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_writer", ReaderUsername: "forecast_service_reader"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestHistoricalReplayMetricFactsPrepareAndPublishDayAheadForecast(t *testing
 		t.Fatal(err)
 	}
 
-	reader, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_reader"})
+	reader, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", ReaderUsername: "forecast_service_reader"})
 	if err != nil {
 		t.Fatal(err)
 	}
