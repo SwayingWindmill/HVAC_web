@@ -267,3 +267,21 @@ func TestSimulatorDoesNotExposeBusinessRevision(t *testing.T) {
 		t.Fatalf("simulator command result exposed businessRevision: %s", encoded)
 	}
 }
+
+// A WSL clock corrected backwards once left the live publisher's readings minutes ahead of
+// the wall clock for good, and ingest rejected every one of them as CLOCK_AHEAD.
+func TestTickToFollowsAWallClockCorrectedBackwards(t *testing.T) {
+	config := testConfig()
+	start := time.Date(2026, 10, 10, 15, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, start)
+	plant.TickTo(start.Add(3 * time.Minute))
+
+	corrected := start.Add(30 * time.Second)
+	if observed := plant.TickTo(corrected).ObservedAt; !observed.Equal(corrected) {
+		t.Fatalf("after a backwards correction observedAt=%s, want the wall clock %s", observed, corrected)
+	}
+	next := corrected.Add(time.Second)
+	if observed := plant.TickTo(next).ObservedAt; !observed.Equal(next) {
+		t.Fatalf("observedAt=%s, want %s", observed, next)
+	}
+}
