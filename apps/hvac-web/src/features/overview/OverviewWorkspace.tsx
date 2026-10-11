@@ -24,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
 import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
-import { relativeChange } from "@/features/energy-analysis/consumption/model";
+import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
 import { ReadingMetric, ReadingValue } from "@/features/operations/realtime/device-presentation";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
@@ -66,7 +66,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
     <MetricTabsChartCard
       role="region"
       aria-label="今日用能"
-      data={hours.map((hour) => ({ ...hour }))}
+      data={completeOnly(hours).map((hour) => ({ ...hour }))}
       xKey="label"
       selected={metric}
       onSelectedChange={(key) => onMetricChange(key as OverviewMetric)}
@@ -76,6 +76,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       showYAxis
       showLegend
       dots
+      yDomain="zero"
       chartClassName="h-[260px]"
       empty="今日还没有计量数据"
       metrics={[
@@ -305,7 +306,7 @@ export function OverviewWorkspace() {
       />
 
       <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-3">
-        <div className="@5xl/main:col-span-2">
+        <div className="min-w-0 @5xl/main:col-span-2">
           <TodayAgainstYesterday
             metric={search.metric ?? "electricityKWh"}
             onMetricChange={(metric) => void navigate({ search: (previous) => ({ ...previous, metric }), replace: true })}
@@ -376,7 +377,7 @@ export function OverviewWorkspace() {
       </div>
 
       <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-3">
-        <div className="@5xl/main:col-span-2">
+        <div className="min-w-0 @5xl/main:col-span-2">
           <HourlyElectricity />
         </div>
         <Card role="region" aria-label="节能成效" className="justify-center">
