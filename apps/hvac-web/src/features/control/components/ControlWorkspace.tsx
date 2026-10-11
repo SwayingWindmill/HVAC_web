@@ -7,16 +7,6 @@ import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Main } from '@/components/layout/Main';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,7 +15,6 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGr
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Spinner } from '@/components/ui/spinner';
 import { Status, StatusIndicator, StatusLabel } from '@/components/ui/status';
 import {
   Timeline,
@@ -46,9 +35,7 @@ import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import {
   approveCommand,
-  CommandRequestError,
   commandKeys,
-  createCommand,
   reconcileCommand,
   siteCommandsQuery,
   type Command,
@@ -56,6 +43,7 @@ import {
 } from '../command-api';
 import { APPROVAL_LABEL, IN_FLIGHT, RISK_LABEL, STATUS_PRESENTATION } from '../command-presentation';
 import { controlTargets, type ControlAction, type ControlSetting, type ControlTarget } from '../control-model';
+import { commandFailure, ConfirmCommand, useSubmitCommand, type PendingCommand } from './CommandConfirmation';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/control');
@@ -70,38 +58,20 @@ interface CommandLabel {
   readonly unit: string | null;
 }
 
-/** A command waiting for the operator's confirmation. */
-interface PendingCommand {
-  readonly target: ControlTarget;
-  readonly label: string;
-  readonly pointId: string;
-  readonly parameters: Readonly<Record<string, number>>;
-  readonly change?: { readonly from: PlantReading | null; readonly to: number; readonly unit: string | null };
-}
-
 function useCommandActions(siteId: string, csrfToken: string) {
   const queryClient = useQueryClient();
   const settle = () => queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
-  const failed = (error: unknown) => toast.error(error instanceof CommandRequestError ? error.message : '指令服务暂时不可用');
   return {
-    submit: useMutation({
-      mutationFn: (pending: PendingCommand) =>
-        createCommand({ assetId: pending.target.assetId, commandPointId: pending.pointId, parameters: pending.parameters }, csrfToken),
-      onSuccess: (command) => {
-        toast.success(command.status === 'AWAITING_APPROVAL' ? `指令已提交，${APPROVAL_LABEL[command.approvalPolicy]}` : '指令已提交，正在下发');
-        void settle();
-      },
-      onError: failed,
-    }),
+    submit: useSubmitCommand(siteId, csrfToken),
     approve: useMutation({
       mutationFn: (commandId: string) => approveCommand(commandId, csrfToken),
       onSuccess: () => { toast.success('已批准'); void settle(); },
-      onError: failed,
+      onError: commandFailure,
     }),
     reconcile: useMutation({
       mutationFn: ({ commandId, outcome }: { commandId: string; outcome: ReconciledOutcome }) => reconcileCommand(commandId, outcome, csrfToken),
       onSuccess: () => { toast.success('已记录核对结果'); void settle(); },
-      onError: failed,
+      onError: commandFailure,
     }),
   };
 }
@@ -341,47 +311,6 @@ function Fact({ label, children }: { readonly label: string; readonly children: 
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="font-medium">{children}</dd>
     </div>
-  );
-}
-
-function ConfirmCommand({ pending, submitting, onCancel, onConfirm }: {
-  readonly pending: PendingCommand | null;
-  readonly submitting: boolean;
-  readonly onCancel: () => void;
-  readonly onConfirm: () => void;
-}) {
-  return (
-    <AlertDialog open={Boolean(pending)} onOpenChange={(open) => { if (!open && !submitting) onCancel(); }}>
-      <AlertDialogContent>
-        {pending ? (
-          <>
-            <AlertDialogHeader>
-              <AlertDialogTitle>向 {pending.target.assetName} 下发指令？</AlertDialogTitle>
-              <AlertDialogDescription>
-                {pending.change ? (
-                  <span className="flex flex-col gap-2">
-                    <span>{pending.label}</span>
-                    <span className="flex items-baseline gap-2 text-base text-foreground">
-                      <ReadingValue reading={pending.change.from} className="font-semibold" />
-                      <span aria-hidden="true">→</span>
-                      <span className="font-semibold tabular-nums">{formatDecimal(pending.change.to, 1)}{pending.change.unit ? ` ${pending.change.unit}` : ''}</span>
-                    </span>
-                  </span>
-                ) : `「${pending.label}」`}
-                <span className="mt-3 block">指令先经过风险评估；中高风险的指令要审批后才会下发到设备。</span>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={submitting}>取消</AlertDialogCancel>
-              <AlertDialogAction disabled={submitting} onClick={(event) => { event.preventDefault(); onConfirm(); }}>
-                {submitting ? <Spinner data-icon="inline-start" /> : null}
-                确认下发
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </>
-        ) : null}
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
 

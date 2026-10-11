@@ -84,6 +84,10 @@ export class Gateway {
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
+  /** The Site's latest published recommendation; null until a run publishes one. */
+  optimization: Json | null = null;
+  /** What the next requested run publishes; null while the owner declines it for missing inputs. */
+  nextRecommendation: Json | null = null;
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -156,6 +160,14 @@ export class Gateway {
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/recommendations/latest`) {
+      return this.optimization ? { body: this.optimization } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'POST' && path === '/api/v1/optimization/runs') {
+      if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };
+      this.optimization = this.nextRecommendation;
+      return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
+    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 
