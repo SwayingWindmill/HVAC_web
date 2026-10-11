@@ -145,6 +145,10 @@ func TestLowDeltaTUsesAuthoritativeHistoryEvidence(t *testing.T) {
 	if finding.FindingType != "CHILLED_WATER_LOW_DELTA_T" || finding.RuleRevisionID != "fdd-low-delta-t/v1" || finding.Confidence <= 0.5 {
 		t.Fatalf("finding=%#v", finding)
 	}
+	// A finding states what was measured against what threshold, so it reads without its evidence.
+	if finding.ObservedValue != 3 || finding.ThresholdValue != 5 || finding.ValueUnit != "K" {
+		t.Fatalf("finding measurement=%v/%v %q", finding.ObservedValue, finding.ThresholdValue, finding.ValueUnit)
+	}
 	if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != "01990000-6200-7000-8000-000000000002" || finding.EvidenceIDs[1] != "01990000-6200-7000-8000-000000000001" {
 		t.Fatalf("evidence IDs must be authoritative observation IDs: %#v", finding.EvidenceIDs)
 	}

@@ -117,6 +117,7 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 		FindingType: "CHILLED_WATER_LOW_DELTA_T", EvaluationFrom: request.EvaluationFrom.UTC(), EvaluationTo: request.EvaluationTo.UTC(),
 		EvidenceIDs: []string{supply.observationID, returnTemp.observationID}, ModelDeploymentID: request.ModelDeploymentRevisionID,
 		RuleRevisionID: request.RuleRevisionID, Confidence: confidence, CreatedAt: service.now().UTC(),
+		ObservedValue: deltaT, ThresholdValue: request.MinimumDeltaTC, ValueUnit: "K",
 	}
 	if err = service.store.InsertFinding(ctx, finding); err != nil {
 		return EvaluationResult{}, fmt.Errorf("persist FDD finding: %w", err)

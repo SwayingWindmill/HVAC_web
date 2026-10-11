@@ -32,6 +32,7 @@ const composeEnvironment = {
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
 const forecastPostgresDSN = `postgres://forecast_runtime:forecast-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const optimizationPostgresDSN = `postgres://optimization_runtime:optimization-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
+const fddPostgresDSN = `postgres://fdd_runtime:fdd-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -640,6 +641,22 @@ try {
       OPTIMIZATION_POSTGRES_TEST_DSN: optimizationPostgresDSN,
     },
   });
+
+  // A finding persists with its measurement and reads back through the FDD runtime's row scope.
+  report.assertions.fddFindingPersistence = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/fdd-service',
+    'test', '-count=1', '-run', 'TestPostgresServicePersistsAuthoritativeHistoryFinding', '-v', './internal/fdd/...',
+  ], {
+    env: {
+      ...process.env,
+      FDD_POSTGRES_INTEGRATION_DSN: fddPostgresDSN,
+      FDD_POSTGRES_INTEGRATION_TENANT_ID: '018f1d00-0000-7000-8000-000000000001',
+      FDD_POSTGRES_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000002',
+      FDD_POSTGRES_INTEGRATION_ASSET_ID: '018f1e00-3000-7000-8000-000000000002',
+    },
+  });
+  if (!report.assertions.fddFindingPersistence.includes('--- PASS: TestPostgresServicePersistsAuthoritativeHistoryFinding')) throw new Error('FDD finding persistence did not run');
 
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT

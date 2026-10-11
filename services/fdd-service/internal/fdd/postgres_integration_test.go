@@ -1,7 +1,6 @@
 package fdd
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -42,26 +41,7 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 		t.Fatalf("result=%#v", result)
 	}
 	findingID := result.Finding.ID
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		tx, cleanupErr := store.pool.Begin(ctx)
-		if cleanupErr != nil {
-			t.Errorf("begin FDD integration cleanup: %v", cleanupErr)
-			return
-		}
-		defer tx.Rollback(ctx)
-		if cleanupErr = fddScope(ctx, tx, tenantID, siteID); cleanupErr == nil {
-			_, cleanupErr = tx.Exec(ctx, `DELETE FROM core_registry.fdd_findings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid`, tenantID, siteID, findingID)
-		}
-		if cleanupErr == nil {
-			cleanupErr = tx.Commit(ctx)
-		}
-		if cleanupErr != nil {
-			t.Errorf("clean FDD integration finding: %v", cleanupErr)
-		}
-	})
-
+	// The FDD runtime cannot delete findings, so the gate runs this against a disposable database.
 	findings, err := service.ListFindings(t.Context(), tenantID, siteID, FindingFilter{Limit: 200})
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +52,9 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 		}
 		if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != result.Finding.EvidenceIDs[0] || finding.EvidenceIDs[1] != result.Finding.EvidenceIDs[1] {
 			t.Fatalf("persisted evidence IDs=%#v", finding.EvidenceIDs)
+		}
+		if finding.ObservedValue != result.Finding.ObservedValue || finding.ThresholdValue != result.Finding.ThresholdValue || finding.ValueUnit != "K" {
+			t.Fatalf("persisted measurement=%v/%v %q", finding.ObservedValue, finding.ThresholdValue, finding.ValueUnit)
 		}
 		return
 	}
