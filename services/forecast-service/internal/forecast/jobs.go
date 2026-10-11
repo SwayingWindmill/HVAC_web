@@ -227,6 +227,34 @@ func ValidateForecastSchedulerJob(job SchedulerJob) (SchedulerForecastReference,
 	return reference, nil
 }
 
+// ScheduledForecastPlan is the payload of a FORECAST_RUN that a schedule fires: it names what to
+// forecast, and the worker prepares a fresh Forecast from the latest metric history.
+type ScheduledForecastPlan struct {
+	Target      string `json:"target"`
+	SubjectType string `json:"subjectType"`
+	SubjectID   string `json:"subjectId"`
+}
+
+func ValidateScheduledForecastPlan(job SchedulerJob) (PreparationRequest, error) {
+	if job.JobType != "FORECAST_RUN" || job.TriggerType != "SCHEDULE" {
+		return PreparationRequest{}, errors.New("a Forecast plan only comes from a FORECAST_RUN schedule")
+	}
+	var plan ScheduledForecastPlan
+	decoder := json.NewDecoder(bytes.NewReader(job.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&plan); err != nil {
+		return PreparationRequest{}, fmt.Errorf("decode scheduled Forecast plan: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return PreparationRequest{}, err
+	}
+	request := PreparationRequest{TenantID: job.TenantID, SiteID: job.SiteID, SubjectType: plan.SubjectType, SubjectID: plan.SubjectID, Target: plan.Target}
+	if err := request.Validate(); err != nil {
+		return PreparationRequest{}, fmt.Errorf("scheduled Forecast plan: %w", err)
+	}
+	return request, nil
+}
+
 func forecastRetryDelay(attempt int) time.Duration {
 	base := 5 * time.Second
 	switch attempt {

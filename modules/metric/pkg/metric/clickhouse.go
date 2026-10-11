@@ -98,7 +98,8 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 		return Input{}, err
 	}
 	parts := strings.Split(strings.TrimSpace(string(body)), "\t")
-	if len(parts) != 7 || parts[0] == "nan" || parts[0] == "" {
+	// An aggregate over no rows is NULL, which TabSeparated writes as \N.
+	if len(parts) != 7 || parts[0] == "nan" || parts[0] == "" || parts[0] == `\N` {
 		return Input{}, errors.New("metric point dependency has no numeric observations")
 	}
 	v, err := strconv.ParseFloat(parts[0], 64)
