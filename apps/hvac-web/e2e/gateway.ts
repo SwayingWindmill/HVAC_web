@@ -52,6 +52,13 @@ function replayDemand(recorded: Json, query: Json): Json {
   return { ...response, buckets, metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length } };
 }
 
+// Recorded findings are replayed as if the last diagnosis had just run.
+function replayFindings(findings: Json[], now: string): Json[] {
+  const shift = Date.parse(now) - Math.max(...findings.map((finding) => Date.parse(finding.evaluationTo)));
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  return findings.map((finding) => ({ ...finding, evaluationFrom: moved(finding.evaluationFrom), evaluationTo: moved(finding.evaluationTo), createdAt: moved(finding.createdAt) }));
+}
+
 function advance(command: Json, status: string, at: string) {
   command.transitions.push({
     ...(command.transitions.length ? { fromStatus: command.status } : {}),
@@ -76,7 +83,7 @@ export class Gateway {
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
-  readonly findings = fixture<Json>('fdd-findings.json').items as Json[];
+  readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 

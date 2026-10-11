@@ -20,16 +20,11 @@ import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { LOW_DELTA_T, lowDeltaTTarget, ruleFor, severity, type DiagnosticRule, type Finding } from '../diagnostics-model';
+import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
 import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, siteFindingsQuery, type EvaluationOutcome } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/diagnostics');
-
-const SEVERITY = {
-  high: { label: '严重偏离', className: 'border-destructive/30 bg-destructive/10 text-destructive', priority: 'HIGH' },
-  medium: { label: '明显偏离', className: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300', priority: 'MEDIUM' },
-  low: { label: '轻微偏离', className: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300', priority: 'LOW' },
-} as const;
 
 const kelvin = (value: number) => `${formatDecimal(value, 1)} K`;
 
@@ -131,7 +126,7 @@ function FindingSheet({ finding, assetName, timeZone, onClose }: {
               <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
                 <Fact label="测量值">{formatDecimal(finding.observedValue, 2)} {finding.valueUnit}</Fact>
                 <Fact label="阈值">{formatDecimal(finding.thresholdValue, 1)} {finding.valueUnit}</Fact>
-                <Fact label="偏离程度"><Badge variant="outline" className={level.className}>{level.label}</Badge></Fact>
+                <Fact label="偏离程度"><FindingSeverityBadge finding={finding} /></Fact>
                 <Fact label="置信度">{formatDecimal(finding.confidence * 100, 0)}%</Fact>
                 <Fact label="诊断窗口">{formatTime(finding.evaluationFrom, timeZone).slice(-5)}–{formatTime(finding.evaluationTo, timeZone).slice(-5)}</Fact>
               </dl>
@@ -262,7 +257,6 @@ export function DiagnosticsWorkspace() {
                 </TableHeader>
                 <TableBody>
                   {list.map((finding) => {
-                    const level = SEVERITY[severity(finding)];
                     return (
                       <TableRow key={finding.id} className="cursor-pointer" onClick={() => inspect(finding.id)}>
                         <TableCell className="whitespace-nowrap tabular-nums">{formatTime(finding.evaluationTo, site.timezone)}</TableCell>
@@ -275,7 +269,7 @@ export function DiagnosticsWorkspace() {
                         <TableCell className="text-right tabular-nums">
                           {formatDecimal(finding.observedValue, 1)} / {formatDecimal(finding.thresholdValue, 1)} {finding.valueUnit}
                         </TableCell>
-                        <TableCell><Badge variant="outline" className={level.className}>{level.label}</Badge></TableCell>
+                        <TableCell><FindingSeverityBadge finding={finding} /></TableCell>
                       </TableRow>
                     );
                   })}
