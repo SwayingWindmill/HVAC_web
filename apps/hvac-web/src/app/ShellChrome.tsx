@@ -3,6 +3,7 @@ import { primaryRoleLabel } from '@/lib/role-labels';
 import { useLocation } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppSidebar } from '@/components/layout/AppSidebar';
+import { NavigationProgress, SkipToMain } from '@/components/layout/NavigationProgress';
 import { Toaster } from '@/components/ui/sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -112,6 +113,8 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
 
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
+      <SkipToMain />
+      <NavigationProgress />
       <AppSidebar
         principalName={principal.principal.displayName}
         principalRole={principalRole}
@@ -162,7 +165,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
 
         {transition?.status === 'purging' ? <TransitionSurface state="purging" /> : null}
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}
-        {!transitionBlocksContent ? <div className="min-w-0 flex-1">{children}</div> : null}
+        {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
       </SidebarInset>
       <Toaster theme={themeMode} position="bottom-right" richColors closeButton />
     </SidebarProvider>

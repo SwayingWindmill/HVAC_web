@@ -54,6 +54,17 @@
     }
   }
 
+  /* The route-loading hairline sweeping across the top of the shell. */
+  --animate-navigation-progress: navigation-progress 1.1s ease-in-out infinite;
+  @keyframes navigation-progress {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
