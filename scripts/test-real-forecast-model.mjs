@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { forecastChartRows, forecastSummary, parseLoadForecast } from '../apps/hvac-web/src/features/forecast/forecast-model.ts';
+import { forecastChartRows, forecastSummary, nextDay, parseLoadForecast } from '../apps/hvac-web/src/features/forecast/forecast-model.ts';
 
 const origin = '2026-10-11T04:07:00Z';
 const point = (minutes, value, band = 10, quality = 'VALID') => ({
@@ -52,4 +52,11 @@ test('the forecast reads hour by hour in Site-local time, with the peak hour mar
     { label: '12:00', loadKW: 220, lowerKW: 210, upperKW: 230, peak: true },
     { label: '13:00', loadKW: 100, lowerKW: null, upperKW: null, peak: false },
   ]);
+});
+
+test('the page reads the next 24 hours of a forecast that reaches further ahead', () => {
+  const forecast = parseLoadForecast(response([point(15, 200), point(24 * 60, 210), point(24 * 60 + 15, 220), point(48 * 60, 230)]));
+  const day = nextDay(forecast);
+  assert.deepEqual(day.points.map((item) => item.loadKW), [200, 210]);
+  assert.equal(day.origin, forecast.origin);
 });

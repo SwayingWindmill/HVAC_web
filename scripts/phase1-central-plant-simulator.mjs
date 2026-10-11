@@ -338,6 +338,10 @@ COMMIT;`;
 // The plant's HVAC demand is a 15-minute Site load metric computed on a schedule, and a
 // day-ahead Site load forecast is deployed on it, so forecasting runs on the plant's own
 // history. History starts when the simulator does, so the schedule alone builds it.
+// Optimization weighs the next day, so the hourly forecast reaches 48 hours ahead: the latest one
+// always covers a full day from whenever a run is asked for.
+const forecastHorizonMinutes = 2880;
+
 function buildForecastSeed(site, points) {
   const { tenantId, siteId } = site;
   const ids = buildIdentities(site, points);
@@ -384,7 +388,7 @@ INSERT INTO core_registry.forecast_dataset_snapshots (id, tenant_id, site_id, ta
 VALUES (${id(datasetId)}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, '2026-01-01T00:00:00Z', '2026-10-01T00:00:00Z', ${id(featureSetVersionId)}, ${id(topologyVersionId)}, ${id(JSON.stringify([metricVersionId]))}, NULL, '{}', ${id(`local://forecast/${site.siteCode}/plant-load/manifest.json`)}, repeat('0', 64), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.forecast_models (id, tenant_id, model_code, target, subject_type, horizon_minutes, granularity, status, revision, created_at, updated_at)
-VALUES (${id(modelId)}, ${t}, ${id(`plant_load_day_ahead_${code}`)}, 'SITE_LOAD', 'SITE', 1440, '15MIN', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+VALUES (${id(modelId)}, ${t}, ${id(`plant_load_day_ahead_${code}`)}, 'SITE_LOAD', 'SITE', ${forecastHorizonMinutes}, '15MIN', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.forecast_training_runs (id, tenant_id, site_id, model_id, dataset_snapshot_id, feature_set_version_id, topology_version_id, algorithm, hyperparameters, code_version, evaluation, status, started_at, finished_at, revision, created_at, updated_at)
 VALUES (${id(trainingRunId)}, ${t}, ${st}, ${id(modelId)}, ${id(datasetId)}, ${id(featureSetVersionId)}, ${id(topologyVersionId)}, 'BASELINE', '{"method":"TIME_OF_DAY_PROFILE"}', 'local-seed', NULL, 'PENDING', NULL, NULL, 1, clock_timestamp(), clock_timestamp())
@@ -436,7 +440,8 @@ function buildOptimizationSeed(site, points) {
   const constraints = {
     comfort: { zoneTempMinC: 22, zoneTempMaxC: 26 },
     safety: { supplyTempMinC: 6, supplyTempMaxC: 10, maxSupplyTempStepC: 1 },
-    inputMapping: { supplyTemperatureKey: 'btu_meter.supply_water_temperature', zoneTemperatureKey: 'zone.temperature' },
+    // Telemetry history keys readings by point code: the BTU meter's supply, the zone sensor's temperature.
+    inputMapping: { supplyTemperatureKey: 'supply_water_temperature', zoneTemperatureKey: 'temperature' },
     maintenanceConstraints: { outOfService: [] },
     manualLocks: { resources: [] },
     // The plant's chiller gains about 0.14 COP per °C of warmer supply water, near 60 kWh a

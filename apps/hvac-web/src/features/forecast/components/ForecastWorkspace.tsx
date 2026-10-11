@@ -17,7 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { forecastChartRows, forecastSummary, hourlyForecast, type ForecastChartRow } from '../forecast-model';
+import { forecastChartRows, forecastSummary, hourlyForecast, nextDay, type ForecastChartRow } from '../forecast-model';
 import { siteLoadForecastQuery, useRecentLoad } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -47,7 +47,7 @@ export function ForecastWorkspace() {
   const now = useNow(60_000);
   const forecast = useQuery(siteLoadForecastQuery(site.id));
   const recent = useRecentLoad();
-  const data = forecast.data;
+  const data = useMemo(() => (forecast.data ? nextDay(forecast.data) : forecast.data), [forecast.data]);
 
   const summary = useMemo(() => (data ? forecastSummary(data) : null), [data]);
   const hours = useMemo(() => (data ? hourlyForecast(data, site.timezone) : []), [data, site.timezone]);

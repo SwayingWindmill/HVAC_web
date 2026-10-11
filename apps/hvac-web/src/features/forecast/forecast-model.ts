@@ -47,6 +47,14 @@ export function parseLoadForecast(published: PublishedForecast): LoadForecast {
   };
 }
 
+const DAY_MS = 86_400_000;
+
+/** The next 24 hours of a forecast; the model reaches further so Optimization always has a full day ahead. */
+export function nextDay(forecast: LoadForecast): LoadForecast {
+  const end = Date.parse(forecast.origin) + DAY_MS;
+  return { ...forecast, points: forecast.points.filter((point) => Date.parse(point.at) <= end) };
+}
+
 const QUARTER_HOUR = 0.25;
 
 export function forecastSummary(forecast: LoadForecast) {
