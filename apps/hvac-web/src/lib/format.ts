@@ -82,7 +82,7 @@ export function formatNumber(
  * formatDelta(-0.03)  -> "-3.0%"
  * formatDelta(0)      -> "0.0%"
  */
-export function formatDelta(delta: number, locale = "en-US"): string {
+export function formatDelta(delta: number, locale = "zh-CN"): string {
   if (!Number.isFinite(delta)) return "—"
   return getFormatter(locale, {
     style: "percent",
