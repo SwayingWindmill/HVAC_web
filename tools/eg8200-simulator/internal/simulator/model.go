@@ -136,8 +136,25 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 func (plant *Plant) Tick(elapsed time.Duration) Snapshot {
 	plant.mu.Lock()
 	defer plant.mu.Unlock()
+	plant.tickLocked(elapsed)
+	return plant.snapshotLocked()
+}
+
+// TickTo advances the plant to the wall-clock instant now. A clock corrected backwards
+// advances nothing and takes the plant's time back with it, so readings are never stamped
+// ahead of the clock.
+func (plant *Plant) TickTo(now time.Time) Snapshot {
+	plant.mu.Lock()
+	defer plant.mu.Unlock()
+	now = now.UTC()
+	plant.tickLocked(now.Sub(plant.now))
+	plant.now = now
+	return plant.snapshotLocked()
+}
+
+func (plant *Plant) tickLocked(elapsed time.Duration) {
 	if elapsed <= 0 {
-		return plant.snapshotLocked()
+		return
 	}
 
 	remaining := elapsed
@@ -155,7 +172,6 @@ func (plant *Plant) Tick(elapsed time.Duration) Snapshot {
 		remaining -= segment
 	}
 	plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
-	return plant.snapshotLocked()
 }
 
 func (plant *Plant) advanceLocked(elapsed time.Duration) {

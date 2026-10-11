@@ -64,8 +64,7 @@ func main() {
 		logger.Error("eg8200_gateway_credential_failed", "error", err.Error())
 		os.Exit(1)
 	}
-	lastTick := time.Now().UTC()
-	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, lastTick)
+	plant := simulator.NewPlant(plantConfig.Plant, plantConfig.Scenario, time.Now())
 	atv630Server, err := simulator.NewVirtualATV630Server(*atv630ModbusAddress, plant)
 	if err != nil {
 		logger.Error("eg8200_atv630_modbus_invalid", "error", err.Error())
@@ -160,9 +159,7 @@ func main() {
 	}
 
 	runEdgeCycleAndPublish := func() {
-		now := time.Now().UTC()
-		snapshot := plant.Tick(now.Sub(lastTick))
-		lastTick = now
+		snapshot := plant.TickTo(time.Now())
 		edgeCycle := edgeRuntime.RunCycle(ctx, snapshot.ObservedAt)
 		for _, poll := range edgeCycle.PollResults {
 			if poll.Error != nil {
