@@ -18,6 +18,7 @@ import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overvie
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
 import { Route as AppSiteOperationsAlarmsRouteImport } from './routes/_app._site.operations.alarms'
+import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._site.operations.control'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
@@ -66,6 +67,12 @@ const AppSiteOperationsAlarmsRoute = AppSiteOperationsAlarmsRouteImport.update({
   path: '/operations/alarms',
   getParentRoute: () => AppSiteRoute,
 } as any)
+const AppSiteOperationsControlRoute =
+  AppSiteOperationsControlRouteImport.update({
+    id: '/operations/control',
+    path: '/operations/control',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteOperationsRealtimeRoute =
   AppSiteOperationsRealtimeRouteImport.update({
     id: '/operations/realtime',
@@ -93,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
+  '/operations/control': typeof AppSiteOperationsControlRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -105,6 +113,7 @@ export interface FileRoutesByTo {
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
+  '/operations/control': typeof AppSiteOperationsControlRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -120,6 +129,7 @@ export interface FileRoutesById {
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/_app/_site/operations/alarms': typeof AppSiteOperationsAlarmsRoute
+  '/_app/_site/operations/control': typeof AppSiteOperationsControlRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -134,6 +144,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/energy-analysis/consumption'
     | '/operations/alarms'
+    | '/operations/control'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -146,6 +157,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/energy-analysis/consumption'
     | '/operations/alarms'
+    | '/operations/control'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -160,6 +172,7 @@ export interface FileRouteTypes {
     | '/_app/settings/integrations'
     | '/_app/_site/energy-analysis/consumption'
     | '/_app/_site/operations/alarms'
+    | '/_app/_site/operations/control'
     | '/_app/_site/operations/realtime'
     | '/_app/_site/operations/systems-devices'
     | '/_app/_site/operations/work-center'
@@ -234,6 +247,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsAlarmsRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/control': {
+      id: '/_app/_site/operations/control'
+      path: '/operations/control'
+      fullPath: '/operations/control'
+      preLoaderRoute: typeof AppSiteOperationsControlRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/realtime': {
       id: '/_app/_site/operations/realtime'
       path: '/operations/realtime'
@@ -262,6 +282,7 @@ interface AppSiteRouteChildren {
   AppSiteOverviewRoute: typeof AppSiteOverviewRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
   AppSiteOperationsAlarmsRoute: typeof AppSiteOperationsAlarmsRoute
+  AppSiteOperationsControlRoute: typeof AppSiteOperationsControlRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
@@ -271,6 +292,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOverviewRoute: AppSiteOverviewRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
   AppSiteOperationsAlarmsRoute: AppSiteOperationsAlarmsRoute,
+  AppSiteOperationsControlRoute: AppSiteOperationsControlRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,

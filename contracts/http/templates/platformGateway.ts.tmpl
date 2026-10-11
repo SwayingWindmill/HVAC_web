@@ -20,6 +20,13 @@ export const alarmPaths = {
   assign: '__ALARM_ASSIGN_PATH__',
 } as const;
 
+export const commandPaths = {
+  collection: '__COMMANDS_PATH__',
+  detail: '__COMMAND_PATH__',
+  approve: '__COMMAND_APPROVE_PATH__',
+  reconcile: '__COMMAND_RECONCILE_PATH__',
+} as const;
+
 export const buildInfoSchema = z.object({
   service: z.literal('platform-gateway'), version: z.string(), commit: z.string(), builtAt: z.string(),
 }).strict();

@@ -3,6 +3,7 @@ import { primaryRoleLabel } from '@/lib/role-labels';
 import { useLocation } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppSidebar } from '@/components/layout/AppSidebar';
+import { Toaster } from '@/components/ui/sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -163,6 +164,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}
         {!transitionBlocksContent ? <div className="min-w-0 flex-1">{children}</div> : null}
       </SidebarInset>
+      <Toaster theme={themeMode} position="bottom-right" richColors closeButton />
     </SidebarProvider>
   );
 }

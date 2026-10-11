@@ -6,6 +6,7 @@ import {
   LineChart,
   ServerCog,
   ShieldAlert,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 export interface AppNavigationGroup {
@@ -50,6 +51,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     items: [
       { id: 'operations-alarms', title: '告警', path: '/operations/alarms', icon: ShieldAlert },
       { id: 'operations-work-center', title: '工单', path: '/operations/work-center', icon: CalendarCheck2 },
+      { id: 'operations-control', title: '控制指令', path: '/operations/control', icon: SlidersHorizontal },
     ],
   },
 ];
