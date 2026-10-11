@@ -56,3 +56,28 @@ test('a bucket without cooling has no efficiency and stays out of the period eff
   assert.equal(summary.cop, 3.5);
   assert.equal(summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai').cop, null);
 });
+
+test('today lines up with the same Site-local hours yesterday', async () => {
+  const { compareHours, relativeChange } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const today = summarizeEnergy(series([['2026-10-10T02:00:00Z', 200], ['2026-10-10T03:00:00Z', 250]]), series([['2026-10-10T02:00:00Z', 700]]), 'hour', 'Asia/Shanghai');
+  const yesterday = summarizeEnergy(series([['2026-10-09T02:00:00Z', 180], ['2026-10-09T05:00:00Z', 999]]), series([]), 'hour', 'Asia/Shanghai');
+  assert.deepEqual(compareHours(today, yesterday).map((row) => [row.label, row.electricityKWh, row.previousElectricityKWh]), [
+    ['10:00', 200, 180],
+    ['11:00', 250, null],
+  ]);
+  assert.equal(relativeChange(450, 400), 0.125);
+  assert.equal(relativeChange(450, null), null);
+  assert.equal(relativeChange(450, 0), null);
+});
+
+test('hourly energy becomes a Site-local day by hour grid with unread hours left empty', async () => {
+  const { hourlyHeatmap, siteDays } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const days = siteDays(now, 'Asia/Shanghai', 2);
+  assert.deepEqual(days, ['2026-10-09', '2026-10-10']);
+  const grid = hourlyHeatmap(series([['2026-10-09T16:00:00Z', 12], ['2026-10-10T05:00:00Z', 30]]), 'Asia/Shanghai', days);
+  assert.deepEqual(grid.map((day) => day.label), ['10/9 周五', '10/10 周六']);
+  assert.equal(grid[1].values[0], 12);
+  assert.equal(grid[1].values[13], 30);
+  assert.equal(grid[1].values[14], null);
+  assert.equal(grid[0].values.every((value) => value === null), true);
+});

@@ -120,3 +120,66 @@ export function summarizeEnergy(
     excludedIntervals: excluded(electricity) + excluded(cooling),
   };
 }
+
+export interface HourComparison {
+  readonly label: string;
+  readonly electricityKWh: number | null;
+  readonly coolingKWh: number | null;
+  readonly cop: number | null;
+  readonly previousElectricityKWh: number | null;
+  readonly previousCoolingKWh: number | null;
+  readonly previousCop: number | null;
+}
+
+/** Today's hours beside the same hours yesterday, joined by Site-local hour; yesterday's hours after now are left out. */
+export function compareHours(today: EnergySummary, yesterday: EnergySummary): HourComparison[] {
+  const previous = new Map(yesterday.rows.map((row) => [row.label, row]));
+  return today.rows.map((row) => {
+    const before = previous.get(row.label);
+    return {
+      label: row.label,
+      electricityKWh: row.electricityKWh,
+      coolingKWh: row.coolingKWh,
+      cop: row.cop,
+      previousElectricityKWh: before?.electricityKWh ?? null,
+      previousCoolingKWh: before?.coolingKWh ?? null,
+      previousCop: before?.cop ?? null,
+    };
+  });
+}
+
+/** The fractional change from `previous` to `current`; null when either is unknown or the base is zero. */
+export function relativeChange(current: number | null, previous: number | null): number | null {
+  if (current === null || previous === null || previous === 0) return null;
+  return (current - previous) / previous;
+}
+
+export interface HeatmapDay {
+  readonly label: string;
+  /** Energy per Site-local hour 0–23; null where the hour has no reading yet. */
+  readonly values: readonly (number | null)[];
+}
+
+/** Hourly energy laid out as Site-local days by hour of day, oldest day first. */
+export function hourlyHeatmap(series: EnergySeriesResponse, timeZone: string, days: readonly string[]): HeatmapDay[] {
+  const byDay = new Map(days.map((day) => [day, Array.from({ length: 24 }, () => null as number | null)]));
+  for (const point of series.points) {
+    const local = wallTime(new Date(point.periodStart), timeZone);
+    const key = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+    const hours = byDay.get(key);
+    if (hours) hours[local.hour] = point.energyKWh;
+  }
+  return days.map((day) => {
+    const [year, month, date] = day.split('-').map(Number);
+    const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, date)).getUTCDay()];
+    return { label: `${month}/${date} ${weekday}`, values: byDay.get(day)! };
+  });
+}
+
+/** The last `count` Site-local days as YYYY-MM-DD, oldest first, today last. */
+export function siteDays(now: Date, timeZone: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => {
+    const local = wallTime(new Date(now.getTime() - (count - 1 - index) * 86_400_000), timeZone);
+    return `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+  });
+}
