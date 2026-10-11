@@ -42,6 +42,12 @@ func TestCounterDeltaAddsEveryRiseAcrossARestartInTheWindow(t *testing.T) {
 		if !strings.Contains(body, "arrayDifference") {
 			t.Errorf("counter read does not step through consecutive readings:\n%s", body)
 		}
+		// The working arrays once leaked into the output as two extra columns, and every
+		// read was then taken for an empty window.
+		selected := body[strings.Index(body, "SELECT ")+len("SELECT ") : strings.Index(body, " FROM ")]
+		if columns := strings.Count(selected, " AS "); columns != 11 {
+			t.Errorf("point read selects %d columns, want 11:\n%s", columns, selected)
+		}
 		// value, n, good, first, last, duration, integral, rise, drops, drop_sum, value_after_drops
 		_, _ = writer.Write([]byte("1.27\t5194\t5194\t0.002\t1.27\t10440\t0\t523.998\t1\t-522.746\t0.012\n"))
 	}))
