@@ -35,10 +35,10 @@ const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段",
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop";
 
-/** Energy in kWh, switching to MWh from 10,000 kWh. */
-function energy(value: number | null): { value: string | null; unit: string } {
+/** Energy in kWh, or in MWh once `scale` (the largest figure shown beside it) reaches 10,000 kWh. */
+function energy(value: number | null, scale = value ?? 0): { value: string | null; unit: string } {
   if (value === null) return { value: null, unit: "kWh" };
-  return value >= 10_000 ? { value: formatDecimal(value / 1000, 2), unit: "MWh" } : { value: formatDecimal(value, 1), unit: "kWh" };
+  return scale >= 10_000 ? { value: formatDecimal(value / 1000, 2), unit: "MWh" } : { value: formatDecimal(value, 1), unit: "kWh" };
 }
 
 const cell = (value: number | null, digits = 1) =>
@@ -209,8 +209,10 @@ function PeriodComparison({ current, previous, buckets, previousLabel, metric, o
   readonly metric: ConsumptionMetric;
   readonly onMetricChange: (metric: ConsumptionMetric) => void;
 }) {
-  const electricity = energy(current.electricityKWh);
-  const cooling = energy(current.coolingKWh);
+  // One unit for both tabs, so electricity and cooling read side by side.
+  const scale = Math.max(current.electricityKWh ?? 0, current.coolingKWh ?? 0);
+  const electricity = energy(current.electricityKWh, scale);
+  const cooling = energy(current.coolingKWh, scale);
   return (
     <MetricTabsChartCard
       role="region"
@@ -227,6 +229,7 @@ function PeriodComparison({ current, previous, buckets, previousLabel, metric, o
       showYAxis
       showLegend
       dots
+      yDomain="zero"
       chartClassName="h-[300px]"
       empty="本期间还没有计量数据"
       metrics={[

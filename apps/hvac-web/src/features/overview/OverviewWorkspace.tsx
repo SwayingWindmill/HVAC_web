@@ -76,6 +76,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       showYAxis
       showLegend
       dots
+      yDomain="zero"
       chartClassName="h-[260px]"
       empty="今日还没有计量数据"
       metrics={[
