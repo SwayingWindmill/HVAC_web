@@ -1,9 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
-import { ArrowUpRight, CircleCheck, RefreshCw } from "lucide-react";
+import { ArrowUpRight, CircleCheck, PiggyBank, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { MetricCard, MetricGrid, MetricValue } from "@/blocks/metric-card";
+import { HeatmapChartCard } from "@/components/heatmap-chart-card";
+import { MetricTabsChartCard } from "@/components/metric-tabs-chart-card";
 import { PageHeader } from "@/blocks/page-header";
 import { Main } from "@/components/layout/Main";
 import { Badge } from "@/components/ui/badge";
@@ -13,110 +13,216 @@ import {
   CardAction,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useDeviceNames } from "@/features/assets/use-device-names";
 import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
-import { ENERGY_PERIODS, type EnergyPeriod } from "@/features/energy-analysis/consumption/model";
-import { useEnergySummary } from "@/features/energy-analysis/consumption/query";
-import { ReadingMetric } from "@/features/operations/realtime/device-presentation";
+import { relativeChange } from "@/features/energy-analysis/consumption/model";
+import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
+import { ReadingMetric, ReadingValue } from "@/features/operations/realtime/device-presentation";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
-import { equipmentStatus, type EquipmentStatus } from "@/features/operations/realtime/plant-model";
+import {
+  EQUIPMENT_CATEGORIES,
+  equipmentStatus,
+  isRunning,
+  plantReading,
+  type EquipmentStatus,
+  type PlantDevice,
+  type PlantView,
+} from "@/features/operations/realtime/plant-model";
 import { PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
 import { formatDecimal, formatTime, personLabel } from "@/lib/operator-format";
+import { cn } from "@/lib/utils";
 
 const siteRoute = getRouteApi("/_app/_site");
 const pageRoute = getRouteApi("/_app/_site/overview");
 const LIST_LIMIT = 5;
-const PERIODS = Object.keys(ENERGY_PERIODS) as EnergyPeriod[];
+const known = (value: number | null, digits: number) => (value === null ? null : formatDecimal(value, digits));
+const HEATMAP_DAYS = 7;
+const HOURS = Array.from({ length: 24 }, (_, hour) => `${hour}时`);
 
-const decimal = formatDecimal;
+type OverviewMetric = "electricityKWh" | "coolingKWh" | "cop";
+
+function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: OverviewMetric; readonly onMetricChange: (metric: OverviewMetric) => void }) {
+  const comparison = useTodayAgainstYesterday();
+  if (comparison.isPending) return <Skeleton className="h-[372px] rounded-xl" />;
+  if (comparison.isError) {
+    return (
+      <Card className="justify-center">
+        <CardContent className="py-16 text-center text-sm text-muted-foreground">今日能耗暂不可用</CardContent>
+      </Card>
+    );
+  }
+  const { today, yesterday, hours } = comparison.data;
+  return (
+    <MetricTabsChartCard
+      role="region"
+      aria-label="今日用能"
+      data={hours.map((hour) => ({ ...hour }))}
+      xKey="label"
+      selected={metric}
+      onSelectedChange={(key) => onMetricChange(key as OverviewMetric)}
+      color="var(--chart-1)"
+      compareColor="var(--chart-5)"
+      compareLabel="昨日"
+      showYAxis
+      showLegend
+      dots
+      chartClassName="h-[260px]"
+      empty="今日还没有计量数据"
+      metrics={[
+        {
+          key: "electricityKWh",
+          label: "今日空调用电",
+          compareKey: "previousElectricityKWh",
+          value: known(today.electricityKWh, 1),
+          delta: relativeChange(today.electricityKWh, yesterday.electricityKWh),
+          unit: "kWh",
+          fractionDigits: 1,
+          invertDelta: true,
+        },
+        {
+          key: "coolingKWh",
+          label: "今日供冷量",
+          compareKey: "previousCoolingKWh",
+          value: known(today.coolingKWh, 1),
+          delta: relativeChange(today.coolingKWh, yesterday.coolingKWh),
+          unit: "kWh",
+          fractionDigits: 1,
+          neutralDelta: true,
+        },
+        {
+          key: "cop",
+          label: "今日综合能效",
+          compareKey: "previousCop",
+          value: known(today.cop, 2),
+          delta: relativeChange(today.cop, yesterday.cop),
+          unit: "COP",
+          fractionDigits: 2,
+        },
+      ]}
+    />
+  );
+}
+
+const EQUIPMENT_TONE = {
+  running: "bg-chart-1",
+  fault: "bg-destructive",
+  offline: "border border-dashed border-muted-foreground/60",
+  stopped: "bg-muted-foreground/25",
+} as const;
+
+function equipmentTone(device: PlantDevice): keyof typeof EQUIPMENT_TONE {
+  if (device.connection === "OFFLINE") return "offline";
+  if (device.runState === "FAULT") return "fault";
+  return isRunning(device) ? "running" : "stopped";
+}
 
 function equipmentLead(status: EquipmentStatus): string {
   const issues = [status.faults > 0 ? `${status.faults} 台故障` : null, status.offline > 0 ? `${status.offline} 台离线` : null].filter(Boolean);
   return issues.length > 0 ? issues.join("，") : "没有故障或离线设备";
 }
 
-const energyChartConfig = {
-  electricityKWh: { label: "空调用电", color: "var(--chart-1)" },
-  coolingKWh: { label: "供冷量", color: "var(--chart-2)" },
-};
-
-function EnergyTrend({ period, onPeriodChange }: { readonly period: EnergyPeriod; readonly onPeriodChange: (period: EnergyPeriod) => void }) {
-  const energy = useEnergySummary(period);
-  const rows = energy.data?.rows ?? [];
+function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return (
-    <Card className="@container/card">
+    <div className="flex flex-col gap-1">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-lg font-semibold tracking-tight">{children}</dd>
+    </div>
+  );
+}
+
+function LivePlant({ plant, registryState, siteId, timeZone }: {
+  readonly plant: PlantView;
+  readonly registryState: "pending" | "error" | "success";
+  readonly siteId: string;
+  readonly timeZone: string;
+}) {
+  const status = equipmentStatus(plant);
+  const equipment = plant.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+  return (
+    <Card aria-label="冷站实时" role="region" className="@container/card">
       <CardHeader>
-        <CardTitle>用电与供冷</CardTitle>
-        <CardDescription>按站点当地时间统计的空调用电与供冷量（kWh）</CardDescription>
-        <CardAction>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={period}
-            onValueChange={(value) => { if (value) onPeriodChange(value as EnergyPeriod); }}
-            aria-label="统计期间"
-            className="hidden @[640px]/card:flex"
-          >
-            {PERIODS.map((key) => (
-              <ToggleGroupItem key={key} value={key} className="px-3">{ENERGY_PERIODS[key]}</ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Select value={period} onValueChange={(value) => onPeriodChange(value as EnergyPeriod)}>
-            <SelectTrigger className="w-28 min-w-0 @[640px]/card:hidden" aria-label="统计期间">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PERIODS.map((key) => <SelectItem key={key} value={key}>{ENERGY_PERIODS[key]}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </CardAction>
+        <CardDescription>冷站实时功率</CardDescription>
+        <CardTitle className="text-3xl font-semibold tabular-nums">
+          <ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />
+        </CardTitle>
+        {registryState === "success" ? (
+          <CardAction>
+            <Badge variant="outline" className="font-normal">{plant.onlineCount} / {plant.devices.length} 在线</Badge>
+          </CardAction>
+        ) : null}
       </CardHeader>
-      <CardContent className="px-2 sm:px-6">
-        {energy.isPending ? (
-          <Skeleton className="h-[260px] w-full" />
-        ) : energy.isError ? (
-          <p className="grid h-[260px] place-items-center text-sm text-muted-foreground">能耗数据暂不可用</p>
-        ) : rows.length === 0 ? (
-          <p className="grid h-[260px] place-items-center text-sm text-muted-foreground">本期间还没有计量数据</p>
-        ) : (
-          <ChartContainer config={energyChartConfig} className="aspect-auto h-[260px] w-full">
-            <AreaChart data={[...rows]} margin={{ left: 4, right: 4 }}>
-              <defs>
-                {(["electricityKWh", "coolingKWh"] as const).map((key) => (
-                  <linearGradient key={key} id={`overview-fill-${key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={`var(--color-${key})`} stopOpacity={0.5} />
-                    <stop offset="95%" stopColor={`var(--color-${key})`} stopOpacity={0.05} />
-                  </linearGradient>
-                ))}
-              </defs>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={32} />
-              <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(value: number) => value.toLocaleString("zh-CN")} />
-              <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
-              <Area dataKey="coolingKWh" type="monotone" fill="url(#overview-fill-coolingKWh)" stroke="var(--color-coolingKWh)" strokeWidth={2} isAnimationActive={false} />
-              <Area dataKey="electricityKWh" type="monotone" fill="url(#overview-fill-electricityKWh)" stroke="var(--color-electricityKWh)" strokeWidth={2} isAnimationActive={false} />
-              <ChartLegend content={<ChartLegendContent />} />
-            </AreaChart>
-          </ChartContainer>
-        )}
+      <CardContent className="flex flex-1 flex-col gap-5">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
+          <Fact label="瞬时制冷量"><ReadingValue reading={plant.coolingCapacity} /></Fact>
+          <Fact label="实时 COP">
+            {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatDecimal(plant.plantCop, 2)}</span>}
+          </Fact>
+          <Fact label="冷冻水供水"><ReadingValue reading={plantReading(plant, "btu_meter.supply_water_temperature")} /></Fact>
+          <Fact label="冷冻水回水"><ReadingValue reading={plantReading(plant, "btu_meter.return_water_temperature")} /></Fact>
+        </dl>
+        <Separator />
+        <section aria-label="主要设备" className="flex flex-col gap-2.5">
+          <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="text-muted-foreground">主要设备</span>
+            {registryState === "pending" ? <Skeleton className="h-4 w-16" />
+              : registryState === "error" ? <span className="text-muted-foreground">暂不可用</span>
+              : status.total === 0 ? <span className="text-muted-foreground">未登记设备</span>
+              : <span className="font-medium tabular-nums">{status.running} / {status.total} 台运行</span>}
+          </div>
+          {equipment.length > 0 ? (
+            <div className="flex gap-1" aria-hidden="true">
+              {equipment.map((device) => (
+                <span key={device.deviceId} title={device.name} className={cn("h-2 flex-1 rounded-full", EQUIPMENT_TONE[equipmentTone(device)])} />
+              ))}
+            </div>
+          ) : null}
+          {registryState === "success" ? <p className="text-xs text-muted-foreground">{equipmentLead(status)}</p> : null}
+        </section>
       </CardContent>
+      <CardFooter className="justify-between gap-3 border-t text-xs text-muted-foreground">
+        <span>{plant.latestSampleAt ? `数据时间 ${formatTime(plant.latestSampleAt, timeZone)}` : "等待数据"}</span>
+        <Link to="/operations/realtime" search={{ site: siteId }} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
+          实时监测
+          <ArrowUpRight className="size-3.5" aria-hidden="true" />
+        </Link>
+      </CardFooter>
     </Card>
+  );
+}
+
+function HourlyElectricity() {
+  const heatmap = useHourlyHeatmap(HEATMAP_DAYS);
+  if (heatmap.isPending) return <Skeleton className="h-[340px] rounded-xl" />;
+  if (heatmap.isError) {
+    return (
+      <Card className="justify-center">
+        <CardContent className="py-16 text-center text-sm text-muted-foreground">逐时用电暂不可用</CardContent>
+      </Card>
+    );
+  }
+  return (
+    <HeatmapChartCard
+      role="region"
+      aria-label="近 7 天逐时用电"
+      title={`近 ${HEATMAP_DAYS} 天空调用电`}
+      deltaLabel="按站点当地时间，每格为一小时；悬停查看该小时用电"
+      rows={heatmap.data.map((day) => ({ label: day.label, values: day.values }))}
+      columns={HOURS}
+      columnLabelEvery={3}
+      color="var(--chart-1)"
+      unit="kWh"
+      valueFormatter={(value) => formatDecimal(value, 1)}
+    />
   );
 }
 
@@ -148,10 +254,12 @@ function ListCard({ title, description, href, siteId, children }: {
 
 function EmptyList({ text }: { readonly text: string }) {
   return (
-    <p className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-      <CircleCheck className="size-4" aria-hidden="true" />
-      {text}
-    </p>
+    <Empty className="py-8">
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><CircleCheck /></EmptyMedia>
+        <EmptyTitle className="text-sm">{text}</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -159,20 +267,14 @@ export function OverviewWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: "/overview" });
-  const period: EnergyPeriod = search.period ?? "today";
+  const queryClient = useQueryClient();
   const { plant, mode, registry, refresh } = useRealtimePlant();
-  const today = useEnergySummary("today");
   const deviceNames = useDeviceNames(site.id);
   const alarms = useQuery(activeAlarmsQuery(site.id));
   const workOrders = useQuery(openWorkOrdersQuery(site.id));
 
-  const cooling = plant.coolingCapacity;
-  const coolingPresent = cooling && cooling.state === "PRESENT" && cooling.numeric !== null;
-  const equipment = equipmentStatus(plant);
-  const energy = today.data;
   const activeAlarms = sortAlarmsForOperators(alarms.data?.items ?? []);
   const openOrders = sortWorkOrdersForOperators(workOrders.data ?? []);
-  const asOf = (instant: string | null | undefined) => (instant ? `数据时间 ${formatTime(instant, site.timezone)}` : "等待数据");
 
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
@@ -186,48 +288,31 @@ export function OverviewWorkspace() {
           </Badge>
         }
         actions={
-          <Button variant="outline" size="sm" onClick={() => { refresh(); void today.refetch(); void alarms.refetch(); void workOrders.refetch(); }}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              refresh();
+              void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
+              void alarms.refetch();
+              void workOrders.refetch();
+            }}
+          >
             <RefreshCw aria-hidden="true" data-icon="inline-start" />
             刷新
           </Button>
         }
       />
 
-      <MetricGrid ariaLabel="冷站概况">
-        <MetricCard
-          label="冷站实时功率"
-          value={<ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />}
-          lead={coolingPresent ? `瞬时制冷量 ${decimal(cooling.numeric!, 0)} kW${cooling.current ? "" : "（数据过期）"}` : "瞬时制冷量暂无数据"}
-          detail={asOf(plant.latestSampleAt)}
-        />
-        <MetricCard
-          label="今日空调用电"
-          value={<MetricValue value={energy?.electricityKWh == null ? null : decimal(energy.electricityKWh, 1)} unit="kWh" />}
-          lead={energy?.coolingKWh == null ? "供冷量暂无数据" : `供冷量 ${decimal(energy.coolingKWh, 1)} kWh`}
-          detail={energy?.dataWatermark ? `截至 ${formatTime(energy.dataWatermark, site.timezone)}` : "站点当地时间今日"}
-        />
-        <MetricCard
-          label="今日冷站综合能效"
-          value={<MetricValue value={energy?.cop == null ? null : decimal(energy.cop, 2)} unit="COP" />}
-          lead={plant.plantCop === null ? "实时能效暂无数据" : `实时 COP ${decimal(plant.plantCop, 2)}`}
-          detail="供冷量 ÷ 空调用电"
-        />
-        <MetricCard
-          label="主要设备运行"
-          value={registry.isPending ? <Skeleton className="h-8 w-24" /> : registry.isError ? <span className="text-muted-foreground">暂不可用</span>
-            : equipment.total === 0 ? <span className="text-muted-foreground">未登记设备</span>
-            : <MetricValue value={`${equipment.running} / ${equipment.total}`} unit="台运行" />}
-          badge={registry.isSuccess ? <Badge variant="outline">{plant.onlineCount} / {plant.devices.length} 在线</Badge> : undefined}
-          lead={registry.isSuccess ? equipmentLead(equipment) : "正在读取设备台账"}
-          detail={
-            <Link to="/operations/systems-devices" search={{ site: site.id }} className="hover:text-foreground hover:underline">
-              查看系统与设备
-            </Link>
-          }
-        />
-      </MetricGrid>
-
-      <EnergyTrend period={period} onPeriodChange={(next) => void navigate({ search: (previous) => ({ ...previous, period: next }) })} />
+      <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-3">
+        <div className="@5xl/main:col-span-2">
+          <TodayAgainstYesterday
+            metric={search.metric ?? "electricityKWh"}
+            onMetricChange={(metric) => void navigate({ search: (previous) => ({ ...previous, metric }), replace: true })}
+          />
+        </div>
+        <LivePlant plant={plant} registryState={registry.status} siteId={site.id} timeZone={site.timezone} />
+      </div>
 
       <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-2">
         <ListCard
@@ -290,10 +375,20 @@ export function OverviewWorkspace() {
         </ListCard>
       </div>
 
-      <section aria-label="节能成效" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
-        <span className="font-medium">节能量、节能率与节约费用</span>
-        <span className="text-muted-foreground">未接入：需要基线模型与电价，接入后在此显示</span>
-      </section>
+      <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-3">
+        <div className="@5xl/main:col-span-2">
+          <HourlyElectricity />
+        </div>
+        <Card role="region" aria-label="节能成效" className="justify-center">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><PiggyBank /></EmptyMedia>
+              <EmptyTitle>节能成效未接入</EmptyTitle>
+              <EmptyDescription>节能量、节能率与节约费用需要基线模型与电价，接入后在此显示。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </Card>
+      </div>
     </Main>
   );
 }

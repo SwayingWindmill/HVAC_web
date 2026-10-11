@@ -20,6 +20,29 @@ export const SITE_ID = '018f3e00-1000-7000-8000-000000000001';
 export const principal = fixture<Json>('principal.json');
 export const MY_ID: string = principal.principalId;
 
+// The recording is one Site-local day of hourly energy (UTC+8). An hourly query gets those hours
+// on every Site-local day it spans, so today, yesterday and a week read the same recorded day.
+const RECORDED_DAY = Date.parse('2026-10-09T16:00:00Z');
+const DAY_MS = 86_400_000;
+
+function replayEnergy(series: Json, query: Json): Json {
+  if (query.granularity !== 'hour') return series;
+  const from = Date.parse(query.from);
+  const to = Date.parse(query.to);
+  const points: Json[] = [];
+  for (let day = from; day < to; day += DAY_MS) {
+    for (const point of series.points) {
+      const shift = day - RECORDED_DAY;
+      points.push({
+        ...point,
+        periodStart: new Date(Date.parse(point.periodStart) + shift).toISOString(),
+        periodEnd: new Date(Date.parse(point.periodEnd) + shift).toISOString(),
+      });
+    }
+  }
+  return { ...series, points };
+}
+
 export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly workOrders = fixture<Json[]>('work-orders.json');
@@ -54,7 +77,7 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshots };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
-    if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: fixture<Json>('energy-series.json')[body?.energyType] };
+    if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 
     if (method === 'GET' && path === '/api/v1/alarms') {
       const items = this.alarms.filter((alarm) =>

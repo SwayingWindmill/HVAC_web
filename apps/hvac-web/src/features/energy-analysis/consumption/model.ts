@@ -59,6 +59,7 @@ export interface EnergySummary {
   readonly excludedIntervals: number;
 }
 
+const HOUR_MS = 3_600_000;
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 export function bucketLabel(periodStart: string, granularity: Granularity, timeZone: string): string {
@@ -119,4 +120,75 @@ export function summarizeEnergy(
     dataWatermark: earlier(electricity.metadata.dataWatermark, cooling.metadata.dataWatermark),
     excludedIntervals: excluded(electricity) + excluded(cooling),
   };
+}
+
+export interface HourComparison {
+  readonly label: string;
+  readonly electricityKWh: number | null;
+  readonly coolingKWh: number | null;
+  readonly cop: number | null;
+  readonly previousElectricityKWh: number | null;
+  readonly previousCoolingKWh: number | null;
+  readonly previousCop: number | null;
+}
+
+/**
+ * Today's complete hours against the whole of yesterday, joined by Site-local hour, so yesterday's
+ * later hours show where today is heading. The hour still running at `now` is left off: its
+ * partial energy would read as a drop.
+ */
+export function compareHours(today: EnergySummary, yesterday: EnergySummary, now: Date): HourComparison[] {
+  const complete = today.rows.filter((row) => new Date(row.periodStart).getTime() + HOUR_MS <= now.getTime());
+  const current = new Map(complete.map((row) => [row.label, row]));
+  const previous = new Map(yesterday.rows.map((row) => [row.label, row]));
+  // Hour labels are zero-padded, so they sort in clock order.
+  return [...new Set([...current.keys(), ...previous.keys()])].sort().map((label) => {
+    const now = current.get(label);
+    const before = previous.get(label);
+    return {
+      label,
+      electricityKWh: now?.electricityKWh ?? null,
+      coolingKWh: now?.coolingKWh ?? null,
+      cop: now?.cop ?? null,
+      previousElectricityKWh: before?.electricityKWh ?? null,
+      previousCoolingKWh: before?.coolingKWh ?? null,
+      previousCop: before?.cop ?? null,
+    };
+  });
+}
+
+/** The fractional change from `previous` to `current`; null when either is unknown or the base is zero. */
+export function relativeChange(current: number | null, previous: number | null): number | null {
+  if (current === null || previous === null || previous === 0) return null;
+  return (current - previous) / previous;
+}
+
+export interface HeatmapDay {
+  readonly label: string;
+  /** Energy per Site-local hour 0–23; null where the hour has no reading yet. */
+  readonly values: readonly (number | null)[];
+}
+
+/** Hourly energy laid out as Site-local days by hour of day, oldest day first. */
+export function hourlyHeatmap(series: EnergySeriesResponse, timeZone: string, days: readonly string[]): HeatmapDay[] {
+  const byDay = new Map(days.map((day) => [day, Array.from({ length: 24 }, () => null as number | null)]));
+  for (const point of series.points) {
+    const local = wallTime(new Date(point.periodStart), timeZone);
+    const key = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+    const hours = byDay.get(key);
+    if (hours) hours[local.hour] = point.energyKWh;
+  }
+  return days.map((day) => {
+    const [year, month, date] = day.split('-').map(Number);
+    const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, date)).getUTCDay()];
+    return { label: `${month}/${date} ${weekday}`, values: byDay.get(day)! };
+  });
+}
+
+/** The last `count` Site-local days as YYYY-MM-DD, oldest first, today last. */
+export function siteDays(now: Date, timeZone: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => {
+    const local = wallTime(new Date(now.getTime() - (count - 1 - index) * 86_400_000), timeZone);
+    return `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+  });
 }
