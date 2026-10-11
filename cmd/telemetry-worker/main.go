@@ -404,7 +404,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		return nil, nil, nil, err
 	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
-		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
+		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
 	})
 	if err != nil {
 		return nil, nil, nil, err

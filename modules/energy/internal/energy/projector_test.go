@@ -88,7 +88,7 @@ func TestProjectorProcessesOneCanonicalBatch(t *testing.T) {
 	resolver := &fakeResolver{resolution: validBinding()}
 	sink := &fakeSink{}
 	projector, err := NewProjector(ProjectorConfig{
-		CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 100,
+		CounterSource: source, BindingResolver: resolver, FactSink: sink, RebuildEvents: sink, BatchSize: 100,
 		Now: func() time.Time { return time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC) },
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestProjectorWritesFactsForPrimaryCoolingMeter(t *testing.T) {
 	binding.EnergyType = "cooling"
 	sink := &fakeSink{}
 	projector, err := NewProjector(ProjectorConfig{
-		CounterSource: &fakeSource{deltas: []CounterDelta{validDelta()}}, BindingResolver: &fakeResolver{resolution: binding}, FactSink: sink, BatchSize: 10,
+		CounterSource: &fakeSource{deltas: []CounterDelta{validDelta()}}, BindingResolver: &fakeResolver{resolution: binding}, FactSink: sink, RebuildEvents: sink, BatchSize: 10,
 		Now: func() time.Time { return time.Date(2026, 7, 29, 13, 0, 3, 0, time.UTC) },
 	})
 	if err != nil {
@@ -126,7 +126,7 @@ func TestProjectorDoesNotWriteWhenBindingIsNotUnique(t *testing.T) {
 	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
 	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingAmbiguous}}
 	sink := &fakeSink{}
-	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 10})
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, RebuildEvents: sink, BatchSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestProjectorDoesNotWriteWhenBindingIsMissing(t *testing.T) {
 	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
 	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingNoMatch}}
 	sink := &fakeSink{}
-	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, BatchSize: 10})
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: resolver, FactSink: sink, RebuildEvents: sink, BatchSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestProjectorRejectsDuplicateLogicalFactKey(t *testing.T) {
 	second := validDelta()
 	second.CurrentObservationID = first.CurrentObservationID
 	source := &fakeSource{deltas: []CounterDelta{first, second}}
-	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: &fakeResolver{resolution: validBinding()}, FactSink: &fakeSink{}, BatchSize: 10})
+	projector, err := NewProjector(ProjectorConfig{CounterSource: source, BindingResolver: &fakeResolver{resolution: validBinding()}, FactSink: &fakeSink{}, RebuildEvents: &fakeSink{}, BatchSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestProjectorReturnsSinkFailureWithoutAdvancingTheCheckpoint(t *testing.T) 
 	projector, err := NewProjector(ProjectorConfig{
 		CounterSource:   &fakeSource{deltas: []CounterDelta{validDelta()}},
 		BindingResolver: &fakeResolver{resolution: validBinding()},
-		FactSink:        sink, BatchSize: 10,
+		FactSink:        sink, RebuildEvents: sink, BatchSize: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,8 +250,23 @@ func (sink *fakeSink) AdvanceCheckpoint(_ context.Context, cursor ProjectionCurs
 	return nil
 }
 
+func (sink *fakeSink) AppendRebuildEvent(context.Context, RebuildEvent) error {
+	return nil
+}
+
 func (sink *fakeSink) InsertFacts(_ context.Context, facts []EnergyIntervalFact) error {
 	sink.called = true
 	sink.facts = append([]EnergyIntervalFact(nil), facts...)
 	return sink.err
+}
+
+// The telemetry worker once ran without a rebuild event sink; the first counter correction
+// then failed every batch and energy projection stopped for good.
+func TestNewProjectorRequiresARebuildEventSink(t *testing.T) {
+	_, err := NewProjector(ProjectorConfig{
+		CounterSource: &fakeSource{}, BindingResolver: &fakeResolver{}, FactSink: &fakeSink{}, BatchSize: 10,
+	})
+	if err == nil {
+		t.Fatal("projector built without a rebuild event sink")
+	}
 }
