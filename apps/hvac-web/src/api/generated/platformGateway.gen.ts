@@ -27,6 +27,10 @@ export const commandPaths = {
   reconcile: '/api/v1/commands/{commandId}/reconcile',
 } as const;
 
+export const intelligencePaths = {
+  siteLoadForecast: '/api/v1/sites/{siteId}/forecast/load',
+} as const;
+
 export const buildInfoSchema = z.object({
   service: z.literal('platform-gateway'), version: z.string(), commit: z.string(), builtAt: z.string(),
 }).strict();
