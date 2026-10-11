@@ -84,7 +84,7 @@ export function ConsumptionWorkspace() {
   return (
     <Main className="space-y-5">
       <PageHeader
-        title="能耗与成本"
+        title="能耗分析"
         description={`${currentScope.name} · 按站点当地时间统计`}
         actions={
           <>

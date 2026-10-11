@@ -86,7 +86,7 @@ export function SystemsDevicesWorkspace() {
   return (
     <Main className="space-y-5">
       <PageHeader
-        title="系统与设备"
+        title="设备"
         actions={(
           <div className="flex items-center gap-4">
             <LiveIndicator mode={mode} />

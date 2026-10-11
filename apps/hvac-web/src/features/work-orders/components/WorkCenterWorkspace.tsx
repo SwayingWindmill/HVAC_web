@@ -61,7 +61,7 @@ export function WorkCenterWorkspace() {
   return (
     <Main className="space-y-5">
       <PageHeader
-        title="工作中心"
+        title="工单"
         actions={(
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) })}>

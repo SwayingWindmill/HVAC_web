@@ -51,7 +51,7 @@ export function ConfigurationWorkspace() {
   const profile = query.data;
   return (
     <Main className="space-y-5">
-      <PageHeader title="系统配置" />
+      <PageHeader title="设置" />
       <WorkspaceQueryState pending={query.isPending} error={query.error} />
       {profile && (
         <Tabs

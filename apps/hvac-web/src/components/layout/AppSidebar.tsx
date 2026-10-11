@@ -1,5 +1,5 @@
+import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { Zap } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -9,11 +9,14 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
+import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { useScope } from '@/hooks/use-scope';
 import { NavUser } from './NavUser';
 import {
@@ -23,20 +26,31 @@ import {
 } from './app-navigation';
 
 interface AppSidebarProps {
-  readonly title?: string;
   readonly principalName: string;
   readonly principalRole: string;
   readonly onNavigate: (target: string) => void;
   readonly onLogout: () => void;
 }
 
+/** What waits on the operator: active alarms and open work orders, from the same queries their pages use. */
+function useNavCounts(siteId: string | undefined): Readonly<Record<string, number | undefined>> {
+  const alarms = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: Boolean(siteId) });
+  const workOrders = useQuery({ ...openWorkOrdersQuery(siteId ?? ''), enabled: Boolean(siteId) });
+  return {
+    'operations-alarms': alarms.data?.items.length,
+    'operations-work-center': workOrders.data?.length,
+  };
+}
+
 function NavItem({
   item,
+  count,
   currentPath,
   siteQuery,
   onNavigate,
 }: {
   readonly item: AppNavigationItem;
+  readonly count: number | undefined;
   readonly currentPath: string;
   readonly siteQuery: string;
   readonly onNavigate: (target: string) => void;
@@ -67,12 +81,12 @@ function NavItem({
           <span>{item.title}</span>
         </a>
       </SidebarMenuButton>
+      {count ? <SidebarMenuBadge aria-label={`${count} 项待处理`} className="tabular-nums">{count > 99 ? '99+' : count}</SidebarMenuBadge> : null}
     </SidebarMenuItem>
   );
 }
 
 export function AppSidebar({
-  title = '智慧能源 SaaS 平台',
   principalName,
   principalRole,
   onNavigate,
@@ -82,6 +96,7 @@ export function AppSidebar({
   const currentPath = location.pathname;
   const { currentScope } = useScope();
   const siteQuery = currentScope ? `?site=${currentScope.siteId}` : '';
+  const counts = useNavCounts(currentScope?.siteId);
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -93,16 +108,10 @@ export function AppSidebar({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground cursor-pointer"
               onClick={() => onNavigate(`/overview${siteQuery}`)}
             >
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
-                <Zap className="size-4.5" />
-              </div>
+              <img src="/quanlaihe-mark.svg" alt="" className="size-8 shrink-0" />
               <div className="flex min-w-0 flex-1 flex-col text-left leading-tight group-data-[collapsible=icon]:hidden">
-                <span className="truncate text-sm font-semibold tracking-tight text-foreground">
-                  {title}
-                </span>
-                <span className="truncate text-[11px] text-muted-foreground">
-                  Smart Energy Cloud
-                </span>
+                <span className="truncate text-sm font-semibold tracking-tight text-foreground">泉来禾智慧能源</span>
+                <span className="truncate text-xs text-muted-foreground">冷站能源管理</span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -121,6 +130,7 @@ export function AppSidebar({
                   <NavItem
                     key={item.id}
                     item={item}
+                    count={counts[item.id]}
                     currentPath={currentPath}
                     siteQuery={siteQuery}
                     onNavigate={onNavigate}
