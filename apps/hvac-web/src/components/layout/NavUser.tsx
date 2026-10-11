@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LogOut, Settings2, ShieldCheck } from 'lucide-react';
+import { ChevronsUpDown, LogOut, ShieldCheck } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -61,13 +61,9 @@ export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => onNavigate('/system?tab=users')}>
+              <DropdownMenuItem onSelect={() => onNavigate('/system')}>
                 <ShieldCheck />
-                权限与组织
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onNavigate('/settings')}>
-                <Settings2 />
-                平台配置
+                系统管理
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

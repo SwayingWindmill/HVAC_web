@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   LineChart,
   ServerCog,
-  Settings2,
   ShieldAlert,
 } from 'lucide-react';
 
@@ -52,11 +51,6 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
       { id: 'operations-alarms', title: '告警', path: '/operations/alarms', icon: ShieldAlert },
       { id: 'operations-work-center', title: '工单', path: '/operations/work-center', icon: CalendarCheck2 },
     ],
-  },
-  {
-    id: 'system',
-    label: '系统',
-    items: [{ id: 'settings', title: '设置', path: '/settings', icon: Settings2 }],
   },
 ];
 
