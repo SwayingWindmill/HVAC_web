@@ -28,7 +28,8 @@ function resolveBreadcrumbs(pathname: string, routeTitle: string | undefined) {
   for (const group of APP_NAVIGATION_CONFIG) {
     for (const item of group.items) {
       if (pathname === item.path || pathname.startsWith(`${item.path}/`)) {
-        return { group: group.label, page: item.title };
+        // A group named like its only page adds nothing to the trail.
+        return { group: group.label === item.title ? undefined : group.label, page: item.title };
       }
     }
   }

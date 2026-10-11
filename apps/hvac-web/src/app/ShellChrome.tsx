@@ -112,7 +112,6 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar
-        title="智慧能源 SaaS 平台"
         principalName={principal.principal.displayName}
         principalRole={principalRole}
         onNavigate={navigate}

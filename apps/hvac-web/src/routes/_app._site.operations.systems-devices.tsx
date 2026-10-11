@@ -9,6 +9,6 @@ export const Route = createFileRoute('/_app/_site/operations/systems-devices')({
     status: z.enum(['running', 'stopped', 'attention']).optional(),
     inspect: z.string().optional(),
   }),
-  staticData: { title: '系统与设备' },
+  staticData: { title: '设备' },
   component: SystemsDevicesWorkspace,
 });

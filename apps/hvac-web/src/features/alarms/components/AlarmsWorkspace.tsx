@@ -338,7 +338,7 @@ export function AlarmsWorkspace() {
     <AlarmActionsContext.Provider value={actions}>
       <Main className="@container/main flex flex-col gap-4 md:gap-6">
         <PageHeader
-          title="异常与告警"
+          title="告警"
           description={`${site.displayName} · 严重度优先，其次最近发生`}
           actions={(
             <Button variant="outline" size="sm" onClick={() => { void active.refetch(); void list.refetch(); void history.refetch(); }}>

@@ -280,7 +280,7 @@ export function OverviewWorkspace() {
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
       <PageHeader
-        title="总览看板"
+        title="总览"
         description={`${site.displayName} · 冷站运行与今日用能`}
         meta={
           <Badge variant="outline" className="gap-1.5 font-normal">

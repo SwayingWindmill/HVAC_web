@@ -7,6 +7,6 @@ export const Route = createFileRoute('/_app/_site/operations/work-center')({
     view: z.enum(['open', 'mine', 'done', 'all']).optional(),
     inspect: z.string().optional(),
   }),
-  staticData: { title: '工作中心' },
+  staticData: { title: '工单' },
   component: WorkCenterWorkspace,
 });

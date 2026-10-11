@@ -12,6 +12,6 @@ export const Route = createFileRoute('/_app/_site/operations/alarms')({
     q: z.string().optional(),
     inspect: z.string().optional(),
   }),
-  staticData: { title: '异常与告警' },
+  staticData: { title: '告警' },
   component: AlarmsWorkspace,
 });

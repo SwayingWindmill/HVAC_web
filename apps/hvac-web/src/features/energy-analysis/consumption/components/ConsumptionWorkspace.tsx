@@ -150,7 +150,7 @@ export function ConsumptionWorkspace() {
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
       <PageHeader
-        title="能耗与成本"
+        title="能耗分析"
         description={`${currentScope.name} · 本期与${previousLabel}对比`}
         actions={
           <>

@@ -545,13 +545,13 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   runtime.registerUnsavedDraft({ id: 'notes', label: 'Operator notes', isDirty: () => true });
   const request = runtime.protectedRequestToken();
 
-  const outcome = await runtime.requestSiteNavigation(`/operations/control?site=${site.id}`);
+  const outcome = await runtime.requestSiteNavigation(`/operations/alarms?site=${site.id}`);
 
   assert.equal(outcome, 'navigated');
   assert.equal(request.signal.aborted, false);
   assert.equal(runtime.current().protectedScope.siteId, site.id);
   assert.equal(runtime.current().protectedScope.draftCount, 1);
-  assert.deepEqual(env.navigations, [`/operations/control?site=${site.id}`]);
+  assert.deepEqual(env.navigations, [`/operations/alarms?site=${site.id}`]);
 });
 
 test('cross-Site navigation warns for drafts and purges before navigation', async () => {
