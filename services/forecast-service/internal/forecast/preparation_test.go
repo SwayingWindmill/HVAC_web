@@ -28,10 +28,12 @@ func (store *preparationStoreStub) CreatePreparedForecast(_ context.Context, inp
 type metricHistoryStub struct {
 	facts []MetricFact
 	calls int
+	query MetricHistoryQuery
 }
 
-func (history *metricHistoryStub) ReadMetricSeries(context.Context, MetricHistoryQuery) ([]MetricFact, error) {
+func (history *metricHistoryStub) ReadMetricSeries(_ context.Context, query MetricHistoryQuery) ([]MetricFact, error) {
 	history.calls++
+	history.query = query
 	result := slices.Clone(history.facts)
 	if history.calls%2 == 0 {
 		slices.Reverse(result)
@@ -93,6 +95,10 @@ func TestPreparerFreezesAuthoritativeMetricHistoryDeterministically(t *testing.T
 	frozen := first.FeatureValues.Series[0].Facts
 	if frozen[1].Value != 775 || frozen[0].PeriodEnd.After(frozen[1].PeriodEnd) {
 		t.Fatalf("history was not normalized to latest revision in time order: %#v", frozen)
+	}
+	// A week of history lets a daily profile average the same time of day across days.
+	if history.query.From != origin.Add(-7*24*time.Hour) || history.query.To != origin {
+		t.Fatalf("history window=%s..%s", history.query.From, history.query.To)
 	}
 	if first.LatestDataTime != origin.Add(-15*time.Minute) || first.ForecastOrigin != origin {
 		t.Fatalf("times latest=%s origin=%s", first.LatestDataTime, first.ForecastOrigin)

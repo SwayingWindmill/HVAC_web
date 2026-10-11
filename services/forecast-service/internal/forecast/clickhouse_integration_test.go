@@ -66,7 +66,7 @@ func TestAuthoritativeHistoryPreparesAndPublishesServerOwnedForecast(t *testing.
 		t.Fatalf("frozen request=%#v", request)
 	}
 
-	writer, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_writer"})
+	writer, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_writer", ReaderUsername: "forecast_service_reader"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestAuthoritativeHistoryPreparesAndPublishesServerOwnedForecast(t *testing.
 		t.Fatal(err)
 	}
 
-	reader, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", Username: "forecast_service_reader"})
+	reader, err := NewClickHouseSink(ClickHouseConfig{BaseURL: baseURL, Database: "analytics", Table: "forecast_series", ReaderUsername: "forecast_service_reader"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +111,11 @@ func TestClickHouseForecastSinkPersistsTraceableBaseline(t *testing.T) {
 		t.Skip("FORECAST_CLICKHOUSE_TEST_URL is not set")
 	}
 	sink, err := NewClickHouseSink(ClickHouseConfig{
-		BaseURL:  baseURL,
-		Database: "analytics",
-		Table:    "forecast_series",
-		Username: "forecast_service_writer",
+		BaseURL:        baseURL,
+		Database:       "analytics",
+		Table:          "forecast_series",
+		Username:       "forecast_service_writer",
+		ReaderUsername: "forecast_service_reader",
 	})
 	if err != nil {
 		t.Fatal(err)

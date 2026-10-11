@@ -24,54 +24,92 @@ type ForecastEngine interface {
 	Generate(context.Context, Request, time.Time) ([]Point, error)
 }
 
-// TrendEngine is the production baseline for the local Forecast chain. Four or
-// more observations produce an actual fitted model with an uncertainty band;
-// shorter but non-empty input is explicitly downgraded to LAST_OBSERVATION.
-type TrendEngine struct{}
+// profileDays is how many earlier days a forecast's time of day is averaged over.
+const profileDays = 7
 
-func (TrendEngine) Generate(_ context.Context, request Request, generatedAt time.Time) ([]Point, error) {
+// BaselineEngine is the production baseline for the local Forecast chain. A chiller plant's
+// load follows the working day, so where earlier days cover a forecast's time of day it forecasts
+// their average at that time, with a band from how much those days differ; where none do it
+// extends the linear trend of the history. Fewer than four observations are an explicit FALLBACK.
+type BaselineEngine struct{}
+
+func (BaselineEngine) Generate(_ context.Context, request Request, generatedAt time.Time) ([]Point, error) {
 	if len(request.Observations) < 4 {
 		return generateLastObservationFallback(request, generatedAt), nil
 	}
-	firstAt := request.Observations[0].ObservedAt.UTC()
-	var sumX, sumY float64
+	trend, rmse, ok := linearTrend(request.Observations)
+	if !ok {
+		return generateLastObservationFallback(request, generatedAt), nil
+	}
+	minutes, _ := granularityMinutes(request.Granularity)
+	slot := time.Duration(minutes) * time.Minute
+	bySlot := make(map[int64]float64, len(request.Observations))
 	for _, observation := range request.Observations {
-		x := observation.ObservedAt.UTC().Sub(firstAt).Minutes()
-		sumX += x
+		bySlot[observation.ObservedAt.UTC().Truncate(slot).Unix()] = observation.Value
+	}
+	nonNegative := request.Target == "SITE_LOAD" || request.Target == "PV_GENERATION"
+	return generatePoints(request, generatedAt, "VALID", func(forecastFor time.Time) (float64, *float64, *float64) {
+		samples := make([]float64, 0, profileDays)
+		for day := 1; day <= profileDays; day++ {
+			if value, found := bySlot[forecastFor.UTC().Add(-time.Duration(day)*24*time.Hour).Truncate(slot).Unix()]; found {
+				samples = append(samples, value)
+			}
+		}
+		value, spread := trend(forecastFor), rmse
+		if len(samples) > 0 {
+			value, spread = meanAndDeviation(samples)
+			if len(samples) == 1 {
+				spread = rmse
+			}
+		}
+		lower, upper := value-1.96*spread, value+1.96*spread
+		if nonNegative {
+			value, lower = math.Max(0, value), math.Max(0, lower)
+		}
+		return value, &lower, &upper
+	}), nil
+}
+
+// linearTrend fits value against time; ok is false when every observation shares one instant.
+func linearTrend(observations []Observation) (func(time.Time) float64, float64, bool) {
+	firstAt := observations[0].ObservedAt.UTC()
+	var sumX, sumY float64
+	for _, observation := range observations {
+		sumX += observation.ObservedAt.UTC().Sub(firstAt).Minutes()
 		sumY += observation.Value
 	}
-	n := float64(len(request.Observations))
+	n := float64(len(observations))
 	meanX, meanY := sumX/n, sumY/n
 	var numerator, denominator float64
-	for _, observation := range request.Observations {
+	for _, observation := range observations {
 		x := observation.ObservedAt.UTC().Sub(firstAt).Minutes()
 		numerator += (x - meanX) * (observation.Value - meanY)
 		denominator += (x - meanX) * (x - meanX)
 	}
 	if denominator == 0 {
-		return generateLastObservationFallback(request, generatedAt), nil
+		return nil, 0, false
 	}
 	slope := numerator / denominator
 	intercept := meanY - slope*meanX
 	var squaredResidual float64
-	for _, observation := range request.Observations {
-		x := observation.ObservedAt.UTC().Sub(firstAt).Minutes()
-		residual := observation.Value - (intercept + slope*x)
+	for _, observation := range observations {
+		residual := observation.Value - (intercept + slope*observation.ObservedAt.UTC().Sub(firstAt).Minutes())
 		squaredResidual += residual * residual
 	}
-	rmse := math.Sqrt(squaredResidual / n)
-	return generatePoints(request, generatedAt, "VALID", func(forecastFor time.Time) (float64, *float64, *float64) {
-		x := forecastFor.UTC().Sub(firstAt).Minutes()
-		value := intercept + slope*x
-		if request.Target == "SITE_LOAD" || request.Target == "PV_GENERATION" {
-			value = math.Max(0, value)
-		}
-		lower, upper := value-1.96*rmse, value+1.96*rmse
-		if request.Target == "SITE_LOAD" || request.Target == "PV_GENERATION" {
-			lower = math.Max(0, lower)
-		}
-		return value, &lower, &upper
-	}), nil
+	return func(at time.Time) float64 { return intercept + slope*at.UTC().Sub(firstAt).Minutes() }, math.Sqrt(squaredResidual / n), true
+}
+
+func meanAndDeviation(values []float64) (float64, float64) {
+	var sum float64
+	for _, value := range values {
+		sum += value
+	}
+	mean := sum / float64(len(values))
+	var squared float64
+	for _, value := range values {
+		squared += (value - mean) * (value - mean)
+	}
+	return mean, math.Sqrt(squared / float64(len(values)))
 }
 
 func generateLastObservationFallback(request Request, generatedAt time.Time) []Point {
@@ -112,7 +150,7 @@ type Service struct {
 }
 
 func NewService(sink Sink, publication PublicationStore, clock Clock) (*Service, error) {
-	return NewServiceWithEngine(sink, publication, TrendEngine{}, clock)
+	return NewServiceWithEngine(sink, publication, BaselineEngine{}, clock)
 }
 
 func NewServiceWithEngine(sink Sink, publication PublicationStore, engine ForecastEngine, clock Clock) (*Service, error) {

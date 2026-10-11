@@ -335,6 +335,90 @@ WHERE id = ${sqlLiteral(topologyVersionId)} AND status = 'DRAFT';
 COMMIT;`;
 }
 
+// The plant's HVAC demand is a 15-minute Site load metric computed on a schedule, and a
+// day-ahead Site load forecast is deployed on it, so forecasting runs on the plant's own
+// history. The metric is backfilled over the last two days so a forecast can start at once.
+function backfillWindows() {
+  const hourStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  return Array.from({ length: 192 }, (_, index) => {
+    const start = hourStart - (192 - index) * 900_000;
+    return [new Date(start), new Date(start + 900_000)];
+  });
+}
+
+function buildForecastSeed(site, points) {
+  const { tenantId, siteId } = site;
+  const ids = buildIdentities(site, points);
+  const loadPointId = ids.pointIdByRef.get('METER-HVAC-TOTAL/hvac_meter.active_power');
+  if (!loadPointId) throw new Error('METER-HVAC-TOTAL/hvac_meter.active_power is required for the Site load metric');
+  let sequence = 0x700000000001;
+  const nextID = () => siteUUID(site, sequence++);
+  const [metricId, metricVersionId, dependencyId, bindingId, scheduleId] = [nextID(), nextID(), nextID(), nextID(), nextID()];
+  const [featureSetId, featureSetVersionId, datasetId, modelId, trainingRunId, modelVersionId, deploymentId, forecastScheduleId] =
+    [nextID(), nextID(), nextID(), nextID(), nextID(), nextID(), nextID(), nextID()];
+  const topologyVersionId = siteUUID(site, 0x600000000001);
+  const code = site.siteCode.replaceAll('-', '_');
+  const t = sqlLiteral(tenantId);
+  const st = sqlLiteral(siteId);
+  const id = sqlLiteral;
+  return `BEGIN;
+INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at)
+VALUES (${id(metricId)}, ${t}, ${id(`plant_load_15min_${code}`)}, '冷站用电负荷（15 分钟）', 'LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at)
+VALUES (${id(metricVersionId)}, ${t}, ${id(metricId)}, 1, 'kW', 'NUMBER', 'SITE', '15MIN', 'AVG', 'IDENTITY', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
+SELECT ${id(dependencyId)}::uuid, ${t}::uuid, ${id(metricVersionId)}::uuid, 'POINT', 'site_load', NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
+WHERE EXISTS (SELECT 1 FROM core_registry.metric_versions WHERE id = ${id(metricVersionId)} AND status = 'DRAFT')
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${id(metricVersionId)} AND status = 'DRAFT';
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+VALUES (${id(bindingId)}, ${t}, ${st}, ${id(metricVersionId)}, ${id(metricId)}, 1, 1, 'SITE', ${st}, '15MIN', ${id(JSON.stringify({ points: { site_load: loadPointId } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${id(scheduleId)}, ${id(`plant-load-15min-${site.siteCode}`)}, '冷站用电负荷每 15 分钟计算', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '*/15 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId }))},
+  date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at) VALUES
+${backfillWindows().map(([start, end]) => `  (${id(siteUUID(site, 0x710000000000 + start.getTime() / 900_000))}, 'BACKFILL', 'METRIC_BACKFILL', ${t}, ${st}, ${id(end.toISOString())}, ${id(`plant-load-backfill:${bindingId}:${start.toISOString()}`)}, ${id(JSON.stringify({ bindingId, periodStart: start.toISOString(), periodEnd: end.toISOString() }))}, 'READY', 3, 60, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (dedup_key) DO NOTHING;
+
+INSERT INTO core_registry.forecast_feature_sets (id, tenant_id, feature_set_code, target, status, revision, created_at, updated_at)
+VALUES (${id(featureSetId)}, ${t}, ${id(`plant_load_${code}`)}, 'SITE_LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_feature_set_versions (id, tenant_id, feature_set_id, version, feature_schema, fallback_schema, status, revision, created_at, updated_at)
+VALUES (${id(featureSetVersionId)}, ${t}, ${id(featureSetId)}, 1, ${id(JSON.stringify({ targetMetricVersionId: metricVersionId, features: ['load_history'] }))}, NULL, 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_dataset_snapshots (id, tenant_id, site_id, target, subject_type, subject_id, train_from, train_to, feature_set_version_id, topology_version_id, metric_version_refs, weather_source, data_quality_summary, manifest_uri, manifest_checksum, created_at)
+VALUES (${id(datasetId)}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, '2026-01-01T00:00:00Z', '2026-10-01T00:00:00Z', ${id(featureSetVersionId)}, ${id(topologyVersionId)}, ${id(JSON.stringify([metricVersionId]))}, NULL, '{}', ${id(`local://forecast/${site.siteCode}/plant-load/manifest.json`)}, repeat('0', 64), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_models (id, tenant_id, model_code, target, subject_type, horizon_minutes, granularity, status, revision, created_at, updated_at)
+VALUES (${id(modelId)}, ${t}, ${id(`plant_load_day_ahead_${code}`)}, 'SITE_LOAD', 'SITE', 1440, '15MIN', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_training_runs (id, tenant_id, site_id, model_id, dataset_snapshot_id, feature_set_version_id, topology_version_id, algorithm, hyperparameters, code_version, evaluation, status, started_at, finished_at, revision, created_at, updated_at)
+VALUES (${id(trainingRunId)}, ${t}, ${st}, ${id(modelId)}, ${id(datasetId)}, ${id(featureSetVersionId)}, ${id(topologyVersionId)}, 'BASELINE', '{"method":"TIME_OF_DAY_PROFILE"}', 'local-seed', NULL, 'PENDING', NULL, NULL, 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.forecast_training_runs SET status = 'RUNNING', started_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${id(trainingRunId)} AND status = 'PENDING';
+UPDATE core_registry.forecast_training_runs SET status = 'SUCCEEDED', evaluation = '{"seeded":true}', finished_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp() + interval '1 second'
+WHERE id = ${id(trainingRunId)} AND status = 'RUNNING';
+INSERT INTO core_registry.forecast_model_versions (id, tenant_id, site_id, model_id, model_version, training_run_id, dataset_snapshot_id, feature_set_version_id, topology_version_id, artifact_uri, artifact_checksum, evaluation, compatibility, status, revision, created_at, updated_at)
+VALUES (${id(modelVersionId)}, ${t}, ${st}, ${id(modelId)}, 1, ${id(trainingRunId)}, ${id(datasetId)}, ${id(featureSetVersionId)}, ${id(topologyVersionId)}, ${id(`local://forecast/${site.siteCode}/plant-load/model.bin`)}, repeat('0', 64), '{"seeded":true}', '{"runtime":"go"}', 'CANDIDATE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.forecast_model_versions SET status = 'VALIDATED', revision = revision + 1, updated_at = clock_timestamp() + interval '1 second'
+WHERE id = ${id(modelVersionId)} AND status = 'CANDIDATE';
+INSERT INTO core_registry.forecast_deployments (id, tenant_id, site_id, target, subject_type, subject_id, model_version_id, model_id, feature_set_version_id, topology_version_id, status, effective_from, revision, created_at, updated_at)
+VALUES (${id(deploymentId)}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, ${id(modelVersionId)}, ${id(modelId)}, ${id(featureSetVersionId)}, ${id(topologyVersionId)}, 'ACTIVE', '2026-01-01T00:00:00Z', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${id(forecastScheduleId)}, ${id(`plant-load-forecast-${site.siteCode}`)}, '冷站用电负荷日前预测（每小时）', ${t}, ${st}, 'FORECAST_RUN', 'CRON', '7 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 120,
+  ${id(JSON.stringify({ target: 'SITE_LOAD', subjectType: 'SITE', subjectId: siteId }))}, clock_timestamp())
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+COMMIT;`;
+}
+
 function localAdminPrincipalId() {
   if (!existsSync(reconciliationPath)) throw new Error('identity-reconcile.json is required before simulator authorization bootstrap');
   const reconciliation = JSON.parse(readFileSync(reconciliationPath, 'utf8'));
@@ -543,6 +627,7 @@ if (process.argv.includes('--authorization-only')) {
 for (const site of localSites) {
   psql('hvac_s1', buildS1Seed(site, seededPoints));
   psql('hvac_s1', buildEnergyTopologySeed(site, seededPoints));
+  psql('hvac_s1', buildForecastSeed(site, seededPoints));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);
