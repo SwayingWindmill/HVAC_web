@@ -224,6 +224,9 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 	if config.FactSink == nil {
 		return nil, errors.New("energy projector fact sink is required")
 	}
+	if config.RebuildEvents == nil {
+		return nil, errors.New("energy projector rebuild event sink is required")
+	}
 	if config.BatchSize <= 0 {
 		return nil, errors.New("energy projector batch size must be positive")
 	}

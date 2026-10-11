@@ -41,7 +41,7 @@ func TestHistoricalReplayCounterHistoryProjectsEnergyFacts(t *testing.T) {
 		pointID:  "01990000-3481-7000-8000-000000000002",
 	}
 	projector, err := energy.NewProjector(energy.ProjectorConfig{
-		CounterSource: reader, BindingResolver: resolver, FactSink: writer, BatchSize: 32,
+		CounterSource: reader, BindingResolver: resolver, FactSink: writer, RebuildEvents: writer, BatchSize: 32,
 		Now: func() time.Time { return time.Date(2026, 8, 28, 17, 35, 0, 0, time.UTC) },
 	})
 	if err != nil {
