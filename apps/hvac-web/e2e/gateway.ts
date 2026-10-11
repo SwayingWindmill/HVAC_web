@@ -43,10 +43,20 @@ function replayEnergy(series: Json, query: Json): Json {
   return { ...series, points };
 }
 
+function advance(command: Json, status: string, at: string) {
+  command.transitions.push({
+    ...(command.transitions.length ? { fromStatus: command.status } : {}),
+    toStatus: status, reason: status, actorType: 'PRINCIPAL', occurredAt: at, version: command.transitions.length + 1,
+  });
+  command.status = status;
+  command.updatedAt = at;
+}
+
 export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
+  readonly commands: Json[] = [];
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -66,6 +76,22 @@ export class Gateway {
       return route.fulfill({ status: 404, contentType: 'application/problem+json', body: JSON.stringify({ status: 404, code: 'ROUTE_NOT_FOUND', title: 'Not found' }) });
     }
     return route.fulfill({ status: reply.status ?? 200, contentType: 'application/json', body: JSON.stringify(reply.body) });
+  }
+
+  private submitCommand(input: Json, now: string): Json {
+    const point = fixture<Json>('asset-model.json').telemetryPoints.find((candidate: Json) => candidate.id === input.commandPointId);
+    const capability: string = point.sourceMetadata.capability;
+    const risk = capability === 'START' || capability === 'STOP' ? 'MEDIUM' : 'LOW';
+    const command: Json = {
+      schemaVersion: 1, commandId: `command-${this.commands.length + 1}`, siteId: SITE_ID, deviceId: point.reportingDeviceId, pointId: point.id,
+      capability, status: 'SUBMITTED', risk, approvalPolicy: risk === 'LOW' ? 'NONE' : 'SINGLE_APPROVER',
+      approvalCount: 0, requiredApprovalCount: risk === 'LOW' ? 0 : 1, parameters: input.parameters, transitions: [],
+      createdAt: now, updatedAt: now,
+    };
+    advance(command, 'SUBMITTED', now);
+    advance(command, risk === 'LOW' ? 'SUCCEEDED' : 'AWAITING_APPROVAL', now);
+    this.commands.unshift(command);
+    return command;
   }
 
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
@@ -100,6 +126,18 @@ export class Gateway {
         return undefined;
       }
       return { body: { data: alarm } };
+    }
+
+    if (method === 'GET' && path === '/api/v1/commands') return { body: { data: this.commands } };
+    if (method === 'POST' && path === '/api/v1/commands') return { status: 202, body: this.submitCommand(body!, now) };
+    const approval = path.match(/^\/api\/v1\/commands\/([^/]+)\/approve$/);
+    if (method === 'POST' && approval) {
+      const command = this.commands.find((candidate) => candidate.commandId === approval[1]);
+      if (!command || command.status !== 'AWAITING_APPROVAL') return { status: 409, body: { status: 409, code: 'COMMAND_APPROVAL_INVALID', detail: '指令不在待审批状态' } };
+      command.approvalCount += 1;
+      advance(command, 'APPROVED', now);
+      advance(command, 'SUCCEEDED', now);
+      return { body: command };
     }
 
     const sitePrefix = `/api/v1/sites/${SITE_ID}/work-orders`;

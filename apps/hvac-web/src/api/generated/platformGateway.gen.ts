@@ -20,6 +20,13 @@ export const alarmPaths = {
   assign: '/api/v1/alarms/{alarmId}/assign',
 } as const;
 
+export const commandPaths = {
+  collection: '/api/v1/commands',
+  detail: '/api/v1/commands/{commandId}',
+  approve: '/api/v1/commands/{commandId}/approve',
+  reconcile: '/api/v1/commands/{commandId}/reconcile',
+} as const;
+
 export const buildInfoSchema = z.object({
   service: z.literal('platform-gateway'), version: z.string(), commit: z.string(), builtAt: z.string(),
 }).strict();
