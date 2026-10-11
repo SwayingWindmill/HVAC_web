@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 type HTTPAuthority interface {
 	Submit(context.Context, commandmodel.SubmitRequest) (SubmitResult, error)
 	Get(context.Context, string, string) (commandmodel.CommandIntent, error)
+	List(ctx context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error)
 	Approve(context.Context, commandmodel.ApproveRequest) (commandmodel.CommandIntent, error)
 	Reconcile(context.Context, commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error)
 }
@@ -140,12 +142,15 @@ func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 
 func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.Path == InternalCommandsPath {
-		if request.Method != http.MethodPost {
-			writer.Header().Set("Allow", http.MethodPost)
+		switch request.Method {
+		case http.MethodPost:
+			h.createCommand(writer, request)
+		case http.MethodGet:
+			h.listCommands(writer, request)
+		default:
+			writer.Header().Set("Allow", "GET, POST")
 			writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
-			return
 		}
-		h.createCommand(writer, request)
 		return
 	}
 	prefix := InternalCommandsPath + "/"
@@ -368,6 +373,40 @@ func (h *HTTPHandler) getCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeCommandJSON(writer, http.StatusOK, commandView(intent))
+}
+
+// MaximumListedCommands bounds one page of a Site's Commands, newest first.
+const MaximumListedCommands = 100
+
+// listCommands returns a Site's newest Commands to a Gateway read context scoped to that Site.
+func (h *HTTPHandler) listCommands(writer http.ResponseWriter, request *http.Request) {
+	tenantID := strings.TrimSpace(request.Header.Get(tenantHeader))
+	siteID := request.URL.Query().Get("siteId")
+	limit, err := strconv.Atoi(request.URL.Query().Get("limit"))
+	if tenantID == "" || siteID == "" || len(siteID) > 256 || err != nil || limit < 1 || limit > MaximumListedCommands {
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_LIST_REQUEST_INVALID", false)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandReadContextHeader))
+	if err != nil || claims.TenantID != tenantID || len(claims.Scopes) != 2 ||
+		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
+			"command:read", []string{"tenant:" + tenantID, "site:" + siteID}) != nil ||
+		!containsCommandScope(claims.Scopes, "tenant:"+tenantID) || !containsCommandScope(claims.Scopes, "site:"+siteID) {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_READ_CONTEXT_REJECTED", false)
+		return
+	}
+	intents, err := h.config.Authority.List(request.Context(), tenantID, siteID, limit)
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return
+	}
+	views := make([]CommandView, 0, len(intents))
+	for _, intent := range intents {
+		views = append(views, commandView(intent))
+	}
+	writeCommandJSON(writer, http.StatusOK, struct {
+		Data []CommandView `json:"data"`
+	}{Data: views})
 }
 
 func validInternalApproval(commandID string, input internalApproveCommandRequest) bool {

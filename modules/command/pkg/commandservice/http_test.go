@@ -25,7 +25,17 @@ type fakeHTTPAuthority struct {
 	intent     commandmodel.CommandIntent
 	getOrg     string
 	getID      string
+	listSite   string
+	listLimit  int
 	err        error
+}
+
+func (authority *fakeHTTPAuthority) List(_ context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error) {
+	authority.getOrg, authority.listSite, authority.listLimit = tenantID, siteID, limit
+	if authority.err != nil {
+		return nil, authority.err
+	}
+	return []commandmodel.CommandIntent{authority.intent}, nil
 }
 
 func (authority *fakeHTTPAuthority) Submit(_ context.Context, request commandmodel.SubmitRequest) (SubmitResult, error) {
@@ -262,6 +272,58 @@ func TestCommandHTTPReadRequiresSignedOrganizationAndCommandScopes(t *testing.T)
 	handler.ServeHTTP(forgedRecorder, forged)
 	if forgedRecorder.Code != http.StatusForbidden {
 		t.Fatalf("forged status=%d body=%s", forgedRecorder.Code, forgedRecorder.Body.String())
+	}
+}
+
+func TestCommandHTTPListRequiresAReadContextForTheSite(t *testing.T) {
+	now := time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC)
+	iamSigner := newECDSASigner(t)
+	gatewaySigner := newECDSASigner(t)
+	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
+		ID: "command-1", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
+		Status: commandmodel.IntentAwaitingApproval, Risk: commandmodel.RiskMedium, ApprovalPolicy: commandmodel.ApprovalSingleApprover,
+		DeviceCommandSequence: 2, Version: 3, SnapshotRevision: 18, CreatedAt: now, UpdatedAt: now,
+	}}
+	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
+	readContext := func(siteID string) string {
+		signed, err := identitycontext.SignDelegation(gatewaySigner, identitycontext.DelegationClaims{
+			Issuer: "spiffe://hvac.local/platform-gateway", ExecutingService: "spiffe://hvac.local/platform-gateway",
+			Subject: "user-1", SubjectIssuer: "https://issuer.example.test", Audience: "command-service",
+			TenantID: "org-1", Actions: []string{"command:read"},
+			Scopes: []string{"tenant:org-1", "site:" + siteID}, PolicyRevision: "policy-1",
+			SessionID: "session-1", TokenID: "list-" + siteID, IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signed
+	}
+	list := func(context string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, InternalCommandsPath+"?siteId=site-1&limit=20", nil)
+		request.Header.Set(tenantHeader, "org-1")
+		request.Header.Set(commandReadContextHeader, context)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	recorder := list(readContext("site-1"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body.Data) != 1 || body.Data[0]["commandId"] != "command-1" {
+		t.Fatalf("list body=%s err=%v", recorder.Body.String(), err)
+	}
+	if authority.getOrg != "org-1" || authority.listSite != "site-1" || authority.listLimit != 20 {
+		t.Fatalf("authority list drifted %s %s %d", authority.getOrg, authority.listSite, authority.listLimit)
+	}
+
+	if other := list(readContext("site-2")); other.Code != http.StatusForbidden {
+		t.Fatalf("another site's context listed commands status=%d body=%s", other.Code, other.Body.String())
 	}
 }
 

@@ -140,6 +140,49 @@ func TestGatewayGetCommandUsesScopedReadContext(t *testing.T) {
 	}
 }
 
+func TestGatewayListCommandsReadsAVisibleSitesCommands(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	request := httptest.NewRequest(http.MethodGet, publicCommandsPath+"?siteId="+fixture.siteID+"&limit=20", nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Data []commandView `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body.Data) != 1 || body.Data[0].CommandID != fixture.commandID {
+		t.Fatalf("list body=%s err=%v", recorder.Body.String(), err)
+	}
+	if fixture.commandCalls.Load() != 1 || fixture.registryCalls.Load() != 1 {
+		t.Fatalf("command list calls command=%d registry=%d", fixture.commandCalls.Load(), fixture.registryCalls.Load())
+	}
+}
+
+func TestGatewayListCommandsHidesASiteOutsideTheSession(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	request := httptest.NewRequest(http.MethodGet, publicCommandsPath+"?siteId=018f3e00-2000-7000-8000-000000000002&limit=20", nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound || fixture.commandCalls.Load() != 0 {
+		t.Fatalf("status=%d commandCalls=%d body=%s", recorder.Code, fixture.commandCalls.Load(), recorder.Body.String())
+	}
+}
+
+func TestGatewayListCommandsRejectsCrossTenantProjection(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.crossTenantView.Store(true)
+	request := httptest.NewRequest(http.MethodGet, publicCommandsPath+"?siteId="+fixture.siteID+"&limit=20", nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestGatewayGetCommandRejectsCrossTenantProjection(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	fixture.crossTenantView.Store(true)
@@ -444,7 +487,7 @@ func (fixture *commandGatewayFixture) registryDecisionResponse(t *testing.T, req
 	t.Helper()
 	var input registryauth.DecisionRequest
 	if json.NewDecoder(request.Body).Decode(&input) != nil ||
-		(input.Action != registryauth.ActionAssetRead && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionDeviceRead) {
+		(input.Action != registryauth.ActionAssetRead && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionDeviceRead && input.Action != registryauth.ActionSiteRead) {
 		t.Fatal("invalid Registry decision request")
 	}
 	decision := registryauth.Decision{
@@ -574,6 +617,11 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 			t.Fatal("missing Registry delegation grant")
 		}
 		switch request.URL.Path {
+		case "/internal/v1/registry/sites/" + fixture.siteID:
+			return telemetryJSONResponse(http.StatusOK, platformapi.Site{
+				ID: fixture.siteID, TenantID: fixture.tenantID, Code: "PLANT-01", DisplayName: "Central Plant", Timezone: "Asia/Shanghai",
+				Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+			}), nil
 		case "/internal/v1/registry/assets/" + fixture.assetID:
 			return telemetryJSONResponse(http.StatusOK, asset), nil
 		case "/internal/v1/registry/sites/" + fixture.siteID + "/asset-model":
@@ -669,6 +717,15 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 		case http.MethodGet:
 			if request.Header.Get("X-Tenant-ID") != fixture.tenantID {
 				t.Fatal("missing tenant for command read")
+			}
+			if request.URL.Path == internalCommandsPath {
+				claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Command-Read-Context"))
+				if err != nil || len(claims.Actions) != 1 || claims.Actions[0] != "command:read" || len(claims.Scopes) != 2 ||
+					!commandTestContains(claims.Scopes, "tenant:"+fixture.tenantID) || !commandTestContains(claims.Scopes, "site:"+fixture.siteID) ||
+					request.URL.Query().Get("siteId") != fixture.siteID || request.URL.Query().Get("limit") != "20" {
+					t.Fatalf("invalid command list context claims=%#v query=%s err=%v", claims, request.URL.RawQuery, err)
+				}
+				return telemetryJSONResponse(http.StatusOK, map[string][]commandView{"data": {fixture.commandView(now)}}), nil
 			}
 			claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Command-Read-Context"))
 			if err != nil || claims.TenantID != fixture.tenantID || len(claims.Actions) != 1 || claims.Actions[0] != "command:read" || !commandTestContains(claims.Scopes, "tenant:"+fixture.tenantID) || !commandTestContains(claims.Scopes, "command:"+fixture.commandID) {

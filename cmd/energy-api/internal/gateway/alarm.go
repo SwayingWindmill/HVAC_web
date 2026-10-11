@@ -12,13 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
@@ -704,64 +701,20 @@ func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, a
 }
 
 func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSession, siteID string, list bool) *alarmFailure {
-	if !alarmmodel.IsUUIDv7(siteID) || h.registry == nil || h.registry.coreHTTPClient == nil || strings.TrimSpace(h.registry.coreBaseURL) == "" {
+	if !alarmmodel.IsUUIDv7(siteID) {
 		failure := alarmUnavailable("Authoritative Site visibility is unavailable.")
 		return &failure
 	}
-	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
-	if failure != nil {
-		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
-			value := alarmNotFound()
-			if list {
-				value = alarmSiteNotFound()
-			}
-			return &value
-		}
-		value := alarmUnavailable("Authoritative Site authorization is temporarily unavailable.")
+	visibility := h.siteVisibility(request, session, siteID)
+	switch {
+	case visibility.unavailable != "":
+		value := alarmUnavailable(visibility.unavailable)
 		return &value
-	}
-	if _, allowed := authorization.allowedSiteIDs[siteID]; !allowed {
+	case visibility.hidden:
 		value := alarmNotFound()
 		if list {
 			value = alarmSiteNotFound()
 		}
-		return &value
-	}
-	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
-	registryRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, publicPath)
-	if !matches {
-		value := alarmUnavailable("Authoritative Site route is unavailable.")
-		return &value
-	}
-	outer := routeDecisionFromContext(request.Context())
-	decision := ownershipregistry.Decision{
-		RouteKey: http.MethodGet + " " + registryRoute.template, PathTemplate: registryRoute.template,
-		SelectedOwner:    ownershipregistry.OwnerCore,
-		RegistryRevision: outer.RegistryRevision, RouteRevision: 1, CompatibilityMode: "native",
-	}
-	if h.routeManager != nil {
-		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
-		if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
-			value := alarmUnavailable("Authoritative Site route ownership is unavailable.")
-			return &value
-		}
-		decision = resolved
-	}
-	result := h.executeCoreRegistry(request.Context(), registryRoute, "", authorization.coreGrant, decision)
-	if result.status == http.StatusNotFound || result.status == http.StatusForbidden {
-		value := alarmNotFound()
-		if list {
-			value = alarmSiteNotFound()
-		}
-		return &value
-	}
-	if result.status != http.StatusOK {
-		value := alarmUnavailable("Authoritative Site lookup is temporarily unavailable.")
-		return &value
-	}
-	var site platformapi.Site
-	if decodeStrictAlarmJSON(result.body, &site) != nil || validateSite(site) != nil || site.ID != siteID || site.TenantID != session.TenantID {
-		value := alarmUnavailable("Authoritative Site lookup returned an invalid projection.")
 		return &value
 	}
 	return nil

@@ -1480,6 +1480,43 @@
       }
     },
     "/api/v1/commands": {
+      "get": {
+        "operationId": "listCommandsV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "$ref": "#/components/responses/V212Success"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/V212Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/V212Error"
+          }
+        }
+      },
       "post": {
         "operationId": "createCommandV212",
         "x-architecture-status": "CONTRACTED",
