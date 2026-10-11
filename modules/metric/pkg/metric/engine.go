@@ -54,6 +54,12 @@ type Input struct {
 	Count           int64   `json:"count"`
 	DurationSeconds float64 `json:"durationSeconds"`
 	Integral        float64 `json:"integral"`
+	// A counter's steps between consecutive readings: the sum of its rises, how often and by how
+	// much it fell, and the readings right after each fall.
+	Rise            float64 `json:"rise"`
+	Drops           int64   `json:"drops"`
+	DropSum         float64 `json:"dropSum"`
+	ValueAfterDrops float64 `json:"valueAfterDrops"`
 	Quality         string  `json:"quality"`
 	Completeness    float64 `json:"completeness"`
 }
@@ -367,25 +373,28 @@ func calculate(binding Binding, inputs []Input) (float64, error) {
 	}
 }
 
+// counterDelta is what a counter accumulated over a window: every rise between consecutive
+// readings, plus what each fall stands for under the binding's declared decrease mode.
 func counterDelta(binding Binding, input Input) (float64, error) {
-	if input.LastValue >= input.FirstValue {
-		return input.LastValue - input.FirstValue, nil
+	if input.Drops == 0 {
+		return input.Rise, nil
 	}
 	counter, _ := binding.SourceDefinition["counter"].(map[string]any)
 	mode, _ := counter["decreaseMode"].(string)
-	mode = strings.ToUpper(strings.TrimSpace(mode))
-	switch mode {
+	switch strings.ToUpper(strings.TrimSpace(mode)) {
 	case "RESET":
-		return input.LastValue, nil
+		// The counter restarted from zero, so the reading after the fall is all new.
+		return input.Rise + input.ValueAfterDrops, nil
 	case "ROLLOVER":
 		modulus, ok := counter["rolloverModulus"].(float64)
-		if !ok || modulus <= input.FirstValue {
-			return 0, errors.New("counter rollover requires rolloverModulus greater than first value")
+		if !ok || modulus <= 0 {
+			return 0, errors.New("counter rollover requires a positive rolloverModulus")
 		}
-		return modulus - input.FirstValue + input.LastValue, nil
+		// Each wrap counted up to the modulus and on from zero: the fall plus one modulus.
+		return input.Rise + input.DropSum + float64(input.Drops)*modulus, nil
 	case "METER_REPLACEMENT":
 		carry, _ := counter["replacementCarry"].(float64)
-		return carry + input.LastValue, nil
+		return input.Rise + input.ValueAfterDrops + float64(input.Drops)*carry, nil
 	default:
 		return 0, errors.New("counter decreased without RESET, ROLLOVER, or METER_REPLACEMENT policy")
 	}
