@@ -204,7 +204,8 @@ function firstReading(devices: readonly PlantDevice[], sourceKey: string): Plant
 }
 
 export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
-  const devices = rows.map(toPlantDevice);
+  // A gateway is how the plant reaches the platform, not plant equipment.
+  const devices = rows.filter((row) => row.device.deviceType !== 'GATEWAY').map(toPlantDevice);
   const groups = PLANT_CATEGORY_ORDER
     .map((category) => ({
       category,

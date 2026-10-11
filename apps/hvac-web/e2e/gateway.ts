@@ -104,6 +104,16 @@ export class Gateway {
     return command;
   }
 
+  // The page names each request by its position in the batch, so recorded items answer by Device.
+  private snapshotBatch(body: Json): Json {
+    const items = body.requests.map((request: Json) => {
+      const recorded = this.snapshots.items.find((item: Json) => item.deviceId === request.deviceId);
+      if (!recorded) throw new Error(`no recorded Snapshot for Device ${request.deviceId}`);
+      return { ...recorded, requestId: request.requestId };
+    });
+    return { ...this.snapshots, items };
+  }
+
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
     if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
@@ -111,7 +121,7 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
-    if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshots };
+    if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };

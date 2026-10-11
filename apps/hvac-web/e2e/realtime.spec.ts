@@ -4,9 +4,10 @@ import { expect, test } from './test';
 test('the plant view shows current plant figures from the Snapshot', async ({ page }) => {
   await page.goto(`/operations/realtime?site=${SITE_ID}`);
   const facts = page.getByRole('region', { name: '冷站实时概况' });
-  await expect(facts).toContainText('设备在线7 / 7台数据均为最新');
+  await expect(facts).toContainText('设备在线8 / 8台数据均为最新');
   await expect(facts).toContainText('主要设备运行4 / 4台冷机、水泵与冷却塔');
   await expect(facts).toContainText(/冷站 COP\d\.\d{2}/);
+  await expect(page.getByRole('row', { name: /ZONE-SENSOR-01/ })).toContainText(/室内温度\s*24\.1\s*°C/);
   // Without a realtime grant the page says it is polling rather than pretending to stream.
   await expect(page.getByText('每 30 秒刷新')).toBeVisible();
 });
@@ -36,7 +37,7 @@ test('the plant diagram puts each measured temperature on its pipe once and show
 
 test('a stopped chilled-water pump stops the flow on the chilled-water loop only', async ({ page, gateway }) => {
   for (const item of gateway.snapshots.items) {
-    for (const value of item.snapshot.values) {
+    for (const value of item.snapshot?.values ?? []) {
       if (item.deviceId.endsWith('0002') && value.key === 'run_state') value.value = 'STOPPED';
     }
   }

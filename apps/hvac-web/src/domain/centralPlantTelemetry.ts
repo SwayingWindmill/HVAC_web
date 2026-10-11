@@ -83,6 +83,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('weather.ambient_dry_bulb_temperature', '室外干球温度', 'Cel'),
   point('weather.ambient_wet_bulb_temperature', '室外湿球温度', 'Cel'),
   point('weather.relative_humidity', '室外相对湿度', '%RH'),
+  point('zone.temperature', '室内温度', 'Cel'),
 ].map((definition) => [definition.key, definition])));
 
 export function telemetryPointDefinition(key: string): TelemetryPointDefinition {
