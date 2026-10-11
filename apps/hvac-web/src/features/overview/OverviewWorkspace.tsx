@@ -72,9 +72,10 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       onSelectedChange={(key) => onMetricChange(key as OverviewMetric)}
       color="var(--chart-1)"
       compareColor="var(--chart-5)"
-      compareLabel="昨日同时段"
+      compareLabel="昨日"
       showYAxis
       showLegend
+      dots
       chartClassName="h-[260px]"
       empty="今日还没有计量数据"
       metrics={[

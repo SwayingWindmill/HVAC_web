@@ -59,6 +59,7 @@ export interface EnergySummary {
   readonly excludedIntervals: number;
 }
 
+const HOUR_MS = 3_600_000;
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 export function bucketLabel(periodStart: string, granularity: Granularity, timeZone: string): string {
@@ -131,9 +132,14 @@ export interface HourComparison {
   readonly previousCop: number | null;
 }
 
-/** Today hour by hour against the whole of yesterday, joined by Site-local hour, so yesterday's later hours show where today is heading. */
-export function compareHours(today: EnergySummary, yesterday: EnergySummary): HourComparison[] {
-  const current = new Map(today.rows.map((row) => [row.label, row]));
+/**
+ * Today's complete hours against the whole of yesterday, joined by Site-local hour, so yesterday's
+ * later hours show where today is heading. The hour still running at `now` is left off: its
+ * partial energy would read as a drop.
+ */
+export function compareHours(today: EnergySummary, yesterday: EnergySummary, now: Date): HourComparison[] {
+  const complete = today.rows.filter((row) => new Date(row.periodStart).getTime() + HOUR_MS <= now.getTime());
+  const current = new Map(complete.map((row) => [row.label, row]));
   const previous = new Map(yesterday.rows.map((row) => [row.label, row]));
   // Hour labels are zero-padded, so they sort in clock order.
   return [...new Set([...current.keys(), ...previous.keys()])].sort().map((label) => {

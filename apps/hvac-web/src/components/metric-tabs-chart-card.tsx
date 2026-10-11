@@ -54,6 +54,8 @@ export interface MetricTabsChartCardProps extends React.ComponentProps<typeof Ca
   /** Draw a y-axis with grid lines, for readings an operator compares against a scale. */
   showYAxis?: boolean
   showLegend?: boolean
+  /** Mark every point of the selected series, so an hour between gaps still shows. */
+  dots?: boolean
   /** Shown in place of the chart when there are no rows. */
   empty?: React.ReactNode
   chartClassName?: string
@@ -87,6 +89,7 @@ function MetricTabsChartCard({
   xFormatter,
   showYAxis = false,
   showLegend = false,
+  dots = false,
   empty,
   chartClassName,
   className,
@@ -213,7 +216,7 @@ function MetricTabsChartCard({
                   },
                 ]
               : []),
-            { key: active.key, label: active.label, type: "line" as const, color },
+            { key: active.key, label: active.label, type: "line" as const, color, dots },
           ]}
           showGrid={showYAxis}
           showYAxis={showYAxis}

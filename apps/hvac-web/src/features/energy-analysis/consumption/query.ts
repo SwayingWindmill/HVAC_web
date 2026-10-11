@@ -55,14 +55,15 @@ export function useTodayAgainstYesterday() {
   return useQuery({
     queryKey: ['energy-series', site.id, 'today-against-yesterday'],
     queryFn: async ({ signal }) => {
-      const { from, to } = periodWindow('today', new Date(), site.timezone);
+      const now = new Date();
+      const { from, to } = periodWindow('today', now, site.timezone);
       const yesterdayFrom = new Date(from.getTime() - DAY_MS);
       const [today, yesterday, wholeYesterday] = await Promise.all([
         summary('hour', from, to, signal),
         summary('hour', yesterdayFrom, new Date(to.getTime() - DAY_MS), signal),
         summary('hour', yesterdayFrom, from, signal),
       ]);
-      return { today, yesterday, hours: compareHours(today, wholeYesterday) };
+      return { today, yesterday, hours: compareHours(today, wholeYesterday, now) };
     },
     refetchInterval: 60_000,
     retry: false,
