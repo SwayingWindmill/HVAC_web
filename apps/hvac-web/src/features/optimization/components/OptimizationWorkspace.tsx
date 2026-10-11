@@ -57,18 +57,23 @@ function RangeTrack({ label, axis, band, bandLabel, markers }: {
         <span className="font-medium">{label}</span>
         <span className="text-xs text-muted-foreground">{bandLabel} {formatDecimal(band[0], 1)}–{celsius(band[1])}</span>
       </figcaption>
-      <div className="relative h-14" aria-hidden="true">
+      {/* The proposal is labelled above the track and the present value below, so close values never collide. */}
+      <div className="relative h-16" aria-hidden="true">
         <div className="absolute inset-x-0 top-6 h-2 rounded-full bg-muted" />
         <div className="absolute top-6 h-2 rounded-full bg-primary/25" style={{ left: at(band[0]), width: `calc(${at(band[1])} - ${at(band[0])})` }} />
         {markers.map((marker) => (
-          <div key={marker.label} className="absolute top-0 flex -translate-x-1/2 flex-col items-center" style={{ left: at(marker.value) }}>
+          <div
+            key={marker.label}
+            className={cn('absolute flex -translate-x-1/2 items-center', marker.emphasis ? 'top-0 flex-col' : 'top-[18px] flex-col-reverse')}
+            style={{ left: at(marker.value) }}
+          >
             <span className={cn('whitespace-nowrap text-[11px] leading-4', marker.emphasis ? 'font-semibold text-primary' : 'text-muted-foreground')}>
               {marker.label} {formatDecimal(marker.value, 1)}
             </span>
-            <span className={cn('mt-0.5 size-3.5 rounded-full border-2 border-background shadow-sm', marker.emphasis ? 'bg-primary' : 'bg-muted-foreground')} />
+            <span className={cn('size-3.5 rounded-full border-2 border-background shadow-sm', marker.emphasis ? 'mt-0.5 bg-primary' : 'mb-0.5 bg-muted-foreground')} />
           </div>
         ))}
-        <div className="absolute inset-x-0 top-10 flex justify-between text-[11px] tabular-nums text-muted-foreground">
+        <div className="absolute inset-x-0 top-12 flex justify-between text-[11px] tabular-nums text-muted-foreground/70">
           <span>{axis[0]}</span>
           <span>{axis[1]} °C</span>
         </div>
