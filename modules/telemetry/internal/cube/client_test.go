@@ -269,3 +269,37 @@ func decodeUnsignedClaims(token string) (map[string]any, error) {
 	}
 	return claims, nil
 }
+
+// A bucket whose intervals are all excluded by the quality policy has no energy under it; Cube
+// answers null for the measure, and one such hour once failed a whole day's query.
+func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if len(decoded.Query.TimeDimensions) == 0 {
+			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-07-03T00:00:00.000Z","energy_usage.max_dataset_revision":"1"}]}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[
+			{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"120.5","energy_usage.valid_count":"96","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"},
+			{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":null,"energy_usage.valid_count":"0","energy_usage.suspect_count":"0","energy_usage.invalid_count":"4"}
+		]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL: server.URL, DatasetRevision: "energy-daily:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, validCubeEnergyQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Points) != 1 || response.Points[0].EnergyKWh != 120.5 || response.Metadata.QualitySummary.Invalid != 4 || !response.Metadata.Partial {
+		t.Fatalf("response = %#v", response)
+	}
+}
