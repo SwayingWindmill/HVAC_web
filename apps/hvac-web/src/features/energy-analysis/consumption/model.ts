@@ -122,7 +122,39 @@ export function summarizeEnergy(
   };
 }
 
-export interface HourComparison {
+/**
+ * The same span of the period before, ending where the current period starts: yesterday up to
+ * this time, the seven days before, last month or last year to the same point.
+ */
+export function previousWindow(period: EnergyPeriod, now: Date, timeZone: string): { granularity: Granularity; from: Date; to: Date } {
+  const current = periodWindow(period, now, timeZone);
+  const start = wallTime(current.from, timeZone);
+  const from = period === 'today' ? siteMidnight(start.year, start.month, start.day - 1, timeZone)
+    : period === '7d' ? siteMidnight(start.year, start.month, start.day - 7, timeZone)
+    : period === 'month' ? siteMidnight(start.year, start.month - 1, 1, timeZone)
+    : siteMidnight(start.year - 1, 1, 1, timeZone);
+  const to = new Date(Math.min(from.getTime() + (now.getTime() - current.from.getTime()), current.from.getTime()));
+  return { granularity: current.granularity, from, to };
+}
+
+/** A bucket's place in its period: hour of the day, day of the window or month of the year. */
+function bucketOrdinal(periodStart: string, from: Date, granularity: Granularity, timeZone: string): number {
+  const at = wallTime(new Date(periodStart), timeZone);
+  const start = wallTime(from, timeZone);
+  if (granularity === 'month') return (at.year - start.year) * 12 + at.month - start.month;
+  const days = (Date.UTC(at.year, at.month - 1, at.day) - Date.UTC(start.year, start.month - 1, start.day)) / 86_400_000;
+  return granularity === 'hour' ? days * 24 + at.hour : days;
+}
+
+/** The start of the bucket at an ordinal of the period starting at `from`. */
+function bucketAt(from: Date, granularity: Granularity, ordinal: number, timeZone: string): Date {
+  const start = wallTime(from, timeZone);
+  if (granularity === 'month') return siteMidnight(start.year, start.month + ordinal, 1, timeZone);
+  if (granularity === 'day') return siteMidnight(start.year, start.month, start.day + ordinal, timeZone);
+  return new Date(siteMidnight(start.year, start.month, start.day, timeZone).getTime() + ordinal * HOUR_MS);
+}
+
+export interface BucketComparison {
   readonly label: string;
   readonly electricityKWh: number | null;
   readonly coolingKWh: number | null;
@@ -130,31 +162,43 @@ export interface HourComparison {
   readonly previousElectricityKWh: number | null;
   readonly previousCoolingKWh: number | null;
   readonly previousCop: number | null;
+  /** The current bucket has ended; the one still running holds partial energy. */
+  readonly complete: boolean;
 }
 
 /**
- * Today's complete hours against the whole of yesterday, joined by Site-local hour, so yesterday's
- * later hours show where today is heading. The hour still running at `now` is left off: its
- * partial energy would read as a drop.
+ * The current period's buckets against the previous period's, lined up by their place in the
+ * period and labelled as the current period's buckets.
  */
-export function compareHours(today: EnergySummary, yesterday: EnergySummary, now: Date): HourComparison[] {
-  const complete = today.rows.filter((row) => new Date(row.periodStart).getTime() + HOUR_MS <= now.getTime());
-  const current = new Map(complete.map((row) => [row.label, row]));
-  const previous = new Map(yesterday.rows.map((row) => [row.label, row]));
-  // Hour labels are zero-padded, so they sort in clock order.
-  return [...new Set([...current.keys(), ...previous.keys()])].sort().map((label) => {
-    const now = current.get(label);
-    const before = previous.get(label);
+export function comparePeriods(
+  current: EnergySummary,
+  previous: EnergySummary,
+  { from, previousFrom, now, timeZone }: { from: Date; previousFrom: Date; now: Date; timeZone: string },
+): BucketComparison[] {
+  const { granularity } = current;
+  const byOrdinal = (summary: EnergySummary, start: Date) =>
+    new Map(summary.rows.map((row) => [bucketOrdinal(row.periodStart, start, granularity, timeZone), row]));
+  const currentRows = byOrdinal(current, from);
+  const previousRows = byOrdinal(previous, previousFrom);
+  return [...new Set([...currentRows.keys(), ...previousRows.keys()])].sort((left, right) => left - right).map((ordinal) => {
+    const row = currentRows.get(ordinal);
+    const before = previousRows.get(ordinal);
     return {
-      label,
-      electricityKWh: now?.electricityKWh ?? null,
-      coolingKWh: now?.coolingKWh ?? null,
-      cop: now?.cop ?? null,
+      label: bucketLabel(bucketAt(from, granularity, ordinal, timeZone).toISOString(), granularity, timeZone),
+      electricityKWh: row?.electricityKWh ?? null,
+      coolingKWh: row?.coolingKWh ?? null,
+      cop: row?.cop ?? null,
       previousElectricityKWh: before?.electricityKWh ?? null,
       previousCoolingKWh: before?.coolingKWh ?? null,
       previousCop: before?.cop ?? null,
+      complete: bucketAt(from, granularity, ordinal + 1, timeZone) <= now,
     };
   });
+}
+
+/** Buckets for a chart: a bucket still running holds partial energy that would read as a drop, so its current values are left out. */
+export function completeOnly(buckets: readonly BucketComparison[]): BucketComparison[] {
+  return buckets.map((bucket) => (bucket.complete ? bucket : { ...bucket, electricityKWh: null, coolingKWh: null, cop: null }));
 }
 
 /** The fractional change from `previous` to `current`; null when either is unknown or the base is zero. */

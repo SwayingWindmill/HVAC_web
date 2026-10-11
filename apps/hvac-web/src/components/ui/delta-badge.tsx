@@ -7,7 +7,8 @@ import { formatDelta } from "@/lib/format"
 export type DeltaDirection = "up" | "down" | "flat"
 
 export function getDeltaDirection(delta: number | undefined): DeltaDirection {
-  if (delta === undefined || delta === 0 || !Number.isFinite(delta)) return "flat"
+  // A change that rounds to 0.0% reads as flat, not as a rise or fall.
+  if (delta === undefined || !Number.isFinite(delta) || Math.abs(delta) < 0.0005) return "flat"
   return delta > 0 ? "up" : "down"
 }
 

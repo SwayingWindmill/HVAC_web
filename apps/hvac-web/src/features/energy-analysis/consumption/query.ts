@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
 import {
-  compareHours,
+  comparePeriods,
   hourlyHeatmap,
   periodWindow,
+  previousWindow,
   siteDays,
   summarizeEnergy,
   type EnergyPeriod,
@@ -32,14 +33,27 @@ function useEnergyReader() {
   return { site, read, summary };
 }
 
-/** Site electricity and cooling for a period, from the Energy analytics owner. */
-export function useEnergySummary(period: EnergyPeriod) {
+/**
+ * Site electricity and cooling for a period beside the same span of the period before, from the
+ * Energy analytics owner; `buckets` lines the two up for a chart or a table.
+ */
+export function useEnergyComparison(period: EnergyPeriod) {
   const { site, summary } = useEnergyReader();
   return useQuery({
     queryKey: ['energy-series', site.id, period],
-    queryFn: ({ signal }) => {
-      const { granularity, from, to } = periodWindow(period, new Date(), site.timezone);
-      return summary(granularity, from, to, signal);
+    queryFn: async ({ signal }) => {
+      const now = new Date();
+      const current = periodWindow(period, now, site.timezone);
+      const before = previousWindow(period, now, site.timezone);
+      const [currentSummary, previousSummary] = await Promise.all([
+        summary(current.granularity, current.from, current.to, signal),
+        summary(before.granularity, before.from, before.to, signal),
+      ]);
+      return {
+        current: currentSummary,
+        previous: previousSummary,
+        buckets: comparePeriods(currentSummary, previousSummary, { from: current.from, previousFrom: before.from, now, timeZone: site.timezone }),
+      };
     },
     refetchInterval: 60_000,
     retry: false,
@@ -57,13 +71,13 @@ export function useTodayAgainstYesterday() {
     queryFn: async ({ signal }) => {
       const now = new Date();
       const { from, to } = periodWindow('today', now, site.timezone);
-      const yesterdayFrom = new Date(from.getTime() - DAY_MS);
+      const before = previousWindow('today', now, site.timezone);
       const [today, yesterday, wholeYesterday] = await Promise.all([
         summary('hour', from, to, signal),
-        summary('hour', yesterdayFrom, new Date(to.getTime() - DAY_MS), signal),
-        summary('hour', yesterdayFrom, from, signal),
+        summary('hour', before.from, before.to, signal),
+        summary('hour', before.from, from, signal),
       ]);
-      return { today, yesterday, hours: compareHours(today, wholeYesterday, now) };
+      return { today, yesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
     },
     refetchInterval: 60_000,
     retry: false,
