@@ -228,10 +228,6 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube period: %w", err)
 		}
-		energy, err := scalarFloat(row[energyMeasure(productQuery.QualityPolicy)])
-		if err != nil {
-			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
-		}
 		valid, err := scalarInt(row["energy_usage.valid_count"])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube valid count: %w", err)
@@ -247,6 +243,19 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		quality.Valid += valid
 		quality.Suspect += suspect
 		quality.Invalid += invalid
+		// Cube answers null when the policy excludes every interval in the bucket: it has no
+		// energy, so it is left out and its intervals still count in the quality summary.
+		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(productQuery.QualityPolicy)])
+		if err != nil {
+			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
+		}
+		if !hasEnergy {
+			continue
+		}
+		energy, err := strconv.ParseFloat(energyValue, 64)
+		if err != nil {
+			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
+		}
 		points = append(points, analyticsmodel.EnergySeriesPoint{
 			PeriodStart: periodStart.UTC(),
 			PeriodEnd:   periodEnd(periodStart.In(location), productQuery.Granularity).UTC(),
@@ -398,14 +407,6 @@ func optionalScalarString(raw json.RawMessage) (string, bool, error) {
 		return "", false, errors.New("Cube scalar is empty")
 	}
 	return value, true, nil
-}
-
-func scalarFloat(raw json.RawMessage) (float64, error) {
-	value, err := scalarString(raw)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseFloat(value, 64)
 }
 
 func scalarInt(raw json.RawMessage) (int64, error) {
