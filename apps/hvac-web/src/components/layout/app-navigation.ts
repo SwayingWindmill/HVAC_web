@@ -7,6 +7,7 @@ import {
   ServerCog,
   ShieldAlert,
   SlidersHorizontal,
+  Stethoscope,
   TrendingUp,
 } from 'lucide-react';
 
@@ -54,6 +55,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     label: '运维',
     items: [
       { id: 'operations-alarms', title: '告警', path: '/operations/alarms', icon: ShieldAlert },
+      { id: 'operations-diagnostics', title: '故障诊断', path: '/operations/diagnostics', icon: Stethoscope },
       { id: 'operations-work-center', title: '工单', path: '/operations/work-center', icon: CalendarCheck2 },
       { id: 'operations-control', title: '控制指令', path: '/operations/control', icon: SlidersHorizontal },
     ],
