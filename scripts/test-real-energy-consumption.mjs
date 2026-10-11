@@ -57,13 +57,14 @@ test('a bucket without cooling has no efficiency and stays out of the period eff
   assert.equal(summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai').cop, null);
 });
 
-test('today lines up with the same Site-local hours yesterday', async () => {
+test('today lines up hour by hour against the whole of yesterday', async () => {
   const { compareHours, relativeChange } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
   const today = summarizeEnergy(series([['2026-10-10T02:00:00Z', 200], ['2026-10-10T03:00:00Z', 250]]), series([['2026-10-10T02:00:00Z', 700]]), 'hour', 'Asia/Shanghai');
   const yesterday = summarizeEnergy(series([['2026-10-09T02:00:00Z', 180], ['2026-10-09T05:00:00Z', 999]]), series([]), 'hour', 'Asia/Shanghai');
   assert.deepEqual(compareHours(today, yesterday).map((row) => [row.label, row.electricityKWh, row.previousElectricityKWh]), [
     ['10:00', 200, 180],
     ['11:00', 250, null],
+    ['13:00', null, 999],
   ]);
   assert.equal(relativeChange(450, 400), 0.125);
   assert.equal(relativeChange(450, null), null);

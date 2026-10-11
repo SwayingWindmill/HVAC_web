@@ -174,7 +174,7 @@ function HeatmapChart({
                       data-slot="heatmap-chart-cell"
                       data-empty="true"
                       aria-hidden="true"
-                      className="aspect-square w-full rounded-sm border border-dashed border-border/70"
+                      className="aspect-square w-full rounded-sm ring-1 ring-inset ring-border/60"
                     />
                   )
                 }

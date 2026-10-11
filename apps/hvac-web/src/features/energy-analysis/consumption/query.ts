@@ -46,18 +46,23 @@ export function useEnergySummary(period: EnergyPeriod) {
   });
 }
 
-/** Today by Site-local hour beside the same hours yesterday, up to now. */
+/**
+ * Today by Site-local hour against yesterday: `yesterday` covers the same hours up to now, for
+ * a like-for-like change; `hours` draws the whole of yesterday as the reference line.
+ */
 export function useTodayAgainstYesterday() {
   const { site, summary } = useEnergyReader();
   return useQuery({
     queryKey: ['energy-series', site.id, 'today-against-yesterday'],
     queryFn: async ({ signal }) => {
       const { from, to } = periodWindow('today', new Date(), site.timezone);
-      const [today, yesterday] = await Promise.all([
+      const yesterdayFrom = new Date(from.getTime() - DAY_MS);
+      const [today, yesterday, wholeYesterday] = await Promise.all([
         summary('hour', from, to, signal),
-        summary('hour', new Date(from.getTime() - DAY_MS), new Date(to.getTime() - DAY_MS), signal),
+        summary('hour', yesterdayFrom, new Date(to.getTime() - DAY_MS), signal),
+        summary('hour', yesterdayFrom, from, signal),
       ]);
-      return { today, yesterday, hours: compareHours(today, yesterday) };
+      return { today, yesterday, hours: compareHours(today, wholeYesterday) };
     },
     refetchInterval: 60_000,
     retry: false,

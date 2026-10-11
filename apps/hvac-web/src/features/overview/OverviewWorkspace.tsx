@@ -45,8 +45,9 @@ import { cn } from "@/lib/utils";
 const siteRoute = getRouteApi("/_app/_site");
 const pageRoute = getRouteApi("/_app/_site/overview");
 const LIST_LIMIT = 5;
+const known = (value: number | null, digits: number) => (value === null ? null : formatDecimal(value, digits));
 const HEATMAP_DAYS = 7;
-const HOURS = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
+const HOURS = Array.from({ length: 24 }, (_, hour) => `${hour}时`);
 
 type OverviewMetric = "electricityKWh" | "coolingKWh" | "cop";
 
@@ -75,12 +76,13 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       showYAxis
       showLegend
       chartClassName="h-[260px]"
+      empty="今日还没有计量数据"
       metrics={[
         {
           key: "electricityKWh",
           label: "今日空调用电",
           compareKey: "previousElectricityKWh",
-          value: today.electricityKWh,
+          value: known(today.electricityKWh, 1),
           delta: relativeChange(today.electricityKWh, yesterday.electricityKWh),
           unit: "kWh",
           fractionDigits: 1,
@@ -90,7 +92,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           key: "coolingKWh",
           label: "今日供冷量",
           compareKey: "previousCoolingKWh",
-          value: today.coolingKWh,
+          value: known(today.coolingKWh, 1),
           delta: relativeChange(today.coolingKWh, yesterday.coolingKWh),
           unit: "kWh",
           fractionDigits: 1,
@@ -100,7 +102,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           key: "cop",
           label: "今日综合能效",
           compareKey: "previousCop",
-          value: today.cop,
+          value: known(today.cop, 2),
           delta: relativeChange(today.cop, yesterday.cop),
           unit: "COP",
           fractionDigits: 2,
@@ -215,6 +217,7 @@ function HourlyElectricity() {
       deltaLabel="按站点当地时间，每格为一小时；悬停查看该小时用电"
       rows={heatmap.data.map((day) => ({ label: day.label, values: day.values }))}
       columns={HOURS}
+      columnLabelEvery={3}
       color="var(--chart-1)"
       unit="kWh"
       valueFormatter={(value) => formatDecimal(value, 1)}

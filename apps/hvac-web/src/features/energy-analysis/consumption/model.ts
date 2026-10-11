@@ -131,16 +131,19 @@ export interface HourComparison {
   readonly previousCop: number | null;
 }
 
-/** Today's hours beside the same hours yesterday, joined by Site-local hour; yesterday's hours after now are left out. */
+/** Today hour by hour against the whole of yesterday, joined by Site-local hour, so yesterday's later hours show where today is heading. */
 export function compareHours(today: EnergySummary, yesterday: EnergySummary): HourComparison[] {
+  const current = new Map(today.rows.map((row) => [row.label, row]));
   const previous = new Map(yesterday.rows.map((row) => [row.label, row]));
-  return today.rows.map((row) => {
-    const before = previous.get(row.label);
+  // Hour labels are zero-padded, so they sort in clock order.
+  return [...new Set([...current.keys(), ...previous.keys()])].sort().map((label) => {
+    const now = current.get(label);
+    const before = previous.get(label);
     return {
-      label: row.label,
-      electricityKWh: row.electricityKWh,
-      coolingKWh: row.coolingKWh,
-      cop: row.cop,
+      label,
+      electricityKWh: now?.electricityKWh ?? null,
+      coolingKWh: now?.coolingKWh ?? null,
+      cop: now?.cop ?? null,
       previousElectricityKWh: before?.electricityKWh ?? null,
       previousCoolingKWh: before?.coolingKWh ?? null,
       previousCop: before?.cop ?? null,

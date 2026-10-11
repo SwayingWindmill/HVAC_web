@@ -23,7 +23,7 @@ export interface HeatmapChartCardProps
   extends Omit<React.ComponentProps<typeof Card>, "children">,
     Pick<
       HeatmapChartProps,
-      "rows" | "columns" | "color" | "max" | "scale" | "unit" | "valueFormatter"
+      "rows" | "columns" | "color" | "max" | "scale" | "unit" | "valueFormatter" | "columnLabelEvery"
     > {
   title: string
   /** Headline value. Defaults to the sum of every cell. Strings render as-is. */
@@ -60,6 +60,7 @@ function HeatmapChartCard({
   valueFormatter,
   rows,
   columns,
+  columnLabelEvery,
   color,
   max,
   scale,
@@ -125,6 +126,7 @@ function HeatmapChartCard({
         <HeatmapChart
           rows={rows}
           columns={columns}
+          columnLabelEvery={columnLabelEvery}
           color={color}
           max={max}
           scale={scale}

@@ -54,6 +54,8 @@ export interface MetricTabsChartCardProps extends React.ComponentProps<typeof Ca
   /** Draw a y-axis with grid lines, for readings an operator compares against a scale. */
   showYAxis?: boolean
   showLegend?: boolean
+  /** Shown in place of the chart when there are no rows. */
+  empty?: React.ReactNode
   chartClassName?: string
 }
 
@@ -85,6 +87,7 @@ function MetricTabsChartCard({
   xFormatter,
   showYAxis = false,
   showLegend = false,
+  empty,
   chartClassName,
   className,
   ...props
@@ -192,6 +195,9 @@ function MetricTabsChartCard({
         })}
       </div>
       <CardContent id={`${id}-panel`} role="tabpanel" className="pt-4 pb-4">
+        {data.length === 0 && empty ? (
+          <div className={cn("text-muted-foreground grid h-40 place-items-center text-sm", chartClassName)}>{empty}</div>
+        ) : (
         <ComposedChart
           data={data}
           xKey={xKey}
@@ -217,6 +223,7 @@ function MetricTabsChartCard({
           yFormatter={yFormatter}
           className={cn("h-40", chartClassName)}
         />
+        )}
       </CardContent>
     </Card>
   )
