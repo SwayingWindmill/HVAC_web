@@ -127,9 +127,6 @@ func (p *Projector) persistFacts(ctx context.Context, facts []EnergyIntervalFact
 		}
 		corrections[fact.TenantID+"|"+fact.SiteID] = append(corrections[fact.TenantID+"|"+fact.SiteID], fact)
 	}
-	if len(corrections) > 0 && p.rebuildEvents == nil {
-		return 0, errors.New("energy rebuild event sink is required for fact corrections")
-	}
 	projected := 0
 	if len(normal) > 0 {
 		if err := p.sink.InsertFacts(ctx, normal); err != nil {

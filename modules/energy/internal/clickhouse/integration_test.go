@@ -41,7 +41,7 @@ func TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently(t *testing.T) {
 	reader, writer := integrationReaderWriter(t, client, baseURL)
 	projector, err := energy.NewProjector(energy.ProjectorConfig{CounterSource: reader, BindingResolver: integrationBindingResolver{
 		tenantID: tenantID, siteID: siteID, deviceID: deviceID, pointID: pointID,
-	}, FactSink: writer, BatchSize: 32, Now: func() time.Time {
+	}, FactSink: writer, RebuildEvents: writer, BatchSize: 32, Now: func() time.Time {
 		return time.Date(2026, 7, 29, 13, 5, 2, 0, time.UTC)
 	}})
 	if err != nil {
