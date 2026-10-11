@@ -199,7 +199,8 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	if err := request.Validate(); err != nil {
 		return PreparedOptimization{}, err
 	}
-	capturedAt := preparer.clock().UTC()
+	// Frozen to the microsecond Postgres keeps, so the checksum holds when the worker reloads it.
+	capturedAt := preparer.clock().UTC().Truncate(time.Microsecond)
 	definition, err := preparer.store.ResolveOptimizationPreparation(ctx, request, capturedAt)
 	if err != nil {
 		return PreparedOptimization{}, fmt.Errorf("resolve Optimization preparation lineage: %w", err)

@@ -31,6 +31,8 @@ export const intelligencePaths = {
   siteLoadForecast: '/api/v1/sites/{siteId}/forecast/load',
   siteFddFindings: '/api/v1/sites/{siteId}/fdd/findings',
   siteFddLowDeltaT: '/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t',
+  optimizationRuns: '/api/v1/optimization/runs',
+  latestOptimizationRecommendation: '/api/v1/sites/{siteId}/optimization/recommendations/latest',
 } as const;
 
 export const buildInfoSchema = z.object({

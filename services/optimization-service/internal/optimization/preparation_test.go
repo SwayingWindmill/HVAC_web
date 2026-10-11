@@ -141,3 +141,26 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 		t.Fatal("preparation must not persist a snapshot when authoritative state is unavailable")
 	}
 }
+
+// Postgres keeps timestamps to the microsecond. A run prepared on a nanosecond wall clock once
+// failed every time with "frozen Optimization input checksum does not match persisted
+// provenance", because the reloaded capture time no longer matched the one checksummed.
+func TestOptimizationPreparationChecksumSurvivesTheDatabaseRoundTrip(t *testing.T) {
+	at := time.Date(2026, 10, 11, 16, 44, 30, 123456789, time.UTC)
+	store := &preparationStoreStub{definition: testPreparationDefinition(), result: PreparedOptimization{Status: "PENDING"}}
+	preparer, err := NewPreparer(store, &authoritativeInputStub{state: testAuthoritativeState(at)}, func() time.Time { return at })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = preparer.Prepare(t.Context(), PreparationRequest{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := store.created[0]
+	reloaded.CapturedAt = reloaded.CapturedAt.Truncate(time.Microsecond)
+	if checksum, err := checksumPreparedOptimization(reloaded); err != nil || checksum != store.created[0].InputChecksum {
+		t.Fatalf("checksum after the round trip=%q, frozen=%q, err=%v", checksum, store.created[0].InputChecksum, err)
+	}
+}

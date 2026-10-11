@@ -1,0 +1,10 @@
+{
+  "type": "https://api.quanlaihe.com/problems/intelligence-upstream-rejected",
+  "title": "Intelligence request rejected",
+  "status": 502,
+  "detail": "The Intelligence owner rejected the request.",
+  "instance": "/api/v1/optimization/runs",
+  "code": "INTELLIGENCE_UPSTREAM_REJECTED",
+  "traceId": "e2e",
+  "retryable": true
+}
