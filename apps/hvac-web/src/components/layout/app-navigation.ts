@@ -7,6 +7,7 @@ import {
   ServerCog,
   ShieldAlert,
   SlidersHorizontal,
+  TrendingUp,
 } from 'lucide-react';
 
 export interface AppNavigationGroup {
@@ -43,7 +44,10 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   {
     id: 'energy',
     label: '能源',
-    items: [{ id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart }],
+    items: [
+      { id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart },
+      { id: 'analytics-forecast', title: '负荷预测', path: '/energy-analysis/forecast', icon: TrendingUp },
+    ],
   },
   {
     id: 'operations',

@@ -52,6 +52,16 @@ function advance(command: Json, status: string, at: string) {
   command.updatedAt = at;
 }
 
+// The recorded forecast is replayed as if it had just been published.
+function replayForecast(forecast: Json, now: string): Json {
+  const shift = Date.parse(now) - Date.parse(forecast.snapshot.forecastOrigin);
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  return {
+    snapshot: { ...forecast.snapshot, forecastOrigin: now },
+    points: forecast.points.map((point: Json) => ({ ...point, forecast_for: moved(point.forecast_for), forecast_origin: now })),
+  };
+}
+
 export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
   readonly workOrders = fixture<Json[]>('work-orders.json');
@@ -103,6 +113,7 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshots };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 
     if (method === 'GET' && path === '/api/v1/alarms') {

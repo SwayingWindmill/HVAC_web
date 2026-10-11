@@ -16,7 +16,8 @@ const client = createPlatformGatewayClient();
 const siteRoute = getRouteApi('/_app/_site');
 const DAY_MS = 86_400_000;
 
-function useEnergyReader() {
+/** Reads Site energy series from the Energy analytics owner for the current Site. */
+export function useEnergyReader() {
   const { site, principal } = siteRoute.useRouteContext();
   const read = (energyType: EnergySeriesQuery['energyType'], granularity: Granularity, from: Date, to: Date, signal: AbortSignal) =>
     client.queryEnergySeries({
