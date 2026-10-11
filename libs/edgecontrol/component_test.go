@@ -135,7 +135,7 @@ func TestEdgeManifestIsSelfDescribingAndDeterministic(t *testing.T) {
 	if len(manifest.Components) != 2 || manifest.Components[0].ID != "chwp01" || manifest.Components[1].ID != "modbus-tcp-1" {
 		t.Fatalf("manifest components are not deterministic: %#v", manifest.Components)
 	}
-	if len(manifest.CapabilityProfiles) != 6 || len(manifest.Channels) != 7 {
+	if len(manifest.CapabilityProfiles) != 7 || len(manifest.Channels) != 7 {
 		t.Fatalf("manifest is incomplete: profiles=%d channels=%d", len(manifest.CapabilityProfiles), len(manifest.Channels))
 	}
 	payload, err := json.Marshal(manifest)

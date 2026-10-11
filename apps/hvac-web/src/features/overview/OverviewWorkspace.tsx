@@ -169,7 +169,7 @@ function LivePlant({ plant, registryState, siteId, timeZone }: {
             {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatDecimal(plant.plantCop, 2)}</span>}
           </Fact>
           <Fact label="冷冻水供水"><ReadingValue reading={plantReading(plant, "btu_meter.supply_water_temperature")} /></Fact>
-          <Fact label="冷冻水回水"><ReadingValue reading={plantReading(plant, "btu_meter.return_water_temperature")} /></Fact>
+          <Fact label="室内温度"><ReadingValue reading={plantReading(plant, "zone.temperature")} /></Fact>
         </dl>
         <Separator />
         <section aria-label="主要设备" className="flex flex-col gap-2.5">

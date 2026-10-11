@@ -58,6 +58,8 @@ func capabilityProfileForDevice(plant PlantConfig, deviceID string) (edgecontrol
 		return edgecontrol.ProfileThermalEnergyMeter, true
 	case plant.WeatherStationID:
 		return edgecontrol.ProfileWeatherStation, true
+	case plant.ZoneSensorID:
+		return edgecontrol.ProfileZoneTemperatureSensor, true
 	default:
 		return "", false
 	}
@@ -368,6 +370,10 @@ func semanticChannelForPoint(profile edgecontrol.CapabilityProfileID, point Poin
 			return edgecontrol.SemanticOutdoorTemperature, true
 		case "relativeHumidityPct":
 			return edgecontrol.SemanticOutdoorHumidity, true
+		}
+	case edgecontrol.ProfileZoneTemperatureSensor:
+		if point.SourceKey == "zoneTemperatureC" {
+			return edgecontrol.SemanticZoneTemperature, true
 		}
 	}
 	return "", false

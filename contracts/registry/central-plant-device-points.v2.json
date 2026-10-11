@@ -81,6 +81,12 @@
         { "sourceKey": "ambientWetBulbTemperatureC", "telemetryKey": "weather.ambient_wet_bulb_temperature", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "relativeHumidityPct", "telemetryKey": "weather.relative_humidity", "valueType": "NUMBER", "unit": "%RH" }
       ]
+    },
+    {
+      "deviceId": "ZONE-SENSOR-01",
+      "points": [
+        { "sourceKey": "zoneTemperatureC", "telemetryKey": "zone.temperature", "valueType": "NUMBER", "unit": "Cel" }
+      ]
     }
   ]
 }

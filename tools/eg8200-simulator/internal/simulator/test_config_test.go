@@ -9,6 +9,7 @@ func testConfig() Config {
 		{ID: "plant-room", ParentID: "building", Name: "Central Plant Room", Type: "PLANT_ROOM"},
 		{ID: "rooftop", ParentID: "building", Name: "Rooftop", Type: "ROOFTOP"},
 		{ID: "outdoor", ParentID: "building", Name: "Outdoor", Type: "OUTDOOR"},
+		{ID: "office-zone", ParentID: "building", Name: "Office Zone", Type: "ZONE"},
 	}
 	assets := []AssetConfig{
 		{ID: "equipment-chiller-01", SpaceID: "plant-room", Name: "Chiller 01", Type: "CHILLER"},
@@ -18,6 +19,7 @@ func testConfig() Config {
 		{ID: "equipment-meter-01", SpaceID: "plant-room", Name: "HVAC Power Meter", Type: "HVAC_POWER_METER"},
 		{ID: "equipment-btu-01", SpaceID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER"},
 		{ID: "equipment-weather-01", SpaceID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION"},
+		{ID: "equipment-zone-sensor-01", SpaceID: "office-zone", Name: "Zone Sensor 01", Type: "ZONE_TEMPERATURE_SENSOR"},
 	}
 	devices := []DeviceEndpointConfig{
 		{ID: plant.Chiller.ID, SpaceID: "plant-room", Name: "Chiller Controller 01", Type: "CHILLER_CONTROLLER", AssetIDs: []string{"equipment-chiller-01"}},
@@ -27,6 +29,7 @@ func testConfig() Config {
 		{ID: plant.PowerMeterID, SpaceID: "plant-room", Name: "HVAC Power Meter", Type: "POWER_METER", AssetIDs: []string{"equipment-meter-01"}},
 		{ID: plant.BTUMeterID, SpaceID: "plant-room", Name: "BTU Meter 01", Type: "BTU_METER", AssetIDs: []string{"equipment-btu-01"}},
 		{ID: plant.WeatherStationID, SpaceID: "outdoor", Name: "Weather Station 01", Type: "WEATHER_STATION", AssetIDs: []string{"equipment-weather-01"}},
+		{ID: plant.ZoneSensorID, SpaceID: "office-zone", Name: "Zone Sensor 01", Type: "ZONE_TEMPERATURE_SENSOR", AssetIDs: []string{"equipment-zone-sensor-01"}},
 	}
 	sensors := []SensorConfig{
 		{ID: "sensor-chws", DeviceID: plant.Chiller.ID, MountedSpaceID: "plant-room", Name: "Leaving Chilled Water Temperature Probe", Type: "TEMPERATURE", SerialNumber: "TEST-PT1000-001", CalibrationDueAt: "2027-08-01T00:00:00Z"},
@@ -69,6 +72,7 @@ func testConfig() Config {
 		{DeviceID: plant.WeatherStationID, SubjectType: "SITE", SourceKey: "ambientDryBulbTemperatureC", TelemetryKey: "weather.ambient_dry_bulb_temperature", PointCode: "ambient_dry_bulb_temperature", Name: "Outdoor Dry Bulb Temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.WeatherStationID + ":ambientDryBulbTemperatureC"},
 		{DeviceID: plant.WeatherStationID, SubjectType: "SITE", SourceKey: "ambientWetBulbTemperatureC", TelemetryKey: "weather.ambient_wet_bulb_temperature", PointCode: "ambient_wet_bulb_temperature", Name: "Outdoor Wet Bulb Temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.WeatherStationID + ":ambientWetBulbTemperatureC"},
 		{DeviceID: plant.WeatherStationID, SubjectType: "SITE", SourceKey: "relativeHumidityPct", TelemetryKey: "weather.relative_humidity", PointCode: "relative_humidity", Name: "Outdoor Relative Humidity", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "%RH", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.WeatherStationID + ":relativeHumidityPct"},
+		{DeviceID: plant.ZoneSensorID, SubjectType: "SPACE", SubjectID: "office-zone", SourceKey: "zoneTemperatureC", TelemetryKey: "zone.temperature", PointCode: "temperature", Name: "Zone Temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleInterval: "2s", PublishInterval: "5s", StaleAfter: "15s", SourceProtocol: "SIMULATED", SourceAddress: plant.ZoneSensorID + ":zoneTemperatureC"},
 	}
 	for index := range points {
 		if points[index].PointID == "" {
