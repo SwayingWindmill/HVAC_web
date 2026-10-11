@@ -92,14 +92,14 @@ func aggregateExpr(name string) string {
 }
 
 func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID string, start, end time.Time) (Input, error) {
-	sql := fmt.Sprintf(`SELECT %s AS value, count() AS n, countIf(quality='GOOD') AS good, argMin(value_number,sampled_at) AS first_value, argMax(value_number,sampled_at) AS last_value, dateDiff('millisecond',min(sampled_at),max(sampled_at))/1000.0 AS duration_seconds, avg(value_number)*dateDiff('millisecond',min(sampled_at),max(sampled_at))/3600000.0 AS integral FROM telemetry_history.observations WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s) AND point_id=toUUID(%s) AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER') AND value_number IS NOT NULL AND sampled_at >= parseDateTime64BestEffort(%s) AND sampled_at < parseDateTime64BestEffort(%s) FORMAT TabSeparated`, aggregateExpr(b.Aggregation), quote(b.TenantID), quote(b.SiteID), quote(pointID), quote(start.UTC().Format(time.RFC3339Nano)), quote(end.UTC().Format(time.RFC3339Nano)))
+	sql := fmt.Sprintf(`SELECT %s AS value, count() AS n, countIf(quality='GOOD') AS good, argMin(value_number,sampled_at) AS first_value, argMax(value_number,sampled_at) AS last_value, dateDiff('millisecond',min(sampled_at),max(sampled_at))/1000.0 AS duration_seconds, avg(value_number)*dateDiff('millisecond',min(sampled_at),max(sampled_at))/3600000.0 AS integral, arrayMap(x -> x.2, arraySort(x -> x.1, groupArray((sampled_at, assumeNotNull(value_number))))) AS ordered, arrayDifference(ordered) AS steps, arraySum(arrayFilter(d -> d > 0, steps)) AS rise, length(arrayFilter(d -> d < 0, steps)) AS drops, arraySum(arrayFilter(d -> d < 0, steps)) AS drop_sum, arraySum(arrayFilter((v, d) -> d < 0, ordered, steps)) AS value_after_drops FROM telemetry_history.observations WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s) AND point_id=toUUID(%s) AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER') AND value_number IS NOT NULL AND sampled_at >= parseDateTime64BestEffort(%s) AND sampled_at < parseDateTime64BestEffort(%s) FORMAT TabSeparated`, aggregateExpr(b.Aggregation), quote(b.TenantID), quote(b.SiteID), quote(pointID), quote(start.UTC().Format(time.RFC3339Nano)), quote(end.UTC().Format(time.RFC3339Nano)))
 	body, err := s.query(ctx, sql)
 	if err != nil {
 		return Input{}, err
 	}
 	parts := strings.Split(strings.TrimSpace(string(body)), "\t")
 	// An aggregate over no rows is NULL, which TabSeparated writes as \N.
-	if len(parts) != 7 || parts[0] == "nan" || parts[0] == "" || parts[0] == `\N` {
+	if len(parts) != 11 || parts[0] == "nan" || parts[0] == "" || parts[0] == `\N` {
 		return Input{}, errors.New("metric point dependency has no numeric observations")
 	}
 	v, err := strconv.ParseFloat(parts[0], 64)
@@ -121,13 +121,29 @@ func (s *ClickHouseStore) ReadPoint(ctx context.Context, b Binding, pointID stri
 	}
 	duration, _ := strconv.ParseFloat(parts[5], 64)
 	integral, _ := strconv.ParseFloat(parts[6], 64)
+	rise, err := strconv.ParseFloat(parts[7], 64)
+	if err != nil {
+		return Input{}, err
+	}
+	drops, err := strconv.ParseInt(parts[8], 10, 64)
+	if err != nil {
+		return Input{}, err
+	}
+	dropSum, err := strconv.ParseFloat(parts[9], 64)
+	if err != nil {
+		return Input{}, err
+	}
+	valueAfterDrops, err := strconv.ParseFloat(parts[10], 64)
+	if err != nil {
+		return Input{}, err
+	}
 	q := "GOOD"
 	c := 1.0
 	if good < float64(n) {
 		q = "PARTIAL"
 		c = good / float64(n)
 	}
-	return Input{Reference: "point:" + pointID, Value: v, FirstValue: first, LastValue: last, Count: n, DurationSeconds: duration, Integral: integral, Quality: q, Completeness: c}, nil
+	return Input{Reference: "point:" + pointID, Value: v, FirstValue: first, LastValue: last, Count: n, DurationSeconds: duration, Integral: integral, Rise: rise, Drops: drops, DropSum: dropSum, ValueAfterDrops: valueAfterDrops, Quality: q, Completeness: c}, nil
 }
 func (s *ClickHouseStore) HasMetricResult(ctx context.Context, resultID string) (bool, error) {
 	body, err := s.query(ctx, fmt.Sprintf(`SELECT count() FROM analytics.metric_result_facts WHERE result_id=toUUID(%s) FORMAT TabSeparated`, quote(resultID)))
