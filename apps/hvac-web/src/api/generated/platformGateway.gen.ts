@@ -29,6 +29,8 @@ export const commandPaths = {
 
 export const intelligencePaths = {
   siteLoadForecast: '/api/v1/sites/{siteId}/forecast/load',
+  siteFddFindings: '/api/v1/sites/{siteId}/fdd/findings',
+  siteFddLowDeltaT: '/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t',
 } as const;
 
 export const buildInfoSchema = z.object({

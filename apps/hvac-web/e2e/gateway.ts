@@ -67,6 +67,7 @@ export class Gateway {
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
+  readonly findings = fixture<Json>('fdd-findings.json').items as Json[];
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -104,6 +105,18 @@ export class Gateway {
     return command;
   }
 
+  // The recorded loop still runs below the rule's threshold, so each evaluation records a finding.
+  private evaluateLowDeltaT(input: Json, now: string): Json {
+    const recorded = fixture<Json>('fdd-findings.json').items[0];
+    const finding = {
+      ...recorded, id: `finding-${this.findings.length + 1}`, assetId: input.assetId, evaluationFrom: input.evaluationFrom, evaluationTo: input.evaluationTo,
+      ruleRevisionId: input.ruleRevisionId, thresholdValue: input.minimumDeltaTC, createdAt: now,
+    };
+    if (finding.observedValue >= input.minimumDeltaTC) return { status: 'CLEAR', deltaTC: finding.observedValue };
+    this.findings.unshift(finding);
+    return { status: 'FINDING', deltaTC: finding.observedValue, finding };
+  }
+
   // The page names each request by its position in the batch, so recorded items answer by Device.
   private snapshotBatch(body: Json): Json {
     const items = body.requests.map((request: Json) => {
@@ -123,6 +136,8 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') return { body: fixture('history.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 

@@ -20,6 +20,7 @@ import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_
 import { Route as AppSiteEnergyAnalysisForecastRouteImport } from './routes/_app._site.energy-analysis.forecast'
 import { Route as AppSiteOperationsAlarmsRouteImport } from './routes/_app._site.operations.alarms'
 import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._site.operations.control'
+import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app._site.operations.diagnostics'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
@@ -80,6 +81,12 @@ const AppSiteOperationsControlRoute =
     path: '/operations/control',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsDiagnosticsRoute =
+  AppSiteOperationsDiagnosticsRouteImport.update({
+    id: '/operations/diagnostics',
+    path: '/operations/diagnostics',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteOperationsRealtimeRoute =
   AppSiteOperationsRealtimeRouteImport.update({
     id: '/operations/realtime',
@@ -109,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
+  '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -123,6 +131,7 @@ export interface FileRoutesByTo {
   '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
+  '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -140,6 +149,7 @@ export interface FileRoutesById {
   '/_app/_site/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
   '/_app/_site/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/_app/_site/operations/control': typeof AppSiteOperationsControlRoute
+  '/_app/_site/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/energy-analysis/forecast'
     | '/operations/alarms'
     | '/operations/control'
+    | '/operations/diagnostics'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -170,6 +181,7 @@ export interface FileRouteTypes {
     | '/energy-analysis/forecast'
     | '/operations/alarms'
     | '/operations/control'
+    | '/operations/diagnostics'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -186,6 +198,7 @@ export interface FileRouteTypes {
     | '/_app/_site/energy-analysis/forecast'
     | '/_app/_site/operations/alarms'
     | '/_app/_site/operations/control'
+    | '/_app/_site/operations/diagnostics'
     | '/_app/_site/operations/realtime'
     | '/_app/_site/operations/systems-devices'
     | '/_app/_site/operations/work-center'
@@ -274,6 +287,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsControlRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/diagnostics': {
+      id: '/_app/_site/operations/diagnostics'
+      path: '/operations/diagnostics'
+      fullPath: '/operations/diagnostics'
+      preLoaderRoute: typeof AppSiteOperationsDiagnosticsRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/realtime': {
       id: '/_app/_site/operations/realtime'
       path: '/operations/realtime'
@@ -304,6 +324,7 @@ interface AppSiteRouteChildren {
   AppSiteEnergyAnalysisForecastRoute: typeof AppSiteEnergyAnalysisForecastRoute
   AppSiteOperationsAlarmsRoute: typeof AppSiteOperationsAlarmsRoute
   AppSiteOperationsControlRoute: typeof AppSiteOperationsControlRoute
+  AppSiteOperationsDiagnosticsRoute: typeof AppSiteOperationsDiagnosticsRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
@@ -315,6 +336,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteEnergyAnalysisForecastRoute: AppSiteEnergyAnalysisForecastRoute,
   AppSiteOperationsAlarmsRoute: AppSiteOperationsAlarmsRoute,
   AppSiteOperationsControlRoute: AppSiteOperationsControlRoute,
+  AppSiteOperationsDiagnosticsRoute: AppSiteOperationsDiagnosticsRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,

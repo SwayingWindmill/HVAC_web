@@ -69,14 +69,26 @@ func (store *PostgresStore) InsertFinding(ctx context.Context, finding intellige
 		ruleRevision = finding.RuleRevisionID
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.fdd_findings(
-id,tenant_id,site_id,asset_id,finding_type,evaluation_from,evaluation_to,evidence_ids,model_deployment_revision_id,rule_revision_id,confidence,quality_blocker,alarm_id,work_order_id,created_at)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9::uuid,$10,$11,NULLIF($12,''),NULL,NULL,$13)
+id,tenant_id,site_id,asset_id,finding_type,evaluation_from,evaluation_to,evidence_ids,observed_value,threshold_value,value_unit,model_deployment_revision_id,rule_revision_id,confidence,quality_blocker,alarm_id,work_order_id,created_at)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9,$10,$11,$12::uuid,$13,$14,NULLIF($15,''),NULL,NULL,$16)
 ON CONFLICT (tenant_id,site_id,id) DO NOTHING`, finding.ID, finding.TenantID, finding.SiteID, finding.AssetID, finding.FindingType,
-		finding.EvaluationFrom.UTC(), finding.EvaluationTo.UTC(), finding.EvidenceIDs, modelDeployment, ruleRevision, finding.Confidence, finding.QualityBlocker, finding.CreatedAt.UTC())
+		finding.EvaluationFrom.UTC(), finding.EvaluationTo.UTC(), finding.EvidenceIDs, finding.ObservedValue, finding.ThresholdValue, finding.ValueUnit, modelDeployment, ruleRevision, finding.Confidence, finding.QualityBlocker, finding.CreatedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("insert FDD finding: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+const findingColumns = `id::text,tenant_id::text,site_id::text,asset_id::text,finding_type,evaluation_from,evaluation_to,evidence_ids,
+observed_value,threshold_value,value_unit,
+COALESCE(model_deployment_revision_id::text,''),COALESCE(rule_revision_id,''),confidence,COALESCE(quality_blocker,''),COALESCE(alarm_id::text,''),COALESCE(work_order_id::text,''),created_at`
+
+func scanFinding(row pgx.Row) (intelligencemodel.FDDFinding, error) {
+	var finding intelligencemodel.FDDFinding
+	err := row.Scan(&finding.ID, &finding.TenantID, &finding.SiteID, &finding.AssetID, &finding.FindingType,
+		&finding.EvaluationFrom, &finding.EvaluationTo, &finding.EvidenceIDs, &finding.ObservedValue, &finding.ThresholdValue, &finding.ValueUnit,
+		&finding.ModelDeploymentID, &finding.RuleRevisionID, &finding.Confidence, &finding.QualityBlocker, &finding.AlarmID, &finding.WorkOrderID, &finding.CreatedAt)
+	return finding, err
 }
 
 func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
@@ -88,8 +100,7 @@ func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID s
 	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT id::text,tenant_id::text,site_id::text,asset_id::text,finding_type,evaluation_from,evaluation_to,evidence_ids,
-COALESCE(model_deployment_revision_id::text,''),COALESCE(rule_revision_id,''),confidence,COALESCE(quality_blocker,''),COALESCE(alarm_id::text,''),COALESCE(work_order_id::text,''),created_at
+	rows, err := tx.Query(ctx, `SELECT `+findingColumns+`
 FROM core_registry.fdd_findings
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid
   AND ($3='' OR alarm_id=$3::uuid)
@@ -102,10 +113,8 @@ LIMIT $5`, tenantID, siteID, filter.AlarmID, filter.WorkOrderID, filter.Limit)
 	defer rows.Close()
 	findings := make([]intelligencemodel.FDDFinding, 0, filter.Limit)
 	for rows.Next() {
-		var finding intelligencemodel.FDDFinding
-		if err = rows.Scan(&finding.ID, &finding.TenantID, &finding.SiteID, &finding.AssetID, &finding.FindingType,
-			&finding.EvaluationFrom, &finding.EvaluationTo, &finding.EvidenceIDs, &finding.ModelDeploymentID, &finding.RuleRevisionID,
-			&finding.Confidence, &finding.QualityBlocker, &finding.AlarmID, &finding.WorkOrderID, &finding.CreatedAt); err != nil {
+		finding, err := scanFinding(rows)
+		if err != nil {
 			return nil, err
 		}
 		findings = append(findings, finding)
@@ -150,12 +159,8 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid`, tenantID, siteID
 	if err != nil {
 		return intelligencemodel.FDDFinding{}, err
 	}
-	var finding intelligencemodel.FDDFinding
-	err = tx.QueryRow(ctx, `SELECT id::text,tenant_id::text,site_id::text,asset_id::text,finding_type,evaluation_from,evaluation_to,evidence_ids,
-COALESCE(model_deployment_revision_id::text,''),COALESCE(rule_revision_id,''),confidence,COALESCE(quality_blocker,''),COALESCE(alarm_id::text,''),COALESCE(work_order_id::text,''),created_at
-FROM core_registry.fdd_findings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid`, tenantID, siteID, findingID).Scan(
-		&finding.ID, &finding.TenantID, &finding.SiteID, &finding.AssetID, &finding.FindingType, &finding.EvaluationFrom, &finding.EvaluationTo,
-		&finding.EvidenceIDs, &finding.ModelDeploymentID, &finding.RuleRevisionID, &finding.Confidence, &finding.QualityBlocker, &finding.AlarmID, &finding.WorkOrderID, &finding.CreatedAt)
+	finding, err := scanFinding(tx.QueryRow(ctx, `SELECT `+findingColumns+`
+FROM core_registry.fdd_findings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid`, tenantID, siteID, findingID))
 	if err != nil {
 		return intelligencemodel.FDDFinding{}, err
 	}
