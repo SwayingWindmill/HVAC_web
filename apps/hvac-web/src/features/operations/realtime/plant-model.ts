@@ -10,6 +10,7 @@ export type PlantCategory =
   | 'CHILLED_WATER_PUMP'
   | 'COOLING_WATER_PUMP'
   | 'COOLING_TOWER'
+  | 'ZONE'
   | 'METER'
   | 'WEATHER'
   | 'OTHER';
@@ -19,6 +20,7 @@ export const PLANT_CATEGORY_ORDER: readonly PlantCategory[] = [
   'CHILLED_WATER_PUMP',
   'COOLING_WATER_PUMP',
   'COOLING_TOWER',
+  'ZONE',
   'METER',
   'WEATHER',
   'OTHER',
@@ -29,6 +31,7 @@ export const PLANT_CATEGORY_LABELS: Readonly<Record<PlantCategory, string>> = {
   CHILLED_WATER_PUMP: '冷冻水泵',
   COOLING_WATER_PUMP: '冷却水泵',
   COOLING_TOWER: '冷却塔',
+  ZONE: '室内环境',
   METER: '计量',
   WEATHER: '室外环境',
   OTHER: '其他设备',
@@ -43,6 +46,7 @@ const CATEGORY_BY_ASSET_TYPE: Readonly<Record<string, PlantCategory>> = {
   POWER_METER: 'METER',
   BTU_METER: 'METER',
   WEATHER_STATION: 'WEATHER',
+  ZONE_TEMPERATURE_SENSOR: 'ZONE',
 };
 
 // Registry source-key namespaces identify the equipment role when a device is not bound
@@ -55,6 +59,7 @@ const CATEGORY_BY_SOURCE_NAMESPACE: Readonly<Record<string, PlantCategory>> = {
   hvac_meter: 'METER',
   btu_meter: 'METER',
   weather: 'WEATHER',
+  zone: 'ZONE',
 };
 
 export type RunState = 'RUNNING' | 'STOPPED' | 'FAULT' | 'UNKNOWN';
@@ -199,7 +204,8 @@ function firstReading(devices: readonly PlantDevice[], sourceKey: string): Plant
 }
 
 export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
-  const devices = rows.map(toPlantDevice);
+  // A gateway is how the plant reaches the platform, not plant equipment.
+  const devices = rows.filter((row) => row.device.deviceType !== 'GATEWAY').map(toPlantDevice);
   const groups = PLANT_CATEGORY_ORDER
     .map((category) => ({
       category,

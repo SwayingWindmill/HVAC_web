@@ -13,12 +13,13 @@ type CapabilityProfileID string
 type SemanticChannel string
 
 const (
-	ProfileVariableSpeedPump  CapabilityProfileID = "VARIABLE_SPEED_PUMP"
-	ProfileChiller            CapabilityProfileID = "CHILLER"
-	ProfileCoolingTower       CapabilityProfileID = "COOLING_TOWER"
-	ProfileElectricityMeter   CapabilityProfileID = "ELECTRICITY_METER"
-	ProfileThermalEnergyMeter CapabilityProfileID = "THERMAL_ENERGY_METER"
-	ProfileWeatherStation     CapabilityProfileID = "WEATHER_STATION"
+	ProfileVariableSpeedPump     CapabilityProfileID = "VARIABLE_SPEED_PUMP"
+	ProfileChiller               CapabilityProfileID = "CHILLER"
+	ProfileCoolingTower          CapabilityProfileID = "COOLING_TOWER"
+	ProfileElectricityMeter      CapabilityProfileID = "ELECTRICITY_METER"
+	ProfileThermalEnergyMeter    CapabilityProfileID = "THERMAL_ENERGY_METER"
+	ProfileWeatherStation        CapabilityProfileID = "WEATHER_STATION"
+	ProfileZoneTemperatureSensor CapabilityProfileID = "ZONE_TEMPERATURE_SENSOR"
 )
 
 const (
@@ -44,6 +45,7 @@ const (
 	SemanticCurrent             SemanticChannel = "Current"
 	SemanticOutdoorTemperature  SemanticChannel = "OutdoorTemperature"
 	SemanticOutdoorHumidity     SemanticChannel = "OutdoorHumidity"
+	SemanticZoneTemperature     SemanticChannel = "ZoneTemperature"
 )
 
 type ChannelRequirement struct {
@@ -200,6 +202,12 @@ func StandardCapabilityProfiles() []CapabilityProfile {
 			Channels: []ChannelRequirement{
 				{Semantic: SemanticOutdoorTemperature, DataType: DataTypeDouble, Unit: "Cel", Access: AccessReadOnly, Required: true},
 				{Semantic: SemanticOutdoorHumidity, DataType: DataTypeDouble, Unit: "%RH", Access: AccessReadOnly, Required: true},
+			},
+		},
+		{
+			ID: ProfileZoneTemperatureSensor, Revision: "edge-profile:zone-temperature-sensor:v1",
+			Channels: []ChannelRequirement{
+				{Semantic: SemanticZoneTemperature, DataType: DataTypeDouble, Unit: "Cel", Access: AccessReadOnly, Required: true},
 			},
 		},
 	}

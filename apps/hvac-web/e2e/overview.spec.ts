@@ -16,7 +16,9 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(plant).toContainText('211.9kW');
   await expect(plant).toContainText('瞬时制冷量864kW');
   await expect(plant.getByRole('region', { name: '主要设备' })).toContainText('4 / 4 台运行');
-  await expect(plant).toContainText('7 / 7 在线');
+  // The gateway is how the plant reaches the platform, not plant equipment.
+  await expect(plant).toContainText('8 / 8 在线');
+  await expect(plant).toContainText('室内温度24.1°C');
 
   await expect(page.getByRole('region', { name: '近 7 天逐时用电' })).toContainText('6,433kWh');
 

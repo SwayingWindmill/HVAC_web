@@ -1,4 +1,4 @@
-import { Fan, Gauge, Snowflake, ThermometerSun, Waves } from 'lucide-react';
+import { Fan, Gauge, Snowflake, Thermometer, ThermometerSun, Waves } from 'lucide-react';
 import type { StatusTone } from '@/components/common/StatusBadge';
 import { MetricValue } from '@/blocks/metric-card';
 import { formatDecimal } from '@/lib/operator-format';
@@ -28,6 +28,7 @@ export const KEY_READINGS: Readonly<Record<PlantCategory, readonly string[]>> = 
     'btu_meter.flow_rate',
   ],
   WEATHER: ['weather.ambient_dry_bulb_temperature', 'weather.ambient_wet_bulb_temperature', 'weather.relative_humidity'],
+  ZONE: ['zone.temperature'],
   OTHER: [],
 };
 
@@ -45,6 +46,7 @@ export const CATEGORY_ICONS: Partial<Record<PlantCategory, typeof Snowflake>> = 
   COOLING_TOWER: Fan,
   METER: Gauge,
   WEATHER: ThermometerSun,
+  ZONE: Thermometer,
 };
 
 export function deviceStatus(device: PlantDevice): { tone: StatusTone; label: string } {

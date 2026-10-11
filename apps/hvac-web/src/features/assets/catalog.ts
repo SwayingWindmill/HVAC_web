@@ -106,6 +106,9 @@ export const REAL_ASSETS_DEVICE_PROFILES = Object.freeze([
     point('weather.ambient_wet_bulb_temperature', '室外湿球温度', 20, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
     point('weather.relative_humidity', '室外相对湿度', 30, { defaultUnit: '%RH', precision: 1, trendEligible: true }),
   ]),
+  profile('ZONE_TEMPERATURE_SENSOR', '室内温度传感器', ['ZONE_TEMPERATURE_SENSOR'], [
+    point('zone.temperature', '室内温度', 10, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
+  ]),
   profile('GENERIC', '通用设备', ['GENERIC'], [
     point('temperature', '温度', 10, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
     point('humidity', '湿度', 20, { defaultUnit: '%RH', precision: 1, trendEligible: true }),

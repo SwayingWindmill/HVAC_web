@@ -789,6 +789,65 @@
           }
         ]
       }
+    },
+    {
+      "requestId": "assets-0-7-018f3e00-4000-7000-8000-000000000008",
+      "deviceId": "018f3e00-4000-7000-8000-000000000008",
+      "status": "OK",
+      "snapshot": {
+        "schemaVersion": 1,
+        "deviceId": "018f3e00-4000-7000-8000-000000000008",
+        "tenantId": "018f3d00-0000-7000-8000-000000000001",
+        "siteId": "018f3e00-1000-7000-8000-000000000001",
+        "businessRevision": 85251,
+        "evaluatedAt": "2026-10-01T15:29:54.112Z",
+        "evaluationAvailability": "AVAILABLE",
+        "availabilityReasons": [],
+        "presence": {
+          "applicability": "APPLICABLE",
+          "currentState": "ONLINE",
+          "lastSeenAt": "2026-10-01T15:29:52.380Z",
+          "policyRevision": 1,
+          "lastKnown": {
+            "state": "ONLINE",
+            "lastSeenAt": "2026-10-01T15:29:52.380Z",
+            "evaluatedAt": "2026-10-01T15:29:54.112Z",
+            "policyRevision": 1
+          }
+        },
+        "telemetryReadiness": "CURRENT",
+        "displayState": "ONLINE",
+        "values": [
+          {
+            "key": "temperature",
+            "state": "PRESENT",
+            "value": 24.1,
+            "valueType": "NUMBER",
+            "unit": "Cel",
+            "sampledAt": "2026-10-01T15:29:52.380Z",
+            "receivedAt": "2026-10-01T15:29:53.661Z",
+            "freshness": "FRESH",
+            "quality": "GOOD",
+            "qualityReasons": [],
+            "policyRevision": 1
+          }
+        ]
+      }
+    },
+    {
+      "requestId": "assets-0-5-018f3e00-4000-7000-8000-000000000100",
+      "deviceId": "018f3e00-4000-7000-8000-000000000100",
+      "status": "ERROR",
+      "problem": {
+        "type": "https://api.quanlaihe.com/problems/resource-not-found",
+        "title": "Not Found",
+        "status": 404,
+        "detail": "The requested telemetry resource was not found.",
+        "instance": "/internal/v1/telemetry/observation-snapshots:batchGet",
+        "code": "RESOURCE_NOT_FOUND",
+        "traceId": "e2e",
+        "retryable": false
+      }
     }
   ]
 }

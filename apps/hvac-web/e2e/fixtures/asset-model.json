@@ -54,6 +54,19 @@
       "revision": 1,
       "createdAt": "2026-09-28T07:15:32.294Z",
       "updatedAt": "2026-09-29T08:51:35.734Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000001",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "parentSpaceId": "01910000-0000-7000-8000-000000000001",
+      "code": "office-zone",
+      "displayName": "办公区",
+      "spaceType": "ZONE",
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.766Z",
+      "updatedAt": "2026-10-11T13:07:19.388Z"
     }
   ],
   "assets": [
@@ -140,6 +153,18 @@
       "revision": 1,
       "createdAt": "2026-09-28T07:15:32.295Z",
       "updatedAt": "2026-09-29T08:51:35.735Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000002",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "code": "zone-sensor",
+      "displayName": "ZONE-SENSOR-01",
+      "assetType": "ZONE_TEMPERATURE_SENSOR",
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.767Z",
+      "updatedAt": "2026-10-11T13:07:19.389Z"
     }
   ],
   "devices": [
@@ -226,6 +251,30 @@
       "revision": 1,
       "createdAt": "2026-09-28T07:15:32.297Z",
       "updatedAt": "2026-09-29T08:51:35.737Z"
+    },
+    {
+      "id": "018f3e00-4000-7000-8000-000000000100",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "code": "eg8200-commercial-001",
+      "displayName": "EG8200-COMMERCIAL-001",
+      "deviceType": "GATEWAY",
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.769Z",
+      "updatedAt": "2026-10-11T13:07:19.390Z"
+    },
+    {
+      "id": "018f3e00-4000-7000-8000-000000000008",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "code": "zone-sensor",
+      "displayName": "ZONE-SENSOR-01 通信端点",
+      "deviceType": "ZONE_TEMPERATURE_SENSOR",
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.769Z",
+      "updatedAt": "2026-10-11T13:07:19.390Z"
     }
   ],
   "sensors": [
@@ -2142,6 +2191,33 @@
       "revision": 1,
       "createdAt": "2026-09-28T07:15:32.307Z",
       "updatedAt": "2026-09-29T08:51:35.745Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000003",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "reportingDeviceId": "018f3e00-4000-7000-8000-000000000008",
+      "sensorId": null,
+      "pointCode": "temperature",
+      "sourceKey": "zone.temperature",
+      "displayName": "zone temperature",
+      "pointType": "TELEMETRY",
+      "valueType": "NUMBER",
+      "unit": "Cel",
+      "writable": false,
+      "sampleIntervalMs": 1000,
+      "publishIntervalMs": 2000,
+      "staleAfterMs": 10000,
+      "counterDecreaseMode": null,
+      "counterRolloverModulus": null,
+      "sourceMetadata": {
+        "address": "ZONE-SENSOR-01:zoneTemperatureC",
+        "protocol": "SIMULATED"
+      },
+      "status": "ACTIVE",
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.781Z",
+      "updatedAt": "2026-10-11T13:07:19.402Z"
     }
   ],
   "relationships": [
@@ -3712,13 +3788,77 @@
       "revision": 1,
       "createdAt": "2026-09-28T07:15:32.311Z",
       "updatedAt": "2026-09-29T08:51:35.748Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000004",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "fromType": "ASSET",
+      "fromId": "01910000-0000-7000-8000-0f0000000002",
+      "toType": "SPACE",
+      "toId": "01910000-0000-7000-8000-0f0000000001",
+      "role": "INSTALLED_IN",
+      "status": "ACTIVE",
+      "validFrom": "2026-10-11T13:05:32.768Z",
+      "validTo": null,
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.768Z",
+      "updatedAt": "2026-10-11T13:07:19.389Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000005",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "fromType": "DEVICE",
+      "fromId": "018f3e00-4000-7000-8000-000000000008",
+      "toType": "SPACE",
+      "toId": "01910000-0000-7000-8000-0f0000000001",
+      "role": "INSTALLED_IN",
+      "status": "ACTIVE",
+      "validFrom": "2026-10-11T13:05:32.772Z",
+      "validTo": null,
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.772Z",
+      "updatedAt": "2026-10-11T13:07:19.392Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000006",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "fromType": "DEVICE",
+      "fromId": "018f3e00-4000-7000-8000-000000000008",
+      "toType": "ASSET",
+      "toId": "01910000-0000-7000-8000-0f0000000002",
+      "role": "CONTROLLER",
+      "status": "ACTIVE",
+      "validFrom": "2026-10-11T13:05:32.774Z",
+      "validTo": null,
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.774Z",
+      "updatedAt": "2026-10-11T13:07:19.393Z"
+    },
+    {
+      "id": "01910000-0000-7000-8000-0f0000000007",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "fromType": "POINT",
+      "fromId": "01910000-0000-7000-8000-0f0000000003",
+      "toType": "SPACE",
+      "toId": "01910000-0000-7000-8000-0f0000000001",
+      "role": "DESCRIBES",
+      "status": "ACTIVE",
+      "validFrom": "2026-10-11T13:05:32.783Z",
+      "validTo": null,
+      "revision": 1,
+      "createdAt": "2026-10-11T13:05:32.783Z",
+      "updatedAt": "2026-10-11T13:07:19.405Z"
     }
   ],
   "counts": {
-    "spaces": 4,
-    "assets": 7,
-    "deviceEndpoints": 7,
+    "spaces": 5,
+    "assets": 8,
+    "deviceEndpoints": 9,
     "physicalSensors": 8,
-    "points": 61
+    "points": 62
   }
 }

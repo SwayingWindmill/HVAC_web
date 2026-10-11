@@ -127,6 +127,7 @@ const ASSET_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   HVAC_POWER_METER: '中央空调总电表',
   BTU_METER: '中央空调总冷量表',
   WEATHER_STATION: '室外气象站',
+  ZONE_TEMPERATURE_SENSOR: '办公区温度传感器',
 });
 
 const DEVICE_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -142,6 +143,7 @@ const DEVICE_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   POWER_METER: '电表通信端点',
   BTU_METER: '冷量表通信端点',
   WEATHER_STATION: '气象站通信端点',
+  ZONE_TEMPERATURE_SENSOR: '温度传感器通信端点',
 });
 
 const SENSOR_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({

@@ -63,7 +63,7 @@ function WaterSide({ plant }: { readonly plant: PlantView }) {
   return (
     <Card className="@container/card">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Waves className="size-4" aria-hidden="true" />水侧与室外工况</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Waves className="size-4" aria-hidden="true" />水侧与室内外工况</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 @3xl/card:grid-cols-3 @3xl/card:gap-8">
         <section>
@@ -88,10 +88,11 @@ function WaterSide({ plant }: { readonly plant: PlantView }) {
           <ConditionRow label="冷却塔逼近温度" reading={plantReading(plant, 'cooling_tower.approach_temperature')} />
         </section>
         <section className="border-t pt-3 @3xl/card:border-t-0 @3xl/card:pt-0">
-          <h3 className="text-xs font-medium text-muted-foreground">室外</h3>
-          <ConditionRow label="干球温度" reading={plantReading(plant, 'weather.ambient_dry_bulb_temperature')} />
-          <ConditionRow label="湿球温度" reading={plantReading(plant, 'weather.ambient_wet_bulb_temperature')} />
-          <ConditionRow label="相对湿度" reading={plantReading(plant, 'weather.relative_humidity')} />
+          <h3 className="text-xs font-medium text-muted-foreground">室内与室外</h3>
+          <ConditionRow label="室内温度" reading={plantReading(plant, 'zone.temperature')} />
+          <ConditionRow label="室外干球" reading={plantReading(plant, 'weather.ambient_dry_bulb_temperature')} />
+          <ConditionRow label="室外湿球" reading={plantReading(plant, 'weather.ambient_wet_bulb_temperature')} />
+          <ConditionRow label="室外湿度" reading={plantReading(plant, 'weather.relative_humidity')} />
         </section>
       </CardContent>
     </Card>

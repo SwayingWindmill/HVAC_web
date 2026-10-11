@@ -13,6 +13,7 @@ export const centralPlantDevices = Object.freeze([
   { slug: 'hvac-meter', name: 'METER-HVAC-TOTAL', type: 'HVAC_POWER_METER', platformDeviceId: '018f3e00-4000-7000-8000-000000000005' },
   { slug: 'btu-meter', name: 'BTU-METER-01', type: 'BTU_METER', platformDeviceId: '018f3e00-4000-7000-8000-000000000006' },
   { slug: 'weather-station', name: 'WEATHER-STATION-01', type: 'WEATHER_STATION', platformDeviceId: '018f3e00-4000-7000-8000-000000000007' },
+  { slug: 'zone-sensor', name: 'ZONE-SENSOR-01', type: 'ZONE_TEMPERATURE_SENSOR', platformDeviceId: '018f3e00-4000-7000-8000-000000000008' },
 ]);
 
 // The local stack runs one EG8200 Gateway per Site, both in the local Tenant. Site A keeps

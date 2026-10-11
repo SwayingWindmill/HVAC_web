@@ -13,7 +13,16 @@ const (
 	coolingTowerFanTimeConstant     = 30 * time.Second
 	coolingTowerWaterTimeConstant   = 2 * time.Minute
 	chillerCapacityTimeConstant     = 90 * time.Second
-	chilledWaterTimeConstant        = 3 * time.Minute
+	// The building zone the plant cools. Its coil removes as much as the zone's warmth above the
+	// supply water allows, sized to the chiller's rating at design (24 °C zone, 7 °C water); its
+	// thermal mass warms the zone 4 °C an hour against a full-rated imbalance.
+	zoneSetpointC            = 24.0
+	zoneDesignSupplyWaterC   = 7.0
+	zoneThermalMassHours     = 0.25
+	zoneControlTimeConstant  = 3 * time.Minute
+	zoneDeadbandC            = 0.3
+	maximumIntegrationStep   = time.Minute
+	chilledWaterTimeConstant = 3 * time.Minute
 )
 
 type DeviceTelemetry map[string]any
@@ -48,8 +57,16 @@ type Plant struct {
 	coolingWaterPump pumpState
 	coolingTower     coolingTowerState
 
+	zone zoneState
+
 	totalEnergyKWh        float64
 	totalCoolingEnergyKWh float64
+}
+
+type zoneState struct {
+	temperatureC float64
+	// What the air-side coil draws from the chilled water to hold the zone at its setpoint.
+	coolingDemandKW float64
 }
 
 type chillerState struct {
@@ -100,6 +117,7 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 		inputs:         inputs,
 		now:            now.UTC(),
 		totalEnergyKWh: config.InitialEnergyKWh,
+		zone:           zoneState{temperatureC: zoneSetpointC},
 		chiller: chillerState{
 			runRequested:          config.Chiller.InitiallyRunning,
 			running:               config.Chiller.InitiallyRunning,
@@ -160,7 +178,8 @@ func (plant *Plant) tickLocked(elapsed time.Duration) {
 	remaining := elapsed
 	for remaining > 0 {
 		plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
-		segment := remaining
+		// Coupled states (zone, coil, chiller) advance together, so a long tick is taken in short steps.
+		segment := min(remaining, maximumIntegrationStep)
 		if transition, ok := plant.scenario.nextTransitionAfter(plant.scenarioElapsed); ok {
 			untilTransition := transition - plant.scenarioElapsed
 			if untilTransition < segment {
@@ -179,7 +198,9 @@ func (plant *Plant) advanceLocked(elapsed time.Duration) {
 	plant.updatePump(&plant.chilledWaterPump, plant.config.ChilledWaterPump, elapsed)
 	plant.updatePump(&plant.coolingWaterPump, plant.config.CoolingWaterPump, elapsed)
 	plant.updateCoolingTower(elapsed)
+	plant.updateZoneDemand()
 	plant.updateChiller(elapsed)
+	plant.updateZoneTemperature(elapsed)
 
 	totalPowerKW := plant.chiller.powerKW + plant.chilledWaterPump.powerKW + plant.coolingWaterPump.powerKW + plant.coolingTower.powerKW
 	plant.totalEnergyKWh += totalPowerKW * elapsed.Hours()
@@ -263,7 +284,7 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 	targetCapacityKW := 0.0
 	if available {
 		limitCapacityKW := plant.config.Chiller.RatedCoolingCapacityKW * state.loadLimitPct / 100
-		targetCapacityKW = math.Min(plant.inputs.CoolingLoadKW, limitCapacityKW)
+		targetCapacityKW = math.Min(plant.zone.coolingDemandKW, limitCapacityKW)
 	}
 	if equipmentFault {
 		state.coolingCapacityKW = 0
@@ -299,6 +320,27 @@ func (plant *Plant) updateChiller(elapsed time.Duration) {
 	state.powerKW = state.coolingCapacityKW / state.cop
 }
 
+// zoneThermalMassKWhPerC is how much heat moves the zone by one degree.
+func (plant *Plant) zoneThermalMassKWhPerC() float64 {
+	return plant.config.Chiller.RatedCoolingCapacityKW * zoneThermalMassHours
+}
+
+// updateZoneDemand sets what the coil asks of the chilled water: the building's heat gain plus a
+// recovery toward the setpoint, no more than the coil can remove at the current supply water.
+func (plant *Plant) updateZoneDemand() {
+	coilKWPerC := plant.config.Chiller.RatedCoolingCapacityKW / (zoneSetpointC - zoneDesignSupplyWaterC)
+	coilLimitKW := coilKWPerC * math.Max(0, plant.zone.temperatureC-plant.chiller.leavingChilledWaterC)
+	// Like a real zone control, it ignores drift inside its deadband and recovers only beyond it.
+	correctionKW := math.Max(0, plant.zone.temperatureC-zoneSetpointC-zoneDeadbandC) * plant.zoneThermalMassKWhPerC() / zoneControlTimeConstant.Hours()
+	plant.zone.coolingDemandKW = clamp(plant.inputs.CoolingLoadKW+correctionKW, 0, coilLimitKW)
+}
+
+// updateZoneTemperature warms the zone by the heat the chilled water did not remove.
+func (plant *Plant) updateZoneTemperature(elapsed time.Duration) {
+	imbalanceKW := plant.inputs.CoolingLoadKW - plant.chiller.coolingCapacityKW
+	plant.zone.temperatureC += imbalanceKW * elapsed.Hours() / plant.zoneThermalMassKWhPerC()
+}
+
 func (plant *Plant) updateChilledWaterTemperatures(elapsed time.Duration) {
 	state := &plant.chiller
 	flowM3H := plant.chilledWaterPump.flowM3H
@@ -308,7 +350,7 @@ func (plant *Plant) updateChilledWaterTemperatures(elapsed time.Duration) {
 	}
 
 	waterCapacityKWPerC := waterHeatCapacityKWPerM3HDeltaC * flowM3H
-	unmetLoadKW := math.Max(plant.inputs.CoolingLoadKW-state.coolingCapacityKW, 0)
+	unmetLoadKW := math.Max(plant.zone.coolingDemandKW-state.coolingCapacityKW, 0)
 	supplyTargetC := state.setpointC + unmetLoadKW/waterCapacityKWPerC
 	state.leavingChilledWaterC = approach(state.leavingChilledWaterC, supplyTargetC, elapsed, chilledWaterTimeConstant)
 	state.enteringChilledWaterC = state.leavingChilledWaterC + state.coolingCapacityKW/waterCapacityKWPerC
@@ -358,6 +400,9 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"flowRateM3h":                 round(plant.chilledWaterPump.flowM3H, 3),
 				"instantCoolingCapacityKw":    round(plant.chiller.coolingCapacityKW, 3),
 				"accumulatedCoolingEnergyKwh": round(plant.totalCoolingEnergyKWh, 6),
+			},
+			plant.config.ZoneSensorID: {
+				"zoneTemperatureC": round(plant.zone.temperatureC, 3),
 			},
 			plant.config.WeatherStationID: {
 				"ambientDryBulbTemperatureC": round(plant.inputs.AmbientDryBulbC, 3),
