@@ -10,7 +10,7 @@ test('the default view lists active alarms only', async ({ page }) => {
   await expect(rows.first()).toContainText('冷冻水回水温度过低');
   await expect(rows.first()).toContainText('活动 · 未确认');
 
-  await page.getByRole('tab', { name: '已恢复' }).click();
+  await page.getByRole('radio', { name: '已恢复' }).click();
   await expect(page).toHaveURL(/view=cleared/);
   await expect(rows.first()).toContainText('已恢复 · 已确认');
 });
@@ -41,4 +41,22 @@ test('a work order created from an alarm references it as its origin', async ({ 
     priority: 'HIGH',
     sourceReferences: [{ domain: 'ALARM', resourceId: ACTIVE_ALARM, relationship: 'ORIGIN' }],
   });
+});
+
+test('search and severity filters narrow the ledger and say when nothing matches', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=all`);
+  const rows = page.getByRole('table', { name: '告警记录' }).locator('tbody tr');
+  await expect(rows).toHaveCount(2);
+
+  await page.getByRole('textbox', { name: '搜索告警' }).fill('不存在的告警');
+  await expect(page).toHaveURL(/q=/);
+  await expect(page.getByText('没有符合条件的告警')).toBeVisible();
+
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(rows).toHaveCount(2);
+
+  await page.getByRole('toolbar').getByRole('button', { name: '严重度' }).click();
+  await page.getByRole('option', { name: '紧急' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('没有符合条件的告警')).toBeVisible();
 });

@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import type { Alarm, AlarmOperation, AlarmSeverity } from './alarm-api';
 
 export const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
@@ -9,14 +9,6 @@ export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
   MINOR: '次要',
   WARNING: '预警',
   INFO: '提示',
-};
-
-export const SEVERITY_CLASSES: Readonly<Record<AlarmSeverity, string>> = {
-  CRITICAL: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300',
-  MAJOR: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900 dark:bg-orange-950/50 dark:text-orange-300',
-  MINOR: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300',
-  WARNING: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300',
-  INFO: 'border-border bg-muted text-muted-foreground',
 };
 
 const OPERATION_LABELS: Readonly<Record<AlarmOperation, string>> = {
@@ -40,7 +32,12 @@ export function alarmStatusLabel(alarm: Alarm): string {
 }
 
 export function formatDuration(from: string, to: string | undefined, now: number): string {
-  const minutes = Math.max(0, Math.round(((to ? Date.parse(to) : now) - Date.parse(from)) / 60_000));
+  return formatSpan((to ? Date.parse(to) : now) - Date.parse(from));
+}
+
+/** A length of time in the units an operator reads: minutes, then hours and minutes, then days and hours. */
+export function formatSpan(milliseconds: number): string {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
   if (minutes < 60) return `${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} 小时 ${minutes % 60} 分`;
@@ -51,11 +48,23 @@ export function severityRank(severity: AlarmSeverity): number {
   return SEVERITY_ORDER.indexOf(severity);
 }
 
+export const SEVERITY_COLORS: Readonly<Record<AlarmSeverity, string>> = {
+  CRITICAL: 'var(--severity-critical)',
+  MAJOR: 'var(--severity-major)',
+  MINOR: 'var(--severity-minor)',
+  WARNING: 'var(--severity-warning)',
+  INFO: 'var(--severity-info)',
+};
+
 export function SeverityBadge({ severity }: { readonly severity: AlarmSeverity }) {
+  const color = SEVERITY_COLORS[severity];
   return (
-    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', SEVERITY_CLASSES[severity])}>
+    <Badge
+      variant="outline"
+      style={{ color, borderColor: `color-mix(in oklab, ${color} 35%, transparent)`, background: `color-mix(in oklab, ${color} 10%, transparent)` }}
+    >
       {SEVERITY_LABELS[severity]}
-    </span>
+    </Badge>
   );
 }
 
@@ -64,3 +73,4 @@ export function sortAlarmsForOperators(alarms: readonly Alarm[]): Alarm[] {
   return [...alarms].sort((left, right) => severityRank(left.currentSeverity) - severityRank(right.currentSeverity)
     || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt));
 }
+

@@ -50,7 +50,6 @@ export interface AlarmPage {
 export interface AlarmListFilter {
   condition?: AlarmCondition;
   acknowledged?: boolean;
-  severity?: AlarmSeverity;
 }
 
 export class AlarmRequestError extends Error {
@@ -85,7 +84,6 @@ export async function listAlarms(siteId: string, filter: AlarmListFilter, cursor
   const query = new URLSearchParams({ siteId, limit: '100' });
   if (filter.condition) query.set('condition', filter.condition);
   if (filter.acknowledged !== undefined) query.set('acknowledged', String(filter.acknowledged));
-  if (filter.severity) query.set('severity', filter.severity);
   if (cursor) query.set('cursor', cursor);
   const body = await send<{ data: Alarm[]; meta: { nextCursor: string | null; hasMore: boolean } }>(
     `${alarmPaths.list}?${query.toString()}`,
@@ -124,11 +122,24 @@ export const alarmKeys = {
   detail: (siteId: string, alarmId: string) => ['alarms', siteId, 'detail', alarmId] as const,
 };
 
-// The Alarm owner has no stream yet; views follow it on a short interval.
+const PAGE_LIMIT = 10;
+
+// The Alarm owner has no stream yet; views follow it on a short interval. Every active alarm is read,
+// up to PAGE_LIMIT pages; `complete` says whether that covered them all.
 export function activeAlarmsQuery(siteId: string) {
   return queryOptions({
     queryKey: alarmKeys.activeSummary(siteId),
-    queryFn: ({ signal }) => listAlarms(siteId, { condition: 'ACTIVE' }, undefined, signal),
+    queryFn: async ({ signal }) => {
+      const items: Alarm[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < PAGE_LIMIT; page += 1) {
+        const result = await listAlarms(siteId, { condition: 'ACTIVE' }, cursor, signal);
+        items.push(...result.items);
+        if (!result.hasMore) return { items, complete: true };
+        cursor = result.nextCursor ?? undefined;
+      }
+      return { items, complete: false };
+    },
     refetchInterval: 15_000,
   });
 }
@@ -137,5 +148,28 @@ export function alarmDetailQuery(siteId: string, alarmId: string) {
   return queryOptions({
     queryKey: alarmKeys.detail(siteId, alarmId),
     queryFn: ({ signal }) => getAlarm(alarmId, signal),
+  });
+}
+
+const HISTORY_DAYS = 14;
+
+/** Alarms raised since a day before the 14-day window (the view trims to Site-local days), newest first; `complete` is false when the page cap cut it short. */
+export function alarmHistoryQuery(siteId: string) {
+  return queryOptions({
+    queryKey: [...alarmKeys.all(siteId), 'history', HISTORY_DAYS] as const,
+    queryFn: async ({ signal }) => {
+      const since = Date.now() - (HISTORY_DAYS + 1) * 86_400_000;
+      const alarms: Alarm[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < PAGE_LIMIT; page += 1) {
+        const result = await listAlarms(siteId, {}, cursor, signal);
+        alarms.push(...result.items.filter((alarm) => Date.parse(alarm.firstOccurredAt) >= since));
+        const reachedStart = result.items.some((alarm) => Date.parse(alarm.firstOccurredAt) < since);
+        if (!result.hasMore || reachedStart) return { alarms, complete: true, days: HISTORY_DAYS };
+        cursor = result.nextCursor ?? undefined;
+      }
+      return { alarms, complete: false, days: HISTORY_DAYS };
+    },
+    refetchInterval: 5 * 60_000,
   });
 }
