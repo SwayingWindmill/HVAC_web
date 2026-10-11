@@ -26,6 +26,11 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(alarms.getByRole('listitem')).toHaveCount(1);
   await expect(alarms.getByRole('link')).toContainText('未确认');
 
+  const findings = page.getByRole('list').filter({ hasText: '冷冻水低温差' });
+  await expect(findings.getByRole('listitem')).toHaveCount(1);
+  await expect(findings).toContainText('BTU-METER-01');
+  await expect(findings).toContainText('3.4 K');
+
   const work = page.getByRole('list').filter({ hasText: '布水器季度检查' });
   await expect(work.getByRole('listitem')).toHaveCount(2);
 

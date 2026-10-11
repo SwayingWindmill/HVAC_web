@@ -22,6 +22,9 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle }
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
+import { ruleFor } from "@/features/diagnostics/diagnostics-model";
+import { FindingSeverityBadge } from "@/features/diagnostics/finding-presentation";
+import { siteFindingsQuery } from "@/features/diagnostics/query";
 import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
 import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
@@ -230,7 +233,7 @@ function HourlyElectricity() {
 function ListCard({ title, description, href, siteId, children }: {
   readonly title: string;
   readonly description: string;
-  readonly href: "/operations/alarms" | "/operations/work-center";
+  readonly href: "/operations/alarms" | "/operations/diagnostics" | "/operations/work-center";
   readonly siteId: string;
   readonly children: ReactNode;
 }) {
@@ -273,9 +276,13 @@ export function OverviewWorkspace() {
   const deviceNames = useDeviceNames(site.id);
   const alarms = useQuery(activeAlarmsQuery(site.id));
   const workOrders = useQuery(openWorkOrdersQuery(site.id));
+  const findings = useQuery(siteFindingsQuery(site.id));
 
   const activeAlarms = sortAlarmsForOperators(alarms.data?.items ?? []);
   const openOrders = sortWorkOrdersForOperators(workOrders.data ?? []);
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const recentFindings = (findings.data ?? []).filter((finding) => Date.parse(finding.evaluationTo) >= weekAgo);
+  const assetName = (assetId: string) => registry.data?.assetModel.assets.find((asset) => asset.id === assetId)?.displayName ?? "—";
 
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
@@ -297,6 +304,7 @@ export function OverviewWorkspace() {
               void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
               void alarms.refetch();
               void workOrders.refetch();
+              void findings.refetch();
             }}
           >
             <RefreshCw aria-hidden="true" data-icon="inline-start" />
@@ -315,7 +323,7 @@ export function OverviewWorkspace() {
         <LivePlant plant={plant} registryState={registry.status} siteId={site.id} timeZone={site.timezone} />
       </div>
 
-      <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-2">
+      <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-3">
         <ListCard
           title="未结告警"
           description={alarms.data ? `${activeAlarms.length} 条活动告警` : "正在读取告警"}
@@ -338,6 +346,37 @@ export function OverviewWorkspace() {
                         </ItemDescription>
                       </ItemContent>
                       <ItemActions className="text-xs text-muted-foreground">{alarm.acknowledgement ? "已确认" : "未确认"}</ItemActions>
+                    </Link>
+                  </Item>
+                </div>
+              ))}
+            </ItemGroup>
+          )}
+        </ListCard>
+        <ListCard
+          title="诊断发现"
+          description={findings.data ? `近 7 天 ${recentFindings.length} 条` : "正在读取诊断发现"}
+          href="/operations/diagnostics"
+          siteId={site.id}
+        >
+          {findings.isPending ? <Skeleton className="h-40" /> : findings.isError ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">诊断发现暂不可用</p>
+          ) : recentFindings.length === 0 ? <EmptyList text="近 7 天没有诊断发现" /> : (
+            <ItemGroup className="gap-1">
+              {recentFindings.slice(0, LIST_LIMIT).map((finding) => (
+                <div role="listitem" key={finding.id}>
+                  <Item size="sm" asChild className="hover:bg-muted/60">
+                    <Link to="/operations/diagnostics" search={{ site: site.id, inspect: finding.id }}>
+                      <FindingSeverityBadge finding={finding} />
+                      <ItemContent>
+                        <ItemTitle className="truncate">{ruleFor(finding.findingType)?.title ?? "诊断发现"}</ItemTitle>
+                        <ItemDescription className="truncate text-xs">
+                          {assetName(finding.assetId)} · {formatTime(finding.evaluationTo, site.timezone)}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="text-xs tabular-nums text-muted-foreground">
+                        {formatDecimal(finding.observedValue, 1)} {finding.valueUnit}
+                      </ItemActions>
                     </Link>
                   </Item>
                 </div>
