@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
-test('the overview compares today with yesterday, shows the live plant and open work, and names what is not integrated', async ({ page }) => {
+test('the overview compares today with yesterday, shows the live plant and open work, and names what is not integrated', async ({ page, gateway }) => {
+  gateway.optimization = JSON.parse(readFileSync(new URL('./fixtures/optimization-latest.json', import.meta.url), 'utf8'));
   await page.goto(`/overview?site=${SITE_ID}`);
 
   const energy = page.getByRole('region', { name: '今日用能' });
@@ -34,7 +36,12 @@ test('the overview compares today with yesterday, shows the live plant and open 
   const work = page.getByRole('list').filter({ hasText: '布水器季度检查' });
   await expect(work.getByRole('listitem')).toHaveCount(2);
 
-  await expect(page.getByRole('region', { name: '节能成效' })).toContainText('未接入');
+  // Savings are the latest recommendation's expectation until a baseline model measures them.
+  const saving = page.getByRole('region', { name: '节能机会' });
+  await expect(saving).toContainText('51元/天 · 预计');
+  await expect(saving).toContainText('预计日节电60 kWh');
+  await expect(saving).toContainText('7.1 → 8.1 °C');
+  await expect(saving).toContainText('实测节能量需要基线模型核算，尚未接入');
 
   await alarms.getByRole('link').click();
   await expect(page).toHaveURL(/\/operations\/alarms\?.*inspect=/);

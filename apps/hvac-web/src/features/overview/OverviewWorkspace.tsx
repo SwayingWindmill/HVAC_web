@@ -17,11 +17,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
+import { changesSupply } from "@/features/optimization/optimization-model";
+import { latestRecommendationQuery } from "@/features/optimization/query";
 import { ruleFor } from "@/features/diagnostics/diagnostics-model";
 import { FindingSeverityBadge } from "@/features/diagnostics/finding-presentation";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
@@ -230,6 +232,60 @@ function HourlyElectricity() {
   );
 }
 
+/**
+ * What the latest Optimization recommendation expects to save, shown as an expectation: measured
+ * savings need a baseline model (M&V), which is not connected.
+ */
+function SavingOpportunity({ siteId, timeZone }: { readonly siteId: string; readonly timeZone: string }) {
+  const latest = useQuery(latestRecommendationQuery(siteId, null));
+  const recommendation = latest.data ?? null;
+  return (
+    <Card role="region" aria-label="节能机会" className="@container/card">
+      <CardHeader>
+        <CardDescription className="flex items-center gap-2">
+          <PiggyBank className="size-4 text-primary" aria-hidden="true" />
+          节能机会
+        </CardDescription>
+        {recommendation ? (
+          <CardTitle className="text-3xl font-medium tracking-tight tabular-nums">
+            {formatDecimal(recommendation.saving.costPerDay, 0)}
+            <span className="ml-1.5 text-sm font-normal tracking-normal text-muted-foreground">元/天 · 预计</span>
+          </CardTitle>
+        ) : null}
+        <CardAction>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/energy-analysis/optimization" search={{ site: siteId }}>
+              {recommendation ? "查看建议" : "去生成"}
+              <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
+            </Link>
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-3 text-sm">
+        {latest.isPending ? <Skeleton className="h-24" /> : latest.isError ? (
+          <p className="text-muted-foreground">优化建议暂不可用</p>
+        ) : !recommendation ? (
+          <p className="text-muted-foreground">还没有优化建议。生成后，这里显示按建议调整供水温度预计每天能省多少电和电费。</p>
+        ) : (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <Fact label="预计日节电">{formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh</Fact>
+            <Fact label="建议供水温度">
+              {changesSupply(recommendation)
+                ? `${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C`
+                : `保持 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C`}
+            </Fact>
+            <Fact label="预计室内温度">{formatDecimal(recommendation.candidate.projectedZoneTempC, 1)} °C</Fact>
+            <Fact label="生成于">{formatTime(recommendation.createdAt, timeZone)}</Fact>
+          </dl>
+        )}
+      </CardContent>
+      <CardFooter className="text-xs text-muted-foreground">
+        实测节能量需要基线模型核算，尚未接入；这里是建议的预计值。
+      </CardFooter>
+    </Card>
+  );
+}
+
 function ListCard({ title, description, href, siteId, children }: {
   readonly title: string;
   readonly description: string;
@@ -419,15 +475,7 @@ export function OverviewWorkspace() {
         <div className="min-w-0 @5xl/main:col-span-2">
           <HourlyElectricity />
         </div>
-        <Card role="region" aria-label="节能成效" className="justify-center">
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon"><PiggyBank /></EmptyMedia>
-              <EmptyTitle>节能成效未接入</EmptyTitle>
-              <EmptyDescription>节能量、节能率与节约费用需要基线模型与电价，接入后在此显示。</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </Card>
+        <SavingOpportunity siteId={site.id} timeZone={site.timezone} />
       </div>
     </Main>
   );
