@@ -337,7 +337,7 @@ export class Gateway {
 
 function totalsOf(days: Json[]): Json {
   const sum = (key: string) => days.reduce((total, day) => total + day[key], 0);
-  return { days: days.length, adjustedBaselineKWh: sum('adjustedBaselineKWh'), actualKWh: sum('actualKWh'), avoidedKWh: sum('avoidedKWh'), avoidedCost: sum('avoidedCost') };
+  return { days: days.length, unpricedHours: sum('unpricedHours'), adjustedBaselineKWh: sum('adjustedBaselineKWh'), actualKWh: sum('actualKWh'), avoidedKWh: sum('avoidedKWh'), avoidedCost: sum('avoidedCost') };
 }
 
 function bodyOf(request: Request): Json | null {

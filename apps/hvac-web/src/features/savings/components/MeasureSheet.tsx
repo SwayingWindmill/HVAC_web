@@ -15,7 +15,7 @@ import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
 import {
-  dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
+  costBasis, dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
   type Measure, type MeasureAction,
 } from '../savings-model';
 import { MeasureStatusBadge } from './measure-presentation';
@@ -100,7 +100,10 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
     <div className="flex flex-col gap-4">
       <dl className="grid grid-cols-3 gap-x-6 gap-y-4 text-sm">
         <FactTile label="累计节电">{kwh(measure.totals.avoidedKWh)}</FactTile>
-        <FactTile label="节省电费">{yuan(measure.totals.avoidedCost)}</FactTile>
+        <FactTile label="节省电费">
+          {yuan(measure.totals.avoidedCost)}
+          {measure.totals.unpricedHours > 0 ? <span className="block text-xs font-normal text-muted-foreground">{costBasis(measure.totals)}</span> : null}
+        </FactTile>
         <FactTile label="节电率">{rate === null ? '—' : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
       </dl>
       <ChartContainer config={dayConfig} className="aspect-auto h-[220px] w-full">

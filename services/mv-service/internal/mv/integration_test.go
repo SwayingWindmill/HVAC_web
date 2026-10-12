@@ -123,3 +123,21 @@ func TestClickHouseHoursReadTheLatestRevisionOfCompleteHours(t *testing.T) {
 		t.Fatalf("samples = %+v", samples)
 	}
 }
+
+// The runner's second Site has no import Tariff: its days still split on its own clock, and its
+// hours go unpriced rather than leaving the Site unverifiable.
+func TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone(t *testing.T) {
+	env := integrationEnv(t, "MV_POSTGRES_INTEGRATION_DSN", "MV_POSTGRES_INTEGRATION_TENANT_ID", "MV_POSTGRES_INTEGRATION_UNPRICED_SITE_ID")
+	store, err := OpenPostgres(t.Context(), env[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	clock, err := store.SiteClock(t.Context(), env[1], env[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clock.Location.String() != "Asia/Singapore" || len(clock.Periods) != 0 {
+		t.Fatalf("clock = %v with %d periods", clock.Location, len(clock.Periods))
+	}
+}

@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { measuresQuery, savingsKeys, SavingsRequestError, summaryQuery } from '../query';
-import { KIND_LABEL, monthToDate, savingsRate, type Measure } from '../savings-model';
+import { costBasis, KIND_LABEL, monthToDate, savingsRate, type Measure } from '../savings-model';
 import { MeasureSheet } from './MeasureSheet';
 import { MeasureStatusBadge } from './measure-presentation';
 import { RegisterMeasureDialog } from './RegisterMeasureDialog';
@@ -87,8 +87,8 @@ export function SavingsWorkspace() {
           <MetricCard
             label="本月节省电费"
             value={<MetricValue value={monthTotals!.days > 0 ? `¥${formatDecimal(monthTotals!.avoidedCost, 0)}` : null} />}
-            lead="按逐时分时电度电价计"
-            detail="不含需量电费"
+            lead={costBasis(monthTotals!)}
+            detail="对照调整后基线"
           />
           <MetricCard
             label="本月节电率"

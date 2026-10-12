@@ -97,8 +97,8 @@ func (history plantHistory) HourlySamples(_ context.Context, _, _ string, from, 
 
 type flatTariff struct{ rate float64 }
 
-func (tariff flatTariff) ImportTariff(_ context.Context, _, _ string) (SiteTariff, error) {
-	return SiteTariff{Location: shanghai, Periods: []TariffPeriod{
+func (tariff flatTariff) SiteClock(_ context.Context, _, _ string) (SiteClock, error) {
+	return SiteClock{Location: shanghai, Periods: []TariffPeriod{
 		{DayType: "WEEKDAY", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
 		{DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
 	}}, nil
@@ -293,5 +293,36 @@ func TestATrustedBaselineCannotBeRefitted(t *testing.T) {
 	}
 	if _, err := service.Refit(t.Context(), testTenant, testSite, measure.ID, implemented.Add(-7*24*time.Hour), implemented, testActor); !errors.Is(err, ErrWrongStatus) {
 		t.Fatalf("refit of a trusted baseline = %v", err)
+	}
+}
+
+type unpricedClock struct{}
+
+func (unpricedClock) SiteClock(context.Context, string, string) (SiteClock, error) {
+	return SiteClock{Location: shanghai}, nil
+}
+
+func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, unpricedClock{}, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
+		return "01990000-7000-7000-8000-000000000001", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 18, 2, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	totals, err := service.Savings(t.Context(), testTenant, testSite, "2026-10-17", "2026-10-17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totals.Days != 1 || totals.AvoidedKWh <= 0 || totals.AvoidedCost != 0 || totals.UnpricedHours != 24 {
+		t.Fatalf("totals = %+v", totals)
 	}
 }

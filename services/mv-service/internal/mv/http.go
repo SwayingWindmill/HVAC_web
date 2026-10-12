@@ -71,6 +71,7 @@ type dayView struct {
 
 type totalsView struct {
 	Days                int     `json:"days"`
+	UnpricedHours       int     `json:"unpricedHours"`
 	AdjustedBaselineKWh float64 `json:"adjustedBaselineKWh"`
 	ActualKWh           float64 `json:"actualKWh"`
 	AvoidedKWh          float64 `json:"avoidedKWh"`
@@ -98,7 +99,7 @@ type measureView struct {
 }
 
 func viewOfTotals(totals Totals) totalsView {
-	return totalsView{Days: totals.Days, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost}
+	return totalsView{Days: totals.Days, UnpricedHours: totals.UnpricedHours, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost}
 }
 
 func viewOf(verified VerifiedMeasure, withDays bool) measureView {

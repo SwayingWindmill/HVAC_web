@@ -22,6 +22,7 @@
   },
   "totals": {
     "days": 0,
+    "unpricedHours": 0,
     "adjustedBaselineKWh": 0,
     "actualKWh": 0,
     "avoidedKWh": 0,

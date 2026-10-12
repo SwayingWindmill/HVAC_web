@@ -13,7 +13,7 @@ import (
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
-// Tenant and Site row security; it also reads the Site's import Tariff.
+// Tenant and Site row security; it also reads the Site's clock and import Tariff.
 type PostgresStore struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
@@ -216,14 +216,23 @@ FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2
 	return results, err
 }
 
-// ImportTariff reads the released Tariff Version assigned to the Site's grid import now, with the
-// Site's clock, as the Registry serves it.
-func (store *PostgresStore) ImportTariff(ctx context.Context, tenantID, siteID string) (SiteTariff, error) {
-	var tariff SiteTariff
+// SiteClock reads the Site's timezone and the periods of the released Tariff Version assigned to its
+// grid import now, as Settlement chooses it.
+func (store *PostgresStore) SiteClock(ctx context.Context, tenantID, siteID string) (SiteClock, error) {
+	var clock SiteClock
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
-		var timezone, versionID string
-		err := tx.QueryRow(ctx, `
-SELECT version.id::text, version.timezone
+		var timezone string
+		if err := tx.QueryRow(ctx, `SELECT timezone FROM core_registry.sites WHERE tenant_id = $1::uuid AND id = $2::uuid`, tenantID, siteID).Scan(&timezone); err != nil {
+			return fmt.Errorf("read Site timezone: %w", err)
+		}
+		location, err := time.LoadLocation(timezone)
+		if err != nil {
+			return err
+		}
+		clock.Location = location
+		var versionID string
+		err = tx.QueryRow(ctx, `
+SELECT version.id::text
 FROM core_registry.tariff_assignments AS assignment
 JOIN core_registry.settlement_boundaries AS boundary
   ON boundary.tenant_id = assignment.tenant_id AND boundary.site_id = assignment.site_id AND boundary.id = assignment.boundary_id
@@ -234,14 +243,11 @@ WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
   AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
   AND version.status = 'RELEASED' AND version.effective_from <= now() AND (version.effective_to IS NULL OR version.effective_to > now())
 ORDER BY boundary.boundary_code
-LIMIT 1`, tenantID, siteID).Scan(&versionID, &timezone)
+LIMIT 1`, tenantID, siteID).Scan(&versionID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("the Site has no import Tariff in effect")
+			return nil
 		}
 		if err != nil {
-			return err
-		}
-		if tariff.Location, err = time.LoadLocation(timezone); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
@@ -255,9 +261,9 @@ FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY da
 			if err := rows.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
 				return err
 			}
-			tariff.Periods = append(tariff.Periods, period)
+			clock.Periods = append(clock.Periods, period)
 		}
 		return rows.Err()
 	})
-	return tariff, err
+	return clock, err
 }
