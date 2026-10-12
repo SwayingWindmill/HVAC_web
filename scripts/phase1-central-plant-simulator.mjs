@@ -2,15 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
-import {
-  centralPlantDevices,
-  centralPlantIdentity,
-  localSites,
-  localUUID,
-  siteDeviceId,
-  siteUUID,
-  sqlLiteral,
-} from './central-plant-local-contract.mjs';
+import { centralPlantDevices, centralPlantIdentity, localSites, localUUID, siteDeviceId, siteUUID, sqlLiteral, sqlJobId } from './central-plant-local-contract.mjs';
 import {
   assignCentralPlantPointIds,
   buildCentralPlantControlPoints,
@@ -573,8 +565,6 @@ function buildSavingsSeed(site, points) {
   const t = sqlLiteral(tenantId);
   const st = sqlLiteral(siteId);
   const id = sqlLiteral;
-  // A backfill job id is a UUIDv7 stamped now, with the rest drawn from the job's dedup key.
-  const backfillJobId = String.raw`regexp_replace(lpad(to_hex((extract(epoch FROM clock_timestamp()) * 1000)::bigint), 12, '0') || '7' || substr(md5(dedup), 1, 3) || '8' || substr(md5(dedup), 4, 15), '^(.{8})(.{4})(.{4})(.{4})(.{12})$', '\1-\2-\3-\4-\5')::uuid`;
   return `BEGIN;
 INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at) VALUES
 ${metrics.map((metric) => `  (${id(metric.metricId)}, ${t}, ${id(metric.code)}, ${id(metric.name)}, 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
@@ -607,7 +597,7 @@ WITH hours AS (
   FROM hours CROSS JOIN (VALUES ${metrics.map((metric) => `(${id(metric.bindingId)})`).join(', ')}) AS binding(id)
 )
 INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, priority, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
-SELECT ${backfillJobId}, 'BACKFILL', 'METRIC_BACKFILL', ${t}, ${st}, period_start + interval '1 hour', 20, dedup,
+SELECT ${sqlJobId}, 'BACKFILL', 'METRIC_BACKFILL', ${t}, ${st}, period_start + interval '1 hour', 20, dedup,
        jsonb_build_object('bindingId', binding_id, 'periodStart', period_start, 'periodEnd', period_start + interval '1 hour'),
        'READY', 3, 60, clock_timestamp(), clock_timestamp()
 FROM plan

@@ -126,3 +126,17 @@ func TestARateLimitedObservationIsSentAgain(t *testing.T) {
 		t.Fatal("an invalid observation was not refused")
 	}
 }
+
+func TestAReplayRefusesAPointThePlantDoesNotHave(t *testing.T) {
+	plantConfig, deviceIDs, err := loadReplayConfigs("../../configs/central-plant.local.json", "../../configs/central-plant.device-ids.local.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := replayPlan{
+		DatasetID: "01991f00-0000-7000-8000-000000000003", From: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), Duration: time.Hour, Step: time.Minute,
+		Points: map[string]bool{"METER-HVAC-TOTAL/hvac_meter.energy": true, "METER-HVAC-TOTAL/hvac_meter.enrgy": true},
+	}
+	if _, err := runReplay(t.Context(), plantConfig, deviceIDs, plan, func(context.Context, replayObservationRequest) error { return nil }); err == nil {
+		t.Fatal("a misspelled point replayed nothing for it without saying so")
+	}
+}

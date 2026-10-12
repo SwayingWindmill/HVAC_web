@@ -9,7 +9,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Status, StatusIndicator, StatusLabel } from '@/components/ui/status';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { contrastGrade, contrastRatio, TOKEN_GROUPS, type ContrastGrade } from './design-tokens';
+import { contrastGrade, contrastRatio, surfaceOf, TOKEN_GROUPS, type ContrastGrade } from './design-tokens';
 
 // The design system as the app ships it: colours read from the running theme with their measured
 // contrast, the type steps and the component states the pages use. Nothing here is business data.
@@ -35,7 +35,9 @@ function useThemeColours(): ReadonlyMap<string, string> {
 const GRADE_TONE: Record<ContrastGrade, string> = {
   AAA: 'bg-success/10 text-success',
   AA: 'bg-success/10 text-success',
+  达标: 'bg-success/10 text-success',
   不足: 'bg-destructive/10 text-destructive',
+  不要求: 'bg-muted text-muted-foreground',
 };
 
 function Section({ title, description, children }: { readonly title: string; readonly description: string; readonly children: ReactNode }) {
@@ -74,8 +76,8 @@ function Colours() {
                 {group.tokens.map((token) => {
                   const value = colours.get(token.name) ?? '';
                   const against = colours.get(token.against) ?? '';
-                  const ratio = value && against ? contrastRatio(value, against) : null;
-                  const grade = ratio === null || token.decorative ? null : contrastGrade(ratio, token.large);
+                  const ratio = value && against ? contrastRatio(value, surfaceOf(token, value, against)) : null;
+                  const grade = ratio === null ? null : contrastGrade(ratio, token.use);
                   return (
                     <TableRow key={token.name}>
                       <TableCell className="pl-6">
@@ -88,15 +90,13 @@ function Colours() {
                         </span>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{token.role}</TableCell>
-                      <TableCell className="text-right tabular-nums" title={`对 --${token.against}`}>
+                      <TableCell className="text-right tabular-nums" title={token.tint ? `对 ${token.tint * 100}% 同色底` : `对 --${token.against}`}>
                         {ratio === null ? '—' : `${ratio.toFixed(2)}:1`}
                       </TableCell>
                       <TableCell className="pr-6 text-right">
                         {grade ? (
-                          <Badge variant="outline" className={cn('h-5.5 rounded-md border-transparent px-1.5', GRADE_TONE[grade])}>{grade}</Badge>
-                        ) : (
-                          <Badge variant="outline" className="h-5.5 rounded-md border-transparent bg-muted px-1.5 text-muted-foreground" title="分隔线不单独标识控件，WCAG 1.4.11 不要求对比度">装饰</Badge>
-                        )}
+                          <Badge variant="outline" className={cn('h-5.5 rounded-md border-transparent px-1.5', GRADE_TONE[grade])} title={grade === '不要求' ? '分隔线不单独标识控件，WCAG 1.4.11 不要求对比度' : undefined}>{grade}</Badge>
+                        ) : '—'}
                       </TableCell>
                     </TableRow>
                   );
@@ -111,11 +111,11 @@ function Colours() {
 }
 
 const TYPE_STEPS = [
-  { name: '页面标题', classes: 'text-2xl leading-tight font-semibold tracking-tight', sample: '节能项目' },
-  { name: '指标数值', classes: 'text-[1.75rem] leading-none font-medium tracking-tight tabular-nums', sample: '12,165.4' },
-  { name: '卡片标题', classes: 'text-base leading-snug font-medium', sample: '措施台账' },
-  { name: '正文', classes: 'text-sm', sample: '以实施前 14 天的运行数据为基线，逐日核算节电量。' },
-  { name: '辅助文字', classes: 'text-xs text-muted-foreground', sample: '数据时间 10/12 17:21' },
+  { name: '页面标题', classes: 'text-2xl leading-tight font-semibold tracking-tight', sample: '页面标题样式' },
+  { name: '指标数值', classes: 'text-[1.75rem] leading-none font-medium tracking-tight tabular-nums', sample: '1,234.5' },
+  { name: '卡片标题', classes: 'text-base leading-snug font-medium', sample: '卡片标题样式' },
+  { name: '正文', classes: 'text-sm', sample: '正文样式：段落、表格单元格与表单说明使用这一级。' },
+  { name: '辅助文字', classes: 'text-xs text-muted-foreground', sample: '辅助文字样式：时间、单位与补充说明' },
 ] as const;
 
 function Typography() {
@@ -197,6 +197,8 @@ function Components() {
   );
 }
 
+// `@theme inline` compiles radii into the utility classes and emits no variable for an unused
+// one, so unlike colours they cannot be read from the running page; these mirror global.css.
 const RADII = [
   { name: 'radius-sm', px: 4, use: '小徽标' },
   { name: 'radius-md', px: 6, use: '按钮、输入框、状态标签' },
@@ -246,10 +248,10 @@ function Shape() {
 export function DesignSystem() {
   return (
     <div className="flex flex-col gap-10">
-      <Section title="颜色" description="读取当前主题的实际颜色，对比度按 WCAG 2.2 计算：正文不低于 4.5:1，图形与大字不低于 3:1">
+      <Section title="颜色" description="读取当前主题的实际颜色，对比度按 WCAG 2.2 计算：文字不低于 4.5:1（7:1 为 AAA），表达含义的图形不低于 3:1">
         <Colours />
       </Section>
-      <Section title="字体层级" description="界面字体为 Geist 与系统中文字体；数字一律等宽对齐">
+      <Section title="字体层级" description="界面字体为 Geist 与系统中文字体；数字一律等宽对齐。以下为样式示例">
         <Typography />
       </Section>
       <Section title="组件与状态" description="各页面使用的同一套组件；以下为样式示例，不是业务数据">

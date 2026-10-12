@@ -95,6 +95,7 @@ func main() {
 	stepValue := flag.String("step", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_STEP")), "Plant step, the sample interval when empty")
 	pointsValue := flag.String("points", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_POINTS")), "comma-separated DEVICE/telemetry.key points to replay, all when empty")
 	commandsPath := flag.String("commands", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_COMMANDS")), "JSON file of commands to apply during the replay")
+	scenarioPath := flag.String("scenario", strings.TrimSpace(os.Getenv("EG8200_SCENARIO")), "the Site's daily scenario, the plant config's when empty")
 	certFile := flag.String("tls-cert", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TLS_CERT")), "replay workload TLS certificate")
 	keyFile := flag.String("tls-key", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TLS_KEY")), "replay workload TLS private key")
 	caFile := flag.String("server-ca", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_SERVER_CA")), "Telemetry Runtime server CA")
@@ -120,8 +121,8 @@ func main() {
 		log.Fatal(err)
 	}
 	// A local Site replays the same weather and load day its live simulator runs.
-	if scenarioPath := strings.TrimSpace(os.Getenv("EG8200_SCENARIO")); scenarioPath != "" {
-		scenarioFile, err := os.Open(scenarioPath)
+	if path := strings.TrimSpace(*scenarioPath); path != "" {
+		scenarioFile, err := os.Open(path)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -223,6 +224,12 @@ func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[strin
 	pointByReference := make(map[string]simulator.PointConfig, len(config.Points))
 	for _, point := range config.Points {
 		pointByReference[point.DeviceID+"\x00"+point.TelemetryKey] = point
+	}
+	for reference := range plan.Points {
+		device, key, _ := strings.Cut(reference, "/")
+		if _, ok := pointByReference[device+"\x00"+key]; !ok {
+			return 0, fmt.Errorf("historical replay point %s is not in the plant config", reference)
+		}
 	}
 	plant := simulator.NewPlant(config.Plant, config.Scenario, from.UTC())
 	scheduler, err := simulator.NewMeasurementScheduler(config)
