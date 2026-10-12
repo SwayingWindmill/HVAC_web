@@ -211,3 +211,26 @@
     scrollbar-color: var(--border) transparent;
   }
 }
+
+/* Printing shows the page's own document (the monthly report) without the application shell. */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff;
+  }
+
+  [data-slot="sidebar"] {
+    display: none !important;
+  }
+
+  [data-slot="sidebar-inset"] {
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+}
