@@ -38,12 +38,11 @@ test('the overview compares today with yesterday, shows the live plant and open 
   const work = page.getByRole('list').filter({ hasText: '布水器季度检查' });
   await expect(work.getByRole('listitem')).toHaveCount(2);
 
-  // Savings are the latest recommendation's expectation until a baseline model measures them.
-  const saving = page.getByRole('region', { name: '节能机会' });
-  await expect(saving).toContainText('51元/天 · 预计');
-  await expect(saving).toContainText('预计日节电60 kWh');
-  await expect(saving).toContainText('7.1 → 8.1 °C');
-  await expect(saving).toContainText('实测节能量需要基线模型核算，尚未接入');
+  // Verified savings come from the measure in verification; the recommendation stays an estimate beside them.
+  const saving = page.getByRole('region', { name: '节能成效' });
+  await expect(saving).toContainText('还没有在核算的节能措施');
+  await expect(saving).toContainText('51 元/天 · 60 kWh/天');
+  await expect(saving).toContainText('供水温度 7.1 → 8.1 °C');
 
   await alarms.getByRole('link').click();
   await expect(page).toHaveURL(/\/operations\/alarms\?.*inspect=/);

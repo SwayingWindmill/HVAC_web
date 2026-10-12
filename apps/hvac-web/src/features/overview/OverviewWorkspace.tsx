@@ -305,7 +305,7 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
               : "还没有在核算的节能措施。登记并确认实施后，这里显示按基线核算的实际节电量与电费。"}
           </p>
         )}
-        <Separator />
+        <Separator className="mt-auto" />
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-muted-foreground">优化建议 · 预计</span>
           {latest.isPending ? <Skeleton className="h-5 w-24" /> : latest.isError ? (
@@ -327,7 +327,7 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
         ) : null}
       </CardContent>
       <CardFooter className="text-xs text-muted-foreground">
-        已核算为对照基线（IPMVP 选项 C）的实测值；建议为预计值。
+        核算值对照基线实测（IPMVP 选项 C），建议值为预计
       </CardFooter>
     </Card>
   );
