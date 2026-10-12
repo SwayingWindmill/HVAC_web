@@ -10,12 +10,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MetricStrip } from '@/components/analysis/workspace-parts';
+import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import type { WorkOrder } from '@/api/work-orders';
 import { formatTime, personLabel } from '@/lib/operator-format';
-import { cn } from '@/lib/utils';
 import { CreateWorkOrderDialog } from '../CreateWorkOrderDialog';
-import { OPEN_STATUSES, PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from '../work-order-presentation';
+import { TableEmpty } from '@/components/data-table';
+import { OPEN_STATUSES, PriorityBadge, sortWorkOrdersForOperators, WorkOrderStatusBadge } from '../work-order-presentation';
 import { listView, openWorkOrdersQuery, workOrderKeys } from '../work-order-queries';
 import { WorkOrderInspector } from './WorkOrderInspector';
 
@@ -54,14 +54,16 @@ export function WorkCenterWorkspace() {
 
   const workOrders = useMemo(() => sortWorkOrdersForOperators(list.data ?? []), [list.data]);
   const openItems = open.data ?? [];
-  const count = (predicate: (workOrder: WorkOrder) => boolean) => (open.data ? openItems.filter(predicate).length : '—');
+  const amount = (predicate: (workOrder: WorkOrder) => boolean) => (open.data ? String(openItems.filter(predicate).length) : null);
+  const overdue = (workOrder: WorkOrder) => Boolean(workOrder.dueAt) && Date.parse(workOrder.dueAt!) < Date.now();
   const setSearch = (patch: { view?: WorkCenterView; inspect?: string }) =>
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
-    <Main className="space-y-5">
+    <Main>
       <PageHeader
         title="工单"
+        description={`${site.displayName} · 优先级高的在前，其次最近创建`}
         actions={(
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) })}>
@@ -76,14 +78,32 @@ export function WorkCenterWorkspace() {
         )}
       />
 
-      <MetricStrip
-        items={[
-          { label: '待处理', value: count((workOrder) => workOrder.status === 'OPEN'), unit: '张' },
-          { label: '处理中', value: count((workOrder) => workOrder.status === 'IN_PROGRESS'), unit: '张' },
-          { label: '受阻', value: count((workOrder) => workOrder.status === 'BLOCKED'), unit: '张' },
-          { label: '我负责的', value: count((workOrder) => workOrder.assigneeId === myId), unit: '张' },
-        ]}
-      />
+      <MetricGrid ariaLabel="工单概况">
+        <MetricCard
+          label="待处理"
+          value={<MetricValue value={amount((workOrder) => workOrder.status === 'OPEN')} unit="张" />}
+          lead={`其中 ${amount((workOrder) => workOrder.status === 'OPEN' && !workOrder.assigneeId) ?? '—'} 张未指派`}
+          detail="已创建、尚未开始处理"
+        />
+        <MetricCard
+          label="处理中"
+          value={<MetricValue value={amount((workOrder) => workOrder.status === 'IN_PROGRESS')} unit="张" />}
+          lead={`其中 ${amount((workOrder) => workOrder.status === 'IN_PROGRESS' && overdue(workOrder)) ?? '—'} 张已超过截止时间`}
+          detail="已开始、尚未完成"
+        />
+        <MetricCard
+          label="受阻"
+          value={<MetricValue value={amount((workOrder) => workOrder.status === 'BLOCKED')} unit="张" />}
+          lead="等待备件、许可或其他工单"
+          detail="恢复后回到处理中"
+        />
+        <MetricCard
+          label="我负责的"
+          value={<MetricValue value={amount((workOrder) => workOrder.assigneeId === myId)} unit="张" />}
+          lead="指派给我、尚未结束"
+          detail="在「我负责的」中查看"
+        />
+      </MetricGrid>
 
       <Tabs value={view} onValueChange={(value) => setSearch({ view: value as WorkCenterView })}>
         <TabsList>
@@ -100,7 +120,7 @@ export function WorkCenterWorkspace() {
         </Alert>
       ) : null}
 
-      <Card>
+      <Card className="py-0">
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -120,8 +140,8 @@ export function WorkCenterWorkspace() {
                 <TableRow><TableCell colSpan={8}><Skeleton className="h-24" /></TableCell></TableRow>
               ) : workOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">
-                    {view === 'open' ? '当前没有进行中的工单' : '没有符合条件的工单'}
+                  <TableCell colSpan={8} className="p-0">
+                    <TableEmpty>{view === 'open' ? '当前没有进行中的工单' : '没有符合条件的工单'}</TableEmpty>
                   </TableCell>
                 </TableRow>
               ) : workOrders.map((workOrder) => (
@@ -138,9 +158,7 @@ export function WorkCenterWorkspace() {
                       <p className="text-xs text-muted-foreground">来自告警</p>
                     ) : null}
                   </TableCell>
-                  <TableCell className={cn(workOrder.status === 'BLOCKED' && 'font-medium text-amber-700 dark:text-amber-400')}>
-                    {STATUS_LABELS[workOrder.status]}
-                  </TableCell>
+                  <TableCell><WorkOrderStatusBadge status={workOrder.status} /></TableCell>
                   <TableCell>{workOrder.assigneeId ? personLabel(workOrder.assigneeId, myId) : '未指派'}</TableCell>
                   <TableCell className="tabular-nums">
                     {workOrder.tasks.total > 0 ? `${workOrder.tasks.completed} / ${workOrder.tasks.total}` : '—'}

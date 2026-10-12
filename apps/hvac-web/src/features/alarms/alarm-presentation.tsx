@@ -61,7 +61,8 @@ export function SeverityBadge({ severity }: { readonly severity: AlarmSeverity }
   return (
     <Badge
       variant="outline"
-      style={{ color, borderColor: `color-mix(in oklab, ${color} 35%, transparent)`, background: `color-mix(in oklab, ${color} 10%, transparent)` }}
+      className="h-5.5 rounded-md border-transparent px-1.5"
+      style={{ color, background: `color-mix(in oklab, ${color} 12%, transparent)` }}
     >
       {SEVERITY_LABELS[severity]}
     </Badge>

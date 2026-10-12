@@ -4,7 +4,7 @@ import { Gauge } from 'lucide-react';
 import { useMemo } from 'react';
 import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceArea, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
-import { PageHeader } from '@/blocks/page-header';
+import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -110,11 +110,11 @@ export function DemandWorkspace() {
   const at = (peak: DemandPeak | null, withDate = false) => (peak ? formatTime(peak.at, site.timezone).slice(withDate ? 0 : -5) : '—');
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="需量分析"
         description={`${site.displayName} · 冷站用电按 15 分钟平均功率计需量${charges?.length ? `，需量电费按${chargedPeriods(charges)}当月最大需量计收` : ''}`}
-        meta={<Badge variant="outline" className="font-normal">空调总电表口径</Badge>}
+        meta={<PageMeta icon={<Gauge />}>空调总电表口径</PageMeta>}
       />
 
       {registry.isPending || tariff.isPending || (point !== null && demand.isPending) ? (

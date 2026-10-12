@@ -19,6 +19,7 @@ import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
 import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { useScope } from '@/hooks/use-scope';
 import { NavUser } from './NavUser';
+import { ScopeSwitcher } from './ScopeSwitcher';
 import {
   APP_NAVIGATION_CONFIG,
   isNavActive,
@@ -101,21 +102,7 @@ export function AppSidebar({
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="lg"
-              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground cursor-pointer"
-              onClick={() => onNavigate(`/overview${siteQuery}`)}
-            >
-              <img src="/quanlaihe-mark.svg" alt="" className="size-8 shrink-0" />
-              <div className="flex min-w-0 flex-1 flex-col text-left leading-tight group-data-[collapsible=icon]:hidden">
-                <span className="truncate text-sm font-semibold tracking-tight text-foreground">泉来禾智慧能源</span>
-                <span className="truncate text-xs text-muted-foreground">冷站能源管理</span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <ScopeSwitcher />
       </SidebarHeader>
 
       <SidebarContent>

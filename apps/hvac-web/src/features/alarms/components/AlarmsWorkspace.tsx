@@ -13,7 +13,6 @@ import { DataTableColumnHeader } from '@/components/data-table/data-table-column
 import type { DataTableFeatures } from '@/components/data-table/data-table-features';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { BarList } from '@/components/ui/bar-list';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -336,7 +335,7 @@ export function AlarmsWorkspace() {
 
   return (
     <AlarmActionsContext.Provider value={actions}>
-      <Main className="@container/main flex flex-col gap-4 md:gap-6">
+      <Main>
         <PageHeader
           title="告警"
           description={`${site.displayName} · 严重度优先，其次最近发生`}
@@ -418,6 +417,7 @@ export function AlarmsWorkspace() {
               <ToggleGroup
                 type="single"
                 variant="outline"
+                spacing={0}
                 value={view}
                 onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView }); }}
                 aria-label="告警范围"
@@ -425,7 +425,7 @@ export function AlarmsWorkspace() {
                 {VIEWS.map((option) => (
                   <ToggleGroupItem key={option.value} value={option.value} className="gap-1.5 px-3">
                     {option.label}
-                    {option.value === 'active' && active.data ? <Badge variant="secondary" className="h-5 px-1.5 tabular-nums">{activeItems.length}</Badge> : null}
+                    {option.value === 'active' && active.data ? <span className="text-muted-foreground tabular-nums">{activeItems.length}</span> : null}
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>

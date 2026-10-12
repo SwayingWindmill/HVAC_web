@@ -169,7 +169,7 @@ export function RealtimeWorkspace() {
   const chillerPower = sumCurrent(plant, 'CHILLER', 'chiller.power');
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="实时运行"
         description={`${site.displayName} · 数据时间 ${formatClock(plant.latestSampleAt, site.timezone)}`}

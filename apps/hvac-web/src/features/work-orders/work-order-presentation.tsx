@@ -1,4 +1,5 @@
 import type { WorkOrder, WorkOrderPriority, WorkOrderStatus } from '@/api/work-orders';
+import { Status, StatusIndicator } from '@/components/ui/status';
 import { cn } from '@/lib/utils';
 
 export const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
@@ -9,10 +10,10 @@ export const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
 };
 
 export const PRIORITY_CLASSES: Readonly<Record<WorkOrderPriority, string>> = {
-  URGENT: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300',
-  HIGH: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900 dark:bg-orange-950/50 dark:text-orange-300',
-  MEDIUM: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300',
-  LOW: 'border-border bg-muted text-muted-foreground',
+  URGENT: 'bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+  HIGH: 'bg-orange-500/10 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
+  MEDIUM: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+  LOW: 'bg-muted text-muted-foreground',
 };
 
 export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
@@ -24,13 +25,31 @@ export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
   CANCELLED: '已取消',
 };
 
+const STATUS_TONE: Readonly<Record<WorkOrderStatus, 'default' | 'info' | 'warning' | 'success'>> = {
+  DRAFT: 'default',
+  OPEN: 'default',
+  IN_PROGRESS: 'info',
+  BLOCKED: 'warning',
+  COMPLETED: 'success',
+  CANCELLED: 'default',
+};
+
+export function WorkOrderStatusBadge({ status }: { readonly status: WorkOrderStatus }) {
+  return (
+    <Status variant={STATUS_TONE[status]}>
+      <StatusIndicator />
+      {STATUS_LABELS[status]}
+    </Status>
+  );
+}
+
 export const OPEN_STATUSES: readonly WorkOrderStatus[] = ['OPEN', 'IN_PROGRESS', 'BLOCKED'];
 
 const PRIORITY_ORDER: readonly WorkOrderPriority[] = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
 
 export function PriorityBadge({ priority }: { readonly priority: WorkOrderPriority }) {
   return (
-    <span className={cn('inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium', PRIORITY_CLASSES[priority])}>
+    <span className={cn('inline-flex h-5.5 items-center rounded-md px-1.5 text-xs font-medium', PRIORITY_CLASSES[priority])}>
       {PRIORITY_LABELS[priority]}
     </span>
   );
