@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppSiteRouteImport } from './routes/_app._site'
+import { Route as AppBenchmarkRouteImport } from './routes/_app.benchmark'
 import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppSystemRouteImport } from './routes/_app.system'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
@@ -39,6 +40,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 } as any)
 const AppSiteRoute = AppSiteRouteImport.update({
   id: '/_site',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBenchmarkRoute = AppBenchmarkRouteImport.update({
+  id: '/benchmark',
+  path: '/benchmark',
   getParentRoute: () => AppRoute,
 } as any)
 const AppNotificationsRoute = AppNotificationsRouteImport.update({
@@ -129,6 +135,7 @@ const AppSiteOperationsWorkCenterRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/benchmark': typeof AppBenchmarkRoute
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
@@ -147,6 +154,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/benchmark': typeof AppBenchmarkRoute
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
@@ -167,6 +175,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_app/_site': typeof AppSiteRouteWithChildren
+  '/_app/benchmark': typeof AppBenchmarkRoute
   '/_app/notifications': typeof AppNotificationsRoute
   '/_app/system': typeof AppSystemRoute
   '/_app/': typeof AppIndexRoute
@@ -188,6 +197,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/benchmark'
     | '/notifications'
     | '/system'
     | '/overview'
@@ -206,6 +216,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/benchmark'
     | '/notifications'
     | '/system'
     | '/overview'
@@ -225,6 +236,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_app/_site'
+    | '/_app/benchmark'
     | '/_app/notifications'
     | '/_app/system'
     | '/_app/'
@@ -268,6 +280,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppSiteRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/benchmark': {
+      id: '/_app/benchmark'
+      path: '/benchmark'
+      fullPath: '/benchmark'
+      preLoaderRoute: typeof AppBenchmarkRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/notifications': {
@@ -414,6 +433,7 @@ const AppSiteRouteWithChildren =
 
 interface AppRouteChildren {
   AppSiteRoute: typeof AppSiteRouteWithChildren
+  AppBenchmarkRoute: typeof AppBenchmarkRoute
   AppNotificationsRoute: typeof AppNotificationsRoute
   AppSystemRoute: typeof AppSystemRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -422,6 +442,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppSiteRoute: AppSiteRouteWithChildren,
+  AppBenchmarkRoute: AppBenchmarkRoute,
   AppNotificationsRoute: AppNotificationsRoute,
   AppSystemRoute: AppSystemRoute,
   AppIndexRoute: AppIndexRoute,
