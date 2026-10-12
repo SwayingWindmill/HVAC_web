@@ -695,6 +695,9 @@ try {
   report.assertions.fddReaderCanSelectObservations = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'fdd_service_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.fddReaderCannotSelectAnalytics = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'fdd_service_reader');
   report.assertions.fddReaderCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'fdd_service_reader');
+  report.assertions.mvReaderCanSelectMetricResults = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'mv_service_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
+  report.assertions.mvReaderCannotSelectObservations = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'mv_service_reader');
+  report.assertions.mvReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())', 'mv_service_reader');
   report.assertions.cubeCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'cube_analytics_reader');
 
   report.status = 'passed';
