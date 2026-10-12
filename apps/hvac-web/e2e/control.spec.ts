@@ -30,7 +30,7 @@ test('an operator sets the chilled water setpoint and approves stopping a pump, 
   await expect(stop).toContainText('已执行');
 
   await stop.getByRole('button', { name: /停止冷冻水泵/ }).click();
-  await expect(page).toHaveURL(/inspect=command-2/);
+  await expect(page).toHaveURL(new RegExp(`inspect=${gateway.commands.find((command) => command.capability === 'STOP')!.commandId}`));
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('需一人审批 · 1/1');
   await expect(sheet.getByRole('listitem')).toHaveText([/已提交/, /待审批/, /已批准/, /已执行/]);

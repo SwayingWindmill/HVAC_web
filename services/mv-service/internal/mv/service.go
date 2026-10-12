@@ -39,10 +39,7 @@ var (
 	ErrBaselineLocked   = errors.New("the baseline is frozen: daily results have been published")
 )
 
-var (
-	uuidPattern   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-)
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Measure is one energy conservation measure in a Site's ledger.
 type Measure struct {
@@ -158,8 +155,8 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: name must be 1–100 characters", ErrInvalidMeasure)
 	case utf8.RuneCountInString(input.Description) > 2000 || utf8.RuneCountInString(input.Evidence) > 200:
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
-	case input.EvidenceCommandID != nil && !uuidV7Pattern.MatchString(*input.EvidenceCommandID):
-		return fmt.Errorf("%w: the cited command must be a UUIDv7", ErrInvalidMeasure)
+	case input.EvidenceCommandID != nil && !uuidPattern.MatchString(*input.EvidenceCommandID):
+		return fmt.Errorf("%w: the cited command must be a UUID", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
 	case (input.InvestmentCNY != nil && *input.InvestmentCNY < 0) || (input.ExpectedAnnualKWh != nil && *input.ExpectedAnnualKWh < 0):

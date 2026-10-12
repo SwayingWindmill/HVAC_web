@@ -128,7 +128,7 @@ export class Gateway {
     const capability: string = point.sourceMetadata.capability;
     const risk = capability === 'START' || capability === 'STOP' ? 'MEDIUM' : 'LOW';
     const command: Json = {
-      schemaVersion: 1, commandId: `command-${this.commands.length + 1}`, siteId: SITE_ID, deviceId: point.reportingDeviceId, pointId: point.id,
+      schemaVersion: 1, commandId: `ec61c2dc-2d2c-4933-8fb7-${String(this.commands.length + 1).padStart(12, '0')}`, siteId: SITE_ID, deviceId: point.reportingDeviceId, pointId: point.id,
       capability, status: 'SUBMITTED', risk, approvalPolicy: risk === 'LOW' ? 'NONE' : 'SINGLE_APPROVER',
       approvalCount: 0, requiredApprovalCount: risk === 'LOW' ? 0 : 1, parameters: input.parameters, transitions: [],
       createdAt: now, updatedAt: now,
@@ -168,6 +168,9 @@ export class Gateway {
       return { body: { from, to, totals: totalsOf(days) } };
     }
     if (method === 'POST' && path === `${base}/measures`) {
+      if (body?.evidenceCommandId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.evidenceCommandId)) {
+        return refuse(400, 'SAVINGS_REQUEST_INVALID');
+      }
       const measure = {
         id: `01a12ef8-0000-7000-8000-${String(this.measures.length + 1).padStart(12, '0')}`, siteId: SITE_ID, name: body?.name, kind: body?.kind,
         description: body?.description ?? '', evidence: body?.evidence ?? '', evidenceCommandId: body?.evidenceCommandId ?? null, status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
