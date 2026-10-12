@@ -43,14 +43,19 @@ func NewHTTPHandler(service *Service) (http.Handler, error) {
 type baselineView struct {
 	From          time.Time `json:"from"`
 	To            time.Time `json:"to"`
-	InterceptKWh  float64   `json:"interceptKWh"`
-	Slope         float64   `json:"slope"`
 	Samples       int       `json:"samples"`
 	ExpectedHours int       `json:"expectedHours"`
-	CVRMSE        float64   `json:"cvRmse"`
-	NMBE          float64   `json:"nmbe"`
-	Trusted       bool      `json:"trusted"`
-	Reason        string    `json:"reason,omitempty"`
+	// Model is absent when the period held too little data to fit a line.
+	Model   *modelView `json:"model"`
+	Trusted bool       `json:"trusted"`
+	Reason  string     `json:"reason,omitempty"`
+}
+
+type modelView struct {
+	InterceptKWh float64 `json:"interceptKWh"`
+	Slope        float64 `json:"slope"`
+	CVRMSE       float64 `json:"cvRmse"`
+	NMBE         float64 `json:"nmbe"`
 }
 
 type dayView struct {
@@ -112,8 +117,11 @@ func viewOf(measure Measure, results []DailyResult, withDays bool) measureView {
 	}
 	if baseline := measure.Baseline; baseline != nil {
 		view.Baseline = &baselineView{
-			From: baseline.From, To: baseline.To, InterceptKWh: baseline.Intercept, Slope: baseline.Slope, Samples: baseline.Samples,
-			ExpectedHours: baseline.ExpectedHours, CVRMSE: baseline.CVRMSE, NMBE: baseline.NMBE, Trusted: baseline.Trusted, Reason: baseline.Reason,
+			From: baseline.From, To: baseline.To, Samples: baseline.Samples, ExpectedHours: baseline.ExpectedHours,
+			Trusted: baseline.Trusted, Reason: baseline.Reason,
+		}
+		if baseline.Fitted() {
+			view.Baseline.Model = &modelView{InterceptKWh: baseline.Intercept, Slope: baseline.Slope, CVRMSE: baseline.CVRMSE, NMBE: baseline.NMBE}
 		}
 	}
 	if withDays {

@@ -2,7 +2,7 @@ import { FactTile } from "@/blocks/fact-list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, CircleCheck, PiggyBank, RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { HeatmapChartCard } from "@/components/heatmap-chart-card";
 import { MetricTabsChartCard } from "@/components/metric-tabs-chart-card";
 import { PageHeader } from "@/blocks/page-header";
@@ -25,6 +25,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
 import { changesSupply } from "@/features/optimization/optimization-model";
 import { latestRecommendationQuery } from "@/features/optimization/query";
+import { measuresQuery, summaryQuery } from "@/features/savings/query";
+import { monthToDate, savingsRate } from "@/features/savings/savings-model";
 import { ruleFor } from "@/features/diagnostics/diagnostics-model";
 import { FindingSeverityBadge } from "@/features/diagnostics/finding-presentation";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
@@ -251,51 +253,81 @@ function HourlyElectricity() {
  * What the latest Optimization recommendation expects to save, shown as an expectation: measured
  * savings need a baseline model (M&V), which is not connected.
  */
-function SavingOpportunity({ siteId, timeZone }: { readonly siteId: string; readonly timeZone: string }) {
+/**
+ * What the Site has saved and what it could still save: verified savings come from the measure the
+ * M&V owner reports on, the opportunity from the latest optimization recommendation's estimate.
+ */
+function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly timeZone: string }) {
+  const month = useMemo(() => monthToDate(new Date(), timeZone), [timeZone]);
+  const summary = useQuery(summaryQuery(siteId, month.from, month.to));
+  const measures = useQuery(measuresQuery(siteId));
   const latest = useQuery(latestRecommendationQuery(siteId, null));
+  const totals = summary.data?.totals;
+  const verified = totals !== undefined && totals.days > 0;
+  const reporting = measures.data?.find((measure) => measure.status === "IMPLEMENTED");
+  const rate = totals ? savingsRate(totals) : null;
   const recommendation = latest.data ?? null;
   return (
-    <Card role="region" aria-label="节能机会" className="@container/card">
+    <Card role="region" aria-label="节能成效" className="@container/card">
       <CardHeader>
         <CardDescription className="flex items-center gap-2">
           <PiggyBank className="size-4 text-primary" aria-hidden="true" />
-          节能机会
+          节能成效 · 本月
         </CardDescription>
-        {recommendation ? (
+        {verified ? (
           <CardTitle className="text-3xl font-medium tracking-tight tabular-nums">
-            {formatDecimal(recommendation.saving.costPerDay, 0)}
-            <span className="ml-1.5 text-sm font-normal tracking-normal text-muted-foreground">元/天 · 预计</span>
+            ¥{formatDecimal(totals.avoidedCost, 0)}
+            <span className="ml-1.5 text-sm font-normal tracking-normal text-muted-foreground">已核算节省</span>
           </CardTitle>
         ) : null}
         <CardAction>
           <Button variant="ghost" size="sm" asChild>
-            <Link to="/energy-analysis/optimization" search={{ site: siteId }}>
-              {recommendation ? "查看建议" : "去生成"}
+            <Link to="/energy-analysis/savings" search={{ site: siteId }}>
+              节能项目
               <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
             </Link>
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-3 text-sm">
-        {latest.isPending ? <Skeleton className="h-24" /> : latest.isError ? (
-          <p className="text-muted-foreground">优化建议暂不可用</p>
-        ) : !recommendation ? (
-          <p className="text-muted-foreground">还没有优化建议。生成后，这里显示按建议调整供水温度预计每天能省多少电和电费。</p>
-        ) : (
+      <CardContent className="flex flex-1 flex-col gap-4 text-sm">
+        {summary.isPending || measures.isPending ? <Skeleton className="h-16" /> : summary.isError || measures.isError ? (
+          <p className="text-muted-foreground">节能核算暂不可用</p>
+        ) : verified ? (
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <FactTile className="text-lg font-semibold tracking-tight" label="预计日节电">{formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh</FactTile>
-            <FactTile className="text-lg font-semibold tracking-tight" label="建议供水温度">
-              {changesSupply(recommendation)
-                ? `${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C`
-                : `保持 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C`}
-            </FactTile>
-            <FactTile className="text-lg font-semibold tracking-tight" label="预计室内温度">{formatDecimal(recommendation.candidate.projectedZoneTempC, 1)} °C</FactTile>
-            <FactTile className="text-lg font-semibold tracking-tight" label="生成于">{formatTime(recommendation.createdAt, timeZone)}</FactTile>
+            <FactTile className="text-lg font-semibold tracking-tight" label="本月节电">{formatDecimal(totals.avoidedKWh, 0)} kWh</FactTile>
+            <FactTile className="text-lg font-semibold tracking-tight" label="节电率">{rate === null ? "—" : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
+            <FactTile className="col-span-2" label="核算措施">{reporting?.name ?? "本月措施已结束"} · 已核算 {totals.days} 天</FactTile>
           </dl>
+        ) : (
+          <p className="text-muted-foreground">
+            {reporting
+              ? `「${reporting.name}」${reporting.baseline?.trusted ? "正在核算，实施满 24 小时后的次日开始出结果。" : "基线检验未通过，暂不核算。"}`
+              : "还没有在核算的节能措施。登记并确认实施后，这里显示按基线核算的实际节电量与电费。"}
+          </p>
         )}
+        <Separator />
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-muted-foreground">优化建议 · 预计</span>
+          {latest.isPending ? <Skeleton className="h-5 w-24" /> : latest.isError ? (
+            <span className="text-muted-foreground">暂不可用</span>
+          ) : recommendation ? (
+            <Link to="/energy-analysis/optimization" search={{ site: siteId }} className="font-medium tabular-nums hover:underline">
+              {formatDecimal(recommendation.saving.costPerDay, 0)} 元/天 · {formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh/天
+            </Link>
+          ) : (
+            <Link to="/energy-analysis/optimization" search={{ site: siteId }} className="text-muted-foreground hover:underline">还没有建议，去生成</Link>
+          )}
+        </div>
+        {recommendation ? (
+          <p className="text-xs text-muted-foreground">
+            {changesSupply(recommendation)
+              ? `供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} 生成`
+              : `保持供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} 生成`}
+          </p>
+        ) : null}
       </CardContent>
       <CardFooter className="text-xs text-muted-foreground">
-        实测节能量需要基线模型核算，尚未接入；这里是建议的预计值。
+        已核算为对照基线（IPMVP 选项 C）的实测值；建议为预计值。
       </CardFooter>
     </Card>
   );
@@ -485,7 +517,7 @@ export function OverviewWorkspace() {
         <div className="min-w-0 @5xl/main:col-span-2">
           <HourlyElectricity />
         </div>
-        <SavingOpportunity siteId={site.id} timeZone={site.timezone} />
+        <SavingsCard siteId={site.id} timeZone={site.timezone} />
       </div>
     </Main>
   );

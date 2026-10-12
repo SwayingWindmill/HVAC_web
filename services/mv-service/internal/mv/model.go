@@ -47,6 +47,12 @@ type Baseline struct {
 	Reason        string
 }
 
+// Fitted says whether the period held enough data for a line to be fitted at all; when it did not,
+// the coefficients and statistics are not results and say nothing about the fit.
+func (baseline Baseline) Fitted() bool {
+	return baseline.Reason != ReasonTooFewHours && baseline.Reason != ReasonLowCoverage
+}
+
 func (baseline Baseline) Predict(coolingKWh float64) float64 {
 	return baseline.Intercept + baseline.Slope*coolingKWh
 }
