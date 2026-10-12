@@ -104,6 +104,9 @@ async function waitForPostgres() {
   let stableChecks = 0;
   for (let attempt = 0; attempt < 360; attempt += 1) {
     try {
+      // The image runs its init scripts on a socket-only server and then restarts it; only the final
+      // server listens on TCP, so a TCP answer means initialization has finished.
+      run('docker', ['exec', registryContainer('postgres'), 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'hvac_s1']);
       const state = psql("SELECT (to_regclass('core_registry.forecast_jobs') IS NOT NULL)::text || '|' || (to_regclass('core_registry.job_instances') IS NOT NULL)::text");
       if (state === 'true|true') {
         stableChecks += 1;
