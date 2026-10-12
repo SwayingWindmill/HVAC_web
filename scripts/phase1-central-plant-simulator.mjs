@@ -553,7 +553,7 @@ ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
 // Savings verification (ADR 0021) fits plant electricity against cooling delivered, hour by hour:
-// two hourly counter-delta Metrics per Site, the last fourteen days backfilled from telemetry
+// two hourly counter-delta Metrics per Site, up to fourteen days backfilled from telemetry
 // history so a measure has its baseline period, and a daily MV_EVALUATION at 02:00 Site time.
 function buildSavingsSeed(site, points) {
   const { tenantId, siteId } = site;
@@ -597,7 +597,10 @@ ${metrics.map((metric) => `  (${id(metric.scheduleId)}, ${id(`${metric.code.repl
     (date_trunc('day', clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 day 2 hours') AT TIME ZONE 'Asia/Shanghai')
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
 WITH hours AS (
-  SELECT generate_series(date_trunc('hour', clock_timestamp()) - interval '14 days', date_trunc('hour', clock_timestamp()) - interval '2 hours', interval '1 hour') AS period_start
+  -- Telemetry starts once the Site's devices are registered; an earlier hour has nothing to count.
+  SELECT generate_series(
+    GREATEST(date_trunc('hour', clock_timestamp()) - interval '14 days', (SELECT date_trunc('hour', min(created_at)) + interval '1 hour' FROM core_registry.devices WHERE site_id = ${st})),
+    date_trunc('hour', clock_timestamp()) - interval '2 hours', interval '1 hour') AS period_start
 ), plan AS (
   SELECT binding.id AS binding_id, hours.period_start,
          'savings-backfill-' || binding.id || '-' || to_char(hours.period_start AT TIME ZONE 'UTC', 'YYYYMMDDHH24') AS dedup
