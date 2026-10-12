@@ -15,3 +15,10 @@ test('authorized sites rank by plant COP over the period, read on each site\'s c
   expect(reads.map((read) => read.body?.energyType).sort()).toEqual(['cooling', 'electricity']);
   for (const read of reads) expect(read.body).toMatchObject({ granularity: 'day', timezone: 'Asia/Shanghai', from: expect.stringMatching(/T16:00:00\.000Z$/) });
 });
+
+test('a site the user may see but not analyze stays listed, outside the comparison', async ({ page, gateway }) => {
+  gateway.analyticsDenied = true;
+  await page.goto('/benchmark');
+  await expect(page.getByRole('region', { name: '站点排名' }).getByRole('row', { name: /中央机房/ })).toContainText('没有该站点的能耗分析权限');
+  await expect(page.getByRole('region', { name: '对标概况' })).toContainText('1 个无权限');
+});

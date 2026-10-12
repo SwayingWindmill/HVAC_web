@@ -94,6 +94,8 @@ export class Gateway {
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
+  /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
+  analyticsDenied = false;
   /** The Site's import Tariff in effect; null when none is assigned. */
   tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
@@ -191,6 +193,9 @@ export class Gateway {
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
+    if (method === 'POST' && path === '/api/v1/analytics/energy-series' && this.analyticsDenied) {
+      return { status: 403, body: { type: 'about:blank', title: 'Analytics access denied', status: 403, detail: 'The requested Site is not authorized for Energy Analytics.', instance: path, code: 'ANALYTICS_ACCESS_DENIED', traceId: '0'.repeat(32), retryable: false } };
+    }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 
     if (method === 'GET' && path === '/api/v1/alarms') {

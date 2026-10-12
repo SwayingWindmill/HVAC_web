@@ -3,7 +3,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Trophy } from 'lucide-react';
 import { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
-import { createPlatformGatewayClient, type Site } from '@/api/generated/platformGateway.gen';
+import { createPlatformGatewayClient, PlatformApiError, type Site } from '@/api/generated/platformGateway.gen';
 import type { ShellSnapshot } from '@/app/shell-runtime';
 import { FactList, FactRow } from '@/blocks/fact-list';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
@@ -39,8 +39,14 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
         tenantId: site.tenantId, siteId: site.id, energyType, granularity: 'day', timezone: site.timezone,
         from: from.toISOString(), to: to.toISOString(), qualityPolicy: 'VALID_ONLY',
       }, csrfToken, { signal }).then((response) => response.data);
-      const [electricity, cooling] = await Promise.all([read('electricity'), read('cooling')]);
-      return { siteId: site.id, name: site.displayName, summary: summarizeEnergy(electricity, cooling, 'day', site.timezone) };
+      try {
+        const [electricity, cooling] = await Promise.all([read('electricity'), read('cooling')]);
+        return { siteId: site.id, name: site.displayName, summary: summarizeEnergy(electricity, cooling, 'day', site.timezone) };
+      } catch (error) {
+        // A Site the principal may see but not analyze stays listed, outside the comparison.
+        if (error instanceof PlatformApiError && error.problem.status === 403) return { siteId: site.id, name: site.displayName, summary: null };
+        throw error;
+      }
     })),
     refetchInterval: 5 * 60_000,
     retry: false,
@@ -53,7 +59,11 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   const period: BenchmarkPeriod = search.period ?? '7d';
   const sites = useMemo(() => [...(snapshot.sites?.items ?? [])].filter((site) => site.status === 'ACTIVE'), [snapshot.sites?.items]);
   const summaries = useSiteSummaries(sites, period, snapshot.principal!.session.csrfToken);
-  const result = useMemo(() => (summaries.data ? benchmark(summaries.data) : null), [summaries.data]);
+  const result = useMemo(
+    () => (summaries.data ? benchmark(summaries.data.flatMap((site) => (site.summary ? [{ ...site, summary: site.summary }] : []))) : null),
+    [summaries.data],
+  );
+  const denied = summaries.data?.filter((site) => site.summary === null) ?? [];
   const colorOf = (siteId: string) => SITE_COLORS[Math.max(0, sites.findIndex((site) => site.id === siteId)) % SITE_COLORS.length];
   const chartConfig = useMemo(
     () => Object.fromEntries(sites.map((site, index) => [site.id, { label: site.displayName, color: SITE_COLORS[index % SITE_COLORS.length] }])) satisfies ChartConfig,
@@ -80,8 +90,8 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
           <MetricGrid ariaLabel="对标概况">
             <MetricCard
               label="对标站点"
-              value={<MetricValue value={String(result.sites.length)} unit="个" />}
-              lead={`${ranked.length} 个站点有完整的电量与冷量`}
+              value={<MetricValue value={String(result.sites.length + denied.length)} unit="个" />}
+              lead={`${ranked.length} 个站点有完整的电量与冷量${denied.length ? `，${denied.length} 个无权限` : ''}`}
               detail="当前账号授权的站点"
             />
             <MetricCard
@@ -150,6 +160,18 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                       <TableCell className="text-right tabular-nums">{energy(site.electricityKWh)}</TableCell>
                       <TableCell className="text-right tabular-nums">{energy(site.dailyElectricityKWh)}</TableCell>
                       <TableCell className="text-right tabular-nums">{energy(site.coolingKWh)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {denied.map((site) => (
+                    <TableRow key={site.siteId} className="text-muted-foreground">
+                      <TableCell>—</TableCell>
+                      <TableCell>
+                        <span className="flex items-center gap-2 font-medium">
+                          <span className="size-2 rounded-[2px] bg-muted-foreground/40" aria-hidden="true" />
+                          {site.name}
+                        </span>
+                      </TableCell>
+                      <TableCell colSpan={5}>没有该站点的能耗分析权限，未参与对比</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
