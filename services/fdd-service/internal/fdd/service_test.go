@@ -8,45 +8,38 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
-	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 type memoryStore struct {
 	findings []intelligencemodel.FDDFinding
 }
 
-type historySource struct {
-	response telemetryhistorymodel.DeviceHistoryResponse
+type loopEvidence struct {
+	readings LoopReadings
 	err      error
-	query    telemetryhistorymodel.DeviceHistoryQuery
-	grant    string
+	query    LoopQuery
 }
 
-type pagedHistorySource struct {
-	pages   []telemetryhistorymodel.DeviceHistoryResponse
-	queries []telemetryhistorymodel.DeviceHistoryQuery
-	grants  []string
-}
-
-func (source *historySource) QueryDeviceHistory(_ context.Context, query telemetryhistorymodel.DeviceHistoryQuery, grant string) (telemetryhistorymodel.DeviceHistoryResponse, error) {
+func (source *loopEvidence) LatestLoopReadings(_ context.Context, query LoopQuery) (LoopReadings, error) {
 	source.query = query
-	source.grant = grant
-	return source.response, source.err
-}
-
-func (source *pagedHistorySource) QueryDeviceHistory(_ context.Context, query telemetryhistorymodel.DeviceHistoryQuery, grant string) (telemetryhistorymodel.DeviceHistoryResponse, error) {
-	index := len(source.queries)
-	if index >= len(source.pages) {
-		return telemetryhistorymodel.DeviceHistoryResponse{}, errors.New("unexpected history page")
-	}
-	source.queries = append(source.queries, query)
-	source.grants = append(source.grants, grant)
-	return source.pages[index], nil
+	return source.readings, source.err
 }
 
 func (store *memoryStore) InsertFinding(_ context.Context, finding intelligencemodel.FDDFinding) error {
 	store.findings = append(store.findings, finding)
 	return nil
+}
+
+func (store *memoryStore) RecentFinding(_ context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error) {
+	for index := len(store.findings) - 1; index >= 0; index-- {
+		finding := store.findings[index]
+		if finding.TenantID == tenantID && finding.SiteID == siteID && finding.AssetID == assetID && finding.FindingType == findingType &&
+			finding.RuleRevisionID == ruleRevisionID && !finding.EvaluationTo.Before(since) {
+			return finding, true, nil
+		}
+	}
+	return intelligencemodel.FDDFinding{}, false, nil
 }
 
 func (store *memoryStore) ListFindings(_ context.Context, _, _ string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
@@ -86,55 +79,30 @@ func validEvaluation() EvaluationRequest {
 	}
 }
 
-func validHistoryResponse(request EvaluationRequest) telemetryhistorymodel.DeviceHistoryResponse {
-	unit := "Cel"
-	return telemetryhistorymodel.DeviceHistoryResponse{
-		SchemaVersion: 2,
-		TenantID:      request.TenantID,
-		SiteID:        request.SiteID,
-		DeviceID:      request.DeviceID,
-		Observations: []telemetryhistorymodel.DeviceHistoryObservation{
-			{
-				ObservationID: "01990000-6200-7000-8000-000000000001", TelemetryKey: returnTemperatureKey,
-				PointID: "01990000-6300-7000-8000-000000000001", PointType: telemetryhistorymodel.PointTypeTelemetry, PointRevision: 1,
-				SampledAt: request.EvaluationFrom.Add(10 * time.Minute), ReceivedAt: request.EvaluationFrom.Add(10*time.Minute + time.Second),
-				Acceptance: telemetryhistorymodel.AcceptanceAccepted, ValueType: telemetryhistorymodel.ValueTypeNumber, Value: json.RawMessage("10"), Unit: &unit,
-				Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{},
-				SourcePosition: telemetryhistorymodel.SourcePosition{Partition: "telemetry-0", Offset: 2, EventID: "01990000-6400-7000-8000-000000000002"},
-			},
-			{
-				ObservationID: "01990000-6200-7000-8000-000000000002", TelemetryKey: supplyTemperatureKey,
-				PointID: "01990000-6300-7000-8000-000000000002", PointType: telemetryhistorymodel.PointTypeTelemetry, PointRevision: 1,
-				SampledAt: request.EvaluationFrom.Add(10 * time.Minute), ReceivedAt: request.EvaluationFrom.Add(10*time.Minute + time.Second),
-				Acceptance: telemetryhistorymodel.AcceptanceAccepted, ValueType: telemetryhistorymodel.ValueTypeNumber, Value: json.RawMessage("7"), Unit: &unit,
-				Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{},
-				SourcePosition: telemetryhistorymodel.SourcePosition{Partition: "telemetry-0", Offset: 1, EventID: "01990000-6400-7000-8000-000000000001"},
-			},
-		},
-		Metadata: telemetryhistorymodel.DeviceHistoryMetadata{
-			RequestedFrom: request.EvaluationFrom, RequestedTo: request.EvaluationTo,
-			PageSize: historyPageSize, ReturnedObservations: 2,
-		},
+func validReadings(request EvaluationRequest) LoopReadings {
+	reading := func(id string, value float64) Reading {
+		return Reading{ObservationID: id, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Value: value, SampledAt: request.EvaluationFrom.Add(10 * time.Minute)}
 	}
+	return LoopReadings{Supply: reading("01990000-6200-7000-8000-000000000002", 7), Return: reading("01990000-6200-7000-8000-000000000001", 10)}
 }
 
-func newTestService(t *testing.T, store Store, source HistorySource, now func() time.Time) *Service {
+func newTestService(t *testing.T, store Store, evidence EvidenceSource, now func() time.Time) *Service {
 	t.Helper()
-	service, err := NewService(store, source, now)
+	service, err := NewService(store, evidence, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service
 }
 
-func TestLowDeltaTUsesAuthoritativeHistoryEvidence(t *testing.T) {
+func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
 	store := &memoryStore{}
 	request := validEvaluation()
-	source := &historySource{response: validHistoryResponse(request)}
+	evidence := &loopEvidence{readings: validReadings(request)}
 	now := time.Date(2026, 8, 19, 10, 16, 0, 0, time.UTC)
-	service := newTestService(t, store, source, func() time.Time { return now })
+	service := newTestService(t, store, evidence, func() time.Time { return now })
 
-	result, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant")
+	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,53 +120,19 @@ func TestLowDeltaTUsesAuthoritativeHistoryEvidence(t *testing.T) {
 	if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != "01990000-6200-7000-8000-000000000002" || finding.EvidenceIDs[1] != "01990000-6200-7000-8000-000000000001" {
 		t.Fatalf("evidence IDs must be authoritative observation IDs: %#v", finding.EvidenceIDs)
 	}
-	if source.grant != "history-grant" || source.query.DeviceID != request.DeviceID || len(source.query.Keys) != 2 || source.query.Keys[0] != returnTemperatureKey || source.query.Keys[1] != supplyTemperatureKey {
-		t.Fatalf("history query=%#v grant=%q", source.query, source.grant)
-	}
-	if finding.AlarmID != "" || finding.WorkOrderID != "" {
-		t.Fatal("FDD evaluation must not create Alarm or Work Order side effects")
-	}
-}
-
-func TestLowDeltaTFollowsAuthoritativeHistoryCursor(t *testing.T) {
-	store := &memoryStore{}
-	request := validEvaluation()
-	response := validHistoryResponse(request)
-	cursor := "history-page-two"
-	firstPage := response
-	firstPage.Observations = response.Observations[:1]
-	firstPage.Metadata.ReturnedObservations = 1
-	firstPage.Metadata.NextCursor = &cursor
-	secondPage := response
-	secondPage.Observations = response.Observations[1:]
-	secondPage.Metadata.ReturnedObservations = 1
-	secondPage.Metadata.NextCursor = nil
-	source := &pagedHistorySource{pages: []telemetryhistorymodel.DeviceHistoryResponse{firstPage, secondPage}}
-	service := newTestService(t, store, source, time.Now)
-
-	result, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "FINDING" || result.Finding == nil || len(store.findings) != 1 {
-		t.Fatalf("result=%#v findings=%#v", result, store.findings)
-	}
-	if len(source.queries) != 2 || source.queries[0].Cursor != nil || source.queries[1].Cursor == nil || *source.queries[1].Cursor != cursor {
-		t.Fatalf("history queries=%#v", source.queries)
-	}
-	if len(source.grants) != 2 || source.grants[0] != "history-grant" || source.grants[1] != "history-grant" {
-		t.Fatalf("history grants=%#v", source.grants)
+	if evidence.query != (LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.EvaluationFrom, To: request.EvaluationTo}) {
+		t.Fatalf("evidence query=%#v", evidence.query)
 	}
 }
 
 func TestHealthyDeltaTClearsWithoutFinding(t *testing.T) {
 	store := &memoryStore{}
 	request := validEvaluation()
-	response := validHistoryResponse(request)
-	response.Observations[0].Value = json.RawMessage("13")
-	service := newTestService(t, store, &historySource{response: response}, time.Now)
+	readings := validReadings(request)
+	readings.Return.Value = 13
+	service := newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
 
-	result, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant")
+	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,48 +141,95 @@ func TestHealthyDeltaTClearsWithoutFinding(t *testing.T) {
 	}
 }
 
-func TestFDDRejectsMissingOrInvalidAuthoritativeHistory(t *testing.T) {
-	request := validEvaluation()
-
+// Every fifteen minutes the schedule finds the same condition again; one finding a day stands
+// for it, and later evaluations report it as ongoing instead of adding another.
+func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
 	store := &memoryStore{}
-	response := validHistoryResponse(request)
-	response.Observations = response.Observations[:1]
-	response.Metadata.ReturnedObservations = 1
-	service := newTestService(t, store, &historySource{response: response}, time.Now)
-	if _, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant"); err == nil {
-		t.Fatal("expected missing supply evidence to fail")
-	}
-	if len(store.findings) != 0 {
-		t.Fatal("missing evidence must not create a finding")
+	request := validEvaluation()
+	now := request.EvaluationTo.Add(time.Minute)
+	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time { return now })
+	first, err := service.EvaluateLowDeltaT(t.Context(), request)
+	if err != nil || first.Status != "FINDING" {
+		t.Fatalf("first=%#v err=%v", first, err)
 	}
 
-	response = validHistoryResponse(request)
-	response.Observations[1].Quality = telemetryhistorymodel.QualityInvalid
-	service = newTestService(t, store, &historySource{response: response}, time.Now)
-	if _, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant"); err == nil {
-		t.Fatal("expected invalid-quality evidence to fail")
+	later := request
+	later.EvaluationFrom, later.EvaluationTo = request.EvaluationFrom.Add(15*time.Minute), request.EvaluationTo.Add(15*time.Minute)
+	ongoing, err := service.EvaluateLowDeltaT(t.Context(), later)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(store.findings) != 0 {
-		t.Fatal("invalid evidence must not create a finding")
+	if ongoing.Status != "ONGOING" || ongoing.Finding == nil || ongoing.Finding.ID != first.Finding.ID || ongoing.DeltaTC != 3 || len(store.findings) != 1 {
+		t.Fatalf("ongoing=%#v findings=%d", ongoing, len(store.findings))
+	}
+
+	nextDay := request
+	nextDay.EvaluationFrom, nextDay.EvaluationTo = request.EvaluationFrom.Add(25*time.Hour), request.EvaluationTo.Add(25*time.Hour)
+	again, err := service.EvaluateLowDeltaT(t.Context(), nextDay)
+	if err != nil || again.Status != "FINDING" || len(store.findings) != 2 {
+		t.Fatalf("a day later=%#v findings=%d err=%v", again, len(store.findings), err)
 	}
 }
 
-func TestFDDRejectsUnauthorizedHistoryWithoutFallback(t *testing.T) {
+func TestFDDRejectsMissingOrInvalidEvidence(t *testing.T) {
+	request := validEvaluation()
 	store := &memoryStore{}
-	service := newTestService(t, store, &historySource{err: errors.New("history authorization rejected")}, time.Now)
-	if _, err := service.EvaluateLowDeltaT(t.Context(), validEvaluation(), "unauthorized-grant"); err == nil {
-		t.Fatal("expected authoritative history failure")
+
+	service := newTestService(t, store, &loopEvidence{err: ErrNoLoopEvidence}, time.Now)
+	if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrNoLoopEvidence) {
+		t.Fatalf("missing evidence err=%v", err)
+	}
+
+	readings := validReadings(request)
+	readings.Return.Quality = "BAD"
+	service = newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
+	if _, err := service.EvaluateLowDeltaT(t.Context(), request); err == nil {
+		t.Fatal("expected non-GOOD evidence to fail")
+	}
+
+	readings = validReadings(request)
+	readings.Supply.Unit = "K"
+	service = newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
+	if _, err := service.EvaluateLowDeltaT(t.Context(), request); err == nil {
+		t.Fatal("expected non-Celsius evidence to fail")
 	}
 	if len(store.findings) != 0 {
-		t.Fatal("history failure must not create a finding")
+		t.Fatal("missing or invalid evidence must not create a finding")
+	}
+}
+
+func TestAScheduledEvaluationChecksTheWindowBeforeItsFireTime(t *testing.T) {
+	request := validEvaluation()
+	payload, err := json.Marshal(ScheduledEvaluation{
+		AssetID: request.AssetID, DeviceID: request.DeviceID, RuleRevisionID: request.RuleRevisionID, MinimumDeltaTC: 5, WindowMinutes: 15,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := schedulerjob.Job{
+		JobID: "01990000-9000-7000-8000-000000000001", TriggerType: "SCHEDULE", JobType: EvaluationJobType,
+		TenantID: request.TenantID, SiteID: request.SiteID, Payload: payload, AttemptNo: 1, MaxAttempts: 3, TimeoutSeconds: 60,
+		ScheduledFor: request.EvaluationTo,
+	}
+	scheduled, err := ScheduledRequest(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduled != request {
+		t.Fatalf("scheduled=%#v want=%#v", scheduled, request)
+	}
+
+	job.Payload = json.RawMessage(`{"assetId":"` + request.AssetID + `","deviceId":"` + request.DeviceID + `","ruleRevisionId":"r","minimumDeltaTC":5,"windowMinutes":15,"evidence":[]}`)
+	if _, err = ScheduledRequest(job); err == nil {
+		t.Fatal("a schedule cannot carry its own evidence")
 	}
 }
 
 func TestFDDLinkingIsExplicitAndSeparateFromDetection(t *testing.T) {
 	store := &memoryStore{}
 	request := validEvaluation()
-	service := newTestService(t, store, &historySource{response: validHistoryResponse(request)}, time.Now)
-	result, err := service.EvaluateLowDeltaT(t.Context(), request, "history-grant")
+	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, time.Now)
+	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

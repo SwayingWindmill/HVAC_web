@@ -21,12 +21,15 @@ test('a finding states its measurement against the threshold and opens its cause
   await expect(sheet).toContainText('降低冷冻水泵频率');
 });
 
-test('running the diagnosis checks the last 15 minutes of the loop BTU meter and records what it finds', async ({ page, gateway }) => {
+test('running the diagnosis checks the last 15 minutes of the loop BTU meter and reports a condition already found today as ongoing', async ({ page, gateway }) => {
   await page.goto(`/operations/diagnostics?site=${SITE_ID}`);
+  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('系统每 15 分钟自动诊断一次');
   await page.getByRole('button', { name: '立即诊断' }).click();
 
-  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('发现问题');
-  await expect(page.getByRole('table', { name: '诊断发现列表' }).getByRole('row').filter({ hasText: '冷冻水低温差' })).toHaveCount(2);
+  const rule = page.getByRole('region', { name: '冷冻水低温差' });
+  await expect(rule).toContainText('仍在持续');
+  await expect(rule).toContainText('问题仍在持续，24 小时内不重复记录');
+  await expect(page.getByRole('table', { name: '诊断发现列表' }).getByRole('row').filter({ hasText: '冷冻水低温差' })).toHaveCount(1);
   const [run] = gateway.writes.filter((write) => write.path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`);
   expect(run.body).toMatchObject({ deviceId: BTU_METER_DEVICE, assetId: BTU_METER_ASSET, ruleRevisionId: 'chilled-water-low-delta-t/v1', minimumDeltaTC: 3.5 });
   expect(Date.parse(run.body!.evaluationTo) - Date.parse(run.body!.evaluationFrom)).toBe(15 * 60_000);

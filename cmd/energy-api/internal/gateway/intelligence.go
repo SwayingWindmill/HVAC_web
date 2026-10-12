@@ -16,8 +16,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
-	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
@@ -27,14 +25,11 @@ const (
 	defaultIntelligenceTimeout      = 8 * time.Second
 	maximumIntelligenceRequestBytes = int64(256 << 10)
 	maximumIntelligenceResponse     = int64(8 << 20)
-	fddSupplyTemperatureKey         = "supply_water_temperature"
-	fddReturnTemperatureKey         = "return_water_temperature"
 )
 
 type IntelligenceConfig struct {
 	ForecastBaseURL     string
 	FDDBaseURL          string
-	FDDWorkloadSPIFFE   string
 	OptimizationBaseURL string
 	HTTPClient          *http.Client
 	Timeout             time.Duration
@@ -43,7 +38,6 @@ type IntelligenceConfig struct {
 type intelligenceController struct {
 	forecastBaseURL     string
 	fddBaseURL          string
-	fddWorkloadSPIFFE   string
 	optimizationBaseURL string
 	httpClient          *http.Client
 	timeout             time.Duration
@@ -93,7 +87,6 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 	resolved := *config
 	resolved.ForecastBaseURL = strings.TrimRight(strings.TrimSpace(resolved.ForecastBaseURL), "/")
 	resolved.FDDBaseURL = strings.TrimRight(strings.TrimSpace(resolved.FDDBaseURL), "/")
-	resolved.FDDWorkloadSPIFFE = strings.TrimSpace(resolved.FDDWorkloadSPIFFE)
 	resolved.OptimizationBaseURL = strings.TrimRight(strings.TrimSpace(resolved.OptimizationBaseURL), "/")
 	if resolved.HTTPClient == nil {
 		resolved.HTTPClient = &http.Client{}
@@ -102,7 +95,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 		resolved.Timeout = defaultIntelligenceTimeout
 	}
 	return &intelligenceController{
-		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, fddWorkloadSPIFFE: resolved.FDDWorkloadSPIFFE, optimizationBaseURL: resolved.OptimizationBaseURL,
+		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
 		httpClient: resolved.HTTPClient, timeout: resolved.Timeout,
 	}
 }
@@ -380,7 +373,7 @@ func workOrderOriginatesFromAlarm(workOrder workordermodel.WorkOrder, alarmID st
 }
 
 func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" || h.intelligence.fddWorkloadSPIFFE == "" {
+	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "FDD_EVALUATION_UNAVAILABLE", "FDD evaluation unavailable", "The production FDD evaluation path is not configured.", true, nil)
 		return
 	}
@@ -404,43 +397,7 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request body is invalid.", false, nil)
 		return
 	}
-	selection := telemetryhistorymodel.DeviceHistoryRequest{
-		DeviceID: input.DeviceID,
-		Keys:     []string{fddSupplyTemperatureKey, fddReturnTemperatureKey},
-		From:     input.EvaluationFrom,
-		To:       input.EvaluationTo,
-		PageSize: telemetryhistorymodel.MaximumHistoryPageSize,
-	}
-	if err := selection.Validate(); err != nil {
-		writeProblem(writer, request, http.StatusUnprocessableEntity, "FDD_EVALUATION_SCOPE_INVALID", "FDD evaluation scope invalid", "The FDD evaluation history selection is invalid.", false, nil)
-		return
-	}
-	caller := telemetryCaller{
-		principal: session.Principal,
-		tenantID:  session.TenantID,
-		contextID: session.ID,
-		expiresAt: session.ExpiresAt,
-	}
-	authorization, failure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionHistoryRead, []telemetryauth.Target{{DeviceID: selection.DeviceID, Keys: selection.Keys}})
-	if failure != nil {
-		h.writeTelemetryFailure(writer, request, *failure)
-		return
-	}
-	if len(authorization.targets) != 1 {
-		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope for FDD evaluation."))
-		return
-	}
-	authorizedTarget := authorization.targets[0]
-	canonical, err := selection.Complete(authorizedTarget.TenantID, authorizedTarget.SiteID)
-	if err != nil || canonical.TenantID != session.TenantID || canonical.SiteID != route.siteID {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD evaluation scope was not found.", false, nil)
-		return
-	}
-	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAction, canonical.CursorScopeDigest, h.intelligence.fddWorkloadSPIFFE)
-	if failure != nil {
-		h.writeTelemetryFailure(writer, request, *failure)
-		return
-	}
+	// FDD reads the loop evidence itself (ADR 0020); the Gateway only decides the Site.
 	upstreamBody, err := json.Marshal(fddLowDeltaTEvaluationUpstream{
 		TenantID:                  session.TenantID,
 		SiteID:                    route.siteID,
@@ -457,8 +414,7 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 		return
 	}
 	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.fddBaseURL+"/v1/fdd/evaluate/low-delta-t", upstreamBody, map[string]string{
-		"X-Tenant-ID":        session.TenantID,
-		"X-Delegation-Grant": grant,
+		"X-Tenant-ID": session.TenantID,
 	})
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }

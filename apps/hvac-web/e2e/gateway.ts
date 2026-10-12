@@ -125,7 +125,8 @@ export class Gateway {
     return command;
   }
 
-  // The recorded loop still runs below the rule's threshold, so each evaluation records a finding.
+  // The recorded loop still runs below the rule's threshold; as the FDD owner does, a finding for the
+  // same asset and rule from the last 24 hours makes the condition ongoing rather than new.
   private evaluateLowDeltaT(input: Json, now: string): Json {
     const recorded = fixture<Json>('fdd-findings.json').items[0];
     const finding = {
@@ -133,6 +134,9 @@ export class Gateway {
       ruleRevisionId: input.ruleRevisionId, thresholdValue: input.minimumDeltaTC, createdAt: now,
     };
     if (finding.observedValue >= input.minimumDeltaTC) return { status: 'CLEAR', deltaTC: finding.observedValue };
+    const open = this.findings.find((candidate) => candidate.assetId === input.assetId && candidate.ruleRevisionId === input.ruleRevisionId
+      && Date.parse(candidate.evaluationTo) >= Date.parse(input.evaluationTo) - 86_400_000);
+    if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, finding: open };
     this.findings.unshift(finding);
     return { status: 'FINDING', deltaTC: finding.observedValue, finding };
   }

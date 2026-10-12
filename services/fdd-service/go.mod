@@ -5,7 +5,7 @@ go 1.25.12
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/intelligencemodel v0.0.0
-	github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
 )
 
 require (
@@ -18,4 +18,4 @@ require (
 
 replace github.com/quanlaihe/hvac-web/libs/intelligencemodel => ../../libs/intelligencemodel
 
-replace github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel => ../../libs/telemetryhistorymodel
+replace github.com/quanlaihe/hvac-web/libs/schedulerjob => ../../libs/schedulerjob

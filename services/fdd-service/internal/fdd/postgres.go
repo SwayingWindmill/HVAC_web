@@ -91,6 +91,29 @@ func scanFinding(row pgx.Row) (intelligencemodel.FDDFinding, error) {
 	return finding, err
 }
 
+func (store *PostgresStore) RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return intelligencemodel.FDDFinding{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
+		return intelligencemodel.FDDFinding{}, false, err
+	}
+	finding, err := scanFinding(tx.QueryRow(ctx, `SELECT `+findingColumns+`
+FROM core_registry.fdd_findings
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND asset_id=$3::uuid AND finding_type=$4 AND rule_revision_id=$5 AND evaluation_to >= $6
+ORDER BY evaluation_to DESC,created_at DESC
+LIMIT 1`, tenantID, siteID, assetID, findingType, ruleRevisionID, since.UTC()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return intelligencemodel.FDDFinding{}, false, tx.Commit(ctx)
+	}
+	if err != nil {
+		return intelligencemodel.FDDFinding{}, false, err
+	}
+	return finding, true, tx.Commit(ctx)
+}
+
 func (store *PostgresStore) ListFindings(ctx context.Context, tenantID, siteID string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {

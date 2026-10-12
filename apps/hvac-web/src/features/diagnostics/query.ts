@@ -32,6 +32,8 @@ export function siteFindingsQuery(siteId: string) {
 
 export type EvaluationOutcome =
   | { readonly status: 'CLEAR'; readonly observedValue: number }
+  // The condition already has a finding from the last day; it is still there, not new.
+  | { readonly status: 'ONGOING'; readonly observedValue: number; readonly finding: Finding }
   | { readonly status: 'FINDING'; readonly observedValue: number; readonly finding: Finding };
 
 /** Runs a rule now over the last window of the target's authoritative history. */
@@ -62,7 +64,7 @@ export async function evaluateRule(
       ? `诊断未完成：最近 ${rule.windowMinutes} 分钟缺少可用的供回水温度，或诊断服务拒绝了请求`
       : payload?.detail ?? '诊断服务暂时不可用');
   }
-  return payload.status === 'FINDING'
-    ? { status: 'FINDING', observedValue: payload.deltaTC, finding: payload.finding as Finding }
-    : { status: 'CLEAR', observedValue: payload.deltaTC };
+  return payload.status === 'CLEAR'
+    ? { status: 'CLEAR', observedValue: payload.deltaTC }
+    : { status: payload.status, observedValue: payload.deltaTC, finding: payload.finding as Finding };
 }

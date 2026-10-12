@@ -642,11 +642,15 @@ try {
     },
   });
 
-  // A finding persists with its measurement and reads back through the FDD runtime's row scope.
+  // A finding persists with its measurement and reads back through the FDD runtime's row scope; the
+  // runtime works a scheduled FDD_EVALUATION job the Scheduler left READY.
+  const fddJobId = '01990000-1990-7000-8000-000000000001';
+  psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
+    VALUES ('${fddJobId}', 'SCHEDULE', 'FDD_EVALUATION', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000002', now(), 'fdd-integration-scheduled-evaluation', '{}'::jsonb, 'READY', 3, 60, now(), now())`);
   report.assertions.fddFindingPersistence = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/fdd-service',
-    'test', '-count=1', '-run', 'TestPostgresServicePersistsAuthoritativeHistoryFinding', '-v', './internal/fdd/...',
+    'test', '-count=1', '-run', 'TestPostgresServicePersistsAuthoritativeHistoryFinding|TestPostgresFDDRuntimeWorksItsScheduledEvaluations', '-v', './internal/fdd/...',
   ], {
     env: {
       ...process.env,
@@ -654,9 +658,12 @@ try {
       FDD_POSTGRES_INTEGRATION_TENANT_ID: '018f1d00-0000-7000-8000-000000000001',
       FDD_POSTGRES_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000002',
       FDD_POSTGRES_INTEGRATION_ASSET_ID: '018f1e00-3000-7000-8000-000000000002',
+      FDD_POSTGRES_INTEGRATION_JOB_ID: fddJobId,
     },
   });
-  if (!report.assertions.fddFindingPersistence.includes('--- PASS: TestPostgresServicePersistsAuthoritativeHistoryFinding')) throw new Error('FDD finding persistence did not run');
+  for (const name of ['TestPostgresServicePersistsAuthoritativeHistoryFinding', 'TestPostgresFDDRuntimeWorksItsScheduledEvaluations']) {
+    if (!report.assertions.fddFindingPersistence.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
+  }
 
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
@@ -685,6 +692,9 @@ try {
   report.assertions.historyQueryCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'telemetry_query_history_reader');
   report.assertions.historyQueryCannotSelectAnalytics = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'telemetry_query_history_reader');
   report.assertions.writerCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'analytics_projector_writer');
+  report.assertions.fddReaderCanSelectObservations = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'fdd_service_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
+  report.assertions.fddReaderCannotSelectAnalytics = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'fdd_service_reader');
+  report.assertions.fddReaderCannotInsert = clickHouseMustFail('INSERT INTO telemetry_history.observations (observation_id) VALUES (generateUUIDv4())', 'fdd_service_reader');
   report.assertions.cubeCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'cube_analytics_reader');
 
   report.status = 'passed';
