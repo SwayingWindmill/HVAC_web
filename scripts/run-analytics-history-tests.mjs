@@ -33,6 +33,7 @@ const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
 const forecastPostgresDSN = `postgres://forecast_runtime:forecast-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const optimizationPostgresDSN = `postgres://optimization_runtime:optimization-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const fddPostgresDSN = `postgres://fdd_runtime:fdd-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
+const mvPostgresDSN = `postgres://mv_runtime:mv-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -663,6 +664,49 @@ try {
   });
   for (const name of ['TestPostgresServicePersistsAuthoritativeHistoryFinding', 'TestPostgresFDDRuntimeWorksItsScheduledEvaluations']) {
     if (!report.assertions.fddFindingPersistence.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
+  }
+
+  // M&V keeps one reporting measure per Site, verifies each settled day once and works its
+  // MV_EVALUATION job as mv_runtime; it reads complete hours of released Metrics as mv_service_reader.
+  const mvJobId = '01990000-1995-7000-8000-000000000001';
+  psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
+    VALUES ('${mvJobId}', 'SCHEDULE', 'MV_EVALUATION', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', now(), 'mv-integration-scheduled-evaluation', '{}'::jsonb, 'READY', 3, 300, now(), now())`);
+  const mvHour = (id, code, start, revision, value) => `(toUUID('01990000-2850-7000-8000-00000000000${id}'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2800-7000-8000-00000000001${id}'), toUUID('01990000-2810-7000-8000-00000000001${id}'), '${code}', 1,
+     toUUID('01990000-2820-7000-8000-00000000001${id}'), 1, toDateTime64('${start}', 3, 'UTC'), toDateTime64('${start}', 3, 'UTC') + INTERVAL 1 HOUR, toDateTime64('2026-08-28 00:00:0${revision}', 3, 'UTC'),
+     'HOUR', 'NUMBER', '${value}', ${value}, NULL, NULL, 'kWh', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-00000000001${id}'), ${revision}, '{"source":"metric-owner"}')`;
+  clickHouse(`INSERT INTO analytics.metric_result_facts (
+    result_id, tenant_id, site_id, subject_type, subject_id,
+    metric_id, metric_version_id, metric_code, metric_version,
+    metric_binding_id, binding_version, period_start, period_end, calculated_at,
+    granularity, value_type, value_json, value_number, value_string, value_boolean,
+    unit, quality, completeness, calculation_run_id, revision, provenance
+  ) VALUES ${[
+    mvHour(1, 'hourly_energy', '2026-08-27 00:00:00', 1, 210),
+    mvHour(2, 'hourly_cooling', '2026-08-27 00:00:00', 1, 740),
+    mvHour(3, 'hourly_energy', '2026-08-27 01:00:00', 1, 230),
+    mvHour(4, 'hourly_energy', '2026-08-27 01:00:00', 2, 190),
+    mvHour(5, 'hourly_cooling', '2026-08-27 01:00:00', 1, 700),
+    mvHour(6, 'hourly_energy', '2026-08-27 02:00:00', 1, 200),
+  ].join(',\n')}`);
+  const mvTests = ['TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours'];
+  report.assertions.mvSavingsVerification = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/mv-service',
+    'test', '-count=1', '-run', mvTests.join('|'), '-v', './internal/mv/...',
+  ], {
+    env: {
+      ...process.env,
+      MV_POSTGRES_INTEGRATION_DSN: mvPostgresDSN,
+      MV_POSTGRES_INTEGRATION_TENANT_ID: '018f1d00-0000-7000-8000-000000000001',
+      MV_POSTGRES_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000001',
+      MV_POSTGRES_INTEGRATION_ACTOR_ID: '018f1f00-0000-7000-8000-000000000001',
+      MV_POSTGRES_INTEGRATION_JOB_ID: mvJobId,
+      MV_CLICKHOUSE_INTEGRATION_URL: clickHouseURL,
+    },
+  });
+  for (const name of mvTests) {
+    if (!report.assertions.mvSavingsVerification.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
   }
 
   const forecastJobId = '01990000-1700-7000-8000-000000000001';

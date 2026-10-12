@@ -259,6 +259,9 @@ func (service *Service) fit(ctx context.Context, measure Measure, from, to time.
 	return FitBaseline(samples, from, to), nil
 }
 
+// SettlingDelay is how long after a Site-local day ends its hourly Metrics are taken as released.
+const SettlingDelay = time.Hour
+
 // VerifyDay verifies the Site-local day starting at dayStart for a measure with a trusted baseline.
 func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart time.Time) error {
 	if measure.ImplementedAt == nil || measure.Baseline == nil || !measure.Baseline.Trusted {
@@ -268,7 +271,10 @@ func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart
 	if err != nil {
 		return fmt.Errorf("read import tariff: %w", err)
 	}
-	local := dayStart.In(tariff.Location)
+	return service.verifyDay(ctx, measure, tariff, dayStart.In(tariff.Location))
+}
+
+func (service *Service) verifyDay(ctx context.Context, measure Measure, tariff SiteTariff, local time.Time) error {
 	dayEnd := local.AddDate(0, 0, 1)
 	if measure.EndedAt != nil && measure.EndedAt.Before(dayEnd) {
 		dayEnd = *measure.EndedAt
@@ -282,4 +288,48 @@ func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart
 		MeasureID: measure.ID, TenantID: measure.TenantID, SiteID: measure.SiteID,
 		Day: local.Format(time.DateOnly), DayResult: result, VerifiedAt: service.now().UTC(),
 	})
+}
+
+// VerifyDueDays verifies every Site-local day with reporting hours that settled by until and has no
+// result yet, for each measure on the Site with a trusted baseline. A missed run is caught up here.
+func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID string, until time.Time) error {
+	measures, err := service.store.Measures(ctx, tenantID, siteID)
+	if err != nil {
+		return err
+	}
+	var tariff *SiteTariff
+	for _, measure := range measures {
+		if measure.ImplementedAt == nil || measure.Baseline == nil || !measure.Baseline.Trusted {
+			continue
+		}
+		if tariff == nil {
+			imported, err := service.tariffs.ImportTariff(ctx, tenantID, siteID)
+			if err != nil {
+				return fmt.Errorf("read import tariff: %w", err)
+			}
+			tariff = &imported
+		}
+		results, err := service.store.DailyResults(ctx, tenantID, siteID, measure.ID)
+		if err != nil {
+			return err
+		}
+		verified := make(map[string]bool, len(results))
+		for _, result := range results {
+			verified[result.Day] = true
+		}
+		reporting := measure.ImplementedAt.Add(StabilizationPeriod).In(tariff.Location)
+		day := time.Date(reporting.Year(), reporting.Month(), reporting.Day(), 0, 0, 0, 0, tariff.Location)
+		for ; !day.AddDate(0, 0, 1).After(until.Add(-SettlingDelay)); day = day.AddDate(0, 0, 1) {
+			if measure.EndedAt != nil && !day.Before(*measure.EndedAt) {
+				break
+			}
+			if verified[day.Format(time.DateOnly)] {
+				continue
+			}
+			if err := service.verifyDay(ctx, measure, *tariff, day); err != nil {
+				return fmt.Errorf("verify %s for measure %s: %w", day.Format(time.DateOnly), measure.ID, err)
+			}
+		}
+	}
+	return nil
 }

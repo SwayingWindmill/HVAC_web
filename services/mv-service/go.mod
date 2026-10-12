@@ -2,7 +2,10 @@ module github.com/quanlaihe/hvac-web/services/mv-service
 
 go 1.25.12
 
-require github.com/jackc/pgx/v5 v5.9.2
+require (
+	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

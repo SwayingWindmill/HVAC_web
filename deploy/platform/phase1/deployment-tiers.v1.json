@@ -24,9 +24,9 @@
       "purpose": "Local or hosted MQTT connectivity is optional. Backend/UI and core data services do not require this profile."
     },
     "intelligence": {
-      "services": ["forecast-service", "optimization-service", "fdd-service", "operations-agent-service"],
+      "services": ["forecast-service", "optimization-service", "fdd-service", "mv-service", "operations-agent-service"],
       "optional": true,
-      "purpose": "Forecast, optimization, FDD and the Operations Agent (Ask AI) are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
+      "purpose": "Forecast, optimization, FDD, M&V and the Operations Agent (Ask AI) are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
     },
     "observability-core": {
       "services": ["prometheus", "node-exporter", "grafana"],
@@ -118,6 +118,7 @@
         "OPERATIONS_AGENT_CPUS": "0.5",
         "FORECAST_SERVICE_CPUS": "0.5",
         "OPTIMIZATION_SERVICE_CPUS": "0.5",
+        "FDD_SERVICE_CPUS": "0.25",
         "CONNECTIVITY_CPUS": "1",
         "TELEMETRY_WORKER_CPUS": "1.5",
         "CUBE_CPUS": "0.5",
@@ -152,6 +153,7 @@
         "OPERATIONS_AGENT_CPUS": "0.5",
         "FORECAST_SERVICE_CPUS": "0.5",
         "OPTIMIZATION_SERVICE_CPUS": "0.5",
+        "FDD_SERVICE_CPUS": "0.25",
         "CONNECTIVITY_CPUS": "1",
         "TELEMETRY_WORKER_CPUS": "1.5",
         "CUBE_CPUS": "0.5",

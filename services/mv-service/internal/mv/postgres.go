@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
@@ -33,7 +34,9 @@ func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
 
 func (store *PostgresStore) Close() { store.pool.Close() }
 
-func (store *PostgresStore) Pool() *pgxpool.Pool { return store.pool }
+func (store *PostgresStore) EvaluationQueue() (*schedulerjob.Queue, error) {
+	return schedulerjob.NewQueue(store.pool, EvaluationJobType)
+}
 
 // scoped runs work in a transaction bound to one Tenant and Site.
 func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string, readOnly bool, work func(pgx.Tx) error) error {

@@ -134,6 +134,7 @@ const env = {
     FORECAST_POSTGRES_DSN: databaseUrl('forecast_runtime', 'hvac_s1'),
     OPTIMIZATION_POSTGRES_DSN: databaseUrl('optimization_runtime', 'hvac_s1'),
     FDD_DATABASE_URL: databaseUrl('fdd_runtime', 'hvac_s1'),
+    MV_DATABASE_URL: databaseUrl('mv_runtime', 'hvac_s1'),
     OPERATIONS_AGENT_DATABASE_URL: databaseUrl('operations_agent_operations_runtime', 'hvac_operations_agent'),
     OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL: databaseUrl('operations_agent_checkpoints_runtime', 'hvac_operations_agent'),
   } : {}),
@@ -182,7 +183,7 @@ const runtimeServices = [
   'scheduler',
   'maintenance',
   ...(integration ? ['connectivity'] : []),
-  ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service', 'operations-agent-service'] : []),
+  ...(intelligence ? ['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'operations-agent-service'] : []),
 ];
 
 if (sourceDeploy) {

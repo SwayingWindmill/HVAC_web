@@ -46,6 +46,7 @@
       "forecast-service",
       "optimization-service",
       "fdd-service",
+      "mv-service",
       "operations-agent-service"
     ],
     "requiredStartupOneShot": [

@@ -191,7 +191,7 @@ local-postgres      = Stage 1 local PostgreSQL placement
 local-clickhouse    = Stage 1 local ClickHouse placement
 local-redis         = Stage 1 local Redis placement
 integration         = connectivity + mqtt-broker
-intelligence        = forecast-service + optimization-service + fdd-service
+intelligence        = forecast-service + optimization-service + fdd-service + mv-service
 ```
 
 Select the deployment tier in the runtime environment; do not pass an observability profile separately:

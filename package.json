@@ -106,7 +106,7 @@
     "mqtt:acl:integration": "node scripts/run-mqtt-broker-acl-tests.mjs",
     "mqtt:e2e:integration": "node scripts/run-mqtt-e2e-tests.mjs",
     "test:gateway": "node scripts/run-go.mjs test ./cmd/energy-api/...",
-    "test:analytics": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/intelligencemodel/... ./modules/energy/... ./modules/telemetry/... ./modules/metric/... ./modules/scheduler/... ./cmd/metric-worker/... ./services/forecast-service/... ./services/optimization-service/... ./services/fdd-service/...",
+    "test:analytics": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/intelligencemodel/... ./modules/energy/... ./modules/telemetry/... ./modules/metric/... ./modules/scheduler/... ./cmd/metric-worker/... ./services/forecast-service/... ./services/optimization-service/... ./services/fdd-service/... ./services/mv-service/...",
     "analytics:history:check": "node scripts/check-analytics-history.mjs",
     "analytics:history:integration": "node scripts/run-analytics-history-tests.mjs && node scripts/run-analytics-cube-tests.mjs",
     "test:analytics-gateway": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./modules/iam/... ./cmd/energy-api/... ./modules/telemetry/...",

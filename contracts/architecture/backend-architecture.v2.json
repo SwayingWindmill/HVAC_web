@@ -104,11 +104,11 @@
     "pattern": "PostgreSQL PERSISTING -> ClickHouse by stable run/result identity -> PostgreSQL PERSISTED + durable Outbox; stale PERSISTING is reconciled by proving ClickHouse evidence"
   },
   "physicalPhase1": {
-    "recommended": ["energy-api", "connectivity", "telemetry-worker", "metric-worker", "forecast-service", "optimization-service", "fdd-service"],
+    "recommended": ["energy-api", "connectivity", "telemetry-worker", "metric-worker", "forecast-service", "optimization-service", "fdd-service", "mv-service"],
     "defaultBusinessDeployables": ["energy-api", "connectivity", "telemetry-worker", "metric-worker"],
     "defaultSupportingWorkloads": ["scheduler", "maintenance"],
     "identityInfrastructure": ["identity-service"],
-    "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service"],
+    "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service", "mv-service"],
     "runtimeInventory": "deploy/platform/phase1/runtime-inventory.v1.json",
     "infrastructure": ["PostgreSQL", "ClickHouse", "Redis", "Object Storage", "MQTT Broker", "Centrifugo", "Identity Provider (identity-service)"],
     "currentDeployment": "deploy/platform/phase1/compose.yaml",

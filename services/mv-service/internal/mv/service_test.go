@@ -228,3 +228,37 @@ func TestAVerifiedDayRecordsAvoidedEnergyAndCostOnce(t *testing.T) {
 		t.Fatalf("avoided cost %v for %v kWh", cost, results[0].AvoidedKWh)
 	}
 }
+
+func TestTheDailyRunVerifiesEachSettledDayOnce(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+	// Reporting starts 10-16 09:00 after the stabilization day; at 10-20 02:00 the days through 10-19 have settled.
+	for range 2 {
+		if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 20, 2, 0, 0, 0, shanghai)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var days []string
+	for _, result := range store.results[measure.ID] {
+		days = append(days, result.Day)
+	}
+	if len(days) != 4 || days[0] != "2026-10-16" || days[3] != "2026-10-19" || store.results[measure.ID][0].ExpectedHours != 15 {
+		t.Fatalf("verified days = %v", store.results[measure.ID])
+	}
+
+	if _, err := service.End(t.Context(), testTenant, testSite, measure.ID, time.Date(2026, 10, 20, 12, 0, 0, 0, shanghai), testActor); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 23, 2, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	results := store.results[measure.ID]
+	if last := results[len(results)-1]; len(results) != 5 || last.Day != "2026-10-20" || last.ExpectedHours != 12 {
+		t.Fatalf("after ending = %+v", results)
+	}
+}
