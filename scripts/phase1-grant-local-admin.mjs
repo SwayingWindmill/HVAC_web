@@ -32,6 +32,7 @@ SELECT
   p.id,
   ARRAY[
     'analytics.energy-series.read',
+    'savings.manage',
     'telemetry.batch.read',
     'telemetry.history.read',
     'telemetry.recovery.checkpoint',

@@ -247,6 +247,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchOperationsRoute(h, writer, request, operationsRoute)
 			return
 		}
+		if savingsRoute, matches := matchPublicSavingsRoute(request.Method, request.URL.Path); matches {
+			dispatchSavingsRoute(h, writer, request, savingsRoute)
+			return
+		}
 		if intelligenceRoute, matches := matchPublicIntelligenceRoute(request.Method, request.URL.Path); matches {
 			dispatchIntelligenceRoute(h, writer, request, intelligenceRoute)
 			return

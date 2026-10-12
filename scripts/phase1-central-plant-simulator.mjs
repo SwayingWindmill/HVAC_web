@@ -552,6 +552,69 @@ VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-wat
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
+// Savings verification (ADR 0021) fits plant electricity against cooling delivered, hour by hour:
+// two hourly counter-delta Metrics per Site, up to fourteen days backfilled from telemetry
+// history so a measure has its baseline period, and a daily MV_EVALUATION at 02:00 Site time.
+function buildSavingsSeed(site, points) {
+  const { tenantId, siteId } = site;
+  const ids = buildIdentities(site, points);
+  const energyPointId = ids.pointIdByRef.get('METER-HVAC-TOTAL/hvac_meter.energy');
+  const coolingPointId = ids.pointIdByRef.get('BTU-METER-01/btu_meter.accumulated_cooling_energy');
+  if (!energyPointId || !coolingPointId) throw new Error('the HVAC total meter energy and BTU cooling energy points are required for savings verification');
+  let tenantSequence = 0x830000000001;
+  const tenantID = () => localUUID(tenantSequence++);
+  let siteSequence = 0x840000000001;
+  const siteID = () => siteUUID(site, siteSequence++);
+  const metrics = [
+    { code: 'hourly_energy', name: '冷站逐时用电量', dependency: 'site_energy', pointId: energyPointId },
+    { code: 'hourly_cooling', name: '冷站逐时供冷量', dependency: 'site_cooling', pointId: coolingPointId },
+  ].map((metric) => ({ ...metric, metricId: tenantID(), versionId: tenantID(), dependencyId: tenantID(), bindingId: siteID(), scheduleId: siteID() }));
+  const evaluationScheduleId = siteID();
+  const t = sqlLiteral(tenantId);
+  const st = sqlLiteral(siteId);
+  const id = sqlLiteral;
+  // A backfill job id is a UUIDv7 stamped now, with the rest drawn from the job's dedup key.
+  const backfillJobId = String.raw`regexp_replace(lpad(to_hex((extract(epoch FROM clock_timestamp()) * 1000)::bigint), 12, '0') || '7' || substr(md5(dedup), 1, 3) || '8' || substr(md5(dedup), 4, 15), '^(.{8})(.{4})(.{4})(.{4})(.{12})$', '\1-\2-\3-\4-\5')::uuid`;
+  return `BEGIN;
+INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at) VALUES
+${metrics.map((metric) => `  (${id(metric.metricId)}, ${t}, ${id(metric.code)}, ${id(metric.name)}, 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at) VALUES
+${metrics.map((metric) => `  (${id(metric.versionId)}, ${t}, ${id(metric.metricId)}, 1, 'kWh', 'NUMBER', 'SITE', 'HOUR', 'LAST', 'DELTA', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+${metrics.map((metric) => `INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
+SELECT ${id(metric.dependencyId)}::uuid, ${t}::uuid, ${id(metric.versionId)}::uuid, 'POINT', ${id(metric.dependency)}, NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
+WHERE EXISTS (SELECT 1 FROM core_registry.metric_versions WHERE id = ${id(metric.versionId)} AND status = 'DRAFT')
+ON CONFLICT (id) DO NOTHING;`).join('\n')}
+UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
+WHERE id IN (${metrics.map((metric) => id(metric.versionId)).join(', ')}) AND status = 'DRAFT';
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at) VALUES
+${metrics.map((metric) => `  (${id(metric.bindingId)}, ${t}, ${st}, ${id(metric.versionId)}, ${id(metric.metricId)}, 1, 1, 'SITE', ${st}, 'HOUR', ${id(JSON.stringify({ points: { [metric.dependency]: metric.pointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
+${metrics.map((metric) => `  (${id(metric.scheduleId)}, ${id(`${metric.code.replace('_', '-')}-${site.siteCode}`)}, ${id(`${metric.name}（每小时）`)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '5 * * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: metric.bindingId }))}, date_trunc('hour', clock_timestamp()) + interval '65 minutes')`).join(',\n')},
+  (${id(evaluationScheduleId)}, ${id(`savings-verification-${site.siteCode}`)}, '节能量核算（每日 02:00）', ${t}, ${st}, 'MV_EVALUATION', 'CRON', '0 2 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 300, '{}',
+    (date_trunc('day', clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 day 2 hours') AT TIME ZONE 'Asia/Shanghai')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+WITH hours AS (
+  -- Telemetry starts once the Site's devices are registered; an earlier hour has nothing to count.
+  SELECT generate_series(
+    GREATEST(date_trunc('hour', clock_timestamp()) - interval '14 days', (SELECT date_trunc('hour', min(created_at)) + interval '1 hour' FROM core_registry.devices WHERE site_id = ${st})),
+    date_trunc('hour', clock_timestamp()) - interval '2 hours', interval '1 hour') AS period_start
+), plan AS (
+  SELECT binding.id AS binding_id, hours.period_start,
+         'savings-backfill-' || binding.id || '-' || to_char(hours.period_start AT TIME ZONE 'UTC', 'YYYYMMDDHH24') AS dedup
+  FROM hours CROSS JOIN (VALUES ${metrics.map((metric) => `(${id(metric.bindingId)})`).join(', ')}) AS binding(id)
+)
+INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, priority, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
+SELECT ${backfillJobId}, 'BACKFILL', 'METRIC_BACKFILL', ${t}, ${st}, period_start + interval '1 hour', 20, dedup,
+       jsonb_build_object('bindingId', binding_id, 'periodStart', period_start, 'periodEnd', period_start + interval '1 hour'),
+       'READY', 3, 60, clock_timestamp(), clock_timestamp()
+FROM plan
+ON CONFLICT (dedup_key) DO NOTHING;
+COMMIT;`;
+}
+
 function localAdminPrincipalId() {
   if (!existsSync(reconciliationPath)) throw new Error('identity-reconcile.json is required before simulator authorization bootstrap');
   const reconciliation = JSON.parse(readFileSync(reconciliationPath, 'utf8'));
@@ -763,6 +826,7 @@ for (const site of localSites) {
   psql('hvac_s1', buildForecastSeed(site, seededPoints));
   psql('hvac_s1', buildOptimizationSeed(site, seededPoints));
   psql('hvac_s1', buildDiagnosisSeed(site, seededPoints));
+  psql('hvac_s1', buildSavingsSeed(site, seededPoints));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);

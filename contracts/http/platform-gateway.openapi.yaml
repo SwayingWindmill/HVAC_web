@@ -1660,6 +1660,71 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/savings/measures": {
+      "get": {
+        "operationId": "listSiteSavingsMeasuresV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      },
+      "post": {
+        "operationId": "registerSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["name", "kind", "plannedAt"], "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 100 }, "kind": { "type": "string", "enum": ["SETPOINT_RESET", "CONTROL_SEQUENCE", "EQUIPMENT_RETROFIT", "OPERATING_SCHEDULE", "OTHER"] }, "description": { "type": "string", "maxLength": 2000 }, "plannedAt": { "type": "string", "format": "date-time" }, "investmentCny": { "type": "number", "minimum": 0 }, "expectedAnnualKWh": { "type": "number", "minimum": 0 }, "evidence": { "type": "string", "maxLength": 200 } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}": {
+      "get": {
+        "operationId": "getSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/implement": {
+      "post": {
+        "operationId": "implementSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["implementedAt"], "properties": { "implementedAt": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/refit": {
+      "post": {
+        "operationId": "refitSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": { "from": { "type": "string", "format": "date-time" }, "to": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/end": {
+      "post": {
+        "operationId": "endSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["endedAt"], "properties": { "endedAt": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/summary": {
+      "get": {
+        "operationId": "getSiteSavingsSummaryV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } }, { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/optimization/recommendations/latest": {
       "get": {
         "operationId": "getLatestSiteOptimizationRecommendationV212",
@@ -2232,7 +2297,8 @@
           "audit.read",
           "iam.admin",
           "api-credential.manage",
-          "rule.manage"
+          "rule.manage",
+          "savings.manage"
         ]
       },
       "EffectiveAuthorization": {
@@ -2247,7 +2313,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 12
+            "const": 13
           },
           "policyRevision": {
             "type": "string",

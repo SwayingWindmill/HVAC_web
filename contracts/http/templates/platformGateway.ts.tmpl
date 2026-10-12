@@ -31,6 +31,12 @@ export const intelligencePaths = {
   siteLoadForecast: '__SITE_LOAD_FORECAST_PATH__',
   siteFddFindings: '__SITE_FDD_FINDINGS_PATH__',
   siteFddLowDeltaT: '__SITE_FDD_LOW_DELTA_T_PATH__',
+  siteSavingsMeasures: '__SITE_SAVINGS_MEASURES_PATH__',
+  siteSavingsMeasure: '__SITE_SAVINGS_MEASURE_PATH__',
+  siteSavingsImplement: '__SITE_SAVINGS_IMPLEMENT_PATH__',
+  siteSavingsRefit: '__SITE_SAVINGS_REFIT_PATH__',
+  siteSavingsEnd: '__SITE_SAVINGS_END_PATH__',
+  siteSavingsSummary: '__SITE_SAVINGS_SUMMARY_PATH__',
   optimizationRuns: '__OPTIMIZATION_RUNS_PATH__',
   latestOptimizationRecommendation: '__LATEST_OPTIMIZATION_RECOMMENDATION_PATH__',
 } as const;
@@ -67,10 +73,10 @@ export const capabilitySchema = z.enum([
   'template.manage', 'registry.import', 'registry.retire',
   'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
   'alarm.list', 'alarm.read', 'alarm.assign', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle',
-  'session.revoke', 'audit.read', 'iam.admin', 'api-credential.manage', 'rule.manage',
+  'session.revoke', 'audit.read', 'iam.admin', 'api-credential.manage', 'rule.manage', 'savings.manage',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(12),
+  capabilitySetVersion: z.literal(13),
   policyRevision: z.string().min(1).max(128),
   capabilities: z.array(capabilitySchema).max(33).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',

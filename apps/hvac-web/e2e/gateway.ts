@@ -100,6 +100,8 @@ export class Gateway {
   tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
   nextRecommendation: Json | null = null;
+  /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
+  readonly measures: Json[] = [];
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -153,6 +155,51 @@ export class Gateway {
     return { status: 'FINDING', deltaTC: finding.observedValue, finding };
   }
 
+  // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
+  // implementation time, and only one measure on the Site reports at a time.
+  private savings(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const base = `/api/v1/sites/${SITE_ID}/savings`;
+    const refuse = (status: number, code: string) => ({ status, body: { type: 'about:blank', title: 'Savings request refused', status, detail: code, instance: path, code, traceId: '0'.repeat(32), retryable: false } });
+    if (method === 'GET' && path === `${base}/measures`) return { body: { items: this.measures.map(({ days: _days, ...measure }) => measure) } };
+    if (method === 'GET' && path === `${base}/summary`) {
+      const from = query.get('from')!;
+      const to = query.get('to')!;
+      const days = this.measures.flatMap((measure) => measure.days).filter((day: Json) => day.day >= from && day.day <= to);
+      return { body: { from, to, totals: totalsOf(days) } };
+    }
+    if (method === 'POST' && path === `${base}/measures`) {
+      const measure = {
+        id: `01a12ef8-0000-7000-8000-${String(this.measures.length + 1).padStart(12, '0')}`, siteId: SITE_ID, name: body?.name, kind: body?.kind,
+        description: body?.description ?? '', evidence: body?.evidence ?? '', status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
+        investmentCny: body?.investmentCny ?? null, expectedAnnualKWh: body?.expectedAnnualKWh ?? null, baseline: null, totals: totalsOf([]), days: [],
+        createdAt: now, updatedAt: now,
+      };
+      this.measures.unshift(measure);
+      return { status: 201, body: measure };
+    }
+    const match = path.match(new RegExp(`^${base}/measures/([^/]+)(?:/(implement|refit|end))?$`));
+    const measure = match ? this.measures.find((candidate) => candidate.id === match[1]) : undefined;
+    if (!match) return undefined;
+    if (!measure) return refuse(404, 'RESOURCE_NOT_FOUND');
+    if (method === 'GET' && !match[2]) return { body: measure };
+    if (method !== 'POST') return undefined;
+    if (match[2] === 'implement') {
+      if (measure.status !== 'PLANNED') return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
+      if (this.measures.some((other) => other.status === 'IMPLEMENTED')) return refuse(409, 'SAVINGS_REPORTING_OVERLAP');
+      const recorded = fixture<Json>('savings-measure.json').baseline;
+      Object.assign(measure, {
+        status: 'IMPLEMENTED', implementedAt: body?.implementedAt, updatedAt: now,
+        baseline: { ...recorded, from: new Date(Date.parse(body?.implementedAt) - 14 * DAY_MS).toISOString(), to: body?.implementedAt },
+      });
+    } else if (match[2] === 'end') {
+      if (measure.status !== 'IMPLEMENTED') return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
+      Object.assign(measure, { status: 'ENDED', endedAt: body?.endedAt, updatedAt: now });
+    } else {
+      return measure.days.length > 0 ? refuse(409, 'SAVINGS_BASELINE_LOCKED') : undefined;
+    }
+    return { body: measure };
+  }
+
   // The page names each request by its position in the batch, so recorded items answer by Device.
   private snapshotBatch(body: Json): Json {
     const items = body.requests.map((request: Json) => {
@@ -193,6 +240,7 @@ export class Gateway {
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
+    if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'POST' && path === '/api/v1/analytics/energy-series' && this.analyticsDenied) {
       return { status: 403, body: { type: 'about:blank', title: 'Analytics access denied', status: 403, detail: 'The requested Site is not authorized for Energy Analytics.', instance: path, code: 'ANALYTICS_ACCESS_DENIED', traceId: '0'.repeat(32), retryable: false } };
     }
@@ -285,6 +333,11 @@ export class Gateway {
     order.updatedAt = now;
     order.timeline.push({ operation, toStatus, reason: reason ?? '', actorType: 'PRINCIPAL', actorId: MY_ID, occurredAt: now, version: order.version });
   }
+}
+
+function totalsOf(days: Json[]): Json {
+  const sum = (key: string) => days.reduce((total, day) => total + day[key], 0);
+  return { days: days.length, adjustedBaselineKWh: sum('adjustedBaselineKWh'), actualKWh: sum('actualKWh'), avoidedKWh: sum('avoidedKWh'), avoidedCost: sum('avoidedCost') };
 }
 
 function bodyOf(request: Request): Json | null {

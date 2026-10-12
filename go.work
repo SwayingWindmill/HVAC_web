@@ -37,6 +37,7 @@ use (
 	./modules/command
 	./services/forecast-service
 	./services/fdd-service
+	./services/mv-service
 	./modules/iam
 	./services/identity-service
 	./services/optimization-service
