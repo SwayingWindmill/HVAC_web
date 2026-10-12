@@ -61,6 +61,7 @@ type resolveResponse struct {
 	EnergyType        string     `json:"energyType"`
 	MeterRole         string     `json:"meterRole"`
 	Direction         string     `json:"direction"`
+	AccountingScope   string     `json:"accountingScope"`
 	DeviceID          string     `json:"deviceId"`
 	PointID           string     `json:"pointId"`
 	PointType         string     `json:"pointType"`
@@ -130,7 +131,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 		Status: energy.BindingResolutionStatus(decoded.Status), TenantID: decoded.TenantID, SiteID: decoded.SiteID,
 		MeterID: decoded.MeterID, MeterBindingID: decoded.MeterBindingID, TopologyVersionID: decoded.TopologyVersionID,
 		BindingVersion: uint64(decoded.BindingVersion), BindingRevision: uint64(decoded.BindingRevision), EnergyTypeID: decoded.EnergyTypeID, EnergyType: decoded.EnergyType,
-		MeterRole: decoded.MeterRole, Direction: decoded.Direction, DeviceID: decoded.DeviceID, PointID: decoded.PointID,
+		MeterRole: decoded.MeterRole, Direction: decoded.Direction, AccountingScope: decoded.AccountingScope, DeviceID: decoded.DeviceID, PointID: decoded.PointID,
 		PointType: decoded.PointType, EffectiveFrom: decoded.EffectiveFrom, EffectiveTo: decoded.EffectiveTo,
 	}, nil
 }

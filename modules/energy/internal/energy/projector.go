@@ -23,6 +23,10 @@ const (
 
 	EnergyTypeElectricity = "electricity"
 	MeterRolePrimary      = "PRIMARY"
+	// A SITE fact counts toward the Site's total; a BRANCH fact is a sub-meter of one piece of
+	// equipment, already inside that total.
+	AccountingScopeSite   = "SITE"
+	AccountingScopeBranch = "BRANCH"
 	PointTypeCounter      = "COUNTER"
 
 	TransitionIncrease         TransitionType = "INCREASE"
@@ -113,6 +117,7 @@ type BindingResolution struct {
 	EnergyType        string
 	MeterRole         string
 	Direction         string
+	AccountingScope   string
 	DeviceID          string
 	PointID           string
 	PointType         string
@@ -132,6 +137,7 @@ type EnergyIntervalFact struct {
 	EnergyType             string         `json:"energy_type"`
 	MeterRole              string         `json:"meter_role"`
 	Direction              string         `json:"direction"`
+	AccountingScope        string         `json:"accounting_scope"`
 	DeviceID               string         `json:"device_id"`
 	PointID                string         `json:"point_id"`
 	SensorID               *string        `json:"sensor_id,omitempty"`
@@ -329,6 +335,7 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 		EnergyType:             binding.EnergyType,
 		MeterRole:              binding.MeterRole,
 		Direction:              binding.Direction,
+		AccountingScope:        binding.AccountingScope,
 		DeviceID:               delta.DeviceID,
 		PointID:                delta.PointID,
 		SensorID:               sensorID,
@@ -409,6 +416,9 @@ func validateBindingResolution(delta CounterDelta, binding BindingResolution) er
 	}
 	if binding.MeterRole != MeterRolePrimary || binding.PointType != PointTypeCounter {
 		return errors.New("binding snapshot is not a released PRIMARY counter")
+	}
+	if binding.AccountingScope != AccountingScopeSite && binding.AccountingScope != AccountingScopeBranch {
+		return errors.New("binding snapshot accounting scope is unknown")
 	}
 	if binding.EffectiveFrom.IsZero() || delta.CurrentSampledAt.Before(binding.EffectiveFrom) || (binding.EffectiveTo != nil && !delta.CurrentSampledAt.Before(*binding.EffectiveTo)) {
 		return errors.New("binding snapshot is outside its effective interval")

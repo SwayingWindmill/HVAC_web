@@ -34,7 +34,7 @@ func TestBuildFactUsesCanonicalDeltaAndBindingSnapshot(t *testing.T) {
 	if fact.FactID != testCurrentObservation || fact.EnergyType != EnergyTypeElectricity || fact.EnergyKWh != 2.75 {
 		t.Fatalf("fact=%#v", fact)
 	}
-	if fact.MeterBindingID != testBindingID || fact.TelemetryKey != "site.energy.total" || fact.FactRevision != 0 {
+	if fact.MeterBindingID != testBindingID || fact.TelemetryKey != "site.energy.total" || fact.FactRevision != 0 || fact.AccountingScope != AccountingScopeSite {
 		t.Fatalf("fact=%#v", fact)
 	}
 	if fact.Quality != FactQualityValid || fact.DatasetRevision != 1722258003000 || fact.SourceOffset != 1722258003000 {
@@ -44,6 +44,14 @@ func TestBuildFactUsesCanonicalDeltaAndBindingSnapshot(t *testing.T) {
 		!fact.PeriodEnd.Equal(time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)) ||
 		!fact.DataWatermark.Equal(fact.PeriodEnd) || !fact.ProjectedAt.Equal(projectedAt) {
 		t.Fatalf("fact=%#v", fact)
+	}
+}
+
+func TestBuildFactRejectsABindingWithoutAnAccountingScope(t *testing.T) {
+	binding := validBinding()
+	binding.AccountingScope = ""
+	if _, err := BuildFact(validDelta(), binding, time.Now()); err == nil {
+		t.Fatal("BuildFact() error = nil")
 	}
 }
 
@@ -206,7 +214,7 @@ func validBinding() BindingResolution {
 		Status: BindingMatch, TenantID: testTenantID, SiteID: testSiteID, MeterID: testMeterID,
 		MeterBindingID: testBindingID, TopologyVersionID: testTopologyVersionID, BindingVersion: 4,
 		EnergyTypeID: testEnergyTypeID, EnergyType: EnergyTypeElectricity, MeterRole: MeterRolePrimary,
-		Direction: "IMPORT", DeviceID: testDeviceID, PointID: testPointID, PointType: PointTypeCounter,
+		Direction: "IMPORT", AccountingScope: AccountingScopeSite, DeviceID: testDeviceID, PointID: testPointID, PointType: PointTypeCounter,
 		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
