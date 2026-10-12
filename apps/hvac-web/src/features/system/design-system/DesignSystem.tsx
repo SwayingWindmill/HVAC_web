@@ -94,7 +94,9 @@ function Colours() {
                       <TableCell className="pr-6 text-right">
                         {grade ? (
                           <Badge variant="outline" className={cn('h-5.5 rounded-md border-transparent px-1.5', GRADE_TONE[grade])}>{grade}</Badge>
-                        ) : <span className="text-xs text-muted-foreground">装饰，不要求</span>}
+                        ) : (
+                          <Badge variant="outline" className="h-5.5 rounded-md border-transparent bg-muted px-1.5 text-muted-foreground" title="分隔线不单独标识控件，WCAG 1.4.11 不要求对比度">装饰</Badge>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -215,8 +217,10 @@ function Shape() {
           {RADII.map((radius) => (
             <div key={radius.name} className="flex flex-col gap-2">
               <div className="h-14 border bg-muted/60" style={{ borderRadius: radius.px }} aria-hidden="true" />
-              <code className="font-mono text-xs">--{radius.name} · {radius.px}px</code>
-              <span className="text-xs text-muted-foreground">{radius.use}</span>
+              <span className="flex flex-col gap-0.5">
+                <code className="font-mono text-xs">--{radius.name}</code>
+                <span className="text-xs text-muted-foreground"><span className="tabular-nums">{radius.px}px</span> · {radius.use}</span>
+              </span>
             </div>
           ))}
         </CardContent>

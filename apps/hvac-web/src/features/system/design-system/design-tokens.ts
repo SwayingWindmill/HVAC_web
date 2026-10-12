@@ -24,7 +24,7 @@ export const TOKEN_GROUPS: readonly TokenGroup[] = [
     description: '页面、卡片和侧栏的底色与文字；正文对比度不低于 4.5:1',
     tokens: [
       { name: 'foreground', role: '正文', against: 'background' },
-      { name: 'muted-foreground', role: '辅助文字、标签', against: 'background' },
+      { name: 'muted-foreground', role: '辅助文字', against: 'background' },
       { name: 'card-foreground', role: '卡片文字', against: 'card' },
       { name: 'sidebar-foreground', role: '侧栏文字', against: 'sidebar' },
       { name: 'secondary-foreground', role: '次要按钮文字', against: 'secondary' },
