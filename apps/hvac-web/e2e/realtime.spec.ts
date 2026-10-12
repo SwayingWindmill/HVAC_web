@@ -5,7 +5,7 @@ test('the plant view shows current plant figures from the Snapshot', async ({ pa
   await page.goto(`/operations/realtime?site=${SITE_ID}`);
   const facts = page.getByRole('region', { name: '冷站实时概况' });
   await expect(facts).toContainText('设备在线8 / 8台数据均为最新');
-  await expect(facts).toContainText('主要设备运行4 / 4台冷机、水泵与冷却塔');
+  await expect(facts).toContainText('主要设备运行4 / 4台没有故障或离线设备');
   await expect(facts).toContainText(/冷站 COP\d\.\d{2}/);
   await expect(page.getByRole('row', { name: /ZONE-SENSOR-01/ })).toContainText(/室内温度\s*24\.1\s*°C/);
   // Without a realtime grant the page says it is polling rather than pretending to stream.
