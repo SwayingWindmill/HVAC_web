@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   CalendarCheck2,
+  FileText,
   Gauge,
   LayoutDashboard,
   Lightbulb,
@@ -54,6 +55,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
       { id: 'analytics-demand', title: '需量分析', path: '/energy-analysis/demand', icon: Gauge },
       { id: 'analytics-forecast', title: '负荷预测', path: '/energy-analysis/forecast', icon: TrendingUp },
       { id: 'analytics-optimization', title: '优化建议', path: '/energy-analysis/optimization', icon: Lightbulb },
+      { id: 'reports', title: '月度报告', path: '/reports', icon: FileText },
     ],
   },
   {

@@ -15,7 +15,7 @@ export function wallTime(instant: Date, timeZone: string): WallTime {
 }
 
 /** The instant at which the Site's wall clock shows the given local midnight. */
-function siteMidnight(year: number, month: number, day: number, timeZone: string): Date {
+export function siteMidnight(year: number, month: number, day: number, timeZone: string): Date {
   const guess = Date.UTC(year, month - 1, day);
   const shown = wallTime(new Date(guess), timeZone);
   const offset = Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - guess;
