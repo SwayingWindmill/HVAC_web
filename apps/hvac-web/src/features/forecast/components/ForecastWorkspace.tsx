@@ -4,7 +4,7 @@ import { RefreshCw, TrendingUp } from 'lucide-react';
 import { useMemo } from 'react';
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
-import { PageHeader } from '@/blocks/page-header';
+import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -62,14 +62,14 @@ export function ForecastWorkspace() {
   }, [rows]);
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="负荷预测"
         description={`${site.displayName} · 冷站用电负荷，未来 24 小时，每小时更新`}
         meta={data ? (
-          <Badge variant="outline" className="font-normal">
+          <PageMeta dot={data.quality === 'VALID' ? 'live' : 'warning'}>
             {data.quality === 'VALID' ? '按近 7 天同时段负荷预测' : '历史不足，暂按最近读数延续'}
-          </Badge>
+          </PageMeta>
         ) : undefined}
         actions={
           <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries({ queryKey: ['forecast', site.id] })}>

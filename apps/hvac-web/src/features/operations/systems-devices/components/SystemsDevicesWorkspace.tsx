@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, RefreshCw, Search } from 'lucide-react';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { MetricStrip } from '@/components/analysis/workspace-parts';
+import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -23,7 +23,7 @@ import {
   POWER_KEY,
   ReadingValue,
 } from '../../realtime/device-presentation';
-import { PLANT_CATEGORY_LABELS, type PlantCategory, type PlantDevice } from '../../realtime/plant-model';
+import { equipmentStatus, PLANT_CATEGORY_LABELS, type PlantCategory, type PlantDevice } from '../../realtime/plant-model';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
 import { boundAssetId, deviceLocation, needsAttention } from '../device-ledger';
 import { DeviceInspector } from './DeviceInspector';
@@ -79,21 +79,22 @@ export function SystemsDevicesWorkspace() {
     }))
     .filter((group) => group.devices.length > 0);
   const inspected = plant.devices.find((device) => device.deviceId === search.inspect);
+  const equipment = equipmentStatus(plant);
+  const attention = plant.devices.filter(needsAttention).length;
 
   const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; inspect?: string }) =>
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
-    <Main className="space-y-5">
+    <Main>
       <PageHeader
         title="设备"
+        description={`${site.displayName} · 按系统分组，点击设备查看读数、趋势与工单`}
+        meta={<LiveIndicator mode={mode} />}
         actions={(
-          <div className="flex items-center gap-4">
-            <LiveIndicator mode={mode} />
-            <Button variant="outline" size="sm" onClick={refresh}>
-              <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
+          </Button>
         )}
       />
 
@@ -121,14 +122,32 @@ export function SystemsDevicesWorkspace() {
 
       {!loading && plant.devices.length > 0 ? (
         <>
-          <MetricStrip
-            items={[
-              { label: '设备', value: plant.devices.length, unit: '台' },
-              { label: '在线', value: plant.onlineCount, unit: '台' },
-              { label: '运行', value: plant.devices.filter((device) => device.runState === 'RUNNING').length, unit: '台' },
-              { label: '需关注', value: plant.devices.filter(needsAttention).length, unit: '台' },
-            ]}
-          />
+          <MetricGrid ariaLabel="设备概况">
+            <MetricCard
+              label="设备"
+              value={<MetricValue value={String(plant.devices.length)} unit="台" />}
+              lead={`主要设备 ${equipment.total} 台 · 计量与环境 ${plant.devices.length - equipment.total} 台`}
+              detail="已登记并接入的冷站设备"
+            />
+            <MetricCard
+              label="在线"
+              value={<MetricValue value={`${plant.onlineCount} / ${plant.devices.length}`} unit="台" />}
+              lead={plant.onlineCount === plant.devices.length ? '全部在线' : `${plant.devices.length - plant.onlineCount} 台离线`}
+              detail="按设备最近一次上报判断"
+            />
+            <MetricCard
+              label="运行"
+              value={<MetricValue value={`${equipment.running} / ${equipment.total}`} unit="台" />}
+              lead={equipment.running === equipment.total ? '主要设备全部运行' : `${equipment.total - equipment.running} 台停机`}
+              detail="冷机、水泵与冷却塔"
+            />
+            <MetricCard
+              label="需关注"
+              value={<MetricValue value={String(attention)} unit="台" />}
+              lead={attention === 0 ? '没有故障、离线或读数过期' : '故障、离线或读数过期'}
+              detail={attention === 0 ? '运行正常' : '在状态中筛选「需关注」'}
+            />
+          </MetricGrid>
 
           <div className="flex flex-wrap items-center gap-3">
             <InputGroup className="w-64">
@@ -164,7 +183,7 @@ export function SystemsDevicesWorkspace() {
             </Select>
           </div>
 
-          <Card>
+          <Card className="py-0">
             <CardContent className="p-0">
               <Table>
                 <TableHeader>

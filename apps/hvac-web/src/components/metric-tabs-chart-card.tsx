@@ -219,7 +219,7 @@ function MetricTabsChartCard({
                   },
                 ]
               : []),
-            { key: active.key, label: active.label, type: "line" as const, color, dots },
+            { key: active.key, label: active.label, type: "area" as const, color, dots },
           ]}
           showGrid={showYAxis}
           showYAxis={showYAxis}

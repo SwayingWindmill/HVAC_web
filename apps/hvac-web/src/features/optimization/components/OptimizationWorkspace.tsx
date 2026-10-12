@@ -215,7 +215,7 @@ export function OptimizationWorkspace() {
     : null;
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="优化建议"
         description={`${site.displayName} · 在安全与舒适约束内，寻找更省电的冷冻水供水温度`}

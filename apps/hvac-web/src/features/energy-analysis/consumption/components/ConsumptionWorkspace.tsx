@@ -145,7 +145,7 @@ export function ConsumptionWorkspace() {
     void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="能耗分析"
         description={`${currentScope.name} · 本期与${previousLabel}对比`}

@@ -336,7 +336,7 @@ export function AlarmsWorkspace() {
 
   return (
     <AlarmActionsContext.Provider value={actions}>
-      <Main className="@container/main flex flex-col gap-4 md:gap-6">
+      <Main>
         <PageHeader
           title="告警"
           description={`${site.displayName} · 严重度优先，其次最近发生`}

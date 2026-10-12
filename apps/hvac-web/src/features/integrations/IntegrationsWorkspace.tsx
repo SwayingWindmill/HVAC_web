@@ -6,7 +6,8 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus } from 'lucide-react';
+import { KeyRound, Plus } from 'lucide-react';
+import { Status, StatusIndicator } from '@/components/ui/status';
 import type { Device } from '@/api/generated/platformGateway.gen';
 import { flattenRegistryPages, useRegistrySites, useRegistryDevices } from '@/api/registry';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
@@ -51,26 +52,27 @@ export function IntegrationsWorkspace() {
   const columns = useMemo<Array<ColumnDef<DataTableFeatures, Device>>>(() => [
     { id: 'name', header: '网关名称', cell: ({ row }) => <span className="font-medium">{row.original.displayName}</span> },
     { id: 'code', header: '业务编码', cell: ({ row }) => row.original.code },
-    { id: 'status', header: '登记状态', cell: ({ row }) => ({ ACTIVE: '已登记', INACTIVE: '已停用', RETIRED: '已退役' })[row.original.status] },
-    { id: 'actions', header: '操作', cell: ({ row }) => <Button size="sm" variant="outline" disabled={row.original.status !== 'ACTIVE'} onClick={() => setSelected(row.original)}>接入凭据</Button>, enableSorting: false, enableHiding: false },
+    { id: 'status', header: '登记状态', cell: ({ row }) => <Status variant={row.original.status === 'ACTIVE' ? 'success' : 'default'}><StatusIndicator />{({ ACTIVE: '已登记', INACTIVE: '已停用', RETIRED: '已退役' })[row.original.status]}</Status> },
+    { id: 'actions', header: '', cell: ({ row }) => <div className="flex justify-end"><Button size="sm" variant="ghost" disabled={row.original.status !== 'ACTIVE'} onClick={() => setSelected(row.original)}><KeyRound data-icon="inline-start" />接入凭据</Button></div>, enableSorting: false, enableHiding: false },
   ], []);
   const table = useDataTable({ key: 'registered-gateways', data: devices, columns, pageSize: 10, getRowId: (row) => row.id });
-  return <Main className="space-y-6">
+  return <Main>
     <PageHeader
       title="集成管理"
-      description="登记现场网关，管理接入身份与证书生命周期。"
-      actions={<Button disabled={!canWrite || !siteId} onClick={() => { registration.reset(); setRegistering(true); }}><Plus />登记网关</Button>}
+      description="现场网关的登记、接入凭据与证书有效期"
+      actions={<Button size="sm" disabled={!canWrite || !siteId} onClick={() => { registration.reset(); setRegistering(true); }}><Plus data-icon="inline-start" />登记网关</Button>}
     />
-    <div className="flex items-center gap-3"><label htmlFor="gateway-site" className="text-sm font-medium">站点</label>
-      <Select value={siteId ?? ''} onValueChange={(site) => { setSelected(null); void navigate({ search: { site } }); }}>
-        <SelectTrigger id="gateway-site" className="w-64"><SelectValue placeholder="选择站点" /></SelectTrigger>
-        <SelectContent>{sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}</SelectContent>
-      </Select>
-      {sitesQuery.hasNextPage ? <Button variant="outline" disabled={sitesQuery.isFetchingNextPage} onClick={() => void sitesQuery.fetchNextPage()}>加载更多站点</Button> : null}
-    </div>
     {sitesQuery.isError || devicesQuery.isError ? <Alert variant="destructive"><AlertDescription>无法读取登记信息，请确认当前站点权限和服务状态。</AlertDescription></Alert> : null}
     <DataTableBlock title="现场网关" description="接入码仅显示一次；吊销身份后，该网关的数据与远程命令都会被拒绝。">
-      <DataTable table={table} tableAriaLabel="现场网关" empty={devicesQuery.isError || sitesQuery.isError ? '登记信息暂不可用' : devicesQuery.isPending ? '正在读取网关…' : '当前站点尚未登记网关'} />
+      <DataTable table={table} tableAriaLabel="现场网关" empty={devicesQuery.isError || sitesQuery.isError ? '登记信息暂不可用' : devicesQuery.isPending ? '正在读取网关…' : '当前站点尚未登记网关'}>
+        <div className="flex items-center gap-2">
+          <Select value={siteId ?? ''} onValueChange={(site) => { setSelected(null); void navigate({ search: { site } }); }}>
+            <SelectTrigger aria-label="站点" className="w-56"><SelectValue placeholder="选择站点" /></SelectTrigger>
+            <SelectContent>{sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}</SelectContent>
+          </Select>
+          {sitesQuery.hasNextPage ? <Button variant="outline" size="sm" disabled={sitesQuery.isFetchingNextPage} onClick={() => void sitesQuery.fetchNextPage()}>加载更多站点</Button> : null}
+        </div>
+      </DataTable>
       <DataTablePagination table={table} totalRows={devices.length} />
     </DataTableBlock>
     {devicesQuery.hasNextPage ? <Button variant="outline" disabled={devicesQuery.isFetchingNextPage} onClick={() => void devicesQuery.fetchNextPage()}>加载更多网关</Button> : null}

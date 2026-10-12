@@ -31,7 +31,7 @@ import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
 import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
-import { ReadingMetric, ReadingValue } from "@/features/operations/realtime/device-presentation";
+import { LiveIndicator, ReadingMetric, ReadingValue } from "@/features/operations/realtime/device-presentation";
 import { siteTariffQuery } from "@/features/tariff/query";
 import { costByLabel } from "@/features/tariff/tariff-model";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
@@ -364,16 +364,11 @@ export function OverviewWorkspace() {
   const assetName = (assetId: string) => registry.data?.assetModel.assets.find((asset) => asset.id === assetId)?.displayName ?? "—";
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="总览"
         description={`${site.displayName} · 冷站运行与今日用能`}
-        meta={
-          <Badge variant="outline" className="gap-1.5 font-normal">
-            <span className={mode === "live" ? "size-1.5 rounded-full bg-success" : "size-1.5 rounded-full bg-muted-foreground"} aria-hidden="true" />
-            {mode === "live" ? "实时推送" : mode === "connecting" ? "正在连接" : "定时刷新"}
-          </Badge>
-        }
+        meta={<LiveIndicator mode={mode} />}
         actions={
           <Button
             variant="outline"

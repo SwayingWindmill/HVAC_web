@@ -179,14 +179,14 @@
   }
 
   html {
-    background: var(--background);
+    background: var(--sidebar);
   }
 
   body {
     min-width: 320px;
     overflow-x: hidden;
     overflow-y: auto;
-    background: var(--background);
+    background: var(--sidebar);
     color: var(--foreground);
     font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;

@@ -8,6 +8,8 @@ import {
   type Table as TanstackTable,
 } from '@tanstack/react-table';
 
+import { Inbox } from 'lucide-react';
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import type { DataTableFeatures } from './data-table-features';
 import {
   Table,
@@ -65,9 +67,9 @@ export function DataTable<TData extends RowData>({
       {...props}
     >
       {children}
-      <div className="w-full min-w-0 overflow-hidden rounded-md border bg-background">
+      <div className="w-full min-w-0 overflow-hidden rounded-xl bg-card shadow-xs ring-1 ring-foreground/10">
         <Table className={cn('text-sm', tableClassName)} aria-label={tableAriaLabel}>
-          <TableHeader className="bg-muted/20">
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => {
               const headerRowProps = getHeaderRowProps?.(headerGroup);
               return (
@@ -83,7 +85,7 @@ export function DataTable<TData extends RowData>({
                         key={header.id}
                         colSpan={header.colSpan}
                         {...headerCellProps}
-                        className={cn('h-9 px-2 text-xs font-medium', headerCellProps?.className)}
+                        className={cn(headerCellProps?.className)}
                       >
                         {header.isPlaceholder ? null : <FlexRender header={header} />}
                       </TableHead>
@@ -113,7 +115,7 @@ export function DataTable<TData extends RowData>({
                         <TableCell
                           key={cell.id}
                           {...cellProps}
-                          className={cn('px-2 py-2 align-middle', cellProps?.className)}
+                          className={cn(cellProps?.className)}
                         >
                           <FlexRender cell={cell} />
                         </TableCell>
@@ -124,11 +126,8 @@ export function DataTable<TData extends RowData>({
               })
             ) : (
               <TableRow>
-                <TableCell
-                  colSpan={table.getVisibleLeafColumns().length}
-                  className="h-24 px-2 text-center text-sm text-muted-foreground"
-                >
-                  {empty ?? '暂无数据'}
+                <TableCell colSpan={table.getVisibleLeafColumns().length} className="p-0">
+                  {typeof empty === 'string' || empty === undefined ? <TableEmpty>{empty ?? '暂无数据'}</TableEmpty> : empty}
                 </TableCell>
               </TableRow>
             )}
@@ -137,5 +136,17 @@ export function DataTable<TData extends RowData>({
       </div>
       {footer ?? null}
     </div>
+  );
+}
+
+/** An empty table says so plainly, with the same mark everywhere. */
+export function TableEmpty({ children }: { readonly children: React.ReactNode }) {
+  return (
+    <Empty className="py-12">
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><Inbox /></EmptyMedia>
+        <EmptyTitle className="font-normal text-muted-foreground">{children}</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }

@@ -93,7 +93,7 @@ function SettingControl({ setting, reading, onSubmit }: {
   };
   const range = `${formatDecimal(setting.minimum, 1)}–${formatDecimal(setting.maximum, 1)}${setting.unit ? ` ${setting.unit}` : ''}`;
   return (
-    <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 @lg/card:grid-cols-[minmax(0,1fr)_auto] @lg/card:items-center">
+    <div className="grid gap-3 rounded-lg border bg-muted/40 p-3 @lg/card:grid-cols-[minmax(0,1fr)_auto] @lg/card:items-center">
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{setting.label}</p>
         <p className="text-xs text-muted-foreground">
@@ -122,7 +122,7 @@ function SettingControl({ setting, reading, onSubmit }: {
             <InputGroupButton size="icon-xs" aria-label="增大" onClick={() => nudge(1)}><Plus /></InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
-        <Button type="submit" size="sm" disabled={!valid}>
+        <Button type="submit" size="sm" variant={valid ? 'default' : 'outline'} disabled={!valid}>
           <Send data-icon="inline-start" />
           下发
         </Button>
@@ -348,7 +348,7 @@ export function ControlWorkspace() {
   const busy = actions.approve.isPending || actions.reconcile.isPending;
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="控制指令"
         description={`${site.displayName} · 指令先经风险评估，中高风险需审批后下发；结果不明的由值班人员核对`}

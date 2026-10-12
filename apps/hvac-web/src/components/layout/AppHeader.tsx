@@ -13,7 +13,6 @@ import { Kbd } from '@/components/ui/kbd';
 import { Separator } from '@/components/ui/separator';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { CommandSearch } from './CommandSearch';
-import { ScopeSwitcher } from './ScopeSwitcher';
 import { APP_NAVIGATION_CONFIG } from './app-navigation';
 import { useShellNotifications } from './use-shell-notifications';
 
@@ -65,21 +64,16 @@ export function AppHeader({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background px-3 sm:px-4 lg:px-6">
+      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background/80 px-6 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
         {/* Left: SidebarTrigger + Scope Switcher + Breadcrumb */}
         <div className="flex min-w-0 items-center gap-2.5">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="h-4" />
 
-          {/* Scope Switcher: URL-driven scope selector */}
-          <ScopeSwitcher />
-
-          <Separator orientation="vertical" className="hidden h-4 md:block" />
-
           {/* Breadcrumb: pure navigational path */}
           {breadcrumbs.page ? (
-            <Breadcrumb className="hidden lg:block">
-              <BreadcrumbList className="text-xs">
+            <Breadcrumb>
+              <BreadcrumbList className="text-sm">
                 {breadcrumbs.group ? (
                   <>
                     <BreadcrumbItem>
@@ -106,23 +100,13 @@ export function AppHeader({
             variant="outline"
             size="sm"
             onClick={() => setCommandOpen(true)}
-            className="hidden h-8 w-52 justify-between border-border/80 bg-background/60 text-xs text-muted-foreground sm:inline-flex md:w-60"
+            className="h-8 w-64 justify-between bg-muted/30 px-2.5 font-normal text-muted-foreground shadow-none hover:bg-accent"
           >
-            <div className="flex items-center gap-1.5">
+            <span className="flex items-center gap-2">
               <Search className="size-3.5" />
-              <span>跳转到页面...</span>
-            </div>
-            <Kbd>⌘K</Kbd>
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCommandOpen(true)}
-            className="sm:hidden"
-            aria-label="搜索"
-          >
-            <Search className="size-4" />
+              搜索页面与设备…
+            </span>
+            <Kbd>Ctrl K</Kbd>
           </Button>
 
           {/* Theme Toggle */}

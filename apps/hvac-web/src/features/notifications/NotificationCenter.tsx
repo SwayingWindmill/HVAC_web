@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PageHeader } from '@/blocks/page-header';
+import { PageHeader, PageMeta } from '@/blocks/page-header';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Link } from '@tanstack/react-router';
 import { Check, RefreshCw } from 'lucide-react';
@@ -14,18 +14,11 @@ import type { ShellSnapshot } from '@/app/shell-runtime';
 
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, DataTablePagination, type DataTableFeatures } from '@/components/data-table';
 import { StatusBadge } from '@/components/status-badge';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -179,26 +172,21 @@ export function NotificationCenter({ snapshot }: NotificationCenterProps) {
   return (
     <section data-testid="real-route-notifications" data-route-state="READY" data-business-state="POPULATED">
       <Main>
-        <div className="space-y-4">
           <PageHeader
             title="通知中心"
-            meta={<Badge variant={unreadCount > 0 ? 'default' : 'outline'}>{unreadCount} 未读</Badge>}
-            actions={<Button variant="outline" onClick={() => setReloadKey((value) => value + 1)} disabled={loading}><RefreshCw className={loading ? 'animate-spin' : undefined} />刷新</Button>}
+            description="服务器投递给你的告警与工单通知；标记已读不会改变告警或工单状态"
+            meta={<PageMeta dot={unreadCount > 0 ? 'warning' : 'idle'}>{unreadCount} 条未读</PageMeta>}
+            actions={<Button variant="outline" size="sm" onClick={() => setReloadKey((value) => value + 1)} disabled={loading}><RefreshCw data-icon="inline-start" className={loading ? 'animate-spin' : undefined} />刷新</Button>}
           />
-          <Alert>
-            <AlertTitle>通知与告警生命周期相互独立</AlertTitle>
-            <AlertDescription>这里只展示服务器投递给当前用户的通知。将通知标记为已读，不会改变告警确认、恢复或工单状态。</AlertDescription>
-          </Alert>
           {failure ? <Alert variant="destructive"><AlertTitle>通知读取失败</AlertTitle><AlertDescription>{failure}</AlertDescription></Alert> : null}
           <DataTableBlock>
             {loading ? (
-              <div className="grid min-h-36 place-items-center rounded-md border text-sm text-muted-foreground">正在读取通知…</div>
+              <Skeleton className="h-64 rounded-xl" />
             ) : (
               <DataTable
                 table={notificationTable}
                 tableAriaLabel="通知"
                 empty={filter === 'unread' ? '当前没有未读通知' : '当前没有通知'}
-                getHeaderRowProps={() => ({ className: 'bg-muted/20' })}
                 getHeaderCellProps={(header) => ({
                   className:
                     header.id === 'select' ? 'w-12 text-center' :
@@ -220,27 +208,21 @@ export function NotificationCenter({ snapshot }: NotificationCenterProps) {
                 })}
                 footer={<DataTablePagination table={notificationTable} totalRows={visibleItems.length} />}
               >
-                <div className="flex justify-end">
-                  <Select
-                    value={filter}
-                    onValueChange={(val) => {
-                      setFilter(val as 'unread' | 'all');
-                      notificationTable.setPageIndex(0);
-                    }}
-                  >
-                    <SelectTrigger className="w-36" aria-label="筛选通知状态">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent><SelectGroup>
-                      <SelectItem value="unread">未读 ({unreadCount})</SelectItem>
-                      <SelectItem value="all">全部 ({items.length})</SelectItem>
-                    </SelectGroup></SelectContent>
-                  </Select>
-                </div>
+                <Tabs
+                  value={filter}
+                  onValueChange={(value) => {
+                    setFilter(value as 'unread' | 'all');
+                    notificationTable.setPageIndex(0);
+                  }}
+                >
+                  <TabsList aria-label="筛选通知状态">
+                    <TabsTrigger value="unread">未读<span className="text-muted-foreground tabular-nums">{unreadCount}</span></TabsTrigger>
+                    <TabsTrigger value="all">全部<span className="text-muted-foreground tabular-nums">{items.length}</span></TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </DataTable>
             )}
           </DataTableBlock>
-        </div>
       </Main>
 
       <Sheet open={Boolean(selected)} onOpenChange={(open) => { if (!open) setSelected(null); }}>

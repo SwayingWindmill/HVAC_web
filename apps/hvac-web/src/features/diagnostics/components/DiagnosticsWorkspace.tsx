@@ -3,6 +3,7 @@ import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { ClipboardPlus, SearchCheck, SlidersHorizontal, Stethoscope } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { Badge } from '@/components/ui/badge';
@@ -19,9 +20,11 @@ import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDia
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { LOW_DELTA_T, lowDeltaTTarget, ruleFor, severity, type DiagnosticRule, type Finding } from '../diagnostics-model';
+import { LOW_DELTA_T, lowDeltaTTarget, ruleFor, RULES, severity, type DiagnosticRule, type Finding } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
 import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, siteFindingsQuery, type EvaluationOutcome } from '../query';
+
+const DAY_MS = 86_400_000;
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/diagnostics');
@@ -211,8 +214,16 @@ export function DiagnosticsWorkspace() {
   });
 
   const list = findings.data ?? [];
+  const now = Date.now();
+  const within = (finding: Finding, fromDays: number, toDays: number) => {
+    const at = Date.parse(finding.evaluationTo);
+    return at >= now - fromDays * DAY_MS && at < now - toDays * DAY_MS;
+  };
+  const thisWeek = list.filter((finding) => within(finding, 7, 0));
+  const lastWeek = list.filter((finding) => within(finding, 14, 7));
+  const latest = list[0];
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="故障诊断"
         description={`${site.displayName} · 用诊断规则检查设备运行数据，发现能效与运行问题`}
@@ -224,19 +235,48 @@ export function DiagnosticsWorkspace() {
         }
       />
 
-      <div className="grid items-start gap-4 md:gap-6 @5xl/main:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+      {findings.isSuccess ? (
+        <MetricGrid ariaLabel="诊断概况">
+          <MetricCard
+            label="近 7 天发现"
+            value={<MetricValue value={String(thisWeek.length)} unit="条" />}
+            lead={`前 7 天 ${lastWeek.length} 条`}
+            detail="同一问题 24 小时内只记一次"
+          />
+          <MetricCard
+            label="严重偏离"
+            value={<MetricValue value={String(thisWeek.filter((finding) => severity(finding) === 'high').length)} unit="条" />}
+            lead="近 7 天低于阈值 30% 以上"
+            detail="优先处理"
+          />
+          <MetricCard
+            label="最近一次发现"
+            value={<MetricValue value={latest ? formatTime(latest.evaluationTo, site.timezone) : null} />}
+            lead={latest ? `${ruleFor(latest.findingType)?.title ?? '诊断发现'} · ${assetName(latest.assetId)}` : '还没有诊断发现'}
+            detail={latest ? `测量 ${formatDecimal(latest.observedValue, 1)} / 阈值 ${formatDecimal(latest.thresholdValue, 1)} ${latest.valueUnit}` : '诊断发现问题时记录'}
+          />
+          <MetricCard
+            label="诊断规则"
+            value={<MetricValue value={String(RULES.length)} unit="项" />}
+            lead={RULES.map((rule) => rule.title).join('、')}
+            detail={`每 ${LOW_DELTA_T.windowMinutes} 分钟自动诊断`}
+          />
+        </MetricGrid>
+      ) : null}
+
+      <div className="grid items-start gap-6 @5xl/main:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <section aria-label="诊断项目" className="flex flex-col gap-4">
           {registry.isPending ? <Skeleton className="h-64 rounded-xl" /> : (
             <RuleCard rule={LOW_DELTA_T} target={target} reading={plantReading(plant, 'btu_meter.temperature_difference')} outcome={outcome} />
           )}
         </section>
 
-        <Card role="region" aria-label="诊断发现">
+        <Card role="region" aria-label="诊断发现" className="pb-0">
           <CardHeader>
             <CardTitle>诊断发现</CardTitle>
             <CardDescription>最近 100 条，按诊断时间倒序；点击查看原因与处理建议</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="border-t px-0">
             {findings.isPending ? <Skeleton className="h-48" /> : findings.isError ? (
               <p className="py-10 text-center text-sm text-muted-foreground">诊断发现暂不可用</p>
             ) : list.length === 0 ? (
