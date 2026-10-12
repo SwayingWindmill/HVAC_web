@@ -208,9 +208,11 @@ FORMAT JSONEachRow`, reader.analyticsDatabase), url.Values{"param_projection": {
 }
 
 func (reader *Reader) arrivals(ctx context.Context, after energy.ProjectionCursor, limit int) ([]arrivalRow, error) {
+	// observation_id stays a UUID so ORDER BY follows the view's cursor comparison: ClickHouse
+	// orders UUIDs by their second half, which is not the order of their text.
 	payload, err := reader.query(ctx, "counter arrival query", fmt.Sprintf(`SELECT
   history_sequence,
-  toString(observation_id) AS observation_id,
+  observation_id,
   toString(tenant_id) AS tenant_id,
   toString(site_id) AS site_id,
   toString(point_id) AS point_id,
