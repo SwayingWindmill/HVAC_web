@@ -463,19 +463,30 @@ try {
     ) VALUES
       ('${topologyNodeA}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'GRID', 'Grid', 'ACTIVE', 1, now(), now()),
       ('${topologyNodeB}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Site Load', 'ACTIVE', 1, now(), now()),
-      ('${topologyNodeV2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersion2Id}', 'GRID', 'Grid V2', 'ACTIVE', 1, now(), now());
+      ('${topologyNodeV2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersion2Id}', 'GRID', 'Grid V2', 'ACTIVE', 1, now(), now()),
+      ('01990000-1310-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'HVAC', 'Plant', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.energy_nodes (
+      id, tenant_id, site_id, topology_version_id, node_type, name, device_id, status, revision, created_at, updated_at
+    ) VALUES
+      ('01990000-1310-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Chiller', '018f1e00-4000-7000-8000-000000000001', 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.energy_edges (
       id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id,
       energy_type_id, direction, enabled, revision, created_at, updated_at
     ) VALUES (
       '${topologyEdgeId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}',
       '${topologyNodeA}', '${topologyNodeB}', '${electricityEnergyTypeId}', 'IMPORT', true, 1, now(), now()
+    ), (
+      '01990000-1320-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}',
+      '01990000-1310-7000-8000-000000000020', '01990000-1310-7000-8000-000000000021', '${electricityEnergyTypeId}', 'CONSUME', true, 1, now(), now()
     );
     INSERT INTO core_registry.energy_meters (
       id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at
     ) VALUES (
       '${meterId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
       'main_incomer', 'Main Incomer', '018f1e00-4000-7000-8000-000000000001', '${electricityEnergyTypeId}', 'ACTIVE', 1, now(), now()
+    ), (
+      '01990000-1330-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      'chiller_energy', 'Chiller Energy', '018f1e00-4000-7000-8000-000000000001', '${electricityEnergyTypeId}', 'ACTIVE', 1, now(), now()
     );
     INSERT INTO core_registry.telemetry_points (
       id, tenant_id, site_id, reporting_device_id, point_code, source_key, display_name,
@@ -487,7 +498,10 @@ try {
        'RESET_TO_ZERO', '{}'::jsonb, 'ACTIVE', 1, now(), now()),
       ('${telemetryPointId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001',
        'active_power', 'meter.active_power', 'Active Power', 'TELEMETRY', 'NUMBER', 'kW', false, 1000, 1000, 5000,
-       NULL, '{}'::jsonb, 'ACTIVE', 1, now(), now());
+       NULL, '{}'::jsonb, 'ACTIVE', 1, now(), now()),
+      ('01990000-1340-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001',
+       'chiller_energy', 'chiller.energy', 'Chiller Energy', 'COUNTER', 'NUMBER', 'kWh', false, 1000, 1000, 5000,
+       'RESET_TO_ZERO', '{}'::jsonb, 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.meter_ratio_versions (
       id, tenant_id, site_id, meter_id, version, ct_ratio, pt_ratio, meter_multiplier,
       ratio_application_mode, effective_from, effective_to, status, revision, created_at, updated_at
@@ -503,6 +517,10 @@ try {
     ) VALUES (
       '${meterBindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '${topologyEdgeId}', '${electricityEnergyTypeId}',
       '${meterId}', '018f1e00-4000-7000-8000-000000000001', '${meterPointId}', 'COUNTER', 'PRIMARY', 'IMPORT', 0,
+      '2026-08-01T00:00:00Z', 1, 'ACTIVE', 1, now(), now()
+    ), (
+      '01990000-1360-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '01990000-1320-7000-8000-000000000020', '${electricityEnergyTypeId}',
+      '01990000-1330-7000-8000-000000000020', '018f1e00-4000-7000-8000-000000000001', '01990000-1340-7000-8000-000000000020', 'COUNTER', 'PRIMARY', 'CONSUME', 0,
       '2026-08-01T00:00:00Z', 1, 'ACTIVE', 1, now(), now()
     );
     INSERT INTO core_registry.virtual_meters (
@@ -532,7 +550,7 @@ try {
       || (SELECT cloud_multiplier::text FROM core_registry.meter_ratio_versions WHERE id = '01990000-1350-7000-8000-000000000002') || '|'
       || (SELECT count(*) FROM core_registry.virtual_meter_sources)::text;
   `);
-  expectEqual(topologyFixture, '2|1|1.000000000000|30.000000000000|2', 'Topology/Metering V2 fixture');
+  expectEqual(topologyFixture, '4|2|1.000000000000|30.000000000000|2', 'Topology/Metering V2 fixture');
 
   const invalidGridDirection = psql(`
     INSERT INTO core_registry.energy_edges (
@@ -646,7 +664,7 @@ try {
       || (SELECT count(*) FROM core_registry.virtual_meters)::text;
     ROLLBACK;
   `);
-  expectEqual(topologyRls, '2|1|1|2', 'Topology/Metering runtime RLS');
+  expectEqual(topologyRls, '2|2|2|2', 'Topology/Metering runtime RLS');
   report.assertions.energyTopologyMeteringV2 = {
     fixture: topologyFixture,
     crossVersionEdgeRejected: true,

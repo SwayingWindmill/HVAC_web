@@ -387,9 +387,14 @@ SELECT mb.tenant_id::text,
        mb.point_id::text,
        mb.point_type,
        mb.effective_from,
-       mb.effective_to
+       mb.effective_to,
+       CASE WHEN tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID'
+            THEN 'BRANCH' ELSE 'SITE' END
 FROM core_registry.meter_bindings AS mb
 JOIN core_registry.energy_types AS et ON et.id = mb.energy_type_id
+JOIN core_registry.energy_edges AS edge ON edge.id = mb.energy_edge_id
+JOIN core_registry.energy_nodes AS fn ON fn.id = edge.from_node_id
+JOIN core_registry.energy_nodes AS tn ON tn.id = edge.to_node_id
 WHERE mb.site_id = $1::uuid
   AND mb.device_id = $2::uuid
   AND mb.point_id = $3::uuid
@@ -409,7 +414,7 @@ ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
 			if err := rows.Scan(
 				&item.TenantID, &item.SiteID, &item.MeterID, &item.MeterBindingID, &item.TopologyVersionID,
 				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
-				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo,
+				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope,
 			); err != nil {
 				return fmt.Errorf("scan Core meter binding resolution: %w", err)
 			}

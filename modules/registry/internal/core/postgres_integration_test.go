@@ -166,8 +166,19 @@ func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testi
 	if resolved.Status != "MATCH" || resolved.TenantID != testTenantA || resolved.SiteID != testSiteA1 ||
 		resolved.MeterID != meterID || resolved.MeterBindingID != bindingID || resolved.TopologyVersionID != topologyID ||
 		resolved.EnergyTypeID != energyTypeID || resolved.EnergyType != "electricity" || resolved.MeterRole != "PRIMARY" ||
-		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 {
+		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 || resolved.AccountingScope != "SITE" {
 		t.Fatalf("resolved Meter Binding = %#v", resolved)
+	}
+
+	// A meter on the feed into one piece of equipment is a sub-meter of the Site, not its total.
+	subMeter, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
+		DeviceID: meterDeviceID, PointID: "01990000-1340-7000-8000-000000000020", SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subMeter.Status != "MATCH" || subMeter.AccountingScope != "BRANCH" || subMeter.Direction != "CONSUME" {
+		t.Fatalf("resolved sub-meter = %#v", subMeter)
 	}
 
 	beforeEffective, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{

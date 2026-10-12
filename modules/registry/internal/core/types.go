@@ -97,6 +97,8 @@ type MeterBindingResolution struct {
 	PointType         string     `json:"pointType,omitempty"`
 	EffectiveFrom     time.Time  `json:"effectiveFrom,omitempty"`
 	EffectiveTo       *time.Time `json:"effectiveTo,omitempty"`
+	// AccountingScope is BRANCH for a sub-meter on the feed into one piece of equipment, SITE otherwise.
+	AccountingScope string `json:"accountingScope,omitempty"`
 }
 
 type Collection[T any] struct {
