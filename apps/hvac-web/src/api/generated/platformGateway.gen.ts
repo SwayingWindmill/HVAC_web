@@ -119,12 +119,15 @@ export const energySeriesQuerySchema = z.object({
   granularity: energyGranularitySchema, timezone: z.string().min(1),
   from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }),
   qualityPolicy: z.enum(['VALID_ONLY', 'VALID_AND_SUSPECT']),
+  breakdown: z.enum(['device']).optional(),
+}).strict();
+const energySeriesPointSchema = z.object({
+  periodStart: z.string().datetime({ offset: true }), periodEnd: z.string().datetime({ offset: true }), energyKWh: z.number().min(0),
 }).strict();
 export const energySeriesResponseSchema = z.object({
   schemaVersion: z.literal(1),
-  points: z.array(z.object({
-    periodStart: z.string().datetime({ offset: true }), periodEnd: z.string().datetime({ offset: true }), energyKWh: z.number().min(0),
-  }).strict()),
+  points: z.array(energySeriesPointSchema),
+  devices: z.array(z.object({ deviceId: z.string().uuid(), points: z.array(energySeriesPointSchema) }).strict()).optional(),
   metadata: z.object({
     requestedGranularity: energyGranularitySchema, actualGranularity: energyGranularitySchema,
     dataWatermark: z.string().datetime({ offset: true }).optional(), aggregateWatermark: z.string().datetime({ offset: true }).optional(),
