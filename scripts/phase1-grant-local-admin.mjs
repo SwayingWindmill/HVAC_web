@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
+import { localSites } from './central-plant-local-contract.mjs';
 import { localContainer, localEnvFile, repoRoot, runtimePath } from './lib/local-environment.mjs';
 import { parseRuntimeEnvironment } from './phase1-deployment-tier.ts';
 
@@ -13,14 +14,13 @@ const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContaine
 const reconcile = JSON.parse(readFileSync(reconcilePath, 'utf8'));
 const subject = reconcile.userId;
 const tenantId = reconcile.seed?.tenantId;
-const siteId = reconcile.seed?.siteBindings?.[0]?.siteId;
-if (!subject || !tenantId || !siteId) {
-  throw new Error('Local admin grant requires userId, tenantId, and at least one site binding in identity-reconcile.json');
+if (!subject || !tenantId) {
+  throw new Error('Local admin grant requires userId and tenantId in identity-reconcile.json');
 }
 
-const sql = String.raw`
-BEGIN;
-
+// The local administrator works every local Site. Each Site's rows keep fixed ids so a rerun
+// updates them in place: the last id group carries the Site's position.
+const siteGrants = (site) => String.raw`
 INSERT INTO iam.site_bindings(
   id, tenant_id, site_id, principal_id, actions, effect,
   valid_from, valid_to, revision, created_at, updated_at
@@ -153,9 +153,10 @@ SET status = 'ACTIVE',
     updated_at = now()
 WHERE iam.work_order_permissions.status IS DISTINCT FROM 'ACTIVE'
    OR iam.work_order_permissions.valid_to IS NOT NULL;
+`.replaceAll(/(01a006a0-00\d\d-7000-8000-)000000000001/g, `$1${String(site.index + 1).padStart(12, '0')}`)
+  .replaceAll(":'site_id'::uuid", `'${site.siteId}'::uuid`);
 
-COMMIT;
-`;
+const sql = ['BEGIN;', ...localSites.filter((site) => site.tenantId === tenantId).map(siteGrants), 'COMMIT;'].join('\n');
 
 const result = spawnSync('docker', [
   'exec',
@@ -168,7 +169,6 @@ const result = spawnSync('docker', [
   '-v', `admin_issuer=${issuer}`,
   '-v', `admin_subject=${subject}`,
   '-v', `tenant_id=${tenantId}`,
-  '-v', `site_id=${siteId}`,
 ], {
   cwd: repoRoot,
   input: sql,

@@ -70,7 +70,6 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - The `forecast_models` horizon was raised to 2880 min by hand.
 - The ClickHouse user `fdd_service_reader` was created by hand.
 - The tariff name was updated to 两部制分时电价 by hand.
-- The local administrator's Energy Analytics grant covers the first site only, because `scripts/phase1-grant-local-admin.mjs` binds `siteBindings[0]`. The second site therefore shows as 没有能耗分析权限 on 站点对标. Whether the admin should analyze both sites is an authorization decision that has not been made.
 
 Known quirks:
 
