@@ -87,7 +87,10 @@ function replay() {
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', path.join(out, 'eg8200-history-replay'), './tools/eg8200-simulator/cmd/eg8200-history-replay'],
     { env: { ...process.env, CGO_ENABLED: '0', GOOS: 'linux' } });
 
-  const points = ['METER-HVAC-TOTAL/hvac_meter.energy', 'BTU-METER-01/btu_meter.accumulated_cooling_energy'].join(',');
+  const points = [
+    'METER-HVAC-TOTAL/hvac_meter.energy', 'BTU-METER-01/btu_meter.accumulated_cooling_energy',
+    'CHILLER-01/chiller.energy', 'CHWP-01/chwp.energy', 'CWP-01/cwp.energy', 'CT-01/cooling_tower.energy',
+  ].join(',');
   for (const site of localSites) {
     const deviceIds = Object.fromEntries(centralPlantDevices.map((device) => [device.name, siteDeviceId(site, device.platformDeviceId)]));
     writeFileSync(path.join(out, `${site.siteCode}.device-ids.json`), `${JSON.stringify(deviceIds, null, 2)}\n`);
