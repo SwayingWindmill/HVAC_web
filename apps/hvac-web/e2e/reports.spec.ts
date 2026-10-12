@@ -9,6 +9,8 @@ test('a month\'s report sums energy, priced cost and operations from their owner
   await expect(report).toContainText('峰时段电度电费');
   await expect(report).toContainText('两部制分时电价');
   await expect(report.getByRole('heading', { name: '运行与维护' })).toBeVisible();
+  await expect(report.getByRole('heading', { name: '节能成效' })).toBeVisible();
+  await expect(report).toContainText('本月没有实施中的节能措施。');
 
   // The month runs from the Site's midnight on the 1st; energy is read by day for the summary and by hour for the price.
   const reads = gateway.writes.filter((write) => write.path === '/api/v1/analytics/energy-series');

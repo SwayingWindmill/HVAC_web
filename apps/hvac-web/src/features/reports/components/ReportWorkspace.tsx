@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate, useSearch } from '@tanstack/react-router';
 import { Printer } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
@@ -13,6 +14,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { SEVERITY_LABELS, SEVERITY_ORDER } from '@/features/alarms/alarm-presentation';
 import { ruleFor } from '@/features/diagnostics/diagnostics-model';
 import { relativeChange } from '@/features/energy-analysis/consumption/model';
+import { measuresQuery, summaryQuery } from '@/features/savings/query';
+import { monthToDate, savingsRate, STATUS_LABEL } from '@/features/savings/savings-model';
 import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
 import { demandCharges, PERIOD_LABEL, touEnergyCost } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
@@ -98,6 +101,35 @@ export function ReportWorkspace() {
       />
       <MonthlyReport key={month} month={month} span={span} />
     </Main>
+  );
+}
+
+/** The month's verified savings, and which measures were in verification during it. */
+function SavingsSection({ siteId, month, span, timeZone }: { readonly siteId: string; readonly month: string; readonly span: ReportWindow; readonly timeZone: string }) {
+  // Verified days are Site-local dates: the whole month once it is over, through today while it runs.
+  const to = span.complete ? `${month}-${String(span.days).padStart(2, '0')}` : monthToDate(span.to, timeZone).to;
+  const summary = useQuery(summaryQuery(siteId, `${month}-01`, to));
+  const measures = useQuery(measuresQuery(siteId));
+  if (summary.isPending || measures.isPending) return <Skeleton className="h-20" />;
+  if (summary.isError || measures.isError) return <p className="text-sm text-muted-foreground">节能核算暂不可用</p>;
+  const totals = summary.data.totals;
+  const rate = savingsRate(totals);
+  const active = measures.data.filter((measure) => measure.implementedAt !== null
+    && Date.parse(measure.implementedAt) < span.to.getTime() && (measure.endedAt === null || Date.parse(measure.endedAt) > span.from.getTime()));
+  return (
+    <>
+      <div className="grid grid-cols-4 gap-8">
+        <Figure label="节电量" value={totals.days > 0 ? formatDecimal(totals.avoidedKWh, 0) : null} unit="kWh" note={totals.days > 0 ? `调整后基线 ${energyText(totals.adjustedBaselineKWh)}` : '本月没有核算结果'} />
+        <Figure label="节省电费" value={totals.days > 0 ? formatDecimal(totals.avoidedCost, 0) : null} unit="元" note="按逐时分时电度电价，不含需量电费" />
+        <Figure label="节电率" value={rate === null ? null : formatDecimal(rate * 100, 1)} unit="%" note="节电量 ÷ 调整后基线" />
+        <Figure label="核算天数" value={String(totals.days)} unit="天" note={span.complete ? `本月 ${span.days} 天` : '每天 02:00 核算前一天'} />
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {active.length === 0
+          ? '本月没有实施中的节能措施。'
+          : active.map((measure) => `「${measure.name}」${measure.baseline?.trusted ? STATUS_LABEL[measure.status] : '基线不可信，未核算'}`).join('；')}
+      </p>
+    </>
   );
 }
 
@@ -240,7 +272,11 @@ function MonthlyReport({ month, span }: { readonly month: string; readonly span:
         )}
       </Section>
 
-      <Section index={4} title="运行与维护" description="本月发生的告警、工单与诊断发现">
+      <Section index={4} title="节能成效" description="对照实施前基线、按实际供冷量调整后核算的节电量与节省电费（IPMVP 选项 C）">
+        <SavingsSection siteId={site.id} month={month} span={span} timeZone={timeZone} />
+      </Section>
+
+      <Section index={5} title="运行与维护" description="本月发生的告警、工单与诊断发现">
         <div className="grid grid-cols-3 gap-8">
           <div className="flex flex-col gap-3">
             <h3 className="text-sm font-medium">告警</h3>
