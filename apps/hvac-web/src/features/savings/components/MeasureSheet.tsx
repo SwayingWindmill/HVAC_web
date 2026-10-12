@@ -251,7 +251,7 @@ export function MeasureSheet({ measureId, canManage, onClose }: {
                 <FactTile label="结束">{formatTime(measure.endedAt ?? undefined, tz)}</FactTile>
                 <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
                 <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
-                <FactTile label="依据" className="col-span-3"><Evidence measure={measure} /></FactTile>
+                <div className="col-span-3"><FactTile label="依据"><Evidence measure={measure} /></FactTile></div>
               </dl>
 
               {canManage && measureActions(measure).length > 0 ? (
