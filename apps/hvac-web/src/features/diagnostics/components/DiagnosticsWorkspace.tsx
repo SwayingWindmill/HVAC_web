@@ -26,6 +26,8 @@ import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, siteFindingsQue
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/diagnostics');
 
+const OUTCOME_LABEL = { FINDING: '发现问题', ONGOING: '仍在持续', CLEAR: '正常' } as const;
+
 const kelvin = (value: number) => `${formatDecimal(value, 1)} K`;
 
 /** A value on a scale from zero past the design value, with the rule's threshold and design marked. */
@@ -67,8 +69,8 @@ function RuleCard({ rule, target, reading, outcome }: {
         <CardDescription>{target ? `${target.assetName} · ${rule.watches}` : '没有登记冷量表，无法诊断'}</CardDescription>
         {outcome ? (
           <CardAction>
-            <Badge variant="outline" className={outcome.status === 'FINDING' ? SEVERITY.medium.className : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'}>
-              {outcome.status === 'FINDING' ? '发现问题' : '正常'}
+            <Badge variant="outline" className={outcome.status === 'CLEAR' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : SEVERITY.medium.className}>
+              {OUTCOME_LABEL[outcome.status]}
             </Badge>
           </CardAction>
         ) : null}
@@ -84,8 +86,8 @@ function RuleCard({ rule, target, reading, outcome }: {
         <ThresholdBar rule={rule} value={live} />
         <p className="text-sm text-muted-foreground">
           {outcome
-            ? `本次诊断：最近 ${rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${rule.threshold} K，已记为诊断发现。` : `不低于阈值 ${rule.threshold} K。`}`
-            : `温差低于 ${rule.threshold} K（设计 ${rule.designValue} K）时记为问题；诊断取最近 ${rule.windowMinutes} 分钟的数据。`}
+            ? `本次诊断：最近 ${rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${rule.threshold} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${rule.threshold} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${rule.threshold} K。`}`
+            : `系统每 ${rule.windowMinutes} 分钟自动诊断一次：温差低于 ${rule.threshold} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。`}
         </p>
       </CardContent>
     </Card>
@@ -202,7 +204,8 @@ export function DiagnosticsWorkspace() {
       if (result.status === 'FINDING') {
         toast.warning(`发现问题：${LOW_DELTA_T.title}`);
         void queryClient.invalidateQueries({ queryKey: diagnosticsKeys.findings(site.id) });
-      } else toast.success('诊断完成，未发现问题');
+      } else if (result.status === 'ONGOING') toast.warning(`问题仍在持续：${LOW_DELTA_T.title}`);
+      else toast.success('诊断完成，未发现问题');
     },
     onError: (error) => toast.error(error instanceof DiagnosticsRequestError ? error.message : '诊断服务暂时不可用'),
   });

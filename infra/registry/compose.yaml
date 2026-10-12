@@ -48,6 +48,7 @@ services:
       - ../connectivity/postgres/init/004-gateway-enrollment.sql:/docker-entrypoint-initdb.d/325.sql:ro
       - ./postgres/init/017-registry-read-port.sql:/docker-entrypoint-initdb.d/330.sql:ro
       - ./postgres/init/018-fdd-finding-measurement.sql:/docker-entrypoint-initdb.d/340.sql:ro
+      - ./postgres/init/019-fdd-scheduled-evaluation.sql:/docker-entrypoint-initdb.d/350.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

@@ -9,11 +9,11 @@ import (
 	"time"
 )
 
-func TestEvaluateHTTPUsesDelegatedAuthoritativeHistory(t *testing.T) {
+func TestEvaluateHTTPReadsTheLoopEvidenceItself(t *testing.T) {
 	store := &memoryStore{}
 	input := validEvaluation()
-	history := &historySource{response: validHistoryResponse(input)}
-	service := newTestService(t, store, history, time.Now)
+	evidence := &loopEvidence{readings: validReadings(input)}
+	service := newTestService(t, store, evidence, time.Now)
 	handler, err := NewHTTPHandler(service)
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +24,6 @@ func TestEvaluateHTTPUsesDelegatedAuthoritativeHistory(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/fdd/evaluate/low-delta-t", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Delegation-Grant", "history-grant")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -32,16 +31,16 @@ func TestEvaluateHTTPUsesDelegatedAuthoritativeHistory(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if history.grant != "history-grant" || len(store.findings) != 1 {
-		t.Fatalf("history grant=%q findings=%#v", history.grant, store.findings)
+	if evidence.query.DeviceID != input.DeviceID || len(store.findings) != 1 {
+		t.Fatalf("evidence query=%#v findings=%#v", evidence.query, store.findings)
 	}
 }
 
 func TestEvaluateHTTPRejectsCallerSuppliedEvidence(t *testing.T) {
 	store := &memoryStore{}
 	input := validEvaluation()
-	history := &historySource{response: validHistoryResponse(input)}
-	service := newTestService(t, store, history, time.Now)
+	evidence := &loopEvidence{readings: validReadings(input)}
+	service := newTestService(t, store, evidence, time.Now)
 	handler, err := NewHTTPHandler(service)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +57,6 @@ func TestEvaluateHTTPRejectsCallerSuppliedEvidence(t *testing.T) {
 		"evidence":[]
 	}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/fdd/evaluate/low-delta-t", bytes.NewReader(body))
-	request.Header.Set("X-Delegation-Grant", "history-grant")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -66,7 +64,7 @@ func TestEvaluateHTTPRejectsCallerSuppliedEvidence(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if history.grant != "" || len(store.findings) != 0 {
-		t.Fatalf("caller evidence reached evaluation: grant=%q findings=%#v", history.grant, store.findings)
+	if evidence.query.DeviceID != "" || len(store.findings) != 0 {
+		t.Fatalf("caller evidence reached evaluation: query=%#v findings=%#v", evidence.query, store.findings)
 	}
 }

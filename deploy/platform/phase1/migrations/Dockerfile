@@ -63,6 +63,7 @@ COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql 
 COPY infra/registry/postgres/init/016-s24-alarm-assign-capability.sql /opt/hvac/repo/infra/registry/postgres/init/016-s24-alarm-assign-capability.sql
 COPY infra/registry/postgres/init/017-registry-read-port.sql /opt/hvac/repo/infra/registry/postgres/init/017-registry-read-port.sql
 COPY infra/registry/postgres/init/018-fdd-finding-measurement.sql /opt/hvac/repo/infra/registry/postgres/init/018-fdd-finding-measurement.sql
+COPY infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql /opt/hvac/repo/infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

@@ -585,16 +585,12 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FDD_HTTP_ADDR: :19094
       FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
-      FDD_HISTORY_QUERY_URL: ${FDD_HISTORY_QUERY_URL:-https://telemetry-query-service:18447}
-      FDD_HISTORY_SERVER_NAME: ${FDD_HISTORY_SERVER_NAME:-telemetry-query-service}
-      FDD_HISTORY_TLS_CERT: ${FDD_HISTORY_TLS_CERT:-/run/hvac/fdd/client-cert.pem}
-      FDD_HISTORY_TLS_KEY: ${FDD_HISTORY_TLS_KEY:-/run/hvac/fdd/client-key.pem}
-      FDD_HISTORY_SERVER_CA: ${FDD_HISTORY_SERVER_CA:-/run/hvac/fdd/ca.pem}
+      FDD_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      FDD_CLICKHOUSE_READER_USERNAME: fdd_service_reader
+      FDD_CLICKHOUSE_READER_PASSWORD: ${FDD_CLICKHOUSE_READER_PASSWORD:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-    volumes:
-      - ${FDD_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/fdd}:/run/hvac/fdd:ro
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]

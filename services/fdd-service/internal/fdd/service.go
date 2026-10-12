@@ -1,25 +1,29 @@
 package fdd
 
 import (
+	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
-	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 const (
 	supplyTemperatureKey = "supply_water_temperature"
 	returnTemperatureKey = "return_water_temperature"
-	historyPageSize      = telemetryhistorymodel.MaximumHistoryPageSize
+	lowDeltaTFindingType = "CHILLED_WATER_LOW_DELTA_T"
+	// A condition that persists is one finding a day, not one per evaluation (ADR 0020).
+	findingRecurrence = 24 * time.Hour
+	// EvaluationJobType is the Scheduler job that runs a Site's low-delta-T rule.
+	EvaluationJobType = "FDD_EVALUATION"
 )
+
+// ErrNoLoopEvidence means the window holds no supply or no return reading to compare.
+var ErrNoLoopEvidence = errors.New("low-delta-T evaluation requires the loop's supply and return readings in the window")
 
 type FindingFilter struct {
 	AlarmID     string
@@ -29,84 +33,90 @@ type FindingFilter struct {
 
 type Store interface {
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
+	// RecentFinding is the latest finding of a type for an asset and rule whose window ended at or after since.
+	RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error)
 	ListFindings(context.Context, string, string, FindingFilter) ([]intelligencemodel.FDDFinding, error)
 	LinkFinding(context.Context, string, string, string, string, string, time.Time) (intelligencemodel.FDDFinding, error)
 }
 
-type HistorySource interface {
-	QueryDeviceHistory(context.Context, telemetryhistorymodel.DeviceHistoryQuery, string) (telemetryhistorymodel.DeviceHistoryResponse, error)
+type LoopQuery struct {
+	TenantID string
+	SiteID   string
+	DeviceID string
+	From     time.Time
+	To       time.Time
+}
+
+// Reading is one authoritative observation as Telemetry history recorded it.
+type Reading struct {
+	ObservationID string
+	PointType     string
+	ValueType     string
+	Unit          string
+	Quality       string
+	Value         float64
+	SampledAt     time.Time
+}
+
+type LoopReadings struct {
+	Supply Reading
+	Return Reading
+}
+
+// EvidenceSource reads the latest supply and return readings of a loop's meter in a window.
+type EvidenceSource interface {
+	LatestLoopReadings(context.Context, LoopQuery) (LoopReadings, error)
 }
 
 type Service struct {
-	store   Store
-	history HistorySource
-	now     func() time.Time
+	store    Store
+	evidence EvidenceSource
+	now      func() time.Time
 }
 
-func NewService(store Store, history HistorySource, now func() time.Time) (*Service, error) {
+func NewService(store Store, evidence EvidenceSource, now func() time.Time) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("FDD store is required")
 	}
-	if history == nil {
-		return nil, errors.New("FDD history source is required")
+	if evidence == nil {
+		return nil, errors.New("FDD evidence source is required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, history: history, now: now}, nil
+	return &Service{store: store, evidence: evidence, now: now}, nil
 }
 
-func (service *Service) EvaluateLowDeltaT(ctx context.Context, request EvaluationRequest, delegationGrant string) (EvaluationResult, error) {
+func (service *Service) EvaluateLowDeltaT(ctx context.Context, request EvaluationRequest) (EvaluationResult, error) {
 	if err := request.Validate(); err != nil {
 		return EvaluationResult{}, err
 	}
-	if strings.TrimSpace(delegationGrant) == "" {
-		return EvaluationResult{}, errors.New("telemetry history delegation grant is required")
-	}
-
-	query, err := (telemetryhistorymodel.DeviceHistoryQuery{
-		TenantID: request.TenantID,
-		SiteID:   request.SiteID,
-		DeviceID: request.DeviceID,
-		Keys:     []string{supplyTemperatureKey, returnTemperatureKey},
-		From:     request.EvaluationFrom.UTC(),
-		To:       request.EvaluationTo.UTC(),
-		PageSize: historyPageSize,
-	}).Canonical()
+	readings, err := service.evidence.LatestLoopReadings(ctx, LoopQuery{
+		TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID,
+		From: request.EvaluationFrom.UTC(), To: request.EvaluationTo.UTC(),
+	})
 	if err != nil {
-		return EvaluationResult{}, fmt.Errorf("build FDD history query: %w", err)
+		return EvaluationResult{}, fmt.Errorf("read loop evidence: %w", err)
 	}
-	evidence := lowDeltaTEvidenceSet{}
-	pageQuery := query
-	for {
-		response, err := service.history.QueryDeviceHistory(ctx, pageQuery, delegationGrant)
-		if err != nil {
-			return EvaluationResult{}, fmt.Errorf("query authoritative telemetry history: %w", err)
-		}
-		if err := response.ValidateFor(pageQuery); err != nil {
-			return EvaluationResult{}, fmt.Errorf("validate authoritative telemetry history: %w", err)
-		}
-		evidence.observe(response.Observations)
-		if response.Metadata.NextCursor == nil {
-			break
-		}
-		cursor := strings.TrimSpace(*response.Metadata.NextCursor)
-		pageQuery.Cursor = &cursor
-		pageQuery, err = pageQuery.Canonical()
-		if err != nil {
-			return EvaluationResult{}, fmt.Errorf("continue authoritative telemetry history: %w", err)
-		}
+	if err = temperatureEvidence(readings.Supply); err != nil {
+		return EvaluationResult{}, fmt.Errorf("supply temperature evidence: %w", err)
 	}
-
-	supply, returnTemp, err := evidence.values()
-	if err != nil {
-		return EvaluationResult{}, err
+	if err = temperatureEvidence(readings.Return); err != nil {
+		return EvaluationResult{}, fmt.Errorf("return temperature evidence: %w", err)
 	}
-	deltaT := returnTemp.value - supply.value
+	deltaT := readings.Return.Value - readings.Supply.Value
 	if deltaT >= request.MinimumDeltaTC {
 		return EvaluationResult{Status: "CLEAR", DeltaTC: deltaT}, nil
 	}
-	findingID, err := uuidv7(service.now().UTC())
+	open, found, err := service.store.RecentFinding(ctx, request.TenantID, request.SiteID, request.AssetID, lowDeltaTFindingType, request.RuleRevisionID,
+		request.EvaluationTo.UTC().Add(-findingRecurrence))
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("read recent FDD finding: %w", err)
+	}
+	if found {
+		return EvaluationResult{Status: "ONGOING", DeltaTC: deltaT, Finding: &open}, nil
+	}
+	findingID, err := schedulerjob.UUIDv7(service.now().UTC())
 	if err != nil {
 		return EvaluationResult{}, err
 	}
@@ -114,8 +124,8 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 	confidence := math.Min(0.99, 0.5+0.5*deficitRatio)
 	finding := intelligencemodel.FDDFinding{
 		ID: findingID, TenantID: request.TenantID, SiteID: request.SiteID, AssetID: request.AssetID,
-		FindingType: "CHILLED_WATER_LOW_DELTA_T", EvaluationFrom: request.EvaluationFrom.UTC(), EvaluationTo: request.EvaluationTo.UTC(),
-		EvidenceIDs: []string{supply.observationID, returnTemp.observationID}, ModelDeploymentID: request.ModelDeploymentRevisionID,
+		FindingType: lowDeltaTFindingType, EvaluationFrom: request.EvaluationFrom.UTC(), EvaluationTo: request.EvaluationTo.UTC(),
+		EvidenceIDs: []string{readings.Supply.ObservationID, readings.Return.ObservationID}, ModelDeploymentID: request.ModelDeploymentRevisionID,
 		RuleRevisionID: request.RuleRevisionID, Confidence: confidence, CreatedAt: service.now().UTC(),
 		ObservedValue: deltaT, ThresholdValue: request.MinimumDeltaTC, ValueUnit: "K",
 	}
@@ -125,59 +135,47 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 	return EvaluationResult{Status: "FINDING", DeltaTC: deltaT, Finding: &finding}, nil
 }
 
-type evidenceValue struct {
-	observationID string
-	value         float64
+func temperatureEvidence(reading Reading) error {
+	if reading.PointType != "TELEMETRY" || reading.Quality != "GOOD" {
+		return errors.New("latest authoritative observation is not good telemetry")
+	}
+	if reading.Unit != "Cel" || reading.ValueType != "NUMBER" {
+		return errors.New("latest authoritative observation is not a Celsius number")
+	}
+	if math.IsNaN(reading.Value) || math.IsInf(reading.Value, 0) {
+		return errors.New("latest authoritative observation has an invalid numeric value")
+	}
+	return nil
 }
 
-type lowDeltaTEvidenceSet struct {
-	supply        telemetryhistorymodel.DeviceHistoryObservation
-	returnTemp    telemetryhistorymodel.DeviceHistoryObservation
-	hasSupply     bool
-	hasReturnTemp bool
+// ScheduledEvaluation is what an FDD_EVALUATION schedule carries: the rule binding to check.
+// The window is the WindowMinutes before the job's fire time.
+type ScheduledEvaluation struct {
+	AssetID        string  `json:"assetId"`
+	DeviceID       string  `json:"deviceId"`
+	RuleRevisionID string  `json:"ruleRevisionId"`
+	MinimumDeltaTC float64 `json:"minimumDeltaTC"`
+	WindowMinutes  int     `json:"windowMinutes"`
 }
 
-func (evidence *lowDeltaTEvidenceSet) observe(observations []telemetryhistorymodel.DeviceHistoryObservation) {
-	for index := range observations {
-		observation := observations[index]
-		switch observation.TelemetryKey {
-		case supplyTemperatureKey:
-			evidence.supply = observation
-			evidence.hasSupply = true
-		case returnTemperatureKey:
-			evidence.returnTemp = observation
-			evidence.hasReturnTemp = true
-		}
+func ScheduledRequest(job schedulerjob.Job) (EvaluationRequest, error) {
+	if job.JobType != EvaluationJobType || job.TriggerType != "SCHEDULE" || job.ScheduledFor.IsZero() {
+		return EvaluationRequest{}, errors.New("an FDD evaluation plan only comes from an FDD_EVALUATION schedule")
 	}
-}
-
-func (evidence lowDeltaTEvidenceSet) values() (evidenceValue, evidenceValue, error) {
-	if !evidence.hasSupply || !evidence.hasReturnTemp {
-		return evidenceValue{}, evidenceValue{}, errors.New("low-delta-T evaluation requires authoritative supply and return history")
+	var plan ScheduledEvaluation
+	if err := decodeStrictFDDJSON(bytes.NewReader(job.Payload), &plan); err != nil {
+		return EvaluationRequest{}, fmt.Errorf("decode FDD evaluation plan: %w", err)
 	}
-	supply, err := temperatureEvidence(evidence.supply)
-	if err != nil {
-		return evidenceValue{}, evidenceValue{}, fmt.Errorf("supply temperature evidence: %w", err)
+	if plan.WindowMinutes <= 0 {
+		return EvaluationRequest{}, errors.New("FDD evaluation window must be positive")
 	}
-	returnTemp, err := temperatureEvidence(evidence.returnTemp)
-	if err != nil {
-		return evidenceValue{}, evidenceValue{}, fmt.Errorf("return temperature evidence: %w", err)
+	to := job.ScheduledFor.UTC()
+	request := EvaluationRequest{
+		TenantID: job.TenantID, SiteID: job.SiteID, AssetID: plan.AssetID, DeviceID: plan.DeviceID,
+		EvaluationFrom: to.Add(-time.Duration(plan.WindowMinutes) * time.Minute), EvaluationTo: to,
+		RuleRevisionID: plan.RuleRevisionID, MinimumDeltaTC: plan.MinimumDeltaTC,
 	}
-	return supply, returnTemp, nil
-}
-
-func temperatureEvidence(observation telemetryhistorymodel.DeviceHistoryObservation) (evidenceValue, error) {
-	if observation.PointType != telemetryhistorymodel.PointTypeTelemetry || observation.Quality != telemetryhistorymodel.QualityGood {
-		return evidenceValue{}, errors.New("latest authoritative observation is not good telemetry")
-	}
-	if observation.Unit == nil || *observation.Unit != "Cel" || observation.ValueType != telemetryhistorymodel.ValueTypeNumber {
-		return evidenceValue{}, errors.New("latest authoritative observation is not a Celsius number")
-	}
-	var value float64
-	if err := json.Unmarshal(observation.Value, &value); err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-		return evidenceValue{}, errors.New("latest authoritative observation has an invalid numeric value")
-	}
-	return evidenceValue{observationID: observation.ObservationID, value: value}, nil
+	return request, request.Validate()
 }
 
 func (service *Service) ListFindings(ctx context.Context, tenantID, siteID string, filter FindingFilter) ([]intelligencemodel.FDDFinding, error) {
@@ -207,17 +205,4 @@ func (service *Service) LinkFinding(ctx context.Context, tenantID, siteID, findi
 		return intelligencemodel.FDDFinding{}, errors.New("workOrderId must be a UUID")
 	}
 	return service.store.LinkFinding(ctx, tenantID, siteID, findingID, alarmID, workOrderID, service.now().UTC())
-}
-
-func uuidv7(at time.Time) (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	milliseconds := uint64(at.UTC().UnixMilli())
-	bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] = byte(milliseconds>>40), byte(milliseconds>>32), byte(milliseconds>>24), byte(milliseconds>>16), byte(milliseconds>>8), byte(milliseconds)
-	bytes[6] = (bytes[6] & 0x0f) | 0x70
-	bytes[8] = (bytes[8] & 0x3f) | 0x80
-	value := hex.EncodeToString(bytes)
-	return fmt.Sprintf("%s-%s-%s-%s-%s", value[0:8], value[8:12], value[12:16], value[16:20], value[20:32]), nil
 }

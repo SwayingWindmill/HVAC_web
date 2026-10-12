@@ -503,8 +503,9 @@ INSERT INTO core_registry.optimization_policies (id, tenant_id, policy_code, sub
 VALUES (${id(policyId)}, ${t}, 'chilled_water_supply_cost', 'SITE', 'HVAC', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.optimization_policy_versions (id, tenant_id, policy_id, version, objective, weights, constraints, dispatch_mode, fallback_policy, risk_level, horizon, horizon_minutes, granularity, effective_from, status, revision, created_at, updated_at)
-VALUES (${id(policyVersionId)}, ${t}, ${id(policyId)}, 1, 'COST', '{"cost":1}', ${id(JSON.stringify(constraints))}, 'SHADOW', 'RULE_STRATEGY', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO NOTHING;
+SELECT ${id(policyVersionId)}::uuid, ${t}::uuid, ${id(policyId)}::uuid, 1, 'COST', '{"cost":1}'::jsonb, ${id(JSON.stringify(constraints))}::jsonb, 'SHADOW', 'RULE_STRATEGY', 'LOW', 'DAY_AHEAD', 1440, '15MIN', '2026-01-01T00:00:00Z'::timestamptz, 'RELEASED', 1::bigint, clock_timestamp(), clock_timestamp()
+-- The overlap guard fires before ON CONFLICT would, so a rerun skips the insert outright.
+WHERE NOT EXISTS (SELECT 1 FROM core_registry.optimization_policy_versions WHERE id = ${id(policyVersionId)});
 INSERT INTO core_registry.ai_model_definitions (id, tenant_id, name, provider, model_id, capabilities, status, revision, created_at, updated_at)
 VALUES (${id(modelDefinitionId)}, ${t}, '冷站供水温度优化', 'LOCAL', 'hvac-recommendation-v1', ARRAY['optimization'], 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
@@ -515,6 +516,20 @@ INSERT INTO core_registry.ai_deployment_bindings (id, tenant_id, site_id, use_ca
 VALUES (${id(deploymentBindingId)}, ${t}, ${st}, 'OPTIMIZATION', ${id(deploymentRevisionId)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 COMMIT;`;
+}
+
+// FDD checks the chilled-water loop every quarter-hour: the BTU meter's supply and return
+// temperatures over the last 15 minutes against a 3.5 K floor (the loop is designed for 5 K).
+function buildDiagnosisSeed(site, points) {
+  const ids = buildIdentities(site, points);
+  const meter = siteDevices(site).find((device) => device.name === 'BTU-METER-01');
+  const assetId = ids.assetIdByKey.get('equipment-btu-meter');
+  if (!meter || !assetId) throw new Error('BTU-METER-01 and its asset are required for the low-delta-T schedule');
+  const plan = { assetId, deviceId: meter.platformDeviceId, ruleRevisionId: 'chilled-water-low-delta-t/v1', minimumDeltaTC: 3.5, windowMinutes: 15 };
+  return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-water-low-delta-t-${site.siteCode}`)}, '冷冻水低温差诊断（每 15 分钟）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'FDD_EVALUATION', 'CRON', '*/15 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 60, ${sqlLiteral(JSON.stringify(plan))},
+  date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
 function localAdminPrincipalId() {
@@ -727,6 +742,7 @@ for (const site of localSites) {
   psql('hvac_s1', buildEnergyTopologySeed(site, seededPoints));
   psql('hvac_s1', buildForecastSeed(site, seededPoints));
   psql('hvac_s1', buildOptimizationSeed(site, seededPoints));
+  psql('hvac_s1', buildDiagnosisSeed(site, seededPoints));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);

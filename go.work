@@ -23,6 +23,7 @@ use (
 	./libs/oidctest
 	./libs/ownershipregistry
 	./libs/registryauth
+	./libs/schedulerjob
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/schemagate
