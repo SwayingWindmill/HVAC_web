@@ -65,9 +65,10 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   );
   const denied = summaries.data?.filter((site) => site.summary === null) ?? [];
   const colorOf = (siteId: string) => SITE_COLORS[Math.max(0, sites.findIndex((site) => site.id === siteId)) % SITE_COLORS.length];
+  const analyzed = useMemo(() => sites.filter((site) => result?.sites.some((entry) => entry.siteId === site.id)), [sites, result]);
   const chartConfig = useMemo(
-    () => Object.fromEntries(sites.map((site, index) => [site.id, { label: site.displayName, color: SITE_COLORS[index % SITE_COLORS.length] }])) satisfies ChartConfig,
-    [sites],
+    () => Object.fromEntries(analyzed.map((site) => [site.id, { label: site.displayName, color: colorOf(site.id) }])) satisfies ChartConfig,
+    [analyzed, sites],
   );
   const ranked = result?.sites.filter((site) => site.cop !== null) ?? [];
   const best = ranked[0];
@@ -190,9 +191,9 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                   <LineChart data={[...result.daily]} margin={{ left: 4, right: 12, top: 8 }}>
                     <CartesianGrid vertical={false} />
                     <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} tickFormatter={(label: string) => label.split(' ')[0]} />
-                    <YAxis tickLine={false} axisLine={false} width={36} domain={['auto', 'auto']} />
+                    <YAxis tickLine={false} axisLine={false} width={40} domain={['auto', 'auto']} tickFormatter={(value: number) => formatDecimal(value, 2)} />
                     <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
-                    {sites.map((site) => (
+                    {analyzed.map((site) => (
                       <Line key={site.id} dataKey={site.id} stroke={`var(--color-${site.id})`} strokeWidth={2} dot={{ r: 3, strokeWidth: 0, fill: `var(--color-${site.id})` }} connectNulls isAnimationActive={false} />
                     ))}
                     <ChartLegend content={<ChartLegendContent />} />
