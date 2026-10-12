@@ -21,6 +21,7 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { AuditLog } from './audit/AuditLog';
 import { EmptyGovernanceState } from './EmptyGovernanceState';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
+import { DesignSystem } from './design-system/DesignSystem';
 import { RuleManagement } from './rule-management/RuleManagement';
 
 interface SystemManagementProps {
@@ -219,6 +220,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: SystemManag
     { key: 'integrations', label: '数据接入', children: integrations },
     { key: 'rules', label: '自动化规则', children: <RuleManagement principal={principal} sites={sites} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '审计日志', children: audit },
+    { key: 'design', label: '设计系统', children: <DesignSystem /> },
   ];
   const normalizedActiveTab = items.some((item) => item.key === activeTab) ? activeTab : 'overview';
   const handleTabChange = (key: string) => {

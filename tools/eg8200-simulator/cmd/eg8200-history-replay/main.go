@@ -46,9 +46,43 @@ type replayObservationRequest struct {
 
 type replayAdmitter func(context.Context, replayObservationRequest) error
 
+// replayPlan is what one replay produces: the dataset, its window, the Plant step, the points kept
+// (all when nil, keyed "DEVICE/telemetry.key") and the commands applied as the replay reaches them.
+type replayPlan struct {
+	DatasetID string
+	From      time.Time
+	Duration  time.Duration
+	Step      time.Duration
+	Points    map[string]bool
+	Commands  []scheduledCommand
+}
+
+// scheduledCommand is an operator command applied to the Plant at a moment of the replay.
+type scheduledCommand struct {
+	At      time.Time
+	Command simulator.Command
+}
+
+type scheduledCommandFile struct {
+	At       time.Time          `json:"at"`
+	DeviceID string             `json:"deviceId"`
+	Method   string             `json:"method"`
+	Params   map[string]float64 `json:"params"`
+}
+
 type replayClient struct {
 	endpoint   string
 	httpClient *http.Client
+	// retryWait is how long to wait before sending an observation again after a retryable refusal.
+	retryWait func(attempt int) time.Duration
+}
+
+// maximumReplayAttempts bounds how long one observation waits out rate limiting before the replay stops.
+const maximumReplayAttempts = 40
+
+// backoff waits a little longer after each refusal, up to five seconds.
+func backoff(attempt int) time.Duration {
+	return min(5*time.Second, time.Duration(attempt)*250*time.Millisecond)
 }
 
 func main() {
@@ -58,6 +92,10 @@ func main() {
 	datasetID := flag.String("dataset-id", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DATASET_ID")), "stable replay dataset UUIDv7")
 	fromValue := flag.String("from", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_FROM")), "historical replay start time in RFC3339")
 	durationValue := flag.String("duration", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_DURATION")), "finite replay duration")
+	stepValue := flag.String("step", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_STEP")), "Plant step, the sample interval when empty")
+	pointsValue := flag.String("points", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_POINTS")), "comma-separated DEVICE/telemetry.key points to replay, all when empty")
+	commandsPath := flag.String("commands", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_COMMANDS")), "JSON file of commands to apply during the replay")
+	scenarioPath := flag.String("scenario", strings.TrimSpace(os.Getenv("EG8200_SCENARIO")), "the Site's daily scenario, the plant config's when empty")
 	certFile := flag.String("tls-cert", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TLS_CERT")), "replay workload TLS certificate")
 	keyFile := flag.String("tls-key", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_TLS_KEY")), "replay workload TLS private key")
 	caFile := flag.String("server-ca", strings.TrimSpace(os.Getenv("EG8200_HISTORY_REPLAY_SERVER_CA")), "Telemetry Runtime server CA")
@@ -82,6 +120,36 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// A local Site replays the same weather and load day its live simulator runs.
+	if path := strings.TrimSpace(*scenarioPath); path != "" {
+		scenarioFile, err := os.Open(path)
+		if err != nil {
+			log.Fatal(err)
+		}
+		scenario, err := simulator.DecodeScenarioJSON(scenarioFile)
+		_ = scenarioFile.Close()
+		if err != nil {
+			log.Fatal(err)
+		}
+		plantConfig.Scenario = scenario
+	}
+	plan := replayPlan{DatasetID: strings.ToLower(strings.TrimSpace(*datasetID)), From: from.UTC(), Duration: duration}
+	if value := strings.TrimSpace(*stepValue); value != "" {
+		if plan.Step, err = time.ParseDuration(value); err != nil || plan.Step <= 0 {
+			log.Fatal("historical replay step must be a positive duration")
+		}
+	}
+	if value := strings.TrimSpace(*pointsValue); value != "" {
+		plan.Points = map[string]bool{}
+		for _, point := range strings.Split(value, ",") {
+			plan.Points[strings.TrimSpace(point)] = true
+		}
+	}
+	if path := strings.TrimSpace(*commandsPath); path != "" {
+		if plan.Commands, err = loadScheduledCommands(path); err != nil {
+			log.Fatal(err)
+		}
+	}
 	client, err := newReplayClient(*telemetryURL, *certFile, *keyFile, *caFile, *serverName)
 	if err != nil {
 		log.Fatal(err)
@@ -89,7 +157,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	count, err := runReplay(ctx, plantConfig, deviceIDs, strings.ToLower(strings.TrimSpace(*datasetID)), from.UTC(), duration, client.Admit)
+	count, err := runReplay(ctx, plantConfig, deviceIDs, plan, client.Admit)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -125,13 +193,43 @@ func loadReplayConfigs(plantPath, deviceIDsPath string) (simulator.Config, map[s
 	return plantConfig, deviceIDs, nil
 }
 
-func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[string]string, datasetID string, from time.Time, duration time.Duration, admit replayAdmitter) (int, error) {
-	if admit == nil || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 {
+func loadScheduledCommands(path string) ([]scheduledCommand, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read replay commands: %w", err)
+	}
+	var entries []scheduledCommandFile
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decode replay commands: %w", err)
+	}
+	commands := make([]scheduledCommand, 0, len(entries))
+	for _, entry := range entries {
+		if entry.At.IsZero() || strings.TrimSpace(entry.DeviceID) == "" || strings.TrimSpace(entry.Method) == "" {
+			return nil, errors.New("a replay command needs at, deviceId and method")
+		}
+		commands = append(commands, scheduledCommand{At: entry.At.UTC(), Command: simulator.Command{DeviceID: entry.DeviceID, Method: entry.Method, Params: entry.Params}})
+	}
+	return commands, nil
+}
+
+func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[string]string, plan replayPlan, admit replayAdmitter) (int, error) {
+	datasetID, from, duration := plan.DatasetID, plan.From, plan.Duration
+	if admit == nil || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 || plan.Step < 0 {
 		return 0, errors.New("historical replay runner configuration is invalid")
 	}
+	commands := slices.Clone(plan.Commands)
+	slices.SortStableFunc(commands, func(left, right scheduledCommand) int { return left.At.Compare(right.At) })
 	pointByReference := make(map[string]simulator.PointConfig, len(config.Points))
 	for _, point := range config.Points {
 		pointByReference[point.DeviceID+"\x00"+point.TelemetryKey] = point
+	}
+	for reference := range plan.Points {
+		device, key, _ := strings.Cut(reference, "/")
+		if _, ok := pointByReference[device+"\x00"+key]; !ok {
+			return 0, fmt.Errorf("historical replay point %s is not in the plant config", reference)
+		}
 	}
 	plant := simulator.NewPlant(config.Plant, config.Scenario, from.UTC())
 	scheduler, err := simulator.NewMeasurementScheduler(config)
@@ -152,6 +250,9 @@ func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[strin
 			return cmp.Compare(left.TelemetryKey, right.TelemetryKey)
 		})
 		for _, measurement := range measurements {
+			if plan.Points != nil && !plan.Points[measurement.DeviceID+"/"+measurement.TelemetryKey] {
+				continue
+			}
 			point, ok := pointByReference[measurement.DeviceID+"\x00"+measurement.TelemetryKey]
 			if !ok {
 				return fmt.Errorf("historical replay point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
@@ -196,8 +297,14 @@ func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[strin
 		return admitted, err
 	}
 	elapsed := time.Duration(0)
-	interval := config.Interval()
+	interval := cmp.Or(plan.Step, config.Interval())
 	for elapsed < duration {
+		for len(commands) > 0 && !commands[0].At.After(from.Add(elapsed)) {
+			if result := plant.ApplyCommand(commands[0].Command); !result.Success {
+				return admitted, fmt.Errorf("replay command %s on %s at %s was refused: %s", commands[0].Command.Method, commands[0].Command.DeviceID, commands[0].At.Format(time.RFC3339), result.Code)
+			}
+			commands = commands[1:]
+		}
 		step := min(interval, duration-elapsed)
 		if err := emit(plant.Tick(step)); err != nil {
 			return admitted, err
@@ -225,7 +332,8 @@ func newReplayClient(rawURL, certFile, keyFile, caFile, serverName string) (*rep
 		return nil, errors.New("historical replay server CA is empty")
 	}
 	return &replayClient{
-		endpoint: strings.TrimRight(base.String(), "/") + historicalReplayObservationPath,
+		retryWait: backoff,
+		endpoint:  strings.TrimRight(base.String(), "/") + historicalReplayObservationPath,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{
@@ -241,28 +349,46 @@ func (client *replayClient) Admit(ctx context.Context, input replayObservationRe
 	if err != nil {
 		return fmt.Errorf("encode Historical Replay observation: %w", err)
 	}
+	for attempt := 1; ; attempt++ {
+		status, response, err := client.send(ctx, body)
+		if err != nil {
+			return err
+		}
+		if status == http.StatusOK {
+			return nil
+		}
+		// Rate limiting and a briefly unavailable store are retryable; anything else is a bad observation.
+		if (status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable) || attempt == maximumReplayAttempts {
+			return fmt.Errorf("Historical Replay admission returned %d: %s", status, response)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(client.retryWait(attempt)):
+		}
+	}
+}
+
+func (client *replayClient) send(ctx context.Context, body []byte) (int, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create Historical Replay request: %w", err)
+		return 0, "", fmt.Errorf("create Historical Replay request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("admit Historical Replay observation: %w", err)
+		return 0, "", fmt.Errorf("admit Historical Replay observation: %w", err)
 	}
 	defer response.Body.Close()
-	body, err = io.ReadAll(io.LimitReader(response.Body, maximumReplayResponseBytes+1))
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumReplayResponseBytes+1))
 	if err != nil {
-		return fmt.Errorf("read Historical Replay response: %w", err)
+		return 0, "", fmt.Errorf("read Historical Replay response: %w", err)
 	}
-	if int64(len(body)) > maximumReplayResponseBytes {
-		return errors.New("Historical Replay response exceeds limit")
+	if int64(len(payload)) > maximumReplayResponseBytes {
+		return 0, "", errors.New("Historical Replay response exceeds limit")
 	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Historical Replay admission returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return nil
+	return response.StatusCode, strings.TrimSpace(string(payload)), nil
 }
 
 func envOr(name, fallback string) string {

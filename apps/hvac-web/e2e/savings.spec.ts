@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
@@ -85,4 +86,26 @@ test('a measure cites the setpoint command it came from, named as the control pa
   await expect(evidence).toBeVisible();
   await evidence.click();
   await expect(page).toHaveURL(new RegExp(`/operations/control\?.*inspect=${gateway.commands[0].commandId}`));
+});
+
+// Recorded on the local stack from replayed history: Site A's setpoint raised to 8 °C on 2026-09-29.
+test('a verified measure shows its trusted baseline and what each day saved', async ({ page, gateway }) => {
+  const verified = JSON.parse(readFileSync(new URL('./fixtures/savings-measure-verified.json', import.meta.url), 'utf8'));
+  gateway.measures.push(verified);
+  await page.goto(`/energy-analysis/savings?site=${SITE_ID}&inspect=${verified.id}`);
+
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('已结束');
+  await expect(sheet).toContainText('累计节电367 kWh');
+  await expect(sheet).toContainText('节省电费¥347');
+  await expect(sheet).toContainText('节电率1.5%');
+  const checks = sheet.getByRole('table', { name: '基线检验' });
+  await expect(checks.getByRole('row').filter({ hasText: '有效小时' })).toContainText('336 / 336（100%）');
+  await expect(checks.getByLabel('未通过')).toHaveCount(0);
+  await expect(sheet.getByLabel('每日节电量')).toBeVisible();
+  const days = sheet.getByRole('table', { name: '逐日核算' });
+  await expect(days.getByRole('row')).toHaveCount(7);
+  await expect(days.getByRole('row').filter({ hasText: '2026-10-02' })).toContainText('80');
+  await expect(days.getByRole('row').filter({ hasText: '2026-09-30' })).toContainText('100%');
+  await expect(sheet.getByRole('button', { name: '重新拟合基线' })).toHaveCount(0);
 });

@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { CircleCheck, CircleDashed, CircleX, Flag, RefreshCcw, Rocket } from 'lucide-react';
 import { useState } from 'react';
-import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { toast } from 'sonner';
 import { FactTile } from '@/blocks/fact-list';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -25,8 +25,7 @@ import { MeasureTimeDialog } from './MeasureTimeDialog';
 const siteRoute = getRouteApi('/_app/_site');
 
 const dayConfig = {
-  actual: { label: '实际用电', color: 'var(--chart-2)' },
-  adjusted: { label: '调整后基线', color: 'var(--chart-1)' },
+  avoided: { label: '节电量', color: 'var(--chart-1)' },
 } satisfies ChartConfig;
 
 const kwh = (value: number) => `${formatDecimal(value, 0)} kWh`;
@@ -107,16 +106,17 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
         </FactTile>
         <FactTile label="节电率">{rate === null ? '—' : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
       </dl>
-      <ChartContainer config={dayConfig} className="aspect-auto h-[220px] w-full">
-        <ComposedChart data={[...rows]} margin={{ left: 4, right: 8, top: 8 }}>
+      <ChartContainer config={dayConfig} className="aspect-auto h-[200px] w-full" aria-label="每日节电量">
+        <BarChart data={[...rows]} margin={{ left: 4, right: 8, top: 8 }}>
           <CartesianGrid vertical={false} />
           <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
           <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(value: number) => formatDecimal(value, 0)} />
-          <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => `${dayConfig[name as keyof typeof dayConfig]?.label ?? name} ${kwh(Number(value))}`} />} />
-          <ChartLegend content={<ChartLegendContent />} />
-          <Bar dataKey="actual" fill="var(--color-actual)" radius={[3, 3, 0, 0]} maxBarSize={22} />
-          <Line dataKey="adjusted" stroke="var(--color-adjusted)" strokeWidth={2} dot={false} type="monotone" />
-        </ComposedChart>
+          <ReferenceLine y={0} stroke="var(--border)" />
+          <ChartTooltip cursor={false} content={<ChartTooltipContent hideIndicator formatter={(value) => `节电 ${kwh(Number(value))}`} />} />
+          <Bar dataKey="avoided" radius={[3, 3, 0, 0]} maxBarSize={28}>
+            {rows.map((row) => <Cell key={row.day} fill={row.avoided < 0 ? 'var(--destructive)' : 'var(--color-avoided)'} />)}
+          </Bar>
+        </BarChart>
       </ChartContainer>
       <Table aria-label="逐日核算" className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
         <TableHeader>

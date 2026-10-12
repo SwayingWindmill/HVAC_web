@@ -292,7 +292,11 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
             <FactTile className="text-lg font-semibold tracking-tight" label="本月节电">{formatDecimal(totals.avoidedKWh, 0)} kWh</FactTile>
             <FactTile className="text-lg font-semibold tracking-tight" label="节电率">{rate === null ? "—" : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
-            <FactTile className="col-span-2" label="核算措施">{reporting?.name ?? "本月措施已结束"} · 已核算 {totals.days} 天</FactTile>
+            <div className="col-span-2">
+              <FactTile label="核算情况">
+                {reporting ? `「${reporting.name}」核算中 · 本月已核算 ${totals.days} 天` : `本月已核算 ${totals.days} 天，措施均已结束`}
+              </FactTile>
+            </div>
           </dl>
         ) : (
           <p className="text-muted-foreground">

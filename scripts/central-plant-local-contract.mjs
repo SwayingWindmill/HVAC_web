@@ -25,12 +25,14 @@ export const localSites = Object.freeze([
     siteCode: 'local-energy-site', siteName: '本地智慧能源站点',
     gatewayDeviceId: centralPlantIdentity.gatewayDeviceId, gatewayCode: 'eg8200-commercial-001', gatewayName: 'EG8200-COMMERCIAL-001',
     simulatorService: 'eg8200-simulator', simulatorConfig: 'eg8200-mqtt.json', simulatorQueue: 'eg8200',
+    dailyScenario: 'scenario-daily-a.json',
   }),
   Object.freeze({
     index: 1, tenantId: centralPlantIdentity.tenantId, siteId: '018f3e00-1000-7000-8000-000000000002',
     siteCode: 'local-energy-site-b', siteName: '本地智慧能源二号站点',
     gatewayDeviceId: '018f3e00-4000-7000-8000-000000000200', gatewayCode: 'eg8200-commercial-002', gatewayName: 'EG8200-COMMERCIAL-002',
     simulatorService: 'eg8200-simulator-b', simulatorConfig: 'eg8200-mqtt-b.json', simulatorQueue: 'eg8200-b',
+    dailyScenario: 'scenario-daily-b.json',
   }),
 ]);
 
@@ -62,6 +64,9 @@ export function localUUID(index) {
   if (!Number.isSafeInteger(index) || index <= 0 || index > 0xffffffffffff) throw new Error('local UUID index is out of range');
   return `01910000-0000-7000-8000-${index.toString(16).padStart(12, '0')}`;
 }
+
+// A job id minted in SQL: a UUIDv7 stamped now, its random part drawn from the row's `dedup` key.
+export const sqlJobId = String.raw`regexp_replace(lpad(to_hex((extract(epoch FROM clock_timestamp()) * 1000)::bigint), 12, '0') || '7' || substr(md5(dedup), 1, 3) || '8' || substr(md5(dedup), 4, 15), '^(.{8})(.{4})(.{4})(.{4})(.{12})$', '\1-\2-\3-\4-\5')::uuid`;
 
 export function sqlLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
