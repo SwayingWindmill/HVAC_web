@@ -202,7 +202,11 @@ export function BreakdownWorkspace() {
             <Card role="region" aria-label="能流">
               <CardHeader>
                 <CardTitle>能流</CardTitle>
-                <CardDescription>空调总用电流向各系统与设备；分表未覆盖的部分记为未分项</CardDescription>
+                <CardDescription>
+                  {breakdown.unallocatedKWh !== null && breakdown.unallocatedKWh < 0
+                    ? `分表合计比总表多 ${kWh(-breakdown.unallocatedKWh)}，图中各设备之和大于空调总用电`
+                    : '空调总用电流向各系统与设备；分表未覆盖的部分记为未分项'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <EnergyFlow breakdown={breakdown} />

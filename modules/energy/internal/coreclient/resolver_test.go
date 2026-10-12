@@ -14,7 +14,7 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
 
-const matchPayload = `{"status":"MATCH","tenantId":"tenant-1","siteId":"site-1","meterId":"meter-1","meterBindingId":"binding-1","topologyVersionId":"topology-1","bindingVersion":4,"revision":9,"energyTypeId":"energy-1","energyType":"electricity","meterRole":"PRIMARY","direction":"IMPORT","accountingScope":"BRANCH","deviceId":"device-1","pointId":"point-1","pointType":"COUNTER","effectiveFrom":"2026-01-01T00:00:00Z"}`
+const matchPayload = `{"status":"MATCH","tenantId":"tenant-1","siteId":"site-1","meterId":"meter-1","meterBindingId":"binding-1","topologyVersionId":"topology-1","bindingVersion":4,"revision":9,"energyTypeId":"energy-1","energyType":"electricity","meterRole":"PRIMARY","direction":"IMPORT","accountingScope":"BRANCH","loadDeviceId":"chiller-1","deviceId":"device-1","pointId":"point-1","pointType":"COUNTER","effectiveFrom":"2026-01-01T00:00:00Z"}`
 
 func TestResolverCallsPrivateCoreRouteAndMapsBindingSnapshot(t *testing.T) {
 	clock := newTestClock()
@@ -37,7 +37,7 @@ func TestResolverCallsPrivateCoreRouteAndMapsBindingSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Status != energy.BindingMatch || resolution.MeterBindingID != "binding-1" || resolution.BindingVersion != 4 || resolution.BindingRevision != 9 || resolution.EnergyType != energy.EnergyTypeElectricity || resolution.AccountingScope != energy.AccountingScopeBranch {
+	if resolution.Status != energy.BindingMatch || resolution.MeterBindingID != "binding-1" || resolution.BindingVersion != 4 || resolution.BindingRevision != 9 || resolution.EnergyType != energy.EnergyTypeElectricity || resolution.AccountingScope != energy.AccountingScopeBranch || resolution.LoadDeviceID != "chiller-1" {
 		t.Fatalf("resolution=%#v", resolution)
 	}
 }

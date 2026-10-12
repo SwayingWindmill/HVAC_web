@@ -465,10 +465,12 @@ try {
       ('${topologyNodeB}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Site Load', 'ACTIVE', 1, now(), now()),
       ('${topologyNodeV2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersion2Id}', 'GRID', 'Grid V2', 'ACTIVE', 1, now(), now()),
       ('01990000-1310-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'HVAC', 'Plant', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at) VALUES
+      ('018f1e00-4100-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'chiller-1', 'Chiller 1', 'CHILLER', 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.energy_nodes (
       id, tenant_id, site_id, topology_version_id, node_type, name, device_id, status, revision, created_at, updated_at
     ) VALUES
-      ('01990000-1310-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Chiller', '018f1e00-4000-7000-8000-000000000001', 'ACTIVE', 1, now(), now());
+      ('01990000-1310-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Chiller', '018f1e00-4100-7000-8000-000000000021', 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.energy_edges (
       id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id,
       energy_type_id, direction, enabled, revision, created_at, updated_at

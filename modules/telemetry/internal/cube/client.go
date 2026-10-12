@@ -201,7 +201,7 @@ func buildDeviceBreakdownQuery(productQuery analyticsmodel.EnergySeriesQuery, lo
 	return cubeQuery{
 		Measures:       []string{energyMeasure(productQuery.QualityPolicy)},
 		Filters:        energyFilters(productQuery, accountingScopeBranch),
-		Dimensions:     []string{"energy_usage.device_id"},
+		Dimensions:     []string{"energy_usage.load_device_id"},
 		TimeDimensions: periodDimension(productQuery, location),
 		Timezone:       productQuery.Timezone,
 		Limit:          50000,
@@ -247,7 +247,7 @@ func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.Energy
 	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
 	byDevice := map[string][]analyticsmodel.EnergySeriesPoint{}
 	for _, row := range decoded.Data {
-		deviceID, err := scalarString(row["energy_usage.device_id"])
+		deviceID, err := scalarString(row["energy_usage.load_device_id"])
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown device: %w", err)
 		}

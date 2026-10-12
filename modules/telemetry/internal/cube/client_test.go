@@ -131,9 +131,9 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 		case len(decoded.Query.Dimensions) == 1:
 			breakdownQuery = &decoded.Query
 			_, _ = writer.Write([]byte(`{"data":[
-				{"energy_usage.device_id":"` + pump + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"20"},
-				{"energy_usage.device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"70"},
-				{"energy_usage.device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"80"}
+				{"energy_usage.load_device_id":"` + pump + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"20"},
+				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"70"},
+				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"80"}
 			]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
@@ -153,7 +153,7 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if breakdownQuery == nil || breakdownQuery.Dimensions[0] != "energy_usage.device_id" ||
+	if breakdownQuery == nil || breakdownQuery.Dimensions[0] != "energy_usage.load_device_id" ||
 		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.accounting_scope", "BRANCH") ||
 		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
 		t.Fatalf("breakdown query = %#v", breakdownQuery)

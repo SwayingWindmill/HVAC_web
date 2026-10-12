@@ -59,6 +59,8 @@ Energy Processing 通过只读 Energy Content adapter 获取 released snapshot�
 | `energy_type` | 是 | 首个切片固定为 `electricity`，不能由 telemetry key 推断 |
 | `meter_role` | 是 | 首个切片固定选择 `PRIMARY`；CHECK/MONITORING/BACKUP 不进入本切片 |
 | `direction` | 是 | 保留 IMPORT/EXPORT/CHARGE/DISCHARGE 等 Registry 语义，不在 Fact 中重新推断 |
+| `accounting_scope` | 是 | `SITE` 计入站点总量；`BRANCH` 是设备分表，已含在总量中（#481）。由 Registry 按绑定所在的边推出 |
+| `load_device_id` | `BRANCH` 必填 | 分表所供电的设备，可与上报计数器的 `device_id` 不同；`SITE` 为空 |
 | `device_id`, `point_id`, `point_type` | 是 | 将 Binding 与历史 observation 的源点对齐；`point_type` 必须是 `COUNTER` |
 | `effective_from`, `effective_to` | 是 | 按 observation event-time 做 Binding 选择 |
 

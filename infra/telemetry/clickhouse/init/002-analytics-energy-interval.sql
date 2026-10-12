@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS analytics.energy_interval_facts (
   meter_role LowCardinality(String),
   direction LowCardinality(String),
   accounting_scope LowCardinality(String),
+  load_device_id Nullable(UUID),
   device_id UUID,
   point_id UUID,
   sensor_id Nullable(UUID),

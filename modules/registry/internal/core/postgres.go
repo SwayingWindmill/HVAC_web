@@ -388,13 +388,14 @@ SELECT mb.tenant_id::text,
        mb.point_type,
        mb.effective_from,
        mb.effective_to,
-       CASE WHEN tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID'
-            THEN 'BRANCH' ELSE 'SITE' END
+       CASE WHEN scope.branch THEN 'BRANCH' ELSE 'SITE' END,
+       CASE WHEN scope.branch THEN tn.device_id::text END
 FROM core_registry.meter_bindings AS mb
 JOIN core_registry.energy_types AS et ON et.id = mb.energy_type_id
 JOIN core_registry.energy_edges AS edge ON edge.id = mb.energy_edge_id
 JOIN core_registry.energy_nodes AS fn ON fn.id = edge.from_node_id
 JOIN core_registry.energy_nodes AS tn ON tn.id = edge.to_node_id
+CROSS JOIN LATERAL (SELECT tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID' AS branch) AS scope
 WHERE mb.site_id = $1::uuid
   AND mb.device_id = $2::uuid
   AND mb.point_id = $3::uuid
@@ -411,12 +412,16 @@ ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
 		defer rows.Close()
 		for rows.Next() {
 			var item MeterBindingResolution
+			var loadDeviceID *string
 			if err := rows.Scan(
 				&item.TenantID, &item.SiteID, &item.MeterID, &item.MeterBindingID, &item.TopologyVersionID,
 				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
-				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope,
+				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope, &loadDeviceID,
 			); err != nil {
 				return fmt.Errorf("scan Core meter binding resolution: %w", err)
+			}
+			if loadDeviceID != nil {
+				item.LoadDeviceID = *loadDeviceID
 			}
 			item.EffectiveFrom = item.EffectiveFrom.UTC()
 			if item.EffectiveTo != nil {

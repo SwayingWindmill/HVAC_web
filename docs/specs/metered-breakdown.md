@@ -1,6 +1,8 @@
 # 分项计量：按设备拆分实测用电规格
 
-Issue #481 第二阶段。2026-10-12 与用户逐条确认（全部按建议）。本文是实现契约。
+Issue #481 第二阶段。2026-10-12 与用户逐条确认（全部按建议）。本文是实现契约，已实现。
+
+参考平台比对（OpenEMS、MyEMS、ThingsBoard）见 `docs/architecture/metered-breakdown-source-review-2026-10-12.md`。
 
 第一阶段的分项能耗页由各设备功率逐时累计估算，总表与估算之和的差额单列为「未分项」。第二阶段改为读设备自己的电能表。
 
@@ -18,11 +20,11 @@ Issue #481 第二阶段。2026-10-12 与用户逐条确认（全部按建议）�
 
 ## 行为
 
-1. 注册中心解析计量绑定（`meter-binding.resolve`）时返回 `accountingScope`：`BRANCH` 或 `SITE`。
-2. 能耗投影把 `accounting_scope` 写进 `analytics.energy_interval_facts`。
+1. 注册中心解析计量绑定（`meter-binding.resolve`）时返回 `accountingScope`：`BRANCH` 或 `SITE`；`BRANCH` 另返回 `loadDeviceId`，即负载节点关联的设备（分表可以是独立的电表设备）。
+2. 能耗投影把 `accounting_scope` 与 `load_device_id` 写进 `analytics.energy_interval_facts`。
 3. 能耗查询：
    - 不拆分时，只汇总 `SITE` 事实，结果与加分表前一致；
-   - 按设备拆分时，另外返回 `BRANCH` 事实按设备汇总的序列，与总量的时间桶一致。
+   - 按设备拆分时，另外返回 `BRANCH` 事实按 `load_device_id` 汇总的序列，与总量的时间桶一致。
 4. 分项能耗页：
    - 桑基图「空调总用电 → 设备 → （未分项）」与排行、逐时/逐日分项均来自实测；
    - 设备没有分表时标「未计量」，其用电计入未分项。

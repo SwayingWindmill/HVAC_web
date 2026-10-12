@@ -99,6 +99,8 @@ type MeterBindingResolution struct {
 	EffectiveTo       *time.Time `json:"effectiveTo,omitempty"`
 	// AccountingScope is BRANCH for a sub-meter on the feed into one piece of equipment, SITE otherwise.
 	AccountingScope string `json:"accountingScope,omitempty"`
+	// LoadDeviceID is the equipment a BRANCH sub-meter feeds, which may not be the device reporting it.
+	LoadDeviceID string `json:"loadDeviceId,omitempty"`
 }
 
 type Collection[T any] struct {

@@ -34,7 +34,7 @@ func TestBuildFactUsesCanonicalDeltaAndBindingSnapshot(t *testing.T) {
 	if fact.FactID != testCurrentObservation || fact.EnergyType != EnergyTypeElectricity || fact.EnergyKWh != 2.75 {
 		t.Fatalf("fact=%#v", fact)
 	}
-	if fact.MeterBindingID != testBindingID || fact.TelemetryKey != "site.energy.total" || fact.FactRevision != 0 || fact.AccountingScope != AccountingScopeSite {
+	if fact.MeterBindingID != testBindingID || fact.TelemetryKey != "site.energy.total" || fact.FactRevision != 0 || fact.AccountingScope != AccountingScopeSite || fact.LoadDeviceID != nil {
 		t.Fatalf("fact=%#v", fact)
 	}
 	if fact.Quality != FactQualityValid || fact.DatasetRevision != 1722258003000 || fact.SourceOffset != 1722258003000 {
@@ -52,6 +52,24 @@ func TestBuildFactRejectsABindingWithoutAnAccountingScope(t *testing.T) {
 	binding.AccountingScope = ""
 	if _, err := BuildFact(validDelta(), binding, time.Now()); err == nil {
 		t.Fatal("BuildFact() error = nil")
+	}
+}
+
+func TestBuildFactCreditsASubMeterToTheEquipmentItFeeds(t *testing.T) {
+	const chiller = "018f4e00-2000-7000-8000-000000000099"
+	binding := validBinding()
+	binding.AccountingScope = AccountingScopeBranch
+	binding.LoadDeviceID = chiller
+	fact, err := BuildFact(validDelta(), binding, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fact.AccountingScope != AccountingScopeBranch || fact.LoadDeviceID == nil || *fact.LoadDeviceID != chiller || fact.DeviceID != testDeviceID {
+		t.Fatalf("fact=%#v", fact)
+	}
+	binding.LoadDeviceID = ""
+	if _, err := BuildFact(validDelta(), binding, time.Now()); err == nil {
+		t.Fatal("BuildFact() accepted a sub-meter without the equipment it feeds")
 	}
 }
 
