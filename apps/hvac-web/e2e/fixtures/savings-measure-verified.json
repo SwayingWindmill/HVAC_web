@@ -1,0 +1,100 @@
+{
+  "id": "01a1301d-313b-79d2-96d5-a1d275de142a",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "name": "冷冻水供水温度由 7 °C 提高到 8 °C",
+  "kind": "SETPOINT_RESET",
+  "description": "按优化建议把 CHILLER-01 冷冻水出水设定温度由 7 °C 提高到 8 °C，冷机效率随之提高。",
+  "evidence": "9 月 29 日优化建议",
+  "evidenceCommandId": null,
+  "status": "ENDED",
+  "plannedAt": "2026-09-29T01:00:00Z",
+  "implementedAt": "2026-09-29T01:00:00Z",
+  "endedAt": "2026-10-05T16:00:00Z",
+  "investmentCny": 0,
+  "expectedAnnualKWh": 21900,
+  "baseline": {
+    "from": "2026-09-15T01:00:00Z",
+    "to": "2026-09-29T01:00:00Z",
+    "samples": 336,
+    "expectedHours": 336,
+    "model": {
+      "interceptKWh": 92.37338490825242,
+      "slope": 0.17537569537837105,
+      "cvRmse": 0.005733689595961938,
+      "nmbe": 2.989835308681889e-17
+    },
+    "trusted": true
+  },
+  "totals": {
+    "days": 6,
+    "unpricedHours": 0,
+    "adjustedBaselineKWh": 25151.85863317232,
+    "actualKWh": 24784.75837600004,
+    "avoidedKWh": 367.1002571722795,
+    "avoidedCost": 347.0927352593673
+  },
+  "days": [
+    {
+      "day": "2026-09-30",
+      "expectedHours": 15,
+      "hours": 15,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 3285.934991597967,
+      "actualKWh": 3242.0403790000128,
+      "avoidedKWh": 43.89461259795357,
+      "avoidedCost": 43.22143269568564
+    },
+    {
+      "day": "2026-10-01",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 4334.6437282869165,
+      "actualKWh": 4267.151739000008,
+      "avoidedKWh": 67.49198928690873,
+      "avoidedCost": 63.575366889282684
+    },
+    {
+      "day": "2026-10-02",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 4169.074013215635,
+      "actualKWh": 4089.3000260000117,
+      "avoidedKWh": 79.77398721562369,
+      "avoidedCost": 73.95907847283013
+    },
+    {
+      "day": "2026-10-03",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 4610.142114920859,
+      "actualKWh": 4563.066883999971,
+      "avoidedKWh": 47.07523092088756,
+      "avoidedCost": 44.710787679633754
+    },
+    {
+      "day": "2026-10-04",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 4445.031555166654,
+      "actualKWh": 4385.70104,
+      "avoidedKWh": 59.3305151666536,
+      "avoidedCost": 56.274679407904834
+    },
+    {
+      "day": "2026-10-05",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 4307.03222998429,
+      "actualKWh": 4237.498308000038,
+      "avoidedKWh": 69.53392198425234,
+      "avoidedCost": 65.35139011403027
+    }
+  ],
+  "createdAt": "2026-10-12T12:36:21.947072Z",
+  "updatedAt": "2026-10-12T12:36:27.763007Z"
+}

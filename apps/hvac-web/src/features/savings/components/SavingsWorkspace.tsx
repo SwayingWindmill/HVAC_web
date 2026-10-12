@@ -87,7 +87,7 @@ export function SavingsWorkspace() {
           <MetricCard
             label="本月节省电费"
             value={<MetricValue value={monthTotals!.days > 0 ? `¥${formatDecimal(monthTotals!.avoidedCost, 0)}` : null} />}
-            lead="对照调整后基线，按逐时电度电价计"
+            lead="节电量逐时乘以当时的电度电价"
             detail={costBasis(monthTotals!)}
           />
           <MetricCard
@@ -98,7 +98,7 @@ export function SavingsWorkspace() {
           />
           <MetricCard
             label="正在核算"
-            value={<MetricValue value={reporting ? reporting.name : null} />}
+            value={<MetricValue value={reporting ? reporting.name : '无'} />}
             lead={reporting ? (reporting.baseline?.trusted ? '基线检验通过' : '基线不可信，暂不核算') : '没有正在核算的措施'}
             detail={`累计节电 ${formatDecimal(lifetime.kwh, 0)} kWh · 节省 ¥${formatDecimal(lifetime.cost, 0)}`}
           />
