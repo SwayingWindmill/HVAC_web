@@ -56,7 +56,7 @@ func TestTheMeasureLifecycleOverHTTP(t *testing.T) {
 	}
 
 	status, summary := call(t, handler, http.MethodGet, "/v1/sites/"+testSite+"/savings/summary?from=2026-10-01&to=2026-10-31", "")
-	if status != http.StatusOK || summary["reporting"] != float64(1) || summary["totals"].(map[string]any)["days"] != float64(1) {
+	if status != http.StatusOK || summary["totals"].(map[string]any)["days"] != float64(1) {
 		t.Fatalf("summary = %d %v", status, summary)
 	}
 
@@ -99,7 +99,7 @@ func TestABaselineWithoutEnoughHoursCarriesNoModel(t *testing.T) {
 	_, created := call(t, handler, http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00"}`)
 	_, measure := call(t, handler, http.MethodPost, base+"/"+created["id"].(string)+"/implement", `{"implementedAt":"2026-10-15T09:00:00+08:00"}`)
 	baseline, _ := measure["baseline"].(map[string]any)
-	if baseline["trusted"] != false || baseline["samples"] != float64(48) || baseline["model"] != nil || baseline["reason"] != ReasonTooFewHours {
+	if baseline["trusted"] != false || baseline["samples"] != float64(48) || baseline["model"] != nil || baseline["reason"] != "TOO_FEW_HOURS" {
 		t.Fatalf("baseline = %v", baseline)
 	}
 }

@@ -18,7 +18,7 @@
     "expectedHours": 336,
     "model": null,
     "trusted": false,
-    "reason": "基线期完整小时不足 72 小时"
+    "reason": "TOO_FEW_HOURS"
   },
   "totals": {
     "days": 0,

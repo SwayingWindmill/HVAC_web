@@ -262,3 +262,36 @@ func TestTheDailyRunVerifiesEachSettledDayOnce(t *testing.T) {
 		t.Fatalf("after ending = %+v", results)
 	}
 }
+
+func TestAnEndInsideAnHourStopsVerificationAtTheHourBefore(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.End(t.Context(), testTenant, testSite, measure.ID, time.Date(2026, 10, 17, 12, 30, 0, 0, shanghai), testActor); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 20, 2, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	results := store.results[measure.ID]
+	last := results[len(results)-1]
+	if last.Day != "2026-10-17" || last.ExpectedHours != 12 || last.Hours != 12 {
+		t.Fatalf("last verified day = %+v", last)
+	}
+}
+
+func TestATrustedBaselineCannotBeRefitted(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	service := newTestService(t, newMemoryStore(), plantHistory{changedAt: implemented, factor: 0.9})
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Refit(t.Context(), testTenant, testSite, measure.ID, implemented.Add(-7*24*time.Hour), implemented, testActor); !errors.Is(err, ErrWrongStatus) {
+		t.Fatalf("refit of a trusted baseline = %v", err)
+	}
+}

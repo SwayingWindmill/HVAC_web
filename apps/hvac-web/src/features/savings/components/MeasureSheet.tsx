@@ -15,7 +15,7 @@ import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
 import {
-  dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, savingsRate, siteInputValue,
+  dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
   type Measure, type MeasureAction,
 } from '../savings-model';
 import { MeasureStatusBadge } from './measure-presentation';
@@ -42,7 +42,7 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
         <Alert variant="destructive">
           <CircleX />
           <AlertTitle>基线不可信，暂不核算</AlertTitle>
-          <AlertDescription>{baseline.reason ?? '检验未通过'}。可换一段运行稳定、数据完整的时段重新拟合。</AlertDescription>
+          <AlertDescription>{baseline.reason ? REASON_TEXT[baseline.reason] : '检验未通过'}。可换一段运行稳定、数据完整的时段重新拟合。</AlertDescription>
         </Alert>
       )}
       <p className="text-sm text-muted-foreground">

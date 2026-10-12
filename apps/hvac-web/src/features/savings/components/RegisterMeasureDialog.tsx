@@ -69,7 +69,8 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
             <Input
               id="measure-name"
               placeholder="例如：冷冻水供水温度由 7 °C 提高到 8 °C"
-              {...form.register('name', { validate: (value) => (value.trim() !== '' && value.trim().length <= 100) || '请填写 1–100 字的名称' })}
+              maxLength={100}
+              {...form.register('name', { validate: (value) => value.trim() !== '' || '请填写名称' })}
             />
             {errors.name ? <p className="text-sm text-destructive">{errors.name.message}</p> : null}
           </div>
@@ -90,8 +91,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="measure-description">说明</Label>
-            <Textarea id="measure-description" rows={3} placeholder="做了什么、作用在哪些设备上" {...form.register('description', { maxLength: { value: 2000, message: '说明不超过 2000 字' } })} />
-            {errors.description ? <p className="text-sm text-destructive">{errors.description.message}</p> : null}
+            <Textarea id="measure-description" rows={3} maxLength={2000} placeholder="做了什么、作用在哪些设备上" {...form.register('description')} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -107,8 +107,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="measure-evidence">依据（可选）</Label>
-            <Input id="measure-evidence" placeholder="例如：10 月 12 日优化建议、改造合同编号" {...form.register('evidence', { maxLength: { value: 200, message: '依据不超过 200 字' } })} />
-            {errors.evidence ? <p className="text-sm text-destructive">{errors.evidence.message}</p> : null}
+            <Input id="measure-evidence" maxLength={200} placeholder="例如：10 月 12 日优化建议、改造合同编号" {...form.register('evidence')} />
           </div>
           {register.isError ? (
             <p className="text-sm text-destructive">{register.error instanceof SavingsRequestError ? register.error.message : '节能核算服务暂时不可用，请稍后重试'}</p>

@@ -135,7 +135,7 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: tenant, site and actor must be UUIDs", ErrInvalidMeasure)
 	case name == "" || utf8.RuneCountInString(name) > 100:
 		return fmt.Errorf("%w: name must be 1–100 characters", ErrInvalidMeasure)
-	case utf8.RuneCountInString(input.Description) > 2000 || len(input.Evidence) > 200:
+	case utf8.RuneCountInString(input.Description) > 2000 || utf8.RuneCountInString(input.Evidence) > 200:
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
@@ -218,6 +218,10 @@ func (service *Service) Refit(ctx context.Context, tenantID, siteID, id string, 
 	if len(results) > 0 {
 		return Measure{}, ErrBaselineLocked
 	}
+	// A baseline that passed stays; refitting is for finding a period that can pass at all.
+	if measure.Baseline.Trusted {
+		return Measure{}, ErrWrongStatus
+	}
 	from, to = from.UTC(), to.UTC()
 	if !from.Before(to) || to.After(*measure.ImplementedAt) {
 		return Measure{}, fmt.Errorf("%w: the baseline period must end by implementation", ErrInvalidMeasure)
@@ -264,7 +268,7 @@ const SettlingDelay = time.Hour
 
 // VerifyDay verifies the Site-local day starting at dayStart for a measure with a trusted baseline.
 func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart time.Time) error {
-	if measure.ImplementedAt == nil || measure.Baseline == nil || !measure.Baseline.Trusted {
+	if !measure.verifiable() {
 		return ErrWrongStatus
 	}
 	tariff, err := service.tariffs.ImportTariff(ctx, measure.TenantID, measure.SiteID)
@@ -277,7 +281,9 @@ func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart
 func (service *Service) verifyDay(ctx context.Context, measure Measure, tariff SiteTariff, local time.Time) error {
 	dayEnd := local.AddDate(0, 0, 1)
 	if measure.EndedAt != nil && measure.EndedAt.Before(dayEnd) {
-		dayEnd = *measure.EndedAt
+		// The hour a measure ends in is not wholly its own, so verification stops at its start.
+		ended := measure.EndedAt.In(tariff.Location)
+		dayEnd = time.Date(ended.Year(), ended.Month(), ended.Day(), ended.Hour(), 0, 0, 0, tariff.Location)
 	}
 	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, local, dayEnd)
 	if err != nil {
@@ -299,7 +305,7 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 	}
 	var tariff *SiteTariff
 	for _, measure := range measures {
-		if measure.ImplementedAt == nil || measure.Baseline == nil || !measure.Baseline.Trusted {
+		if !measure.verifiable() {
 			continue
 		}
 		if tariff == nil {
@@ -332,4 +338,89 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 		}
 	}
 	return nil
+}
+
+// verifiable says the measure was implemented on a baseline that passed, so its days can be verified.
+func (measure Measure) verifiable() bool {
+	return measure.ImplementedAt != nil && measure.Baseline != nil && measure.Baseline.Trusted
+}
+
+// Totals sums verified days.
+type Totals struct {
+	Days                int
+	AdjustedBaselineKWh float64
+	ActualKWh           float64
+	AvoidedKWh          float64
+	AvoidedCost         float64
+}
+
+func totalOf(days []DailyResult) Totals {
+	totals := Totals{Days: len(days)}
+	for _, day := range days {
+		totals.AdjustedBaselineKWh += day.AdjustedBaselineKWh
+		totals.ActualKWh += day.ActualKWh
+		totals.AvoidedKWh += day.AvoidedKWh
+		totals.AvoidedCost += day.AvoidedCost
+	}
+	return totals
+}
+
+// VerifiedMeasure is a measure with every day verified against its baseline.
+type VerifiedMeasure struct {
+	Measure
+	Days []DailyResult
+}
+
+func (verified VerifiedMeasure) Totals() Totals { return totalOf(verified.Days) }
+
+func (service *Service) withDays(ctx context.Context, measure Measure) (VerifiedMeasure, error) {
+	days, err := service.store.DailyResults(ctx, measure.TenantID, measure.SiteID, measure.ID)
+	return VerifiedMeasure{Measure: measure, Days: days}, err
+}
+
+// Ledger is the Site's measures with their verified days.
+func (service *Service) Ledger(ctx context.Context, tenantID, siteID string) ([]VerifiedMeasure, error) {
+	measures, err := service.store.Measures(ctx, tenantID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	ledger := make([]VerifiedMeasure, 0, len(measures))
+	for _, measure := range measures {
+		verified, err := service.withDays(ctx, measure)
+		if err != nil {
+			return nil, err
+		}
+		ledger = append(ledger, verified)
+	}
+	return ledger, nil
+}
+
+func (service *Service) Verified(ctx context.Context, tenantID, siteID, id string) (VerifiedMeasure, error) {
+	measure, err := service.store.Measure(ctx, tenantID, siteID, id)
+	if err != nil {
+		return VerifiedMeasure{}, err
+	}
+	return service.withDays(ctx, measure)
+}
+
+// Savings totals the Site's days verified between two Site-local dates, inclusive.
+func (service *Service) Savings(ctx context.Context, tenantID, siteID, from, to string) (Totals, error) {
+	_, fromErr := time.Parse(time.DateOnly, from)
+	_, toErr := time.Parse(time.DateOnly, to)
+	if fromErr != nil || toErr != nil || to < from {
+		return Totals{}, fmt.Errorf("%w: the period must be two dates in order", ErrInvalidMeasure)
+	}
+	ledger, err := service.Ledger(ctx, tenantID, siteID)
+	if err != nil {
+		return Totals{}, err
+	}
+	var days []DailyResult
+	for _, verified := range ledger {
+		for _, day := range verified.Days {
+			if day.Day >= from && day.Day <= to {
+				days = append(days, day)
+			}
+		}
+	}
+	return totalOf(days), nil
 }

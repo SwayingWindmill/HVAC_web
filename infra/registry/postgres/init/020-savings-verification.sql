@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS core_registry.savings_measures (
   baseline_cv_rmse double precision,
   baseline_nmbe double precision,
   baseline_trusted boolean,
-  baseline_reason text NOT NULL DEFAULT '',
+  baseline_reason text NOT NULL DEFAULT '' CHECK (baseline_reason IN ('', 'TOO_FEW_HOURS', 'LOW_COVERAGE', 'POOR_FIT')),
   created_by uuid NOT NULL,
   updated_by uuid NOT NULL,
   created_at timestamptz NOT NULL,
@@ -67,7 +67,13 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.implemented_at IS NOT NULL AND EXISTS (
+  IF NEW.implemented_at IS NULL THEN
+    RETURN NEW;
+  END IF;
+  -- Writers on one Site take turns, so two measures implemented at once cannot both pass the
+  -- check below; it then reads with a fresh snapshot that includes the other's commit.
+  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.tenant_id::text || '/' || NEW.site_id::text, 0));
+  IF EXISTS (
     SELECT 1 FROM core_registry.savings_measures AS other
     WHERE other.tenant_id = NEW.tenant_id AND other.site_id = NEW.site_id AND other.id <> NEW.id
       AND other.implemented_at IS NOT NULL

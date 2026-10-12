@@ -22,9 +22,9 @@ const (
 
 // Why a baseline is not trusted, in the operator's words.
 const (
-	ReasonTooFewHours = "基线期完整小时不足 72 小时"
-	ReasonLowCoverage = "基线期数据覆盖率低于 90%"
-	ReasonPoorFit     = "模型未通过 ASHRAE Guideline 14 检验"
+	ReasonTooFewHours = "TOO_FEW_HOURS"
+	ReasonLowCoverage = "LOW_COVERAGE"
+	ReasonPoorFit     = "POOR_FIT"
 )
 
 // HourSample is one complete hour of the measurement boundary: plant electricity and cooling delivered.

@@ -23,8 +23,17 @@ export interface Baseline {
   /** Absent when the period held too little data to fit a line. */
   readonly model: BaselineModel | null;
   readonly trusted: boolean;
-  readonly reason?: string;
+  readonly reason?: BaselineReason;
 }
+
+export type BaselineReason = 'TOO_FEW_HOURS' | 'LOW_COVERAGE' | 'POOR_FIT';
+
+/** Why a baseline is not trusted, in the operator's words. */
+export const REASON_TEXT: Record<BaselineReason, string> = {
+  TOO_FEW_HOURS: `基线期完整小时不足 72 小时`,
+  LOW_COVERAGE: '基线期数据覆盖率低于 90%',
+  POOR_FIT: '模型未通过 ASHRAE Guideline 14 检验',
+};
 
 export interface SavingsTotals {
   readonly days: number;
@@ -68,8 +77,6 @@ export interface Measure {
 export interface SavingsSummary {
   readonly from: string;
   readonly to: string;
-  readonly measures: number;
-  readonly reporting: number;
   readonly totals: SavingsTotals;
 }
 
@@ -81,7 +88,7 @@ export const KIND_LABEL: Record<MeasureKind, string> = {
   OTHER: '其他',
 };
 
-export const STATUS_LABEL: Record<MeasureStatus, string> = { PLANNED: '计划中', IMPLEMENTED: '核算中', ENDED: '已结束' };
+export const STATUS_LABEL: Record<MeasureStatus, string> = { PLANNED: '计划中', IMPLEMENTED: '已实施', ENDED: '已结束' };
 
 // ASHRAE Guideline 14 for hourly models, and the data a baseline needs before it is fitted.
 export const LIMITS = { cvRmse: 0.3, nmbe: 0.1, minimumHours: 72, minimumCoverage: 0.9 } as const;
@@ -120,13 +127,13 @@ export function fitChecks(baseline: Pick<Baseline, 'samples' | 'expectedHours' |
 
 export type MeasureAction = 'implement' | 'refit' | 'end';
 
-/** What can still be done to a measure: a baseline is refitted only before any day is published. */
-export function measureActions(measure: Pick<Measure, 'status' | 'totals'>): readonly MeasureAction[] {
+/** What can still be done to a measure: only a baseline that failed is refitted, and only before any day is published. */
+export function measureActions(measure: Pick<Measure, 'status' | 'totals' | 'baseline'>): readonly MeasureAction[] {
   switch (measure.status) {
     case 'PLANNED':
       return ['implement'];
     case 'IMPLEMENTED':
-      return measure.totals.days === 0 ? ['refit', 'end'] : ['end'];
+      return measure.totals.days === 0 && !measure.baseline?.trusted ? ['refit', 'end'] : ['end'];
     case 'ENDED':
       return [];
   }
@@ -138,25 +145,19 @@ export interface DayRow {
   readonly adjusted: number;
   readonly actual: number;
   readonly avoided: number;
-  readonly cumulativeAvoided: number;
   readonly coverage: number;
 }
 
-/** Verified days oldest first, with the running total of energy avoided. */
+/** Verified days oldest first, as the chart and the day table read them. */
 export function dayRows(days: readonly VerifiedDay[]): readonly DayRow[] {
-  let cumulative = 0;
-  return [...days].sort((left, right) => left.day.localeCompare(right.day)).map((day) => {
-    cumulative += day.avoidedKWh;
-    return {
-      day: day.day,
-      label: `${Number(day.day.slice(5, 7))}/${Number(day.day.slice(8, 10))}`,
-      adjusted: day.adjustedBaselineKWh,
-      actual: day.actualKWh,
-      avoided: day.avoidedKWh,
-      cumulativeAvoided: cumulative,
-      coverage: day.expectedHours > 0 ? day.hours / day.expectedHours : 0,
-    };
-  });
+  return [...days].sort((left, right) => left.day.localeCompare(right.day)).map((day) => ({
+    day: day.day,
+    label: `${Number(day.day.slice(5, 7))}/${Number(day.day.slice(8, 10))}`,
+    adjusted: day.adjustedBaselineKWh,
+    actual: day.actualKWh,
+    avoided: day.avoidedKWh,
+    coverage: day.expectedHours > 0 ? day.hours / day.expectedHours : 0,
+  }));
 }
 
 /** Avoided energy as a share of what the plant would have used without the measure. */

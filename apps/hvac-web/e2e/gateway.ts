@@ -165,7 +165,7 @@ export class Gateway {
       const from = query.get('from')!;
       const to = query.get('to')!;
       const days = this.measures.flatMap((measure) => measure.days).filter((day: Json) => day.day >= from && day.day <= to);
-      return { body: { from, to, measures: this.measures.length, reporting: this.measures.filter((measure) => measure.status === 'IMPLEMENTED').length, totals: totalsOf(days) } };
+      return { body: { from, to, totals: totalsOf(days) } };
     }
     if (method === 'POST' && path === `${base}/measures`) {
       const measure = {

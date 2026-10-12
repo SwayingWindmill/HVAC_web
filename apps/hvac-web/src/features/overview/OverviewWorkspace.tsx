@@ -250,10 +250,6 @@ function HourlyElectricity() {
 }
 
 /**
- * What the latest Optimization recommendation expects to save, shown as an expectation: measured
- * savings need a baseline model (M&V), which is not connected.
- */
-/**
  * What the Site has saved and what it could still save: verified savings come from the measure the
  * M&V owner reports on, the opportunity from the latest optimization recommendation's estimate.
  */

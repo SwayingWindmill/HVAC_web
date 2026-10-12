@@ -97,22 +97,16 @@ type measureView struct {
 	UpdatedAt         time.Time     `json:"updatedAt"`
 }
 
-func totalsOf(results []DailyResult) totalsView {
-	totals := totalsView{Days: len(results)}
-	for _, result := range results {
-		totals.AdjustedBaselineKWh += result.AdjustedBaselineKWh
-		totals.ActualKWh += result.ActualKWh
-		totals.AvoidedKWh += result.AvoidedKWh
-		totals.AvoidedCost += result.AvoidedCost
-	}
-	return totals
+func viewOfTotals(totals Totals) totalsView {
+	return totalsView{Days: totals.Days, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost}
 }
 
-func viewOf(measure Measure, results []DailyResult, withDays bool) measureView {
+func viewOf(verified VerifiedMeasure, withDays bool) measureView {
+	measure, results := verified.Measure, verified.Days
 	view := measureView{
 		ID: measure.ID, SiteID: measure.SiteID, Name: measure.Name, Kind: measure.Kind, Description: measure.Description, Evidence: measure.Evidence,
 		Status: measure.Status, PlannedAt: measure.PlannedAt, ImplementedAt: measure.ImplementedAt, EndedAt: measure.EndedAt,
-		InvestmentCNY: measure.InvestmentCNY, ExpectedAnnualKWh: measure.ExpectedAnnualKWh, Totals: totalsOf(results),
+		InvestmentCNY: measure.InvestmentCNY, ExpectedAnnualKWh: measure.ExpectedAnnualKWh, Totals: viewOfTotals(verified.Totals()),
 		CreatedAt: measure.CreatedAt, UpdatedAt: measure.UpdatedAt,
 	}
 	if baseline := measure.Baseline; baseline != nil {
@@ -137,37 +131,25 @@ func viewOf(measure Measure, results []DailyResult, withDays bool) measureView {
 }
 
 func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Request) {
-	tenantID, siteID := request.Header.Get(headerTenant), request.PathValue("siteId")
-	measures, err := handler.service.store.Measures(request.Context(), tenantID, siteID)
+	ledger, err := handler.service.Ledger(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
 	}
-	items := make([]measureView, 0, len(measures))
-	for _, measure := range measures {
-		results, err := handler.service.store.DailyResults(request.Context(), tenantID, siteID, measure.ID)
-		if err != nil {
-			writeMVError(writer, err)
-			return
-		}
-		items = append(items, viewOf(measure, results, false))
+	items := make([]measureView, 0, len(ledger))
+	for _, verified := range ledger {
+		items = append(items, viewOf(verified, false))
 	}
 	writeMVJSON(writer, http.StatusOK, map[string]any{"items": items})
 }
 
 func (handler *HTTPHandler) detail(writer http.ResponseWriter, request *http.Request) {
-	tenantID, siteID := request.Header.Get(headerTenant), request.PathValue("siteId")
-	measure, err := handler.service.store.Measure(request.Context(), tenantID, siteID, request.PathValue("measureId"))
+	verified, err := handler.service.Verified(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
 	}
-	results, err := handler.service.store.DailyResults(request.Context(), tenantID, siteID, measure.ID)
-	if err != nil {
-		writeMVError(writer, err)
-		return
-	}
-	writeMVJSON(writer, http.StatusOK, viewOf(measure, results, true))
+	writeMVJSON(writer, http.StatusOK, viewOf(verified, true))
 }
 
 func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.Request) {
@@ -193,7 +175,7 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 		writeMVError(writer, err)
 		return
 	}
-	writeMVJSON(writer, http.StatusCreated, viewOf(measure, nil, true))
+	writeMVJSON(writer, http.StatusCreated, viewOf(VerifiedMeasure{Measure: measure}, true))
 }
 
 // transition runs a lifecycle step that takes one body and answers the measure afterwards.
@@ -207,12 +189,12 @@ func (handler *HTTPHandler) transition(writer http.ResponseWriter, request *http
 		writeMVError(writer, err)
 		return
 	}
-	results, err := handler.service.store.DailyResults(request.Context(), measure.TenantID, measure.SiteID, measure.ID)
+	verified, err := handler.service.Verified(request.Context(), measure.TenantID, measure.SiteID, measure.ID)
 	if err != nil {
 		writeMVError(writer, err)
 		return
 	}
-	writeMVJSON(writer, http.StatusOK, viewOf(measure, results, true))
+	writeMVJSON(writer, http.StatusOK, viewOf(verified, true))
 }
 
 func (handler *HTTPHandler) implement(writer http.ResponseWriter, request *http.Request) {
@@ -246,39 +228,12 @@ func (handler *HTTPHandler) end(writer http.ResponseWriter, request *http.Reques
 // summary totals the Site's verified days in [from, to], given as Site-local dates.
 func (handler *HTTPHandler) summary(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
-	from, to := query.Get("from"), query.Get("to")
-	if _, err := time.Parse(time.DateOnly, from); err != nil {
-		writeMVError(writer, ErrInvalidMeasure)
-		return
-	}
-	if _, err := time.Parse(time.DateOnly, to); err != nil || to < from {
-		writeMVError(writer, ErrInvalidMeasure)
-		return
-	}
-	tenantID, siteID := request.Header.Get(headerTenant), request.PathValue("siteId")
-	measures, err := handler.service.store.Measures(request.Context(), tenantID, siteID)
+	totals, err := handler.service.Savings(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), query.Get("from"), query.Get("to"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
 	}
-	var days []DailyResult
-	reporting := 0
-	for _, measure := range measures {
-		if measure.Status == StatusImplemented {
-			reporting++
-		}
-		results, err := handler.service.store.DailyResults(request.Context(), tenantID, siteID, measure.ID)
-		if err != nil {
-			writeMVError(writer, err)
-			return
-		}
-		for _, result := range results {
-			if result.Day >= from && result.Day <= to {
-				days = append(days, result)
-			}
-		}
-	}
-	writeMVJSON(writer, http.StatusOK, map[string]any{"from": from, "to": to, "measures": len(measures), "reporting": reporting, "totals": totalsOf(days)})
+	writeMVJSON(writer, http.StatusOK, map[string]any{"from": query.Get("from"), "to": query.Get("to"), "totals": viewOfTotals(totals)})
 }
 
 func decodeMVJSON(body io.Reader, target any) error {
