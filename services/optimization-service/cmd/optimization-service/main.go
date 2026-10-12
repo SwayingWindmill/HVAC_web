@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
 )
 
@@ -55,12 +56,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	queue, err := publication.RunQueue()
+	if err != nil {
+		log.Fatal(err)
+	}
 	workerID := envOrDefault("OPTIMIZATION_WORKER_ID", defaultWorkerID())
 	claimInterval := durationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
 	leaseDuration := durationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
 	leaseRenew := durationEnv("OPTIMIZATION_LEASE_RENEW", 30*time.Second)
 	claimBatch := integerEnv("OPTIMIZATION_CLAIM_BATCH", 8)
-	go runOptimizationWorker(ctx, publication, service, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
+	go runOptimizationWorker(ctx, queue, publication, service, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -104,8 +109,8 @@ func requiredEnv(name string) string {
 	return value
 }
 
-func runOptimizationWorker(ctx context.Context, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
-	claimAndRunOptimizationJobs(ctx, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+	claimAndRunOptimizationJobs(ctx, queue, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
 	ticker := time.NewTicker(claimInterval)
 	defer ticker.Stop()
 	for {
@@ -113,26 +118,26 @@ func runOptimizationWorker(ctx context.Context, store *optimization.PostgresStor
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			claimAndRunOptimizationJobs(ctx, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+			claimAndRunOptimizationJobs(ctx, queue, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
 		}
 	}
 }
 
-func claimAndRunOptimizationJobs(ctx context.Context, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	jobs, err := store.ClaimOptimizationJobs(claimCtx, workerID, claimBatch, leaseDuration, time.Now().UTC())
+	jobs, err := queue.Claim(claimCtx, workerID, claimBatch, leaseDuration, time.Now().UTC())
 	cancel()
 	if err != nil {
 		log.Printf("optimization job claim failed: %v", err)
 		return
 	}
 	for _, job := range jobs {
-		executeOptimizationJob(ctx, store, service, job, leaseDuration, leaseRenew)
+		executeOptimizationJob(ctx, queue, store, service, job, leaseDuration, leaseRenew)
 	}
 }
 
-func executeOptimizationJob(ctx context.Context, store *optimization.PostgresStore, service *optimization.Service, job optimization.SchedulerJob, leaseDuration, leaseRenew time.Duration) {
-	started, err := store.StartOptimizationJob(ctx, job, leaseDuration, time.Now().UTC())
+func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, job schedulerjob.Job, leaseDuration, leaseRenew time.Duration) {
+	started, err := queue.Start(ctx, job, leaseDuration, time.Now().UTC())
 	if err != nil {
 		log.Printf("optimization job %s start failed: %v", job.JobID, err)
 		return
@@ -142,14 +147,14 @@ func executeOptimizationJob(ctx context.Context, store *optimization.PostgresSto
 	}
 	reference, validationErr := optimization.ValidateOptimizationSchedulerJob(job)
 	if validationErr != nil {
-		_ = store.FailOptimizationJob(context.Background(), job, "OPTIMIZATION_JOB_INVALID", validationErr, false, time.Now().UTC())
+		_ = queue.Fail(context.Background(), job, "OPTIMIZATION_JOB_INVALID", validationErr, false, time.Now().UTC())
 		return
 	}
 	jobCtx, cancelJob := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
 	defer cancelJob()
 	request, loadErr := store.LoadOptimizationRequest(jobCtx, job.TenantID, job.SiteID, reference)
 	if loadErr != nil {
-		_ = store.FailOptimizationJob(context.Background(), job, "OPTIMIZATION_INPUT_LOAD_FAILED", loadErr, false, time.Now().UTC())
+		_ = queue.Fail(context.Background(), job, "OPTIMIZATION_INPUT_LOAD_FAILED", loadErr, false, time.Now().UTC())
 		return
 	}
 	leaseStop := make(chan struct{})
@@ -166,7 +171,7 @@ func executeOptimizationJob(ctx context.Context, store *optimization.PostgresSto
 				return
 			case <-ticker.C:
 				renewCtx, renewCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				cancelRequested, renewErr := store.RenewOptimizationJobLease(renewCtx, job, leaseDuration, time.Now().UTC())
+				cancelRequested, renewErr := queue.Renew(renewCtx, job, leaseDuration, time.Now().UTC())
 				renewCancel()
 				if renewErr != nil || cancelRequested {
 					cancelJob()
@@ -184,13 +189,13 @@ func executeOptimizationJob(ctx context.Context, store *optimization.PostgresSto
 		if errors.Is(executionErr, context.DeadlineExceeded) {
 			errorCode = "TIMEOUT"
 		}
-		if err = store.FailOptimizationJob(context.Background(), job, errorCode, executionErr, retryable, time.Now().UTC()); err != nil {
+		if err = queue.Fail(context.Background(), job, errorCode, executionErr, retryable, time.Now().UTC()); err != nil {
 			log.Printf("optimization job %s failure finalization failed: %v", job.JobID, err)
 		}
 		return
 	}
 	output := map[string]any{"optimizationRunId": request.OptimizationRunID, "recommendationId": recommendation.ID, "approvalState": recommendation.Approval}
-	if err = store.CompleteOptimizationJob(context.Background(), job, output, time.Now().UTC()); err != nil {
+	if err = queue.Complete(context.Background(), job, output, time.Now().UTC()); err != nil {
 		log.Printf("optimization job %s success finalization failed: %v", job.JobID, err)
 	}
 }

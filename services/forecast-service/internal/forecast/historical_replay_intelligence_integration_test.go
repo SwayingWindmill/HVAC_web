@@ -43,14 +43,18 @@ func TestHistoricalReplayMetricFactsPrepareAndPublishDayAheadForecast(t *testing
 		t.Fatalf("prepared replay Forecast=%#v", prepared)
 	}
 
-	jobs, err := store.ClaimForecastJobs(t.Context(), "historical-replay-intelligence-acceptance", 1, time.Minute, origin.Add(time.Second))
+	queue, err := store.RunQueue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := queue.Claim(t.Context(), "historical-replay-intelligence-acceptance", 1, time.Minute, origin.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(jobs) != 1 || jobs[0].JobID != prepared.ForecastJobID {
 		t.Fatalf("claimed replay Forecast jobs=%#v prepared=%#v", jobs, prepared)
 	}
-	started, err := store.StartForecastJob(t.Context(), jobs[0], time.Minute, origin.Add(2*time.Second))
+	started, err := queue.Start(t.Context(), jobs[0], time.Minute, origin.Add(2*time.Second))
 	if err != nil || !started {
 		t.Fatalf("start replay Forecast job=%t err=%v", started, err)
 	}
@@ -90,7 +94,7 @@ func TestHistoricalReplayMetricFactsPrepareAndPublishDayAheadForecast(t *testing
 	if len(points) != 96 || points[0].Quality != "VALID" || points[len(points)-1].HorizonMinutes != 1440 {
 		t.Fatalf("replay day-ahead Forecast points=%#v", points)
 	}
-	if err = store.CompleteForecastJob(t.Context(), jobs[0], map[string]any{
+	if err = queue.Complete(t.Context(), jobs[0], map[string]any{
 		"forecastSnapshotId": prepared.ForecastSnapshotID, "forecastJobId": prepared.ForecastJobID,
 		"pointCount": len(points), "quality": points[0].Quality,
 	}, origin.Add(4*time.Second)); err != nil {
