@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useForm } from 'react-hook-form';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
+import { siteCommandsQuery } from '@/features/control/command-api';
+import { commandSummary } from '@/features/control/command-presentation';
+import { useCommandLabels } from '@/features/control/use-command-labels';
+import { formatTime } from '@/lib/operator-format';
 import { registerMeasure, SavingsRequestError } from '../query';
 import { instantFromSiteInput, KIND_LABEL, siteInputValue, type Measure, type MeasureKind } from '../savings-model';
 
@@ -21,7 +25,10 @@ interface MeasureForm {
   investmentCny: string;
   expectedAnnualKWh: string;
   evidence: string;
+  evidenceCommandId: string;
 }
+
+const NO_COMMAND = 'none';
 
 const optionalNumber = (value: string) => (value.trim() === '' ? undefined : Number(value));
 const nonNegative = (value: string) => value.trim() === '' || (Number.isFinite(Number(value)) && Number(value) >= 0) || '请填写不小于 0 的数字';
@@ -35,7 +42,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
   const form = useForm<MeasureForm>({
     values: {
       name: '', kind: 'SETPOINT_RESET', plannedAt: siteInputValue(new Date(), site.timezone),
-      description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '',
+      description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '', evidenceCommandId: NO_COMMAND,
     },
   });
   const register = useMutation({
@@ -47,6 +54,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
       investmentCny: optionalNumber(input.investmentCny),
       expectedAnnualKWh: optionalNumber(input.expectedAnnualKWh),
       evidence: input.evidence.trim(),
+      evidenceCommandId: input.evidenceCommandId === NO_COMMAND ? undefined : input.evidenceCommandId,
     }),
     onSuccess: (measure) => {
       onRegistered(measure);
@@ -55,6 +63,10 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
     },
   });
   const errors = form.formState.errors;
+  // A measure can cite a command that took effect on this Site, as the control page lists it.
+  const commands = useQuery({ ...siteCommandsQuery(site.id), enabled: open });
+  const labels = useCommandLabels(site.id);
+  const executed = (commands.data ?? []).filter((command) => command.status === 'SUCCEEDED');
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -106,7 +118,27 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="measure-evidence">依据（可选）</Label>
+            <Label>依据指令（可选）</Label>
+            <Select value={form.watch('evidenceCommandId')} onValueChange={(value) => form.setValue('evidenceCommandId', value)}>
+              <SelectTrigger className="w-full" aria-label="依据指令"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_COMMAND}>不关联指令</SelectItem>
+                {executed.map((command) => {
+                  const summary = commandSummary(command, labels);
+                  return (
+                    <SelectItem key={command.commandId} value={command.commandId}>
+                      {formatTime(command.updatedAt, site.timezone)} · {summary.target} {summary.title}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {commands.isError ? '指令记录暂不可用' : executed.length === 0 ? '本站最近没有已执行的指令' : '例如按优化建议下发的供水温度设定'}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="measure-evidence">依据说明（可选）</Label>
             <Input id="measure-evidence" maxLength={200} placeholder="例如：10 月 12 日优化建议、改造合同编号" {...form.register('evidence')} />
           </div>
           {register.isError ? (

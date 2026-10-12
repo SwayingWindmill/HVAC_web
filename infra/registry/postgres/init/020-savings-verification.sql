@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS core_registry.savings_measures (
   kind text NOT NULL CHECK (kind IN ('SETPOINT_RESET','CONTROL_SEQUENCE','EQUIPMENT_RETROFIT','OPERATING_SCHEDULE','OTHER')),
   description text NOT NULL DEFAULT '' CHECK (length(description) <= 2000),
   evidence text NOT NULL DEFAULT '' CHECK (length(evidence) <= 200),
+  -- The executed command the measure came from, owned by Command Governance; a reference, not a key.
+  evidence_command_id uuid CHECK (evidence_command_id IS NULL OR core_registry.is_uuid_v7(evidence_command_id)),
   planned_at timestamptz NOT NULL,
   implemented_at timestamptz,
   ended_at timestamptz,

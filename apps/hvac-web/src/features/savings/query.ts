@@ -80,6 +80,7 @@ export interface MeasureDraft {
   readonly investmentCny?: number;
   readonly expectedAnnualKWh?: number;
   readonly evidence: string;
+  readonly evidenceCommandId?: string;
 }
 
 export const registerMeasure = (siteId: string, csrfToken: string, draft: MeasureDraft) =>

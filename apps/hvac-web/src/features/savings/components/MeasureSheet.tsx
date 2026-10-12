@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
+import { getRouteApi, Link } from '@tanstack/react-router';
 import { CircleCheck, CircleDashed, CircleX, Flag, RefreshCcw, Rocket } from 'lucide-react';
 import { useState } from 'react';
 import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
@@ -11,6 +11,9 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { siteCommandsQuery } from '@/features/control/command-api';
+import { commandSummary } from '@/features/control/command-presentation';
+import { useCommandLabels } from '@/features/control/use-command-labels';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
@@ -143,6 +146,24 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
   );
 }
 
+/** What the measure rests on: the executed command it came from, as the control page shows it, and the operator's note. */
+function Evidence({ measure }: { readonly measure: Measure }) {
+  const { site } = siteRoute.useRouteContext();
+  const commands = useQuery({ ...siteCommandsQuery(site.id), enabled: measure.evidenceCommandId !== null });
+  const labels = useCommandLabels(site.id);
+  if (measure.evidenceCommandId === null) return <>{measure.evidence || '—'}</>;
+  const command = commands.data?.find((candidate) => candidate.commandId === measure.evidenceCommandId);
+  const summary = command ? commandSummary(command, labels) : null;
+  return (
+    <span className="flex flex-col gap-0.5">
+      <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="hover:underline">
+        {summary ? `${formatTime(command!.updatedAt, site.timezone)} · ${summary.target} ${summary.title}` : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
+      </Link>
+      {measure.evidence ? <span className="text-xs font-normal text-muted-foreground">{measure.evidence}</span> : null}
+    </span>
+  );
+}
+
 const ACTION = {
   implement: { label: '确认实施', icon: Rocket },
   refit: { label: '重新拟合基线', icon: RefreshCcw },
@@ -234,7 +255,7 @@ export function MeasureSheet({ measureId, canManage, onClose }: {
                 <FactTile label="结束">{formatTime(measure.endedAt ?? undefined, tz)}</FactTile>
                 <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
                 <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
-                <FactTile label="依据">{measure.evidence || '—'}</FactTile>
+                <FactTile label="依据" className="col-span-3"><Evidence measure={measure} /></FactTile>
               </dl>
 
               {canManage && measureActions(measure).length > 0 ? (

@@ -170,7 +170,7 @@ export class Gateway {
     if (method === 'POST' && path === `${base}/measures`) {
       const measure = {
         id: `01a12ef8-0000-7000-8000-${String(this.measures.length + 1).padStart(12, '0')}`, siteId: SITE_ID, name: body?.name, kind: body?.kind,
-        description: body?.description ?? '', evidence: body?.evidence ?? '', status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
+        description: body?.description ?? '', evidence: body?.evidence ?? '', evidenceCommandId: body?.evidenceCommandId ?? null, status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
         investmentCny: body?.investmentCny ?? null, expectedAnnualKWh: body?.expectedAnnualKWh ?? null, baseline: null, totals: totalsOf([]), days: [],
         createdAt: now, updatedAt: now,
       };

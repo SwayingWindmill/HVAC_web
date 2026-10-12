@@ -61,7 +61,7 @@ func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string,
 	return tx.Commit(ctx)
 }
 
-const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, planned_at, implemented_at, ended_at,
+const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, evidence_command_id::text, planned_at, implemented_at, ended_at,
 investment_cny, expected_annual_kwh, status, baseline_from, baseline_to, baseline_intercept_kwh, baseline_slope, baseline_samples,
 baseline_expected_hours, baseline_cv_rmse, baseline_nmbe, baseline_trusted, baseline_reason, created_by::text, updated_by::text, created_at, updated_at`
 
@@ -73,7 +73,7 @@ func scanMeasure(row pgx.Row) (Measure, error) {
 	var samples, expected *int
 	var trusted *bool
 	var reason string
-	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence,
+	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence, &measure.EvidenceCommandID,
 		&measure.PlannedAt, &measure.ImplementedAt, &measure.EndedAt, &measure.InvestmentCNY, &measure.ExpectedAnnualKWh, &status,
 		&from, &to, &intercept, &slope, &samples, &expected, &cvrmse, &nmbe, &trusted, &reason,
 		&measure.CreatedBy, &measure.UpdatedBy, &measure.CreatedAt, &measure.UpdatedAt)
@@ -112,11 +112,11 @@ func overlapError(err error) error {
 
 func (store *PostgresStore) InsertMeasure(ctx context.Context, measure Measure) error {
 	return store.scoped(ctx, measure.TenantID, measure.SiteID, false, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_measures(id, tenant_id, site_id, name, kind, description, evidence, planned_at,
-investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid,$13::uuid,$14,$15)`,
-			measure.ID, measure.TenantID, measure.SiteID, measure.Name, string(measure.Kind), measure.Description, measure.Evidence, measure.PlannedAt,
-			measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
+		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_measures(id, tenant_id, site_id, name, kind, description, evidence, evidence_command_id,
+planned_at, investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9,$10,$11,$12,$13::uuid,$14::uuid,$15,$16)`,
+			measure.ID, measure.TenantID, measure.SiteID, measure.Name, string(measure.Kind), measure.Description, measure.Evidence, measure.EvidenceCommandID,
+			measure.PlannedAt, measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("insert savings measure: %w", err)
 		}

@@ -54,11 +54,13 @@ type Measure struct {
 	EndedAt           *time.Time
 	InvestmentCNY     *float64
 	ExpectedAnnualKWh *float64
-	// Evidence names what the measure acted on, such as an optimization recommendation or a command.
-	Evidence  string
-	Status    Status
-	Baseline  *Baseline
-	CreatedBy string
+	// Evidence says in the operator's words what the measure rests on, such as a contract.
+	Evidence string
+	// EvidenceCommandID is the executed command the measure came from, when it came from one.
+	EvidenceCommandID *string
+	Status            Status
+	Baseline          *Baseline
+	CreatedBy         string
 	// UpdatedBy is who last implemented, refitted or ended the measure.
 	UpdatedBy string
 	CreatedAt time.Time
@@ -126,6 +128,7 @@ type MeasureInput struct {
 	InvestmentCNY     *float64
 	ExpectedAnnualKWh *float64
 	Evidence          string
+	EvidenceCommandID *string
 	Actor             string
 }
 
@@ -138,6 +141,8 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: name must be 1–100 characters", ErrInvalidMeasure)
 	case utf8.RuneCountInString(input.Description) > 2000 || utf8.RuneCountInString(input.Evidence) > 200:
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
+	case input.EvidenceCommandID != nil && !uuidPattern.MatchString(*input.EvidenceCommandID):
+		return fmt.Errorf("%w: the cited command must be a UUID", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
 	case (input.InvestmentCNY != nil && *input.InvestmentCNY < 0) || (input.ExpectedAnnualKWh != nil && *input.ExpectedAnnualKWh < 0):
@@ -163,7 +168,7 @@ func (service *Service) Register(ctx context.Context, input MeasureInput) (Measu
 	measure := Measure{
 		ID: id, TenantID: input.TenantID, SiteID: input.SiteID, Name: strings.TrimSpace(input.Name), Kind: input.Kind,
 		Description: strings.TrimSpace(input.Description), PlannedAt: input.PlannedAt.UTC(),
-		InvestmentCNY: input.InvestmentCNY, ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence,
+		InvestmentCNY: input.InvestmentCNY, ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID,
 		Status: StatusPlanned, CreatedBy: input.Actor, UpdatedBy: input.Actor, CreatedAt: now, UpdatedAt: now,
 	}
 	return measure, service.store.InsertMeasure(ctx, measure)

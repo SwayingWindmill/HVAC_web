@@ -85,6 +85,7 @@ type measureView struct {
 	Kind              Kind          `json:"kind"`
 	Description       string        `json:"description"`
 	Evidence          string        `json:"evidence"`
+	EvidenceCommandID *string       `json:"evidenceCommandId"`
 	Status            Status        `json:"status"`
 	PlannedAt         time.Time     `json:"plannedAt"`
 	ImplementedAt     *time.Time    `json:"implementedAt"`
@@ -105,7 +106,7 @@ func viewOfTotals(totals Totals) totalsView {
 func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 	measure, results := verified.Measure, verified.Days
 	view := measureView{
-		ID: measure.ID, SiteID: measure.SiteID, Name: measure.Name, Kind: measure.Kind, Description: measure.Description, Evidence: measure.Evidence,
+		ID: measure.ID, SiteID: measure.SiteID, Name: measure.Name, Kind: measure.Kind, Description: measure.Description, Evidence: measure.Evidence, EvidenceCommandID: measure.EvidenceCommandID,
 		Status: measure.Status, PlannedAt: measure.PlannedAt, ImplementedAt: measure.ImplementedAt, EndedAt: measure.EndedAt,
 		InvestmentCNY: measure.InvestmentCNY, ExpectedAnnualKWh: measure.ExpectedAnnualKWh, Totals: viewOfTotals(verified.Totals()),
 		CreatedAt: measure.CreatedAt, UpdatedAt: measure.UpdatedAt,
@@ -162,6 +163,7 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 		InvestmentCNY     *float64  `json:"investmentCny"`
 		ExpectedAnnualKWh *float64  `json:"expectedAnnualKWh"`
 		Evidence          string    `json:"evidence"`
+		EvidenceCommandID *string   `json:"evidenceCommandId"`
 	}
 	if err := decodeMVJSON(request.Body, &input); err != nil {
 		writeMVError(writer, ErrInvalidMeasure)
@@ -170,7 +172,7 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 	measure, err := handler.service.Register(request.Context(), MeasureInput{
 		TenantID: request.Header.Get(headerTenant), SiteID: request.PathValue("siteId"), Name: input.Name, Kind: input.Kind,
 		Description: input.Description, PlannedAt: input.PlannedAt, InvestmentCNY: input.InvestmentCNY,
-		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, Actor: request.Header.Get(headerActor),
+		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, Actor: request.Header.Get(headerActor),
 	})
 	if err != nil {
 		writeMVError(writer, err)

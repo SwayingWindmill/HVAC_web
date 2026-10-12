@@ -63,6 +63,8 @@ export interface Measure {
   readonly kind: MeasureKind;
   readonly description: string;
   readonly evidence: string;
+  /** The executed command the measure came from, when it came from one. */
+  readonly evidenceCommandId: string | null;
   readonly status: MeasureStatus;
   readonly plannedAt: string;
   readonly implementedAt: string | null;
