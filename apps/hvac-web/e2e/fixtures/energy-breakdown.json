@@ -1,0 +1,643 @@
+{
+  "recordedDay": "2026-09-19T16:00:00.000Z",
+  "response": {
+    "schemaVersion": 1,
+    "points": [
+      {
+        "periodStart": "2026-09-19T16:00:00Z",
+        "periodEnd": "2026-09-19T17:00:00Z",
+        "energyKWh": 107.8368180000034
+      },
+      {
+        "periodStart": "2026-09-19T17:00:00Z",
+        "periodEnd": "2026-09-19T18:00:00Z",
+        "energyKWh": 99.175809999997
+      },
+      {
+        "periodStart": "2026-09-19T18:00:00Z",
+        "periodEnd": "2026-09-19T19:00:00Z",
+        "energyKWh": 73.14346499999738
+      },
+      {
+        "periodStart": "2026-09-19T19:00:00Z",
+        "periodEnd": "2026-09-19T20:00:00Z",
+        "energyKWh": 116.87682500000665
+      },
+      {
+        "periodStart": "2026-09-19T20:00:00Z",
+        "periodEnd": "2026-09-19T21:00:00Z",
+        "energyKWh": 118.16195300000254
+      },
+      {
+        "periodStart": "2026-09-19T21:00:00Z",
+        "periodEnd": "2026-09-19T22:00:00Z",
+        "energyKWh": 79.74258800000462
+      },
+      {
+        "periodStart": "2026-09-19T22:00:00Z",
+        "periodEnd": "2026-09-19T23:00:00Z",
+        "energyKWh": 110.53079499999876
+      },
+      {
+        "periodStart": "2026-09-19T23:00:00Z",
+        "periodEnd": "2026-09-20T00:00:00Z",
+        "energyKWh": 111.74660199999926
+      },
+      {
+        "periodStart": "2026-09-20T00:00:00Z",
+        "periodEnd": "2026-09-20T01:00:00Z",
+        "energyKWh": 126.2642330000017
+      },
+      {
+        "periodStart": "2026-09-20T01:00:00Z",
+        "periodEnd": "2026-09-20T02:00:00Z",
+        "energyKWh": 223.55186400000093
+      },
+      {
+        "periodStart": "2026-09-20T02:00:00Z",
+        "periodEnd": "2026-09-20T03:00:00Z",
+        "energyKWh": 195.14763400000083
+      },
+      {
+        "periodStart": "2026-09-20T03:00:00Z",
+        "periodEnd": "2026-09-20T04:00:00Z",
+        "energyKWh": 208.33990300000005
+      },
+      {
+        "periodStart": "2026-09-20T04:00:00Z",
+        "periodEnd": "2026-09-20T05:00:00Z",
+        "energyKWh": 168.292766999999
+      },
+      {
+        "periodStart": "2026-09-20T05:00:00Z",
+        "periodEnd": "2026-09-20T06:00:00Z",
+        "energyKWh": 200.6777899999979
+      },
+      {
+        "periodStart": "2026-09-20T06:00:00Z",
+        "periodEnd": "2026-09-20T07:00:00Z",
+        "energyKWh": 219.73469599999953
+      },
+      {
+        "periodStart": "2026-09-20T07:00:00Z",
+        "periodEnd": "2026-09-20T08:00:00Z",
+        "energyKWh": 246.0774199999978
+      },
+      {
+        "periodStart": "2026-09-20T08:00:00Z",
+        "periodEnd": "2026-09-20T09:00:00Z",
+        "energyKWh": 201.06628499998988
+      },
+      {
+        "periodStart": "2026-09-20T09:00:00Z",
+        "periodEnd": "2026-09-20T10:00:00Z",
+        "energyKWh": 194.7225389999985
+      },
+      {
+        "periodStart": "2026-09-20T10:00:00Z",
+        "periodEnd": "2026-09-20T11:00:00Z",
+        "energyKWh": 199.5914910000065
+      },
+      {
+        "periodStart": "2026-09-20T11:00:00Z",
+        "periodEnd": "2026-09-20T12:00:00Z",
+        "energyKWh": 201.7435239999977
+      },
+      {
+        "periodStart": "2026-09-20T12:00:00Z",
+        "periodEnd": "2026-09-20T13:00:00Z",
+        "energyKWh": 131.25642500000322
+      },
+      {
+        "periodStart": "2026-09-20T13:00:00Z",
+        "periodEnd": "2026-09-20T14:00:00Z",
+        "energyKWh": 123.39583200000197
+      },
+      {
+        "periodStart": "2026-09-20T14:00:00Z",
+        "periodEnd": "2026-09-20T15:00:00Z",
+        "energyKWh": 105.39431899999181
+      },
+      {
+        "periodStart": "2026-09-20T15:00:00Z",
+        "periodEnd": "2026-09-20T16:00:00Z",
+        "energyKWh": 86.77489499999501
+      }
+    ],
+    "devices": [
+      {
+        "deviceId": "018f3e00-4000-7000-8000-000000000001",
+        "points": [
+          {
+            "periodStart": "2026-09-19T16:00:00Z",
+            "periodEnd": "2026-09-19T17:00:00Z",
+            "energyKWh": 34.09087600000021
+          },
+          {
+            "periodStart": "2026-09-19T17:00:00Z",
+            "periodEnd": "2026-09-19T18:00:00Z",
+            "energyKWh": 25.13654999999926
+          },
+          {
+            "periodStart": "2026-09-19T18:00:00Z",
+            "periodEnd": "2026-09-19T19:00:00Z",
+            "energyKWh": 22.038378999997803
+          },
+          {
+            "periodStart": "2026-09-19T19:00:00Z",
+            "periodEnd": "2026-09-19T20:00:00Z",
+            "energyKWh": 29.798502999998163
+          },
+          {
+            "periodStart": "2026-09-19T20:00:00Z",
+            "periodEnd": "2026-09-19T21:00:00Z",
+            "energyKWh": 31.641034000002037
+          },
+          {
+            "periodStart": "2026-09-19T21:00:00Z",
+            "periodEnd": "2026-09-19T22:00:00Z",
+            "energyKWh": 19.09576300000117
+          },
+          {
+            "periodStart": "2026-09-19T22:00:00Z",
+            "periodEnd": "2026-09-19T23:00:00Z",
+            "energyKWh": 32.111448999998174
+          },
+          {
+            "periodStart": "2026-09-19T23:00:00Z",
+            "periodEnd": "2026-09-20T00:00:00Z",
+            "energyKWh": 36.773003000000244
+          },
+          {
+            "periodStart": "2026-09-20T00:00:00Z",
+            "periodEnd": "2026-09-20T01:00:00Z",
+            "energyKWh": 61.82898699999896
+          },
+          {
+            "periodStart": "2026-09-20T01:00:00Z",
+            "periodEnd": "2026-09-20T02:00:00Z",
+            "energyKWh": 126.91326800000024
+          },
+          {
+            "periodStart": "2026-09-20T02:00:00Z",
+            "periodEnd": "2026-09-20T03:00:00Z",
+            "energyKWh": 131.4865489999993
+          },
+          {
+            "periodStart": "2026-09-20T03:00:00Z",
+            "periodEnd": "2026-09-20T04:00:00Z",
+            "energyKWh": 114.74910500000078
+          },
+          {
+            "periodStart": "2026-09-20T04:00:00Z",
+            "periodEnd": "2026-09-20T05:00:00Z",
+            "energyKWh": 75.29322700000012
+          },
+          {
+            "periodStart": "2026-09-20T05:00:00Z",
+            "periodEnd": "2026-09-20T06:00:00Z",
+            "energyKWh": 139.10592699999688
+          },
+          {
+            "periodStart": "2026-09-20T06:00:00Z",
+            "periodEnd": "2026-09-20T07:00:00Z",
+            "energyKWh": 140.64192399999956
+          },
+          {
+            "periodStart": "2026-09-20T07:00:00Z",
+            "periodEnd": "2026-09-20T08:00:00Z",
+            "energyKWh": 149.21555100000114
+          },
+          {
+            "periodStart": "2026-09-20T08:00:00Z",
+            "periodEnd": "2026-09-20T09:00:00Z",
+            "energyKWh": 122.424646999998
+          },
+          {
+            "periodStart": "2026-09-20T09:00:00Z",
+            "periodEnd": "2026-09-20T10:00:00Z",
+            "energyKWh": 148.37369500000204
+          },
+          {
+            "periodStart": "2026-09-20T10:00:00Z",
+            "periodEnd": "2026-09-20T11:00:00Z",
+            "energyKWh": 122.40735800000039
+          },
+          {
+            "periodStart": "2026-09-20T11:00:00Z",
+            "periodEnd": "2026-09-20T12:00:00Z",
+            "energyKWh": 120.38481400000455
+          },
+          {
+            "periodStart": "2026-09-20T12:00:00Z",
+            "periodEnd": "2026-09-20T13:00:00Z",
+            "energyKWh": 49.29579900000135
+          },
+          {
+            "periodStart": "2026-09-20T13:00:00Z",
+            "periodEnd": "2026-09-20T14:00:00Z",
+            "energyKWh": 45.874893000001975
+          },
+          {
+            "periodStart": "2026-09-20T14:00:00Z",
+            "periodEnd": "2026-09-20T15:00:00Z",
+            "energyKWh": 41.471120999998675
+          },
+          {
+            "periodStart": "2026-09-20T15:00:00Z",
+            "periodEnd": "2026-09-20T16:00:00Z",
+            "energyKWh": 31.398683999999776
+          }
+        ]
+      },
+      {
+        "deviceId": "018f3e00-4000-7000-8000-000000000002",
+        "points": [
+          {
+            "periodStart": "2026-09-19T16:00:00Z",
+            "periodEnd": "2026-09-19T17:00:00Z",
+            "energyKWh": 39.75
+          },
+          {
+            "periodStart": "2026-09-19T17:00:00Z",
+            "periodEnd": "2026-09-19T18:00:00Z",
+            "energyKWh": 34.5
+          },
+          {
+            "periodStart": "2026-09-19T18:00:00Z",
+            "periodEnd": "2026-09-19T19:00:00Z",
+            "energyKWh": 36
+          },
+          {
+            "periodStart": "2026-09-19T19:00:00Z",
+            "periodEnd": "2026-09-19T20:00:00Z",
+            "energyKWh": 41.25
+          },
+          {
+            "periodStart": "2026-09-19T20:00:00Z",
+            "periodEnd": "2026-09-19T21:00:00Z",
+            "energyKWh": 41.25
+          },
+          {
+            "periodStart": "2026-09-19T21:00:00Z",
+            "periodEnd": "2026-09-19T22:00:00Z",
+            "energyKWh": 24
+          },
+          {
+            "periodStart": "2026-09-19T22:00:00Z",
+            "periodEnd": "2026-09-19T23:00:00Z",
+            "energyKWh": 32.25
+          },
+          {
+            "periodStart": "2026-09-19T23:00:00Z",
+            "periodEnd": "2026-09-20T00:00:00Z",
+            "energyKWh": 37.5
+          },
+          {
+            "periodStart": "2026-09-20T00:00:00Z",
+            "periodEnd": "2026-09-20T01:00:00Z",
+            "energyKWh": 20.25
+          },
+          {
+            "periodStart": "2026-09-20T01:00:00Z",
+            "periodEnd": "2026-09-20T02:00:00Z",
+            "energyKWh": 40.5
+          },
+          {
+            "periodStart": "2026-09-20T02:00:00Z",
+            "periodEnd": "2026-09-20T03:00:00Z",
+            "energyKWh": 33.75
+          },
+          {
+            "periodStart": "2026-09-20T03:00:00Z",
+            "periodEnd": "2026-09-20T04:00:00Z",
+            "energyKWh": 33
+          },
+          {
+            "periodStart": "2026-09-20T04:00:00Z",
+            "periodEnd": "2026-09-20T05:00:00Z",
+            "energyKWh": 22.5
+          },
+          {
+            "periodStart": "2026-09-20T05:00:00Z",
+            "periodEnd": "2026-09-20T06:00:00Z",
+            "energyKWh": 39.75
+          },
+          {
+            "periodStart": "2026-09-20T06:00:00Z",
+            "periodEnd": "2026-09-20T07:00:00Z",
+            "energyKWh": 39
+          },
+          {
+            "periodStart": "2026-09-20T07:00:00Z",
+            "periodEnd": "2026-09-20T08:00:00Z",
+            "energyKWh": 40.5
+          },
+          {
+            "periodStart": "2026-09-20T08:00:00Z",
+            "periodEnd": "2026-09-20T09:00:00Z",
+            "energyKWh": 34.5
+          },
+          {
+            "periodStart": "2026-09-20T09:00:00Z",
+            "periodEnd": "2026-09-20T10:00:00Z",
+            "energyKWh": 38.25
+          },
+          {
+            "periodStart": "2026-09-20T10:00:00Z",
+            "periodEnd": "2026-09-20T11:00:00Z",
+            "energyKWh": 36
+          },
+          {
+            "periodStart": "2026-09-20T11:00:00Z",
+            "periodEnd": "2026-09-20T12:00:00Z",
+            "energyKWh": 41.25
+          },
+          {
+            "periodStart": "2026-09-20T12:00:00Z",
+            "periodEnd": "2026-09-20T13:00:00Z",
+            "energyKWh": 34.5
+          },
+          {
+            "periodStart": "2026-09-20T13:00:00Z",
+            "periodEnd": "2026-09-20T14:00:00Z",
+            "energyKWh": 39.75
+          },
+          {
+            "periodStart": "2026-09-20T14:00:00Z",
+            "periodEnd": "2026-09-20T15:00:00Z",
+            "energyKWh": 39.75
+          },
+          {
+            "periodStart": "2026-09-20T15:00:00Z",
+            "periodEnd": "2026-09-20T16:00:00Z",
+            "energyKWh": 41.25
+          }
+        ]
+      },
+      {
+        "deviceId": "018f3e00-4000-7000-8000-000000000003",
+        "points": [
+          {
+            "periodStart": "2026-09-19T16:00:00Z",
+            "periodEnd": "2026-09-19T17:00:00Z",
+            "energyKWh": 35.76666699999987
+          },
+          {
+            "periodStart": "2026-09-19T17:00:00Z",
+            "periodEnd": "2026-09-19T18:00:00Z",
+            "energyKWh": 30.21666699999878
+          },
+          {
+            "periodStart": "2026-09-19T18:00:00Z",
+            "periodEnd": "2026-09-19T19:00:00Z",
+            "energyKWh": 32.066665999998804
+          },
+          {
+            "periodStart": "2026-09-19T19:00:00Z",
+            "periodEnd": "2026-09-19T20:00:00Z",
+            "energyKWh": 35.149999999999636
+          },
+          {
+            "periodStart": "2026-09-19T20:00:00Z",
+            "periodEnd": "2026-09-19T21:00:00Z",
+            "energyKWh": 32.6833319999987
+          },
+          {
+            "periodStart": "2026-09-19T21:00:00Z",
+            "periodEnd": "2026-09-19T22:00:00Z",
+            "energyKWh": 20.349999999998545
+          },
+          {
+            "periodStart": "2026-09-19T22:00:00Z",
+            "periodEnd": "2026-09-19T23:00:00Z",
+            "energyKWh": 28.983334000000468
+          },
+          {
+            "periodStart": "2026-09-19T23:00:00Z",
+            "periodEnd": "2026-09-20T00:00:00Z",
+            "energyKWh": 30.21666599999935
+          },
+          {
+            "periodStart": "2026-09-20T00:00:00Z",
+            "periodEnd": "2026-09-20T01:00:00Z",
+            "energyKWh": 14.800000000000182
+          },
+          {
+            "periodStart": "2026-09-20T01:00:00Z",
+            "periodEnd": "2026-09-20T02:00:00Z",
+            "energyKWh": 34.53333500000008
+          },
+          {
+            "periodStart": "2026-09-20T02:00:00Z",
+            "periodEnd": "2026-09-20T03:00:00Z",
+            "energyKWh": 31.449999999999818
+          },
+          {
+            "periodStart": "2026-09-20T03:00:00Z",
+            "periodEnd": "2026-09-20T04:00:00Z",
+            "energyKWh": 29.600000999999793
+          },
+          {
+            "periodStart": "2026-09-20T04:00:00Z",
+            "periodEnd": "2026-09-20T05:00:00Z",
+            "energyKWh": 20.350000999998883
+          },
+          {
+            "periodStart": "2026-09-20T05:00:00Z",
+            "periodEnd": "2026-09-20T06:00:00Z",
+            "energyKWh": 32.06666699999914
+          },
+          {
+            "periodStart": "2026-09-20T06:00:00Z",
+            "periodEnd": "2026-09-20T07:00:00Z",
+            "energyKWh": 29.599999999999454
+          },
+          {
+            "periodStart": "2026-09-20T07:00:00Z",
+            "periodEnd": "2026-09-20T08:00:00Z",
+            "energyKWh": 33.91666600000008
+          },
+          {
+            "periodStart": "2026-09-20T08:00:00Z",
+            "periodEnd": "2026-09-20T09:00:00Z",
+            "energyKWh": 30.83333400000265
+          },
+          {
+            "periodStart": "2026-09-20T09:00:00Z",
+            "periodEnd": "2026-09-20T10:00:00Z",
+            "energyKWh": 32.68333299999904
+          },
+          {
+            "periodStart": "2026-09-20T10:00:00Z",
+            "periodEnd": "2026-09-20T11:00:00Z",
+            "energyKWh": 25.28333399999974
+          },
+          {
+            "periodStart": "2026-09-20T11:00:00Z",
+            "periodEnd": "2026-09-20T12:00:00Z",
+            "energyKWh": 29.600001000001612
+          },
+          {
+            "periodStart": "2026-09-20T12:00:00Z",
+            "periodEnd": "2026-09-20T13:00:00Z",
+            "energyKWh": 27.750001000001248
+          },
+          {
+            "periodStart": "2026-09-20T13:00:00Z",
+            "periodEnd": "2026-09-20T14:00:00Z",
+            "energyKWh": 31.450001000000157
+          },
+          {
+            "periodStart": "2026-09-20T14:00:00Z",
+            "periodEnd": "2026-09-20T15:00:00Z",
+            "energyKWh": 33.29999899999984
+          },
+          {
+            "periodStart": "2026-09-20T15:00:00Z",
+            "periodEnd": "2026-09-20T16:00:00Z",
+            "energyKWh": 29.600001000001612
+          }
+        ]
+      },
+      {
+        "deviceId": "018f3e00-4000-7000-8000-000000000004",
+        "points": [
+          {
+            "periodStart": "2026-09-19T16:00:00Z",
+            "periodEnd": "2026-09-19T17:00:00Z",
+            "energyKWh": 8.051200999999992
+          },
+          {
+            "periodStart": "2026-09-19T17:00:00Z",
+            "periodEnd": "2026-09-19T18:00:00Z",
+            "energyKWh": 7.419735000000173
+          },
+          {
+            "periodStart": "2026-09-19T18:00:00Z",
+            "periodEnd": "2026-09-19T19:00:00Z",
+            "energyKWh": 7.8933320000001
+          },
+          {
+            "periodStart": "2026-09-19T19:00:00Z",
+            "periodEnd": "2026-09-19T20:00:00Z",
+            "energyKWh": 8.52479900000003
+          },
+          {
+            "periodStart": "2026-09-19T20:00:00Z",
+            "periodEnd": "2026-09-19T21:00:00Z",
+            "energyKWh": 8.051200000000335
+          },
+          {
+            "periodStart": "2026-09-19T21:00:00Z",
+            "periodEnd": "2026-09-19T22:00:00Z",
+            "energyKWh": 6.314667999999756
+          },
+          {
+            "periodStart": "2026-09-19T22:00:00Z",
+            "periodEnd": "2026-09-19T23:00:00Z",
+            "energyKWh": 6.946133000000145
+          },
+          {
+            "periodStart": "2026-09-19T23:00:00Z",
+            "periodEnd": "2026-09-20T00:00:00Z",
+            "energyKWh": 8.051200000000108
+          },
+          {
+            "periodStart": "2026-09-20T00:00:00Z",
+            "periodEnd": "2026-09-20T01:00:00Z",
+            "energyKWh": 4.262398999999959
+          },
+          {
+            "periodStart": "2026-09-20T01:00:00Z",
+            "periodEnd": "2026-09-20T02:00:00Z",
+            "energyKWh": 7.893334999999979
+          },
+          {
+            "periodStart": "2026-09-20T02:00:00Z",
+            "periodEnd": "2026-09-20T03:00:00Z",
+            "energyKWh": 7.8933330000002115
+          },
+          {
+            "periodStart": "2026-09-20T03:00:00Z",
+            "periodEnd": "2026-09-20T04:00:00Z",
+            "energyKWh": 7.577600999999959
+          },
+          {
+            "periodStart": "2026-09-20T04:00:00Z",
+            "periodEnd": "2026-09-20T05:00:00Z",
+            "energyKWh": 4.893866000000116
+          },
+          {
+            "periodStart": "2026-09-20T05:00:00Z",
+            "periodEnd": "2026-09-20T06:00:00Z",
+            "energyKWh": 7.419732999999951
+          },
+          {
+            "periodStart": "2026-09-20T06:00:00Z",
+            "periodEnd": "2026-09-20T07:00:00Z",
+            "energyKWh": 8.209066999999777
+          },
+          {
+            "periodStart": "2026-09-20T07:00:00Z",
+            "periodEnd": "2026-09-20T08:00:00Z",
+            "energyKWh": 8.051200999999992
+          },
+          {
+            "periodStart": "2026-09-20T08:00:00Z",
+            "periodEnd": "2026-09-20T09:00:00Z",
+            "energyKWh": 6.472533999999996
+          },
+          {
+            "periodStart": "2026-09-20T09:00:00Z",
+            "periodEnd": "2026-09-20T10:00:00Z",
+            "energyKWh": 8.05120100000022
+          },
+          {
+            "periodStart": "2026-09-20T10:00:00Z",
+            "periodEnd": "2026-09-20T11:00:00Z",
+            "energyKWh": 6.472533999999996
+          },
+          {
+            "periodStart": "2026-09-20T11:00:00Z",
+            "periodEnd": "2026-09-20T12:00:00Z",
+            "energyKWh": 8.051200999999992
+          },
+          {
+            "periodStart": "2026-09-20T12:00:00Z",
+            "periodEnd": "2026-09-20T13:00:00Z",
+            "energyKWh": 7.419734000000062
+          },
+          {
+            "periodStart": "2026-09-20T13:00:00Z",
+            "periodEnd": "2026-09-20T14:00:00Z",
+            "energyKWh": 7.735465999999633
+          },
+          {
+            "periodStart": "2026-09-20T14:00:00Z",
+            "periodEnd": "2026-09-20T15:00:00Z",
+            "energyKWh": 8.6826659999997
+          },
+          {
+            "periodStart": "2026-09-20T15:00:00Z",
+            "periodEnd": "2026-09-20T16:00:00Z",
+            "energyKWh": 6.156801000000314
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "requestedGranularity": "hour",
+      "actualGranularity": "hour",
+      "dataWatermark": "2026-10-12T14:22:06.196Z",
+      "aggregateWatermark": "2026-10-12T14:22:06.196Z",
+      "datasetRevision": "local-development-v1:16244",
+      "partial": false,
+      "qualitySummary": {
+        "valid": 1127,
+        "suspect": 0,
+        "invalid": 0
+      }
+    }
+  }
+}

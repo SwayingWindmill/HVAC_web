@@ -364,6 +364,11 @@ _Avoid_: provisioning key, activation token
 The name a Gateway uses in its messages for one Device behind it. It is a Registry mapping scoped to that Gateway, not Device identity.
 _Avoid_: external device id, child id
 
+## Sub-meter
+
+A meter on the feed into one piece of equipment (分表), as opposed to the Site's total meter. Its energy is already inside the Site total: a Meter Binding on an edge from a non-grid node into a device's load node has accounting scope BRANCH, every other one SITE, and a Site's total counts only SITE energy. What the total meter reads beyond the sub-meters is 未分项 (unallocated), shown as it is even when negative.
+_Avoid_: branch meter, child meter
+
 ## Energy Conservation Measure
 
 One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended; only one measure on a Site is implemented at a time.

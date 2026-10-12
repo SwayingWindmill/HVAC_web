@@ -25,22 +25,23 @@ export const MY_ID: string = principal.principalId;
 const RECORDED_DAY = Date.parse('2026-10-09T16:00:00Z');
 const DAY_MS = 86_400_000;
 
-function replayEnergy(series: Json, query: Json): Json {
+// A device breakdown's sub-meter series move with the total.
+function replayEnergy(series: Json, query: Json, recordedDay = RECORDED_DAY): Json {
   if (query.granularity !== 'hour') return series;
   const from = Date.parse(query.from);
   const to = Date.parse(query.to);
-  const points: Json[] = [];
-  for (let day = from; day < to; day += DAY_MS) {
-    for (const point of series.points) {
-      const shift = day - RECORDED_DAY;
-      points.push({
-        ...point,
-        periodStart: new Date(Date.parse(point.periodStart) + shift).toISOString(),
-        periodEnd: new Date(Date.parse(point.periodEnd) + shift).toISOString(),
-      });
+  const replay = (recorded: Json[]) => {
+    const points: Json[] = [];
+    for (let day = from; day < to; day += DAY_MS) {
+      for (const point of recorded) {
+        const shift = day - recordedDay;
+        points.push({ ...point, periodStart: new Date(Date.parse(point.periodStart) + shift).toISOString(), periodEnd: new Date(Date.parse(point.periodEnd) + shift).toISOString() });
+      }
     }
-  }
-  return { ...series, points };
+    return points;
+  };
+  const devices = series.devices?.map((device: Json) => ({ ...device, points: replay(device.points) }));
+  return { ...series, points: replay(series.points), ...(devices ? { devices } : {}) };
 }
 
 // Recorded quarter-hours answer each window the page asks for; tests pin the page clock to the recording.
@@ -96,6 +97,8 @@ export class Gateway {
   optimization: Json | null = null;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
+  /** Machines whose sub-meter the recorded device breakdown leaves out. */
+  unmeteredDeviceIds: readonly string[] = [];
   /** The Site's import Tariff in effect; null when none is assigned. */
   tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
@@ -246,6 +249,11 @@ export class Gateway {
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'POST' && path === '/api/v1/analytics/energy-series' && this.analyticsDenied) {
       return { status: 403, body: { type: 'about:blank', title: 'Analytics access denied', status: 403, detail: 'The requested Site is not authorized for Energy Analytics.', instance: path, code: 'ANALYTICS_ACCESS_DENIED', traceId: '0'.repeat(32), retryable: false } };
+    }
+    if (method === 'POST' && path === '/api/v1/analytics/energy-series' && body?.breakdown === 'device') {
+      const recorded = fixture<Json>('energy-breakdown.json');
+      const devices = recorded.response.devices.filter((device: Json) => !this.unmeteredDeviceIds.includes(device.deviceId));
+      return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
     }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
 
