@@ -32,6 +32,8 @@ import { SeverityBadge, sortAlarmsForOperators } from "@/features/alarms/alarm-p
 import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
 import { ReadingMetric, ReadingValue } from "@/features/operations/realtime/device-presentation";
+import { siteTariffQuery } from "@/features/tariff/query";
+import { costByLabel } from "@/features/tariff/tariff-model";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
 import {
   EQUIPMENT_CATEGORIES,
@@ -54,10 +56,12 @@ const known = (value: number | null, digits: number) => (value === null ? null :
 const HEATMAP_DAYS = 7;
 const HOURS = Array.from({ length: 24 }, (_, hour) => `${hour}时`);
 
-type OverviewMetric = "electricityKWh" | "coolingKWh" | "cop";
+type OverviewMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
 
 function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: OverviewMetric; readonly onMetricChange: (metric: OverviewMetric) => void }) {
+  const { site } = siteRoute.useRouteContext();
   const comparison = useTodayAgainstYesterday();
+  const tariff = useQuery(siteTariffQuery(site.id));
   if (comparison.isPending) return <Skeleton className="h-[372px] rounded-xl" />;
   if (comparison.isError) {
     return (
@@ -66,12 +70,21 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       </Card>
     );
   }
-  const { today, yesterday, hours } = comparison.data;
+  const { today, yesterday, wholeYesterday, hours } = comparison.data;
+  // Without a Tariff the day is not priced, and the cost tab is left out.
+  const priced = tariff.data
+    ? { today: costByLabel(today.rows, tariff.data, site.timezone), yesterday: costByLabel(wholeYesterday.rows, tariff.data, site.timezone), sameHours: costByLabel(yesterday.rows, tariff.data, site.timezone) }
+    : null;
+  const sum = (costs: Map<string, number>) => (costs.size === 0 ? null : [...costs.values()].reduce((total, cost) => total + cost, 0));
   return (
     <MetricTabsChartCard
       role="region"
       aria-label="今日用能"
-      data={completeOnly(hours).map((hour) => ({ ...hour }))}
+      data={completeOnly(hours).map((hour) => ({
+        ...hour,
+        cost: hour.electricityKWh === null ? null : priced?.today.get(hour.label) ?? null,
+        previousCost: priced?.yesterday.get(hour.label) ?? null,
+      }))}
       xKey="label"
       selected={metric}
       onSelectedChange={(key) => onMetricChange(key as OverviewMetric)}
@@ -114,6 +127,16 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           unit: "COP",
           fractionDigits: 2,
         },
+        ...(priced ? [{
+          key: "cost",
+          label: "今日电费（估算）",
+          compareKey: "previousCost",
+          value: known(sum(priced.today), 0),
+          delta: relativeChange(sum(priced.today), sum(priced.sameHours)),
+          unit: "元",
+          fractionDigits: 0,
+          invertDelta: true,
+        }] : []),
       ]}
     />
   );

@@ -86,6 +86,8 @@ export class Gateway {
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
+  /** The Site's import Tariff in effect; null when none is assigned. */
+  tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
   nextRecommendation: Json | null = null;
   readonly writes: RecordedRequest[] = [];
@@ -158,6 +160,12 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
+      return this.tariff ? { body: this.tariff } : {
+        status: 404,
+        body: { type: 'about:blank', title: 'Resource not found', status: 404, detail: 'The requested Registry resource was not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false },
+      };
+    }
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
       return { body: body?.granularity === 'QUARTER_HOUR' ? replayDemand(fixture<Json>('demand-quarter-hours.json'), body) : fixture('history.json') };

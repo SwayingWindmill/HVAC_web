@@ -78,9 +78,23 @@ export function useTodayAgainstYesterday() {
         summary('hour', before.from, before.to, signal),
         summary('hour', before.from, from, signal),
       ]);
-      return { today, yesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
+      return { today, yesterday, wholeYesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
     },
     refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/** HVAC electricity hour by hour over a period so far, for pricing by time of use. */
+export function useHourlyElectricity(period: EnergyPeriod) {
+  const { site, read } = useEnergyReader();
+  return useQuery({
+    queryKey: ['energy-series', site.id, 'hourly-electricity', period],
+    queryFn: async ({ signal }) => {
+      const { from, to } = periodWindow(period, new Date(), site.timezone);
+      return (await read('electricity', 'hour', from, to, signal)).points;
+    },
+    refetchInterval: 5 * 60_000,
     retry: false,
   });
 }

@@ -56,6 +56,7 @@ const (
 	ActionDeviceBindingList   Action = "device-binding.list"
 	ActionMeterBindingResolve Action = "meter-binding.resolve"
 	ActionAssetModelRead      Action = "asset-model.read"
+	ActionTariffRead          Action = "tariff.read"
 	ActionSiteWrite           Action = "site.write"
 	ActionSpaceWrite          Action = "space.write"
 	ActionAssetWrite          Action = "asset.write"
@@ -80,6 +81,7 @@ func (action Action) Valid() bool {
 		ActionDeviceBindingList,
 		ActionMeterBindingResolve,
 		ActionAssetModelRead,
+		ActionTariffRead,
 		ActionSiteWrite,
 		ActionSpaceWrite,
 		ActionAssetWrite,
@@ -98,7 +100,7 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead,
+	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead, ActionTariffRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
 		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire:
 		return true
@@ -114,7 +116,7 @@ func (action Action) TenantScoped() bool {
 func ActionAllows(granted, requested Action) bool {
 	if granted == ActionRegistryRead {
 		return requested == ActionSiteList || requested == ActionSiteRead || requested == ActionAssetList || requested == ActionAssetRead ||
-			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead
+			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead || requested == ActionTariffRead
 	}
 	return granted == requested
 }

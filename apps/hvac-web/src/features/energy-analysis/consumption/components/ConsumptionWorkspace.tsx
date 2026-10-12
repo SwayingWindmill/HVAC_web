@@ -9,13 +9,13 @@ import { DataTable } from "@/components/data-table/data-table";
 import type { DataTableFeatures } from "@/components/data-table/data-table-features";
 import { Main } from "@/components/layout/Main";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaBadge } from "@/components/ui/delta-badge";
 import { PeriodTabs } from "@/components/ui/period-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataTable } from "@/hooks/use-data-table";
+import { TouCostCard } from "@/features/tariff/components/TouCostCard";
 import { useWorkspaceScope } from "@/hooks/use-scope";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
 import {
@@ -101,9 +101,6 @@ function PeriodFacts({ current, previous, previousLabel, timeZone }: {
           </Fact>
           <Fact label="计量质量">
             {current.excludedIntervals > 0 ? `${current.excludedIntervals} 个区间未计入` : "全部有效"}
-          </Fact>
-          <Fact label="电费" detail="电价与结算尚未接入">
-            <Badge variant="outline" className="font-normal">未接入</Badge>
           </Fact>
         </dl>
       </CardContent>
@@ -192,6 +189,7 @@ export function ConsumptionWorkspace() {
             </div>
             <PeriodFacts current={comparison.current} previous={comparison.previous} previousLabel={previousLabel} timeZone={currentScope.timezone} />
           </div>
+          <TouCostCard period={period} />
           <DataTableBlock title={`分${BUCKET_NOUN[comparison.current.granularity]}能耗`} description={`本期每${BUCKET_NOUN[comparison.current.granularity]}的空调用电、${previousLabel}用电、供冷量与综合能效。`}>
             <DataTable table={table} tableAriaLabel="分时段能耗明细" />
           </DataTableBlock>

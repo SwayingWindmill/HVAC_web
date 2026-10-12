@@ -271,6 +271,23 @@ export const siteAssetModelSchema = z.object({
   relationships: z.array(assetRelationshipSchema),
   counts: assetModelCountsSchema,
 }).strict();
+export const tariffPeriodSchema = z.object({
+  periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']),
+  dayType: z.enum(['WEEKDAY', 'WEEKEND', 'HOLIDAY', 'SPECIAL_DAY']),
+  startMinute: z.number().int().min(0).max(1439),
+  endMinute: z.number().int().min(1).max(1440),
+  energyRatePerKWh: z.number().nonnegative(),
+  demandRatePerKW: z.number().nonnegative(),
+}).strict();
+export const siteTariffSchema = z.object({
+  siteId: uuidV7Schema,
+  displayName: z.string().min(1).max(256),
+  version: z.number().int().positive(),
+  effectiveFrom: instantSchema,
+  timezone: z.string().min(1),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  periods: z.array(tariffPeriodSchema),
+}).strict();
 
 export const mutationMetaSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -612,6 +629,8 @@ export type TelemetryPoint = z.infer<typeof telemetryPointSchema>;
 export type AssetRelationship = z.infer<typeof assetRelationshipSchema>;
 export type AssetModelCounts = z.infer<typeof assetModelCountsSchema>;
 export type SiteAssetModel = z.infer<typeof siteAssetModelSchema>;
+export type TariffPeriod = z.infer<typeof tariffPeriodSchema>;
+export type SiteTariff = z.infer<typeof siteTariffSchema>;
 export type ExternalBinding = z.infer<typeof externalBindingSchema>;
 export type SiteCollection = z.infer<typeof siteCollectionSchema>;
 export type AssetCollection = z.infer<typeof assetCollectionSchema>;
@@ -773,6 +792,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     getSiteAssetModel: (siteId: string, init?: RequestInit) => request(
       '__SITE_ASSET_MODEL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteAssetModelSchema, { ...init, method: 'GET' },
+    ),
+    getSiteTariff: (siteId: string, init?: RequestInit) => request(
+      '__SITE_TARIFF_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteTariffSchema, { ...init, method: 'GET' },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

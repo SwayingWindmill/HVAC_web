@@ -26,6 +26,7 @@ type RegistryStore interface {
 	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
 	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
+	GetSiteTariff(context.Context, registryauth.GrantClaims, string) (SiteTariff, error)
 }
 
 type PostgresStore struct {
