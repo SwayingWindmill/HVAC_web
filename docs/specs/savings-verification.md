@@ -1,6 +1,7 @@
 # 节能项目与节能验证（M&V）规格
 
 Issue #484. Decided with the user in three rounds on 2026-10-12. This spec is the contract for implementation.
+Implemented on branch `feat/mv-service` (2026-10-12); live acceptance of verified days is pending enough local history (see `docs/HANDOFF.md`).
 Terms follow IPMVP: 措施 (measure), 测量边界 (measurement boundary), 基线期 (baseline period), 报告期 (reporting period), 调整后基线 (adjusted baseline), 节能量 (avoided energy).
 
 ## 范围

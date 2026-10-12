@@ -363,3 +363,21 @@ _Avoid_: provisioning key, activation token
 
 The name a Gateway uses in its messages for one Device behind it. It is a Registry mapping scoped to that Gateway, not Device identity.
 _Avoid_: external device id, child id
+
+## Energy Conservation Measure
+
+One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended; only one measure on a Site is implemented at a time.
+_Avoid_: project, ECM record
+
+## Baseline
+
+The line fitted over a period before a measure was implemented that predicts the plant's hourly electricity from the cooling it delivered. It is frozen at implementation and trusted only when it passes ASHRAE Guideline 14; it can be refitted on another period until the first Verified Day is published.
+
+## Adjusted Baseline
+
+What the Baseline predicts the plant would have used under the conditions actually seen after implementation. Avoided energy is the adjusted baseline minus the electricity actually used.
+_Avoid_: expected consumption, reference consumption
+
+## Verified Day
+
+One Site-local day of a measure's reporting period, verified once against its Baseline and never changed afterwards. Hours missing data count against its coverage; they are not filled in.
