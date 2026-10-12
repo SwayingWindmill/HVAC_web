@@ -19,10 +19,13 @@ const DAY_MS = 86_400_000;
 /** Reads Site energy series from the Energy analytics owner for the current Site. */
 export function useEnergyReader() {
   const { site, principal } = siteRoute.useRouteContext();
-  const read = (energyType: EnergySeriesQuery['energyType'], granularity: Granularity, from: Date, to: Date, signal: AbortSignal) =>
+  const read = (
+    energyType: EnergySeriesQuery['energyType'], granularity: Granularity, from: Date, to: Date, signal: AbortSignal,
+    breakdown?: EnergySeriesQuery['breakdown'],
+  ) =>
     client.queryEnergySeries({
       tenantId: site.tenantId, siteId: site.id, energyType, granularity, timezone: site.timezone,
-      from: from.toISOString(), to: to.toISOString(), qualityPolicy: 'VALID_ONLY',
+      from: from.toISOString(), to: to.toISOString(), qualityPolicy: 'VALID_ONLY', ...(breakdown ? { breakdown } : {}),
     }, principal.session.csrfToken, { signal }).then((response) => response.data);
   const summary = async (granularity: Granularity, from: Date, to: Date, signal: AbortSignal) => {
     const [electricity, cooling] = await Promise.all([

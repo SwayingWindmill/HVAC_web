@@ -252,7 +252,7 @@ func (resolver integrationBindingResolver) Resolve(_ context.Context, input ener
 		MeterID: "018f4f00-1100-7000-8000-000000000001", MeterBindingID: "018f4f00-1200-7000-8000-000000000001",
 		TopologyVersionID: "018f4f00-1300-7000-8000-000000000001", BindingVersion: 1,
 		EnergyTypeID: "018f4f00-1400-7000-8000-000000000001", EnergyType: energy.EnergyTypeElectricity,
-		MeterRole: energy.MeterRolePrimary, Direction: "IMPORT", DeviceID: input.DeviceID, PointID: input.PointID,
+		MeterRole: energy.MeterRolePrimary, Direction: "IMPORT", AccountingScope: energy.AccountingScopeSite, DeviceID: input.DeviceID, PointID: input.PointID,
 		PointType: energy.PointTypeCounter, EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }

@@ -59,24 +59,28 @@ export const REAL_ASSETS_DEVICE_PROFILES = Object.freeze([
     point('chiller.power', '主机功率', 20, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
     point('chiller.cop', '主机 COP', 30, { precision: 2, trendEligible: true }),
     point('chiller.cooling_capacity', '制冷量', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+    point('chiller.energy', '累计电量', 50, { critical: false, showInList: false, defaultUnit: 'kWh', precision: 1, trendEligible: true }),
   ]),
   profile('CHILLED_WATER_PUMP', '冷冻水泵', ['CHILLED_WATER_PUMP', 'CHWP'], [
     point('chwp.run_state', '运行状态', 10),
     point('chwp.frequency', '运行频率', 20, { defaultUnit: 'Hz', precision: 1, trendEligible: true }),
     point('chwp.flow_rate', '冷冻水流量', 30, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
     point('chwp.power', '水泵功率', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+    point('chwp.energy', '累计电量', 50, { critical: false, showInList: false, defaultUnit: 'kWh', precision: 1, trendEligible: true }),
   ]),
   profile('COOLING_WATER_PUMP', '冷却水泵', ['COOLING_WATER_PUMP', 'CWP'], [
     point('cwp.run_state', '运行状态', 10),
     point('cwp.frequency', '运行频率', 20, { defaultUnit: 'Hz', precision: 1, trendEligible: true }),
     point('cwp.flow_rate', '冷却水流量', 30, { defaultUnit: 'm3/h', precision: 1, trendEligible: true }),
     point('cwp.power', '水泵功率', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+    point('cwp.energy', '累计电量', 50, { critical: false, showInList: false, defaultUnit: 'kWh', precision: 1, trendEligible: true }),
   ]),
   profile('COOLING_TOWER', '冷却塔', ['COOLING_TOWER', 'CT', 'COOLING_TOWER_CONTROLLER'], [
     point('cooling_tower.run_state', '运行状态', 10),
     point('cooling_tower.fan_speed', '风机转速', 20, { defaultUnit: '%', precision: 1, trendEligible: true }),
     point('cooling_tower.approach_temperature', '逼近温度', 30, { defaultUnit: 'Cel', precision: 1, trendEligible: true }),
     point('cooling_tower.power', '冷却塔功率', 40, { defaultUnit: 'kW', precision: 1, trendEligible: true }),
+    point('cooling_tower.energy', '累计电量', 50, { critical: false, showInList: false, defaultUnit: 'kWh', precision: 1, trendEligible: true }),
   ]),
   profile('HVAC_POWER_METER', '中央空调电表', ['HVAC_POWER_METER', 'POWER_METER', 'ELECTRIC_METER'], [
     point('hvac_meter.active_power', '中央空调总功率', 10, { defaultUnit: 'kW', precision: 1, trendEligible: true }),

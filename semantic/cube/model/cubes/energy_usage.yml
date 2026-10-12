@@ -80,6 +80,16 @@ cubes:
         sql: energy_type
         type: string
 
+      - name: accounting_scope
+        description: SITE facts make up the Site's total; BRANCH facts are equipment sub-meters already inside it.
+        sql: accounting_scope
+        type: string
+
+      - name: load_device_id
+        description: The equipment a BRANCH fact's sub-meter feeds; empty for SITE facts.
+        sql: load_device_id
+        type: string
+
       - name: quality
         sql: quality
         type: string

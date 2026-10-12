@@ -84,8 +84,13 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 		t.Fatalf("date range = %#v, want Asia/Shanghai wall time", dateRange)
 	}
 	if !hasCubeFilter(seriesQuery.Filters, "energy_usage.tenant_id", testCubeTenantID) ||
-		!hasCubeFilter(seriesQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
+		!hasCubeFilter(seriesQuery.Filters, "energy_usage.site_id", testCubeSiteID) ||
+		!hasCubeFilter(seriesQuery.Filters, "energy_usage.accounting_scope", "SITE") ||
+		!hasCubeFilter(metadataQuery.Filters, "energy_usage.accounting_scope", "SITE") {
 		t.Fatalf("filters = %#v", seriesQuery.Filters)
+	}
+	if response.Devices != nil {
+		t.Fatalf("devices = %#v, want none unless a breakdown is asked for", response.Devices)
 	}
 	if len(metadataQuery.Measures) != 2 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "energy_usage.max_data_watermark" {
 		t.Fatalf("metadata query = %#v", metadataQuery)
@@ -107,6 +112,62 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 		!response.Metadata.DataWatermark.Equal(expectedWatermark) || !response.Metadata.AggregateWatermark.Equal(expectedWatermark) ||
 		!response.Metadata.DataWatermark.After(productQuery.To) {
 		t.Fatalf("metadata watermarks = %#v", response.Metadata)
+	}
+}
+
+func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
+	const chiller = "018f1e00-4000-7000-8000-000000000011"
+	const pump = "018f1e00-4000-7000-8000-000000000012"
+	var breakdownQuery *cubeQuery
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case decoded.Query.Measures[0] == "energy_usage.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-08-01T00:00:00.000Z","energy_usage.max_dataset_revision":"1"}]}`))
+		case len(decoded.Query.Dimensions) == 1:
+			breakdownQuery = &decoded.Query
+			_, _ = writer.Write([]byte(`{"data":[
+				{"energy_usage.load_device_id":"` + pump + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"20"},
+				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"70"},
+				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"80"}
+			]}`))
+		default:
+			_, _ = writer.Write([]byte(`{"data":[
+				{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"},
+				{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"}
+			]}`))
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy-daily:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	productQuery := validCubeEnergyQuery()
+	productQuery.Breakdown = analyticsmodel.EnergyBreakdownDevice
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, productQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if breakdownQuery == nil || breakdownQuery.Dimensions[0] != "energy_usage.load_device_id" ||
+		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.accounting_scope", "BRANCH") ||
+		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
+		t.Fatalf("breakdown query = %#v", breakdownQuery)
+	}
+	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
+		t.Fatalf("site points = %#v", response.Points)
+	}
+	if len(response.Devices) != 2 || response.Devices[0].DeviceID != chiller || response.Devices[1].DeviceID != pump {
+		t.Fatalf("devices = %#v", response.Devices)
+	}
+	chillerPoints := response.Devices[0].Points
+	if len(chillerPoints) != 2 || chillerPoints[0].EnergyKWh != 80 || chillerPoints[1].EnergyKWh != 70 ||
+		!chillerPoints[0].PeriodStart.Equal(productQuery.From) || chillerPoints[0].PeriodEnd.Sub(chillerPoints[0].PeriodStart) != 24*time.Hour {
+		t.Fatalf("chiller points = %#v", chillerPoints)
 	}
 }
 

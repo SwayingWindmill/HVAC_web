@@ -460,6 +460,26 @@
       "sensorId": "",
       "subjectType": "ASSET",
       "subjectId": "equipment-chiller-01",
+      "sourceKey": "energyKwh",
+      "telemetryKey": "chiller.energy",
+      "pointCode": "energy",
+      "name": "chiller energy",
+      "pointType": "COUNTER",
+      "valueType": "NUMBER",
+      "unit": "kWh",
+      "writable": false,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceProtocol": "SIMULATED",
+      "sourceAddress": "CHILLER-01:energyKwh",
+      "pointId": "01910000-0000-7000-8000-00000000001f"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
       "sourceKey": "cop",
       "telemetryKey": "chiller.cop",
       "pointCode": "cop",
@@ -472,7 +492,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHILLER-01:cop",
-      "pointId": "01910000-0000-7000-8000-00000000001f"
+      "pointId": "01910000-0000-7000-8000-000000000020"
     },
     {
       "deviceId": "CHILLER-01",
@@ -491,7 +511,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHILLER-01:faultCode",
-      "pointId": "01910000-0000-7000-8000-000000000020"
+      "pointId": "01910000-0000-7000-8000-000000000021"
     },
     {
       "deviceId": "CHWP-01",
@@ -510,7 +530,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:runState",
-      "pointId": "01910000-0000-7000-8000-000000000021"
+      "pointId": "01910000-0000-7000-8000-000000000022"
     },
     {
       "deviceId": "CHWP-01",
@@ -530,7 +550,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:frequencyHz",
-      "pointId": "01910000-0000-7000-8000-000000000022"
+      "pointId": "01910000-0000-7000-8000-000000000023"
     },
     {
       "deviceId": "CHWP-01",
@@ -550,7 +570,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:speedPct",
-      "pointId": "01910000-0000-7000-8000-000000000023"
+      "pointId": "01910000-0000-7000-8000-000000000024"
     },
     {
       "deviceId": "CHWP-01",
@@ -570,7 +590,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:flowRateM3h",
-      "pointId": "01910000-0000-7000-8000-000000000024"
+      "pointId": "01910000-0000-7000-8000-000000000025"
     },
     {
       "deviceId": "CHWP-01",
@@ -590,7 +610,27 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:powerKw",
-      "pointId": "01910000-0000-7000-8000-000000000025"
+      "pointId": "01910000-0000-7000-8000-000000000026"
+    },
+    {
+      "deviceId": "CHWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chwp-01",
+      "sourceKey": "energyKwh",
+      "telemetryKey": "chwp.energy",
+      "pointCode": "energy",
+      "name": "chwp energy",
+      "pointType": "COUNTER",
+      "valueType": "NUMBER",
+      "unit": "kWh",
+      "writable": false,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceProtocol": "SIMULATED",
+      "sourceAddress": "CHWP-01:energyKwh",
+      "pointId": "01910000-0000-7000-8000-000000000027"
     },
     {
       "deviceId": "CHWP-01",
@@ -609,7 +649,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHWP-01:faultCode",
-      "pointId": "01910000-0000-7000-8000-000000000026"
+      "pointId": "01910000-0000-7000-8000-000000000028"
     },
     {
       "deviceId": "CWP-01",
@@ -628,7 +668,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:runState",
-      "pointId": "01910000-0000-7000-8000-000000000027"
+      "pointId": "01910000-0000-7000-8000-000000000029"
     },
     {
       "deviceId": "CWP-01",
@@ -648,7 +688,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:frequencyHz",
-      "pointId": "01910000-0000-7000-8000-000000000028"
+      "pointId": "01910000-0000-7000-8000-00000000002a"
     },
     {
       "deviceId": "CWP-01",
@@ -668,7 +708,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:speedPct",
-      "pointId": "01910000-0000-7000-8000-000000000029"
+      "pointId": "01910000-0000-7000-8000-00000000002b"
     },
     {
       "deviceId": "CWP-01",
@@ -688,7 +728,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:flowRateM3h",
-      "pointId": "01910000-0000-7000-8000-00000000002a"
+      "pointId": "01910000-0000-7000-8000-00000000002c"
     },
     {
       "deviceId": "CWP-01",
@@ -708,7 +748,27 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:powerKw",
-      "pointId": "01910000-0000-7000-8000-00000000002b"
+      "pointId": "01910000-0000-7000-8000-00000000002d"
+    },
+    {
+      "deviceId": "CWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-cwp-01",
+      "sourceKey": "energyKwh",
+      "telemetryKey": "cwp.energy",
+      "pointCode": "energy",
+      "name": "cwp energy",
+      "pointType": "COUNTER",
+      "valueType": "NUMBER",
+      "unit": "kWh",
+      "writable": false,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceProtocol": "SIMULATED",
+      "sourceAddress": "CWP-01:energyKwh",
+      "pointId": "01910000-0000-7000-8000-00000000002e"
     },
     {
       "deviceId": "CWP-01",
@@ -727,7 +787,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CWP-01:faultCode",
-      "pointId": "01910000-0000-7000-8000-00000000002c"
+      "pointId": "01910000-0000-7000-8000-00000000002f"
     },
     {
       "deviceId": "CT-01",
@@ -746,7 +806,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:runState",
-      "pointId": "01910000-0000-7000-8000-00000000002d"
+      "pointId": "01910000-0000-7000-8000-000000000030"
     },
     {
       "deviceId": "CT-01",
@@ -766,7 +826,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:fanSpeedPct",
-      "pointId": "01910000-0000-7000-8000-00000000002e"
+      "pointId": "01910000-0000-7000-8000-000000000031"
     },
     {
       "deviceId": "CT-01",
@@ -786,7 +846,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:enteringWaterTemperatureC",
-      "pointId": "01910000-0000-7000-8000-00000000002f"
+      "pointId": "01910000-0000-7000-8000-000000000032"
     },
     {
       "deviceId": "CT-01",
@@ -806,7 +866,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:leavingWaterTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000030"
+      "pointId": "01910000-0000-7000-8000-000000000033"
     },
     {
       "deviceId": "CT-01",
@@ -826,7 +886,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:ambientWetBulbTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000031"
+      "pointId": "01910000-0000-7000-8000-000000000034"
     },
     {
       "deviceId": "CT-01",
@@ -846,7 +906,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:approachTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000032"
+      "pointId": "01910000-0000-7000-8000-000000000035"
     },
     {
       "deviceId": "CT-01",
@@ -866,7 +926,27 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:powerKw",
-      "pointId": "01910000-0000-7000-8000-000000000033"
+      "pointId": "01910000-0000-7000-8000-000000000036"
+    },
+    {
+      "deviceId": "CT-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-ct-01",
+      "sourceKey": "energyKwh",
+      "telemetryKey": "cooling_tower.energy",
+      "pointCode": "energy",
+      "name": "cooling tower energy",
+      "pointType": "COUNTER",
+      "valueType": "NUMBER",
+      "unit": "kWh",
+      "writable": false,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceProtocol": "SIMULATED",
+      "sourceAddress": "CT-01:energyKwh",
+      "pointId": "01910000-0000-7000-8000-000000000037"
     },
     {
       "deviceId": "CT-01",
@@ -885,7 +965,7 @@
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CT-01:faultCode",
-      "pointId": "01910000-0000-7000-8000-000000000034"
+      "pointId": "01910000-0000-7000-8000-000000000038"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -905,7 +985,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "METER-HVAC-TOTAL:activePowerKw",
-      "pointId": "01910000-0000-7000-8000-000000000035"
+      "pointId": "01910000-0000-7000-8000-000000000039"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -925,7 +1005,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "METER-HVAC-TOTAL:energyKwh",
-      "pointId": "01910000-0000-7000-8000-000000000036"
+      "pointId": "01910000-0000-7000-8000-00000000003a"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -944,7 +1024,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "METER-HVAC-TOTAL:powerFactor",
-      "pointId": "01910000-0000-7000-8000-000000000037"
+      "pointId": "01910000-0000-7000-8000-00000000003b"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -964,7 +1044,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "METER-HVAC-TOTAL:frequencyHz",
-      "pointId": "01910000-0000-7000-8000-000000000038"
+      "pointId": "01910000-0000-7000-8000-00000000003c"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -984,7 +1064,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:supplyWaterTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000039"
+      "pointId": "01910000-0000-7000-8000-00000000003d"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1004,7 +1084,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:returnWaterTemperatureC",
-      "pointId": "01910000-0000-7000-8000-00000000003a"
+      "pointId": "01910000-0000-7000-8000-00000000003e"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1024,7 +1104,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:temperatureDifferenceC",
-      "pointId": "01910000-0000-7000-8000-00000000003b"
+      "pointId": "01910000-0000-7000-8000-00000000003f"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1044,7 +1124,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:flowRateM3h",
-      "pointId": "01910000-0000-7000-8000-00000000003c"
+      "pointId": "01910000-0000-7000-8000-000000000040"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1064,7 +1144,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:instantCoolingCapacityKw",
-      "pointId": "01910000-0000-7000-8000-00000000003d"
+      "pointId": "01910000-0000-7000-8000-000000000041"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1084,7 +1164,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "BTU-METER-01:accumulatedCoolingEnergyKwh",
-      "pointId": "01910000-0000-7000-8000-00000000003e"
+      "pointId": "01910000-0000-7000-8000-000000000042"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1104,7 +1184,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "WEATHER-STATION-01:ambientDryBulbTemperatureC",
-      "pointId": "01910000-0000-7000-8000-00000000003f"
+      "pointId": "01910000-0000-7000-8000-000000000043"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1124,7 +1204,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "WEATHER-STATION-01:ambientWetBulbTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000040"
+      "pointId": "01910000-0000-7000-8000-000000000044"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1144,7 +1224,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "WEATHER-STATION-01:relativeHumidityPct",
-      "pointId": "01910000-0000-7000-8000-000000000041"
+      "pointId": "01910000-0000-7000-8000-000000000045"
     },
     {
       "deviceId": "ZONE-SENSOR-01",
@@ -1164,7 +1244,7 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "ZONE-SENSOR-01:zoneTemperatureC",
-      "pointId": "01910000-0000-7000-8000-000000000042"
+      "pointId": "01910000-0000-7000-8000-000000000046"
     },
     {
       "deviceId": "CHILLER-01",

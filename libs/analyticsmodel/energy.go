@@ -60,6 +60,11 @@ func (value QualityPolicy) Valid() bool {
 	}
 }
 
+// EnergyBreakdown asks for the Site's sub-metered energy split out alongside its total.
+type EnergyBreakdown string
+
+const EnergyBreakdownDevice EnergyBreakdown = "device"
+
 type EnergySeriesQuery struct {
 	TenantID      string        `json:"tenantId"`
 	SiteID        string        `json:"siteId"`
@@ -69,6 +74,8 @@ type EnergySeriesQuery struct {
 	From          time.Time     `json:"from"`
 	To            time.Time     `json:"to"`
 	QualityPolicy QualityPolicy `json:"qualityPolicy"`
+	// Breakdown is empty for the Site total alone.
+	Breakdown EnergyBreakdown `json:"breakdown,omitempty"`
 }
 
 func (query EnergySeriesQuery) Validate() error {
@@ -99,6 +106,9 @@ func (query EnergySeriesQuery) Validate() error {
 	if !query.QualityPolicy.Valid() {
 		return errors.New("analytics quality policy is invalid")
 	}
+	if query.Breakdown != "" && query.Breakdown != EnergyBreakdownDevice {
+		return errors.New("analytics breakdown is invalid")
+	}
 	return nil
 }
 
@@ -107,20 +117,21 @@ func (query EnergySeriesQuery) ScopeDigest() (string, error) {
 		return "", err
 	}
 	payload, err := json.Marshal(struct {
-		Action        string        `json:"action"`
-		TenantID      string        `json:"tenantId"`
-		SiteID        string        `json:"siteId"`
-		EnergyType    EnergyType    `json:"energyType"`
-		Granularity   Granularity   `json:"granularity"`
-		Timezone      string        `json:"timezone"`
-		From          string        `json:"from"`
-		To            string        `json:"to"`
-		QualityPolicy QualityPolicy `json:"qualityPolicy"`
+		Action        string          `json:"action"`
+		TenantID      string          `json:"tenantId"`
+		SiteID        string          `json:"siteId"`
+		EnergyType    EnergyType      `json:"energyType"`
+		Granularity   Granularity     `json:"granularity"`
+		Timezone      string          `json:"timezone"`
+		From          string          `json:"from"`
+		To            string          `json:"to"`
+		QualityPolicy QualityPolicy   `json:"qualityPolicy"`
+		Breakdown     EnergyBreakdown `json:"breakdown,omitempty"`
 	}{
 		Action: EnergySeriesAction, TenantID: query.TenantID, SiteID: query.SiteID,
 		EnergyType: query.EnergyType, Granularity: query.Granularity, Timezone: query.Timezone,
 		From: query.From.UTC().Format(time.RFC3339Nano), To: query.To.UTC().Format(time.RFC3339Nano),
-		QualityPolicy: query.QualityPolicy,
+		QualityPolicy: query.QualityPolicy, Breakdown: query.Breakdown,
 	})
 	if err != nil {
 		return "", err
@@ -151,9 +162,17 @@ type EnergySeriesMetadata struct {
 	QualitySummary       QualitySummary `json:"qualitySummary"`
 }
 
+// EnergyDeviceSeries is one piece of equipment's sub-metered energy, already part of the Site's
+// total. Equipment without a sub-meter has no series.
+type EnergyDeviceSeries struct {
+	DeviceID string              `json:"deviceId"`
+	Points   []EnergySeriesPoint `json:"points"`
+}
+
 type EnergySeriesResponse struct {
 	SchemaVersion int                  `json:"schemaVersion"`
 	Points        []EnergySeriesPoint  `json:"points"`
+	Devices       []EnergyDeviceSeries `json:"devices,omitempty"`
 	Metadata      EnergySeriesMetadata `json:"metadata"`
 }
 
