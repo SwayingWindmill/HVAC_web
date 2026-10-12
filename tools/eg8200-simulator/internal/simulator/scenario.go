@@ -39,6 +39,7 @@ type Scenario struct {
 	Description   string
 	Inputs        *ScenarioInputs
 	Steps         []ScenarioStep
+	Daily         *DailyProfile
 
 	inputsPresent bool
 	stepsPresent  bool
@@ -51,6 +52,7 @@ type scenarioDocumentJSON struct {
 	Description   string          `json:"description,omitempty"`
 	Inputs        json.RawMessage `json:"inputs"`
 	Steps         json.RawMessage `json:"steps"`
+	Daily         json.RawMessage `json:"daily"`
 }
 
 type scenarioInputsJSON struct {
@@ -154,6 +156,13 @@ func (scenario *Scenario) UnmarshalJSON(data []byte) error {
 		}
 		decoded.Steps = steps
 	}
+	if document.Daily != nil {
+		profile, err := decodeDailyProfile(document.Daily)
+		if err != nil {
+			return err
+		}
+		decoded.Daily = &profile
+	}
 	if err := decoded.Validate(); err != nil {
 		return err
 	}
@@ -173,6 +182,7 @@ func (scenario Scenario) MarshalJSON() ([]byte, error) {
 		Description   string               `json:"description,omitempty"`
 		Inputs        *ScenarioInputs      `json:"inputs,omitempty"`
 		Steps         []scenarioStepOutput `json:"steps,omitempty"`
+		Daily         *DailyProfile        `json:"daily,omitempty"`
 	}
 
 	output := scenarioOutput{
@@ -181,6 +191,7 @@ func (scenario Scenario) MarshalJSON() ([]byte, error) {
 		Name:          scenario.Name,
 		Description:   scenario.Description,
 		Inputs:        scenario.Inputs,
+		Daily:         scenario.Daily,
 	}
 	if scenario.Mode == ScenarioModeScenario {
 		output.Steps = make([]scenarioStepOutput, 0, len(scenario.Steps))
@@ -199,6 +210,14 @@ func (scenario Scenario) Validate() error {
 	stepsPresent := scenario.stepsPresent || scenario.Steps != nil
 
 	switch scenario.Mode {
+	case ScenarioModeDaily:
+		if inputsPresent || stepsPresent {
+			return errors.New("DAILY scenario must contain only its daily profile")
+		}
+		if scenario.Daily == nil {
+			return errors.New("DAILY scenario daily profile is required")
+		}
+		return scenario.Daily.validate()
 	case ScenarioModeStatic:
 		if !inputsPresent || scenario.Inputs == nil {
 			return errors.New("STATIC scenario inputs are required")
