@@ -56,6 +56,7 @@ const reviewCapabilities: readonly Capability[] = [
   'iam.admin',
   'api-credential.manage',
   'rule.manage',
+  'savings.manage',
 ];
 
 function reviewResponse<T>(data: T): PlatformResponse<T> {
@@ -98,7 +99,7 @@ function reviewPrincipal(): CurrentPrincipalResponse {
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 12,
+      capabilitySetVersion: 13,
       policyRevision: 'frontend-review-policy',
       capabilities: [...reviewCapabilities],
     },

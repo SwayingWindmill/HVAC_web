@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 35,
+  "registryRevision": 36,
   "routes": [
     {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/credential", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/enrollment-code", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
@@ -1648,6 +1648,118 @@
       "method": "PATCH",
       "path": "/api/v1/sites/{siteId}/fdd/findings/{findingId}/links",
       "owner": "fdd-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/savings/measures",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/savings/measures",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/savings/measures/{measureId}",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/savings/measures/{measureId}/implement",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/savings/measures/{measureId}/refit",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/savings/measures/{measureId}/end",
+      "owner": "mv-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/savings/summary",
+      "owner": "mv-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
       "rollout": {

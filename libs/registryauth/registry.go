@@ -67,6 +67,8 @@ const (
 	ActionTemplateManage      Action = "template.manage"
 	ActionRegistryImport      Action = "registry.import"
 	ActionRegistryRetire      Action = "registry.retire"
+	// ActionSavingsManage registers and lifecycles a Site's energy conservation measures (ADR 0021).
+	ActionSavingsManage Action = "savings.manage"
 )
 
 func (action Action) Valid() bool {
@@ -91,7 +93,8 @@ func (action Action) Valid() bool {
 		ActionBindingWrite,
 		ActionTemplateManage,
 		ActionRegistryImport,
-		ActionRegistryRetire:
+		ActionRegistryRetire,
+		ActionSavingsManage:
 		return true
 	default:
 		return false
@@ -102,7 +105,7 @@ func (action Action) SiteScoped() bool {
 	switch action {
 	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead, ActionTariffRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
-		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire:
+		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire, ActionSavingsManage:
 		return true
 	default:
 		return false

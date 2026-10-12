@@ -151,4 +151,24 @@ GRANT SELECT, INSERT, UPDATE ON core_registry.job_attempts TO mv_runtime;
 
 CREATE INDEX IF NOT EXISTS savings_measures_site_idx ON core_registry.savings_measures (tenant_id, site_id, planned_at DESC);
 
+-- savings.manage registers and lifecycles measures on a Site; reads stay on site.read. Tenant
+-- administrators receive it with the catalog revision that introduces it.
+RESET ROLE;
+SET LOCAL ROLE s1_iam_migrator;
+
+UPDATE iam.capability_catalog_revisions SET status = 'RETIRED' WHERE status = 'ACTIVE';
+INSERT INTO iam.capability_catalog_revisions (revision, catalog_key, capabilities, status, created_at)
+SELECT 5, 's25-savings-v1', array_append(capabilities, 'savings.manage'), 'ACTIVE', '2026-10-12T00:00:00Z'
+FROM iam.capability_catalog_revisions
+WHERE revision = 4;
+
+UPDATE iam.role_templates
+SET capabilities = array_append(capabilities, 'savings.manage'),
+    revision = revision + 1,
+    updated_at = '2026-10-12T00:00:00Z'
+WHERE status = 'ACTIVE'
+  AND capabilities @> ARRAY['iam.admin']::text[]
+  AND NOT capabilities @> ARRAY['savings.manage']::text[];
+
+RESET ROLE;
 COMMIT;

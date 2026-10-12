@@ -123,6 +123,13 @@ const expectedOperations = {
   getSiteLoadForecastV212: ['get', '/api/v1/sites/{siteId}/forecast/load'],
   listSiteFddFindingsV212: ['get', '/api/v1/sites/{siteId}/fdd/findings'],
   evaluateSiteFddLowDeltaTV212: ['post', '/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t'],
+  listSiteSavingsMeasuresV212: ['get', '/api/v1/sites/{siteId}/savings/measures'],
+  registerSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures'],
+  getSiteSavingsMeasureV212: ['get', '/api/v1/sites/{siteId}/savings/measures/{measureId}'],
+  implementSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/implement'],
+  refitSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/refit'],
+  endSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/end'],
+  getSiteSavingsSummaryV212: ['get', '/api/v1/sites/{siteId}/savings/summary'],
   createOptimizationRunV212: ['post', '/api/v1/optimization/runs'],
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
   getRuleCatalog: ['get', '/api/v1/rules/catalog'],
@@ -296,8 +303,9 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'iam.admin',
   'api-credential.manage',
   'rule.manage',
+  'savings.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 12, 'EffectiveAuthorization capability set version must be 12');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 13, 'EffectiveAuthorization capability set version must be 13');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 33, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
@@ -372,6 +380,12 @@ const replacements = {
   __SITE_LOAD_FORECAST_PATH__: operations.getSiteLoadForecastV212.path,
   __SITE_FDD_FINDINGS_PATH__: operations.listSiteFddFindingsV212.path,
   __SITE_FDD_LOW_DELTA_T_PATH__: operations.evaluateSiteFddLowDeltaTV212.path,
+  __SITE_SAVINGS_MEASURES_PATH__: operations.listSiteSavingsMeasuresV212.path,
+  __SITE_SAVINGS_MEASURE_PATH__: operations.getSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_IMPLEMENT_PATH__: operations.implementSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_REFIT_PATH__: operations.refitSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_END_PATH__: operations.endSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_SUMMARY_PATH__: operations.getSiteSavingsSummaryV212.path,
   __OPTIMIZATION_RUNS_PATH__: operations.createOptimizationRunV212.path,
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
   __RULE_CATALOG_PATH__: operations.getRuleCatalog.path,

@@ -166,6 +166,7 @@ var principalRegistryCapabilities = []struct {
 	{identitycontext.CapabilityTemplateManage, registryauth.ActionTemplateManage},
 	{identitycontext.CapabilityRegistryImport, registryauth.ActionRegistryImport},
 	{identitycontext.CapabilityRegistryRetire, registryauth.ActionRegistryRetire},
+	{identitycontext.CapabilitySavingsManage, registryauth.ActionSavingsManage},
 }
 
 var principalTelemetryCapabilities = []struct {
