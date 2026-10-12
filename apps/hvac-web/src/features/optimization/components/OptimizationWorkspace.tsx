@@ -1,7 +1,8 @@
+import { FactList, FactRow } from '@/blocks/fact-list';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { Lightbulb, Send, ShieldCheck, Sparkles, TriangleAlert, Undo2 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
@@ -79,15 +80,6 @@ function RangeTrack({ label, axis, band, bandLabel, markers }: {
         </div>
       </div>
     </figure>
-  );
-}
-
-function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 border-b py-2.5 text-sm last:border-b-0">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-medium tabular-nums">{children}</dd>
-    </div>
   );
 }
 
@@ -327,12 +319,12 @@ export function OptimizationWorkspace() {
                   <CardDescription>生成建议时冻结的输入</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <dl>
-                    <Fact label="昨日冷站用电">{formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh</Fact>
-                    <Fact label="昨日电费">{formatDecimal(recommendation.baseline.dailyCost, 0)} 元</Fact>
-                    <Fact label="供水温度">{celsius(recommendation.baseline.supplyTempC)}</Fact>
-                    <Fact label="室内温度">{celsius(recommendation.baseline.zoneTempC)}</Fact>
-                  </dl>
+                  <FactList>
+                    <FactRow label="昨日冷站用电">{formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh</FactRow>
+                    <FactRow label="昨日电费">{formatDecimal(recommendation.baseline.dailyCost, 0)} 元</FactRow>
+                    <FactRow label="供水温度">{celsius(recommendation.baseline.supplyTempC)}</FactRow>
+                    <FactRow label="室内温度">{celsius(recommendation.baseline.zoneTempC)}</FactRow>
+                  </FactList>
                 </CardContent>
               </Card>
               <Card role="region" aria-label="验证与回退">

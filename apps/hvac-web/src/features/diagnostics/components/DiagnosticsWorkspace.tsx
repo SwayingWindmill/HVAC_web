@@ -1,7 +1,8 @@
+import { FactTile } from '@/blocks/fact-list';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { ClipboardPlus, SearchCheck, SlidersHorizontal, Stethoscope } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
@@ -97,15 +98,6 @@ function RuleCard({ rule, target, reading, outcome }: {
   );
 }
 
-function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-medium tabular-nums">{children}</dd>
-    </div>
-  );
-}
-
 function FindingSheet({ finding, assetName, timeZone, onClose }: {
   readonly finding: Finding | undefined;
   readonly assetName: (assetId: string) => string;
@@ -120,7 +112,7 @@ function FindingSheet({ finding, assetName, timeZone, onClose }: {
   const name = finding ? assetName(finding.assetId) : '';
   return (
     <Sheet open={Boolean(finding)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+      <SheetContent className="overflow-y-auto">
         {finding && level ? (
           <>
             <SheetHeader>
@@ -129,11 +121,11 @@ function FindingSheet({ finding, assetName, timeZone, onClose }: {
             </SheetHeader>
             <div className="flex flex-col gap-6 px-4 pb-6">
               <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-                <Fact label="测量值">{formatDecimal(finding.observedValue, 2)} {finding.valueUnit}</Fact>
-                <Fact label="阈值">{formatDecimal(finding.thresholdValue, 1)} {finding.valueUnit}</Fact>
-                <Fact label="偏离程度"><FindingSeverityBadge finding={finding} /></Fact>
-                <Fact label="置信度">{formatDecimal(finding.confidence * 100, 0)}%</Fact>
-                <Fact label="诊断窗口">{formatTime(finding.evaluationFrom, timeZone).slice(-5)}–{formatTime(finding.evaluationTo, timeZone).slice(-5)}</Fact>
+                <FactTile label="测量值">{formatDecimal(finding.observedValue, 2)} {finding.valueUnit}</FactTile>
+                <FactTile label="阈值">{formatDecimal(finding.thresholdValue, 1)} {finding.valueUnit}</FactTile>
+                <FactTile label="偏离程度"><FindingSeverityBadge finding={finding} /></FactTile>
+                <FactTile label="置信度">{formatDecimal(finding.confidence * 100, 0)}%</FactTile>
+                <FactTile label="诊断窗口">{formatTime(finding.evaluationFrom, timeZone).slice(-5)}–{formatTime(finding.evaluationTo, timeZone).slice(-5)}</FactTile>
               </dl>
               {rule ? (
                 <>

@@ -1,7 +1,8 @@
+import { FactTile } from '@/blocks/fact-list';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { Minus, Play, Plus, RefreshCw, RotateCcw, Send, Square, Terminal } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
@@ -263,7 +264,7 @@ function CommandSheet({ command, labels, timeZone, onClose }: {
   const summary = command ? commandSummary(command, labels) : null;
   return (
     <Sheet open={Boolean(command)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-full sm:max-w-md">
+      <SheetContent className="overflow-y-auto">
         {command && summary ? (
           <>
             <SheetHeader>
@@ -272,10 +273,10 @@ function CommandSheet({ command, labels, timeZone, onClose }: {
             </SheetHeader>
             <div className="flex flex-col gap-6 px-4 pb-6">
               <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-                <Fact label="状态"><CommandStatus command={command} /></Fact>
-                <Fact label="风险">{RISK_LABEL[command.risk]}</Fact>
-                <Fact label="审批">{APPROVAL_LABEL[command.approvalPolicy]}{command.requiredApprovalCount > 0 ? ` · ${command.approvalCount}/${command.requiredApprovalCount}` : ''}</Fact>
-                <Fact label="提交时间">{formatTime(command.createdAt, timeZone)}</Fact>
+                <FactTile label="状态"><CommandStatus command={command} /></FactTile>
+                <FactTile label="风险">{RISK_LABEL[command.risk]}</FactTile>
+                <FactTile label="审批">{APPROVAL_LABEL[command.approvalPolicy]}{command.requiredApprovalCount > 0 ? ` · ${command.approvalCount}/${command.requiredApprovalCount}` : ''}</FactTile>
+                <FactTile label="提交时间">{formatTime(command.createdAt, timeZone)}</FactTile>
               </dl>
               <section aria-label="指令经过">
                 <h3 className="mb-3 text-sm font-medium">经过</h3>
@@ -302,15 +303,6 @@ function CommandSheet({ command, labels, timeZone, onClose }: {
         ) : null}
       </SheetContent>
     </Sheet>
-  );
-}
-
-function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-medium">{children}</dd>
-    </div>
   );
 }
 

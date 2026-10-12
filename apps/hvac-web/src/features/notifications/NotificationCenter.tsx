@@ -226,7 +226,7 @@ export function NotificationCenter({ snapshot }: NotificationCenterProps) {
       </Main>
 
       <Sheet open={Boolean(selected)} onOpenChange={(open) => { if (!open) setSelected(null); }}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl!">
+        <SheetContent className="overflow-y-auto">
           <SheetHeader>
             <SheetTitle>{selected?.subject ?? '通知详情'}</SheetTitle>
           </SheetHeader>
