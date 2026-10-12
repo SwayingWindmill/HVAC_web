@@ -268,10 +268,15 @@ COMMIT;`;
 }
 
 // Every plant COUNTER is a PRIMARY meter on the Site's energy topology, so the
-// energy projector can resolve each counter delta to an Energy Fact.
+// energy projector can resolve each counter delta to an Energy Fact. The total
+// meter sits on the grid inlet; each piece of equipment's own meter sits on the
+// feed from the plant into it, which makes it a sub-meter inside that total.
+const electricity = '01990000-0000-7000-8000-000000000001';
+const meteredEquipment = Object.freeze(['CHILLER-01', 'CHWP-01', 'CWP-01', 'CT-01']);
 const counterEnergy = Object.freeze({
-  energyKwh: { energyTypeId: '01990000-0000-7000-8000-000000000001', from: 'grid', to: 'plant', direction: 'IMPORT' },
-  accumulatedCoolingEnergyKwh: { energyTypeId: '01990000-0000-7000-8000-000000000006', from: 'plant', to: 'building', direction: 'CONSUME' },
+  'METER-HVAC-TOTAL/energyKwh': { energyTypeId: electricity, from: 'grid', to: 'plant', direction: 'IMPORT' },
+  'BTU-METER-01/accumulatedCoolingEnergyKwh': { energyTypeId: '01990000-0000-7000-8000-000000000006', from: 'plant', to: 'building', direction: 'CONSUME' },
+  ...Object.fromEntries(meteredEquipment.map((device) => [`${device}/energyKwh`, { energyTypeId: electricity, from: 'plant', to: device, direction: 'CONSUME' }])),
 });
 
 function buildEnergyTopologySeed(site, points) {
@@ -285,10 +290,11 @@ function buildEnergyTopologySeed(site, points) {
     { key: 'grid', type: 'GRID', name: '电网' },
     { key: 'plant', type: 'HVAC', name: '中央冷站' },
     { key: 'building', type: 'BUILDING', name: '建筑冷负荷' },
+    ...meteredEquipment.map((device) => ({ key: device, type: 'LOAD', name: device, deviceId: deviceByName.get(device).platformDeviceId })),
   ].map((node) => ({ ...node, id: nextID() }));
   const nodeId = new Map(nodes.map((node) => [node.key, node.id]));
   const meters = points.filter((point) => point.pointType === 'COUNTER').map((point) => {
-    const energy = counterEnergy[point.sourceKey];
+    const energy = counterEnergy[`${point.deviceId}/${point.sourceKey}`];
     if (!energy) throw new Error(`COUNTER ${point.deviceId}/${point.sourceKey} has no energy metering role`);
     const device = deviceByName.get(point.deviceId);
     return {
@@ -305,9 +311,9 @@ function buildEnergyTopologySeed(site, points) {
 INSERT INTO core_registry.energy_topology_versions (id, tenant_id, site_id, version, status, revision, created_at, updated_at)
 VALUES (${sqlLiteral(topologyVersionId)}, ${scope}, 1, 'DRAFT', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
-INSERT INTO core_registry.energy_nodes (id, tenant_id, site_id, topology_version_id, node_type, name, status, revision, created_at, updated_at)
+INSERT INTO core_registry.energy_nodes (id, tenant_id, site_id, topology_version_id, node_type, name, device_id, status, revision, created_at, updated_at)
 SELECT node.* FROM (VALUES
-${nodes.map((node) => `  (${sqlLiteral(node.id)}::uuid, ${sqlLiteral(tenantId)}::uuid, ${sqlLiteral(siteId)}::uuid, ${sqlLiteral(topologyVersionId)}::uuid, ${sqlLiteral(node.type)}, ${sqlLiteral(node.name)}, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${nodes.map((node) => `  (${sqlLiteral(node.id)}::uuid, ${sqlLiteral(tenantId)}::uuid, ${sqlLiteral(siteId)}::uuid, ${sqlLiteral(topologyVersionId)}::uuid, ${sqlLiteral(node.type)}, ${sqlLiteral(node.name)}, ${node.deviceId ? `${sqlLiteral(node.deviceId)}::uuid` : 'NULL::uuid'}, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ) AS node ${draft}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.energy_edges (id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id, energy_type_id, direction, enabled, revision, created_at, updated_at)

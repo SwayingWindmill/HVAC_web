@@ -61,13 +61,12 @@ interface FlowNode {
   readonly energyKWh: number;
 }
 
-/** Total → subsystem → machine, with what the machines leave unexplained as its own branch. */
+/** Total → subsystem → machine, with what the sub-meters leave unexplained as its own branch. */
 function flowData(breakdown: Breakdown) {
   const nodes: FlowNode[] = [];
   const links: { source: number; target: number; value: number }[] = [];
   const add = (node: FlowNode) => nodes.push(node) - 1;
-  const allocated = breakdown.items.reduce((sum, item) => sum + item.energyKWh, 0);
-  const total = add({ name: '空调总用电', color: 'var(--foreground)', energyKWh: Math.max(breakdown.meteredKWh ?? 0, allocated) });
+  const total = add({ name: '空调总用电', color: 'var(--foreground)', energyKWh: breakdown.totalKWh ?? breakdown.subMeteredKWh });
   for (const subsystem of SUBSYSTEMS) {
     const machines = breakdown.items.filter((item) => subsystem.categories.includes(item.category) && item.energyKWh > 0);
     if (machines.length === 0) continue;
@@ -78,7 +77,7 @@ function flowData(breakdown: Breakdown) {
       links.push({ source: node, target: add({ name: machine.name, color: CATEGORY_COLOR[machine.category], energyKWh: machine.energyKWh }), value: machine.energyKWh });
     }
   }
-  if (breakdown.unallocatedKWh && breakdown.unallocatedKWh > 0.5) {
+  if (breakdown.unallocatedKWh !== null && breakdown.unallocatedKWh > 0.5) {
     links.push({ source: total, target: add({ name: '未分项', color: CATEGORY_COLOR.UNALLOCATED, energyKWh: breakdown.unallocatedKWh }), value: breakdown.unallocatedKWh });
   }
   return { nodes, links };
@@ -132,16 +131,14 @@ export function BreakdownWorkspace() {
     })),
     [breakdown, granularity, site.timezone],
   );
-  const allocated = (breakdown?.items ?? []).reduce((sum, item) => sum + item.energyKWh, 0);
   const category = (key: EquipmentCategory | 'PUMPS') => {
-    const categories = key === 'PUMPS' ? ['CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP'] : [key];
-    const items = (breakdown?.items ?? []).filter((item) => categories.includes(item.category));
+    const keys: readonly EquipmentCategory[] = key === 'PUMPS' ? ['CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP'] : [key];
+    const categories = (breakdown?.categories ?? []).filter((candidate) => keys.includes(candidate.category));
     return {
-      energy: items.reduce((sum, item) => sum + item.energyKWh, 0),
-      share: items.reduce((sum, item) => sum + item.share, 0),
-      averageKW: items.reduce((sum, item) => sum + item.averageKW, 0),
-      peakKW: items.reduce((peak, item) => Math.max(peak, item.peakKW), 0),
-      count: items.length,
+      energy: categories.reduce((sum, candidate) => sum + candidate.energyKWh, 0),
+      share: categories.reduce((sum, candidate) => sum + candidate.share, 0),
+      metered: categories.reduce((sum, candidate) => sum + candidate.metered, 0),
+      unmetered: categories.reduce((sum, candidate) => sum + candidate.unmetered, 0),
     };
   };
 
@@ -149,8 +146,8 @@ export function BreakdownWorkspace() {
     <Main>
       <PageHeader
         title="分项能耗"
-        description={`${site.displayName} · 冷站各设备的用电与占比，按设备功率逐时累计`}
-        meta={<PageMeta icon={<Workflow />}>按设备功率估算</PageMeta>}
+        description={`${site.displayName} · 冷站各设备的用电与占比，读自各设备的分表`}
+        meta={<PageMeta icon={<Workflow />}>分表实测</PageMeta>}
         actions={(
           <>
             <PeriodTabs aria-label="统计期间" options={[...PERIODS]} value={period} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, period: value as BreakdownPeriod }), replace: true })} />
@@ -168,8 +165,8 @@ export function BreakdownWorkspace() {
           <Empty className="py-16">
             <EmptyHeader>
               <EmptyMedia variant="icon"><Workflow /></EmptyMedia>
-              <EmptyTitle>没有上报功率的冷站设备</EmptyTitle>
-              <EmptyDescription>冷机、水泵与冷却塔接入功率读数后，这里按设备拆分用电。</EmptyDescription>
+              <EmptyTitle>冷站没有登记用电设备</EmptyTitle>
+              <EmptyDescription>冷机、水泵与冷却塔登记并接入分表后，这里按设备拆分用电。</EmptyDescription>
             </EmptyHeader>
           </Empty>
         </Card>
@@ -180,11 +177,11 @@ export function BreakdownWorkspace() {
           <MetricGrid ariaLabel="分项概况">
             <MetricCard
               label="空调总用电"
-              value={<MetricValue value={breakdown.meteredKWh === null ? null : formatDecimal(breakdown.meteredKWh, 0)} unit="kWh" />}
-              lead={`设备合计 ${kWh(allocated)}`}
-              detail={breakdown.meteredKWh === null ? '电表本期没有读数'
-                : allocated > breakdown.meteredKWh ? `设备估算比电表多 ${kWh(allocated - breakdown.meteredKWh)}，电表有缺数时段`
-                : breakdown.unallocatedKWh ? `未分项 ${kWh(breakdown.unallocatedKWh)}` : '设备覆盖全部用电'}
+              value={<MetricValue value={breakdown.totalKWh === null ? null : formatDecimal(breakdown.totalKWh, 0)} unit="kWh" />}
+              lead={`分表合计 ${kWh(breakdown.subMeteredKWh)}`}
+              detail={breakdown.unallocatedKWh === null ? '总表本期没有读数'
+                : breakdown.unallocatedKWh < 0 ? `分表合计比总表多 ${kWh(-breakdown.unallocatedKWh)}`
+                : `未分项 ${kWh(breakdown.unallocatedKWh)}`}
             />
             {([['CHILLER', '冷水机组'], ['PUMPS', '水泵'], ['COOLING_TOWER', '冷却塔']] as const).map(([key, label]) => {
               const facts = category(key);
@@ -192,10 +189,10 @@ export function BreakdownWorkspace() {
                 <MetricCard
                   key={key}
                   label={label}
-                  value={<MetricValue value={facts.count ? formatDecimal(facts.energy, 0) : null} unit="kWh" />}
-                  badge={facts.count ? <Badge variant="secondary" className="tabular-nums">{percent(facts.share)}</Badge> : undefined}
-                  lead={facts.count ? `平均 ${formatDecimal(facts.averageKW, 1)} kW` : '没有上报功率的设备'}
-                  detail={facts.count ? `最高 ${formatDecimal(facts.peakKW, 1)} kW` : '—'}
+                  value={<MetricValue value={facts.metered ? formatDecimal(facts.energy, 0) : null} unit="kWh" />}
+                  badge={facts.metered ? <Badge variant="secondary" className="tabular-nums">{percent(facts.share)}</Badge> : undefined}
+                  lead={facts.metered ? `${facts.metered} 台分表计量` : '未计量'}
+                  detail={facts.unmetered ? `${facts.unmetered} 台未计量，用电计入未分项` : facts.metered ? '全部计量' : '—'}
                 />
               );
             })}
@@ -205,7 +202,11 @@ export function BreakdownWorkspace() {
             <Card role="region" aria-label="能流">
               <CardHeader>
                 <CardTitle>能流</CardTitle>
-                <CardDescription>空调总用电流向各系统与设备；设备功率未覆盖的部分记为未分项</CardDescription>
+                <CardDescription>
+                  {breakdown.unallocatedKWh !== null && breakdown.unallocatedKWh < 0
+                    ? `分表合计比总表多 ${kWh(-breakdown.unallocatedKWh)}，图中各设备之和大于空调总用电`
+                    : '空调总用电流向各系统与设备；分表未覆盖的部分记为未分项'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <EnergyFlow breakdown={breakdown} />
@@ -215,7 +216,7 @@ export function BreakdownWorkspace() {
             <Card role="region" aria-label="设备用电排行">
               <CardHeader>
                 <CardTitle>设备用电排行</CardTitle>
-                <CardDescription>本期用电与占比，以及平均、最高功率</CardDescription>
+                <CardDescription>本期分表用电与占空调总用电的比例</CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="flex flex-col gap-4">
@@ -235,7 +236,16 @@ export function BreakdownWorkspace() {
                       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                         <div className="h-full rounded-full" style={{ width: `${Math.min(100, item.share * 100)}%`, background: CATEGORY_COLOR[item.category] }} />
                       </div>
-                      <p className="text-xs text-muted-foreground tabular-nums">平均 {formatDecimal(item.averageKW, 1)} kW · 最高 {formatDecimal(item.peakKW, 1)} kW</p>
+                    </li>
+                  ))}
+                  {breakdown.unmetered.map((machine) => (
+                    <li key={machine.deviceId} className="flex items-baseline justify-between gap-4">
+                      <span className="flex min-w-0 items-center gap-2 text-sm">
+                        <span className="size-2 shrink-0 rounded-[2px] bg-muted" aria-hidden="true" />
+                        <span className="truncate font-medium">{machine.name}</span>
+                        <span className="text-xs text-muted-foreground">{CATEGORY_LABEL[machine.category]}</span>
+                      </span>
+                      <Badge variant="outline">未计量</Badge>
                     </li>
                   ))}
                 </ul>
@@ -246,7 +256,7 @@ export function BreakdownWorkspace() {
           <Card role="region" aria-label="分项用电趋势">
             <CardHeader>
               <CardTitle>{granularity === 'hour' ? '逐时分项用电' : '逐日分项用电'}</CardTitle>
-              <CardDescription>{granularity === 'hour' ? '今日每小时' : '每天'}各类设备的用电（kWh），进行中的时段只计已运行的时间</CardDescription>
+              <CardDescription>{granularity === 'hour' ? '今日每小时' : '每天'}各类设备分表计量的用电（kWh），进行中的时段只计已过去的部分</CardDescription>
             </CardHeader>
             <CardContent>
               <ChartContainer config={chartConfig} className="aspect-auto h-[300px] w-full">

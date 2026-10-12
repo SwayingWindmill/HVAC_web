@@ -122,6 +122,7 @@ components:
           format: date-time
           description: Exclusive range end; maximum supported range is 366 days.
         qualityPolicy: { type: string, enum: [VALID_ONLY, VALID_AND_SUSPECT] }
+        breakdown: { type: string, enum: [device] }
     EnergySeriesPoint:
       type: object
       additionalProperties: false
@@ -160,7 +161,20 @@ components:
           type: array
           maxItems: 10000
           items: { $ref: '#/components/schemas/EnergySeriesPoint' }
+        devices:
+          type: array
+          items: { $ref: '#/components/schemas/EnergyDeviceSeries' }
         metadata: { $ref: '#/components/schemas/EnergySeriesMetadata' }
+    EnergyDeviceSeries:
+      type: object
+      additionalProperties: false
+      required: [deviceId, points]
+      properties:
+        deviceId: { type: string, format: uuid }
+        points:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/EnergySeriesPoint' }
     DeviceHistoryQuery:
       type: object
       additionalProperties: false

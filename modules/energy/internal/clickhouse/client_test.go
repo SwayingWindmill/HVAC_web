@@ -161,7 +161,7 @@ func validBinding() energy.BindingResolution {
 		MeterID: "018f4e00-1100-7000-8000-000000000001", MeterBindingID: "018f4e00-1200-7000-8000-000000000001",
 		TopologyVersionID: "018f4e00-1300-7000-8000-000000000001", BindingVersion: 4,
 		EnergyTypeID: "018f4e00-1400-7000-8000-000000000001", EnergyType: energy.EnergyTypeElectricity,
-		MeterRole: energy.MeterRolePrimary, Direction: "IMPORT", DeviceID: "018f4e00-2000-7000-8000-000000000001",
+		MeterRole: energy.MeterRolePrimary, Direction: "IMPORT", AccountingScope: energy.AccountingScopeSite, DeviceID: "018f4e00-2000-7000-8000-000000000001",
 		PointID: "018f4e00-2100-7000-8000-000000000001", PointType: energy.PointTypeCounter,
 		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}

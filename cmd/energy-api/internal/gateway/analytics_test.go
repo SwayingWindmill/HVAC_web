@@ -63,6 +63,27 @@ func TestGatewayEnergySeriesSignsExactGrantAndPreservesResponse(t *testing.T) {
 	}
 }
 
+func TestGatewayEnergySeriesPassesThroughTheDeviceBreakdownItAskedFor(t *testing.T) {
+	fixture := newAnalyticsGatewayFixture(t, analyticsFixtureOptions{})
+	query := validGatewayEnergyQuery(fixture.now)
+	query.Breakdown = analyticsmodel.EnergyBreakdownDevice
+	recorder := fixture.request(t, query, true)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response analyticsmodel.EnergySeriesResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Devices) != 1 || response.Devices[0].DeviceID != analyticsGatewayDevice || response.Devices[0].Points[0].EnergyKWh != 7.5 {
+		t.Fatalf("devices=%#v", response.Devices)
+	}
+
+	unasked := newAnalyticsGatewayFixture(t, analyticsFixtureOptions{queryMode: "unaskedDevices"})
+	rejected := unasked.request(t, validGatewayEnergyQuery(unasked.now), true)
+	assertAnalyticsProblem(t, rejected, http.StatusBadGateway, "ANALYTICS_RESPONSE_INVALID")
+}
+
 func TestGatewayEnergySeriesRunsThroughQueryServiceRouteOwnership(t *testing.T) {
 	fixture := newAnalyticsGatewayFixture(t, analyticsFixtureOptions{routeOwnership: true})
 	recorder := fixture.request(t, validGatewayEnergyQuery(fixture.now), true)
@@ -226,9 +247,17 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 			return analyticsHTTPResponse(http.StatusOK, map[string]any{"schemaVersion": 1, "points": []any{}, "metadata": map[string]any{"datasetRevision": ""}}), nil
 		default:
 			watermark := query.To
+			var devices []analyticsmodel.EnergyDeviceSeries
+			if query.Breakdown != "" || options.queryMode == "unaskedDevices" {
+				devices = []analyticsmodel.EnergyDeviceSeries{{
+					DeviceID: analyticsGatewayDevice,
+					Points:   []analyticsmodel.EnergySeriesPoint{{PeriodStart: query.From, PeriodEnd: query.From.Add(24 * time.Hour), EnergyKWh: 7.5}},
+				}}
+			}
 			return analyticsHTTPResponse(http.StatusOK, analyticsmodel.EnergySeriesResponse{
 				SchemaVersion: 1,
 				Points:        []analyticsmodel.EnergySeriesPoint{{PeriodStart: query.From, PeriodEnd: query.From.Add(24 * time.Hour), EnergyKWh: 12.5}},
+				Devices:       devices,
 				Metadata: analyticsmodel.EnergySeriesMetadata{
 					RequestedGranularity: query.Granularity, ActualGranularity: query.Granularity,
 					DataWatermark: &watermark, AggregateWatermark: &watermark, DatasetRevision: "energy:v1:7", Partial: false,
@@ -300,6 +329,8 @@ func (fixture *analyticsGatewayFixture) request(t *testing.T, query analyticsmod
 	fixture.handler.ServeHTTP(recorder, request)
 	return recorder
 }
+
+const analyticsGatewayDevice = "018f1e00-4000-7000-8000-000000000011"
 
 func validGatewayEnergyQuery(now time.Time) analyticsmodel.EnergySeriesQuery {
 	return analyticsmodel.EnergySeriesQuery{

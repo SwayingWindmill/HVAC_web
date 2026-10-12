@@ -23,6 +23,10 @@ const (
 
 	EnergyTypeElectricity = "electricity"
 	MeterRolePrimary      = "PRIMARY"
+	// A SITE fact counts toward the Site's total; a BRANCH fact is a sub-meter of one piece of
+	// equipment, already inside that total.
+	AccountingScopeSite   = "SITE"
+	AccountingScopeBranch = "BRANCH"
 	PointTypeCounter      = "COUNTER"
 
 	TransitionIncrease         TransitionType = "INCREASE"
@@ -113,6 +117,8 @@ type BindingResolution struct {
 	EnergyType        string
 	MeterRole         string
 	Direction         string
+	AccountingScope   string
+	LoadDeviceID      string
 	DeviceID          string
 	PointID           string
 	PointType         string
@@ -121,17 +127,20 @@ type BindingResolution struct {
 }
 
 type EnergyIntervalFact struct {
-	FactID                 string         `json:"fact_id"`
-	TenantID               string         `json:"tenant_id"`
-	SiteID                 string         `json:"site_id"`
-	MeterID                string         `json:"meter_id"`
-	MeterBindingID         string         `json:"meter_binding_id"`
-	TopologyVersionID      string         `json:"topology_version_id"`
-	BindingVersion         uint64         `json:"binding_version"`
-	EnergyTypeID           string         `json:"energy_type_id"`
-	EnergyType             string         `json:"energy_type"`
-	MeterRole              string         `json:"meter_role"`
-	Direction              string         `json:"direction"`
+	FactID            string `json:"fact_id"`
+	TenantID          string `json:"tenant_id"`
+	SiteID            string `json:"site_id"`
+	MeterID           string `json:"meter_id"`
+	MeterBindingID    string `json:"meter_binding_id"`
+	TopologyVersionID string `json:"topology_version_id"`
+	BindingVersion    uint64 `json:"binding_version"`
+	EnergyTypeID      string `json:"energy_type_id"`
+	EnergyType        string `json:"energy_type"`
+	MeterRole         string `json:"meter_role"`
+	Direction         string `json:"direction"`
+	AccountingScope   string `json:"accounting_scope"`
+	// LoadDeviceID is the equipment a BRANCH fact's energy belongs to; nil for SITE facts.
+	LoadDeviceID           *string        `json:"load_device_id"`
 	DeviceID               string         `json:"device_id"`
 	PointID                string         `json:"point_id"`
 	SensorID               *string        `json:"sensor_id,omitempty"`
@@ -316,6 +325,10 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 	if strings.TrimSpace(delta.SensorID) != "" {
 		sensorID = &delta.SensorID
 	}
+	var loadDeviceID *string
+	if binding.AccountingScope == AccountingScopeBranch {
+		loadDeviceID = &binding.LoadDeviceID
+	}
 
 	return EnergyIntervalFact{
 		FactID:                 delta.CurrentObservationID,
@@ -329,6 +342,8 @@ func BuildFact(delta CounterDelta, binding BindingResolution, projectedAt time.T
 		EnergyType:             binding.EnergyType,
 		MeterRole:              binding.MeterRole,
 		Direction:              binding.Direction,
+		AccountingScope:        binding.AccountingScope,
+		LoadDeviceID:           loadDeviceID,
 		DeviceID:               delta.DeviceID,
 		PointID:                delta.PointID,
 		SensorID:               sensorID,
@@ -409,6 +424,12 @@ func validateBindingResolution(delta CounterDelta, binding BindingResolution) er
 	}
 	if binding.MeterRole != MeterRolePrimary || binding.PointType != PointTypeCounter {
 		return errors.New("binding snapshot is not a released PRIMARY counter")
+	}
+	switch {
+	case binding.AccountingScope == AccountingScopeSite && binding.LoadDeviceID == "":
+	case binding.AccountingScope == AccountingScopeBranch && strings.TrimSpace(binding.LoadDeviceID) != "":
+	default:
+		return errors.New("binding snapshot accounting scope is unknown or has no load device")
 	}
 	if binding.EffectiveFrom.IsZero() || delta.CurrentSampledAt.Before(binding.EffectiveFrom) || (binding.EffectiveTo != nil && !delta.CurrentSampledAt.Before(*binding.EffectiveTo)) {
 		return errors.New("binding snapshot is outside its effective interval")
