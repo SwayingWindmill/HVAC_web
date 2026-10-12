@@ -64,7 +64,7 @@ export function AppHeader({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background/80 px-6 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
+      <header className="sticky top-0 z-30 flex h-12 print:hidden shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background/80 px-6 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
         {/* Left: SidebarTrigger + Scope Switcher + Breadcrumb */}
         <div className="flex min-w-0 items-center gap-2.5">
           <SidebarTrigger className="-ml-1" />

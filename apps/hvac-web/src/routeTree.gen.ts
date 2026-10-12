@@ -16,6 +16,7 @@ import { Route as AppBenchmarkRouteImport } from './routes/_app.benchmark'
 import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppSystemRouteImport } from './routes/_app.system'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
+import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
 import { Route as AppSiteEnergyAnalysisBreakdownRouteImport } from './routes/_app._site.energy-analysis.breakdown'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
@@ -60,6 +61,11 @@ const AppSystemRoute = AppSystemRouteImport.update({
 const AppSiteOverviewRoute = AppSiteOverviewRouteImport.update({
   id: '/overview',
   path: '/overview',
+  getParentRoute: () => AppSiteRoute,
+} as any)
+const AppSiteReportsRoute = AppSiteReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
   getParentRoute: () => AppSiteRoute,
 } as any)
 const AppSettingsIntegrationsRoute = AppSettingsIntegrationsRouteImport.update({
@@ -139,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
+  '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -158,6 +165,7 @@ export interface FileRoutesByTo {
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
+  '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -180,6 +188,7 @@ export interface FileRoutesById {
   '/_app/system': typeof AppSystemRoute
   '/_app/': typeof AppIndexRoute
   '/_app/_site/overview': typeof AppSiteOverviewRoute
+  '/_app/_site/reports': typeof AppSiteReportsRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/_app/_site/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -201,6 +210,7 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/system'
     | '/overview'
+    | '/reports'
     | '/settings/integrations'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -220,6 +230,7 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/system'
     | '/overview'
+    | '/reports'
     | '/settings/integrations'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
@@ -241,6 +252,7 @@ export interface FileRouteTypes {
     | '/_app/system'
     | '/_app/'
     | '/_app/_site/overview'
+    | '/_app/_site/reports'
     | '/_app/settings/integrations'
     | '/_app/_site/energy-analysis/breakdown'
     | '/_app/_site/energy-analysis/consumption'
@@ -308,6 +320,13 @@ declare module '@tanstack/react-router' {
       path: '/overview'
       fullPath: '/overview'
       preLoaderRoute: typeof AppSiteOverviewRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/reports': {
+      id: '/_app/_site/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AppSiteReportsRouteImport
       parentRoute: typeof AppSiteRoute
     }
     '/_app/settings/integrations': {
@@ -399,6 +418,7 @@ declare module '@tanstack/react-router' {
 
 interface AppSiteRouteChildren {
   AppSiteOverviewRoute: typeof AppSiteOverviewRoute
+  AppSiteReportsRoute: typeof AppSiteReportsRoute
   AppSiteEnergyAnalysisBreakdownRoute: typeof AppSiteEnergyAnalysisBreakdownRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
   AppSiteEnergyAnalysisDemandRoute: typeof AppSiteEnergyAnalysisDemandRoute
@@ -414,6 +434,7 @@ interface AppSiteRouteChildren {
 
 const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOverviewRoute: AppSiteOverviewRoute,
+  AppSiteReportsRoute: AppSiteReportsRoute,
   AppSiteEnergyAnalysisBreakdownRoute: AppSiteEnergyAnalysisBreakdownRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
   AppSiteEnergyAnalysisDemandRoute: AppSiteEnergyAnalysisDemandRoute,

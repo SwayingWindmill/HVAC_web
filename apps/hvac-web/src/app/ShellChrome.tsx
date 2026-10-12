@@ -122,7 +122,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         onLogout={() => { void runtime.logout(); }}
       />
       <SidebarInset
-        className="min-w-0"
+        className="min-w-0 print:m-0 print:rounded-none print:border-0 print:shadow-none"
         data-testid="real-protected-shell"
         data-protected-route-mounted="true"
         data-policy-revision={principal.authorization.policyRevision}
