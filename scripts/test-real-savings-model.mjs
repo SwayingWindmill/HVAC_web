@@ -52,5 +52,5 @@ test('implementation times are entered on the Site clock whatever the browser zo
 
 test('avoided cost says when hours went unpriced for want of a tariff', () => {
   assert.equal(costBasis({ unpricedHours: 0 }), '按逐时分时电度电价，不含需量电费');
-  assert.equal(costBasis({ unpricedHours: 24 }), '24 小时没有电价，未计入电费');
+  assert.equal(costBasis({ unpricedHours: 24 }), '24 小时没有电价未计入；不含需量电费');
 });

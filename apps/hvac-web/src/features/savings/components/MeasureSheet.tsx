@@ -11,9 +11,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { siteCommandsQuery } from '@/features/control/command-api';
-import { commandSummary } from '@/features/control/command-presentation';
-import { useCommandLabels } from '@/features/control/use-command-labels';
+import { useExecutedCommands } from '@/features/control/use-executed-commands';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
@@ -149,15 +147,13 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
 /** What the measure rests on: the executed command it came from, as the control page shows it, and the operator's note. */
 function Evidence({ measure }: { readonly measure: Measure }) {
   const { site } = siteRoute.useRouteContext();
-  const commands = useQuery({ ...siteCommandsQuery(site.id), enabled: measure.evidenceCommandId !== null });
-  const labels = useCommandLabels(site.id);
+  const commands = useExecutedCommands(site.id, site.timezone, measure.evidenceCommandId !== null);
   if (measure.evidenceCommandId === null) return <>{measure.evidence || '—'}</>;
-  const command = commands.data?.find((candidate) => candidate.commandId === measure.evidenceCommandId);
-  const summary = command ? commandSummary(command, labels) : null;
+  const cited = commands.executed.find((command) => command.commandId === measure.evidenceCommandId);
   return (
     <span className="flex flex-col gap-0.5">
       <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="hover:underline">
-        {summary ? `${formatTime(command!.updatedAt, site.timezone)} · ${summary.target} ${summary.title}` : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
+        {cited ? cited.description : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
       </Link>
       {measure.evidence ? <span className="text-xs font-normal text-muted-foreground">{measure.evidence}</span> : null}
     </span>

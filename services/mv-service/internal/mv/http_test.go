@@ -115,8 +115,8 @@ func TestAMeasureCitesTheExecutedCommandItCameFrom(t *testing.T) {
 	if status != http.StatusCreated || created["evidenceCommandId"] != command {
 		t.Fatalf("register = %d %v", status, created)
 	}
-	if status, _ := call(t, handler, http.MethodPost, base, `{"name":"x","kind":"OTHER","plannedAt":"2026-10-15T09:00:00+08:00","evidenceCommandId":"command-1"}`); status != http.StatusBadRequest {
-		t.Fatalf("a malformed command reference = %d", status)
+	if status, _ := call(t, handler, http.MethodPost, base, `{"name":"x","kind":"OTHER","plannedAt":"2026-10-15T09:00:00+08:00","evidenceCommandId":"3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b"}`); status != http.StatusBadRequest {
+		t.Fatalf("a command reference that is not a UUIDv7 = %d", status)
 	}
 	_, plain := call(t, handler, http.MethodPost, base, `{"name":"y","kind":"OTHER","plannedAt":"2026-10-15T09:00:00+08:00"}`)
 	if plain["evidenceCommandId"] != nil {

@@ -75,11 +75,11 @@ test('a measure cites the setpoint command it came from, named as the control pa
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
   await page.getByRole('button', { name: '登记措施' }).first().click();
   await page.getByLabel('名称').fill('冷冻水供水温度由 7 °C 提高到 8 °C');
-  await page.getByRole('combobox', { name: '依据指令' }).click();
+  await page.getByLabel('依据指令（可选）').click();
   await page.getByRole('option', { name: /CHILLER-01 冷冻水出水设定温度 → 8\.0 °C/ }).click();
   await page.getByRole('button', { name: '登记', exact: true }).click();
 
-  const [registered] = gateway.writes.filter((write) => write.path === `/api/v1/sites/${SITE_ID}/savings/measures`);
+  const [registered] = gateway.writes.filter((write) => write.path === MEASURES);
   expect(registered.body?.evidenceCommandId).toBe(gateway.commands[0].commandId);
   const evidence = page.getByRole('dialog').getByRole('link', { name: /CHILLER-01 冷冻水出水设定温度 → 8\.0 °C/ });
   await expect(evidence).toBeVisible();

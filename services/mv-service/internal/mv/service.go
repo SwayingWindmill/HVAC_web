@@ -39,7 +39,10 @@ var (
 	ErrBaselineLocked   = errors.New("the baseline is frozen: daily results have been published")
 )
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var (
+	uuidPattern   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+)
 
 // Measure is one energy conservation measure in a Site's ledger.
 type Measure struct {
@@ -92,11 +95,25 @@ type HourlySource interface {
 	HourlySamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]HourSample, error)
 }
 
-// SiteClock is the Site's timezone, which days are verified on, and the periods of the import Tariff
-// in effect; without one there are no periods and every hour goes unpriced.
+// SiteClock is the Site's timezone, which days are verified on, and the import Tariff in effect,
+// which prices hours on its own timezone as Settlement does; Tariff is nil when none is assigned and
+// every hour then goes unpriced.
 type SiteClock struct {
 	Location *time.Location
+	Tariff   *ImportTariff
+}
+
+// ImportTariff is the energy rate periods of the Tariff Version in effect, on the version's clock.
+type ImportTariff struct {
+	Location *time.Location
 	Periods  []TariffPeriod
+}
+
+func (clock SiteClock) rates() func(time.Time) (float64, bool) {
+	if clock.Tariff == nil {
+		return func(time.Time) (float64, bool) { return 0, false }
+	}
+	return TariffRates(clock.Tariff.Periods, clock.Tariff.Location)
 }
 
 type ClockSource interface {
@@ -141,8 +158,8 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: name must be 1–100 characters", ErrInvalidMeasure)
 	case utf8.RuneCountInString(input.Description) > 2000 || utf8.RuneCountInString(input.Evidence) > 200:
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
-	case input.EvidenceCommandID != nil && !uuidPattern.MatchString(*input.EvidenceCommandID):
-		return fmt.Errorf("%w: the cited command must be a UUID", ErrInvalidMeasure)
+	case input.EvidenceCommandID != nil && !uuidV7Pattern.MatchString(*input.EvidenceCommandID):
+		return fmt.Errorf("%w: the cited command must be a UUIDv7", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
 	case (input.InvestmentCNY != nil && *input.InvestmentCNY < 0) || (input.ExpectedAnnualKWh != nil && *input.ExpectedAnnualKWh < 0):
@@ -295,7 +312,7 @@ func (service *Service) verifyDay(ctx context.Context, measure Measure, clock Si
 	if err != nil {
 		return fmt.Errorf("read reporting hours: %w", err)
 	}
-	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), TariffRates(clock.Periods, clock.Location))
+	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), clock.rates())
 	return service.store.InsertDailyResult(ctx, DailyResult{
 		MeasureID: measure.ID, TenantID: measure.TenantID, SiteID: measure.SiteID,
 		Day: local.Format(time.DateOnly), DayResult: result, VerifiedAt: service.now().UTC(),

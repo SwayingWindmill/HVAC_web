@@ -16,7 +16,9 @@ Savings verification (M&V, #484, spec `docs/specs/savings-verification.md`) is i
 
 **What it reads.**
 - Hourly plant electricity and cooling come from released Metric results (`hourly_energy`, `hourly_cooling`). They are DELTA Metrics on the HVAC meter's energy counter and the BTU meter's cooling counter. mv-service reads them from ClickHouse with its own read-only account (`mv_service_reader`), the way Optimization reads `daily_energy`.
-- The import Tariff's periods are read with the runtime role, to price each avoided hour.
+- The runtime role reads the Site's timezone, which verified days are split on.
+- It also reads the import Tariff in effect, to price each avoided hour. Hours are priced on the Tariff Version's own timezone, the way Settlement prices them. When no Tariff is assigned, energy is still verified and the hours stay unpriced.
+- A measure may cite the executed command it came from. This is a reference into Command Governance's records, not a key. mv-service does not check the command, and the page resolves it from the Site's command list. An executed optimization recommendation is cited through the command it produced.
 
 **How it runs.**
 - A daily `MV_EVALUATION` Scheduler job verifies the Site's implemented measures, claimed through `libs/schedulerjob` like FDD.

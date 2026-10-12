@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useForm } from 'react-hook-form';
 import { Button } from '@/components/ui/button';
@@ -8,10 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { siteCommandsQuery } from '@/features/control/command-api';
-import { commandSummary } from '@/features/control/command-presentation';
-import { useCommandLabels } from '@/features/control/use-command-labels';
-import { formatTime } from '@/lib/operator-format';
+import { useExecutedCommands } from '@/features/control/use-executed-commands';
 import { registerMeasure, SavingsRequestError } from '../query';
 import { instantFromSiteInput, KIND_LABEL, siteInputValue, type Measure, type MeasureKind } from '../savings-model';
 
@@ -64,9 +61,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
   });
   const errors = form.formState.errors;
   // A measure can cite a command that took effect on this Site, as the control page lists it.
-  const commands = useQuery({ ...siteCommandsQuery(site.id), enabled: open });
-  const labels = useCommandLabels(site.id);
-  const executed = (commands.data ?? []).filter((command) => command.status === 'SUCCEEDED');
+  const commands = useExecutedCommands(site.id, site.timezone, open);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -118,23 +113,18 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>依据指令（可选）</Label>
+            <Label htmlFor="measure-evidence-command">依据指令（可选）</Label>
             <Select value={form.watch('evidenceCommandId')} onValueChange={(value) => form.setValue('evidenceCommandId', value)}>
-              <SelectTrigger className="w-full" aria-label="依据指令"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="measure-evidence-command" className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_COMMAND}>不关联指令</SelectItem>
-                {executed.map((command) => {
-                  const summary = commandSummary(command, labels);
-                  return (
-                    <SelectItem key={command.commandId} value={command.commandId}>
-                      {formatTime(command.updatedAt, site.timezone)} · {summary.target} {summary.title}
-                    </SelectItem>
-                  );
-                })}
+                {commands.executed.map((command) => (
+                  <SelectItem key={command.commandId} value={command.commandId}>{command.description}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              {commands.isError ? '指令记录暂不可用' : executed.length === 0 ? '本站最近没有已执行的指令' : '例如按优化建议下发的供水温度设定'}
+              {commands.isError ? '指令记录暂不可用' : commands.executed.length === 0 ? '本站最近没有已执行的指令' : '例如按优化建议下发的供水温度设定'}
             </p>
           </div>
           <div className="space-y-1.5">

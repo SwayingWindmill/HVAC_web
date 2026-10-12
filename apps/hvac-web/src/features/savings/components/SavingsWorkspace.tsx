@@ -87,8 +87,8 @@ export function SavingsWorkspace() {
           <MetricCard
             label="本月节省电费"
             value={<MetricValue value={monthTotals!.days > 0 ? `¥${formatDecimal(monthTotals!.avoidedCost, 0)}` : null} />}
-            lead={costBasis(monthTotals!)}
-            detail="对照调整后基线"
+            lead="对照调整后基线，按逐时电度电价计"
+            detail={costBasis(monthTotals!)}
           />
           <MetricCard
             label="本月节电率"

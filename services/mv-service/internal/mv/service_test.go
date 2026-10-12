@@ -3,6 +3,7 @@ package mv
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 )
@@ -98,10 +99,10 @@ func (history plantHistory) HourlySamples(_ context.Context, _, _ string, from, 
 type flatTariff struct{ rate float64 }
 
 func (tariff flatTariff) SiteClock(_ context.Context, _, _ string) (SiteClock, error) {
-	return SiteClock{Location: shanghai, Periods: []TariffPeriod{
+	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: shanghai, Periods: []TariffPeriod{
 		{DayType: "WEEKDAY", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
 		{DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
-	}}, nil
+	}}}, nil
 }
 
 func newTestService(t *testing.T, store Store, history HourlySource) *Service {
@@ -324,5 +325,40 @@ func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
 	}
 	if totals.Days != 1 || totals.AvoidedKWh <= 0 || totals.AvoidedCost != 0 || totals.UnpricedHours != 24 {
 		t.Fatalf("totals = %+v", totals)
+	}
+}
+
+// A Tariff written in UTC whose first eight hours cost 1/kWh; the Site keeps Shanghai's clock.
+type utcTariffClock struct{}
+
+func (utcTariffClock) SiteClock(context.Context, string, string) (SiteClock, error) {
+	periods := []TariffPeriod{}
+	for _, dayType := range []string{"WEEKDAY", "WEEKEND"} {
+		periods = append(periods, TariffPeriod{DayType: dayType, StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 1},
+			TariffPeriod{DayType: dayType, StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 0})
+	}
+	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: time.UTC, Periods: periods}}, nil
+}
+
+func TestHoursArePricedOnTheTariffClockAndDaysSplitOnTheSiteClock(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, utcTariffClock{}, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
+		return "01990000-7000-7000-8000-000000000001", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measure := register(t, service, "提高冷冻水供水温度")
+	if _, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyDueDays(t.Context(), testTenant, testSite, time.Date(2026, 10, 18, 2, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	day := store.results[measure.ID][len(store.results[measure.ID])-1]
+	// UTC 00:00–08:00 is Shanghai 08:00–16:00 on 10-17: cooling 730…800 kWh, a tenth of 20 + 0.25 × cooling avoided each hour.
+	if day.Day != "2026-10-17" || day.Hours != 24 || math.Abs(day.AvoidedCost-169) > 1e-6 {
+		t.Fatalf("day = %+v", day)
 	}
 }

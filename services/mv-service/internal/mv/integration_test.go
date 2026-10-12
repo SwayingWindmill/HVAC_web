@@ -137,7 +137,7 @@ func TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clock.Location.String() != "Asia/Singapore" || len(clock.Periods) != 0 {
-		t.Fatalf("clock = %v with %d periods", clock.Location, len(clock.Periods))
+	if clock.Location.String() != "Asia/Singapore" || clock.Tariff != nil {
+		t.Fatalf("clock = %v with tariff %+v", clock.Location, clock.Tariff)
 	}
 }

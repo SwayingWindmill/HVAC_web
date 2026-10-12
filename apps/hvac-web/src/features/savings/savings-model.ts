@@ -164,10 +164,10 @@ export function dayRows(days: readonly VerifiedDay[]): readonly DayRow[] {
   }));
 }
 
-/** How the avoided cost was priced, saying so when some hours had no energy rate. */
+/** How the avoided cost was priced: energy rates only, and which hours had none. */
 export function costBasis(totals: Pick<SavingsTotals, 'unpricedHours'>): string {
   return totals.unpricedHours > 0
-    ? `${totals.unpricedHours} 小时没有电价，未计入电费`
+    ? `${totals.unpricedHours} 小时没有电价未计入；不含需量电费`
     : '按逐时分时电度电价，不含需量电费';
 }
 
