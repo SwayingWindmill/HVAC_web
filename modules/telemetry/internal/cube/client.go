@@ -50,6 +50,7 @@ type loadRequest struct {
 type cubeQuery struct {
 	Measures       []string            `json:"measures"`
 	Filters        []cubeFilter        `json:"filters"`
+	Dimensions     []string            `json:"dimensions,omitempty"`
 	TimeDimensions []cubeTimeDimension `json:"timeDimensions,omitempty"`
 	Order          map[string]string   `json:"order,omitempty"`
 	Timezone       string              `json:"timezone"`
@@ -118,7 +119,19 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
 	}
-	return mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
+	response, err := mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
+	if err != nil || productQuery.Breakdown != analyticsmodel.EnergyBreakdownDevice {
+		return response, err
+	}
+	devices, err := client.load(queryContext, token, buildDeviceBreakdownQuery(productQuery, location))
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy breakdown: %w", err)
+	}
+	response.Devices, err = mapDeviceBreakdown(devices, productQuery, location)
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, err
+	}
+	return response, nil
 }
 
 func (client *Client) load(ctx context.Context, token string, query cubeQuery) (loadResponse, error) {
@@ -176,16 +189,31 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *t
 			"energy_usage.suspect_count",
 			"energy_usage.invalid_count",
 		},
-		Filters: energyFilters(productQuery),
-		TimeDimensions: []cubeTimeDimension{{
-			Dimension:   "energy_usage.period_end",
-			DateRange:   []string{productQuery.From.In(location).Format(cubeWallTime), productQuery.To.In(location).Add(-time.Millisecond).Format(cubeWallTime)},
-			Granularity: string(productQuery.Granularity),
-		}},
-		Order:    map[string]string{periodMember: "asc"},
-		Timezone: productQuery.Timezone,
-		Limit:    10000,
+		Filters:        energyFilters(productQuery, accountingScopeSite),
+		TimeDimensions: periodDimension(productQuery, location),
+		Order:          map[string]string{periodMember: "asc"},
+		Timezone:       productQuery.Timezone,
+		Limit:          10000,
 	}
+}
+
+func buildDeviceBreakdownQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
+	return cubeQuery{
+		Measures:       []string{energyMeasure(productQuery.QualityPolicy)},
+		Filters:        energyFilters(productQuery, accountingScopeBranch),
+		Dimensions:     []string{"energy_usage.device_id"},
+		TimeDimensions: periodDimension(productQuery, location),
+		Timezone:       productQuery.Timezone,
+		Limit:          50000,
+	}
+}
+
+func periodDimension(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) []cubeTimeDimension {
+	return []cubeTimeDimension{{
+		Dimension:   "energy_usage.period_end",
+		DateRange:   []string{productQuery.From.In(location).Format(cubeWallTime), productQuery.To.In(location).Add(-time.Millisecond).Format(cubeWallTime)},
+		Granularity: string(productQuery.Granularity),
+	}}
 }
 
 func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
@@ -194,18 +222,67 @@ func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery
 			"energy_usage.max_data_watermark",
 			"energy_usage.max_dataset_revision",
 		},
-		Filters:  energyFilters(productQuery),
+		Filters:  energyFilters(productQuery, accountingScopeSite),
 		Timezone: productQuery.Timezone,
 		Limit:    1,
 	}
 }
 
-func energyFilters(productQuery analyticsmodel.EnergySeriesQuery) []cubeFilter {
+// A Site's total is its SITE facts; BRANCH facts are equipment sub-meters already inside it.
+const (
+	accountingScopeSite   = "SITE"
+	accountingScopeBranch = "BRANCH"
+)
+
+func energyFilters(productQuery analyticsmodel.EnergySeriesQuery, accountingScope string) []cubeFilter {
 	return []cubeFilter{
 		{Member: "energy_usage.tenant_id", Operator: "equals", Values: []string{productQuery.TenantID}},
 		{Member: "energy_usage.site_id", Operator: "equals", Values: []string{productQuery.SiteID}},
 		{Member: "energy_usage.energy_type", Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
+		{Member: "energy_usage.accounting_scope", Operator: "equals", Values: []string{accountingScope}},
 	}
+}
+
+func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) ([]analyticsmodel.EnergyDeviceSeries, error) {
+	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
+	byDevice := map[string][]analyticsmodel.EnergySeriesPoint{}
+	for _, row := range decoded.Data {
+		deviceID, err := scalarString(row["energy_usage.device_id"])
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown device: %w", err)
+		}
+		periodValue, err := scalarString(row[periodMember])
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown period: %w", err)
+		}
+		periodStart, err := parseCubeTime(periodValue, location)
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown period: %w", err)
+		}
+		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(productQuery.QualityPolicy)])
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
+		}
+		if !hasEnergy {
+			continue
+		}
+		energy, err := strconv.ParseFloat(energyValue, 64)
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
+		}
+		byDevice[deviceID] = append(byDevice[deviceID], analyticsmodel.EnergySeriesPoint{
+			PeriodStart: periodStart.UTC(),
+			PeriodEnd:   periodEnd(periodStart.In(location), productQuery.Granularity).UTC(),
+			EnergyKWh:   energy,
+		})
+	}
+	devices := make([]analyticsmodel.EnergyDeviceSeries, 0, len(byDevice))
+	for deviceID, points := range byDevice {
+		sort.Slice(points, func(left, right int) bool { return points[left].PeriodStart.Before(points[right].PeriodStart) })
+		devices = append(devices, analyticsmodel.EnergyDeviceSeries{DeviceID: deviceID, Points: points})
+	}
+	sort.Slice(devices, func(left, right int) bool { return devices[left].DeviceID < devices[right].DeviceID })
+	return devices, nil
 }
 
 func energyMeasure(policy analyticsmodel.QualityPolicy) string {

@@ -2507,7 +2507,18 @@
           "timezone": { "type": "string" },
           "from": { "type": "string", "format": "date-time" },
           "to": { "type": "string", "format": "date-time" },
-          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "VALID_AND_SUSPECT"] }
+          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "VALID_AND_SUSPECT"] },
+          "breakdown": { "type": "string", "enum": ["device"], "description": "Also return each sub-metered device's energy, already part of the Site total." }
+        }
+      },
+      "EnergySeriesPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["periodStart", "periodEnd", "energyKWh"],
+        "properties": {
+          "periodStart": { "type": "string", "format": "date-time" },
+          "periodEnd": { "type": "string", "format": "date-time" },
+          "energyKWh": { "type": "number", "minimum": 0 }
         }
       },
       "EnergySeriesResponse": {
@@ -2516,16 +2527,17 @@
         "required": ["schemaVersion", "points", "metadata"],
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
-          "points": {
+          "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } },
+          "devices": {
             "type": "array",
+            "description": "Present only for breakdown=device. Devices without a sub-meter are absent.",
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["periodStart", "periodEnd", "energyKWh"],
+              "required": ["deviceId", "points"],
               "properties": {
-                "periodStart": { "type": "string", "format": "date-time" },
-                "periodEnd": { "type": "string", "format": "date-time" },
-                "energyKWh": { "type": "number", "minimum": 0 }
+                "deviceId": { "type": "string", "format": "uuid" },
+                "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } }
               }
             }
           },
