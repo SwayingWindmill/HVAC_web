@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "mode": "DAILY",
+  "name": "office-autumn-a",
+  "description": "办公楼秋季日：08–20 时为使用时段，午后最热",
+  "daily": {
+    "timezone": "Asia/Shanghai",
+    "dryBulbC": {
+      "mean": 29,
+      "amplitude": 4,
+      "peakHour": 15
+    },
+    "wetBulbC": {
+      "mean": 24,
+      "amplitude": 2,
+      "peakHour": 15
+    },
+    "dayToDayC": 2.5,
+    "coolingLoadKw": {
+      "unoccupied": 260,
+      "occupied": 820,
+      "occupiedFrom": 8,
+      "occupiedTo": 20,
+      "perDryBulbC": 28
+    }
+  }
+}

@@ -44,6 +44,21 @@ func main() {
 		logger.Error("eg8200_mqtt_plant_config_invalid", "error", err.Error())
 		os.Exit(1)
 	}
+	// A local Site may run its own weather and load day over the shared plant model.
+	if scenarioPath := strings.TrimSpace(os.Getenv("EG8200_SCENARIO")); scenarioPath != "" {
+		scenarioFile, err := os.Open(scenarioPath)
+		if err != nil {
+			logger.Error("eg8200_mqtt_scenario_open_failed", "error", err.Error())
+			os.Exit(1)
+		}
+		scenario, err := simulator.DecodeScenarioJSON(scenarioFile)
+		_ = scenarioFile.Close()
+		if err != nil {
+			logger.Error("eg8200_mqtt_scenario_invalid", "error", err.Error())
+			os.Exit(1)
+		}
+		plantConfig.Scenario = scenario
+	}
 	mqttFile, err := os.Open(*mqttConfigPath)
 	if err != nil {
 		logger.Error("eg8200_mqtt_transport_config_open_failed", "error", err.Error())

@@ -108,7 +108,7 @@ type coolingTowerState struct {
 }
 
 func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
-	inputs := scenario.InputsAt(0)
+	inputs := scenario.InputsFor(0, now)
 	initialTowerLeavingC := inputs.AmbientWetBulbC + 4
 	initialTowerEnteringC := initialTowerLeavingC + 4
 	return &Plant{
@@ -177,7 +177,7 @@ func (plant *Plant) tickLocked(elapsed time.Duration) {
 
 	remaining := elapsed
 	for remaining > 0 {
-		plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
+		plant.inputs = plant.scenario.InputsFor(plant.scenarioElapsed, plant.now)
 		// Coupled states (zone, coil, chiller) advance together, so a long tick is taken in short steps.
 		segment := min(remaining, maximumIntegrationStep)
 		if transition, ok := plant.scenario.nextTransitionAfter(plant.scenarioElapsed); ok {
@@ -190,7 +190,7 @@ func (plant *Plant) tickLocked(elapsed time.Duration) {
 		plant.scenarioElapsed += segment
 		remaining -= segment
 	}
-	plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
+	plant.inputs = plant.scenario.InputsFor(plant.scenarioElapsed, plant.now)
 }
 
 func (plant *Plant) advanceLocked(elapsed time.Duration) {
