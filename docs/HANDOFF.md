@@ -79,7 +79,7 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - Both Sites hold replayed meter history, sub-meters included, for 2026-09-15 to 10-06 (Site time). Site A's includes the 8 °C setpoint raise from 09-29 09:00.
 - The savings ledger is empty. The accepted M&V result lives on only as `e2e/fixtures/savings-measure-verified.json`.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.
-- Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. Clearing the projection checkpoint (`analytics.energy_projection_checkpoints`) makes the projector fill them in; the existing-fact check skips intervals that already have a fact.
+- Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. To fill them in, stop `telemetry-worker`, truncate `analytics.energy_projection_checkpoints`, then start it again. Truncating while it runs does nothing: the batch in flight writes its checkpoint back. The existing-fact check skips intervals that already have a fact.
 
 Known quirks:
 
