@@ -416,8 +416,23 @@ COMMIT;`;
 // cost and the office zone's comfort. Daily energy and cost are tenant Metrics the
 // optimizer reads by code, computed per Site each night after the Site's day closes; the
 // policy and the AI deployment are tenant-wide, the import Tariff belongs to each Site.
-// The flat price is the only tariff rate until Tariffs carry their own rates.
-const flatImportPriceCNYPerKWh = 0.85;
+//
+// The grid import is priced by a two-part time-of-use Tariff, the same on every day type:
+// energy by period, and demand on the peak period's maximum demand in the month, which is
+// how Settlement charges it.
+const touImportRates = {
+  PEAK: { energyRatePerKWh: 1.2, demandRatePerKW: 38 },
+  FLAT: { energyRatePerKWh: 0.72 },
+  VALLEY: { energyRatePerKWh: 0.32 },
+};
+const touImportSlices = [
+  ['VALLEY', 0, 360], ['FLAT', 360, 480], ['PEAK', 480, 660], ['FLAT', 660, 780], ['PEAK', 780, 900],
+  ['FLAT', 900, 1080], ['PEAK', 1080, 1260], ['FLAT', 1260, 1320], ['VALLEY', 1320, 1440],
+];
+// The daily cost Metric prices a day's energy at the Tariff's time-weighted average rate
+// until Metrics read Tariffs.
+const averageImportRateCNYPerKWh = Number((touImportSlices
+  .reduce((sum, [code, start, end]) => sum + touImportRates[code].energyRatePerKWh * (end - start), 0) / 1440).toFixed(4));
 
 function buildOptimizationSeed(site, points) {
   const { tenantId, siteId } = site;
@@ -436,7 +451,9 @@ function buildOptimizationSeed(site, points) {
   const topologyVersionId = siteUUID(site, 0x600000000001);
   const gridNodeId = siteUUID(site, 0x600000000002);
   const electricity = '01990000-0000-7000-8000-000000000001';
-  const costExpression = `daily_energy * ${flatImportPriceCNYPerKWh}`;
+  const costExpression = `daily_energy * ${averageImportRateCNYPerKWh}`;
+  const tariffPeriods = ['WEEKDAY', 'WEEKEND'].flatMap((dayType) => touImportSlices.map(([code, start, end], ordinal) =>
+    ({ id: siteID(), dayType, code, start, end, ordinal, pricingRule: touImportRates[code] })));
   const constraints = {
     comfort: { zoneTempMinC: 22, zoneTempMaxC: 26 },
     safety: { supplyTempMinC: 6, supplyTempMaxC: 10, maxSupplyTempStepC: 1 },
@@ -490,10 +507,13 @@ ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.settlement_boundaries SET status = 'ACTIVE', revision = revision + 1, updated_at = clock_timestamp()
 WHERE id = ${id(boundaryId)} AND status = 'DRAFT';
 INSERT INTO core_registry.tariffs (id, tenant_id, site_id, tariff_code, display_name, energy_type_id, status, revision, created_at, updated_at)
-VALUES (${id(tariffId)}, ${t}, ${st}, 'grid_import_flat', '一般工商业电价（单一制）', ${id(electricity)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+VALUES (${id(tariffId)}, ${t}, ${st}, 'grid_import_tou', '两部制分时电价', ${id(electricity)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.tariff_versions (id, tenant_id, site_id, tariff_id, version, effective_from, timezone, currency, billing_cycle, status, revision, created_at, updated_at)
 VALUES (${id(tariffVersionId)}, ${t}, ${st}, ${id(tariffId)}, 1, '2026-01-01T00:00:00Z', 'Asia/Shanghai', 'CNY', 'CALENDAR_MONTH', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.tariff_periods (id, tenant_id, site_id, tariff_version_id, period_code, day_type, local_start_minute, local_end_minute, pricing_rule, ordinal, revision, created_at, updated_at) VALUES
+${tariffPeriods.map((period) => `  (${id(period.id)}, ${t}, ${st}, ${id(tariffVersionId)}, ${id(period.code)}, ${id(period.dayType)}, ${period.start}, ${period.end}, ${id(JSON.stringify(period.pricingRule))}, ${period.ordinal}, 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.tariff_assignments (id, tenant_id, site_id, boundary_id, tariff_id, effective_from, status, revision, created_at, updated_at)
 VALUES (${id(assignmentId)}, ${t}, ${st}, ${id(boundaryId)}, ${id(tariffId)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())

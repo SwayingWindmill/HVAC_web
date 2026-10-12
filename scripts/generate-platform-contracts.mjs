@@ -90,6 +90,7 @@ const expectedOperations = {
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
+  getSiteTariff: ['get', '/api/v1/sites/{siteId}/tariff'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
   listSiteSpaceChildren: ['get', '/api/v1/sites/{siteId}/spaces/tree'],
   listDevicePoints: ['get', '/api/v1/devices/{deviceId}/points'],
@@ -160,6 +161,7 @@ const expectedSuccessSchemas = {
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
   getSiteAssetModel: 'SiteAssetModel',
+  getSiteTariff: 'SiteTariff',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -241,6 +243,8 @@ const schemaRequirements = {
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
+  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods'], ['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
+  TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW'], ['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -339,6 +343,7 @@ const replacements = {
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
+  __SITE_TARIFF_PATH__: operations.getSiteTariff.path,
   __DEVICE_PATH__: operations.getDevice.path,
   __SITE_SPACE_CHILDREN_PATH__: operations.listSiteSpaceChildren.path,
   __DEVICE_POINTS_PATH__: operations.listDevicePoints.path,

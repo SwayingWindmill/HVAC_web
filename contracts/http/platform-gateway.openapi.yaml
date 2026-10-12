@@ -1170,6 +1170,25 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/tariff": {
+      "get": {
+        "operationId": "getSiteTariff",
+        "summary": "Read the import Tariff in effect for one Site, with its time-of-use periods",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "The released Tariff Version assigned to the Site's grid import.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteTariff" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/devices/{deviceId}": {
       "get": {
         "operationId": "getDevice",
@@ -3221,6 +3240,33 @@
           "telemetryPoints": { "type": "array", "items": { "$ref": "#/components/schemas/TelemetryPoint" } },
           "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/AssetRelationship" } },
           "counts": { "$ref": "#/components/schemas/AssetModelCounts" }
+        }
+      },
+      "SiteTariff": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "displayName", "version", "effectiveFrom", "timezone", "currency", "periods"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "version": { "type": "integer", "minimum": 1 },
+          "effectiveFrom": { "type": "string", "format": "date-time" },
+          "timezone": { "type": "string" },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "periods": { "type": "array", "items": { "$ref": "#/components/schemas/TariffPeriod" } }
+        }
+      },
+      "TariffPeriod": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["periodCode", "dayType", "startMinute", "endMinute", "energyRatePerKWh", "demandRatePerKW"],
+        "properties": {
+          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"] },
+          "dayType": { "type": "string", "enum": ["WEEKDAY", "WEEKEND", "HOLIDAY", "SPECIAL_DAY"] },
+          "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
+          "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "energyRatePerKWh": { "type": "number", "minimum": 0 },
+          "demandRatePerKW": { "type": "number", "minimum": 0 }
         }
       },
       "FieldError": {

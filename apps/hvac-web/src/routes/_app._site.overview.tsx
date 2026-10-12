@@ -4,7 +4,7 @@ import { OverviewWorkspace } from "@/features/overview/OverviewWorkspace";
 
 export const Route = createFileRoute("/_app/_site/overview")({
   validateSearch: z.object({
-    metric: z.enum(["electricityKWh", "coolingKWh", "cop"]).optional(),
+    metric: z.enum(["electricityKWh", "coolingKWh", "cop", "cost"]).optional(),
   }),
   component: OverviewWorkspace,
 });

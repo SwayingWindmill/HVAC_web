@@ -32,6 +32,7 @@ const (
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
 	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
 	GetSiteAssetModelPathTemplate          = "__SITE_ASSET_MODEL_PATH__"
+	GetSiteTariffPathTemplate              = "__SITE_TARIFF_PATH__"
 	GetDevicePathTemplate                  = "__DEVICE_PATH__"
 	ListAlarmsPath                        = "__ALARMS_PATH__"
 	GetAlarmPathTemplate                  = "__ALARM_PATH__"
@@ -365,6 +366,25 @@ type SiteAssetModel struct {
 	TelemetryPoints []TelemetryPoint    `json:"telemetryPoints"`
 	Relationships   []AssetRelationship `json:"relationships"`
 	Counts          AssetModelCounts    `json:"counts"`
+}
+
+type SiteTariff struct {
+	SiteID        string         `json:"siteId"`
+	DisplayName   string         `json:"displayName"`
+	Version       int64          `json:"version"`
+	EffectiveFrom string         `json:"effectiveFrom"`
+	Timezone      string         `json:"timezone"`
+	Currency      string         `json:"currency"`
+	Periods       []TariffPeriod `json:"periods"`
+}
+
+type TariffPeriod struct {
+	PeriodCode       string  `json:"periodCode"`
+	DayType          string  `json:"dayType"`
+	StartMinute      int     `json:"startMinute"`
+	EndMinute        int     `json:"endMinute"`
+	EnergyRatePerKWh float64 `json:"energyRatePerKWh"`
+	DemandRatePerKW  float64 `json:"demandRatePerKW"`
 }
 
 type FieldError struct {

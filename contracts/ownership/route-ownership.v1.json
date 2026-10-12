@@ -247,6 +247,22 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/sites/{siteId}/tariff",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/devices/{deviceId}",
       "owner": "platform-core-service",
       "publicIngress": "platform-gateway",

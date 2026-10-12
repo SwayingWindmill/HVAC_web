@@ -311,6 +311,13 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		}
 		writeJSON(writer, http.StatusOK, model)
 		return http.StatusOK
+	case "tariff":
+		tariff, err := server.store.GetSiteTariff(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, tariff)
+		return http.StatusOK
 	case "space-children":
 		parentSpaceID := request.URL.Query().Get("parentSpaceId")
 		result, err := server.store.ListSpaceChildren(request.Context(), claims, route.parentID, parentSpaceID, page)
@@ -535,6 +542,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/bindings/rebind", resource: "binding-write", parentID: segments[1], action: registryauth.ActionBindingWrite, write: true}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "asset-model":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/asset-model", resource: "asset-model", parentID: segments[1], action: registryauth.ActionAssetModelRead}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "tariff":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/tariff", resource: "tariff", parentID: segments[1], action: registryauth.ActionTariffRead}, true
 	case method == http.MethodGet && len(segments) == 2 && segments[0] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "devices" && segments[2] == "points":

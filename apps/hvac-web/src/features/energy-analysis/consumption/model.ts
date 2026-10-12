@@ -7,7 +7,7 @@ export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
 
-function wallTime(instant: Date, timeZone: string): WallTime {
+export function wallTime(instant: Date, timeZone: string): WallTime {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
   }).formatToParts(instant).map((part) => [part.type, Number(part.value)]));

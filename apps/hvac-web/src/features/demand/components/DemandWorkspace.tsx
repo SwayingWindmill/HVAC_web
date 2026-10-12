@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { Gauge } from 'lucide-react';
 import { useMemo } from 'react';
-import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, XAxis, YAxis } from 'recharts';
+import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceArea, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
@@ -11,7 +11,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
+import { periodWindow } from '@/features/energy-analysis/consumption/model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
+import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
+import { siteTariffQuery } from '@/features/tariff/query';
+import { daySchedule, demandCharges, PERIOD_LABEL, type DemandCharge } from '@/features/tariff/tariff-model';
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { demandChartRows, demandSummary, type DemandChartRow, type DemandPeak } from '../demand-model';
@@ -53,6 +57,33 @@ function DailyTooltip({ active, payload }: { active?: boolean; payload?: { paylo
 
 const peakValue = (peak: DemandPeak | null) => (peak ? formatDecimal(peak.demandKW, 1) : null);
 
+const chargedPeriods = (charges: readonly DemandCharge[]) => charges.map((charge) => `${PERIOD_LABEL[charge.code]}时段`).join('、');
+
+function DemandChargeCard({ charges, unavailable }: { readonly charges: readonly DemandCharge[] | null; readonly unavailable: boolean }) {
+  if (unavailable) {
+    return <MetricCard label="本月需量电费" value={<MetricValue value={null} />} lead="电价暂不可用" detail="稍后刷新重试" />;
+  }
+  if (charges === null) {
+    return <MetricCard label="本月需量电费" value={<MetricValue value={null} />} lead="站点还没有配置电价" detail="发布电价后按需量电价估算" />;
+  }
+  if (charges.length === 0) {
+    return <MetricCard label="本月需量电费" value={<MetricValue value="0" unit="元" />} lead="现行电价不收需量电费" detail="按电价估算" />;
+  }
+  const billed = charges.filter((charge) => charge.charge !== null);
+  const total = billed.reduce((sum, charge) => sum + charge.charge!, 0);
+  return (
+    <MetricCard
+      label="本月需量电费"
+      value={<MetricValue value={billed.length ? formatDecimal(total, 0) : null} unit="元" />}
+      badge={<Badge variant="outline" className="font-normal">估算</Badge>}
+      lead={billed.length
+        ? billed.map((charge) => `${PERIOD_LABEL[charge.code]}段 ${formatDecimal(charge.peak!.demandKW, 1)} kW × ${formatDecimal(charge.ratePerKW, 0)} 元/kW`).join('，')
+        : `${chargedPeriods(charges)}本月还没有完整的 15 分钟`}
+      detail="按电价估算，正式电费以结算为准"
+    />
+  );
+}
+
 export function DemandWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const now = useNow(60_000);
@@ -66,17 +97,27 @@ export function DemandWorkspace() {
     () => (summary?.dailyPeaks ?? []).map((day) => ({ day: day.day.slice(5).replace('-', '/'), peak: day.peak?.demandKW ?? null, isMax: Boolean(day.peak && summary?.month && day.peak.at === summary.month.at) })),
     [summary],
   );
+  const tariff = useQuery(siteTariffQuery(site.id));
+  const charges = useMemo(
+    () => (tariff.data && hours ? demandCharges(hours, tariff.data, site.timezone, periodWindow('month', new Date(now), site.timezone).from) : null),
+    [tariff.data, hours, now, site.timezone],
+  );
+  // Today's periods that carry a demand rate, shaded on the curve.
+  const chargedToday = useMemo(
+    () => (tariff.data ? daySchedule(tariff.data, new Date(now), site.timezone).filter((period) => period.demandRatePerKW > 0) : []),
+    [tariff.data, now, site.timezone],
+  );
   const at = (peak: DemandPeak | null, withDate = false) => (peak ? formatTime(peak.at, site.timezone).slice(withDate ? 0 : -5) : '—');
 
   return (
     <Main className="@container/main flex flex-col gap-4 md:gap-6">
       <PageHeader
         title="需量分析"
-        description={`${site.displayName} · 冷站用电按 15 分钟平均功率计需量，需量电费按当月最大需量计收`}
+        description={`${site.displayName} · 冷站用电按 15 分钟平均功率计需量${charges?.length ? `，需量电费按${chargedPeriods(charges)}当月最大需量计收` : ''}`}
         meta={<Badge variant="outline" className="font-normal">空调总电表口径</Badge>}
       />
 
-      {registry.isPending || (point !== null && demand.isPending) ? (
+      {registry.isPending || tariff.isPending || (point !== null && demand.isPending) ? (
         <Skeleton className="h-[520px] rounded-xl" />
       ) : point === null ? (
         <Card>
@@ -92,7 +133,7 @@ export function DemandWorkspace() {
         <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">需量数据暂不可用</CardContent></Card>
       ) : (
         <>
-          <MetricGrid ariaLabel="需量概况">
+          <MetricGrid ariaLabel="需量概况" className="@xl/main:[&>:last-child]:col-span-2 @5xl/main:grid-cols-5 @5xl/main:[&>:last-child]:col-span-1">
             <MetricCard
               label="当前需量"
               value={<MetricValue value={summary.current ? formatDecimal(summary.current.demandKW, 1) : null} unit="kW" />}
@@ -111,13 +152,14 @@ export function DemandWorkspace() {
               label="本月最大需量"
               value={<MetricValue value={peakValue(summary.month)} unit="kW" />}
               lead={summary.month ? `出现在 ${at(summary.month, true)}` : '本月还没有完整的 15 分钟'}
-              detail="需量电费的计费依据"
+              detail="全天 15 分钟平均功率的最高值"
             />
+            <DemandChargeCard charges={charges} unavailable={tariff.isError} />
             <MetricCard
               label="今日负荷率"
               value={<MetricValue value={summary.todayLoadFactor !== null ? formatDecimal(summary.todayLoadFactor * 100, 0) : null} unit="%" />}
               lead="今日平均需量 ÷ 今日最大需量"
-              detail="越高说明用电越平稳，需量电费占比越低"
+              detail="越高说明用电越平稳"
             />
           </MetricGrid>
 
@@ -125,7 +167,7 @@ export function DemandWorkspace() {
             <Card role="region" aria-label="需量曲线">
               <CardHeader>
                 <CardTitle>需量曲线</CardTitle>
-                <CardDescription>今日与昨日每 15 分钟平均功率（kW），虚线为本月最大需量</CardDescription>
+                <CardDescription>今日与昨日每 15 分钟平均功率（kW），虚线为本月最大需量{chargedToday.length ? `，底色为计收需量的${chargedPeriods(charges ?? [])}` : ''}</CardDescription>
               </CardHeader>
               <CardContent className="px-2 sm:px-6">
                 <ChartContainer config={curveConfig} className="aspect-auto h-[340px] w-full">
@@ -133,6 +175,9 @@ export function DemandWorkspace() {
                     <CartesianGrid vertical={false} />
                     <XAxis dataKey="minute" type="number" domain={[0, 1440]} ticks={[0, 240, 480, 720, 960, 1200, 1440]} tickFormatter={clock} tickLine={false} axisLine={false} />
                     <YAxis tickLine={false} axisLine={false} width={44} domain={[0, 'auto']} />
+                    {chargedToday.map((period) => (
+                      <ReferenceArea key={period.startMinute} x1={period.startMinute} x2={period.endMinute} fill={PERIOD_COLOR[period.periodCode]} fillOpacity={0.08} strokeOpacity={0} ifOverflow="hidden" />
+                    ))}
                     <ChartTooltip cursor={{ strokeDasharray: '3 3' }} content={<CurveTooltip />} />
                     <Line dataKey="yesterday" stroke="var(--color-yesterday)" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls={false} isAnimationActive={false} />
                     <Area dataKey="today" stroke="var(--color-today)" strokeWidth={2} fill="var(--color-today)" fillOpacity={0.12} dot={false} connectNulls={false} isAnimationActive={false} />

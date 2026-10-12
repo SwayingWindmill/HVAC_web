@@ -183,6 +183,15 @@ func (h *handler) GetSiteAssetModel(writer http.ResponseWriter, request *http.Re
 	}, platformapi.ListRegistryParams{})
 }
 
+func (h *handler) GetSiteTariff(writer http.ResponseWriter, request *http.Request, siteID string) {
+	h.serveRegistry(writer, request, publicRegistryRoute{
+		template:     platformapi.GetSiteTariffPathTemplate,
+		internalPath: "/internal/v1/registry/sites/" + siteID + "/tariff",
+		action:       registryauth.ActionTariffRead,
+		scopeID:      siteID,
+	}, platformapi.ListRegistryParams{})
+}
+
 func (h *handler) GetDevice(writer http.ResponseWriter, request *http.Request, deviceID string) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
 		template:     platformapi.GetDevicePathTemplate,
@@ -583,6 +592,10 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 			if method == http.MethodGet {
 				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/asset-model", internalPath: "/internal/v1/registry/sites/" + siteID + "/asset-model", resource: "asset-model", action: registryauth.ActionAssetModelRead, scopeID: siteID}, siteID, true
 			}
+		case "tariff":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/tariff", internalPath: "/internal/v1/registry/sites/" + siteID + "/tariff", resource: "tariff", action: registryauth.ActionTariffRead, scopeID: siteID}, siteID, true
+			}
 		case "retire":
 			if method == http.MethodPost {
 				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/retire", internalPath: "/internal/v1/registry/sites/" + siteID + "/retire", resource: "retire", action: registryauth.ActionRegistryRetire, scopeID: siteID, write: true}, siteID, true
@@ -690,6 +703,8 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		h.ListSiteDeviceBindings(writer, request, id, params)
 	case "asset-model":
 		h.GetSiteAssetModel(writer, request, id)
+	case "tariff":
+		h.GetSiteTariff(writer, request, id)
 	case "space-children", "device-points":
 		h.serveRegistry(writer, request, route, params)
 	default:
@@ -726,6 +741,13 @@ func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []
 	case registryauth.ActionAssetModelRead:
 		return decodeCanonical[platformapi.SiteAssetModel](raw, func(value platformapi.SiteAssetModel) error {
 			return validateSiteAssetModel(value, scopeID)
+		})
+	case registryauth.ActionTariffRead:
+		return decodeCanonical[platformapi.SiteTariff](raw, func(value platformapi.SiteTariff) error {
+			if value.SiteID != scopeID {
+				return errors.New("Registry Tariff is outside the requested Site")
+			}
+			return nil
 		})
 	case registryauth.ActionDeviceRead:
 		return decodeCanonical[platformapi.Device](raw, validateDevice)
