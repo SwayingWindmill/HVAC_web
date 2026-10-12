@@ -37,6 +37,8 @@ export const REASON_TEXT: Record<BaselineReason, string> = {
 
 export interface SavingsTotals {
   readonly days: number;
+  /** Hours verified without an energy rate; their avoided cost is not counted. */
+  readonly unpricedHours: number;
   readonly adjustedBaselineKWh: number;
   readonly actualKWh: number;
   readonly avoidedKWh: number;
@@ -61,6 +63,8 @@ export interface Measure {
   readonly kind: MeasureKind;
   readonly description: string;
   readonly evidence: string;
+  /** The executed command the measure came from, when it came from one. */
+  readonly evidenceCommandId: string | null;
   readonly status: MeasureStatus;
   readonly plannedAt: string;
   readonly implementedAt: string | null;
@@ -158,6 +162,13 @@ export function dayRows(days: readonly VerifiedDay[]): readonly DayRow[] {
     avoided: day.avoidedKWh,
     coverage: day.expectedHours > 0 ? day.hours / day.expectedHours : 0,
   }));
+}
+
+/** How the avoided cost was priced: energy rates only, and which hours had none. */
+export function costBasis(totals: Pick<SavingsTotals, 'unpricedHours'>): string {
+  return totals.unpricedHours > 0
+    ? `${totals.unpricedHours} 小时没有电价未计入；不含需量电费`
+    : '按逐时分时电度电价，不含需量电费';
 }
 
 /** Avoided energy as a share of what the plant would have used without the measure. */

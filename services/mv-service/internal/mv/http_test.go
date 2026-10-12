@@ -103,3 +103,23 @@ func TestABaselineWithoutEnoughHoursCarriesNoModel(t *testing.T) {
 		t.Fatalf("baseline = %v", baseline)
 	}
 }
+
+func TestAMeasureCitesTheExecutedCommandItCameFrom(t *testing.T) {
+	handler, err := NewHTTPHandler(newTestService(t, newMemoryStore(), plantHistory{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/v1/sites/" + testSite + "/savings/measures"
+	command := "ec61c2dc-2d2c-4933-8fb7-bdc284a76a28"
+	status, created := call(t, handler, http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00","evidenceCommandId":"`+command+`"}`)
+	if status != http.StatusCreated || created["evidenceCommandId"] != command {
+		t.Fatalf("register = %d %v", status, created)
+	}
+	if status, _ := call(t, handler, http.MethodPost, base, `{"name":"x","kind":"OTHER","plannedAt":"2026-10-15T09:00:00+08:00","evidenceCommandId":"command-1"}`); status != http.StatusBadRequest {
+		t.Fatalf("a command reference that is not a UUID = %d", status)
+	}
+	_, plain := call(t, handler, http.MethodPost, base, `{"name":"y","kind":"OTHER","plannedAt":"2026-10-15T09:00:00+08:00"}`)
+	if plain["evidenceCommandId"] != nil {
+		t.Fatalf("a measure without a command = %v", plain["evidenceCommandId"])
+	}
+}

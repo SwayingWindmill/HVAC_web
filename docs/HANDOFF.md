@@ -54,8 +54,6 @@ Roadmap issues, in order:
 3. **#484 — measured savings (M&V), acceptance.** The first version is live (spec `docs/specs/savings-verification.md`, ADR 0021): the ledger, Guideline 14 baselines, the daily `MV_EVALUATION` job, the overview card and the report section. Still to do:
    - live acceptance of a trusted baseline and verified days. Local telemetry history starts 2026-10-11 21:05 (Site time), so a 72-hour baseline is possible from 2026-10-14 evening: refit the measure registered on Site A (implemented 10-12 15:17, untrusted) over a fully covered period, or register a new one, then check the first verified day after 02:00;
    - record a measure with verified days into `e2e/fixtures/` and cover the chart, the summary and the overview card's verified state;
-   - link a measure's evidence to an executed optimization recommendation or command (the spec asks for it; v1 takes free text);
-   - a Site without an import Tariff verifies nothing: day boundaries come from the Tariff's timezone. Read the Site's timezone instead and leave the hours unpriced;
    - later: Option B once machines have their own meters, non-routine adjustments, demand savings.
 4. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP. Still to do:
    - site profiles: floor area and climate zone, owned by the Registry, for unit-area energy and climate correction;
@@ -76,13 +74,15 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - The `forecast_models` horizon was raised to 2880 min by hand.
 - The ClickHouse users `fdd_service_reader` and `mv_service_reader` were created by hand (ClickHouse init scripts only run on an empty volume).
 - Site A has one savings measure, implemented 2026-10-12 15:17 with an untrusted baseline (15 hours of data); it is the acceptance subject above.
-- Migration 020 was edited after it ran locally (overlap trigger takes a per-Site lock; `baseline_reason` holds codes). The change was applied by hand and its ledger checksum updated, to keep the telemetry history the baseline needs.
+- Site A also has two planned measures left from acceptance (冷却水泵降频运行; 冷冻水出水设定温度维持 7 °C（验收）, which cites a same-value 7 °C chiller setpoint command issued 10-12 17:22). Planned measures cannot be ended, so they stay until a reset.
+- Migration 020 was edited after it ran locally (overlap trigger takes a per-Site lock; `baseline_reason` holds codes; `evidence_command_id` added). Each change was applied by hand and the ledger checksum updated, to keep the telemetry history the baseline needs.
 - The tariff name was updated to 两部制分时电价 by hand.
 
 Known quirks:
 
+- **Host standby stops Docker Desktop.** After Windows Modern Standby (System log Kernel-Power 506/507), WSL may report `docker` missing. Start `D:\Program Files\Docker\Docker\Docker Desktop.exe`; the `hvac-local` containers come back on their own.
 - **Flaky Go proxy.** `goproxy.cn` sometimes drops module downloads. Run `local:up` with `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` and re-run on a network error.
-- **e2e flake under load.** A full `npm run web:e2e` occasionally times out one spec. Re-run that spec on its own before treating it as a failure.
+- **e2e under load.** With the local stack running, the e2e build alone can exceed Playwright's 240 s webServer timeout, and parallel workers time out on pages that never finish loading. Build `dist-e2e` once, start `vite preview --outDir dist-e2e --port 5190` yourself (the config reuses it), and run `npm run web:e2e -- --workers=1`.
 - **Integration tests only run when a module changes.** Integration scripts run only when a PR touches their module, so a migration that breaks another module's seed shows up later. Example: the Registry baseline seeding FDD findings, fixed in #504.
 
 ## Process

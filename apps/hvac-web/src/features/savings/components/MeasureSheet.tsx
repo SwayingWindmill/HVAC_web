@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
+import { getRouteApi, Link } from '@tanstack/react-router';
 import { CircleCheck, CircleDashed, CircleX, Flag, RefreshCcw, Rocket } from 'lucide-react';
 import { useState } from 'react';
 import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
@@ -11,11 +11,12 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useExecutedCommands } from '@/features/control/use-executed-commands';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
 import {
-  dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
+  costBasis, dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
   type Measure, type MeasureAction,
 } from '../savings-model';
 import { MeasureStatusBadge } from './measure-presentation';
@@ -100,7 +101,10 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
     <div className="flex flex-col gap-4">
       <dl className="grid grid-cols-3 gap-x-6 gap-y-4 text-sm">
         <FactTile label="累计节电">{kwh(measure.totals.avoidedKWh)}</FactTile>
-        <FactTile label="节省电费">{yuan(measure.totals.avoidedCost)}</FactTile>
+        <FactTile label="节省电费">
+          {yuan(measure.totals.avoidedCost)}
+          {measure.totals.unpricedHours > 0 ? <span className="block text-xs font-normal text-muted-foreground">{costBasis(measure.totals)}</span> : null}
+        </FactTile>
         <FactTile label="节电率">{rate === null ? '—' : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
       </dl>
       <ChartContainer config={dayConfig} className="aspect-auto h-[220px] w-full">
@@ -137,6 +141,22 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+/** What the measure rests on: the executed command it came from, as the control page shows it, and the operator's note. */
+function Evidence({ measure }: { readonly measure: Measure }) {
+  const { site } = siteRoute.useRouteContext();
+  const commands = useExecutedCommands(site.id, site.timezone, measure.evidenceCommandId !== null);
+  if (measure.evidenceCommandId === null) return <>{measure.evidence || '—'}</>;
+  const cited = commands.executed.find((command) => command.commandId === measure.evidenceCommandId);
+  return (
+    <span className="flex flex-col gap-0.5">
+      <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="hover:underline">
+        {cited ? cited.description : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
+      </Link>
+      {measure.evidence ? <span className="text-xs font-normal text-muted-foreground">{measure.evidence}</span> : null}
+    </span>
   );
 }
 
@@ -231,7 +251,7 @@ export function MeasureSheet({ measureId, canManage, onClose }: {
                 <FactTile label="结束">{formatTime(measure.endedAt ?? undefined, tz)}</FactTile>
                 <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
                 <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
-                <FactTile label="依据">{measure.evidence || '—'}</FactTile>
+                <div className="col-span-3"><FactTile label="依据"><Evidence measure={measure} /></FactTile></div>
               </dl>
 
               {canManage && measureActions(measure).length > 0 ? (

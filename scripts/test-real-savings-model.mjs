@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dayRows, fitChecks, instantFromSiteInput, measureActions, monthToDate, savingsRate, siteInputValue } from '../apps/hvac-web/src/features/savings/savings-model.ts';
+import { costBasis, dayRows, fitChecks, instantFromSiteInput, measureActions, monthToDate, savingsRate, siteInputValue } from '../apps/hvac-web/src/features/savings/savings-model.ts';
 
 const zone = 'Asia/Shanghai';
-const totals = (days) => ({ days, adjustedBaselineKWh: 0, actualKWh: 0, avoidedKWh: 0, avoidedCost: 0 });
+const totals = (days) => ({ days, unpricedHours: 0, adjustedBaselineKWh: 0, actualKWh: 0, avoidedKWh: 0, avoidedCost: 0 });
 
 test('a baseline passes Guideline 14 only when coverage, CV(RMSE) and NMBE all hold', () => {
   const model = { interceptKWh: 20, slope: 0.25, cvRmse: 0.12, nmbe: -0.004 };
@@ -48,4 +48,9 @@ test('implementation times are entered on the Site clock whatever the browser zo
   assert.equal(instantFromSiteInput('2026-10-15T09:00', zone).toISOString(), '2026-10-15T01:00:00.000Z');
   assert.equal(siteInputValue(new Date('2026-10-15T01:00:00Z'), zone), '2026-10-15T09:00');
   assert.equal(instantFromSiteInput('2026-03-08T09:30', 'America/New_York').toISOString(), '2026-03-08T13:30:00.000Z');
+});
+
+test('avoided cost says when hours went unpriced for want of a tariff', () => {
+  assert.equal(costBasis({ unpricedHours: 0 }), '按逐时分时电度电价，不含需量电费');
+  assert.equal(costBasis({ unpricedHours: 24 }), '24 小时没有电价未计入；不含需量电费');
 });

@@ -13,7 +13,7 @@ import (
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
-// Tenant and Site row security; it also reads the Site's import Tariff.
+// Tenant and Site row security; it also reads the Site's clock and import Tariff.
 type PostgresStore struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
@@ -61,7 +61,7 @@ func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string,
 	return tx.Commit(ctx)
 }
 
-const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, planned_at, implemented_at, ended_at,
+const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, evidence_command_id::text, planned_at, implemented_at, ended_at,
 investment_cny, expected_annual_kwh, status, baseline_from, baseline_to, baseline_intercept_kwh, baseline_slope, baseline_samples,
 baseline_expected_hours, baseline_cv_rmse, baseline_nmbe, baseline_trusted, baseline_reason, created_by::text, updated_by::text, created_at, updated_at`
 
@@ -73,7 +73,7 @@ func scanMeasure(row pgx.Row) (Measure, error) {
 	var samples, expected *int
 	var trusted *bool
 	var reason string
-	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence,
+	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence, &measure.EvidenceCommandID,
 		&measure.PlannedAt, &measure.ImplementedAt, &measure.EndedAt, &measure.InvestmentCNY, &measure.ExpectedAnnualKWh, &status,
 		&from, &to, &intercept, &slope, &samples, &expected, &cvrmse, &nmbe, &trusted, &reason,
 		&measure.CreatedBy, &measure.UpdatedBy, &measure.CreatedAt, &measure.UpdatedAt)
@@ -112,11 +112,11 @@ func overlapError(err error) error {
 
 func (store *PostgresStore) InsertMeasure(ctx context.Context, measure Measure) error {
 	return store.scoped(ctx, measure.TenantID, measure.SiteID, false, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_measures(id, tenant_id, site_id, name, kind, description, evidence, planned_at,
-investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid,$13::uuid,$14,$15)`,
-			measure.ID, measure.TenantID, measure.SiteID, measure.Name, string(measure.Kind), measure.Description, measure.Evidence, measure.PlannedAt,
-			measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
+		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_measures(id, tenant_id, site_id, name, kind, description, evidence, evidence_command_id,
+planned_at, investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9,$10,$11,$12,$13::uuid,$14::uuid,$15,$16)`,
+			measure.ID, measure.TenantID, measure.SiteID, measure.Name, string(measure.Kind), measure.Description, measure.Evidence, measure.EvidenceCommandID,
+			measure.PlannedAt, measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("insert savings measure: %w", err)
 		}
@@ -216,13 +216,22 @@ FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2
 	return results, err
 }
 
-// ImportTariff reads the released Tariff Version assigned to the Site's grid import now, with the
-// Site's clock, as the Registry serves it.
-func (store *PostgresStore) ImportTariff(ctx context.Context, tenantID, siteID string) (SiteTariff, error) {
-	var tariff SiteTariff
+// SiteClock reads the Site's timezone and the released Tariff Version assigned to the Site's grid
+// import now, with the version's own timezone, choosing it the way Settlement does.
+func (store *PostgresStore) SiteClock(ctx context.Context, tenantID, siteID string) (SiteClock, error) {
+	var clock SiteClock
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
-		var timezone, versionID string
-		err := tx.QueryRow(ctx, `
+		var timezone string
+		if err := tx.QueryRow(ctx, `SELECT timezone FROM core_registry.sites WHERE tenant_id = $1::uuid AND id = $2::uuid`, tenantID, siteID).Scan(&timezone); err != nil {
+			return fmt.Errorf("read Site timezone: %w", err)
+		}
+		location, err := time.LoadLocation(timezone)
+		if err != nil {
+			return err
+		}
+		clock.Location = location
+		var versionID, versionTimezone string
+		err = tx.QueryRow(ctx, `
 SELECT version.id::text, version.timezone
 FROM core_registry.tariff_assignments AS assignment
 JOIN core_registry.settlement_boundaries AS boundary
@@ -234,16 +243,18 @@ WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
   AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
   AND version.status = 'RELEASED' AND version.effective_from <= now() AND (version.effective_to IS NULL OR version.effective_to > now())
 ORDER BY boundary.boundary_code
-LIMIT 1`, tenantID, siteID).Scan(&versionID, &timezone)
+LIMIT 1`, tenantID, siteID).Scan(&versionID, &versionTimezone)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("the Site has no import Tariff in effect")
+			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if tariff.Location, err = time.LoadLocation(timezone); err != nil {
+		tariffLocation, err := time.LoadLocation(versionTimezone)
+		if err != nil {
 			return err
 		}
+		clock.Tariff = &ImportTariff{Location: tariffLocation}
 		rows, err := tx.Query(ctx, `SELECT day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
 FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, versionID)
 		if err != nil {
@@ -255,9 +266,9 @@ FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY da
 			if err := rows.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
 				return err
 			}
-			tariff.Periods = append(tariff.Periods, period)
+			clock.Tariff.Periods = append(clock.Tariff.Periods, period)
 		}
 		return rows.Err()
 	})
-	return tariff, err
+	return clock, err
 }

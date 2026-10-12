@@ -107,3 +107,20 @@ function plantPosition(assetType: string): number {
   const position = PLANT_ORDER.indexOf(assetType);
   return position === -1 ? PLANT_ORDER.length : position;
 }
+
+/** What a command point was asked to do, in the operator's words. */
+export interface CommandLabel {
+  readonly assetName: string;
+  readonly label: string;
+  readonly unit: string | null;
+}
+
+/** Each command point's asset and name, so a command reads as the operator issued it. */
+export function commandLabels(targets: readonly ControlTarget[]): ReadonlyMap<string, CommandLabel> {
+  const labels = new Map<string, CommandLabel>();
+  for (const target of targets) {
+    for (const action of target.actions) labels.set(action.pointId, { assetName: target.assetName, label: action.label, unit: null });
+    for (const setting of target.settings) labels.set(setting.pointId, { assetName: target.assetName, label: setting.label, unit: setting.unit });
+  }
+  return labels;
+}

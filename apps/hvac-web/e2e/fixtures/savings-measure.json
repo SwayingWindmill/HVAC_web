@@ -5,6 +5,7 @@
   "kind": "SETPOINT_RESET",
   "description": "按优化建议提高冷冻水供水温度设定值，冷机 COP 随之提高。",
   "evidence": "10 月 12 日优化建议",
+  "evidenceCommandId": null,
   "status": "IMPLEMENTED",
   "plannedAt": "2026-10-12T07:17:00Z",
   "implementedAt": "2026-10-12T07:17:00Z",
@@ -22,6 +23,7 @@
   },
   "totals": {
     "days": 0,
+    "unpricedHours": 0,
     "adjustedBaselineKWh": 0,
     "actualKWh": 0,
     "avoidedKWh": 0,

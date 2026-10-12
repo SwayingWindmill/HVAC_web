@@ -15,7 +15,7 @@ import { SEVERITY_LABELS, SEVERITY_ORDER } from '@/features/alarms/alarm-present
 import { ruleFor } from '@/features/diagnostics/diagnostics-model';
 import { relativeChange } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
-import { monthToDate, savingsRate, STATUS_LABEL } from '@/features/savings/savings-model';
+import { costBasis, monthToDate, savingsRate, STATUS_LABEL } from '@/features/savings/savings-model';
 import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
 import { demandCharges, PERIOD_LABEL, touEnergyCost } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
@@ -120,7 +120,7 @@ function SavingsSection({ siteId, month, span, timeZone }: { readonly siteId: st
     <>
       <div className="grid grid-cols-4 gap-8">
         <Figure label="节电量" value={totals.days > 0 ? formatDecimal(totals.avoidedKWh, 0) : null} unit="kWh" note={totals.days > 0 ? `调整后基线 ${energyText(totals.adjustedBaselineKWh)}` : '本月没有核算结果'} />
-        <Figure label="节省电费" value={totals.days > 0 ? formatDecimal(totals.avoidedCost, 0) : null} unit="元" note="按逐时分时电度电价，不含需量电费" />
+        <Figure label="节省电费" value={totals.days > 0 ? formatDecimal(totals.avoidedCost, 0) : null} unit="元" note={costBasis(totals)} />
         <Figure label="节电率" value={rate === null ? null : formatDecimal(rate * 100, 1)} unit="%" note="节电量 ÷ 调整后基线" />
         <Figure label="核算天数" value={String(totals.days)} unit="天" note={span.complete ? `本月 ${span.days} 天` : '每天 02:00 核算前一天'} />
       </div>

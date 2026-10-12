@@ -42,8 +42,8 @@ import {
   type Command,
   type ReconciledOutcome,
 } from '../command-api';
-import { APPROVAL_LABEL, IN_FLIGHT, RISK_LABEL, STATUS_PRESENTATION } from '../command-presentation';
-import { controlTargets, type ControlAction, type ControlSetting, type ControlTarget } from '../control-model';
+import { APPROVAL_LABEL, commandSummary, IN_FLIGHT, RISK_LABEL, STATUS_PRESENTATION } from '../command-presentation';
+import { commandLabels, controlTargets, type CommandLabel, type ControlAction, type ControlSetting, type ControlTarget } from '../control-model';
 import { commandFailure, ConfirmCommand, useSubmitCommand, type PendingCommand } from './CommandConfirmation';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -51,13 +51,6 @@ const pageRoute = getRouteApi('/_app/_site/operations/control');
 
 const ACTION_ICON = { START: Play, STOP: Square, RESET_FAULT: RotateCcw } as const;
 const ACTION_SHORT = { START: '启动', STOP: '停止', RESET_FAULT: '复位故障' } as const;
-
-/** What a command point was asked to do, in the operator's words. */
-interface CommandLabel {
-  readonly assetName: string;
-  readonly label: string;
-  readonly unit: string | null;
-}
 
 function useCommandActions(siteId: string, csrfToken: string) {
   const queryClient = useQueryClient();
@@ -180,13 +173,6 @@ function TargetCard({ target, device, timeZone, onCommand }: {
       </CardContent>
     </Card>
   );
-}
-
-function commandSummary(command: Command, labels: ReadonlyMap<string, CommandLabel>): { title: string; target: string } {
-  const label = labels.get(command.pointId);
-  const value = Object.values(command.parameters)[0];
-  const setTo = value === undefined ? '' : ` → ${formatDecimal(value, 1)}${label?.unit ? ` ${label.unit}` : ''}`;
-  return { title: `${label?.label ?? '已移除的控制点'}${setTo}`, target: label?.assetName ?? '未登记设备' };
 }
 
 function CommandStatus({ command }: { readonly command: Command }) {
@@ -320,14 +306,7 @@ export function ControlWorkspace() {
     () => (registry.data ? controlTargets(registry.data.assetModel, new Date(now)) : []),
     [registry.data, now],
   );
-  const labels = useMemo(() => {
-    const map = new Map<string, CommandLabel>();
-    for (const target of targets) {
-      for (const action of target.actions) map.set(action.pointId, { assetName: target.assetName, label: action.label, unit: null });
-      for (const setting of target.settings) map.set(setting.pointId, { assetName: target.assetName, label: setting.label, unit: setting.unit });
-    }
-    return map;
-  }, [targets]);
+  const labels = useMemo(() => commandLabels(targets), [targets]);
   const devices = useMemo(() => new Map(plant.devices.map((device) => [device.deviceId, device])), [plant.devices]);
 
   const list = commands.data ?? [];

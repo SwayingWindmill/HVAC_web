@@ -692,7 +692,7 @@ try {
     mvHour(5, 'hourly_cooling', '2026-08-27 01:00:00', 1, 700),
     mvHour(6, 'hourly_energy', '2026-08-27 02:00:00', 1, 200),
   ].join(',\n')}`);
-  const mvTests = ['TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours'];
+  const mvTests = ['TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours', 'TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone'];
   report.assertions.mvSavingsVerification = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/mv-service',
@@ -703,6 +703,7 @@ try {
       MV_POSTGRES_INTEGRATION_DSN: mvPostgresDSN,
       MV_POSTGRES_INTEGRATION_TENANT_ID: '018f1d00-0000-7000-8000-000000000001',
       MV_POSTGRES_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000001',
+      MV_POSTGRES_INTEGRATION_UNPRICED_SITE_ID: '018f1e00-1000-7000-8000-000000000002',
       MV_POSTGRES_INTEGRATION_ACTOR_ID: '018f1f00-0000-7000-8000-000000000001',
       MV_POSTGRES_INTEGRATION_JOB_ID: mvJobId,
       MV_CLICKHOUSE_INTEGRATION_URL: clickHouseURL,

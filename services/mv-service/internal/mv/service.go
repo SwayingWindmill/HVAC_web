@@ -54,11 +54,13 @@ type Measure struct {
 	EndedAt           *time.Time
 	InvestmentCNY     *float64
 	ExpectedAnnualKWh *float64
-	// Evidence names what the measure acted on, such as an optimization recommendation or a command.
-	Evidence  string
-	Status    Status
-	Baseline  *Baseline
-	CreatedBy string
+	// Evidence says in the operator's words what the measure rests on, such as a contract.
+	Evidence string
+	// EvidenceCommandID is the executed command the measure came from, when it came from one.
+	EvidenceCommandID *string
+	Status            Status
+	Baseline          *Baseline
+	CreatedBy         string
 	// UpdatedBy is who last implemented, refitted or ended the measure.
 	UpdatedBy string
 	CreatedAt time.Time
@@ -90,29 +92,44 @@ type HourlySource interface {
 	HourlySamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]HourSample, error)
 }
 
-// SiteTariff is the Site's import Tariff in effect, with the Site clock it prices on.
-type SiteTariff struct {
+// SiteClock is the Site's timezone, which days are verified on, and the import Tariff in effect,
+// which prices hours on its own timezone as Settlement does; Tariff is nil when none is assigned and
+// every hour then goes unpriced.
+type SiteClock struct {
+	Location *time.Location
+	Tariff   *ImportTariff
+}
+
+// ImportTariff is the energy rate periods of the Tariff Version in effect, on the version's clock.
+type ImportTariff struct {
 	Location *time.Location
 	Periods  []TariffPeriod
 }
 
-type TariffSource interface {
-	ImportTariff(ctx context.Context, tenantID, siteID string) (SiteTariff, error)
+func (clock SiteClock) rates() func(time.Time) (float64, bool) {
+	if clock.Tariff == nil {
+		return func(time.Time) (float64, bool) { return 0, false }
+	}
+	return TariffRates(clock.Tariff.Periods, clock.Tariff.Location)
+}
+
+type ClockSource interface {
+	SiteClock(ctx context.Context, tenantID, siteID string) (SiteClock, error)
 }
 
 type Service struct {
 	store   Store
 	history HourlySource
-	tariffs TariffSource
+	clocks  ClockSource
 	now     func() time.Time
 	newID   func(time.Time) (string, error)
 }
 
-func NewService(store Store, history HourlySource, tariffs TariffSource, now func() time.Time, newID func(time.Time) (string, error)) (*Service, error) {
-	if store == nil || history == nil || tariffs == nil || now == nil || newID == nil {
-		return nil, errors.New("savings verification needs a store, an hourly source, a tariff source, a clock and an id source")
+func NewService(store Store, history HourlySource, clocks ClockSource, now func() time.Time, newID func(time.Time) (string, error)) (*Service, error) {
+	if store == nil || history == nil || clocks == nil || now == nil || newID == nil {
+		return nil, errors.New("savings verification needs a store, an hourly source, a Site clock source, a time source and an id source")
 	}
-	return &Service{store: store, history: history, tariffs: tariffs, now: now, newID: newID}, nil
+	return &Service{store: store, history: history, clocks: clocks, now: now, newID: newID}, nil
 }
 
 type MeasureInput struct {
@@ -125,6 +142,7 @@ type MeasureInput struct {
 	InvestmentCNY     *float64
 	ExpectedAnnualKWh *float64
 	Evidence          string
+	EvidenceCommandID *string
 	Actor             string
 }
 
@@ -137,6 +155,8 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: name must be 1–100 characters", ErrInvalidMeasure)
 	case utf8.RuneCountInString(input.Description) > 2000 || utf8.RuneCountInString(input.Evidence) > 200:
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
+	case input.EvidenceCommandID != nil && !uuidPattern.MatchString(*input.EvidenceCommandID):
+		return fmt.Errorf("%w: the cited command must be a UUID", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
 	case (input.InvestmentCNY != nil && *input.InvestmentCNY < 0) || (input.ExpectedAnnualKWh != nil && *input.ExpectedAnnualKWh < 0):
@@ -162,7 +182,7 @@ func (service *Service) Register(ctx context.Context, input MeasureInput) (Measu
 	measure := Measure{
 		ID: id, TenantID: input.TenantID, SiteID: input.SiteID, Name: strings.TrimSpace(input.Name), Kind: input.Kind,
 		Description: strings.TrimSpace(input.Description), PlannedAt: input.PlannedAt.UTC(),
-		InvestmentCNY: input.InvestmentCNY, ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence,
+		InvestmentCNY: input.InvestmentCNY, ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID,
 		Status: StatusPlanned, CreatedBy: input.Actor, UpdatedBy: input.Actor, CreatedAt: now, UpdatedAt: now,
 	}
 	return measure, service.store.InsertMeasure(ctx, measure)
@@ -271,25 +291,25 @@ func (service *Service) VerifyDay(ctx context.Context, measure Measure, dayStart
 	if !measure.verifiable() {
 		return ErrWrongStatus
 	}
-	tariff, err := service.tariffs.ImportTariff(ctx, measure.TenantID, measure.SiteID)
+	clock, err := service.clocks.SiteClock(ctx, measure.TenantID, measure.SiteID)
 	if err != nil {
-		return fmt.Errorf("read import tariff: %w", err)
+		return fmt.Errorf("read Site clock: %w", err)
 	}
-	return service.verifyDay(ctx, measure, tariff, dayStart.In(tariff.Location))
+	return service.verifyDay(ctx, measure, clock, dayStart.In(clock.Location))
 }
 
-func (service *Service) verifyDay(ctx context.Context, measure Measure, tariff SiteTariff, local time.Time) error {
+func (service *Service) verifyDay(ctx context.Context, measure Measure, clock SiteClock, local time.Time) error {
 	dayEnd := local.AddDate(0, 0, 1)
 	if measure.EndedAt != nil && measure.EndedAt.Before(dayEnd) {
 		// The hour a measure ends in is not wholly its own, so verification stops at its start.
-		ended := measure.EndedAt.In(tariff.Location)
-		dayEnd = time.Date(ended.Year(), ended.Month(), ended.Day(), ended.Hour(), 0, 0, 0, tariff.Location)
+		ended := measure.EndedAt.In(clock.Location)
+		dayEnd = time.Date(ended.Year(), ended.Month(), ended.Day(), ended.Hour(), 0, 0, 0, clock.Location)
 	}
 	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, local, dayEnd)
 	if err != nil {
 		return fmt.Errorf("read reporting hours: %w", err)
 	}
-	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), TariffRates(tariff.Periods, tariff.Location))
+	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), clock.rates())
 	return service.store.InsertDailyResult(ctx, DailyResult{
 		MeasureID: measure.ID, TenantID: measure.TenantID, SiteID: measure.SiteID,
 		Day: local.Format(time.DateOnly), DayResult: result, VerifiedAt: service.now().UTC(),
@@ -303,17 +323,17 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 	if err != nil {
 		return err
 	}
-	var tariff *SiteTariff
+	var clock *SiteClock
 	for _, measure := range measures {
 		if !measure.verifiable() {
 			continue
 		}
-		if tariff == nil {
-			imported, err := service.tariffs.ImportTariff(ctx, tenantID, siteID)
+		if clock == nil {
+			read, err := service.clocks.SiteClock(ctx, tenantID, siteID)
 			if err != nil {
-				return fmt.Errorf("read import tariff: %w", err)
+				return fmt.Errorf("read Site clock: %w", err)
 			}
-			tariff = &imported
+			clock = &read
 		}
 		results, err := service.store.DailyResults(ctx, tenantID, siteID, measure.ID)
 		if err != nil {
@@ -323,8 +343,8 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 		for _, result := range results {
 			verified[result.Day] = true
 		}
-		reporting := measure.ImplementedAt.Add(StabilizationPeriod).In(tariff.Location)
-		day := time.Date(reporting.Year(), reporting.Month(), reporting.Day(), 0, 0, 0, 0, tariff.Location)
+		reporting := measure.ImplementedAt.Add(StabilizationPeriod).In(clock.Location)
+		day := time.Date(reporting.Year(), reporting.Month(), reporting.Day(), 0, 0, 0, 0, clock.Location)
 		for ; !day.AddDate(0, 0, 1).After(until.Add(-SettlingDelay)); day = day.AddDate(0, 0, 1) {
 			if measure.EndedAt != nil && !day.Before(*measure.EndedAt) {
 				break
@@ -332,7 +352,7 @@ func (service *Service) VerifyDueDays(ctx context.Context, tenantID, siteID stri
 			if verified[day.Format(time.DateOnly)] {
 				continue
 			}
-			if err := service.verifyDay(ctx, measure, *tariff, day); err != nil {
+			if err := service.verifyDay(ctx, measure, *clock, day); err != nil {
 				return fmt.Errorf("verify %s for measure %s: %w", day.Format(time.DateOnly), measure.ID, err)
 			}
 		}
@@ -347,7 +367,9 @@ func (measure Measure) verifiable() bool {
 
 // Totals sums verified days.
 type Totals struct {
-	Days                int
+	Days int
+	// UnpricedHours were verified without an energy rate, so their avoided cost is not counted.
+	UnpricedHours       int
 	AdjustedBaselineKWh float64
 	ActualKWh           float64
 	AvoidedKWh          float64
@@ -361,6 +383,7 @@ func totalOf(days []DailyResult) Totals {
 		totals.ActualKWh += day.ActualKWh
 		totals.AvoidedKWh += day.AvoidedKWh
 		totals.AvoidedCost += day.AvoidedCost
+		totals.UnpricedHours += day.UnpricedHours
 	}
 	return totals
 }
