@@ -14,7 +14,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | --- | --- | --- |
 | 总览 | `/overview` | energy series, realtime plant, alarms, FDD, work orders, optimization, tariff |
 | 监测 | 实时运行, 设备 | telemetry snapshots/push, Registry asset model, device history |
-| 能源 | 能耗分析, 需量分析 | analytics energy series, device-series quarter-hour aggregates, Site tariff |
+| 能源 | 能耗分析, 分项能耗, 需量分析 | analytics energy series, device-series hourly/quarter-hour aggregates, Site tariff |
 | 能源 | 负荷预测, 优化建议 | forecast service, optimization service |
 | 运维 | 告警, 故障诊断, 工单, 控制指令 | alarm, FDD (scheduled every 15 min), work orders, command governance |
 | 平台 | 通知, 集成管理, 系统管理 | notification inbox, gateway credentials, IAM/Registry/rules/audit |
@@ -42,7 +42,9 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 Roadmap issues, in order:
 
-1. **#481 — breakdown/Sankey.** Energy by system: chiller, pumps and towers.
+1. **#481 — breakdown, second half.** The first version is live: `/energy-analysis/breakdown`. It estimates each machine's energy from its hourly power and shows the meter's remainder as 未分项. Still to do:
+   - give machines their own energy meters, i.e. counters plus energy nodes in the simulator and the Registry;
+   - let `/analytics/energy-series` split by node, so the page reads metered energy instead of estimates.
 2. **#483 — reports.** Daily, monthly and export.
 3. **#484 — measured savings (M&V).** Needs a baseline model; the overview and optimization pages already say measured savings are not yet available.
 4. **#485 — benchmarking.**

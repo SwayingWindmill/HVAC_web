@@ -52,6 +52,14 @@ function replayDemand(recorded: Json, query: Json): Json {
   return { ...response, buckets, metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length } };
 }
 
+// A machine's recorded hours of power, moved onto the requested day.
+function replayMachineHours(recorded: Json, query: Json): Json {
+  const response = recorded.byDevice[query.deviceId];
+  const shift = Date.parse(query.from) - Date.parse(recorded.recordedFrom);
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  return { ...response, buckets: response.buckets.map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) })) };
+}
+
 // Recorded findings are replayed as if the last diagnosis had just run.
 function replayFindings(findings: Json[], now: string): Json[] {
   const shift = Date.parse(now) - Math.max(...findings.map((finding) => Date.parse(finding.evaluationTo)));
@@ -168,7 +176,9 @@ export class Gateway {
     }
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
-      return { body: body?.granularity === 'QUARTER_HOUR' ? replayDemand(fixture<Json>('demand-quarter-hours.json'), body) : fixture('history.json') };
+      if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
+      return { body: fixture('history.json') };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
