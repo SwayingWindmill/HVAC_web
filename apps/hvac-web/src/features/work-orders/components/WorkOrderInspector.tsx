@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { Fact } from '@/components/common/Fact';
+import { FactList, FactRow } from '@/blocks/fact-list';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -121,7 +121,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
 
   return (
     <Sheet modal={false} open={Boolean(workOrderId)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent showOverlay={false} className="w-[480px] overflow-y-auto sm:max-w-[480px]">
+      <SheetContent showOverlay={false} className="overflow-y-auto">
         {!workOrder ? (
           <div className="p-4">
             {detail.isError ? <p className="text-sm text-destructive">{workOrderErrorMessage(detail.error)}</p> : <Skeleton className="h-64" />}
@@ -138,9 +138,9 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
             </SheetHeader>
 
             <div className="space-y-5 px-4 pb-6">
-              <dl className="divide-y rounded-lg border px-3">
-                <Fact label="负责人">{workOrder.assigneeId ? personLabel(workOrder.assigneeId, myId) : '未指派'}</Fact>
-                <Fact label="来源">
+              <FactList>
+                <FactRow label="负责人">{workOrder.assigneeId ? personLabel(workOrder.assigneeId, myId) : '未指派'}</FactRow>
+                <FactRow label="来源">
                   {alarmSource ? (
                     <Link to="/operations/alarms" search={{ site: site.id, view: 'all', inspect: alarmSource.resourceId }} className="hover:underline">
                       查看来源告警
@@ -150,15 +150,15 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                       {sourceDevice.name}
                     </Link>
                   ) : '人工创建'}
-                </Fact>
-                <Fact label="检查项">{workOrder.tasks.total > 0 ? `${workOrder.tasks.completed} / ${workOrder.tasks.total} 已完成` : '无'}</Fact>
-                <Fact label="计划开始">{formatTime(workOrder.scheduledStart, site.timezone)}</Fact>
-                <Fact label="截止">{formatTime(workOrder.dueAt, site.timezone)}</Fact>
-                <Fact label="创建">{formatTime(workOrder.createdAt, site.timezone)}</Fact>
+                </FactRow>
+                <FactRow label="检查项">{workOrder.tasks.total > 0 ? `${workOrder.tasks.completed} / ${workOrder.tasks.total} 已完成` : '无'}</FactRow>
+                <FactRow label="计划开始">{formatTime(workOrder.scheduledStart, site.timezone)}</FactRow>
+                <FactRow label="截止">{formatTime(workOrder.dueAt, site.timezone)}</FactRow>
+                <FactRow label="创建">{formatTime(workOrder.createdAt, site.timezone)}</FactRow>
                 {workOrder.completionEvidence.map((evidence) => (
-                  <Fact key={`${evidence.kind}-${evidence.capturedAt}`} label="处理结果">{evidence.reference}</Fact>
+                  <FactRow key={`${evidence.kind}-${evidence.capturedAt}`} label="处理结果">{evidence.reference}</FactRow>
                 ))}
-              </dl>
+              </FactList>
 
               <section className="space-y-2">
                 {pendingAction?.note ? (

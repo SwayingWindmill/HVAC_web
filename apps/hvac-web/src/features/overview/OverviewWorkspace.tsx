@@ -1,3 +1,4 @@
+import { FactTile } from "@/blocks/fact-list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, CircleCheck, PiggyBank, RefreshCw } from "lucide-react";
@@ -160,15 +161,6 @@ function equipmentLead(status: EquipmentStatus): string {
   return issues.length > 0 ? issues.join("，") : "没有故障或离线设备";
 }
 
-function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-lg font-semibold tracking-tight">{children}</dd>
-    </div>
-  );
-}
-
 function LivePlant({ plant, registryState, siteId, timeZone }: {
   readonly plant: PlantView;
   readonly registryState: "pending" | "error" | "success";
@@ -192,12 +184,12 @@ function LivePlant({ plant, registryState, siteId, timeZone }: {
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-5">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
-          <Fact label="瞬时制冷量"><ReadingValue reading={plant.coolingCapacity} /></Fact>
-          <Fact label="实时 COP">
+          <FactTile className="text-lg font-semibold tracking-tight" label="瞬时制冷量"><ReadingValue reading={plant.coolingCapacity} /></FactTile>
+          <FactTile className="text-lg font-semibold tracking-tight" label="实时 COP">
             {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatDecimal(plant.plantCop, 2)}</span>}
-          </Fact>
-          <Fact label="冷冻水供水"><ReadingValue reading={plantReading(plant, "btu_meter.supply_water_temperature")} /></Fact>
-          <Fact label="室内温度"><ReadingValue reading={plantReading(plant, "zone.temperature")} /></Fact>
+          </FactTile>
+          <FactTile className="text-lg font-semibold tracking-tight" label="冷冻水供水"><ReadingValue reading={plantReading(plant, "btu_meter.supply_water_temperature")} /></FactTile>
+          <FactTile className="text-lg font-semibold tracking-tight" label="室内温度"><ReadingValue reading={plantReading(plant, "zone.temperature")} /></FactTile>
         </dl>
         <Separator />
         <section aria-label="主要设备" className="flex flex-col gap-2.5">
@@ -291,14 +283,14 @@ function SavingOpportunity({ siteId, timeZone }: { readonly siteId: string; read
           <p className="text-muted-foreground">还没有优化建议。生成后，这里显示按建议调整供水温度预计每天能省多少电和电费。</p>
         ) : (
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Fact label="预计日节电">{formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh</Fact>
-            <Fact label="建议供水温度">
+            <FactTile className="text-lg font-semibold tracking-tight" label="预计日节电">{formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh</FactTile>
+            <FactTile className="text-lg font-semibold tracking-tight" label="建议供水温度">
               {changesSupply(recommendation)
                 ? `${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C`
                 : `保持 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C`}
-            </Fact>
-            <Fact label="预计室内温度">{formatDecimal(recommendation.candidate.projectedZoneTempC, 1)} °C</Fact>
-            <Fact label="生成于">{formatTime(recommendation.createdAt, timeZone)}</Fact>
+            </FactTile>
+            <FactTile className="text-lg font-semibold tracking-tight" label="预计室内温度">{formatDecimal(recommendation.candidate.projectedZoneTempC, 1)} °C</FactTile>
+            <FactTile className="text-lg font-semibold tracking-tight" label="生成于">{formatTime(recommendation.createdAt, timeZone)}</FactTile>
           </dl>
         )}
       </CardContent>

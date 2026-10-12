@@ -1,7 +1,8 @@
+import { FactList, FactRow } from "@/blocks/fact-list";
 import { Download, RefreshCw } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import { DataTableBlock } from "@/blocks/data-table";
 import { PageHeader } from "@/blocks/page-header";
 import { MetricTabsChartCard } from "@/components/metric-tabs-chart-card";
@@ -60,18 +61,6 @@ function ledgerColumns(previousLabel: string): ColumnDef<DataTableFeatures, Buck
   ];
 }
 
-function Fact({ label, children, detail }: { readonly label: string; readonly children: ReactNode; readonly detail?: ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-2.5">
-      <dt className="text-sm text-muted-foreground">{label}</dt>
-      <dd className="flex flex-col items-end gap-0.5 text-right">
-        <span className="font-medium tabular-nums">{children}</span>
-        {detail ? <span className="text-xs text-muted-foreground">{detail}</span> : null}
-      </dd>
-    </div>
-  );
-}
-
 function PeriodFacts({ current, previous, previousLabel, timeZone }: {
   readonly current: EnergySummary;
   readonly previous: EnergySummary;
@@ -89,20 +78,20 @@ function PeriodFacts({ current, previous, previousLabel, timeZone }: {
         <CardDescription>按站点当地时间统计</CardDescription>
       </CardHeader>
       <CardContent className="flex-1">
-        <dl className="divide-y">
-          <Fact label={`用电最高${noun}`} detail={current.peak ? `${formatDecimal(current.peak.electricityKWh!, 1)} kWh` : undefined}>
+        <FactList>
+          <FactRow label={`用电最高${noun}`} detail={current.peak ? `${formatDecimal(current.peak.electricityKWh!, 1)} kWh` : undefined}>
             {current.peak?.label ?? <span className="text-muted-foreground">—</span>}
-          </Fact>
-          <Fact label={`平均每${noun}用电`}>
+          </FactRow>
+          <FactRow label={`平均每${noun}用电`}>
             {average === null ? <span className="text-muted-foreground">—</span> : `${formatDecimal(average, 1)} kWh`}
-          </Fact>
-          <Fact label={`${previousLabel}用电`}>
+          </FactRow>
+          <FactRow label={`${previousLabel}用电`}>
             {before.value === null ? <span className="text-muted-foreground">—</span> : `${before.value} ${before.unit}`}
-          </Fact>
-          <Fact label="计量质量">
+          </FactRow>
+          <FactRow label="计量质量">
             {current.excludedIntervals > 0 ? `${current.excludedIntervals} 个区间未计入` : "全部有效"}
-          </Fact>
-        </dl>
+          </FactRow>
+        </FactList>
       </CardContent>
       <CardFooter className="border-t text-xs text-muted-foreground" data-testid="energy-freshness">
         {current.dataWatermark ? `数据截至 ${formatTime(current.dataWatermark, timeZone)}` : "本期间还没有计量数据"}

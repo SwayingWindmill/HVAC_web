@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BellRing, CheckCheck, CircleCheck, EyeOff, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { Fact } from '@/components/common/Fact';
+import { FactList, FactRow } from '@/blocks/fact-list';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -79,7 +79,7 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
 
   return (
     <Sheet modal={false} open={Boolean(alarmId)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent showOverlay={false} className="w-[480px] overflow-y-auto sm:max-w-[480px]">
+      <SheetContent showOverlay={false} className="overflow-y-auto">
         {!alarm ? (
           <div className="space-y-3 p-4">
             {detail.isError ? <p className="text-sm text-destructive">{detail.error.message}</p> : <Skeleton className="h-64" />}
@@ -96,29 +96,29 @@ export function AlarmInspector({ alarmId, deviceNames, onClose }: {
             </SheetHeader>
 
             <div className="space-y-5 px-4 pb-6">
-              <dl className="divide-y rounded-lg border px-3">
-                <Fact label="设备">
+              <FactList>
+                <FactRow label="设备">
                   {alarm.deviceId ? (
                     <Link to="/operations/systems-devices" search={{ site: site.id, inspect: alarm.deviceId }} className="hover:underline">
                       {deviceName ?? '查看设备'}
                     </Link>
                   ) : '站点级'}
-                </Fact>
-                <Fact label="开始时间">{formatTime(alarm.firstOccurredAt, site.timezone)}</Fact>
-                <Fact label={alarm.condition === 'CLEARED' ? '恢复时间' : '最近发生'}>
+                </FactRow>
+                <FactRow label="开始时间">{formatTime(alarm.firstOccurredAt, site.timezone)}</FactRow>
+                <FactRow label={alarm.condition === 'CLEARED' ? '恢复时间' : '最近发生'}>
                   {formatTime(alarm.clearedAt ?? alarm.lastOccurredAt, site.timezone)}
-                </Fact>
-                <Fact label="持续">{formatDuration(alarm.firstOccurredAt, alarm.clearedAt, Date.now())}</Fact>
-                <Fact label="发生次数">{alarm.occurrenceCount}</Fact>
-                {alarm.peakSeverity !== alarm.currentSeverity ? <Fact label="最高严重度">{SEVERITY_LABELS[alarm.peakSeverity]}</Fact> : null}
-                <Fact label="负责人">{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未认领'}</Fact>
-                <Fact label="确认">
+                </FactRow>
+                <FactRow label="持续">{formatDuration(alarm.firstOccurredAt, alarm.clearedAt, Date.now())}</FactRow>
+                <FactRow label="发生次数">{alarm.occurrenceCount}</FactRow>
+                {alarm.peakSeverity !== alarm.currentSeverity ? <FactRow label="最高严重度">{SEVERITY_LABELS[alarm.peakSeverity]}</FactRow> : null}
+                <FactRow label="负责人">{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未认领'}</FactRow>
+                <FactRow label="确认">
                   {alarm.acknowledgement
                     ? `${personLabel(alarm.acknowledgement.acknowledgedBy, myId)} · ${formatTime(alarm.acknowledgement.acknowledgedAt, site.timezone)}`
                     : '未确认'}
-                </Fact>
-                {alarm.acknowledgement?.comment ? <Fact label="确认说明">{alarm.acknowledgement.comment}</Fact> : null}
-              </dl>
+                </FactRow>
+                {alarm.acknowledgement?.comment ? <FactRow label="确认说明">{alarm.acknowledgement.comment}</FactRow> : null}
+              </FactList>
 
               <section className="space-y-2">
                 {!alarm.acknowledgement ? (
