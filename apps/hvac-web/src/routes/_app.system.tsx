@@ -8,7 +8,7 @@ import { useShellRuntime, useShellSnapshot } from '@/app/ShellRuntimeContext';
 import type { ProtectedScopeDraft } from '@/app/protected-scope';
 
 const systemSearchSchema = z.object({
-  tab: fallback(z.enum(['overview', 'users', 'site', 'registry', 'integrations', 'rules', 'audit']), 'overview').optional(),
+  tab: fallback(z.enum(['overview', 'users', 'site', 'registry', 'integrations', 'rules', 'audit', 'design']), 'overview').optional(),
 });
 
 export const Route = createFileRoute('/_app/system')({
