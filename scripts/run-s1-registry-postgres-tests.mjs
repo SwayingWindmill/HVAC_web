@@ -2027,12 +2027,12 @@ try {
   psql(`
     INSERT INTO core_registry.fdd_findings (
       id, tenant_id, site_id, asset_id, finding_type, evaluation_from, evaluation_to, evidence_ids,
-      model_deployment_revision_id, rule_revision_id, confidence, quality_blocker, alarm_id, work_order_id, created_at
+      observed_value, threshold_value, value_unit, model_deployment_revision_id, rule_revision_id, confidence, quality_blocker, alarm_id, work_order_id, created_at
     ) VALUES (
       '${fddFindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
       '018f1e00-3000-7000-8000-000000000001', 'CHILLED_WATER_LOW_DELTA_T',
       '2026-08-13T00:00:00Z', '2026-08-13T00:30:00Z', ARRAY['telemetry:chw_supply','telemetry:chw_return'],
-      NULL, 'low-delta-t/v1', 0.91, NULL, NULL, NULL, '2026-08-13T00:31:00Z'
+      3.1, 5, 'K', NULL, 'low-delta-t/v1', 0.91, NULL, NULL, NULL, '2026-08-13T00:31:00Z'
     );
   `);
 
