@@ -11,6 +11,7 @@ import {
   SlidersHorizontal,
   Stethoscope,
   TrendingUp,
+  Workflow,
 } from 'lucide-react';
 
 export interface AppNavigationGroup {
@@ -49,6 +50,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     label: '能源',
     items: [
       { id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart },
+      { id: 'analytics-breakdown', title: '分项能耗', path: '/energy-analysis/breakdown', icon: Workflow },
       { id: 'analytics-demand', title: '需量分析', path: '/energy-analysis/demand', icon: Gauge },
       { id: 'analytics-forecast', title: '负荷预测', path: '/energy-analysis/forecast', icon: TrendingUp },
       { id: 'analytics-optimization', title: '优化建议', path: '/energy-analysis/optimization', icon: Lightbulb },
