@@ -57,7 +57,7 @@ function principalResponse(overrides = {}) {
       delegationExpiresAt: '2026-07-28T00:00:00Z',
     },
     authorization: {
-      capabilitySetVersion: 12,
+      capabilitySetVersion: 13,
       policyRevision: 'registry-read:7',
       capabilities: ['site.list', 'site.read', 'work-order.list', 'work-order.read'],
     },
@@ -87,7 +87,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 12,
+      capabilitySetVersion: 13,
       policyRevision: 'registry-read:7',
       capabilities: ['site.read', 'site.read'],
     },
@@ -95,7 +95,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 12,
+      capabilitySetVersion: 13,
       policyRevision: 'registry-read:7',
       capabilities: ['role.admin'],
     },
