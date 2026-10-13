@@ -34,8 +34,9 @@ test('a closed month with a snapshot reads from it, and says what was not archiv
   await expect(report).toContainText('已存档');
   await expect(report).toContainText('覆盖 16 / 30 天');
   await expect(report).toContainText('空调用电72,697kWh上月未存档');
-  await expect(report).toContainText('峰时段电度电费29,820 kWh1.20 元/kWh35,784 元');
-  await expect(report).toContainText('用电最多的一天9/16 周三');
+  await expect(report).toContainText('峰时段电度电费29,820 kWh1.20 元/kWh');
+  await expect(report).toContainText('¥35,784');
+  await expect(report).toContainText(/用电最多的一天[\d,]+kWh9\/16 周三/);
   await expect(report.getByText('未存档，按当前记录现算').first()).toBeVisible();
 
   // The archived month's energy is the snapshot's, not read again from the series.
