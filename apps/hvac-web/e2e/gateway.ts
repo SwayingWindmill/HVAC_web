@@ -120,6 +120,8 @@ export class Gateway {
   analyticsDenied = false;
   /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
   energyByDay = false;
+  /** Telemetry fails the weather station's daily temperature. */
+  outdoorFailing = false;
   /** Machines whose sub-meter the recorded device breakdown leaves out. */
   unmeteredDeviceIds: readonly string[] = [];
   /** report-service's kept snapshots of closed months; a month without one answers 404. */
@@ -267,7 +269,10 @@ export class Gateway {
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
       if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
-      if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
+      if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
+        if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
+        return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
+      }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
       return { body: fixture('history.json') };
     }

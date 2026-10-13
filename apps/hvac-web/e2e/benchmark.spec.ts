@@ -60,3 +60,13 @@ test('sites also compare on electricity per square metre per cooling degree day'
     keys: ['ambient_dry_bulb_temperature'], granularity: 'DAY', timezone: 'Asia/Shanghai', from: expect.stringMatching(/T16:00:00\.000Z$/),
   }));
 });
+
+test('a site whose temperature cannot be read says so and keeps its other comparisons', async ({ page, gateway }) => {
+  gateway.energyByDay = true;
+  gateway.outdoorFailing = true;
+  await page.goto('/benchmark');
+  const row = page.getByRole('region', { name: '站点排名' }).getByRole('row', { name: /中央机房/ });
+  await expect(row.getByRole('cell').nth(6)).toHaveText('气温暂不可用');
+  await expect(row).toContainText('3.48');
+  await expect(page.getByRole('region', { name: '更多对标维度' })).toContainText('1 个站点气温暂不可用');
+});

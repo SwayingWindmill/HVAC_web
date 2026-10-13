@@ -28,14 +28,18 @@ const telemetry = createS2TelemetryClient();
 type BenchmarkPeriod = '7d' | 'month';
 const PERIODS = [{ value: '7d', label: '近 7 天' }, { value: 'month', label: '本月' }];
 type RankBy = 'cop' | 'intensity' | 'climate';
-const RANKINGS = [{ value: 'cop', label: '按综合能效' }, { value: 'intensity', label: '按单位面积用电' }, { value: 'climate', label: '按度日修正用电' }];
-const RANKING_TITLE: Record<RankBy, string> = { cop: '按冷站综合能效排名', intensity: '按单位面积用电排名', climate: '按度日修正用电排名' };
-const RANKING_NOTE: Record<RankBy, string> = {
-  cop: '综合能效越高，同样的冷量用电越少；与整体相比按电量加权的整体能效计算',
-  intensity: '期间空调用电 ÷ 建筑面积，越低越好；没有登记建筑面积的站点不参与此排名',
-  climate: `期间空调用电 ÷ 建筑面积 ÷ 冷却度日（日均室外温度高于 ${DEGREE_DAY_BASE_C} °C 的度数之和），越低越好；只算有气温记录的日子`,
+// Each ranking: its tab, the page's caption, the ranking card's note and the site's place in it.
+const RANKINGS: Record<RankBy, { label: string; title: string; note: string; place: (site: BenchmarkSite) => number | null }> = {
+  cop: { label: '按综合能效', title: '按冷站综合能效排名', note: '综合能效越高，同样的冷量用电越少；与整体相比按电量加权的整体能效计算', place: (site) => site.rank },
+  intensity: { label: '按单位面积用电', title: '按单位面积用电排名', note: '期间空调用电 ÷ 建筑面积，越低越好；没有登记建筑面积的站点不参与此排名', place: (site) => site.intensityRank },
+  climate: {
+    label: '按度日修正用电',
+    title: '按度日修正用电排名',
+    note: `期间空调用电 ÷ 建筑面积 ÷ 冷却度日（日均室外温度高于 ${DEGREE_DAY_BASE_C} °C 的度数之和），越低越好；只算有气温记录的日子`,
+    place: (site) => site.climateRank,
+  },
 };
-const placeOf = (site: BenchmarkSite, rankBy: RankBy) => (rankBy === 'cop' ? site.rank : rankBy === 'intensity' ? site.intensityRank : site.climateRank);
+const RANKING_TABS = Object.entries(RANKINGS).map(([value, ranking]) => ({ value, label: ranking.label }));
 const DRY_BULB_SOURCE_KEY = 'weather.ambient_dry_bulb_temperature';
 const SITE_COLORS = ['var(--chart-1)', 'var(--chart-3)', 'var(--chart-2)', 'var(--chart-4)', 'var(--chart-5)'];
 
@@ -67,22 +71,29 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
   });
 }
 
-/** Each Site's daily mean outdoor temperature at its weather station over the period; null for a Site without one. */
+/**
+ * Each Site's daily mean outdoor temperature at its weather station over the period: null for a Site
+ * without one, 'unavailable' when its temperature could not be read, which leaves the other Sites compared.
+ */
 function useOutdoorMeans(sites: readonly Site[], period: BenchmarkPeriod, csrfToken: string) {
   return useQuery({
     queryKey: ['benchmark', 'outdoor', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
-    queryFn: async ({ signal }) => new Map(await Promise.all(sites.map(async (site) => {
-      const model = (await client.getSiteAssetModel(site.id, { signal })).data;
-      const point = model.telemetryPoints.find((candidate) => candidate.sourceKey === DRY_BULB_SOURCE_KEY && candidate.status === 'ACTIVE');
-      if (!point) return [site.id, null] as const;
-      const { from, to } = periodWindow(period, new Date(), site.timezone);
-      const response = await telemetry.queryDeviceHistoryAggregate({
-        deviceId: point.reportingDeviceId, keys: [point.pointCode], from: from.toISOString(), to: to.toISOString(),
-        granularity: 'DAY', timezone: site.timezone, qualityPolicy: 'USABLE',
-      }, { csrfToken, signal });
-      const days = new Map(response.buckets.flatMap((bucket) => (bucket.gauge ? [[new Date(bucket.periodStart).toISOString(), bucket.gauge.average] as const] : [])));
-      return [site.id, days] as const;
+    queryFn: async ({ signal }) => new Map(await Promise.all(sites.map(async (site): Promise<readonly [string, ReadonlyMap<string, number> | null | 'unavailable']> => {
+      try {
+        const model = (await client.getSiteAssetModel(site.id, { signal })).data;
+        const point = model.telemetryPoints.find((candidate) => candidate.sourceKey === DRY_BULB_SOURCE_KEY && candidate.status === 'ACTIVE');
+        if (!point) return [site.id, null];
+        const { from, to } = periodWindow(period, new Date(), site.timezone);
+        const response = await telemetry.queryDeviceHistoryAggregate({
+          deviceId: point.reportingDeviceId, keys: [point.pointCode], from: from.toISOString(), to: to.toISOString(),
+          granularity: 'DAY', timezone: site.timezone, qualityPolicy: 'USABLE',
+        }, { csrfToken, signal });
+        return [site.id, new Map(response.buckets.flatMap((bucket) => (bucket.gauge ? [[new Date(bucket.periodStart).toISOString(), bucket.gauge.average] as const] : [])))];
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return [site.id, 'unavailable'];
+      }
     }))),
     refetchInterval: 5 * 60_000,
     retry: false,
@@ -99,7 +110,10 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   const outdoor = useOutdoorMeans(sites, period, snapshot.principal!.session.csrfToken);
   const result = useMemo(
     () => (summaries.data
-      ? benchmark(summaries.data.flatMap((site) => (site.summary ? [{ ...site, outdoorMeanC: outdoor.data?.get(site.siteId) ?? null, summary: site.summary }] : [])))
+      ? benchmark(summaries.data.flatMap((site) => {
+        const outdoorMeanC = outdoor.data?.get(site.siteId);
+        return site.summary ? [{ ...site, outdoorMeanC: outdoorMeanC instanceof Map ? outdoorMeanC : null, summary: site.summary }] : [];
+      }))
       : null),
     [summaries.data, outdoor.data],
   );
@@ -113,13 +127,15 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   const ranked = result?.sites.filter((site) => site.cop !== null) ?? [];
   // Sites with a place in the chosen ranking come first in its order; the rest keep the COP order.
   const listed = result
-    ? (rankBy === 'cop' ? result.sites : [...result.sites].sort((left, right) => (placeOf(left, rankBy) ?? Infinity) - (placeOf(right, rankBy) ?? Infinity)))
+    ? (rankBy === 'cop' ? result.sites : [...result.sites].sort((left, right) => (RANKINGS[rankBy].place(left) ?? Infinity) - (RANKINGS[rankBy].place(right) ?? Infinity)))
     : [];
   const withArea = result?.sites.filter((site) => site.floorAreaM2 !== null).length ?? 0;
-  const withStation = outdoor.data ? [...outdoor.data.values()].filter((days) => days !== null).length : null;
+  const stationOf = (siteId: string) => outdoor.data?.get(siteId);
+  const withStation = result?.sites.filter((site) => stationOf(site.siteId) instanceof Map).length ?? 0;
+  const unreadStations = result?.sites.filter((site) => stationOf(site.siteId) === 'unavailable').length ?? 0;
   const climateCell = (site: BenchmarkSite) => {
-    if (outdoor.isError) return <span className="text-muted-foreground">气温暂不可用</span>;
     if (!outdoor.data) return <span className="text-muted-foreground">—</span>;
+    if (stationOf(site.siteId) === 'unavailable') return <span className="text-muted-foreground">气温暂不可用</span>;
     const reason = site.degreeDays === null ? '未接入气象站' : site.floorAreaM2 === null ? '未登记建筑面积' : site.degreeDays === 0 ? '无供冷度日' : null;
     return (
       <>
@@ -137,7 +153,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
       <PageHeader
         title="站点对标"
         description="各授权站点的空调用电、供冷量与冷站综合能效对比"
-        meta={<PageMeta icon={<Trophy />}>{RANKING_TITLE[rankBy]}</PageMeta>}
+        meta={<PageMeta icon={<Trophy />}>{RANKINGS[rankBy].title}</PageMeta>}
         actions={<PeriodTabs aria-label="对比期间" options={PERIODS} value={period} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, period: value as BenchmarkPeriod }), replace: true })} />}
       />
 
@@ -175,9 +191,9 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
           <Card role="region" aria-label="站点排名" className="pb-0">
             <CardHeader>
               <CardTitle>站点排名</CardTitle>
-              <CardDescription>{RANKING_NOTE[rankBy]}</CardDescription>
+              <CardDescription>{RANKINGS[rankBy].note}</CardDescription>
               <CardAction>
-                <PeriodTabs aria-label="排名依据" options={RANKINGS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value as RankBy }), replace: true })} />
+                <PeriodTabs aria-label="排名依据" options={RANKING_TABS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value as RankBy }), replace: true })} />
               </CardAction>
             </CardHeader>
             <CardContent className="border-t px-0">
@@ -197,7 +213,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                 </TableHeader>
                 <TableBody>
                   {listed.map((site) => {
-                    const place = placeOf(site, rankBy);
+                    const place = RANKINGS[rankBy].place(site);
                     return (
                     <TableRow key={site.siteId}>
                       <TableCell>
@@ -285,9 +301,16 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
               <CardContent>
                 <FactList>
                   <FactRow label="单位面积用电" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`}><Badge variant="secondary" className="font-normal">已接入</Badge></FactRow>
-                  <FactRow label="气候修正" detail={withStation === null ? '读取各站点的气象站' : `${withStation} / ${sites.length} 个站点有气象站，按冷却度日（CDD${DEGREE_DAY_BASE_C}）修正`}>
-                    {withStation ? <Badge variant="secondary" className="font-normal">已接入</Badge> : <Badge variant="outline" className="font-normal">{outdoor.isError ? '暂不可用' : '未接入'}</Badge>}
-                  </FactRow>
+                  {outdoor.data ? (
+                    <FactRow
+                      label="气候修正"
+                      detail={`${withStation} / ${result.sites.length} 个站点有气象站，按冷却度日（CDD${DEGREE_DAY_BASE_C}）修正${unreadStations ? `；${unreadStations} 个站点气温暂不可用` : ''}`}
+                    >
+                      <Badge variant={withStation ? 'secondary' : 'outline'} className="font-normal">{withStation ? '已接入' : '未接入'}</Badge>
+                    </FactRow>
+                  ) : (
+                    <FactRow label="气候修正" detail="正在读取各站点的气象站"><Skeleton className="h-5 w-12" /></FactRow>
+                  )}
                   <FactRow label="行业基准" detail="需要可信的同类建筑基准数据"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
                 </FactList>
               </CardContent>

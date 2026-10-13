@@ -61,7 +61,7 @@ Roadmap issues, in order:
      - Accepted on replayed history: Site B's chilled water pump was cut from 50 Hz to 45 Hz on 2026-09-08 09:00 (`tools/eg8200-simulator/configs/replay-chwp-frequency-cut.json`). The baseline used 336/336 hours (the pump's power does not follow cooling, so the line is flat: 45 kWh/h); six days saved 1,646 kWh (27.1 %, as (45/50)³ predicts) and ¥1,256. Recorded as `e2e/fixtures/savings-measure-device-verified.json`.
      - A Site's savings rate is avoided ÷ (plant electricity over the verified hours + avoided), so measures on several machines add up.
    - Later: non-routine adjustments, demand savings, apportioning savings between measures.
-   2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP, by electricity per square metre, or by electricity per square metre per cooling degree day (spec `docs/specs/site-profile-benchmark.md`, 第二版). A Site's floor area and GB 50176 climate zone are its Registry profile, edited in 系统管理 → 注册中心.
+2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP, by electricity per square metre, or by electricity per square metre per cooling degree day (spec `docs/specs/site-profile-benchmark.md`, 第二版). A Site's floor area and GB 50176 climate zone are its Registry profile, edited in 系统管理 → 注册中心.
    - Degree days (CDD26) come from each Site's own weather station: the page reads its daily mean dry-bulb temperature (Device History aggregate, `DAY`) and sums the degrees above 26 °C. Move it into a daily Metric once reports or M&V need it too.
    - Still to do: a trusted industry baseline source; the page says 未接入 until there is one.
 
