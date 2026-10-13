@@ -17,9 +17,9 @@ export const savingsKeys = {
 
 // The owner's refusals, in the words of the operator who has to act on them.
 const REFUSALS: Record<string, string> = {
-  SAVINGS_REPORTING_OVERLAP: '同一测量边界上同一时间只能有一项措施在核算；冷站总表的措施与任何设备措施也不能同时核算，请先结束正在核算的措施',
-  SAVINGS_BOUNDARY_UNMETERED: '这台设备没有逐时用电指标，不能作为测量边界',
-  SAVINGS_BASELINE_LOCKED: '已发布核算结果，基线已冻结，不能重新拟合',
+  SAVINGS_REPORTING_OVERLAP: '同一块电表同一时间只能统计一项措施；用冷站总电表统计的措施，也不能和单台设备的措施同时统计，请先结束正在统计的措施',
+  SAVINGS_BOUNDARY_UNMETERED: '这台设备没有逐时用电数据，不能作为计量电表',
+  SAVINGS_BASELINE_LOCKED: '已发布统计结果，对比基线已固定，不能重新计算',
   SAVINGS_MEASURE_STATE_CONFLICT: '措施当前状态不允许此操作，请刷新后重试',
   SAVINGS_REQUEST_INVALID: '填写的内容不完整或超出范围，请检查后重试',
   SAVINGS_MANAGE_FORBIDDEN: '你没有管理本站节能项目的权限',
@@ -31,7 +31,7 @@ const path = (template: string, siteId: string, measureId = '') => template.repl
 async function read<T>(url: string, signal: AbortSignal): Promise<T> {
   const response = await fetch(url, { credentials: 'same-origin', signal, headers: accept });
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能核算服务暂时不可用');
+  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能统计服务暂时不可用');
   return payload as T;
 }
 
@@ -69,7 +69,7 @@ async function write(url: string, csrfToken: string, body: unknown): Promise<Mea
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能核算服务暂时不可用，请稍后重试');
+  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能统计服务暂时不可用，请稍后重试');
   return payload as Measure;
 }
 

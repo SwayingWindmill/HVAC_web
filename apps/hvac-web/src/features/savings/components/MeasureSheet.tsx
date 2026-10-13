@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { CircleCheck, CircleDashed, CircleX, Flag, RefreshCcw, Rocket } from 'lucide-react';
+import { CircleCheck, CircleDashed, CircleX, Flag, Link2, RefreshCcw, Rocket } from 'lucide-react';
 import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { toast } from 'sonner';
 import { FactTile } from '@/blocks/fact-list';
+import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useExecutedCommands } from '@/features/control/use-executed-commands';
@@ -34,19 +35,45 @@ const yuan = (value: number) => `¥${formatDecimal(value, 0)}`;
 function BaselineSection({ measure, timeZone }: { readonly measure: Measure; readonly timeZone: string }) {
   const baseline = measure.baseline;
   if (!baseline) {
-    return <p className="text-sm text-muted-foreground">确认实施后，系统用实施前 14 天的逐时用电与供冷量拟合基线并冻结。</p>;
+    return <p className="text-sm text-muted-foreground">确认实施后，系统用实施前 14 天的逐时用电与供冷量算出对比基线，之后不再变动。</p>;
   }
   return (
     <div className="flex flex-col gap-3">
       {baseline.trusted ? null : (
         <Alert variant="destructive">
           <CircleX />
-          <AlertTitle>基线不可信，暂不核算</AlertTitle>
-          <AlertDescription>{baseline.reason ? REASON_TEXT[baseline.reason] : '检验未通过'}。可换一段运行稳定、数据完整的时段重新拟合。</AlertDescription>
+          <AlertTitle>对比基线不可靠，暂不统计</AlertTitle>
+          <AlertDescription>{baseline.reason ? REASON_TEXT[baseline.reason] : '检验未通过'}。可换一段运行稳定、数据完整的时段重新计算。</AlertDescription>
         </Alert>
       )}
-      <p className="text-sm text-muted-foreground">
-        基线期 {formatTime(baseline.from, timeZone)} – {formatTime(baseline.to, timeZone)}
+      <Table aria-label="基线检验">
+        <TableHeader>
+          <TableRow>
+            <TableHead>检验项</TableHead>
+            <TableHead>要求</TableHead>
+            <TableHead className="text-right">结果</TableHead>
+            <TableHead className="w-12 text-center">通过</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {fitChecks(baseline).map((check) => (
+            <TableRow key={check.label} className="hover:bg-transparent">
+              <TableCell className="font-medium">{check.label}</TableCell>
+              <TableCell className="text-muted-foreground tabular-nums">{check.limit}</TableCell>
+              <TableCell className="text-right tabular-nums">{check.value}</TableCell>
+              <TableCell>
+                <span className="flex justify-center">
+                  {check.pass === null ? <CircleDashed aria-label="未检验" className="size-4 text-muted-foreground" />
+                    : check.pass ? <CircleCheck aria-label="通过" className="size-4 text-success" />
+                      : <CircleX aria-label="未通过" className="size-4 text-destructive" />}
+                </span>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <p className="text-xs text-muted-foreground">
+        对比基线期 <span className="font-mono">{formatTime(baseline.from, timeZone)} – {formatTime(baseline.to, timeZone)}</span>
         {baseline.model ? (
           <>
             ，逐时
@@ -56,30 +83,6 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
           </>
         ) : '，数据不足，未拟合模型'}
       </p>
-      <Table aria-label="基线检验" className="[&_td]:py-2">
-        <TableHeader>
-          <TableRow>
-            <TableHead>检验项</TableHead>
-            <TableHead className="text-right">结果</TableHead>
-            <TableHead className="text-right">要求</TableHead>
-            <TableHead className="w-8"><span className="sr-only">是否通过</span></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {fitChecks(baseline).map((check) => (
-            <TableRow key={check.label}>
-              <TableCell className="font-medium">{check.label}</TableCell>
-              <TableCell className="text-right tabular-nums">{check.value}</TableCell>
-              <TableCell className="text-right text-muted-foreground tabular-nums">{check.limit}</TableCell>
-              <TableCell>
-                {check.pass === null ? <CircleDashed aria-label="未检验" className="size-4 text-muted-foreground" />
-                  : check.pass ? <CircleCheck aria-label="通过" className="size-4 text-emerald-600 dark:text-emerald-400" />
-                    : <CircleX aria-label="未通过" className="size-4 text-destructive" />}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
     </div>
   );
 }
@@ -90,23 +93,14 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
     return (
       <p className="text-sm text-muted-foreground">
         {measure.status === 'PLANNED'
-          ? '实施后开始核算。'
-          : '实施后 24 小时为稳定期，不计入核算；之后每天 02:00 核算前一天，结果发布后不再改动。'}
+          ? '实施后开始统计。'
+          : '实施后 24 小时为稳定期，不计入统计；之后每天 02:00 统计前一天，结果发布后不再改动。'}
       </p>
     );
   }
-  const rate = savingsRate(measure.totals);
   return (
-    <div className="flex flex-col gap-4">
-      <dl className="grid grid-cols-3 gap-x-6 gap-y-4 text-sm">
-        <FactTile label="累计节电">{kwh(measure.totals.avoidedKWh)}</FactTile>
-        <FactTile label="节省电费">
-          {yuan(measure.totals.avoidedCost)}
-          {measure.totals.unpricedHours > 0 ? <span className="block text-xs font-normal text-muted-foreground">{costBasis(measure.totals)}</span> : null}
-        </FactTile>
-        <FactTile label="节电率">{rate === null ? '—' : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
-      </dl>
-      <ChartContainer config={dayConfig} className="aspect-auto h-[200px] w-full" aria-label="每日节电量">
+    <div className="flex flex-col gap-3">
+      <ChartContainer config={dayConfig} className="aspect-auto h-[180px] w-full" aria-label="每日节电量">
         <BarChart data={[...rows]} margin={{ left: 4, right: 8, top: 8 }}>
           <CartesianGrid vertical={false} />
           <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
@@ -118,24 +112,24 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
           </Bar>
         </BarChart>
       </ChartContainer>
-      <Table aria-label="逐日核算" className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+      <Table aria-label="逐日核算">
         <TableHeader>
           <TableRow>
             <TableHead>日期</TableHead>
-            <TableHead className="text-right">调整后基线</TableHead>
+            <TableHead className="text-right">没做措施时预计</TableHead>
             <TableHead className="text-right">实际</TableHead>
             <TableHead className="text-right">节电</TableHead>
-            <TableHead className="text-right">数据覆盖</TableHead>
+            <TableHead className="text-right">完整度</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {[...rows].reverse().map((row) => (
-            <TableRow key={row.day}>
-              <TableCell className="tabular-nums">{row.day}</TableCell>
+            <TableRow key={row.day} className="hover:bg-transparent">
+              <TableCell className="font-mono text-xs">{row.day}</TableCell>
               <TableCell className="text-right tabular-nums">{formatDecimal(row.adjusted, 0)}</TableCell>
               <TableCell className="text-right tabular-nums">{formatDecimal(row.actual, 0)}</TableCell>
-              <TableCell className={cn('text-right font-medium tabular-nums', row.avoided < 0 && 'text-destructive')}>{formatDecimal(row.avoided, 0)}</TableCell>
-              <TableCell className={cn('text-right tabular-nums', row.coverage < 0.9 && 'text-amber-700 dark:text-amber-300')}>{formatDecimal(row.coverage * 100, 0)}%</TableCell>
+              <TableCell className={cn('text-right font-semibold tabular-nums', row.avoided < 0 && 'text-destructive-text')}>{formatDecimal(row.avoided, 0)}</TableCell>
+              <TableCell className={cn('text-right tabular-nums', row.coverage < 0.9 && 'text-warning-text')}>{formatDecimal(row.coverage * 100, 0)}%</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -148,14 +142,14 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
 function Evidence({ measure }: { readonly measure: Measure }) {
   const { site } = siteRoute.useRouteContext();
   const commands = useExecutedCommands(site.id, site.timezone, measure.evidenceCommandId !== null);
-  if (measure.evidenceCommandId === null) return <>{measure.evidence || '—'}</>;
+  if (measure.evidenceCommandId === null) return <span className="text-secondary-foreground">{measure.evidence || '无关联指令'}</span>;
   const cited = commands.executed.find((command) => command.commandId === measure.evidenceCommandId);
   return (
     <span className="flex flex-col gap-0.5">
-      <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="hover:underline">
+      <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="text-primary hover:underline">
         {cited ? cited.description : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
       </Link>
-      {measure.evidence ? <span className="text-xs font-normal text-muted-foreground">{measure.evidence}</span> : null}
+      {measure.evidence ? <span className="text-xs text-muted-foreground">{measure.evidence}</span> : null}
     </span>
   );
 }
@@ -193,9 +187,9 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
     onSuccess: (updated) => {
       queryClient.setQueryData(savingsKeys.measure(site.id, updated.id), updated);
       void queryClient.invalidateQueries({ queryKey: savingsKeys.all(site.id) });
-      if (action === 'end') toast.success('措施已结束，此后不再核算');
-      else if (updated.baseline?.trusted) toast.success('基线已冻结，检验通过');
-      else toast.warning('基线检验未通过，暂不核算');
+      if (action === 'end') toast.success('措施已结束，此后不再统计');
+      else if (updated.baseline?.trusted) toast.success('对比基线已算出，检验通过');
+      else toast.warning('对比基线检验未通过，暂不统计');
       setAction(null);
     },
   });
@@ -205,13 +199,13 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
   const dialogs: Record<MeasureAction, { title: string; description: string; confirm: string; fields: { id: string; label: string; initial: string }[] }> = {
     implement: {
       title: '确认实施',
-      description: '按站点当地时间填写措施实际生效的时间。系统读取此前 14 天的逐时数据拟合基线并冻结；同一站点同一时间只能有一项措施在核算。',
+      description: '按站点当地时间填写措施实际生效的时间。系统用此前 14 天的逐时数据算出对比基线，之后不再变动；同一块电表同一时间只能统计一项措施。',
       confirm: '确认实施并拟合基线',
       fields: [{ id: 'at', label: '实施时间', initial: now }],
     },
     refit: {
       title: '重新拟合基线',
-      description: '换一段实施前、运行稳定且数据完整的时段，至少 72 个小时。发布第一天核算结果后基线冻结，不能再改。',
+      description: '换一段实施前、运行稳定且数据完整的时段，至少 72 个小时。发布第一天统计结果后对比基线固定，不能再改。',
       confirm: '重新拟合',
       fields: [
         { id: 'from', label: '基线开始', initial: implementedAt ? siteInputValue(new Date(implementedAt.getTime() - 7 * 86_400_000), tz) : now },
@@ -220,67 +214,102 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
     },
     end: {
       title: '结束措施',
-      description: '结束后不再核算，已发布的逐日结果保留。之后可以实施下一项措施。',
+      description: '结束后不再统计节电，已发布的每日结果保留。之后可以实施下一项措施。',
       confirm: '结束措施',
       fields: [{ id: 'at', label: '结束时间', initial: now }],
     },
   };
   const dialog = action ? dialogs[action] : null;
+  const rate = measure ? savingsRate(measure.totals) : null;
+  const copyLink = () => {
+    void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
+  };
 
   return (
     <Sheet open={Boolean(measureId)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[640px]">
+      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[600px]">
         {detail.isPending ? (
-          <div className="flex flex-col gap-4 p-4"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-64" /></div>
+          <div className="flex flex-col gap-4 p-6"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-64" /></div>
         ) : detail.isError || !measure ? (
-          <SheetHeader>
+          <SheetHeader className="px-6 pt-5">
             <SheetTitle>节能措施</SheetTitle>
-            <SheetDescription>{detail.error instanceof SavingsRequestError ? detail.error.message : '措施暂不可用'}</SheetDescription>
+            <SheetDescription>{detail.error instanceof SavingsRequestError ? detail.error.message : '措施暂时读不到'}</SheetDescription>
           </SheetHeader>
         ) : (
           <>
-            <SheetHeader>
-              <div className="flex items-center gap-2">
-                <SheetTitle>{measure.name}</SheetTitle>
+            <SheetHeader className="gap-2 border-b border-divider px-6 pt-5 pb-4">
+              <div className="flex items-center gap-2 pr-8 text-xs">
                 <MeasureStatusBadge measure={measure} />
+                <span className="text-muted-foreground">{KIND_LABEL[measure.kind]}</span>
+                <Button variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground" aria-label="复制链接" onClick={copyLink}><Link2 className="size-3.5" /></Button>
               </div>
-              <SheetDescription>{KIND_LABEL[measure.kind]}{measure.description ? ` · ${measure.description}` : ''}</SheetDescription>
+              <SheetTitle>{measure.name}</SheetTitle>
+              <SheetDescription className="flex flex-col gap-0.5">
+                {measure.description ? <span>{measure.description}</span> : null}
+                <span className="text-xs">
+                  按 {boundaryLabel(measure.boundaryDeviceId, names)} 统计 · {measure.implementedAt
+                    ? <>实施于 <span className="font-mono">{formatTime(measure.implementedAt, tz)}</span></>
+                    : <>计划 <span className="font-mono">{formatTime(measure.plannedAt, tz)}</span></>}
+                  {measure.endedAt ? <> · 结束于 <span className="font-mono">{formatTime(measure.endedAt, tz)}</span></> : null}
+                </span>
+              </SheetDescription>
             </SheetHeader>
-            <div className="flex flex-col gap-8 px-4 pb-8">
-              <dl className="grid grid-cols-3 gap-x-6 gap-y-4 text-sm">
-                <FactTile label="计划实施">{formatTime(measure.plannedAt, tz)}</FactTile>
-                <FactTile label="实际实施">{formatTime(measure.implementedAt ?? undefined, tz)}</FactTile>
-                <FactTile label="结束">{formatTime(measure.endedAt ?? undefined, tz)}</FactTile>
-                <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
-                <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
-                <FactTile label="测量边界">{boundaryLabel(measure.boundaryDeviceId, names)}</FactTile>
-                <div className="col-span-3"><FactTile label="依据"><Evidence measure={measure} /></FactTile></div>
-              </dl>
+            <div className="flex flex-col">
+              <section aria-label="成效" className="flex flex-col gap-3 border-b border-divider px-6 py-4">
+                <h3 className="text-sm font-semibold">成效</h3>
+                <dl className="grid grid-cols-4 gap-x-5 gap-y-3 text-sm">
+                  <FactTile label="累计节电">{measure.totals.days > 0 ? kwh(measure.totals.avoidedKWh) : '—'}</FactTile>
+                  <FactTile label="节电率">{rate === null ? '—' : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
+                  <FactTile label="节省电费">
+                    {measure.totals.days > 0 ? yuan(measure.totals.avoidedCost) : '—'}
+                    {measure.totals.unpricedHours > 0 ? <span className="block text-xs font-normal text-muted-foreground">{costBasis(measure.totals)}</span> : null}
+                  </FactTile>
+                  <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
+                  <FactTile label="计量电表">{boundaryLabel(measure.boundaryDeviceId, names)}</FactTile>
+                  <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
+                  <FactTile label="已统计">{measure.totals.days > 0 ? `${measure.totals.days} 天` : '—'}</FactTile>
+                </dl>
+              </section>
 
-              {canManage && measureActions(measure).length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {measureActions(measure).map((next, index) => {
-                    const { label, icon: Icon } = ACTION[next];
-                    return (
-                      <Button key={next} size="sm" variant={index === 0 && next !== 'end' ? 'default' : 'outline'} onClick={() => { step.reset(); setAction(next); }}>
-                        <Icon data-icon="inline-start" />
-                        {label}
-                      </Button>
-                    );
-                  })}
-                </div>
-              ) : null}
-
-              <section aria-label="基线" className="flex flex-col gap-3">
-                <h3 className="text-sm font-medium">基线（{ipmvpOption(measure.boundaryDeviceId)} · {boundaryLabel(measure.boundaryDeviceId, names)}）</h3>
+              <section aria-label="基线" className="flex flex-col gap-3 border-b border-divider px-6 py-4">
+                <h3 className="flex items-center gap-2 text-sm font-semibold">
+                  对比基线是否可靠
+                  {measure.baseline ? (
+                    <span className={cn('rounded-md px-1.5 text-xs leading-5 font-medium', measure.baseline.trusted ? 'bg-success-soft text-success-text' : 'bg-warning-soft text-warning-text')}>
+                      {measure.baseline.trusted ? '通过' : '未通过'}
+                    </span>
+                  ) : null}
+                  <InfoTip>实施后，系统用实施前 14 天的用电与供冷数据，算出“没做这项措施时会用多少电”作为对比基线，之后不再变动</InfoTip>
+                  <span className="ml-auto text-xs font-normal text-muted-foreground">{ipmvpOption(measure.boundaryDeviceId)} · {boundaryLabel(measure.boundaryDeviceId, names)}</span>
+                </h3>
                 <BaselineSection measure={measure} timeZone={tz} />
               </section>
 
-              <section aria-label="逐日核算" className="flex flex-col gap-3">
-                <h3 className="text-sm font-medium">逐日核算</h3>
+              <section aria-label="逐日核算" className="flex flex-col gap-3 border-b border-divider px-6 py-4">
+                <h3 className="flex items-center gap-2 text-sm font-semibold">每日节电<span className="text-xs font-normal text-muted-foreground">每天 02:00 统计前一天 · kWh</span></h3>
                 <VerifiedDays measure={measure} />
               </section>
+
+              <section aria-label="依据" className="flex flex-col gap-1.5 px-6 py-4 text-sm">
+                <h3 className="font-semibold">依据</h3>
+                <Evidence measure={measure} />
+              </section>
             </div>
+
+            {canManage && measureActions(measure).length > 0 ? (
+              <SheetFooter className="mt-auto flex-row flex-wrap items-center gap-2 border-t border-divider px-6 py-3">
+                {measureActions(measure).map((next, index) => {
+                  const { label, icon: Icon } = ACTION[next];
+                  return (
+                    <Button key={next} size="sm" variant={index === 0 && next !== 'end' ? 'default' : 'outline'} onClick={() => { step.reset(); setAction(next); }}>
+                      <Icon data-icon="inline-start" />
+                      {label}
+                    </Button>
+                  );
+                })}
+                {measureActions(measure).includes('end') ? <span className="text-xs text-muted-foreground">结束后不再统计节电</span> : null}
+              </SheetFooter>
+            ) : null}
             {dialog ? (
               <MeasureTimeDialog
                 open
@@ -290,7 +319,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
                 fields={dialog.fields}
                 confirmLabel={dialog.confirm}
                 pending={step.isPending}
-                error={step.isError ? (step.error instanceof SavingsRequestError ? step.error.message : '节能核算服务暂时不可用，请稍后重试') : null}
+                error={step.isError ? (step.error instanceof SavingsRequestError ? step.error.message : '节能统计服务暂时不可用，请稍后重试') : null}
                 onConfirm={(values) => step.mutate(values)}
               />
             ) : null}

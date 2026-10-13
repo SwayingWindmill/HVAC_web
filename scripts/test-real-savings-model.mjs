@@ -46,9 +46,9 @@ test("a Site's savings rate is avoided energy over what the plant would have use
 });
 
 test("a measurement boundary is the plant meter or a machine's sub-meter, named as the plant page names it", () => {
-  assert.equal(boundaryLabel(null, null), '冷站总表');
-  assert.equal(boundaryLabel('chwp', new Map([['chwp', 'CHWP-01']])), 'CHWP-01 分表');
-  assert.equal(boundaryLabel('chwp', null), '设备分表');
+  assert.equal(boundaryLabel(null, null), '冷站总电表');
+  assert.equal(boundaryLabel('chwp', new Map([['chwp', 'CHWP-01']])), 'CHWP-01 电表');
+  assert.equal(boundaryLabel('chwp', null), '设备电表');
 });
 
 test('the summary runs from the first of the Site month to the Site day', () => {
