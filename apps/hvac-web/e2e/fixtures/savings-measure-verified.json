@@ -1,5 +1,5 @@
 {
-  "id": "01a1301d-313b-79d2-96d5-a1d275de142a",
+  "id": "01a13485-8ca3-7a8a-9467-c2506b046961",
   "siteId": "018f3e00-1000-7000-8000-000000000001",
   "name": "冷冻水供水温度由 7 °C 提高到 8 °C",
   "kind": "SETPOINT_RESET",
@@ -19,21 +19,21 @@
     "samples": 336,
     "expectedHours": 336,
     "model": {
-      "interceptKWh": 92.37338490825242,
-      "slope": 0.17537569537837105,
-      "cvRmse": 0.005733689595961938,
-      "nmbe": 2.989835308681889e-17
+      "interceptKWh": 93.93659713868264,
+      "slope": 0.1753782906578097,
+      "cvRmse": 0.005736748618540521,
+      "nmbe": 3.725514319899206e-17
     },
     "trusted": true
   },
   "totals": {
     "days": 6,
     "unpricedHours": 0,
-    "adjustedBaselineKWh": 25151.85863317232,
-    "actualKWh": 24784.75837600004,
-    "avoidedKWh": 367.1002571722795,
-    "avoidedCost": 347.0927352593673,
-    "plantKWh": 24784.75837600004
+    "adjustedBaselineKWh": 25579.114447731135,
+    "actualKWh": 25205.750824000002,
+    "avoidedKWh": 373.36362373113457,
+    "avoidedCost": 353.1353545907607,
+    "plantKWh": 25205.750824000002
   },
   "days": [
     {
@@ -41,68 +41,68 @@
       "expectedHours": 15,
       "hours": 15,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 3285.934991597967,
-      "actualKWh": 3242.0403790000128,
-      "avoidedKWh": 43.89461259795357,
-      "avoidedCost": 43.22143269568564,
-      "plantKWh": 3242.0403790000128
+      "adjustedBaselineKWh": 3342.572011634544,
+      "actualKWh": 3297.893895000001,
+      "avoidedKWh": 44.67811663454336,
+      "avoidedCost": 44.00354953510534,
+      "plantKWh": 3297.893895000001
     },
     {
       "day": "2026-10-01",
       "expectedHours": 24,
       "hours": 24,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 4334.6437282869165,
-      "actualKWh": 4267.151739000008,
-      "avoidedKWh": 67.49198928690873,
-      "avoidedCost": 63.575366889282684,
-      "plantKWh": 4267.151739000008
+      "adjustedBaselineKWh": 4408.206758550841,
+      "actualKWh": 4339.570615000004,
+      "avoidedKWh": 68.63614355083664,
+      "avoidedCost": 64.67697445382048,
+      "plantKWh": 4339.570615000004
     },
     {
       "day": "2026-10-02",
       "expectedHours": 24,
       "hours": 24,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 4169.074013215635,
-      "actualKWh": 4089.3000260000117,
-      "avoidedKWh": 79.77398721562369,
-      "avoidedCost": 73.95907847283013,
-      "plantKWh": 4089.3000260000117
+      "adjustedBaselineKWh": 4239.82197537611,
+      "actualKWh": 4158.698703999995,
+      "avoidedKWh": 81.12327137611436,
+      "avoidedCost": 75.23592826245657,
+      "plantKWh": 4158.698703999995
     },
     {
       "day": "2026-10-03",
       "expectedHours": 24,
       "hours": 24,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 4610.142114920859,
-      "actualKWh": 4563.066883999971,
-      "avoidedKWh": 47.07523092088756,
-      "avoidedCost": 44.710787679633754,
-      "plantKWh": 4563.066883999971
+      "adjustedBaselineKWh": 4687.951375336576,
+      "actualKWh": 4640.074049000003,
+      "avoidedKWh": 47.87732633657306,
+      "avoidedCost": 45.48563836612468,
+      "plantKWh": 4640.074049000003
     },
     {
       "day": "2026-10-04",
       "expectedHours": 24,
       "hours": 24,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 4445.031555166654,
-      "actualKWh": 4385.70104,
-      "avoidedKWh": 59.3305151666536,
-      "avoidedCost": 56.274679407904834,
-      "plantKWh": 4385.70104
+      "adjustedBaselineKWh": 4520.460916392594,
+      "actualKWh": 4460.125386,
+      "avoidedKWh": 60.3355303925954,
+      "avoidedCost": 57.24934744859053,
+      "plantKWh": 4460.125386
     },
     {
       "day": "2026-10-05",
       "expectedHours": 24,
       "hours": 24,
       "unpricedHours": 0,
-      "adjustedBaselineKWh": 4307.03222998429,
-      "actualKWh": 4237.498308000038,
-      "avoidedKWh": 69.53392198425234,
-      "avoidedCost": 65.35139011403027,
-      "plantKWh": 4237.498308000038
+      "adjustedBaselineKWh": 4380.101410440472,
+      "actualKWh": 4309.388175,
+      "avoidedKWh": 70.71323544047176,
+      "avoidedCost": 66.48391652466307,
+      "plantKWh": 4309.388175
     }
   ],
-  "createdAt": "2026-10-12T12:36:21.947072Z",
-  "updatedAt": "2026-10-12T12:36:27.763007Z"
+  "createdAt": "2026-10-13T09:08:49.955569Z",
+  "updatedAt": "2026-10-13T09:08:57.749721Z"
 }
