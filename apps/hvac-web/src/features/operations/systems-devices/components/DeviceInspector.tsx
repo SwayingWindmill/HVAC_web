@@ -1,9 +1,9 @@
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import { listWorkOrders } from '@/api/work-orders';
-import { FactList, FactRow } from '@/blocks/fact-list';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
@@ -70,17 +70,17 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
 
   return (
     <>
-      <SheetHeader>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{categoryLabel}</span>
+      <SheetHeader className="gap-1.5 border-b border-divider px-5 pt-4 pr-12 pb-3.5">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {categoryLabel} · {deviceLocation(device)}
           <StatusBadge tone={status.tone} label={status.label} />
         </div>
-        <SheetTitle className="text-lg">{device.name}</SheetTitle>
-        <SheetDescription>{deviceLocation(device)}</SheetDescription>
+        <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
+        <SheetDescription className="sr-only">{categoryLabel}，{deviceLocation(device)}</SheetDescription>
       </SheetHeader>
 
-      <div className="flex flex-col gap-6 px-4 pb-6">
-        <dl className="grid grid-cols-3 divide-x rounded-lg bg-muted/40 py-3">
+      <div className="flex flex-col gap-5 px-5 py-4">
+        <dl className="grid grid-cols-3 divide-x divide-divider rounded-lg border border-divider bg-muted py-2.5">
           {([
             ['通信', CONNECTION_LABELS[device.connection]],
             ['最近数据', formatTime(device.latestSampleAt ?? undefined, site.timezone)],
@@ -88,29 +88,30 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
           ] as const).map(([label, value]) => (
             <div key={label} className="flex flex-col gap-1 px-4">
               <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="text-sm font-medium tabular-nums">{value}</dd>
+              <dd className="font-mono text-xs font-medium">{value}</dd>
             </div>
           ))}
         </dl>
 
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">当前读数</h3>
+        <section className="flex flex-col gap-2.5">
+          <h3 className="text-sm font-semibold">当前读数<span className="ml-2 text-xs font-normal text-muted-foreground">{points.length} 个点位</span></h3>
           {points.length === 0 ? (
-            <p className="text-sm text-muted-foreground">该设备尚未登记点位</p>
+            <p className="text-sm text-muted-foreground">该设备还没有登记点位</p>
           ) : (
-            <FactList>
+            <dl className="grid grid-cols-2 gap-2">
               {points.map((point) => {
                 const current = point.state === 'PRESENT' && point.freshness === 'FRESH' && point.quality === 'GOOD';
                 return (
-                  <FactRow key={point.key} label={point.label}>
-                    <span className={cn(!current && 'text-muted-foreground')} title={current ? undefined : '数据过期或质量降级'}>
+                  <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
+                    <dt className="truncate text-xs text-muted-foreground">{point.label}</dt>
+                    <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或质量降级'}>
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
-                      {point.state === 'PRESENT' && point.unit ? <span className="ml-0.5 text-xs font-normal text-muted-foreground">{point.unit}</span> : null}
-                    </span>
-                  </FactRow>
+                      {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}
+                    </dd>
+                  </div>
                 );
               })}
-            </FactList>
+            </dl>
           )}
         </section>
 
@@ -119,13 +120,13 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
         {assetId ? (
           <section className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">设备工单</h3>
+              <h3 className="text-sm font-semibold">设备工单</h3>
               {capabilities.includes('work-order.create') ? (
-                <Button size="sm" variant="outline" onClick={() => setCreatingWorkOrder(true)}>创建工单</Button>
+                <Button size="sm" variant="outline" onClick={() => setCreatingWorkOrder(true)}><Plus data-icon="inline-start" />创建工单</Button>
               ) : null}
             </div>
             {!workOrders.data ? null : workOrders.data.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">暂无工单</p>
+              <p className="text-xs text-muted-foreground">暂无工单</p>
             ) : (
               <ul className="divide-y">
                 {workOrders.data.items.map((workOrder) => (
@@ -186,7 +187,7 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium">最近 24 小时<span className="ml-2 text-xs font-normal text-muted-foreground">每小时平均值与范围</span></h3>
+        <h3 className="text-sm font-semibold">最近 24 小时<span className="ml-2 text-xs font-normal text-muted-foreground">每小时平均值与范围</span></h3>
         <Select value={selected} onValueChange={setSelected}>
           <SelectTrigger className="h-8 w-40" aria-label="趋势读数"><SelectValue /></SelectTrigger>
           <SelectContent>
