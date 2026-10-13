@@ -33,6 +33,8 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
   }), { days: 0, avoidedKWh: 0, avoidedCost: 0 });
   const findings = archived.reduce((sum, stored) => sum + stored.report.findings.count, 0);
   const liveMonths = rows.filter((row) => row.source === 'live').length;
+  const monthsWithData = rows.filter((row) => row.source !== 'none').length;
+  const monthly = (value: number | null) => (value === null || monthsWithData === 0 ? '—' : `月均 ${energyText(value / monthsWithData)}`);
   const lastMonth = months.length;
   const running = lastMonth > 0 && months[lastMonth - 1] === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
@@ -45,10 +47,10 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
       status={`${archived.length} 个月已存档 · ${liveMonths} 个月按当前记录现算`}
       footnote="说明：已存档的月份取自月结后保存的快照，其余月份按当前记录现算；电度电费按分时电价逐时计算，不含需量电费，正式电费以结算为准。节能与诊断只合计已存档月份。"
     >
-      <Section index={1} title="全年概要" description={`${rows.filter((row) => row.source !== 'none').length} 个月有计量数据`}>
+      <Section index={1} title="全年概要" description={`${monthsWithData} 个月有计量数据`}>
         <div className="grid grid-cols-4 gap-8">
-          <Figure label="空调用电" value={totals.electricityKWh === null ? null : formatDecimal(totals.electricityKWh, 0)} unit="kWh" note={energyText(totals.electricityKWh)} />
-          <Figure label="供冷量" value={totals.coolingKWh === null ? null : formatDecimal(totals.coolingKWh, 0)} unit="kWh" note={energyText(totals.coolingKWh)} />
+          <Figure label="空调用电" value={totals.electricityKWh === null ? null : formatDecimal(totals.electricityKWh, 0)} unit="kWh" note={monthly(totals.electricityKWh)} />
+          <Figure label="供冷量" value={totals.coolingKWh === null ? null : formatDecimal(totals.coolingKWh, 0)} unit="kWh" note={monthly(totals.coolingKWh)} />
           <Figure label="综合能效" value={totals.cop === null ? null : formatDecimal(totals.cop, 2)} unit="COP" note="全年供冷量 ÷ 全年空调用电" />
           <Figure label="电度电费" value={totals.energyCost === null ? null : formatDecimal(totals.energyCost, 0)} unit="元" note={totals.energyCost === null ? '有月份没有电价，全年未计' : '按分时电价逐时计算，不含需量电费'} />
         </div>
