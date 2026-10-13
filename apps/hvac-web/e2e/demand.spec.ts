@@ -11,14 +11,17 @@ test('demand is the plant meter\'s quarter-hour average power, with today\'s and
   const facts = page.getByRole('region', { name: '需量概况' });
   // The quarter-hour still running is current demand, not a peak.
   await expect(facts).toContainText('当前需量247.2kW22:30 起的 15 分钟，进行中');
-  await expect(facts).toContainText('今日最大需量247.2kW出现在 21:45');
-  await expect(facts).toContainText('本月最大需量247.2kW出现在 10/11 21:45');
+  await expect(facts).toContainText('今日最大需量247.2kW出现在 21:45 · 即本月最大');
   await expect(facts).toContainText('今日负荷率97%');
+  await expect(page.getByRole('region', { name: '本月每日最大需量' })).toContainText('本月最大 247.2 kW · 出现在 10/11 21:45');
   // The recording has no peak-period quarter-hour, the only period that carries a demand rate.
-  await expect(facts).toContainText('本月需量电费暂无数据');
-  await expect(facts).toContainText('峰时段本月还没有完整的 15 分钟');
-  await expect(page.getByText('需量电费按峰时段当月最大需量计收')).toBeVisible();
-  await expect(page.getByRole('region', { name: '需量曲线' })).toContainText('本月最大 247 kW');
+  const charge = page.getByRole('region', { name: '本月需量电费' });
+  await expect(charge).toContainText('暂无数据');
+  await expect(charge).toContainText('峰时段本月还没有完整的 15 分钟');
+  await expect(charge).toContainText('计费方式按峰时段当月最大需量计收');
+
+  await facts.getByRole('radio', { name: '表格' }).click();
+  await expect(facts.getByRole('table', { name: '每 15 分钟需量' }).getByRole('row').nth(1)).toContainText('22:30–22:45247.2');
 
   const reads = gateway.writes.filter((write) => write.path === '/api/v1/telemetry/device-series:aggregate');
   expect(reads.map((read) => [read.body!.from, read.body!.granularity])).toEqual([
