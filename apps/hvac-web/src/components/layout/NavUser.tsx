@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LogOut, ShieldCheck } from 'lucide-react';
+import { ChevronDown, LogOut, ShieldCheck } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -9,7 +9,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from '@/components/ui/sidebar';
 
 interface NavUserProps {
   readonly name: string;
@@ -18,62 +17,41 @@ interface NavUserProps {
   readonly onLogout: () => void;
 }
 
-function Identity({ name, role }: { readonly name: string; readonly role: string }) {
-  return (
-    <>
-      <Avatar className="size-8 rounded-lg">
-        <AvatarFallback className="rounded-lg bg-sidebar-accent text-xs font-semibold">{name.slice(0, 1)}</AvatarFallback>
-      </Avatar>
-      <div className="grid flex-1 text-left text-sm leading-tight">
-        <span className="truncate font-medium">{name}</span>
-        <span className="truncate text-xs text-muted-foreground">{role}</span>
-      </div>
-    </>
-  );
-}
-
+/** The signed-in user at the right of the top bar: who they are, and the way out. */
 export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
-  const { isMobile } = useSidebar();
   return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <SidebarMenuButton
-              size="lg"
-              tooltip={name}
-              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-            >
-              <Identity name={name} role={role} />
-              <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
-            </SidebarMenuButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
-            side={isMobile ? 'bottom' : 'right'}
-            align="end"
-            sideOffset={4}
-          >
-            <DropdownMenuLabel className="p-0 font-normal">
-              <div className="flex items-center gap-2 px-1 py-1.5">
-                <Identity name={name} role={role} />
-              </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => onNavigate('/system')}>
-                <ShieldCheck />
-                系统管理
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onLogout}>
-              <LogOut />
-              退出登录
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </SidebarMenuItem>
-    </SidebarMenu>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${name}，用户菜单`}
+          className="flex h-8 items-center gap-2 rounded-lg pr-1.5 pl-1 text-sm text-secondary-foreground transition-colors duration-100 outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft data-[state=open]:bg-accent"
+        >
+          <Avatar className="size-7">
+            <AvatarFallback className="bg-primary-soft text-xs font-semibold text-primary">{name.slice(0, 1)}</AvatarFallback>
+          </Avatar>
+          <span className="max-w-32 truncate">{name}</span>
+          <ChevronDown className="size-3.5 text-subtle-foreground" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="min-w-56" align="end" sideOffset={6}>
+        <DropdownMenuLabel className="flex flex-col gap-0.5 font-normal">
+          <span className="text-sm font-semibold text-foreground">{name}</span>
+          <span className="text-xs text-muted-foreground">{role}</span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={() => onNavigate('/system')}>
+            <ShieldCheck />
+            系统管理
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={onLogout}>
+          <LogOut />
+          退出登录
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -28,6 +28,20 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 ## Design system
 
+> **Redesign in progress (2026-10-13 →).** The approved design is the Claude Design canvas
+> https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm (pages 定稿, 设计系统, 页面 · 批次 1–5) and
+> `docs/design-redesign/` (`DESIGN-SYSTEM.md` + `design-tokens.css`). It is implemented in phases,
+> one PR each; existing features stay, missing ones get the new visual language:
+>
+> 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done.
+> 2. 总览. 3. 告警, 工单, 设备, 资产与点位. 4. 实时运行, 故障诊断, 控制指令, 通知中心.
+> 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标. 6. 优化建议, 节能项目, 报告.
+> 7. 集成管理, 系统管理, shared states.
+>
+> Rules that come with it: each fact has one home page (table in `DESIGN-SYSTEM.md` §1); plain
+> operator wording (same section); charts and tables together on analysis pages only when the
+> table adds dimensions. Until a page's phase lands, the notes below still describe it.
+
 - Desktop only. Verify at 1440px; no mobile or responsive work (decision of 2026-10-12).
 - Visual language follows three shadcn admin templates. What was adopted, adapted or rejected:
   `docs/architecture/shadcn-admin-visual-language-source-review-2026-10-12.md`. Product-wide

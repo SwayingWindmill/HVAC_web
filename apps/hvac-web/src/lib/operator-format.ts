@@ -23,6 +23,16 @@ export function formatTime(value: string | undefined, timezone: string): string 
   }).format(new Date(value));
 }
 
+/** A time as an operator scans a list: 09:42 today, 10/12 22:15 on an earlier day. */
+export function formatCompactTime(value: string | undefined, timezone: string, now: number = Date.now()): string {
+  if (!value) return '—';
+  const day = new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
+  if (day.format(new Date(value)) === day.format(new Date(now))) return clock;
+  const date = new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, month: '2-digit', day: '2-digit' }).format(new Date(value));
+  return `${date} ${clock}`;
+}
+
 /** How long ago an instant was, in the words an operator scans: 刚刚, 12 分钟前, 3 小时前, 2 天前. */
 export function formatRelative(value: string, now: number): string {
   const minutes = Math.floor((now - Date.parse(value)) / 60_000);

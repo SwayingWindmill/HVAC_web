@@ -12,12 +12,12 @@ const statusVariants = cva(
         default:
           "bg-muted text-muted-foreground **:data-[slot=status-indicator]:bg-muted-foreground",
         success:
-          "bg-success/10 text-success **:data-[slot=status-indicator]:bg-success",
+          "bg-success-soft text-success-text **:data-[slot=status-indicator]:bg-success",
         error:
-          "bg-destructive/10 text-destructive **:data-[slot=status-indicator]:bg-destructive",
+          "bg-destructive-soft text-destructive-text **:data-[slot=status-indicator]:bg-destructive",
         warning:
-          "bg-warning/10 text-warning **:data-[slot=status-indicator]:bg-warning",
-        info: "bg-information/10 text-information **:data-[slot=status-indicator]:bg-information",
+          "bg-warning-soft text-warning-text **:data-[slot=status-indicator]:bg-warning",
+        info: "bg-primary-soft text-primary **:data-[slot=status-indicator]:bg-primary",
       },
     },
     defaultVariants: {

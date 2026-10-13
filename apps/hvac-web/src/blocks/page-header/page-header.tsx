@@ -15,14 +15,14 @@ interface PageHeaderProps {
 /** The one page title of a route Surface, with its description and local actions. */
 export function PageHeader({ title, description, meta, actions, className }: PageHeaderProps) {
   return (
-    <header className={cn('flex items-start justify-between gap-6', className)}>
-      <div className="flex min-w-0 flex-col gap-1.5">
+    <header className={cn('flex items-end justify-between gap-4', className)}>
+      <div className="flex min-w-0 flex-col gap-1">
         <div className="flex items-center gap-2.5">
-          <h1 className="text-2xl leading-tight font-semibold tracking-tight text-foreground">{title}</h1>
+          <h1 className="text-[26px] leading-[30px] font-bold tracking-[-0.03em] text-foreground">{title}</h1>
           {__HVAC_WEB_FRONTEND_REVIEW__ ? <Badge variant="outline">评审构建</Badge> : null}
           {meta}
         </div>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+        {description ? <p className="text-xs leading-[18px] text-muted-foreground">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </header>
@@ -31,8 +31,14 @@ export function PageHeader({ title, description, meta, actions, className }: Pag
 
 const DOT_TONE = {
   live: 'bg-success',
-  idle: 'bg-muted-foreground/60',
+  idle: 'bg-subtle-foreground',
   warning: 'bg-warning',
+} as const;
+
+const CHIP_TONE = {
+  live: 'border-transparent bg-success-soft text-success-text',
+  idle: 'border-border text-muted-foreground',
+  warning: 'border-transparent bg-warning-soft text-warning-text',
 } as const;
 
 /**
@@ -46,7 +52,7 @@ export function PageMeta({ children, dot, icon, className }: {
   readonly className?: string;
 }) {
   return (
-    <Badge variant="outline" className={cn('h-6 gap-1.5 rounded-md px-2 font-normal text-muted-foreground [&>svg]:size-3.5!', className)}>
+    <Badge variant="outline" className={cn('h-[22px] gap-1.5 rounded-full px-[9px] text-xs font-medium [&>svg]:size-3.5!', CHIP_TONE[dot ?? 'idle'], className)}>
       {dot ? <span className={cn('size-1.5 rounded-full', DOT_TONE[dot])} aria-hidden="true" /> : icon}
       {children}
     </Badge>

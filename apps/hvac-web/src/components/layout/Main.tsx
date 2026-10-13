@@ -12,7 +12,7 @@ export function Main({ fixed = false, fluid = false, className, ...props }: Main
     <div
       data-layout={fixed ? 'fixed' : 'auto'}
       className={cn(
-        '@container/main flex w-full flex-col gap-6 px-6 pt-6 pb-8',
+        '@container/main flex w-full flex-col gap-[18px] px-7 pt-[22px] pb-6',
         fixed && 'min-h-0 flex-1 overflow-hidden',
         !fluid && 'mx-auto max-w-[1600px]',
         'print:max-w-none print:p-0',

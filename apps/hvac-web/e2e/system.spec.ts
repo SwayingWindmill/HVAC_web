@@ -47,6 +47,8 @@ test('leaving system management with an unsaved registry import asks before drop
   await expect(page).toHaveURL(/tab=registry/);
   await expect(source).toHaveValue('{"draft": true}');
 
+  // Away from its pages the 运维 group is folded; open it to reach 告警.
+  await page.getByRole('button', { name: '运维，展开', exact: true }).click();
   await page.getByRole('link', { name: '告警', exact: true }).click();
   await expect(page.getByRole('alertdialog')).toContainText('站点与设备登记管理');
   await page.getByRole('alertdialog').getByRole('button', { name: '继续编辑', exact: true }).click();

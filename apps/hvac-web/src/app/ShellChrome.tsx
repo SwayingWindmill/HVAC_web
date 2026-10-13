@@ -52,7 +52,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const runtime = useShellRuntime();
   const snapshot = useShellSnapshot();
   const location = useLocation();
-  const { resolvedMode: themeMode, setMode: setThemeMode } = useAppTheme();
+  const { resolvedMode: themeMode } = useAppTheme();
   const principal = snapshot.principal!;
   const transition = snapshot.siteTransition;
   const protectedScope = snapshot.protectedScope;
@@ -73,14 +73,20 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const retryHref = `${location.pathname}${location.searchStr}${location.hash}`;
 
   return (
-    <SidebarProvider defaultOpen={defaultSidebarOpen}>
+    <SidebarProvider defaultOpen={defaultSidebarOpen} className="flex-col [--header-height:52px]">
       <SkipToMain />
       <NavigationProgress />
-      <AppSidebar
+      <AppHeader
+        principalSubject={principal.principal.subject}
         principalName={principal.principal.displayName}
         principalRole={principalRole}
         onNavigate={navigate}
         onLogout={() => { void runtime.logout(); }}
+      />
+      <div className="flex flex-1">
+      <AppSidebar
+        className="top-(--header-height) h-[calc(100svh-var(--header-height))]! print:hidden"
+        onNavigate={navigate}
       />
       <SidebarInset
         className="min-w-0 print:m-0 print:rounded-none print:border-0 print:shadow-none"
@@ -96,13 +102,6 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         data-realtime-state={realtime.state}
         data-realtime-site={realtime.siteId}
       >
-        <AppHeader
-          principalSubject={principal.principal.subject}
-          themeMode={themeMode}
-          onThemeToggle={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
-          onNavigate={navigate}
-        />
-
         <span className="sr-only" role="status" aria-live="polite" data-testid="real-realtime-status" data-realtime-state={realtime.state} data-realtime-site={realtime.siteId}>
           {realtimePresentation.label}
           <span data-testid="real-realtime-code" data-code={realtimePresentation.code} aria-hidden="true" />
@@ -122,6 +121,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}
         {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
       </SidebarInset>
+      </div>
       <Toaster theme={themeMode} position="bottom-right" richColors closeButton />
     </SidebarProvider>
   );
