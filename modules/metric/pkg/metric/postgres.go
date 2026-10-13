@@ -311,14 +311,14 @@ ORDER BY 1, 3`, tenantID, siteID, start.UTC(), end.UTC())
 		return nil, err
 	}
 	for index := range tariffs {
-		periods, err := tx.Query(ctx, `SELECT day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
+		periods, err := tx.Query(ctx, `SELECT period_code, day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
 FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, tariffs[index].VersionID)
 		if err != nil {
 			return nil, fmt.Errorf("load import Tariff periods: %w", err)
 		}
 		for periods.Next() {
 			var period tariffmodel.Period
-			if err := periods.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
+			if err := periods.Scan(&period.Code, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
 				periods.Close()
 				return nil, err
 			}

@@ -26,6 +26,9 @@ func TestRatesFollowTheTariffClockAndDayType(t *testing.T) {
 	if got, ok := rate(monday.AddDate(0, 0, -1)); !ok || got != 0.5 {
 		t.Fatalf("Sunday = %v %v", got, ok)
 	}
+	if period, ok := Covering(periods, shanghai, monday.Add(time.Hour)); !ok || period.EnergyRatePerKWh != 1.2 || period.StartMinute != 480 {
+		t.Fatalf("08:30 Monday period = %#v %v", period, ok)
+	}
 	if _, ok := Rates(periods[:1], shanghai)(monday.Add(2 * time.Hour)); ok {
 		t.Fatal("an hour no period covers must not be priced")
 	}
