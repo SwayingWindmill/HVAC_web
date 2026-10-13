@@ -3,13 +3,19 @@ import type { EnergySummary } from '../energy-analysis/consumption/model.ts';
 
 // Sites compared on what every plant measures alike: HVAC electricity, cooling delivered and the
 // plant COP between them. The fleet's COP weighs each site by its energy, not one vote per site.
-// A site with a floor area in its Registry profile is also compared on electricity per square metre.
+// A site with a floor area in its Registry profile is also compared on electricity per square metre,
+// and, with a weather station, per square metre per cooling degree day (CDD26) to take out the weather.
+
+/** Cooling degree days count each degree of daily mean outdoor temperature above this base. */
+export const DEGREE_DAY_BASE_C = 26;
 
 export interface SiteSummary {
   readonly siteId: string;
   readonly name: string;
   readonly floorAreaM2: number | null;
   readonly climateZone: ClimateZone | null;
+  /** Each day's mean outdoor dry-bulb temperature (°C) at the site's weather station, keyed by the day's start; null without a station. */
+  readonly outdoorMeanC: ReadonlyMap<string, number> | null;
   readonly summary: EnergySummary;
 }
 
@@ -31,6 +37,12 @@ export interface BenchmarkSite {
   readonly intensityKWhPerM2: number | null;
   /** 1 uses the least electricity per square metre; null without an intensity. */
   readonly intensityRank: number | null;
+  /** CDD26 over the days with both electricity and a mean temperature; null without a weather station. */
+  readonly degreeDays: number | null;
+  /** Electricity over those days per square metre per degree day; null without a floor area or degree days. */
+  readonly climateIntensity: number | null;
+  /** 1 uses the least electricity per square metre per degree day; null without a climate intensity. */
+  readonly climateRank: number | null;
 }
 
 export type BenchmarkDay = { readonly key: string; readonly label: string } & Readonly<Record<string, number | string | null>>;
@@ -55,6 +67,12 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
   const sites = input
     .map((site) => {
       const metered = site.summary.rows.filter((row) => row.electricityKWh !== null).length;
+      const weathered = site.outdoorMeanC === null ? null : site.summary.rows.flatMap((row) => {
+        const meanC = site.outdoorMeanC!.get(row.periodStart);
+        return row.electricityKWh === null || meanC === undefined ? [] : [{ electricityKWh: row.electricityKWh, degreeDays: Math.max(0, meanC - DEGREE_DAY_BASE_C) }];
+      });
+      const degreeDays = weathered === null ? null : weathered.reduce((sum, day) => sum + day.degreeDays, 0);
+      const weatheredKWh = weathered?.reduce((sum, day) => sum + day.electricityKWh, 0) ?? 0;
       return {
         siteId: site.siteId,
         name: site.name,
@@ -66,15 +84,19 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
         floorAreaM2: site.floorAreaM2,
         climateZone: site.climateZone,
         intensityKWhPerM2: site.floorAreaM2 !== null && site.summary.electricityKWh !== null ? site.summary.electricityKWh / site.floorAreaM2 : null,
+        degreeDays,
+        climateIntensity: site.floorAreaM2 !== null && degreeDays ? weatheredKWh / site.floorAreaM2 / degreeDays : null,
       };
     })
     .sort((left, right) => (right.cop ?? -Infinity) - (left.cop ?? -Infinity))
     .map((site, index) => ({ ...site, rank: site.cop === null ? null : index + 1 }));
-  const byIntensity = sites.filter((site) => site.intensityKWhPerM2 !== null).sort((left, right) => left.intensityKWhPerM2! - right.intensityKWhPerM2!);
-  const rankedSites = sites.map((site): BenchmarkSite => {
-    const place = byIntensity.indexOf(site);
-    return { ...site, intensityRank: place === -1 ? null : place + 1 };
-  });
+  const placeBy = (value: (site: (typeof sites)[number]) => number | null) => {
+    const ordered = sites.filter((site) => value(site) !== null).sort((left, right) => value(left)! - value(right)!);
+    return (site: (typeof sites)[number]) => (ordered.includes(site) ? ordered.indexOf(site) + 1 : null);
+  };
+  const intensityPlace = placeBy((site) => site.intensityKWhPerM2);
+  const climatePlace = placeBy((site) => site.climateIntensity);
+  const rankedSites = sites.map((site): BenchmarkSite => ({ ...site, intensityRank: intensityPlace(site), climateRank: climatePlace(site) }));
 
   const days = new Map<string, Record<string, number | string | null>>();
   for (const site of input) {

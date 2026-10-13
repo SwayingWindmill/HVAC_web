@@ -70,7 +70,7 @@ Roadmap issues, in order:
    - Acceptance ran on replayed history: Site A's setpoint was raised to 8 °C on 2026-09-29 09:00; the measure was implemented then and ended 10-06.
    - The baseline used 336/336 hours (CV(RMSE) 0.6 %, NMBE 0.0 %) and passed; six days were verified, saving 373 kWh and ¥353 (re-verified on 2026-10-13 on hourly Metrics recalculated with the counter window-start fix; before it, 367 kWh and ¥347 with the same 1.5 % rate).
    - The result is recorded as `e2e/fixtures/savings-measure-verified.json`.
-   - **Weeks of history without the live simulator.** `node scripts/local-history-replay.mjs --from … --to … [--commands <siteCode>=<file>] [--metrics-only]` replays the Sites' meters through Telemetry Runtime's Historical Replay path, on each Site's daily scenario, then recalculates their hourly and daily Metrics.
+   - **Weeks of history without the live simulator.** `node scripts/local-history-replay.mjs --from … --to … [--commands <siteCode>=<file>] [--metrics-only | --weather-only]` replays the Sites' meters and weather station temperature through Telemetry Runtime's Historical Replay path, on each Site's daily scenario, then recalculates their hourly and daily Metrics. `--weather-only` adds the temperature alone to a window that already holds the meters.
      - It takes about 10 minutes per Site for three weeks, and a few minutes of Metric recalculation.
      - Replay only windows that end before live history begins, because the counters restart.
      - `tools/eg8200-simulator/configs/replay-setpoint-raise.json` is the command schedule used for acceptance.
@@ -78,15 +78,15 @@ Roadmap issues, in order:
      - Accepted on replayed history: Site B's chilled water pump was cut from 50 Hz to 45 Hz on 2026-09-08 09:00 (`tools/eg8200-simulator/configs/replay-chwp-frequency-cut.json`). The baseline used 336/336 hours (the pump's power does not follow cooling, so the line is flat: 45 kWh/h); six days saved 1,646 kWh (27.1 %, as (45/50)³ predicts) and ¥1,256. Recorded as `e2e/fixtures/savings-measure-device-verified.json`.
      - A Site's savings rate is avoided ÷ (plant electricity over the verified hours + avoided), so measures on several machines add up.
    - Later: non-routine adjustments, demand savings, apportioning savings between measures.
-   - The local savings ledger was emptied by the #481 reset; the accepted result lives on as the e2e fixture.
-2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP or by electricity per square metre (spec `docs/specs/site-profile-benchmark.md`). A Site's floor area and GB 50176 climate zone are its Registry profile, edited in 系统管理 → 注册中心. Still to do:
-   - climate correction, which needs daily weather (cooling degree days) from an owner the platform does not have yet;
-   - a trusted industry baseline source; the page says 未接入 until there is one.
+2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP, by electricity per square metre, or by electricity per square metre per cooling degree day (spec `docs/specs/site-profile-benchmark.md`, 第二版). A Site's floor area and GB 50176 climate zone are its Registry profile, edited in 系统管理 → 注册中心.
+   - Degree days (CDD26) come from each Site's own weather station: the page reads its daily mean dry-bulb temperature (Device History aggregate, `DAY`) and sums the degrees above 26 °C. Move it into a daily Metric once reports or M&V need it too.
+   - Still to do: a trusted industry baseline source; the page says 未接入 until there is one.
 
 Smaller follow-ups:
 
 - To change the FDD low-delta-T threshold or window, publish the next revision (never update one): `node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <instant>]`. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
+- Energy-series cost now follows the window, about 0.5 KB of ClickHouse memory per fact read. Live meters write a fact every few seconds (~24,000 per meter per day), so a month on one Site takes ~150 MiB and a year would not fit under the 1.5 GiB cap. Before long windows get used on live data, serve day and month granularity from an hourly rollup instead of raw facts.
 - Polish the device inspector and the work-order sheet in the same visual system.
 
 ## Local environment notes
@@ -96,11 +96,14 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - The stack was rebuilt from the #481 seed on 2026-10-12 22:06 (Site time); live history starts then.
 - Both Sites hold replayed meter history, sub-meters included, for 2026-09-15 to 10-06 (Site time). Site A's includes the 8 °C setpoint raise from 09-29 09:00.
 - The savings ledger holds the Option B acceptance measure on Site B (CHWP-01, 09-08 to 09-15) and the re-verified Option C measure on Site A (8 °C setpoint, 09-29 09:00 to 10-06).
+- Both Sites hold the weather station's replayed outdoor temperature for 2026-08-25 to 10-06 (Site time), replayed with `--weather-only` on 2026-10-13.
 - Both Sites now also hold replayed history for 2026-08-25 to 09-14 (Site time). Site B's chilled water pump runs at 45 Hz from 09-08 09:00. Only Site B's `hourly_energy`, `hourly_cooling` and CHWP-01 `device_hourly_energy` were recalculated over it; Site A's hourly and daily Metrics for that window are missing.
 - `energy_cost` v1 (average-rate expression) was superseded by hand with v2 (`TARIFF_ENERGY_COST` on `hourly_energy`), with new bindings and the daily cost schedules repointed; a fresh seed starts at v1 = `TARIFF_ENERGY_COST`.
 - Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Site A's `hourly_energy` and `hourly_cooling` were also recalculated through 10-05 for the M&V re-verification. Other periods and Metrics still hold values from before the fix.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.
 - The ClickHouse user `report_service_reader` was created by hand (init scripts only run on an empty volume). September 2026 was snapshot for both Sites by a hand-queued `REPORT_GENERATE` job (16 of 30 days, from the replay).
+- `analytics.energy_interval_facts_visible` was replaced by hand with the definition in `009-energy-fact-rebuild-v1.sql` (GROUP BY the logical key with `argMax`, so Site and period filters reach the table index) on 2026-10-13; a reset applies it from the init script.
+- **The energy projector is stuck (seen 2026-10-13).** Its counter-delta query uses ~800 MiB per batch and every retry hits ClickHouse's 1.5 GiB cap; the projection checkpoint has not moved since 08:21 UTC, so no new energy facts are written, and the retries crowd out other ClickHouse readers. Not fixed yet; the suspect is a batch whose `since` falls back into replayed history.
 - Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. To fill them in, stop `telemetry-worker`, truncate `analytics.energy_projection_checkpoints`, then start it again. Truncating while it runs does nothing: the batch in flight writes its checkpoint back. The existing-fact check skips intervals that already have a fact.
 
 Known quirks:

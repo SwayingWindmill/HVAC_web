@@ -78,8 +78,9 @@ numeric revision for every additive interval fact.
 The adapter executes two fixed Cube queries under one 16-second budget:
 
 - a time-series query for the requested range;
-- a global metadata query with the same Tenant, Site and energy-type
-  filters but no time dimension.
+- a metadata query with the same Tenant, Site and energy-type filters over
+  facts from the requested `from` on, with no time dimension and no upper
+  bound, so it costs what the window costs and still sees data after `to`.
 
 The product contract uses inclusive `from` and exclusive `to`. Cube date ranges
 are inclusive, so the adapter sends `to - 1ms`, matching the ClickHouse
@@ -87,12 +88,13 @@ are inclusive, so the adapter sends `to - 1ms`, matching the ClickHouse
 
 The response metadata is derived as follows:
 
-- `dataWatermark`: maximum fact watermark from the global metadata query;
+- `dataWatermark`: maximum fact watermark from the metadata query; none when
+  the Site has no facts since `from`;
 - `aggregateWatermark`: the same value for the current direct-fact aggregation;
 - `datasetRevision`: `<QUERY_DATASET_REVISION>:<maximum fact revision>`;
-- `partial`: true when the global watermark is before the requested exclusive
+- `partial`: true when the watermark is before the requested exclusive
   end or any requested local hour/day/month bucket has no returned fact row;
-- a site with no facts uses an `:empty` revision suffix and remains partial;
+- a site with no facts since `from` uses an `:empty` revision suffix and remains partial;
 - a covered watermark alone never hides gaps in the requested bucket sequence.
 
 Cube cache refresh timestamps are never presented as data watermarks.

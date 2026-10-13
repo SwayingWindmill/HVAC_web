@@ -369,6 +369,11 @@ _Avoid_: external device id, child id
 What the Registry records about a Site beyond its identity, to compare it with others: its building floor area (建筑面积, m²), which energy per square metre is taken on (GB/T 51161), and its GB 50176 thermal design zone (气候区). Both are optional; a Site without a floor area is not ranked on energy per square metre.
 _Avoid_: site metadata, site attributes
 
+## Cooling Degree Days
+
+CDD26 (冷却度日): over a period, the sum of each day's mean outdoor dry-bulb temperature above 26 °C, read from the Site's own weather station. Benchmarking divides electricity per square metre by it (单位度日用电, kWh/m²·℃·d) to compare Sites in different weather, over the days that have both electricity and a mean temperature. A Site without a weather station has none.
+_Avoid_: weather normalization, climate-adjusted energy
+
 ## Sub-meter
 
 A meter on the feed into one piece of equipment (分表), as opposed to the Site's total meter. Its energy is already inside the Site total: a Meter Binding on an edge from a non-grid node into a device's load node has accounting scope BRANCH, every other one SITE, and a Site's total counts only SITE energy. What the total meter reads beyond the sub-meters is 未分项 (unallocated), shown as it is even when negative.

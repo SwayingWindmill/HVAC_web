@@ -95,6 +95,10 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	if len(metadataQuery.Measures) != 2 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "energy_usage.max_data_watermark" {
 		t.Fatalf("metadata query = %#v", metadataQuery)
 	}
+	// The watermark only needs facts from the window's start on; an unbounded query reads the Site's whole history.
+	if !hasCubeFilterOperator(metadataQuery.Filters, "energy_usage.period_end", "afterOrOnDate", "2026-07-01T00:00:00.000") {
+		t.Fatalf("metadata filters = %#v, want period_end from the window's start in Asia/Shanghai wall time", metadataQuery.Filters)
+	}
 	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
 		t.Fatalf("points = %#v", response.Points)
 	}
@@ -307,8 +311,12 @@ func validCubeEnergyQuery() analyticsmodel.EnergySeriesQuery {
 }
 
 func hasCubeFilter(filters []cubeFilter, member, value string) bool {
+	return hasCubeFilterOperator(filters, member, "equals", value)
+}
+
+func hasCubeFilterOperator(filters []cubeFilter, member, operator, value string) bool {
 	for _, filter := range filters {
-		if filter.Member == member && len(filter.Values) == 1 && filter.Values[0] == value {
+		if filter.Member == member && filter.Operator == operator && len(filter.Values) == 1 && filter.Values[0] == value {
 			return true
 		}
 	}
