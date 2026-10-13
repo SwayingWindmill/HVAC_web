@@ -16,7 +16,7 @@ export const STATUS_PRESENTATION: Readonly<Record<CommandStatus, { label: string
   REJECTED: { label: '已拒绝', variant: 'error' },
   CANCELLED: { label: '已取消', variant: 'default' },
   EXPIRED: { label: '已过期', variant: 'default' },
-  OUTCOME_UNKNOWN: { label: '待核对', variant: 'warning' },
+  OUTCOME_UNKNOWN: { label: '待现场确认', variant: 'warning' },
 };
 
 export const RISK_LABEL: Readonly<Record<CommandRisk, string>> = { LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' };
