@@ -256,7 +256,7 @@ LIMIT 1`, tenantID, siteID).Scan(&versionID, &versionTimezone)
 			return err
 		}
 		clock.Tariff = &ImportTariff{Location: tariffLocation}
-		rows, err := tx.Query(ctx, `SELECT day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
+		rows, err := tx.Query(ctx, `SELECT period_code, day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
 FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, versionID)
 		if err != nil {
 			return err
@@ -264,7 +264,7 @@ FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY da
 		defer rows.Close()
 		for rows.Next() {
 			var period tariffmodel.Period
-			if err := rows.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
+			if err := rows.Scan(&period.Code, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
 				return err
 			}
 			clock.Tariff.Periods = append(clock.Tariff.Periods, period)

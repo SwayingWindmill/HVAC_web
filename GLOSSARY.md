@@ -383,6 +383,11 @@ The line fitted over a period before a measure was implemented that predicts the
 What the Baseline predicts the plant would have used under the conditions actually seen after implementation. Avoided energy is the adjusted baseline minus the electricity actually used.
 _Avoid_: expected consumption, reference consumption
 
+## Report Snapshot
+
+A Site's closed month as its energy report shows it, taken once by report-service after the month ends and never changed. Taking it again keeps a new version; the report shows the latest. Demand, alarms and work orders are not in it and are worked out live beside it.
+_Avoid_: archived report, frozen report
+
 ## Verified Day
 
 One Site-local day of a measure's reporting period, verified once against its Baseline and never changed afterwards. Hours missing data count against its coverage; they are not filled in.

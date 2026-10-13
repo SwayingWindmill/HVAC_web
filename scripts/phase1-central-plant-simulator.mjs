@@ -488,10 +488,14 @@ ${draftVersion(costVersionId)}
 ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
 WHERE id IN (${id(energyVersionId)}, ${id(costVersionId)}) AND status = 'DRAFT';
-INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at) VALUES
-  (${id(energyBindingId)}, ${t}, ${st}, ${id(energyVersionId)}, ${id(energyMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', ${id(JSON.stringify({ points: { site_energy: energyPointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()),
-  (${id(costBindingId)}, ${t}, ${st}, ${id(costVersionId)}, ${id(costMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', '{}', '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO NOTHING;
+-- A binding is written once; after its Metric Version is superseded the overlap guard would
+-- refuse it again before ON CONFLICT could skip it.
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+SELECT ${id(energyBindingId)}, ${t}, ${st}, ${id(energyVersionId)}, ${id(energyMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', ${id(JSON.stringify({ points: { site_energy: energyPointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
+WHERE NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id(energyBindingId)});
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+SELECT ${id(costBindingId)}, ${t}, ${st}, ${id(costVersionId)}, ${id(costMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', '{}', '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
+WHERE NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id(costBindingId)});
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
   (${id(energyScheduleId)}, ${id(`daily-energy-${site.siteCode}`)}, '冷站日用电量（每日零点后）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '10 0 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: energyBindingId }))}, ${nextLocalTime(10)}),
   (${id(costScheduleId)}, ${id(`daily-energy-cost-${site.siteCode}`)}, '冷站日电度电费（每日零点后）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '20 0 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: costBindingId }))}, ${nextLocalTime(20)})
@@ -545,6 +549,15 @@ function buildDiagnosisSeed(site, points) {
   return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
 VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-water-low-delta-t-${site.siteCode}`)}, '冷冻水低温差诊断（每 15 分钟）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'FDD_EVALUATION', 'CRON', '*/15 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 60, ${sqlLiteral(JSON.stringify(plan))},
   date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
+}
+
+// A Site's monthly report is kept as a snapshot once the month is over (#483): report-service takes
+// it at 03:00 on the 1st, Site time, for the month before.
+function buildReportSeed(site) {
+  return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${sqlLiteral(siteUUID(site, 0x850000000001))}, ${sqlLiteral(`monthly-report-${site.siteCode}`)}, '月度报告快照（每月 1 日 03:00）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'REPORT_GENERATE', 'CRON', '0 3 1 * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 120, '{}',
+  (date_trunc('month', clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 month' + interval '3 hours') AT TIME ZONE 'Asia/Shanghai')
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
@@ -823,6 +836,7 @@ for (const site of localSites) {
   psql('hvac_s1', buildSavingsSeed(site, seededPoints));
   psql('hvac_s1', buildOptimizationSeed(site, seededPoints));
   psql('hvac_s1', buildDiagnosisSeed(site, seededPoints));
+  psql('hvac_s1', buildReportSeed(site));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);

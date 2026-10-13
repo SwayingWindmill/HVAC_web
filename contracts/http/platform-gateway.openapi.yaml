@@ -1725,6 +1725,24 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/reports/monthly": {
+      "get": {
+        "operationId": "listSiteMonthlyReportsV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "report-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "year", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 2000, "maximum": 9999 } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/reports/monthly/{month}": {
+      "get": {
+        "operationId": "getSiteMonthlyReportV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "report-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "month", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/optimization/recommendations/latest": {
       "get": {
         "operationId": "getLatestSiteOptimizationRecommendationV212",

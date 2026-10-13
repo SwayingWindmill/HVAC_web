@@ -31,6 +31,7 @@ type IntelligenceConfig struct {
 	ForecastBaseURL     string
 	FDDBaseURL          string
 	MVBaseURL           string
+	ReportBaseURL       string
 	OptimizationBaseURL string
 	HTTPClient          *http.Client
 	Timeout             time.Duration
@@ -40,6 +41,7 @@ type intelligenceController struct {
 	forecastBaseURL     string
 	fddBaseURL          string
 	mvBaseURL           string
+	reportBaseURL       string
 	optimizationBaseURL string
 	httpClient          *http.Client
 	timeout             time.Duration
@@ -90,6 +92,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 	resolved.ForecastBaseURL = strings.TrimRight(strings.TrimSpace(resolved.ForecastBaseURL), "/")
 	resolved.FDDBaseURL = strings.TrimRight(strings.TrimSpace(resolved.FDDBaseURL), "/")
 	resolved.MVBaseURL = strings.TrimRight(strings.TrimSpace(resolved.MVBaseURL), "/")
+	resolved.ReportBaseURL = strings.TrimRight(strings.TrimSpace(resolved.ReportBaseURL), "/")
 	resolved.OptimizationBaseURL = strings.TrimRight(strings.TrimSpace(resolved.OptimizationBaseURL), "/")
 	if resolved.HTTPClient == nil {
 		resolved.HTTPClient = &http.Client{}
@@ -98,7 +101,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 		resolved.Timeout = defaultIntelligenceTimeout
 	}
 	return &intelligenceController{
-		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, mvBaseURL: resolved.MVBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
+		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, mvBaseURL: resolved.MVBaseURL, reportBaseURL: resolved.ReportBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
 		httpClient: resolved.HTTPClient, timeout: resolved.Timeout,
 	}
 }

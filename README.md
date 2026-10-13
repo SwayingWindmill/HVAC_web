@@ -97,7 +97,7 @@ npm run repo:clean:local
 - 平台/身份/耐久性：`identity-service/`、`outbox-relay/`。
 - Telemetry/Analytics：`settlement-service/`。
 - Control/Rules/Delivery：`rule-runtime-service/`、`notification-service/`、`outbound-delivery-service/`。
-- Intelligence：`forecast-service/`、`optimization-service/`、`fdd-service/`、`mv-service/`。
+- Intelligence：`forecast-service/`、`optimization-service/`、`fdd-service/`、`mv-service/`、`report-service/`。
 - 智能运维：`operations-agent-service/`，TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、受控模型调用、业务记录和 AG-UI 投影。
 
 Operations Agent 通过 `energy-api`/Platform Gateway 边界暴露受保护调查接口；模型不能选择工具、扩大 Scope 或提交业务效果。`npm run operations-agent:safety-certification` 统一验证授权负向、精确重试、重启、并发和事件流恢复。

@@ -1,0 +1,160 @@
+{
+  "id": "01a1331b-180c-7241-80f7-224a78a8095e",
+  "month": "2026-09",
+  "version": 1,
+  "generatedAt": "2026-10-13T02:32:56.076711Z",
+  "report": {
+    "schemaVersion": 1,
+    "month": "2026-09",
+    "timezone": "Asia/Shanghai",
+    "daysInMonth": 30,
+    "daysWithData": 16,
+    "electricityKWh": 72696.834355,
+    "coolingKWh": 209458.895496,
+    "cop": 2.881265702343388,
+    "energyCostCNY": 60258.71164632004,
+    "energyCostStatus": "PRICED",
+    "tariffPeriods": [
+      {
+        "code": "PEAK",
+        "electricityKWh": 29820.148884000024,
+        "costCNY": 35784.17866080005
+      },
+      {
+        "code": "FLAT",
+        "electricityKWh": 26884.98408699999,
+        "costCNY": 19357.18854264
+      },
+      {
+        "code": "VALLEY",
+        "electricityKWh": 15991.701383999985,
+        "costCNY": 5117.344442879995
+      }
+    ],
+    "days": [
+      {
+        "date": "2026-09-15",
+        "electricityKWh": 4654.184539,
+        "coolingKWh": 13636.467181,
+        "cop": 2.929936934544056,
+        "energyCostCNY": 3852.212473519999
+      },
+      {
+        "date": "2026-09-16",
+        "electricityKWh": 4811.656046,
+        "coolingKWh": 14442.614489,
+        "cop": 3.0015891308370546,
+        "energyCostCNY": 3971.2454972
+      },
+      {
+        "date": "2026-09-17",
+        "electricityKWh": 4317.246751000001,
+        "coolingKWh": 11887.170292000003,
+        "cop": 2.7534146129698485,
+        "energyCostCNY": 3595.3404992799997
+      },
+      {
+        "date": "2026-09-18",
+        "electricityKWh": 4409.326656999998,
+        "coolingKWh": 12363.023046999995,
+        "cop": 2.803834691488134,
+        "energyCostCNY": 3665.214343280001
+      },
+      {
+        "date": "2026-09-19",
+        "electricityKWh": 4563.9947680000005,
+        "coolingKWh": 13162.662494000004,
+        "cop": 2.8840222574944026,
+        "energyCostCNY": 3782.4569735199993
+      },
+      {
+        "date": "2026-09-20",
+        "electricityKWh": 4653.788538000001,
+        "coolingKWh": 13626.868928999997,
+        "cop": 2.9281237894097014,
+        "energyCostCNY": 3850.707866880002
+      },
+      {
+        "date": "2026-09-21",
+        "electricityKWh": 4499.355754,
+        "coolingKWh": 12828.576629999996,
+        "cop": 2.851203001361958,
+        "energyCostCNY": 3733.224260400001
+      },
+      {
+        "date": "2026-09-22",
+        "electricityKWh": 4313.705683000004,
+        "coolingKWh": 11868.75690600001,
+        "cop": 2.75140627993558,
+        "energyCostCNY": 3592.8531869599983
+      },
+      {
+        "date": "2026-09-23",
+        "electricityKWh": 4808.072035999998,
+        "coolingKWh": 14423.972823000004,
+        "cop": 2.99994940071651,
+        "energyCostCNY": 3968.7090781600004
+      },
+      {
+        "date": "2026-09-24",
+        "electricityKWh": 4623.2162769999995,
+        "coolingKWh": 13468.94892499999,
+        "cop": 2.913328756001867,
+        "energyCostCNY": 3827.2730183199974
+      },
+      {
+        "date": "2026-09-25",
+        "electricityKWh": 4468.420002999999,
+        "coolingKWh": 12668.624635000015,
+        "cop": 2.835146344008526,
+        "energyCostCNY": 3709.78361
+      },
+      {
+        "date": "2026-09-26",
+        "electricityKWh": 4282.764256000002,
+        "coolingKWh": 11708.804910999985,
+        "cop": 2.7339363577148474,
+        "energyCostCNY": 3569.536083200004
+      },
+      {
+        "date": "2026-09-27",
+        "electricityKWh": 4777.108103999999,
+        "coolingKWh": 14264.020827,
+        "cop": 2.9859112493301874,
+        "energyCostCNY": 3945.033035840004
+      },
+      {
+        "date": "2026-09-28",
+        "electricityKWh": 4592.275798000002,
+        "coolingKWh": 13308.996931000001,
+        "cop": 2.8981266623394544,
+        "energyCostCNY": 3803.7431123200045
+      },
+      {
+        "date": "2026-09-29",
+        "electricityKWh": 4391.846961999996,
+        "coolingKWh": 12508.672638999997,
+        "cop": 2.848157676537912,
+        "energyCostCNY": 3642.991340480002
+      },
+      {
+        "date": "2026-09-30",
+        "electricityKWh": 4529.8721829999995,
+        "coolingKWh": 13290.713837000018,
+        "cop": 2.9340151995630865,
+        "energyCostCNY": 3748.3872669600028
+      }
+    ],
+    "findings": {
+      "count": 0,
+      "byType": []
+    },
+    "savings": {
+      "days": 0,
+      "adjustedBaselineKWh": 0,
+      "avoidedKWh": 0,
+      "avoidedCost": 0,
+      "unpricedHours": 0
+    }
+  }
+}
