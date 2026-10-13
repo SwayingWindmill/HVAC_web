@@ -147,7 +147,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                   <TableRow>
                     <TableHead className="w-16">排名</TableHead>
                     <TableHead>站点</TableHead>
-                    <TableHead className="w-[28%]">综合能效（COP）</TableHead>
+                    <TableHead className="w-[20%]">综合能效（COP）</TableHead>
                     <TableHead className="w-28">与整体相比</TableHead>
                     <TableHead className="w-32 text-right">空调用电</TableHead>
                     <TableHead className="w-36 text-right">单位面积用电</TableHead>
@@ -166,11 +166,11 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="flex items-center gap-2 font-medium">
+                        <span className="flex items-center gap-2 font-medium whitespace-nowrap">
                           <span className="size-2 rounded-[2px]" style={{ background: colorOf(site.siteId) }} aria-hidden="true" />
                           {site.name}
                         </span>
-                        <span className="block pl-4 text-xs text-muted-foreground">
+                        <span className="block pl-4 text-xs whitespace-nowrap text-muted-foreground">
                           {site.climateZone ? CLIMATE_ZONE_LABEL[site.climateZone] : '气候区未登记'}
                         </span>
                       </TableCell>
