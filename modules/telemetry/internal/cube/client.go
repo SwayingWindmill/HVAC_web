@@ -115,7 +115,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy series: %w", err)
 	}
-	metadata, err := client.load(queryContext, token, buildMetadataQuery(productQuery))
+	metadata, err := client.load(queryContext, token, buildMetadataQuery(productQuery, location))
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
 	}
@@ -216,13 +216,18 @@ func periodDimension(productQuery analyticsmodel.EnergySeriesQuery, location *ti
 	}}
 }
 
-func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
+// buildMetadataQuery reads the watermark and dataset revision from the window's start on, so its
+// cost follows the window rather than the Site's whole history. A Site without facts since then has
+// no watermark for the window, which callers already show as no data.
+func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	return cubeQuery{
 		Measures: []string{
 			"energy_usage.max_data_watermark",
 			"energy_usage.max_dataset_revision",
 		},
-		Filters:  energyFilters(productQuery, accountingScopeSite),
+		Filters: append(energyFilters(productQuery, accountingScopeSite), cubeFilter{
+			Member: "energy_usage.period_end", Operator: "afterOrOnDate", Values: []string{productQuery.From.In(location).Format(cubeWallTime)},
+		}),
 		Timezone: productQuery.Timezone,
 		Limit:    1,
 	}

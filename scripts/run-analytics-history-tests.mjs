@@ -767,6 +767,24 @@ try {
   });
   if (!report.assertions.reportSnapshots.includes('--- PASS: TestReportRuntimeSnapshotsTheMonthItsJobNames')) throw new Error('TestReportRuntimeSnapshotsTheMonthItsJobNames did not run');
 
+  // energy_interval_facts_visible keeps only a fact's latest revision, and filters on it after
+  // choosing that revision: a fact corrected from SITE to BRANCH leaves the Site total. The caller's
+  // Site and period filters must still reach the table's index, or every query reads the whole table.
+  const visibleFact = (revision, scope, energyKWh, projectedAt) => `(generateUUIDv4(), toUUID('01990000-2a00-7000-8000-000000000001'), toUUID('01990000-2a10-7000-8000-000000000001'),
+     toUUID('01990000-2a20-7000-8000-000000000001'), 'electricity', '${scope}', 'VALID', toDateTime64('2026-06-10 01:59:00', 3, 'UTC'), toDateTime64('2026-06-10 02:00:00', 3, 'UTC'), ${energyKWh},
+     toUUID('01990000-2a30-7000-8000-000000000001'), ${revision}, toDateTime64('${projectedAt}', 3, 'UTC'))`;
+  clickHouse(`INSERT INTO analytics.energy_interval_facts (fact_id, tenant_id, site_id, meter_binding_id, energy_type, accounting_scope, quality, period_start, period_end, energy_kwh, source_current_observation_id, fact_revision, projected_at) VALUES ${[
+    visibleFact(0, 'SITE', 5, '2026-06-10 02:01:00'),
+    visibleFact(1, 'BRANCH', 6, '2026-06-11 00:00:00'),
+  ].join(',\n')}`);
+  const visibleScope = `FROM analytics.energy_interval_facts_visible WHERE tenant_id = toUUID('01990000-2a00-7000-8000-000000000001') AND site_id = toUUID('01990000-2a10-7000-8000-000000000001')
+    AND period_end >= toDateTime64('2026-06-10 00:00:00', 3, 'UTC') AND period_end < toDateTime64('2026-06-11 00:00:00', 3, 'UTC')`;
+  report.assertions.visibleLatestRevision = clickHouse(`SELECT toString(count()) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'SITE')) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'BRANCH')) ${visibleScope} FORMAT TSVRaw`);
+  if (report.assertions.visibleLatestRevision !== '1|0|6') throw new Error(`visible facts did not keep only the latest revision: ${report.assertions.visibleLatestRevision}`);
+  report.assertions.visibleIndexCondition = clickHouse(`EXPLAIN indexes = 1 SELECT sum(energy_kwh) ${visibleScope}`);
+  const primaryKeyCondition = /PrimaryKey\n[\s\S]*?Condition: (.*)/.exec(report.assertions.visibleIndexCondition)?.[1] ?? '';
+  if (!primaryKeyCondition.includes('site_id') || !primaryKeyCondition.includes('period_end')) throw new Error(`visible facts read the whole table: PrimaryKey condition ${primaryKeyCondition || 'missing'}`);
+
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
     toString(count()) || '|' || toString(min(horizon_minutes)) || '|' || toString(max(horizon_minutes)) || '|'
