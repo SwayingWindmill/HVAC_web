@@ -46,7 +46,7 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
   await expect(page.getByRole('region', { name: '节能成效' })).toContainText('基线不可信，暂不核算');
 });
 
-test('only one measure reports on a Site at a time, and the owner says so', async ({ page, gateway }) => {
+test('a measure on the plant meter reports alone, and the owner says so', async ({ page, gateway }) => {
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
   for (const name of ['提高冷冻水供水温度', '冷却塔风机变频']) {
     await page.getByRole('button', { name: '登记措施' }).first().click();
@@ -56,13 +56,39 @@ test('only one measure reports on a Site at a time, and the owner says so', asyn
     await sheet.getByRole('button', { name: '确认实施' }).click();
     await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
     if (name === '冷却塔风机变频') {
-      await expect(page.getByRole('dialog', { name: '确认实施' })).toContainText('同一站点同一时间只能有一项措施在核算');
+      await expect(page.getByRole('dialog', { name: '确认实施' })).toContainText('冷站总表的措施与任何设备措施也不能同时核算');
     } else {
       await expect(sheet).toContainText('基线不可信');
       await page.keyboard.press('Escape');
     }
   }
   expect(gateway.measures.filter((measure) => measure.status === 'IMPLEMENTED')).toHaveLength(1);
+});
+
+// Each machine's sub-meter is its own boundary: measures on two machines report at once.
+test("measures on two machines' sub-meters report side by side", async ({ page, gateway }) => {
+  await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
+  for (const [name, machine] of [['冷冻泵降频', 'CHWP-01'], ['冷却塔风机变频', 'CT-01']]) {
+    await page.getByRole('button', { name: '登记措施' }).first().click();
+    await page.getByLabel('名称').fill(name);
+    await page.getByLabel('测量边界').click();
+    await page.getByRole('option', { name: `${machine} 分表（IPMVP 选项 B）` }).click();
+    await page.getByRole('button', { name: '登记', exact: true }).click();
+    const sheet = page.getByRole('dialog');
+    await expect(sheet).toContainText(`基线（IPMVP 选项 B · ${machine} 分表）`);
+    await sheet.getByRole('button', { name: '确认实施' }).click();
+    await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
+    await expect(sheet).toContainText('基线不可信');
+    await page.keyboard.press('Escape');
+  }
+  const registered = gateway.writes.filter((write) => write.path === MEASURES).map((write) => write.body?.boundaryDeviceId);
+  expect(registered.every((id) => typeof id === 'string')).toBe(true);
+  expect(new Set(registered).size).toBe(2);
+  expect(gateway.measures.filter((measure) => measure.status === 'IMPLEMENTED')).toHaveLength(2);
+  const ledger = page.getByRole('table', { name: '节能措施列表' });
+  await expect(ledger.getByRole('row', { name: /冷冻泵降频/ })).toContainText('CHWP-01 分表');
+  await expect(ledger.getByRole('row', { name: /冷却塔风机变频/ })).toContainText('CT-01 分表');
+  await expect(page.getByRole('region', { name: '节能成效' })).toContainText('2 项措施');
 });
 
 test('a measure cites the setpoint command it came from, named as the control page names it', async ({ page, gateway }) => {

@@ -161,7 +161,7 @@ export class Gateway {
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
-  // implementation time, and only one measure on the Site reports at a time.
+  // implementation time; measures report at once only on different machines' sub-meters.
   private savings(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
     const base = `/api/v1/sites/${SITE_ID}/savings`;
     const refuse = (status: number, code: string) => ({ status, body: { type: 'about:blank', title: 'Savings request refused', status, detail: code, instance: path, code, traceId: '0'.repeat(32), retryable: false } });
@@ -178,7 +178,8 @@ export class Gateway {
       }
       const measure = {
         id: `01a12ef8-0000-7000-8000-${String(this.measures.length + 1).padStart(12, '0')}`, siteId: SITE_ID, name: body?.name, kind: body?.kind,
-        description: body?.description ?? '', evidence: body?.evidence ?? '', evidenceCommandId: body?.evidenceCommandId ?? null, status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
+        description: body?.description ?? '', evidence: body?.evidence ?? '', evidenceCommandId: body?.evidenceCommandId ?? null,
+        boundaryDeviceId: body?.boundaryDeviceId ?? null, status: 'PLANNED', plannedAt: body?.plannedAt, implementedAt: null, endedAt: null,
         investmentCny: body?.investmentCny ?? null, expectedAnnualKWh: body?.expectedAnnualKWh ?? null, baseline: null, totals: totalsOf([]), days: [],
         createdAt: now, updatedAt: now,
       };
@@ -193,7 +194,8 @@ export class Gateway {
     if (method !== 'POST') return undefined;
     if (match[2] === 'implement') {
       if (measure.status !== 'PLANNED') return refuse(409, 'SAVINGS_MEASURE_STATE_CONFLICT');
-      if (this.measures.some((other) => other.status === 'IMPLEMENTED')) return refuse(409, 'SAVINGS_REPORTING_OVERLAP');
+      const sharesBoundary = (other: Json) => other.boundaryDeviceId === null || measure.boundaryDeviceId === null || other.boundaryDeviceId === measure.boundaryDeviceId;
+      if (this.measures.some((other) => other.status === 'IMPLEMENTED' && sharesBoundary(other))) return refuse(409, 'SAVINGS_REPORTING_OVERLAP');
       const recorded = fixture<Json>('savings-measure.json').baseline;
       Object.assign(measure, {
         status: 'IMPLEMENTED', implementedAt: body?.implementedAt, updatedAt: now,
@@ -355,9 +357,15 @@ export class Gateway {
   }
 }
 
+// As the owner totals them: a day several measures verified counts once, with the plant's electricity once.
 function totalsOf(days: Json[]): Json {
   const sum = (key: string) => days.reduce((total, day) => total + day[key], 0);
-  return { days: days.length, unpricedHours: sum('unpricedHours'), adjustedBaselineKWh: sum('adjustedBaselineKWh'), actualKWh: sum('actualKWh'), avoidedKWh: sum('avoidedKWh'), avoidedCost: sum('avoidedCost') };
+  const plant = new Map<string, number>();
+  for (const day of days) plant.set(day.day, Math.max(plant.get(day.day) ?? 0, day.plantKWh));
+  return {
+    days: plant.size, unpricedHours: sum('unpricedHours'), adjustedBaselineKWh: sum('adjustedBaselineKWh'), actualKWh: sum('actualKWh'),
+    avoidedKWh: sum('avoidedKWh'), avoidedCost: sum('avoidedCost'), plantKWh: Array.from(plant.values()).reduce((total, kwh) => total + kwh, 0),
+  };
 }
 
 function bodyOf(request: Request): Json | null {

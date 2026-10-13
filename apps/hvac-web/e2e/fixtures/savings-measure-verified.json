@@ -6,6 +6,7 @@
   "description": "按优化建议把 CHILLER-01 冷冻水出水设定温度由 7 °C 提高到 8 °C，冷机效率随之提高。",
   "evidence": "9 月 29 日优化建议",
   "evidenceCommandId": null,
+  "boundaryDeviceId": null,
   "status": "ENDED",
   "plannedAt": "2026-09-29T01:00:00Z",
   "implementedAt": "2026-09-29T01:00:00Z",
@@ -31,7 +32,8 @@
     "adjustedBaselineKWh": 25151.85863317232,
     "actualKWh": 24784.75837600004,
     "avoidedKWh": 367.1002571722795,
-    "avoidedCost": 347.0927352593673
+    "avoidedCost": 347.0927352593673,
+    "plantKWh": 24784.75837600004
   },
   "days": [
     {
@@ -42,7 +44,8 @@
       "adjustedBaselineKWh": 3285.934991597967,
       "actualKWh": 3242.0403790000128,
       "avoidedKWh": 43.89461259795357,
-      "avoidedCost": 43.22143269568564
+      "avoidedCost": 43.22143269568564,
+      "plantKWh": 3242.0403790000128
     },
     {
       "day": "2026-10-01",
@@ -52,7 +55,8 @@
       "adjustedBaselineKWh": 4334.6437282869165,
       "actualKWh": 4267.151739000008,
       "avoidedKWh": 67.49198928690873,
-      "avoidedCost": 63.575366889282684
+      "avoidedCost": 63.575366889282684,
+      "plantKWh": 4267.151739000008
     },
     {
       "day": "2026-10-02",
@@ -62,7 +66,8 @@
       "adjustedBaselineKWh": 4169.074013215635,
       "actualKWh": 4089.3000260000117,
       "avoidedKWh": 79.77398721562369,
-      "avoidedCost": 73.95907847283013
+      "avoidedCost": 73.95907847283013,
+      "plantKWh": 4089.3000260000117
     },
     {
       "day": "2026-10-03",
@@ -72,7 +77,8 @@
       "adjustedBaselineKWh": 4610.142114920859,
       "actualKWh": 4563.066883999971,
       "avoidedKWh": 47.07523092088756,
-      "avoidedCost": 44.710787679633754
+      "avoidedCost": 44.710787679633754,
+      "plantKWh": 4563.066883999971
     },
     {
       "day": "2026-10-04",
@@ -82,7 +88,8 @@
       "adjustedBaselineKWh": 4445.031555166654,
       "actualKWh": 4385.70104,
       "avoidedKWh": 59.3305151666536,
-      "avoidedCost": 56.274679407904834
+      "avoidedCost": 56.274679407904834,
+      "plantKWh": 4385.70104
     },
     {
       "day": "2026-10-05",
@@ -92,7 +99,8 @@
       "adjustedBaselineKWh": 4307.03222998429,
       "actualKWh": 4237.498308000038,
       "avoidedKWh": 69.53392198425234,
-      "avoidedCost": 65.35139011403027
+      "avoidedCost": 65.35139011403027,
+      "plantKWh": 4237.498308000038
     }
   ],
   "createdAt": "2026-10-12T12:36:21.947072Z",

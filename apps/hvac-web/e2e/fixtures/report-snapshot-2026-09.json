@@ -154,7 +154,8 @@
       "adjustedBaselineKWh": 0,
       "avoidedKWh": 0,
       "avoidedCost": 0,
-      "unpricedHours": 0
+      "unpricedHours": 0,
+      "plantKWh": 0
     }
   }
 }
