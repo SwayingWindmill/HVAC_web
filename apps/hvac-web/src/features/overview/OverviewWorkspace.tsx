@@ -325,8 +325,9 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
         {recommendation ? (
           <p className="text-xs text-muted-foreground">
             {changesSupply(recommendation)
-              ? `供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} ${TRIGGER_LABEL[recommendation.trigger]}`
-              : `保持供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} ${TRIGGER_LABEL[recommendation.trigger]}`}
+              ? `供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C`
+              : `保持供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C`}
+            ，{formatTime(recommendation.createdAt, timeZone)} {TRIGGER_LABEL[recommendation.trigger]}
           </p>
         ) : null}
       </CardContent>

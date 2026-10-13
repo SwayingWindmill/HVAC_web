@@ -244,9 +244,11 @@ func (store *PostgresStore) LatestRecommendation(ctx context.Context, tenantID, 
 		return PublishedRecommendation{}, err
 	}
 	var runID string
+	// The latest is the one prepared last: an older run still queued when a newer one published
+	// must not replace it by finishing later.
 	err = tx.QueryRow(ctx, `SELECT id::text FROM core_registry.optimization_runs
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='PUBLISHED'
-ORDER BY finished_at DESC NULLS LAST,updated_at DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
+ORDER BY created_at DESC, id DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
 	}
@@ -316,6 +318,7 @@ r.approval_state,r.current_state_revalidation,CASE WHEN r.command_intent_id IS N
 run.status,run.quality,job.trigger_type
 FROM core_registry.optimization_recommendations r
 JOIN core_registry.optimization_runs run ON run.tenant_id=r.tenant_id AND run.site_id=r.site_id AND run.id=r.optimization_run_id
+-- A prepared run is queued as the job with the run's own id.
 JOIN core_registry.job_instances job ON job.job_id=run.id
 WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::uuid AND run.status='PUBLISHED'`, tenantID, siteID, runID).Scan(
 		&result.Recommendation.ID, &result.RunID, &result.Recommendation.InputSnapshotID, &result.Recommendation.DeploymentRevision,

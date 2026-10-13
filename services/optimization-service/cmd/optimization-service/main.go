@@ -136,8 +136,8 @@ func claimAndRunOptimizationJobs(ctx context.Context, store *optimization.Postgr
 }
 
 // prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current
-// state; the run's own job then executes like an operator's. A Site whose inputs are unavailable
-// fails the firing without retry, as the next firing reads them again.
+// state; the run's own job then executes like an operator's. A firing that cannot prepare fails
+// without retry: the next hour's firing reads the Site again.
 func prepareScheduledOptimization(ctx context.Context, store *optimization.PostgresStore, preparer *optimization.Preparer, job optimization.SchedulerJob, leaseDuration time.Duration) {
 	started, err := store.StartOptimizationJob(ctx, job, leaseDuration, time.Now().UTC())
 	if err != nil {
@@ -156,11 +156,11 @@ func prepareScheduledOptimization(ctx context.Context, store *optimization.Postg
 	prepared, err := preparer.Prepare(jobCtx, request)
 	cancel()
 	if err != nil {
-		code, retryable := "OPTIMIZATION_PREPARATION_FAILED", true
+		code := "OPTIMIZATION_PREPARATION_FAILED"
 		if errors.Is(err, optimization.ErrPreparationUnavailable) {
-			code, retryable = "OPTIMIZATION_INPUT_UNAVAILABLE", false
+			code = "OPTIMIZATION_INPUT_UNAVAILABLE"
 		}
-		if failErr := store.FailOptimizationJob(context.Background(), job, code, err, retryable, time.Now().UTC()); failErr != nil {
+		if failErr := store.FailOptimizationJob(context.Background(), job, code, err, false, time.Now().UTC()); failErr != nil {
 			log.Printf("optimization schedule firing %s failure finalization failed: %v", job.JobID, failErr)
 		}
 		return

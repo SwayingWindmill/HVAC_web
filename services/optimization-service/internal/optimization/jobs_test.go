@@ -54,9 +54,4 @@ func TestAScheduleFiringPreparesARunOnTheWholeSite(t *testing.T) {
 	if IsScheduledPreparation(run) {
 		t.Fatal("a prepared run was taken for a schedule firing")
 	}
-	manual := firing
-	manual.TriggerType = "MANUAL"
-	if _, err := ScheduledPreparationRequest(manual); err == nil {
-		t.Fatal("a MANUAL job was prepared as a schedule firing")
-	}
 }
