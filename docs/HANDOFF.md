@@ -50,7 +50,7 @@ Roadmap issues, in order:
 
 1. **#484 — measured savings (M&V).** Live and accepted end to end (spec `docs/specs/savings-verification.md`, ADR 0021).
    - Acceptance ran on replayed history: Site A's setpoint was raised to 8 °C on 2026-09-29 09:00; the measure was implemented then and ended 10-06.
-   - The baseline used 336/336 hours (CV(RMSE) 0.6 %, NMBE 0.0 %) and passed; six days were verified, saving 367 kWh and ¥347.
+   - The baseline used 336/336 hours (CV(RMSE) 0.6 %, NMBE 0.0 %) and passed; six days were verified, saving 373 kWh and ¥353 (re-verified on 2026-10-13 on hourly Metrics recalculated with the counter window-start fix; before it, 367 kWh and ¥347 with the same 1.5 % rate).
    - The result is recorded as `e2e/fixtures/savings-measure-verified.json`.
    - **Weeks of history without the live simulator.** `node scripts/local-history-replay.mjs --from … --to … [--commands <siteCode>=<file>] [--metrics-only]` replays the Sites' meters through Telemetry Runtime's Historical Replay path, on each Site's daily scenario, then recalculates their hourly and daily Metrics.
      - It takes about 10 minutes per Site for three weeks, and a few minutes of Metric recalculation.
@@ -67,10 +67,9 @@ Roadmap issues, in order:
 
 Smaller follow-ups:
 
-- FDD rule revisions have no publishing script yet. To change the low-delta-T threshold or window, insert the next revision (never update one): `INSERT INTO core_registry.fdd_rule_revisions (id, tenant_id, rule_code, revision, minimum_delta_tc, window_minutes, effective_from, created_at) VALUES (<uuid v7>, <tenant>, 'CHILLED_WATER_LOW_DELTA_T', <n+1>, <K>, <minutes>, <from>, now())` as the migrator. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
-- Unsaved drafts on platform pages (系统管理) belong to the page: `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope's own draft path (`registerDraft` / `dirtyDrafts`, the site-switch confirmation in `ShellChrome`) has no caller since that fix; keep it for Site-page forms or remove it.
+- To change the FDD low-delta-T threshold or window, publish the next revision (never update one): `node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <instant>]`. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
+- Unsaved drafts on platform pages (系统管理) belong to the page: `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope no longer tracks drafts and switching Sites asks nothing; a Site-page form that must guard its draft does it the same way.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
-- The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
 - Polish the device inspector and the work-order sheet in the same visual system.
 
 ## Local environment notes
@@ -79,10 +78,10 @@ These are drifts from the seed in the current local database. A `npm run local:r
 
 - The stack was rebuilt from the #481 seed on 2026-10-12 22:06 (Site time); live history starts then.
 - Both Sites hold replayed meter history, sub-meters included, for 2026-09-15 to 10-06 (Site time). Site A's includes the 8 °C setpoint raise from 09-29 09:00.
-- The savings ledger holds the Option B acceptance measure on Site B (CHWP-01, 09-08 to 09-15). The Option C result lives on only as `e2e/fixtures/savings-measure-verified.json`.
+- The savings ledger holds the Option B acceptance measure on Site B (CHWP-01, 09-08 to 09-15) and the re-verified Option C measure on Site A (8 °C setpoint, 09-29 09:00 to 10-06).
 - Both Sites now also hold replayed history for 2026-08-25 to 09-14 (Site time). Site B's chilled water pump runs at 45 Hz from 09-08 09:00. Only Site B's `hourly_energy`, `hourly_cooling` and CHWP-01 `device_hourly_energy` were recalculated over it; Site A's hourly and daily Metrics for that window are missing.
 - `energy_cost` v1 (average-rate expression) was superseded by hand with v2 (`TARIFF_ENERGY_COST` on `hourly_energy`), with new bindings and the daily cost schedules repointed; a fresh seed starts at v1 = `TARIFF_ENERGY_COST`.
-- Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Earlier and later periods still hold values from before the fix.
+- Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Site A's `hourly_energy` and `hourly_cooling` were also recalculated through 10-05 for the M&V re-verification. Other periods and Metrics still hold values from before the fix.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.
 - The ClickHouse user `report_service_reader` was created by hand (init scripts only run on an empty volume). September 2026 was snapshot for both Sites by a hand-queued `REPORT_GENERATE` job (16 of 30 days, from the replay).
 - Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. To fill them in, stop `telemetry-worker`, truncate `analytics.energy_projection_checkpoints`, then start it again. Truncating while it runs does nothing: the batch in flight writes its checkpoint back. The existing-fact check skips intervals that already have a fact.
