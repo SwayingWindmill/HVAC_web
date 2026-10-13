@@ -1,0 +1,108 @@
+{
+  "id": "01a133b0-c5cb-7d62-9930-ebf9b87ba2ca",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "name": "冷冻水泵降频至 45 Hz",
+  "kind": "SETPOINT_RESET",
+  "description": "冷冻水泵 CHWP-01 由工频 50 Hz 降至 45 Hz 运行，流量仍满足冷机最低流量要求。",
+  "evidence": "9 月 8 日运行调整",
+  "evidenceCommandId": null,
+  "boundaryDeviceId": "018f3e00-4000-7000-8000-000000000002",
+  "status": "ENDED",
+  "plannedAt": "2026-09-08T01:00:00Z",
+  "implementedAt": "2026-09-08T01:00:00Z",
+  "endedAt": "2026-09-14T16:00:00Z",
+  "investmentCny": 0,
+  "expectedAnnualKWh": null,
+  "baseline": {
+    "from": "2026-08-25T01:00:00Z",
+    "to": "2026-09-08T01:00:00Z",
+    "samples": 336,
+    "expectedHours": 336,
+    "model": {
+      "interceptKWh": 45,
+      "slope": 0,
+      "cvRmse": 0,
+      "nmbe": 0
+    },
+    "trusted": true
+  },
+  "totals": {
+    "days": 6,
+    "unpricedHours": 0,
+    "adjustedBaselineKWh": 6075,
+    "actualKWh": 4428.675000000001,
+    "avoidedKWh": 1646.324999999999,
+    "avoidedCost": 1255.5972,
+    "plantKWh": 23134.342674
+  },
+  "days": [
+    {
+      "day": "2026-09-09",
+      "expectedHours": 15,
+      "hours": 15,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 675,
+      "actualKWh": 492.0749999999989,
+      "avoidedKWh": 182.9250000000011,
+      "avoidedCost": 162.92520000000178,
+      "plantKWh": 2837.6489629999996
+    },
+    {
+      "day": "2026-09-10",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 1080,
+      "actualKWh": 787.3199999999997,
+      "avoidedKWh": 292.6800000000003,
+      "avoidedCost": 218.53440000000174,
+      "plantKWh": 4005.7548769999994
+    },
+    {
+      "day": "2026-09-11",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 1080,
+      "actualKWh": 787.3199999999997,
+      "avoidedKWh": 292.6800000000003,
+      "avoidedCost": 218.5344000000003,
+      "plantKWh": 4138.978791000001
+    },
+    {
+      "day": "2026-09-12",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 1080,
+      "actualKWh": 787.3199999999997,
+      "avoidedKWh": 292.6800000000003,
+      "avoidedCost": 218.53439999999853,
+      "plantKWh": 4272.321477000005
+    },
+    {
+      "day": "2026-09-13",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 1080,
+      "actualKWh": 787.3200000000033,
+      "avoidedKWh": 292.67999999999665,
+      "avoidedCost": 218.53439999999736,
+      "plantKWh": 3847.237653999997
+    },
+    {
+      "day": "2026-09-14",
+      "expectedHours": 24,
+      "hours": 24,
+      "unpricedHours": 0,
+      "adjustedBaselineKWh": 1080,
+      "actualKWh": 787.3199999999997,
+      "avoidedKWh": 292.6800000000003,
+      "avoidedCost": 218.5344000000003,
+      "plantKWh": 4032.4009119999973
+    }
+  ],
+  "createdAt": "2026-10-13T05:16:25.419781Z",
+  "updatedAt": "2026-10-13T05:16:31.398985Z"
+}

@@ -16,6 +16,7 @@ Savings verification (M&V, #484, spec `docs/specs/savings-verification.md`) is i
 
 **What it reads.**
 - Hourly plant electricity and cooling come from released Metric results (`hourly_energy`, `hourly_cooling`). They are DELTA Metrics on the HVAC meter's energy counter and the BTU meter's cooling counter. mv-service reads them from ClickHouse with its own read-only account (`mv_service_reader`), the way Optimization reads `daily_energy`.
+- A measure bounded by one machine's sub-meter (IPMVP Option B, added 2026-10-13) reads that device's `device_hourly_energy`, a DELTA Metric on the sub-meter's counter, against the plant's `hourly_cooling`. Each verified day also records the plant's `hourly_energy` over the same hours, so a Site's savings are read against the whole plant.
 - The runtime role reads the Site's timezone, which verified days are split on.
 - It also reads the import Tariff in effect, to price each avoided hour. Hours are priced on the Tariff Version's own timezone, the way Settlement prices them. When no Tariff is assigned, energy is still verified and the hours stay unpriced.
 - A measure may cite the executed command it came from. This is a reference into Command Governance's records, not a key. mv-service does not check the command, and the page resolves it from the Site's command list. An executed optimization recommendation is cited through the command it produced.
@@ -36,4 +37,5 @@ We chose a separate owner because "verified savings" is an audit claim (PRODUCT.
 
 - Two hourly Metrics per Site must be released and scheduled before a measure can be verified. The local seed provides them.
 - `mv_service_reader` can read every Tenant's Metric results. The query scopes it to the Site, so the account sees only metric result tables and cannot write.
-- IPMVP Option C with whole-plant boundaries means at most one measure per Site may report at a time.
+- Measures overlap only on different machines' sub-meters: two on one device, or any beside one on the plant's total meter, would count the same energy. The service and a table trigger enforce it.
+- Each sub-metered device needs its own released `device_hourly_energy` binding before it can bound a measure.

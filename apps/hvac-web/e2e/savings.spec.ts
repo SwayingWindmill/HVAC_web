@@ -135,3 +135,19 @@ test('a verified measure shows its trusted baseline and what each day saved', as
   await expect(days.getByRole('row').filter({ hasText: '2026-09-30' })).toContainText('100%');
   await expect(sheet.getByRole('button', { name: '重新拟合基线' })).toHaveCount(0);
 });
+
+// Recorded on the local stack from replayed history: Site B's chilled water pump cut from 50 Hz to
+// 45 Hz on 2026-09-08 09:00, verified on its sub-meter; moved onto the e2e Site's own CHWP-01.
+test("a measure verified on a machine's sub-meter fits that machine against plant cooling", async ({ page, gateway }) => {
+  const verified = JSON.parse(readFileSync(new URL('./fixtures/savings-measure-device-verified.json', import.meta.url), 'utf8'));
+  gateway.measures.push(verified);
+  await page.goto(`/energy-analysis/savings?site=${SITE_ID}&inspect=${verified.id}`);
+
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('测量边界CHWP-01 分表');
+  await expect(sheet).toContainText('基线（IPMVP 选项 B · CHWP-01 分表）');
+  await expect(sheet).toContainText('设备用电 = 45.0 + 0.000 × 冷站供冷量');
+  await expect(sheet).toContainText('累计节电1,646 kWh');
+  await expect(sheet).toContainText('节电率27.1%');
+  await expect(sheet.getByRole('table', { name: '逐日核算' }).getByRole('row')).toHaveCount(7);
+});
