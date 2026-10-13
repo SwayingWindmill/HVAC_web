@@ -43,7 +43,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
-import { confirmDiscardRegistryDraft } from './useDirtyGuard';
+import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import {
   makeRegistryMutationMeta,
   newRegistryIdempotencyKey,
