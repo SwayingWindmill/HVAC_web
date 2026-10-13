@@ -3,9 +3,11 @@
 // weeks of plant history before a measure; a laptop cannot run the simulator that long.
 //
 //   node scripts/local-history-replay.mjs --from 2026-09-15T00:00:00+08:00 --to 2026-10-06T00:00:00+08:00 \
-//     [--commands local-energy-site=tools/eg8200-simulator/configs/replay-setpoint-raise.json] [--metrics-only]
+//     [--commands local-energy-site=tools/eg8200-simulator/configs/replay-setpoint-raise.json] [--metrics-only | --weather-only]
 //
-// --metrics-only queues the Metric recalculation again without replaying.
+// --metrics-only queues the Metric recalculation again without replaying. --weather-only replays the
+// weather station's outdoor temperature alone, into a window that already holds the meters' history;
+// no Metric reads it, so nothing is recalculated.
 //
 // Replay only a window that ends before the Site's live history begins: replayed counters start
 // fresh, so a window touching live data would put a counter jump into one hour. A window that
@@ -25,6 +27,7 @@ const { values } = parseArgs({
     to: { type: 'string' },
     commands: { type: 'string', multiple: true, default: [] },
     'metrics-only': { type: 'boolean', default: false },
+    'weather-only': { type: 'boolean', default: false },
   },
 });
 const from = new Date(values.from ?? '');
@@ -74,23 +77,28 @@ function datasetId(site) {
   return `${stamp.slice(0, 8)}-${stamp.slice(8, 12)}-7000-8000-${String(site.index + 1).padStart(12, '0')}`;
 }
 
+// The benchmark's degree days read the weather station's outdoor temperature.
+const weatherPoint = 'WEATHER-STATION-01/weather.ambient_dry_bulb_temperature';
+const meterPoints = [
+  'METER-HVAC-TOTAL/hvac_meter.energy', 'BTU-METER-01/btu_meter.accumulated_cooling_energy',
+  'CHILLER-01/chiller.energy', 'CHWP-01/chwp.energy', 'CWP-01/cwp.energy', 'CT-01/cooling_tower.energy',
+];
+
 if (!values['metrics-only']) replay();
 
 function replay() {
+  const heldKeys = values['weather-only'] ? ['ambient_dry_bulb_temperature'] : ['energy', 'accumulated_cooling_energy', 'ambient_dry_bulb_temperature'];
   for (const site of localSites) {
     const held = Number(clickhouse(`SELECT count() FROM telemetry_history.observations WHERE site_id = toUUID(${sqlLiteral(site.siteId)})
-      AND telemetry_key IN ('energy', 'accumulated_cooling_energy')
+      AND telemetry_key IN (${heldKeys.map(sqlLiteral).join(', ')})
       AND sampled_at >= parseDateTime64BestEffort(${sqlLiteral(from.toISOString())}, 3) AND sampled_at < parseDateTime64BestEffort(${sqlLiteral(to.toISOString())}, 3)`));
-    if (held > 0) throw new Error(`${site.siteName} already holds ${held} meter observations in this window; reset the local stack or choose another window`);
+    if (held > 0) throw new Error(`${site.siteName} already holds ${held} observations of what this replay writes in this window; reset the local stack or choose another window`);
   }
   ensureReplayIdentity();
   run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', path.join(out, 'eg8200-history-replay'), './tools/eg8200-simulator/cmd/eg8200-history-replay'],
     { env: { ...process.env, CGO_ENABLED: '0', GOOS: 'linux' } });
 
-  const points = [
-    'METER-HVAC-TOTAL/hvac_meter.energy', 'BTU-METER-01/btu_meter.accumulated_cooling_energy',
-    'CHILLER-01/chiller.energy', 'CHWP-01/chwp.energy', 'CWP-01/cwp.energy', 'CT-01/cooling_tower.energy',
-  ].join(',');
+  const points = (values['weather-only'] ? [weatherPoint] : [...meterPoints, weatherPoint]).join(',');
   for (const site of localSites) {
     const deviceIds = Object.fromEntries(centralPlantDevices.map((device) => [device.name, siteDeviceId(site, device.platformDeviceId)]));
     writeFileSync(path.join(out, `${site.siteCode}.device-ids.json`), `${JSON.stringify(deviceIds, null, 2)}\n`);
@@ -154,7 +162,9 @@ async function awaitRecalculation(pass) {
   }
 }
 
-for (const pass of ['independent', 'dependent']) {
-  queueRecalculation(pass);
-  await awaitRecalculation(pass);
+if (!values['weather-only']) {
+  for (const pass of ['independent', 'dependent']) {
+    queueRecalculation(pass);
+    await awaitRecalculation(pass);
+  }
 }
