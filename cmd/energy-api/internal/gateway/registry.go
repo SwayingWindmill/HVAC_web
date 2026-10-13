@@ -1037,7 +1037,9 @@ func (h *handler) siteVisibility(request *http.Request, session bffSession, site
 }
 
 func validateSite(value platformapi.Site) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) ||
+		(value.FloorAreaM2 != nil && !(*value.FloorAreaM2 > 0)) ||
+		(value.ClimateZone != nil && !oneOf(*value.ClimateZone, "SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD")) {
 		return errors.New("invalid Site response")
 	}
 	return nil

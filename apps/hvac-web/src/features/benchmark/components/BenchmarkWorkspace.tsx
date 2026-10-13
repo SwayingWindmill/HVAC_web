@@ -10,13 +10,14 @@ import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Main } from '@/components/layout/Main';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { DeltaBadge } from '@/components/ui/delta-badge';
 import { PeriodTabs } from '@/components/ui/period-tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { periodWindow, summarizeEnergy } from '@/features/energy-analysis/consumption/model';
+import { CLIMATE_ZONE_LABEL } from '@/lib/climate-zone';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { benchmark } from '../benchmark-model';
@@ -24,6 +25,8 @@ import { benchmark } from '../benchmark-model';
 const client = createPlatformGatewayClient();
 type BenchmarkPeriod = '7d' | 'month';
 const PERIODS = [{ value: '7d', label: '近 7 天' }, { value: 'month', label: '本月' }];
+type RankBy = 'cop' | 'intensity';
+const RANKINGS = [{ value: 'cop', label: '按综合能效' }, { value: 'intensity', label: '按单位面积用电' }];
 const SITE_COLORS = ['var(--chart-1)', 'var(--chart-3)', 'var(--chart-2)', 'var(--chart-4)', 'var(--chart-5)'];
 
 const energy = (value: number | null) => (value === null ? '—' : value >= 10_000 ? `${formatDecimal(value / 1000, 2)} MWh` : `${formatDecimal(value, 0)} kWh`);
@@ -34,6 +37,7 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
     queryKey: ['benchmark', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
     queryFn: async ({ signal }) => Promise.all(sites.map(async (site) => {
+      const profile = { siteId: site.id, name: site.displayName, floorAreaM2: site.floorAreaM2, climateZone: site.climateZone };
       const { from, to } = periodWindow(period, new Date(), site.timezone);
       const read = (energyType: 'electricity' | 'cooling') => client.queryEnergySeries({
         tenantId: site.tenantId, siteId: site.id, energyType, granularity: 'day', timezone: site.timezone,
@@ -41,10 +45,10 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
       }, csrfToken, { signal }).then((response) => response.data);
       try {
         const [electricity, cooling] = await Promise.all([read('electricity'), read('cooling')]);
-        return { siteId: site.id, name: site.displayName, summary: summarizeEnergy(electricity, cooling, 'day', site.timezone) };
+        return { ...profile, summary: summarizeEnergy(electricity, cooling, 'day', site.timezone) };
       } catch (error) {
         // A Site the principal may see but not analyze stays listed, outside the comparison.
-        if (error instanceof PlatformApiError && error.problem.status === 403) return { siteId: site.id, name: site.displayName, summary: null };
+        if (error instanceof PlatformApiError && error.problem.status === 403) return { ...profile, summary: null };
         throw error;
       }
     })),
@@ -57,6 +61,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   const search = useSearch({ from: '/_app/benchmark' });
   const navigate = useNavigate({ from: '/benchmark' });
   const period: BenchmarkPeriod = search.period ?? '7d';
+  const rankBy: RankBy = search.rank ?? 'cop';
   const sites = useMemo(() => [...(snapshot.sites?.items ?? [])].filter((site) => site.status === 'ACTIVE'), [snapshot.sites?.items]);
   const summaries = useSiteSummaries(sites, period, snapshot.principal!.session.csrfToken);
   const result = useMemo(
@@ -71,6 +76,11 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
     [analyzed, sites],
   );
   const ranked = result?.sites.filter((site) => site.cop !== null) ?? [];
+  // Sites with a place in the chosen ranking come first in its order; the rest keep the COP order.
+  const listed = result
+    ? (rankBy === 'cop' ? result.sites : [...result.sites].sort((left, right) => (left.intensityRank ?? Infinity) - (right.intensityRank ?? Infinity)))
+    : [];
+  const withArea = result?.sites.filter((site) => site.floorAreaM2 !== null).length ?? 0;
   const best = ranked[0];
   const worst = ranked.at(-1);
   const maxCop = Math.max(...ranked.map((site) => site.cop ?? 0), 0);
@@ -80,8 +90,8 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
       <PageHeader
         title="站点对标"
         description="各授权站点的空调用电、供冷量与冷站综合能效对比"
-        meta={<PageMeta icon={<Trophy />}>按冷站综合能效排名</PageMeta>}
-        actions={<PeriodTabs aria-label="对比期间" options={PERIODS} value={period} onValueChange={(value) => void navigate({ search: { period: value as BenchmarkPeriod }, replace: true })} />}
+        meta={<PageMeta icon={<Trophy />}>{rankBy === 'cop' ? '按冷站综合能效排名' : '按单位面积用电排名'}</PageMeta>}
+        actions={<PeriodTabs aria-label="对比期间" options={PERIODS} value={period} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, period: value as BenchmarkPeriod }), replace: true })} />}
       />
 
       {summaries.isPending || !result ? (
@@ -118,7 +128,14 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
           <Card role="region" aria-label="站点排名" className="pb-0">
             <CardHeader>
               <CardTitle>站点排名</CardTitle>
-              <CardDescription>综合能效越高，同样的冷量用电越少；与整体相比按电量加权的整体能效计算</CardDescription>
+              <CardDescription>
+                {rankBy === 'cop'
+                  ? '综合能效越高，同样的冷量用电越少；与整体相比按电量加权的整体能效计算'
+                  : '期间空调用电 ÷ 建筑面积，越低越好；没有登记建筑面积的站点不参与此排名'}
+              </CardDescription>
+              <CardAction>
+                <PeriodTabs aria-label="排名依据" options={RANKINGS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value as RankBy }), replace: true })} />
+              </CardAction>
             </CardHeader>
             <CardContent className="border-t px-0">
               <Table>
@@ -126,25 +143,31 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                   <TableRow>
                     <TableHead className="w-16">排名</TableHead>
                     <TableHead>站点</TableHead>
-                    <TableHead className="w-[28%]">综合能效（COP）</TableHead>
+                    <TableHead className="w-[20%]">综合能效（COP）</TableHead>
                     <TableHead className="w-28">与整体相比</TableHead>
                     <TableHead className="w-32 text-right">空调用电</TableHead>
+                    <TableHead className="w-36 text-right">单位面积用电</TableHead>
                     <TableHead className="w-32 text-right">日均用电</TableHead>
                     <TableHead className="w-32 text-right">供冷量</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {result.sites.map((site) => (
+                  {listed.map((site) => {
+                    const place = rankBy === 'cop' ? site.rank : site.intensityRank;
+                    return (
                     <TableRow key={site.siteId}>
                       <TableCell>
-                        {site.rank === null ? <span className="text-muted-foreground">—</span> : (
-                          <span className={cn('inline-flex size-6 items-center justify-center rounded-md text-xs font-semibold tabular-nums', site.rank === 1 ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>{site.rank}</span>
+                        {place === null ? <span className="text-muted-foreground">—</span> : (
+                          <span className={cn('inline-flex size-6 items-center justify-center rounded-md text-xs font-semibold tabular-nums', place === 1 ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>{place}</span>
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="flex items-center gap-2 font-medium">
+                        <span className="flex items-center gap-2 font-medium whitespace-nowrap">
                           <span className="size-2 rounded-[2px]" style={{ background: colorOf(site.siteId) }} aria-hidden="true" />
                           {site.name}
+                        </span>
+                        <span className="block pl-4 text-xs whitespace-nowrap text-muted-foreground">
+                          {site.climateZone ? CLIMATE_ZONE_LABEL[site.climateZone] : '气候区未登记'}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -159,10 +182,17 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                       </TableCell>
                       <TableCell>{site.copVsFleet === null ? <span className="text-muted-foreground">—</span> : <DeltaBadge delta={site.copVsFleet} variant="soft" showIcon={false} />}</TableCell>
                       <TableCell className="text-right tabular-nums">{energy(site.electricityKWh)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {site.intensityKWhPerM2 === null
+                          ? <span className="text-muted-foreground">{site.floorAreaM2 === null ? '未登记建筑面积' : '—'}</span>
+                          : `${formatDecimal(site.intensityKWhPerM2, 2)} kWh/m²`}
+                        {site.floorAreaM2 !== null ? <span className="block text-xs text-muted-foreground">建筑面积 {formatDecimal(site.floorAreaM2, 0)} m²</span> : null}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{energy(site.dailyElectricityKWh)}</TableCell>
                       <TableCell className="text-right tabular-nums">{energy(site.coolingKWh)}</TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                   {denied.map((site) => (
                     <TableRow key={site.siteId} className="text-muted-foreground">
                       <TableCell>—</TableCell>
@@ -172,7 +202,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                           {site.name}
                         </span>
                       </TableCell>
-                      <TableCell colSpan={5}>没有该站点的能耗分析权限，未参与对比</TableCell>
+                      <TableCell colSpan={6}>没有该站点的能耗分析权限，未参与对比</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -205,12 +235,12 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
             <Card role="region" aria-label="更多对标维度">
               <CardHeader>
                 <CardTitle>更多对标维度</CardTitle>
-                <CardDescription>需要站点档案或外部基准，接入后在此对比</CardDescription>
+                <CardDescription>站点档案在系统管理的注册中心里维护；外部数据接入后在此对比</CardDescription>
               </CardHeader>
               <CardContent>
                 <FactList>
-                  <FactRow label="单位面积能耗" detail="需要站点建筑面积"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
-                  <FactRow label="气候修正" detail="需要站点所在气候区"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
+                  <FactRow label="单位面积用电" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`}><Badge variant="secondary" className="font-normal">已接入</Badge></FactRow>
+                  <FactRow label="气候修正" detail="需要逐日气象数据（冷却度日）"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
                   <FactRow label="行业基准" detail="需要可信的同类建筑基准数据"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
                 </FactList>
               </CardContent>

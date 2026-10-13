@@ -30,6 +30,8 @@
           "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
           "timezone": { "type": "string", "minLength": 1, "maxLength": 128 },
           "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "floorAreaM2": { "type": "number", "exclusiveMinimum": 0 },
+          "climateZone": { "type": "string", "enum": ["SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD"] },
           "meta": { "$ref": "#/components/schemas/MutationMeta" }
         }
       },

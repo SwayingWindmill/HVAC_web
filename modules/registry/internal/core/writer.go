@@ -56,6 +56,8 @@ type SiteMutation struct {
 	DisplayName string       `json:"displayName"`
 	Timezone    string       `json:"timezone"`
 	Status      string       `json:"status"`
+	FloorAreaM2 *float64     `json:"floorAreaM2,omitempty"`
+	ClimateZone *string      `json:"climateZone,omitempty"`
 	Meta        MutationMeta `json:"meta"`
 }
 
@@ -153,6 +155,16 @@ func (input SiteMutation) Validate() error {
 	}
 	if strings.TrimSpace(input.Timezone) == "" || len(input.Timezone) > 128 {
 		return ErrInvalidMutation
+	}
+	if input.FloorAreaM2 != nil && !(*input.FloorAreaM2 > 0) {
+		return ErrInvalidMutation
+	}
+	if input.ClimateZone != nil {
+		switch *input.ClimateZone {
+		case "SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD":
+		default:
+			return ErrInvalidMutation
+		}
 	}
 	return nil
 }

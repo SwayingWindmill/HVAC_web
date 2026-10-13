@@ -20,6 +20,8 @@ const reviewSite: Site = {
   revision: 1,
   createdAt: '2026-09-01T00:00:00.000Z',
   updatedAt: '2026-09-21T00:00:00.000Z',
+  floorAreaM2: 32000,
+  climateZone: 'HOT_SUMMER_COLD_WINTER',
 };
 
 const reviewCapabilities: readonly Capability[] = [

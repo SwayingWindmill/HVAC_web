@@ -83,7 +83,8 @@
         "infra/registry/postgres/init/020-savings-verification.sql",
         "infra/registry/postgres/init/021-metric-tariff-pricing.sql",
         "infra/registry/postgres/init/022-report-snapshots.sql",
-        "infra/registry/postgres/init/023-savings-device-boundary.sql"
+        "infra/registry/postgres/init/023-savings-device-boundary.sql",
+        "infra/registry/postgres/init/024-site-profile.sql"
       ]
     },
     {
