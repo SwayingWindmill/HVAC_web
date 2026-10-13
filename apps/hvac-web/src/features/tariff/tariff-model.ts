@@ -22,7 +22,8 @@ export function daySchedule(tariff: SiteTariff, instant: Date, timeZone: string)
   return tariff.periods.filter((period) => period.dayType === type).sort((left, right) => left.startMinute - right.startMinute);
 }
 
-function periodAt(tariff: SiteTariff, instant: Date, timeZone: string): TariffPeriod | null {
+/** The period pricing an instant on the Site's clock; null where no period covers it. */
+export function periodAt(tariff: SiteTariff, instant: Date, timeZone: string): TariffPeriod | null {
   const local = wallTime(instant, timeZone);
   const minute = local.hour * 60 + local.minute;
   return daySchedule(tariff, instant, timeZone).find((period) => period.startMinute <= minute && minute < period.endMinute) ?? null;
