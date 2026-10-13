@@ -39,6 +39,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'optimization_runtime') THEN CREATE ROLE optimization_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fdd_runtime') THEN CREATE ROLE fdd_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mv_runtime') THEN CREATE ROLE mv_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'report_runtime') THEN CREATE ROLE report_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's2_iam_grant_runtime') THEN CREATE ROLE s2_iam_grant_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's2_telemetry_migrator') THEN CREATE ROLE s2_telemetry_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -98,6 +99,7 @@ ALTER ROLE forecast_runtime LOGIN;
 ALTER ROLE optimization_runtime LOGIN;
 ALTER ROLE fdd_runtime LOGIN;
 ALTER ROLE mv_runtime LOGIN;
+ALTER ROLE report_runtime LOGIN;
 REVOKE CONNECT ON DATABASE hvac_s1 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS iam AUTHORIZATION s1_iam_migrator;
 CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
@@ -112,9 +114,9 @@ ALTER SCHEMA notification_runtime OWNER TO s16_notification_migrator;
 ALTER SCHEMA rule_runtime OWNER TO rule_runtime_migrator;
 ALTER SCHEMA connectivity OWNER TO connectivity_migrator;
 REVOKE ALL ON SCHEMA iam, core_registry, outbound_delivery, notification_runtime, rule_runtime, connectivity FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, s16_notification_service, rule_runtime_runtime, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime, forecast_runtime, optimization_runtime, fdd_runtime, mv_runtime, s2_iam_grant_runtime, connectivity_runtime;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, outbound_delivery_runtime, s16_notification_service, rule_runtime_runtime, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime, forecast_runtime, optimization_runtime, fdd_runtime, mv_runtime, report_runtime, s2_iam_grant_runtime, connectivity_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, maintenance_runtime;
-GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime, forecast_runtime, optimization_runtime, fdd_runtime, mv_runtime;
+GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, maintenance_runtime, settlement_runtime, forecast_runtime, optimization_runtime, fdd_runtime, mv_runtime, report_runtime;
 GRANT USAGE ON SCHEMA outbound_delivery TO outbound_delivery_runtime;
 GRANT USAGE ON SCHEMA rule_runtime TO rule_runtime_runtime;
 GRANT USAGE ON SCHEMA connectivity TO connectivity_runtime;

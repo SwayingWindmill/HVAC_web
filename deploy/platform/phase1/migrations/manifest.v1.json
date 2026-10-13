@@ -81,7 +81,8 @@
         "infra/registry/postgres/init/018-fdd-finding-measurement.sql",
         "infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql",
         "infra/registry/postgres/init/020-savings-verification.sql",
-        "infra/registry/postgres/init/021-metric-tariff-pricing.sql"
+        "infra/registry/postgres/init/021-metric-tariff-pricing.sql",
+        "infra/registry/postgres/init/022-report-snapshots.sql"
       ]
     },
     {
