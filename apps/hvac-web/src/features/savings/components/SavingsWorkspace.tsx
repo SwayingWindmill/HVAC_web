@@ -13,7 +13,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { measuresQuery, savingsKeys, SavingsRequestError, summaryQuery } from '../query';
-import { costBasis, KIND_LABEL, monthToDate, savingsRate, type Measure } from '../savings-model';
+import { boundaryLabel, costBasis, KIND_LABEL, monthToDate, savingsRate, siteSavingsRate, type Measure } from '../savings-model';
+import { usePlantMachines } from '../use-boundary-devices';
 import { MeasureSheet } from './MeasureSheet';
 import { MeasureStatusBadge } from './measure-presentation';
 import { RegisterMeasureDialog } from './RegisterMeasureDialog';
@@ -23,7 +24,12 @@ const pageRoute = getRouteApi('/_app/_site/energy-analysis/savings');
 
 const STATUS_ORDER = { IMPLEMENTED: 0, PLANNED: 1, ENDED: 2 } as const;
 
-function LedgerRow({ measure, timeZone, onInspect }: { readonly measure: Measure; readonly timeZone: string; readonly onInspect: () => void }) {
+function LedgerRow({ measure, timeZone, names, onInspect }: {
+  readonly measure: Measure;
+  readonly timeZone: string;
+  readonly names: ReadonlyMap<string, string> | null;
+  readonly onInspect: () => void;
+}) {
   const rate = savingsRate(measure.totals);
   const verified = measure.totals.days > 0;
   return (
@@ -34,6 +40,7 @@ function LedgerRow({ measure, timeZone, onInspect }: { readonly measure: Measure
         </button>
         <div className="text-xs text-muted-foreground">{KIND_LABEL[measure.kind]}</div>
       </TableCell>
+      <TableCell>{boundaryLabel(measure.boundaryDeviceId, names)}</TableCell>
       <TableCell><MeasureStatusBadge measure={measure} /></TableCell>
       <TableCell className="tabular-nums">{formatTime(measure.implementedAt ?? measure.plannedAt, timeZone)}{measure.implementedAt ? '' : '（计划）'}</TableCell>
       <TableCell className="text-right tabular-nums">{verified ? measure.totals.days : '—'}</TableCell>
@@ -53,15 +60,17 @@ export function SavingsWorkspace() {
   const month = useMemo(() => monthToDate(new Date(), site.timezone), [site.timezone]);
   const measures = useQuery(measuresQuery(site.id));
   const summary = useQuery(summaryQuery(site.id, month.from, month.to));
+  const { machines, names } = usePlantMachines();
   const canManage = principal.authorization.capabilities.includes('savings.manage');
   const inspect = (measureId: string | undefined) => void navigate({ search: (previous) => ({ ...previous, inspect: measureId }), replace: true });
 
   const list = [...(measures.data ?? [])].sort((left, right) =>
     STATUS_ORDER[left.status] - STATUS_ORDER[right.status] || right.plannedAt.localeCompare(left.plannedAt));
-  const reporting = list.find((measure) => measure.status === 'IMPLEMENTED');
+  const reporting = list.filter((measure) => measure.status === 'IMPLEMENTED');
+  const untrusted = reporting.filter((measure) => !measure.baseline?.trusted).length;
   const lifetime = list.reduce((sum, measure) => ({ kwh: sum.kwh + measure.totals.avoidedKWh, cost: sum.cost + measure.totals.avoidedCost }), { kwh: 0, cost: 0 });
   const monthTotals = summary.data?.totals;
-  const monthRate = monthTotals ? savingsRate(monthTotals) : null;
+  const monthRate = monthTotals ? siteSavingsRate(monthTotals) : null;
 
   return (
     <Main>
@@ -93,13 +102,13 @@ export function SavingsWorkspace() {
           <MetricCard
             label="本月节电率"
             value={<MetricValue value={monthRate === null ? null : formatDecimal(monthRate * 100, 1)} unit="%" />}
-            lead={monthTotals!.days > 0 ? `调整后基线 ${formatDecimal(monthTotals!.adjustedBaselineKWh, 0)} kWh` : '有核算结果后显示'}
-            detail="节电量 ÷ 调整后基线"
+            lead={monthTotals!.days > 0 ? `冷站同期用电 ${formatDecimal(monthTotals!.plantKWh, 0)} kWh` : '有核算结果后显示'}
+            detail="节电量 ÷（冷站同期用电 + 节电量）"
           />
           <MetricCard
             label="正在核算"
-            value={<MetricValue value={reporting ? reporting.name : '无'} />}
-            lead={reporting ? (reporting.baseline?.trusted ? '基线检验通过' : '基线不可信，暂不核算') : '没有正在核算的措施'}
+            value={<MetricValue value={reporting.length === 0 ? '无' : reporting.length === 1 ? reporting[0].name : `${reporting.length} 项措施`} />}
+            lead={reporting.length === 0 ? '没有正在核算的措施' : untrusted === 0 ? '基线检验均通过' : `${untrusted} 项基线不可信，暂不核算`}
             detail={`累计节电 ${formatDecimal(lifetime.kwh, 0)} kWh · 节省 ¥${formatDecimal(lifetime.cost, 0)}`}
           />
         </MetricGrid>
@@ -108,7 +117,7 @@ export function SavingsWorkspace() {
       <Card role="region" aria-label="措施台账" className="pb-0">
         <CardHeader>
           <CardTitle>措施台账</CardTitle>
-          <CardDescription>同一站点同一时间只核算一项措施；点击查看基线检验与逐日核算</CardDescription>
+          <CardDescription>同一测量边界同一时间只核算一项措施，冷站总表的措施不与设备措施同时核算；点击查看基线检验与逐日核算</CardDescription>
         </CardHeader>
         <CardContent className="border-t px-0">
           {measures.isPending ? <Skeleton className="h-48" /> : measures.isError ? (
@@ -138,6 +147,7 @@ export function SavingsWorkspace() {
               <TableHeader>
                 <TableRow>
                   <TableHead>措施</TableHead>
+                  <TableHead>测量边界</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>实施时间</TableHead>
                   <TableHead className="text-right">已核算天数</TableHead>
@@ -148,7 +158,7 @@ export function SavingsWorkspace() {
               </TableHeader>
               <TableBody>
                 {list.map((measure) => (
-                  <LedgerRow key={measure.id} measure={measure} timeZone={site.timezone} onInspect={() => inspect(measure.id)} />
+                  <LedgerRow key={measure.id} measure={measure} timeZone={site.timezone} names={names} onInspect={() => inspect(measure.id)} />
                 ))}
               </TableBody>
             </Table>
@@ -158,6 +168,7 @@ export function SavingsWorkspace() {
 
       <RegisterMeasureDialog
         open={registering}
+        machines={machines}
         onOpenChange={setRegistering}
         onRegistered={(measure) => {
           toast.success('措施已登记');
@@ -165,7 +176,7 @@ export function SavingsWorkspace() {
           inspect(measure.id);
         }}
       />
-      <MeasureSheet measureId={search.inspect} canManage={canManage} onClose={() => inspect(undefined)} />
+      <MeasureSheet measureId={search.inspect} names={names} canManage={canManage} onClose={() => inspect(undefined)} />
     </Main>
   );
 }

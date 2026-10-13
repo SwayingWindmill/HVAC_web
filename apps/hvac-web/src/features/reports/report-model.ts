@@ -109,7 +109,8 @@ export interface ReportSnapshot {
   readonly tariffPeriods: readonly { readonly code: string; readonly electricityKWh: number; readonly costCNY: number }[];
   readonly days: readonly { readonly date: string; readonly electricityKWh: number; readonly coolingKWh: number; readonly cop: number | null; readonly energyCostCNY: number | null }[];
   readonly findings: { readonly count: number; readonly byType: readonly { readonly findingType: string; readonly count: number }[] };
-  readonly savings: { readonly days: number; readonly adjustedBaselineKWh: number; readonly avoidedKWh: number; readonly avoidedCost: number; readonly unpricedHours: number };
+  /** Every measure's verified days; days and the plant's electricity count each day once. */
+  readonly savings: { readonly days: number; readonly adjustedBaselineKWh: number; readonly avoidedKWh: number; readonly avoidedCost: number; readonly unpricedHours: number; readonly plantKWh: number };
 }
 
 /** One kept version of a month's snapshot. */
