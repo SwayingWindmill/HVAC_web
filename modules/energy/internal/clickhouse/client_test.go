@@ -139,6 +139,63 @@ func TestWriterSurfacesClickHouseFailure(t *testing.T) {
 	}
 }
 
+// A batch mixing weeks-old replayed history with live arrivals reads its deltas window by
+// window, so no query sorts the weeks between them.
+func TestReaderBoundsEachDeltaQueryToItsArrivalsSampleSpan(t *testing.T) {
+	arrivals := []struct{ id, sampledAt string }{
+		{"018f4e00-3000-7000-8000-000000000011", "2026-10-13 04:41:57.164"},
+		{"018f4e00-3000-7000-8000-000000000012", "2026-08-24 16:00:00.000"},
+		{"018f4e00-3000-7000-8000-000000000013", "2026-09-14 13:53:00.000"},
+		{"018f4e00-3000-7000-8000-000000000014", "2026-08-24 16:35:00.000"},
+	}
+	type window struct{ since, until, observations string }
+	var windows []window
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		query := request.URL.Query()
+		switch {
+		case strings.Contains(string(body), "energy_projection_checkpoints"):
+		case strings.Contains(string(body), "counter_arrivals"):
+			for _, arrival := range arrivals {
+				json.NewEncoder(writer).Encode(map[string]any{
+					"history_sequence": 9540, "observation_id": arrival.id, "tenant_id": "018f4d00-0000-7000-8000-000000000001",
+					"site_id": "018f4e00-1000-7000-8000-000000000001", "point_id": "018f4e00-2100-7000-8000-000000000001",
+					"sampled_at": arrival.sampledAt,
+				})
+			}
+		case strings.Contains(string(body), "counter_deltas_from"):
+			windows = append(windows, window{query.Get("param_since"), query.Get("param_until"), query.Get("param_observations")})
+		default:
+			t.Errorf("unexpected query %s", body)
+		}
+	}))
+	defer server.Close()
+	reader, err := NewReader(ReaderConfig{BaseURL: server.URL, SourceDatabase: "telemetry_history", AnalyticsDatabase: "analytics", AnalyticsTable: "energy_interval_facts", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := reader.NextBatch(context.Background(), 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []window{
+		{"2026-08-24 16:00:00.000", "2026-08-24 16:35:00.000", "['" + arrivals[1].id + "','" + arrivals[3].id + "']"},
+		{"2026-09-14 13:53:00.000", "2026-09-14 13:53:00.000", "['" + arrivals[2].id + "']"},
+		{"2026-10-13 04:41:57.164", "2026-10-13 04:41:57.164", "['" + arrivals[0].id + "']"},
+	}
+	if len(windows) != len(want) {
+		t.Fatalf("delta queries = %+v, want %+v", windows, want)
+	}
+	for index := range want {
+		if windows[index] != want[index] {
+			t.Fatalf("delta query %d = %+v, want %+v", index, windows[index], want[index])
+		}
+	}
+	if batch.Through == nil || batch.Through.ObservationID != arrivals[3].id {
+		t.Fatalf("through = %+v", batch.Through)
+	}
+}
+
 func validDelta() energy.CounterDelta {
 	delta := 2.75
 	return energy.CounterDelta{

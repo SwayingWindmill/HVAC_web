@@ -87,6 +87,8 @@ Smaller follow-ups:
 - To change the FDD low-delta-T threshold or window, publish the next revision (never update one): `node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <instant>]`. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - Polish the device inspector and the work-order sheet in the same visual system.
+- Each Energy delta query still aggregates its Points' whole Counter history for the ANCHOR, PREFIX_MAX and NEXT rows of `counter_deltas_from`. Memory stays small (about 40 MiB a window locally), but every window reads about 7 M rows, so a batch costs roughly 0.5 s per window and grows with history. The `has(points, point_id)` filter cannot use the `observations` sort key, which wraps `point_id` in `ifNull`.
+- `scripts/local-history-replay.mjs` writes its `--to` instant, but its "window already holds history" check is half-open (`< to`). Two adjacent replays therefore both write the boundary instant; see the stuck projection below.
 
 ## Local environment notes
 
@@ -101,6 +103,8 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Site A's `hourly_energy` and `hourly_cooling` were also recalculated through 10-05 for the M&V re-verification. Other periods and Metrics still hold values from before the fix.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.
 - The ClickHouse user `report_service_reader` was created by hand (init scripts only run on an empty volume). September 2026 was snapshot for both Sites by a hand-queued `REPORT_GENERATE` job (16 of 30 days, from the replay).
+- `telemetry_history.counter_deltas_from` and `counter_deltas` were replaced by hand from `004-counter-semantics.sql` on 2026-10-13 (bounded delta windows), and only `telemetry-worker` was rebuilt from that branch.
+- The Energy projection checkpoint has been stuck at history sequence 9539 since 2026-10-13 08:21 UTC. Until the bounded-window fix it was the memory loop. Now it is 12 pairs of Counter observations, one pair per Point, sharing the sample time 2026-09-14 16:00 UTC. That is the boundary between the 08-25..09-14 replay (value 22680) and the 09-15..10-06 replay (value 0). The zero-length interval is refused by `BuildFact`, so the batch fails on every retry. It needs a decision: drop one observation of each pair, or `local:reset`.
 - Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. To fill them in, stop `telemetry-worker`, truncate `analytics.energy_projection_checkpoints`, then start it again. Truncating while it runs does nothing: the batch in flight writes its checkpoint back. The existing-fact check skips intervals that already have a fact.
 
 Known quirks:

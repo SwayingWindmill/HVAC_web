@@ -167,6 +167,60 @@ VALUES ('energy_interval_facts', %d, toUUID('%s'), now64(3))`, lateSequence-1, s
 	}
 }
 
+// One History batch holds an observation weeks late and a live one, as when replayed history
+// lands beside live data. Each is read in its own delta window, and the late one's successor
+// is the live one, so both windows return the live delta; it is projected once.
+func TestMixedAgeBatchProjectsTheSharedSuccessorOnce(t *testing.T) {
+	baseURL := strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_TEST_URL"))
+	if baseURL == "" {
+		t.Skip("ANALYTICS_CLICKHOUSE_TEST_URL is not configured")
+	}
+	adminUsername := envOr("ANALYTICS_CLICKHOUSE_TEST_ADMIN_USERNAME", "telemetry_history")
+	adminPassword := os.Getenv("ANALYTICS_CLICKHOUSE_TEST_ADMIN_PASSWORD")
+	client := &http.Client{Timeout: 15 * time.Second}
+	tenantID := "018f4f00-0100-7000-8000-000000000003"
+	siteID := "018f4f00-1000-7000-8000-000000000003"
+	deviceID := "018f4f00-2000-7000-8000-000000000003"
+	pointID := "018f4f00-2100-7000-8000-000000000001"
+	partition := "analytics-integration-" + t.Name()
+	first, late, live := "018f4f00-3000-7000-8000-000000000021", "018f4f00-3000-7000-8000-000000000022", "018f4f00-3000-7000-8000-000000000023"
+
+	reader, writer := integrationReaderWriter(t, client, baseURL)
+	projector, err := energy.NewProjector(energy.ProjectorConfig{CounterSource: reader, BindingResolver: integrationBindingResolver{
+		tenantID: tenantID, siteID: siteID, deviceID: deviceID, pointID: pointID,
+	}, FactSink: writer, RebuildEvents: writer, BatchSize: 32, Now: func() time.Time {
+		return time.Date(2026, 7, 30, 13, 10, 0, 0, time.UTC)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := func(want int) {
+		t.Helper()
+		projected, err := projector.ProjectOnce(context.Background())
+		if err != nil || projected != want {
+			t.Fatalf("projected=%d err=%v, want %d", projected, err, want)
+		}
+	}
+
+	insertJSONEachRow(t, client, baseURL, adminUsername, adminPassword, "telemetry_history.observations", inHistoryBatch([]map[string]any{
+		historyObservation(first, "018f4f00-4000-7000-8000-000000000021", tenantID, siteID, deviceID, partition, 1, 100, "2026-07-01T12:00:00.000Z"),
+	}))
+	project(0)
+	insertJSONEachRow(t, client, baseURL, adminUsername, adminPassword, "telemetry_history.observations", inHistoryBatch([]map[string]any{
+		historyObservation(late, "018f4f00-4000-7000-8000-000000000022", tenantID, siteID, deviceID, partition, 2, 101, "2026-07-01T12:05:00.000Z"),
+		historyObservation(live, "018f4f00-4000-7000-8000-000000000023", tenantID, siteID, deviceID, partition, 3, 150, "2026-07-30T13:00:00.000Z"),
+	}))
+	project(2)
+	project(0)
+
+	facts := string(executeClickHouse(t, client, baseURL, adminUsername, adminPassword, fmt.Sprintf(`SELECT toString(source_current_observation_id), toString(source_previous_observation_id), energy_kwh
+FROM analytics.energy_interval_facts WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s')
+ORDER BY period_end FORMAT TSVRaw`, tenantID, siteID)))
+	if want := late + "\t" + first + "\t1\n" + live + "\t" + late + "\t49\n"; facts != want {
+		t.Fatalf("facts=%q want %q", facts, want)
+	}
+}
+
 func integrationReaderWriter(t *testing.T, client *http.Client, baseURL string) (*Reader, *Writer) {
 	t.Helper()
 	reader, err := NewReader(ReaderConfig{
