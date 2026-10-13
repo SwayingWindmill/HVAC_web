@@ -48,6 +48,29 @@ func fddScope(ctx context.Context, tx pgx.Tx, tenantID, siteID string) error {
 	return err
 }
 
+func (store *PostgresStore) CurrentRule(ctx context.Context, tenantID, siteID, ruleCode string, at time.Time) (RuleRevision, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return RuleRevision{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
+		return RuleRevision{}, err
+	}
+	var rule RuleRevision
+	err = tx.QueryRow(ctx, `SELECT id::text, revision, minimum_delta_tc, window_minutes, effective_from
+FROM core_registry.fdd_rule_revisions
+WHERE tenant_id = $1::uuid AND rule_code = $2 AND effective_from <= $3
+ORDER BY revision DESC LIMIT 1`, tenantID, ruleCode, at.UTC()).Scan(&rule.ID, &rule.Revision, &rule.MinimumDeltaTC, &rule.WindowMinutes, &rule.EffectiveFrom)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuleRevision{}, ErrRuleNotFound
+	}
+	if err != nil {
+		return RuleRevision{}, fmt.Errorf("read FDD rule revision: %w", err)
+	}
+	return rule, tx.Commit(ctx)
+}
+
 func (store *PostgresStore) InsertFinding(ctx context.Context, finding intelligencemodel.FDDFinding) error {
 	if store == nil || store.pool == nil {
 		return errors.New("FDD postgres store is unavailable")

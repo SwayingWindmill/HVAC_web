@@ -12,7 +12,29 @@ import (
 )
 
 type memoryStore struct {
+	rules    []RuleRevision
 	findings []intelligencemodel.FDDFinding
+}
+
+// testRule is the Tenant's first low-delta-T revision: 5 K over 15 minutes.
+var testRule = RuleRevision{
+	ID: "01990000-9500-7000-8000-000000000001", Revision: 1, MinimumDeltaTC: 5, WindowMinutes: 15,
+	EffectiveFrom: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+}
+
+func newStore() *memoryStore { return &memoryStore{rules: []RuleRevision{testRule}} }
+
+func (store *memoryStore) CurrentRule(_ context.Context, _, _, ruleCode string, at time.Time) (RuleRevision, error) {
+	var current *RuleRevision
+	for index, rule := range store.rules {
+		if ruleCode == LowDeltaTRuleCode && !rule.EffectiveFrom.After(at) && (current == nil || rule.Revision > current.Revision) {
+			current = &store.rules[index]
+		}
+	}
+	if current == nil {
+		return RuleRevision{}, ErrRuleNotFound
+	}
+	return *current, nil
 }
 
 type loopEvidence struct {
@@ -71,17 +93,15 @@ func (store *memoryStore) LinkFinding(_ context.Context, _, _, findingID, alarmI
 }
 
 func validEvaluation() EvaluationRequest {
-	from := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
 	return EvaluationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001", AssetID: "01990000-6000-7000-8000-000000000001",
-		DeviceID:       "01990000-6100-7000-8000-000000000001",
-		EvaluationFrom: from, EvaluationTo: from.Add(15 * time.Minute), RuleRevisionID: "fdd-low-delta-t/v1", MinimumDeltaTC: 5,
+		DeviceID: "01990000-6100-7000-8000-000000000001", At: time.Date(2026, 8, 19, 10, 15, 0, 0, time.UTC),
 	}
 }
 
 func validReadings(request EvaluationRequest) LoopReadings {
 	reading := func(id string, value float64) Reading {
-		return Reading{ObservationID: id, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Value: value, SampledAt: request.EvaluationFrom.Add(10 * time.Minute)}
+		return Reading{ObservationID: id, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Value: value, SampledAt: request.At.Add(-5 * time.Minute)}
 	}
 	return LoopReadings{Supply: reading("01990000-6200-7000-8000-000000000002", 7), Return: reading("01990000-6200-7000-8000-000000000001", 10)}
 }
@@ -96,7 +116,7 @@ func newTestService(t *testing.T, store Store, evidence EvidenceSource, now func
 }
 
 func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
-	store := &memoryStore{}
+	store := newStore()
 	request := validEvaluation()
 	evidence := &loopEvidence{readings: validReadings(request)}
 	now := time.Date(2026, 8, 19, 10, 16, 0, 0, time.UTC)
@@ -110,7 +130,7 @@ func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
 		t.Fatalf("result=%#v persisted=%#v", result, store.findings)
 	}
 	finding := *result.Finding
-	if finding.FindingType != "CHILLED_WATER_LOW_DELTA_T" || finding.RuleRevisionID != "fdd-low-delta-t/v1" || finding.Confidence <= 0.5 {
+	if finding.FindingType != "CHILLED_WATER_LOW_DELTA_T" || finding.RuleRevisionID != testRule.ID || result.Rule != testRule || finding.Confidence <= 0.5 {
 		t.Fatalf("finding=%#v", finding)
 	}
 	// A finding states what was measured against what threshold, so it reads without its evidence.
@@ -120,13 +140,58 @@ func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
 	if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != "01990000-6200-7000-8000-000000000002" || finding.EvidenceIDs[1] != "01990000-6200-7000-8000-000000000001" {
 		t.Fatalf("evidence IDs must be authoritative observation IDs: %#v", finding.EvidenceIDs)
 	}
-	if evidence.query != (LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.EvaluationFrom, To: request.EvaluationTo}) {
+	// The rule's window, not the caller, decides how far back the evidence is read.
+	if evidence.query != (LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.At.Add(-15 * time.Minute), To: request.At}) {
 		t.Fatalf("evidence query=%#v", evidence.query)
+	}
+	if !finding.EvaluationFrom.Equal(request.At.Add(-15*time.Minute)) || !finding.EvaluationTo.Equal(request.At) {
+		t.Fatalf("finding window=%s–%s", finding.EvaluationFrom, finding.EvaluationTo)
+	}
+}
+
+// A new revision takes effect from its time: later evaluations use its threshold and window and
+// cite it, and the old revision's finding does not make the condition "ongoing" under the new one.
+func TestANewRuleRevisionAppliesFromItsEffectiveTime(t *testing.T) {
+	store := newStore()
+	request := validEvaluation()
+	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time { return request.At })
+	first, err := service.EvaluateLowDeltaT(t.Context(), request)
+	if err != nil || first.Finding.ThresholdValue != 5 {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	revised := RuleRevision{ID: "01990000-9500-7000-8000-000000000002", Revision: 2, MinimumDeltaTC: 4, WindowMinutes: 30, EffectiveFrom: request.At.Add(time.Minute)}
+	store.rules = append(store.rules, revised)
+	later := request
+	later.At = request.At.Add(15 * time.Minute)
+	evidence := &loopEvidence{readings: validReadings(later)}
+	service = newTestService(t, store, evidence, func() time.Time { return later.At })
+	second, err := service.EvaluateLowDeltaT(t.Context(), later)
+	if err != nil || second.Status != "FINDING" || second.Rule != revised || second.Finding.RuleRevisionID != revised.ID || second.Finding.ThresholdValue != 4 {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	if !evidence.query.From.Equal(later.At.Add(-30 * time.Minute)) {
+		t.Fatalf("revised window from=%s", evidence.query.From)
+	}
+	// At its own time the first evaluation's revision still decides.
+	if rule, err := service.store.CurrentRule(t.Context(), request.TenantID, request.SiteID, LowDeltaTRuleCode, request.At); err != nil || rule != testRule {
+		t.Fatalf("rule at the first evaluation=%#v err=%v", rule, err)
+	}
+}
+
+func TestATenantWithoutTheRuleIsNotEvaluated(t *testing.T) {
+	store := &memoryStore{}
+	request := validEvaluation()
+	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, time.Now)
+	if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrRuleNotFound) {
+		t.Fatalf("evaluation without a rule err=%v", err)
+	}
+	if len(store.findings) != 0 {
+		t.Fatal("a finding was recorded without a rule")
 	}
 }
 
 func TestHealthyDeltaTClearsWithoutFinding(t *testing.T) {
-	store := &memoryStore{}
+	store := newStore()
 	request := validEvaluation()
 	readings := validReadings(request)
 	readings.Return.Value = 13
@@ -144,9 +209,9 @@ func TestHealthyDeltaTClearsWithoutFinding(t *testing.T) {
 // Every fifteen minutes the schedule finds the same condition again; one finding a day stands
 // for it, and later evaluations report it as ongoing instead of adding another.
 func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
-	store := &memoryStore{}
+	store := newStore()
 	request := validEvaluation()
-	now := request.EvaluationTo.Add(time.Minute)
+	now := request.At.Add(time.Minute)
 	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time { return now })
 	first, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil || first.Status != "FINDING" {
@@ -154,7 +219,7 @@ func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
 	}
 
 	later := request
-	later.EvaluationFrom, later.EvaluationTo = request.EvaluationFrom.Add(15*time.Minute), request.EvaluationTo.Add(15*time.Minute)
+	later.At = request.At.Add(15 * time.Minute)
 	ongoing, err := service.EvaluateLowDeltaT(t.Context(), later)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +229,7 @@ func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
 	}
 
 	nextDay := request
-	nextDay.EvaluationFrom, nextDay.EvaluationTo = request.EvaluationFrom.Add(25*time.Hour), request.EvaluationTo.Add(25*time.Hour)
+	nextDay.At = request.At.Add(25 * time.Hour)
 	again, err := service.EvaluateLowDeltaT(t.Context(), nextDay)
 	if err != nil || again.Status != "FINDING" || len(store.findings) != 2 {
 		t.Fatalf("a day later=%#v findings=%d err=%v", again, len(store.findings), err)
@@ -173,7 +238,7 @@ func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
 
 func TestFDDRejectsMissingOrInvalidEvidence(t *testing.T) {
 	request := validEvaluation()
-	store := &memoryStore{}
+	store := newStore()
 
 	service := newTestService(t, store, &loopEvidence{err: ErrNoLoopEvidence}, time.Now)
 	if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrNoLoopEvidence) {
@@ -198,18 +263,16 @@ func TestFDDRejectsMissingOrInvalidEvidence(t *testing.T) {
 	}
 }
 
-func TestAScheduledEvaluationChecksTheWindowBeforeItsFireTime(t *testing.T) {
+func TestAScheduledEvaluationDiagnosesTheLoopAtItsFireTime(t *testing.T) {
 	request := validEvaluation()
-	payload, err := json.Marshal(ScheduledEvaluation{
-		AssetID: request.AssetID, DeviceID: request.DeviceID, RuleRevisionID: request.RuleRevisionID, MinimumDeltaTC: 5, WindowMinutes: 15,
-	})
+	payload, err := json.Marshal(ScheduledEvaluation{AssetID: request.AssetID, DeviceID: request.DeviceID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := schedulerjob.Job{
 		JobID: "01990000-9000-7000-8000-000000000001", TriggerType: "SCHEDULE", JobType: EvaluationJobType,
 		TenantID: request.TenantID, SiteID: request.SiteID, Payload: payload, AttemptNo: 1, MaxAttempts: 3, TimeoutSeconds: 60,
-		ScheduledFor: request.EvaluationTo,
+		ScheduledFor: request.At,
 	}
 	scheduled, err := ScheduledRequest(job)
 	if err != nil {
@@ -219,14 +282,15 @@ func TestAScheduledEvaluationChecksTheWindowBeforeItsFireTime(t *testing.T) {
 		t.Fatalf("scheduled=%#v want=%#v", scheduled, request)
 	}
 
-	job.Payload = json.RawMessage(`{"assetId":"` + request.AssetID + `","deviceId":"` + request.DeviceID + `","ruleRevisionId":"r","minimumDeltaTC":5,"windowMinutes":15,"evidence":[]}`)
+	// The rule is FDD's own; a schedule names the loop and nothing about the threshold.
+	job.Payload = json.RawMessage(`{"assetId":"` + request.AssetID + `","deviceId":"` + request.DeviceID + `","minimumDeltaTC":5}`)
 	if _, err = ScheduledRequest(job); err == nil {
-		t.Fatal("a schedule cannot carry its own evidence")
+		t.Fatal("a schedule carried its own threshold")
 	}
 }
 
 func TestFDDLinkingIsExplicitAndSeparateFromDetection(t *testing.T) {
-	store := &memoryStore{}
+	store := newStore()
 	request := validEvaluation()
 	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, time.Now)
 	result, err := service.EvaluateLowDeltaT(t.Context(), request)

@@ -24,18 +24,31 @@ func NewHTTPHandler(service *Service) (http.Handler, error) {
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("POST /v1/fdd/evaluate/low-delta-t", handler.handleEvaluateLowDeltaT)
+	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/rules/low-delta-t", handler.handleCurrentRule)
 	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/findings", handler.handleListFindings)
 	mux.HandleFunc("PATCH /v1/sites/{siteId}/fdd/findings/{findingId}/links", handler.handleLinkFinding)
 	return mux, nil
 }
 
+// handleEvaluateLowDeltaT diagnoses a loop now, over the window of the rule in effect.
 func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, request *http.Request) {
-	var input EvaluationRequest
+	var input struct {
+		TenantID string `json:"tenantId"`
+		SiteID   string `json:"siteId"`
+		AssetID  string `json:"assetId"`
+		DeviceID string `json:"deviceId"`
+	}
 	if err := decodeStrictFDDJSON(request.Body, &input); err != nil {
 		writeFDDError(writer, http.StatusBadRequest, "fdd_request_invalid")
 		return
 	}
-	result, err := handler.service.EvaluateLowDeltaT(request.Context(), input)
+	result, err := handler.service.EvaluateLowDeltaT(request.Context(), EvaluationRequest{
+		TenantID: input.TenantID, SiteID: input.SiteID, AssetID: input.AssetID, DeviceID: input.DeviceID, At: handler.service.now().UTC(),
+	})
+	if errors.Is(err, ErrRuleNotFound) {
+		writeFDDError(writer, http.StatusConflict, "fdd_rule_not_found")
+		return
+	}
 	if err != nil {
 		writeFDDError(writer, http.StatusUnprocessableEntity, "fdd_evaluation_rejected")
 		return
@@ -43,6 +56,20 @@ func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, 
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleCurrentRule(writer http.ResponseWriter, request *http.Request) {
+	rule, err := handler.service.CurrentRule(request.Context(), request.Header.Get("X-Tenant-ID"), request.PathValue("siteId"))
+	if errors.Is(err, ErrRuleNotFound) {
+		writeFDDError(writer, http.StatusNotFound, "fdd_rule_not_found")
+		return
+	}
+	if err != nil {
+		writeFDDError(writer, http.StatusBadGateway, "fdd_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(rule)
 }
 
 func (handler *HTTPHandler) handleListFindings(writer http.ResponseWriter, request *http.Request) {

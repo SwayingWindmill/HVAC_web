@@ -32,6 +32,8 @@ type FindingFilter struct {
 }
 
 type Store interface {
+	// CurrentRule is the Tenant's latest revision of a rule in effect at a time.
+	CurrentRule(ctx context.Context, tenantID, siteID, ruleCode string, at time.Time) (RuleRevision, error)
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
 	// RecentFinding is the latest finding of a type for an asset and rule whose window ended at or after since.
 	RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error)
@@ -87,13 +89,26 @@ func NewService(store Store, evidence EvidenceSource, now func() time.Time) (*Se
 	return &Service{store: store, evidence: evidence, now: now}, nil
 }
 
+// CurrentRule is the low-delta-T rule revision in effect for the Site's Tenant now.
+func (service *Service) CurrentRule(ctx context.Context, tenantID, siteID string) (RuleRevision, error) {
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
+		return RuleRevision{}, errors.New("FDD rule scope is invalid")
+	}
+	return service.store.CurrentRule(ctx, tenantID, siteID, LowDeltaTRuleCode, service.now().UTC())
+}
+
 func (service *Service) EvaluateLowDeltaT(ctx context.Context, request EvaluationRequest) (EvaluationResult, error) {
 	if err := request.Validate(); err != nil {
 		return EvaluationResult{}, err
 	}
+	to := request.At.UTC()
+	rule, err := service.store.CurrentRule(ctx, request.TenantID, request.SiteID, LowDeltaTRuleCode, to)
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("read the low-delta-T rule: %w", err)
+	}
+	from := to.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 	readings, err := service.evidence.LatestLoopReadings(ctx, LoopQuery{
-		TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID,
-		From: request.EvaluationFrom.UTC(), To: request.EvaluationTo.UTC(),
+		TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: from, To: to,
 	})
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read loop evidence: %w", err)
@@ -105,34 +120,33 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 		return EvaluationResult{}, fmt.Errorf("return temperature evidence: %w", err)
 	}
 	deltaT := readings.Return.Value - readings.Supply.Value
-	if deltaT >= request.MinimumDeltaTC {
-		return EvaluationResult{Status: "CLEAR", DeltaTC: deltaT}, nil
+	if deltaT >= rule.MinimumDeltaTC {
+		return EvaluationResult{Status: "CLEAR", DeltaTC: deltaT, Rule: rule}, nil
 	}
-	open, found, err := service.store.RecentFinding(ctx, request.TenantID, request.SiteID, request.AssetID, lowDeltaTFindingType, request.RuleRevisionID,
-		request.EvaluationTo.UTC().Add(-findingRecurrence))
+	open, found, err := service.store.RecentFinding(ctx, request.TenantID, request.SiteID, request.AssetID, lowDeltaTFindingType, rule.ID, to.Add(-findingRecurrence))
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read recent FDD finding: %w", err)
 	}
 	if found {
-		return EvaluationResult{Status: "ONGOING", DeltaTC: deltaT, Finding: &open}, nil
+		return EvaluationResult{Status: "ONGOING", DeltaTC: deltaT, Rule: rule, Finding: &open}, nil
 	}
 	findingID, err := schedulerjob.UUIDv7(service.now().UTC())
 	if err != nil {
 		return EvaluationResult{}, err
 	}
-	deficitRatio := math.Max(0, (request.MinimumDeltaTC-deltaT)/request.MinimumDeltaTC)
+	deficitRatio := math.Max(0, (rule.MinimumDeltaTC-deltaT)/rule.MinimumDeltaTC)
 	confidence := math.Min(0.99, 0.5+0.5*deficitRatio)
 	finding := intelligencemodel.FDDFinding{
 		ID: findingID, TenantID: request.TenantID, SiteID: request.SiteID, AssetID: request.AssetID,
-		FindingType: lowDeltaTFindingType, EvaluationFrom: request.EvaluationFrom.UTC(), EvaluationTo: request.EvaluationTo.UTC(),
-		EvidenceIDs: []string{readings.Supply.ObservationID, readings.Return.ObservationID}, ModelDeploymentID: request.ModelDeploymentRevisionID,
-		RuleRevisionID: request.RuleRevisionID, Confidence: confidence, CreatedAt: service.now().UTC(),
-		ObservedValue: deltaT, ThresholdValue: request.MinimumDeltaTC, ValueUnit: "K",
+		FindingType: lowDeltaTFindingType, EvaluationFrom: from, EvaluationTo: to,
+		EvidenceIDs:    []string{readings.Supply.ObservationID, readings.Return.ObservationID},
+		RuleRevisionID: rule.ID, Confidence: confidence, CreatedAt: service.now().UTC(),
+		ObservedValue: deltaT, ThresholdValue: rule.MinimumDeltaTC, ValueUnit: "K",
 	}
 	if err = service.store.InsertFinding(ctx, finding); err != nil {
 		return EvaluationResult{}, fmt.Errorf("persist FDD finding: %w", err)
 	}
-	return EvaluationResult{Status: "FINDING", DeltaTC: deltaT, Finding: &finding}, nil
+	return EvaluationResult{Status: "FINDING", DeltaTC: deltaT, Rule: rule, Finding: &finding}, nil
 }
 
 func temperatureEvidence(reading Reading) error {
@@ -148,14 +162,11 @@ func temperatureEvidence(reading Reading) error {
 	return nil
 }
 
-// ScheduledEvaluation is what an FDD_EVALUATION schedule carries: the rule binding to check.
-// The window is the WindowMinutes before the job's fire time.
+// ScheduledEvaluation is what an FDD_EVALUATION schedule carries: the loop to diagnose. The rule
+// in effect at the job's fire time says over which window and against which threshold.
 type ScheduledEvaluation struct {
-	AssetID        string  `json:"assetId"`
-	DeviceID       string  `json:"deviceId"`
-	RuleRevisionID string  `json:"ruleRevisionId"`
-	MinimumDeltaTC float64 `json:"minimumDeltaTC"`
-	WindowMinutes  int     `json:"windowMinutes"`
+	AssetID  string `json:"assetId"`
+	DeviceID string `json:"deviceId"`
 }
 
 func ScheduledRequest(job schedulerjob.Job) (EvaluationRequest, error) {
@@ -166,15 +177,7 @@ func ScheduledRequest(job schedulerjob.Job) (EvaluationRequest, error) {
 	if err := decodeStrictFDDJSON(bytes.NewReader(job.Payload), &plan); err != nil {
 		return EvaluationRequest{}, fmt.Errorf("decode FDD evaluation plan: %w", err)
 	}
-	if plan.WindowMinutes <= 0 {
-		return EvaluationRequest{}, errors.New("FDD evaluation window must be positive")
-	}
-	to := job.ScheduledFor.UTC()
-	request := EvaluationRequest{
-		TenantID: job.TenantID, SiteID: job.SiteID, AssetID: plan.AssetID, DeviceID: plan.DeviceID,
-		EvaluationFrom: to.Add(-time.Duration(plan.WindowMinutes) * time.Minute), EvaluationTo: to,
-		RuleRevisionID: plan.RuleRevisionID, MinimumDeltaTC: plan.MinimumDeltaTC,
-	}
+	request := EvaluationRequest{TenantID: job.TenantID, SiteID: job.SiteID, AssetID: plan.AssetID, DeviceID: plan.DeviceID, At: job.ScheduledFor.UTC()}
 	return request, request.Validate()
 }
 

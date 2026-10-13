@@ -658,9 +658,12 @@ try {
     },
   });
 
-  // A finding persists with its measurement and reads back through the FDD runtime's row scope; the
-  // runtime works a scheduled FDD_EVALUATION job the Scheduler left READY.
+  // A finding persists with its measurement under the Tenant's rule revision and reads back through
+  // the FDD runtime's row scope; the runtime works a scheduled FDD_EVALUATION job the Scheduler left READY.
   const fddJobId = '01990000-1990-7000-8000-000000000001';
+  const fddRuleId = '01990000-1985-7000-8000-000000000001';
+  psql(`INSERT INTO core_registry.fdd_rule_revisions (id, tenant_id, rule_code, revision, minimum_delta_tc, window_minutes, effective_from, created_at)
+    VALUES ('${fddRuleId}', '018f1d00-0000-7000-8000-000000000001', 'CHILLED_WATER_LOW_DELTA_T', 1, 5, 15, '2026-01-01T00:00:00Z', now())`);
   psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
     VALUES ('${fddJobId}', 'SCHEDULE', 'FDD_EVALUATION', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000002', now(), 'fdd-integration-scheduled-evaluation', '{}'::jsonb, 'READY', 3, 60, now(), now())`);
   report.assertions.fddFindingPersistence = run(process.execPath, [
@@ -675,6 +678,7 @@ try {
       FDD_POSTGRES_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000002',
       FDD_POSTGRES_INTEGRATION_ASSET_ID: '018f1e00-3000-7000-8000-000000000002',
       FDD_POSTGRES_INTEGRATION_JOB_ID: fddJobId,
+      FDD_POSTGRES_INTEGRATION_RULE_ID: fddRuleId,
     },
   });
   for (const name of ['TestPostgresServicePersistsAuthoritativeHistoryFinding', 'TestPostgresFDDRuntimeWorksItsScheduledEvaluations']) {

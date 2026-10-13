@@ -29,7 +29,7 @@ func TestClickHouseEvidenceReadsTheLatestSupplyAndReturnOfTheDevice(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.EvaluationFrom, To: request.EvaluationTo}
+	query := LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.At.Add(-15 * time.Minute), To: request.At}
 	readings, err := evidence.LatestLoopReadings(t.Context(), query)
 	if err != nil {
 		t.Fatal(err)
