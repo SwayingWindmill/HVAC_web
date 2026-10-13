@@ -20,7 +20,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | 能源 | 节能项目 (`/energy-analysis/savings`) | mv-service: measures, frozen baselines, verified days (ADR 0021) |
 | 能源 | 能源报告 (`/reports`) | closed months from report-service snapshots (`REPORT_GENERATE`, 03:00 on the 1st); the running month and unarchived months assembled on demand; yearly view; printable to A4 |
 | 能源 | 站点对标 (platform route `/benchmark`) | each authorized site's energy series; sites without analytics access are listed but not compared |
-| 运维 | 告警, 故障诊断, 工单, 控制指令 | alarm, FDD (scheduled every 15 min), work orders, command governance |
+| 运维 | 告警, 故障诊断, 工单, 控制指令 | alarm, FDD (scheduled every 15 min; its rule revisions in `core_registry.fdd_rule_revisions`, spec `docs/specs/fdd-rule-definition.md`), work orders, command governance |
 | 平台 | 通知, 集成管理, 系统管理 | notification inbox, gateway credentials, IAM/Registry/rules/audit |
 
 Costs are estimates at the Site's time-of-use tariff and are labelled as such; Settlement
@@ -69,7 +69,6 @@ Smaller follow-ups:
 
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
-- Move the FDD low-ΔT threshold from the schedule payload into an owner-held rule definition.
 - Polish the device inspector and the work-order sheet in the same visual system.
 
 ## Local environment notes
