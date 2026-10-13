@@ -1771,6 +1771,38 @@
         "site",
         "principal"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/reports/monthly",
+      "owner": "report-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/reports/monthly/{month}",
+      "owner": "report-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
     }
   ]
 }
