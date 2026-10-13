@@ -2,7 +2,6 @@ package metric
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"math"
@@ -22,7 +21,7 @@ func TestCounterDeltaTakesTheStepIntoTheWindow(t *testing.T) {
 	if baseURL == "" {
 		t.Skip("METRIC_CLICKHOUSE_TEST_URL is not set")
 	}
-	tenant, site, device, point := newUUID(t), newUUID(t), newUUID(t), newUUID(t)
+	const tenant, site, device, point = "018f5a00-0000-7000-8000-000000000001", "018f5a00-1000-7000-8000-000000000001", "018f5a00-2000-7000-8000-000000000001", "018f5a00-3000-7000-8000-000000000001"
 	// One reading a minute from 09:00, counting one kWh a minute.
 	insert := fmt.Sprintf(`INSERT INTO telemetry_history.observations
  (observation_id, tenant_id, site_id, device_id, point_id, source_event_id, sampled_at, received_at, acceptance_status, quality, value_number)
@@ -69,15 +68,4 @@ FROM numbers(151)`, tenant, site, device, point)
 	if halves := delta(ten, ten.Add(30*time.Minute)) + delta(ten.Add(30*time.Minute), ten.Add(time.Hour)); math.Abs(halves-60) > 1e-9 {
 		t.Fatalf("two half hours add to %v kWh, want the hour's 60", halves)
 	}
-}
-
-func newUUID(t *testing.T) string {
-	t.Helper()
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		t.Fatal(err)
-	}
-	bytes[6] = bytes[6]&0x0f | 0x40
-	bytes[8] = bytes[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:])
 }
