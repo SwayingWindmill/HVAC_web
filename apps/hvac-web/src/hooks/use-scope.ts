@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react';
-import { getRouteApi, useLocation } from '@tanstack/react-router';
+import { getRouteApi, useLocation, useRouter } from '@tanstack/react-router';
 import type { Site } from '@/api/generated/platformGateway.gen';
 import { siteIdFromLocation, workspaceLocationForSite } from '@/app/router-paths';
-import { useShellRuntime, useShellSnapshot } from '@/app/ShellRuntimeContext';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 
 export interface ScopeItem {
   /** Stable query-key scope for the Site, `site:<siteId>`. */
@@ -27,7 +27,7 @@ function siteScope(site: Readonly<Site>): ScopeItem {
 
 /** Registry Sites visible to the principal and the Site the current location is scoped to. */
 export function useScope() {
-  const runtime = useShellRuntime();
+  const router = useRouter();
   const snapshot = useShellSnapshot();
   const location = useLocation();
   const sites = snapshot.sites?.items ?? NO_SITES;
@@ -37,8 +37,8 @@ export function useScope() {
 
   const setScope = useCallback((nextSiteId: string) => {
     if (nextSiteId === currentScope?.siteId) return;
-    void runtime.requestSiteNavigation(workspaceLocationForSite(location.pathname, nextSiteId));
-  }, [currentScope?.siteId, location.pathname, runtime]);
+    void router.navigate({ href: workspaceLocationForSite(location.pathname, nextSiteId) });
+  }, [currentScope?.siteId, location.pathname, router]);
 
   return { currentScope, availableScopes, setScope };
 }

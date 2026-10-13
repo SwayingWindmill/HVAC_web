@@ -67,7 +67,7 @@ Roadmap issues, in order:
 
 Smaller follow-ups:
 
-- Unsaved drafts have two owners: platform pages (系统管理) keep their own registry with a router blocker (`features/system/unsaved-drafts.tsx`); the protected Site scope's `registerDraft` / `dirtyDrafts` still drive the site-switch confirmation, but no Site page registers a draft yet. Wire a Site page's form into it when one needs the guard, or remove the path.
+- Unsaved drafts on platform pages (系统管理) belong to the page: `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope's own draft path (`registerDraft` / `dirtyDrafts`, the site-switch confirmation in `ShellChrome`) has no caller since that fix; keep it for Site-page forms or remove it.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
 - Move the FDD low-ΔT threshold from the schedule payload into an owner-held rule definition.

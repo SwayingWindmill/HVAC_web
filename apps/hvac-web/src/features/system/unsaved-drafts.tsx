@@ -24,29 +24,26 @@ export type RegisterUnsavedDraft = (draft: UnsavedDraft) => () => void;
 // asks before unsaved work is dropped.
 export function useUnsavedDraftGuard() {
   const drafts = useRef(new Map<string, UnsavedDraft>());
-  const [blockedLabels, setBlockedLabels] = useState<readonly string[]>([]);
+  const [blockedDrafts, setBlockedDrafts] = useState<readonly UnsavedDraft[]>([]);
 
-  const dirtyLabels = useCallback(
-    () => Array.from(drafts.current.values()).filter((draft) => draft.isDirty()).map((draft) => draft.label),
-    [],
-  );
+  const dirtyDrafts = useCallback(() => Array.from(drafts.current.values()).filter((draft) => draft.isDirty()), []);
 
   const registerUnsavedDraft = useCallback<RegisterUnsavedDraft>((draft) => {
     if (drafts.current.has(draft.id)) throw new Error(`Unsaved draft already registered: ${draft.id}`);
     drafts.current.set(draft.id, draft);
     return () => {
-      if (drafts.current.get(draft.id) === draft) drafts.current.delete(draft.id);
+      drafts.current.delete(draft.id);
     };
   }, []);
 
   const blocker = useBlocker({
     shouldBlockFn: () => {
-      const labels = dirtyLabels();
-      if (labels.length === 0) return false;
-      setBlockedLabels(labels);
+      const dirty = dirtyDrafts();
+      if (dirty.length === 0) return false;
+      setBlockedDrafts(dirty);
       return true;
     },
-    enableBeforeUnload: () => dirtyLabels().length > 0,
+    enableBeforeUnload: () => dirtyDrafts().length > 0,
     withResolver: true,
   });
 
@@ -58,7 +55,7 @@ export function useUnsavedDraftGuard() {
           <AlertDialogDescription>以下内容尚未保存，离开后不能恢复。</AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="space-y-1 rounded-md border bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
-          {blockedLabels.map((label) => <li key={label}>• {label}</li>)}
+          {blockedDrafts.map((draft) => <li key={draft.id}>• {draft.label}</li>)}
         </ul>
         <AlertDialogFooter>
           <AlertDialogCancel>继续编辑</AlertDialogCancel>

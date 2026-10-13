@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { primaryRoleLabel } from '@/lib/role-labels';
-import { useLocation } from '@tanstack/react-router';
+import { useLocation, useRouter } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { AppSidebar } from '@/components/layout/AppSidebar';
 import { NavigationProgress, SkipToMain } from '@/components/layout/NavigationProgress';
@@ -105,8 +105,10 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const principalRole = primaryRoleLabel(principal.principal.roles);
   const defaultSidebarOpen = useMemo(sidebarDefaultOpen, []);
 
+  const router = useRouter();
+  // Through the router, so a page's unsaved-draft blocker sees it; the _app blocker hands leaving the Site scope to the runtime.
   const navigate = (target: string) => {
-    void runtime.requestSiteNavigation(target);
+    void router.navigate({ href: target });
   };
 
   const retryHref = `${location.pathname}${location.searchStr}${location.hash}`;

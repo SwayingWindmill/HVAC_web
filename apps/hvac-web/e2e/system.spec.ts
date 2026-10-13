@@ -1,4 +1,4 @@
-import { principal } from './gateway';
+import { SITE_ID, principal } from './gateway';
 import { expect, test } from './test';
 
 test('asset and point registration opens from the system overview', async ({ page }) => {
@@ -16,6 +16,16 @@ test('automation rules open from the system overview', async ({ page }) => {
   await expect(page).toHaveURL(/tab=rules/);
   // The recorded operator does not maintain rules.
   await expect(page.getByRole('tabpanel')).toContainText('当前为只读状态');
+});
+
+test('opening system management from a Site page leaves the Site scope', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}`);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('中央机房');
+
+  await page.getByRole('button', { name: new RegExp(principal.principal.displayName) }).click();
+  await page.getByRole('menuitem', { name: '系统管理', exact: true }).click();
+  await expect(page).toHaveURL(/\/system$/);
+  await expect(page.getByTestId('real-shell-site')).toHaveText('平台范围');
 });
 
 test('leaving system management with an unsaved registry import asks before dropping it', async ({ page }) => {
@@ -36,6 +46,11 @@ test('leaving system management with an unsaved registry import asks before drop
   await confirmation.getByRole('button', { name: '继续编辑', exact: true }).click();
   await expect(page).toHaveURL(/tab=registry/);
   await expect(source).toHaveValue('{"draft": true}');
+
+  await page.getByRole('link', { name: '告警', exact: true }).click();
+  await expect(page.getByRole('alertdialog')).toContainText('站点与设备登记管理');
+  await page.getByRole('alertdialog').getByRole('button', { name: '继续编辑', exact: true }).click();
+  await expect(page).toHaveURL(/\/system\?tab=registry/);
 
   await page.getByRole('tab', { name: '系统概览', exact: true }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: '丢弃并离开', exact: true }).click();
