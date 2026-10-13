@@ -9,6 +9,7 @@
 // weather station's outdoor temperature alone, into a window that already holds the meters' history;
 // no Metric reads it, so nothing is recalculated.
 //
+// The window is [--from, --to): the --to instant is the first sample of the window after it.
 // Replay only a window that ends before the Site's live history begins: replayed counters start
 // fresh, so a window touching live data would put a counter jump into one hour. A window that
 // already holds history is refused: replaying it again would keep the old observations (same

@@ -298,18 +298,18 @@ func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[strin
 	}
 	elapsed := time.Duration(0)
 	interval := cmp.Or(plan.Step, config.Interval())
-	for elapsed < duration {
+	// The window is [from, from+duration): its end instant is the next window's first sample.
+	for elapsed+interval < duration {
 		for len(commands) > 0 && !commands[0].At.After(from.Add(elapsed)) {
 			if result := plant.ApplyCommand(commands[0].Command); !result.Success {
 				return admitted, fmt.Errorf("replay command %s on %s at %s was refused: %s", commands[0].Command.Method, commands[0].Command.DeviceID, commands[0].At.Format(time.RFC3339), result.Code)
 			}
 			commands = commands[1:]
 		}
-		step := min(interval, duration-elapsed)
-		if err := emit(plant.Tick(step)); err != nil {
+		if err := emit(plant.Tick(interval)); err != nil {
 			return admitted, err
 		}
-		elapsed += step
+		elapsed += interval
 	}
 	return admitted, nil
 }
