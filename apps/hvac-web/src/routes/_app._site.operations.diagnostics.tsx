@@ -4,6 +4,7 @@ import { DiagnosticsWorkspace } from '@/features/diagnostics/components/Diagnost
 
 export const Route = createFileRoute('/_app/_site/operations/diagnostics')({
   validateSearch: z.object({
+    range: z.enum(['7d', 'all']).optional(),
     inspect: z.string().optional(),
   }),
   staticData: { title: '故障诊断' },

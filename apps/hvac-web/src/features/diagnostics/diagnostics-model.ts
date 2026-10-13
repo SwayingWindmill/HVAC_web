@@ -68,6 +68,14 @@ export function lowDeltaTTarget(model: Pick<SiteAssetModel, 'devices' | 'relatio
   return null;
 }
 
+/** The active Device that meters an Asset, e.g. the BTU meter whose readings a finding was drawn from. */
+export function meterOf(model: Pick<SiteAssetModel, 'devices' | 'relationships'>, assetId: string): string | undefined {
+  return model.relationships.find((relationship) =>
+    relationship.status === 'ACTIVE' && relationship.role === 'METER'
+    && relationship.fromType === 'DEVICE' && relationship.toType === 'ASSET' && relationship.toId === assetId
+    && model.devices.some((device) => device.id === relationship.fromId && device.status === 'ACTIVE'))?.fromId;
+}
+
 /** How far a finding fell past its threshold, as a share of the threshold. */
 export function severity(finding: Finding): 'high' | 'medium' | 'low' {
   const shortfall = Math.abs(finding.thresholdValue - finding.observedValue) / finding.thresholdValue;

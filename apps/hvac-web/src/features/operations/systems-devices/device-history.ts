@@ -79,6 +79,37 @@ export function deviceRecentHistoryQuery(input: {
   });
 }
 
+/**
+ * Quarter-hour gauge aggregates between two instants, e.g. the hours around a diagnosis window.
+ * A closed span never changes, so it is read once.
+ */
+export function deviceSpanHistoryQuery(input: {
+  readonly siteId: string;
+  readonly deviceId: string;
+  readonly keys: readonly string[];
+  readonly from: string;
+  readonly to: string;
+  readonly timezone: string;
+  readonly csrfToken: string;
+}) {
+  return queryOptions({
+    queryKey: ['device-history', 'span', input.siteId, input.deviceId, input.keys, input.from, input.to],
+    queryFn: async ({ signal }) => {
+      const response = await client.queryDeviceHistoryAggregate({
+        deviceId: input.deviceId,
+        keys: [...input.keys],
+        from: input.from,
+        to: input.to,
+        granularity: 'QUARTER_HOUR',
+        timezone: input.timezone,
+        qualityPolicy: 'USABLE',
+      }, { csrfToken: input.csrfToken, signal });
+      return groupByKey(response.buckets);
+    },
+    staleTime: Date.parse(input.to) <= Date.now() ? Infinity : 60_000,
+  });
+}
+
 function groupByKey(buckets: readonly DeviceHistoryAggregateBucket[]): ReadonlyMap<string, readonly HourlyPoint[]> {
   const series = new Map<string, HourlyPoint[]>();
   for (const bucket of buckets) {
