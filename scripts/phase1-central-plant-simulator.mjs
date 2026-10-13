@@ -561,9 +561,10 @@ VALUES (${sqlLiteral(siteUUID(site, 0x850000000001))}, ${sqlLiteral(`monthly-rep
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
-// Savings verification (ADR 0021) fits plant electricity against cooling delivered, hour by hour:
-// two hourly counter-delta Metrics per Site, up to fourteen days backfilled from telemetry
-// history so a measure has its baseline period, and a daily MV_EVALUATION at 02:00 Site time.
+// Savings verification (ADR 0021) fits electricity against cooling delivered, hour by hour: two
+// hourly counter-delta Metrics per Site, and one per sub-metered device for measures bounded by
+// its sub-meter (IPMVP Option B), up to fourteen days backfilled from telemetry history so a
+// measure has its baseline period, and a daily MV_EVALUATION at 02:00 Site time.
 function buildSavingsSeed(site, points) {
   const { tenantId, siteId } = site;
   const ids = buildIdentities(site, points);
@@ -580,27 +581,36 @@ function buildSavingsSeed(site, points) {
   ].map((metric) => ({ ...metric, metricId: tenantID(), versionId: tenantID(), dependencyId: tenantID(), bindingId: siteID(), scheduleId: siteID() }));
   if (metrics[0].metricId !== hourlyEnergyMetricId) throw new Error('the daily energy cost Metric depends on hourly_energy being the first savings Metric');
   const evaluationScheduleId = siteID();
+  const deviceMetric = { code: 'device_hourly_energy', name: '设备逐时用电量', dependency: 'device_energy', metricId: tenantID(), versionId: tenantID(), dependencyId: tenantID() };
+  const deviceByName = new Map(siteDevices(site).map((device) => [device.name, device]));
+  const deviceBindings = points.filter((point) => point.pointType === 'COUNTER' && meteredEquipment.includes(point.deviceId)).map((point) => ({
+    device: deviceByName.get(point.deviceId), pointId: ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`), bindingId: siteID(), scheduleId: siteID(),
+  }));
+  if (deviceBindings.length !== meteredEquipment.length) throw new Error('every metered device needs its energy counter for savings verification');
+  const hourlyBindings = [...metrics.map((metric) => metric.bindingId), ...deviceBindings.map((binding) => binding.bindingId)];
   const t = sqlLiteral(tenantId);
   const st = sqlLiteral(siteId);
   const id = sqlLiteral;
   return `BEGIN;
 INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at) VALUES
-${metrics.map((metric) => `  (${id(metric.metricId)}, ${t}, ${id(metric.code)}, ${id(metric.name)}, 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${[...metrics, deviceMetric].map((metric) => `  (${id(metric.metricId)}, ${t}, ${id(metric.code)}, ${id(metric.name)}, 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at) VALUES
-${metrics.map((metric) => `  (${id(metric.versionId)}, ${t}, ${id(metric.metricId)}, 1, 'kWh', 'NUMBER', 'SITE', 'HOUR', 'LAST', 'DELTA', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${[...metrics.map((metric) => ({ ...metric, subject: 'SITE' })), { ...deviceMetric, subject: 'DEVICE' }].map((metric) => `  (${id(metric.versionId)}, ${t}, ${id(metric.metricId)}, 1, 'kWh', 'NUMBER', ${id(metric.subject)}, 'HOUR', 'LAST', 'DELTA', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
-${metrics.map((metric) => `INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
+${[...metrics, deviceMetric].map((metric) => `INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
 SELECT ${id(metric.dependencyId)}::uuid, ${t}::uuid, ${id(metric.versionId)}::uuid, 'POINT', ${id(metric.dependency)}, NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
 WHERE EXISTS (SELECT 1 FROM core_registry.metric_versions WHERE id = ${id(metric.versionId)} AND status = 'DRAFT')
 ON CONFLICT (id) DO NOTHING;`).join('\n')}
 UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
-WHERE id IN (${metrics.map((metric) => id(metric.versionId)).join(', ')}) AND status = 'DRAFT';
+WHERE id IN (${[...metrics, deviceMetric].map((metric) => id(metric.versionId)).join(', ')}) AND status = 'DRAFT';
 INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at) VALUES
-${metrics.map((metric) => `  (${id(metric.bindingId)}, ${t}, ${st}, ${id(metric.versionId)}, ${id(metric.metricId)}, 1, 1, 'SITE', ${st}, 'HOUR', ${id(JSON.stringify({ points: { [metric.dependency]: metric.pointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${metrics.map((metric) => `  (${id(metric.bindingId)}, ${t}, ${st}, ${id(metric.versionId)}, ${id(metric.metricId)}, 1, 1, 'SITE', ${st}, 'HOUR', ${id(JSON.stringify({ points: { [metric.dependency]: metric.pointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())`).join(',\n')},
+${deviceBindings.map((binding) => `  (${id(binding.bindingId)}, ${t}, ${st}, ${id(deviceMetric.versionId)}, ${id(deviceMetric.metricId)}, 1, 1, 'DEVICE', ${id(binding.device.platformDeviceId)}, 'HOUR', ${id(JSON.stringify({ points: { [deviceMetric.dependency]: binding.pointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
 ${metrics.map((metric) => `  (${id(metric.scheduleId)}, ${id(`${metric.code.replace('_', '-')}-${site.siteCode}`)}, ${id(`${metric.name}（每小时）`)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '5 * * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: metric.bindingId }))}, date_trunc('hour', clock_timestamp()) + interval '65 minutes')`).join(',\n')},
+${deviceBindings.map((binding) => `  (${id(binding.scheduleId)}, ${id(`device-hourly-energy-${binding.device.slug}-${site.siteCode}`)}, ${id(`${binding.device.name} ${deviceMetric.name}（每小时）`)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '5 * * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: binding.bindingId }))}, date_trunc('hour', clock_timestamp()) + interval '65 minutes')`).join(',\n')},
   (${id(evaluationScheduleId)}, ${id(`savings-verification-${site.siteCode}`)}, '节能量核算（每日 02:00）', ${t}, ${st}, 'MV_EVALUATION', 'CRON', '0 2 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 300, '{}',
     (date_trunc('day', clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 day 2 hours') AT TIME ZONE 'Asia/Shanghai')
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
@@ -612,7 +622,7 @@ WITH hours AS (
 ), plan AS (
   SELECT binding.id AS binding_id, hours.period_start,
          'savings-backfill-' || binding.id || '-' || to_char(hours.period_start AT TIME ZONE 'UTC', 'YYYYMMDDHH24') AS dedup
-  FROM hours CROSS JOIN (VALUES ${metrics.map((metric) => `(${id(metric.bindingId)})`).join(', ')}) AS binding(id)
+  FROM hours CROSS JOIN (VALUES ${hourlyBindings.map((bindingId) => `(${id(bindingId)}::uuid)`).join(', ')}) AS binding(id)
 )
 INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, priority, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
 SELECT ${sqlJobId}, 'BACKFILL', 'METRIC_BACKFILL', ${t}, ${st}, period_start + interval '1 hour', 20, dedup,
