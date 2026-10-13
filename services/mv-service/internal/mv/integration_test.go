@@ -23,7 +23,7 @@ func integrationEnv(t *testing.T, names ...string) []string {
 	return values
 }
 
-func TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce(t *testing.T) {
+func TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce(t *testing.T) {
 	env := integrationEnv(t, "MV_POSTGRES_INTEGRATION_DSN", "MV_POSTGRES_INTEGRATION_TENANT_ID", "MV_POSTGRES_INTEGRATION_SITE_ID", "MV_POSTGRES_INTEGRATION_ACTOR_ID", "MV_POSTGRES_INTEGRATION_DEVICE_ID")
 	dsn, tenantID, siteID, actor, device := env[0], env[1], env[2], env[3], env[4]
 	store, err := OpenPostgres(t.Context(), dsn)

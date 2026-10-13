@@ -21,7 +21,7 @@ export function usePlantMachines() {
   const assets = useSiteAssetsData({ site, principal, runtime });
   const machines = useMemo(() => (assets.registry.data ? plantMachines(buildPlantView(assets.rows).devices) : null), [assets.registry.data, assets.rows]);
   const names = useMemo(() => (machines ? new Map(machines.map((machine) => [machine.deviceId, machine.name])) : null), [machines]);
-  return { machines, names, registry: assets.registry };
+  return { machines, names };
 }
 
 /**

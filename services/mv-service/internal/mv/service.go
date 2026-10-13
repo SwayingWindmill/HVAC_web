@@ -37,7 +37,7 @@ var (
 	ErrMeasureNotFound   = errors.New("savings measure not found")
 	ErrInvalidMeasure    = errors.New("savings measure input is invalid")
 	ErrWrongStatus       = errors.New("savings measure is not in a state that allows this")
-	ErrReportingOverlap  = errors.New("another measure on this Site reports over the same period")
+	ErrReportingOverlap  = errors.New("another measure on the same measurement boundary reports over the same period")
 	ErrBaselineLocked    = errors.New("the baseline is frozen: daily results have been published")
 	ErrBoundaryUnmetered = errors.New("the device has no hourly energy Metric to verify on")
 )

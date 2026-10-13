@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { measuresQuery, savingsKeys, SavingsRequestError, summaryQuery } from '../query';
 import { boundaryLabel, costBasis, KIND_LABEL, monthToDate, savingsRate, siteSavingsRate, type Measure } from '../savings-model';
-import { usePlantMachines } from '../use-boundary-devices';
+import { usePlantMachines } from '../use-plant-machines';
 import { MeasureSheet } from './MeasureSheet';
 import { MeasureStatusBadge } from './measure-presentation';
 import { RegisterMeasureDialog } from './RegisterMeasureDialog';

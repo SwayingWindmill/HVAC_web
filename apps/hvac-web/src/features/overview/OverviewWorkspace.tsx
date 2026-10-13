@@ -302,7 +302,9 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
           </dl>
         ) : (
           <p className="text-muted-foreground">
-            {reporting.length > 0
+            {reporting.length > 1
+              ? `${reporting.length} 项措施正在核算${reporting.some((measure) => !measure.baseline?.trusted) ? `，其中 ${reporting.filter((measure) => !measure.baseline?.trusted).length} 项基线不可信，暂不核算` : "，实施满 24 小时后的次日开始出结果"}。`
+              : reporting.length === 1
               ? `「${reporting[0].name}」${reporting[0].baseline?.trusted ? "正在核算，实施满 24 小时后的次日开始出结果。" : "基线检验未通过，暂不核算。"}`
               : "还没有在核算的节能措施。登记并确认实施后，这里显示按基线核算的实际节电量与电费。"}
           </p>

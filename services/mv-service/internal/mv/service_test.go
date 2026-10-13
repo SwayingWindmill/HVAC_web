@@ -305,7 +305,7 @@ func TestASiteSummaryCountsThePlantOnceADay(t *testing.T) {
 	}
 }
 
-func TestOnlyOneMeasureReportsOnASiteAtATime(t *testing.T) {
+func TestAMeasureOnThePlantMeterReportsAlone(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
 	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})

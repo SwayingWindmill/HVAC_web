@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useExecutedCommands } from '@/features/control/use-executed-commands';
 import { registerMeasure, SavingsRequestError } from '../query';
 import { instantFromSiteInput, KIND_LABEL, siteInputValue, type Measure, type MeasureKind } from '../savings-model';
-import { useMeteredMachines } from '../use-boundary-devices';
+import { useMeteredMachines } from '../use-plant-machines';
 import type { Machine } from '@/features/breakdown/breakdown-model';
 
 const siteRoute = getRouteApi('/_app/_site');
