@@ -16,7 +16,9 @@ import (
 )
 
 type PublishedRecommendation struct {
-	RunID          string         `json:"runId"`
+	RunID string `json:"runId"`
+	// Trigger is MANUAL when an operator asked for the run, SCHEDULE when the Site's schedule did.
+	Trigger        string         `json:"trigger"`
 	RunStatus      string         `json:"runStatus"`
 	Quality        string         `json:"quality"`
 	Recommendation Recommendation `json:"recommendation"`
@@ -311,14 +313,15 @@ func (store *PostgresStore) GetRecommendation(ctx context.Context, tenantID, sit
 	err = tx.QueryRow(ctx, `SELECT r.id::text,r.optimization_run_id::text,r.input_snapshot_id::text,r.deployment_revision_id::text,
 r.baseline,r.objective,r.constraints,r.candidate,r.expected_impact,r.uncertainty,r.risk,r.rollback_plan,r.verification_plan,
 r.approval_state,r.current_state_revalidation,CASE WHEN r.command_intent_id IS NULL THEN NULL ELSE r.command_intent_id::text END,r.created_at,
-run.status,run.quality
+run.status,run.quality,job.trigger_type
 FROM core_registry.optimization_recommendations r
 JOIN core_registry.optimization_runs run ON run.tenant_id=r.tenant_id AND run.site_id=r.site_id AND run.id=r.optimization_run_id
+JOIN core_registry.job_instances job ON job.job_id=run.id
 WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::uuid AND run.status='PUBLISHED'`, tenantID, siteID, runID).Scan(
 		&result.Recommendation.ID, &result.RunID, &result.Recommendation.InputSnapshotID, &result.Recommendation.DeploymentRevision,
 		&baseline, &objective, &constraints, &candidate, &expectedImpact, &uncertainty, &risk, &rollbackPlan, &verificationPlan,
 		&result.Recommendation.Approval, &currentStateRevalidation, &commandIntentID, &result.Recommendation.CreatedAt,
-		&result.RunStatus, &result.Quality,
+		&result.RunStatus, &result.Quality, &result.Trigger,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
