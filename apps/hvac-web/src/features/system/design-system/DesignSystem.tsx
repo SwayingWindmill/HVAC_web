@@ -110,12 +110,15 @@ function Colours() {
   );
 }
 
+// DS 1.0 type scale (docs/design-redesign/DESIGN-SYSTEM.md §2.2).
 const TYPE_STEPS = [
-  { name: '页面标题', classes: 'text-2xl leading-tight font-semibold tracking-tight', sample: '页面标题样式' },
-  { name: '指标数值', classes: 'text-[1.75rem] leading-none font-medium tracking-tight tabular-nums', sample: '1,234.5' },
-  { name: '卡片标题', classes: 'text-base leading-snug font-medium', sample: '卡片标题样式' },
-  { name: '正文', classes: 'text-sm', sample: '正文样式：段落、表格单元格与表单说明使用这一级。' },
-  { name: '辅助文字', classes: 'text-xs text-muted-foreground', sample: '辅助文字样式：时间、单位与补充说明' },
+  { name: '页面标题 26/32', classes: 'text-[26px] leading-8 font-bold tracking-[-0.03em]', sample: '页面标题样式' },
+  { name: '主数值 24/29', classes: 'text-2xl leading-[29px] font-semibold tracking-[-0.03em] tabular-nums', sample: '1,234.5' },
+  { name: '次数值 16/22', classes: 'text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', sample: '318.4' },
+  { name: '面板标题 14/20', classes: 'text-title font-semibold', sample: '面板标题样式' },
+  { name: '正文 13/20', classes: 'text-sm', sample: '正文样式：段落、表格单元格、菜单与按钮使用这一级。' },
+  { name: '说明 12/18', classes: 'text-xs text-muted-foreground', sample: '说明样式：元信息、字段标签与补充说明' },
+  { name: '微型 11/16', classes: 'text-micro font-medium text-subtle-foreground', sample: '单位、坐标轴、徽章' },
 ] as const;
 
 function Typography() {

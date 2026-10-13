@@ -161,7 +161,7 @@ function MetricTabsChartCard({
     >
       {title ? (
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-divider px-4">
-          <h2 className="text-sm font-semibold whitespace-nowrap">{title}</h2>
+          <h2 className="text-title font-semibold whitespace-nowrap">{title}</h2>
           {caption ? <span className="text-muted-foreground min-w-0 truncate text-xs">{caption}</span> : null}
           {action ? <div className="ml-auto flex items-center gap-2">{action}</div> : null}
         </div>

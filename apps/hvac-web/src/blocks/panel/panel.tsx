@@ -27,7 +27,7 @@ export function PanelHeader({ title, caption, badge, action, className }: {
 }) {
   return (
     <header className={cn('flex h-12 shrink-0 items-center gap-2 border-b border-divider px-4', className)}>
-      <h2 className="text-sm font-semibold whitespace-nowrap">{title}</h2>
+      <h2 className="text-title font-semibold whitespace-nowrap">{title}</h2>
       {badge}
       {caption ? <span className="min-w-0 truncate text-xs text-muted-foreground">{caption}</span> : null}
       {action ? <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div> : null}

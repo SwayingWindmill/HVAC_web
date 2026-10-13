@@ -9,6 +9,16 @@
   --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", "WenQuanYi Micro Hei", system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* DS 1.0 type scale (DESIGN-SYSTEM.md §2.2): text-sm is body 13/20, text-xs caption 12/18. */
+  --text-micro: 11px;
+  --text-micro--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 18px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-title: 14px;
+  --text-title--line-height: 20px;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -273,6 +283,8 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 20px;
     font-variant-numeric: tabular-nums;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
