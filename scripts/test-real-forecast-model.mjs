@@ -49,8 +49,8 @@ test('the forecast reads hour by hour in Site-local time, with the peak hour mar
   // 04:22Z and 04:37Z fall in the 12:00 hour in Shanghai, 04:52Z too; 05:07Z starts 13:00.
   const forecast = parseLoadForecast(response([point(15, 200), point(30, 240), point(45, 220), point(60, 100, 0, 'FALLBACK')]));
   assert.deepEqual(hourlyForecast(forecast, 'Asia/Shanghai'), [
-    { label: '12:00', loadKW: 220, lowerKW: 210, upperKW: 230, peak: true },
-    { label: '13:00', loadKW: 100, lowerKW: null, upperKW: null, peak: false },
+    { label: '12:00', start: '2026-10-11T04:22:00.000Z', loadKW: 220, lowerKW: 210, upperKW: 230, peak: true },
+    { label: '13:00', start: '2026-10-11T05:07:00.000Z', loadKW: 100, lowerKW: null, upperKW: null, peak: false },
   ]);
 });
 
