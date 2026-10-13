@@ -2,6 +2,7 @@ package metric
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func valleyPeak(versionID string, from time.Time, to *time.Time, peak float64) I
 func hoursOf(start time.Time, energy float64, count int) []HourlyResult {
 	hours := make([]HourlyResult, 0, count)
 	for hour := 0; hour < count; hour++ {
-		hours = append(hours, HourlyResult{PeriodStart: start.Add(time.Duration(hour) * time.Hour), Value: energy, Quality: "GOOD"})
+		hours = append(hours, HourlyResult{PeriodStart: start.Add(time.Duration(hour) * time.Hour), Value: energy, Quality: "GOOD", ResultID: fmt.Sprintf("hour-%02d", hour), Revision: 1})
 	}
 	return hours
 }
@@ -63,7 +64,9 @@ func TestDailyEnergyCostPricesEachHourAtItsTimeOfUseRate(t *testing.T) {
 	if want := 25.6 + 192.0; result.Value < want-1e-9 || result.Value > want+1e-9 {
 		t.Fatalf("daily cost = %v, want %v", result.Value, want)
 	}
-	if len(result.Inputs) != 1 || !strings.Contains(result.Inputs[0].Reference, "tou-v1") || result.Inputs[0].Count != 24 {
+	// The persisted input names every hourly result and Tariff Version, so the cost can be traced and reproduced.
+	if len(result.Inputs) != 1 || !strings.Contains(result.Inputs[0].Reference, "tou-v1") || result.Inputs[0].Count != 24 ||
+		!strings.Contains(result.Inputs[0].Reference, "hour-00@1") || !strings.Contains(result.Inputs[0].Reference, "hour-23@1") {
 		t.Fatalf("inputs = %#v", result.Inputs)
 	}
 }

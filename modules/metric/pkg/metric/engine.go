@@ -99,6 +99,8 @@ type HourlyResult struct {
 	PeriodStart time.Time
 	Value       float64
 	Quality     string
+	ResultID    string
+	Revision    uint64
 }
 
 // ImportTariff is a Site's import Tariff Version over the time it is in effect, priced on its own
@@ -433,7 +435,7 @@ func priceHours(hours []HourlyResult, tariffs []ImportTariff, start, end time.Ti
 	var cost float64
 	var count int64
 	used := map[string]bool{}
-	var versions []string
+	var versions, results []string
 	for at := start.UTC(); at.Before(end); at = at.Add(time.Hour) {
 		hour, ok := byStart[at.Unix()]
 		if !ok {
@@ -442,6 +444,7 @@ func priceHours(hours []HourlyResult, tariffs []ImportTariff, start, end time.Ti
 		if hour.Quality != "GOOD" {
 			return Input{}, fmt.Errorf("hourly energy for %s is %s", at.Format(time.RFC3339), hour.Quality)
 		}
+		results = append(results, fmt.Sprintf("%s@%d", hour.ResultID, hour.Revision))
 		priced := false
 		for index, tariff := range tariffs {
 			if at.Before(tariff.EffectiveFrom) || (tariff.EffectiveTo != nil && !at.Before(*tariff.EffectiveTo)) {
@@ -465,7 +468,7 @@ func priceHours(hours []HourlyResult, tariffs []ImportTariff, start, end time.Ti
 		count++
 	}
 	return Input{
-		Reference:       "tariff-versions:" + strings.Join(versions, ","),
+		Reference:       "tariff-versions:" + strings.Join(versions, ",") + ";metric-results:" + strings.Join(results, ","),
 		Value:           cost,
 		FirstValue:      cost,
 		LastValue:       cost,

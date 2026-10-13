@@ -8,7 +8,7 @@
 
 - **MyEMS** `myems-aggregation/meter_billing.py`：按计量表逐时段汇总电量后，逐时段取电价相乘，`actual_value = current_energy * current_tariff`，写入计费库；电价或电量缺失的时段直接跳过。
 - **MyEMS** `myems-aggregation/tariff.py` 的 `get_energy_category_tariffs`：电价有 `valid_from_datetime_utc`/`valid_through_datetime_utc`，分时价目在 `tbl_tariffs_timeofuses`（`start_time_of_day`、`end_time_of_day`、`price`），按配置的固定分钟时区偏移把每个时段展开成逐时段单价。
-- OpenEMS 的电价只用于边缘侧调度（日前价格），不做历史计费；ThingsBoard 没有电价模型。两者不适用。
+- **REJECT（OpenEMS、ThingsBoard）**：OpenEMS 的电价只用于边缘侧调度（日前价格），不做历史计费；ThingsBoard 没有电价模型。
 
 ## 决定
 

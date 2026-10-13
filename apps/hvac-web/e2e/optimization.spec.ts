@@ -9,7 +9,7 @@ test('without a recommendation the page offers a run and says when its inputs ar
   await expect(page.getByText('还没有优化建议')).toBeVisible();
 
   await page.getByRole('button', { name: '生成建议' }).first().click();
-  await expect(page.getByRole('alert')).toContainText('暂时无法生成建议：昨日用电与电费、最新负荷预测或实时供水、室内温度尚未就绪');
+  await expect(page.getByRole('alert')).toContainText('暂时无法生成建议：最近一天的用电与电费、最新负荷预测或实时供水、室内温度尚未就绪');
   const runs = gateway.writes.filter((write) => write.path === '/api/v1/optimization/runs');
   expect(runs).toEqual([expect.objectContaining({ body: { siteId: SITE_ID }, csrfToken: expect.any(String) })]);
 });
@@ -26,7 +26,7 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   const impact = page.getByRole('region', { name: '预计效果' });
   await expect(impact).toContainText('预计日节电60kWh');
   await expect(impact).toContainText('预计日节省51元');
-  await expect(page.getByRole('region', { name: '计算依据' })).toContainText('昨日冷站用电675 kWh');
+  await expect(page.getByRole('region', { name: '计算依据' })).toContainText('最近一天冷站用电675 kWh');
 
   await proposal.getByRole('button', { name: '按建议下发' }).click();
   const confirm = page.getByRole('alertdialog');

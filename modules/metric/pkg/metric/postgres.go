@@ -225,7 +225,7 @@ WHERE tenant_id=$1::uuid AND metric_id=$2::uuid AND status='RELEASED'
 	if dataType != "NUMBER" || unit != "kWh" {
 		return nil, errors.New("hourly Metric dependency is not energy in kWh")
 	}
-	rows, err := tx.Query(ctx, `SELECT period_start,metric_version_id::text,value_number,quality
+	rows, err := tx.Query(ctx, `SELECT period_start,metric_version_id::text,value_number,quality,current_result_id::text,current_revision
 FROM core_registry.metric_result_heads
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
   AND subject_type=$4 AND subject_id=$5::uuid AND granularity='HOUR'
@@ -240,7 +240,7 @@ ORDER BY period_start`,
 	for rows.Next() {
 		var hour HourlyResult
 		var actualVersionID string
-		if err := rows.Scan(&hour.PeriodStart, &actualVersionID, &hour.Value, &hour.Quality); err != nil {
+		if err := rows.Scan(&hour.PeriodStart, &actualVersionID, &hour.Value, &hour.Quality, &hour.ResultID, &hour.Revision); err != nil {
 			return nil, err
 		}
 		if actualVersionID != versionID {
@@ -255,7 +255,8 @@ ORDER BY period_start`,
 }
 
 // LoadImportTariffs is each import Tariff Version priced on the Site's grid connection during the
-// window, over the part of it where both the version and its assignment are in effect.
+// window, over the part of it where both the version and its assignment are in effect. A Site with
+// several import connections is priced on the first by boundary code, as M&V prices it.
 func (s *PostgresStore) LoadImportTariffs(ctx context.Context, tenantID, siteID string, start, end time.Time) ([]ImportTariff, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -266,7 +267,8 @@ func (s *PostgresStore) LoadImportTariffs(ctx context.Context, tenantID, siteID 
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-SELECT version.id::text,
+SELECT boundary.boundary_code,
+       version.id::text,
        GREATEST(version.effective_from, assignment.effective_from),
        LEAST(version.effective_to, assignment.effective_to),
        version.timezone
@@ -279,17 +281,24 @@ WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
   AND assignment.status = 'RELEASED' AND assignment.effective_from < $4 AND (assignment.effective_to IS NULL OR assignment.effective_to > $3)
   AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
   AND version.status = 'RELEASED' AND version.effective_from < $4 AND (version.effective_to IS NULL OR version.effective_to > $3)
-ORDER BY 2`, tenantID, siteID, start.UTC(), end.UTC())
+ORDER BY 1, 3`, tenantID, siteID, start.UTC(), end.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("load import Tariff versions: %w", err)
 	}
 	var tariffs []ImportTariff
+	firstBoundary := ""
 	for rows.Next() {
 		var tariff ImportTariff
-		var timezone string
-		if err := rows.Scan(&tariff.VersionID, &tariff.EffectiveFrom, &tariff.EffectiveTo, &timezone); err != nil {
+		var boundaryCode, timezone string
+		if err := rows.Scan(&boundaryCode, &tariff.VersionID, &tariff.EffectiveFrom, &tariff.EffectiveTo, &timezone); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if firstBoundary == "" {
+			firstBoundary = boundaryCode
+		}
+		if boundaryCode != firstBoundary {
+			continue
 		}
 		if tariff.Location, err = time.LoadLocation(timezone); err != nil {
 			rows.Close()
