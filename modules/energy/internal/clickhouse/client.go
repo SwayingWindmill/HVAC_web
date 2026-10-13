@@ -148,6 +148,10 @@ const (
 	maximumArrivals = maximumBatchSize / 2
 	// historyStart is the cursor before the first History observation.
 	historyStart = "00000000-0000-0000-0000-000000000000"
+	// maximumDeltaWindow bounds the sample-time span of one delta query, whose window sorts
+	// every observation of its Points in that span: a batch mixing replayed history with live
+	// arrivals would otherwise sort weeks of observations.
+	maximumDeltaWindow = time.Hour
 )
 
 type cursorRow struct {
@@ -165,7 +169,7 @@ type arrivalRow struct {
 
 // NextBatch reads up to limit Counter observations that History made visible after the
 // checkpoint, and the deltas they change: each arrival's own delta and, when it arrived late,
-// its successor's. Both reads are bounded by the arrivals' Points and earliest sample (#441).
+// its successor's. Delta reads are bounded by the arrivals' Points and sample times (#441).
 func (reader *Reader) NextBatch(ctx context.Context, limit int) (energy.CounterBatch, error) {
 	if reader == nil || reader.endpoint == nil || reader.httpClient == nil {
 		return energy.CounterBatch{}, errors.New("ClickHouse analytics reader is closed")
@@ -241,22 +245,76 @@ FORMAT JSONEachRow`, reader.sourceDatabase), url.Values{
 	}
 }
 
-func (reader *Reader) deltas(ctx context.Context, arrivals []arrivalRow) ([]energy.CounterDelta, error) {
-	var observations, tenants, sites, points []string
-	since := arrivals[0].SampledAt
-	for _, arrival := range arrivals {
-		observations = append(observations, arrival.ObservationID)
-		tenants = append(tenants, arrival.TenantID)
-		sites = append(sites, arrival.SiteID)
-		points = append(points, arrival.PointID)
-		since = min(since, arrival.SampledAt)
+// deltaWindow is one delta query: arrivals whose samples fall within maximumDeltaWindow.
+type deltaWindow struct {
+	since, until                         time.Time
+	observations, tenants, sites, points []string
+}
+
+// deltaWindows splits arrivals by sample time so each delta query sorts only the observations
+// around its own arrivals.
+func deltaWindows(arrivals []arrivalRow) ([]deltaWindow, error) {
+	type sampled struct {
+		arrivalRow
+		at time.Time
 	}
+	ordered := make([]sampled, 0, len(arrivals))
+	for _, arrival := range arrivals {
+		at, err := parseClickHouseTime(arrival.SampledAt)
+		if err != nil {
+			return nil, fmt.Errorf("decode counter arrival sample time: %w", err)
+		}
+		ordered = append(ordered, sampled{arrivalRow: arrival, at: at})
+	}
+	sort.SliceStable(ordered, func(left, right int) bool { return ordered[left].at.Before(ordered[right].at) })
+	var windows []deltaWindow
+	for _, arrival := range ordered {
+		if len(windows) == 0 || arrival.at.Sub(windows[len(windows)-1].since) > maximumDeltaWindow {
+			windows = append(windows, deltaWindow{since: arrival.at})
+		}
+		window := &windows[len(windows)-1]
+		window.until = arrival.at
+		window.observations = append(window.observations, arrival.ObservationID)
+		window.tenants = append(window.tenants, arrival.TenantID)
+		window.sites = append(window.sites, arrival.SiteID)
+		window.points = append(window.points, arrival.PointID)
+	}
+	return windows, nil
+}
+
+// deltas reads each window's deltas. A late arrival's successor can be another window's
+// arrival, so both windows return its delta; it is kept once.
+func (reader *Reader) deltas(ctx context.Context, arrivals []arrivalRow) ([]energy.CounterDelta, error) {
+	windows, err := deltaWindows(arrivals)
+	if err != nil {
+		return nil, err
+	}
+	var deltas []energy.CounterDelta
+	seen := make(map[string]struct{})
+	for _, window := range windows {
+		windowDeltas, err := reader.windowDeltas(ctx, window)
+		if err != nil {
+			return nil, err
+		}
+		for _, delta := range windowDeltas {
+			if _, duplicate := seen[delta.CurrentObservationID]; duplicate {
+				continue
+			}
+			seen[delta.CurrentObservationID] = struct{}{}
+			deltas = append(deltas, delta)
+		}
+	}
+	return deltas, nil
+}
+
+func (reader *Reader) windowDeltas(ctx context.Context, window deltaWindow) ([]energy.CounterDelta, error) {
 	payload, err := reader.query(ctx, "counter delta query", reader.counterDeltaQuery(), url.Values{
-		"param_observations": {clickHouseArray(observations)},
-		"param_tenants":      {clickHouseArray(tenants)},
-		"param_sites":        {clickHouseArray(sites)},
-		"param_points":       {clickHouseArray(points)},
-		"param_since":        {since},
+		"param_observations": {clickHouseArray(window.observations)},
+		"param_tenants":      {clickHouseArray(window.tenants)},
+		"param_sites":        {clickHouseArray(window.sites)},
+		"param_points":       {clickHouseArray(window.points)},
+		"param_since":        {clickHouseTime(window.since)},
+		"param_until":        {clickHouseTime(window.until)},
 	})
 	if err != nil {
 		return nil, err
@@ -307,6 +365,9 @@ func (reader *Reader) deltas(ctx context.Context, arrivals []arrivalRow) ([]ener
 	return deltas, nil
 }
 
+// counterDeltaQuery reads a window's deltas and the facts they would replace. A fact for one of
+// them ends at or after since and starts at or before until: History only adds observations, so
+// every revision's predecessor is at or before the delta's, which is at or before until.
 func (reader *Reader) counterDeltaQuery() string {
 	return fmt.Sprintf(`SELECT
   toString(delta.previous_observation_id) AS previous_observation_id,
@@ -338,7 +399,7 @@ func (reader *Reader) counterDeltaQuery() string {
   existing.existing_fact_meter_binding_id,
   existing.existing_fact_previous_observation_id,
   existing.existing_fact_revision
-FROM %[1]s.counter_deltas_from(points = {points:Array(UUID)}, since = {since:DateTime64(3, 'UTC')}) AS delta
+FROM %[1]s.counter_deltas_from(points = {points:Array(UUID)}, since = {since:DateTime64(3, 'UTC')}, until = {until:DateTime64(3, 'UTC')}) AS delta
 LEFT JOIN (
   SELECT
     tenant_id,
@@ -355,6 +416,7 @@ LEFT JOIN (
     AND has({sites:Array(UUID)}, site_id)
     AND has({points:Array(UUID)}, point_id)
     AND period_end >= {since:DateTime64(3, 'UTC')}
+    AND period_start <= {until:DateTime64(3, 'UTC')}
   GROUP BY tenant_id, site_id, device_id, point_id, source_current_observation_id
 ) AS existing
   ON existing.tenant_id = delta.tenant_id
@@ -401,6 +463,11 @@ func (reader *Reader) query(ctx context.Context, operation, sql string, paramete
 		return nil, clickHouseStatusError(operation, response.StatusCode, payload)
 	}
 	return payload, nil
+}
+
+// clickHouseTime formats a sample time as a DateTime64(3, 'UTC') query parameter.
+func clickHouseTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05.000")
 }
 
 // clickHouseArray formats ClickHouse-issued UUIDs as an Array(UUID) query parameter.

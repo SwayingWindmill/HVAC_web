@@ -44,14 +44,16 @@ WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND device_id IS NOT NULL
   AND point_id IS NOT NULL;
 
--- Counter deltas of the observations of {points} sampled at or after {since}; empty {points}
--- means every Point. Two kinds of rows stand in for history before {since}, so each delta
--- equals the unbounded computation while the window only holds rows from {since}:
+-- Counter deltas of the observations of {points} sampled from {since} through {until}, and of
+-- each Point's first observation after {until}; empty {points} means every Point. Three kinds
+-- of rows stand in for history outside the range, so each delta equals the unbounded
+-- computation while the sorted window only holds the range:
 --   ANCHOR      each Point's last observation before {since}, the first delta's predecessor;
---   PREFIX_MAX  each Point revision and unit's maximum before {since}, for INVALID decreases.
+--   PREFIX_MAX  each Point revision and unit's maximum before {since}, for INVALID decreases;
+--   NEXT        each Point's first observation after {until}, whose delta a late arrival changes.
 -- PREFIX_MAX rows take part in revision maxima only, never as a predecessor. Each stand-in
--- takes the whole last row as one tuple: argMax skips NULL arguments, so per-column argMax
--- would borrow an older row's NULL-able unit or revision.
+-- takes the whole row as one tuple: argMax/argMin skip NULL arguments, so per-column argMax
+-- would borrow another row's NULL-able unit or revision.
 CREATE OR REPLACE VIEW telemetry_history.counter_deltas_from
 DEFINER = CURRENT_USER
 SQL SECURITY DEFINER AS
@@ -84,7 +86,7 @@ window_input AS (
     quality_reasons,
     value_number
   FROM scoped
-  WHERE sampled_at >= {since:DateTime64(3, 'UTC')}
+  WHERE sampled_at >= {since:DateTime64(3, 'UTC')} AND sampled_at <= {until:DateTime64(3, 'UTC')}
   UNION ALL
   SELECT
     'ANCHOR' AS row_kind,
@@ -140,6 +142,34 @@ window_input AS (
     FROM scoped
     WHERE sampled_at < {since:DateTime64(3, 'UTC')}
     GROUP BY tenant_id, site_id, point_id, point_revision, unit
+  )
+  UNION ALL
+  SELECT
+    'NEXT' AS row_kind,
+    tenant_id,
+    site_id,
+    point_id,
+    first.1 AS device_id,
+    first.2 AS sensor_id,
+    first.3 AS telemetry_key,
+    first.4 AS unit,
+    first.5 AS point_revision,
+    first.6 AS counter_decrease_mode,
+    first.7 AS counter_rollover_modulus,
+    first.8 AS sampled_at,
+    first.9 AS received_at,
+    first.10 AS observation_id,
+    first.11 AS source_event_id,
+    first.12 AS source_partition,
+    first.13 AS source_offset,
+    first.14 AS quality,
+    first.15 AS quality_reasons,
+    first.16 AS value_number
+  FROM (
+    SELECT tenant_id, site_id, point_id, argMin(tuple(device_id, sensor_id, telemetry_key, unit, point_revision, counter_decrease_mode, counter_rollover_modulus, sampled_at, received_at, observation_id, source_event_id, source_partition, source_offset, quality, quality_reasons, value_number), (sampled_at, observation_id)) AS first
+    FROM scoped
+    WHERE sampled_at > {until:DateTime64(3, 'UTC')}
+    GROUP BY tenant_id, site_id, point_id
   )
 ),
 ordered AS (
@@ -225,14 +255,14 @@ SELECT
     CAST(NULL, 'Nullable(Float64)')
   ) AS delta_value
 FROM ordered
-WHERE row_kind = 'RANGE';
+WHERE row_kind IN ('RANGE', 'NEXT');
 
 -- The canonical unbounded contract read by Metric, Forecast and the rollups below.
 CREATE OR REPLACE VIEW telemetry_history.counter_deltas
 DEFINER = CURRENT_USER
 SQL SECURITY DEFINER AS
 SELECT *
-FROM telemetry_history.counter_deltas_from(points = [], since = '1970-01-01 00:00:00.000');
+FROM telemetry_history.counter_deltas_from(points = [], since = '1970-01-01 00:00:00.000', until = '2299-12-31 23:59:59.999');
 
 -- Counter observations in the order History made them visible (#441). A projection resumes
 -- after its checkpoint; the minmax index on history_sequence skips earlier parts.

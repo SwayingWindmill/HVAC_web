@@ -453,7 +453,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/energy',
-    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint|TestProjectorWritesEveryIntervalOfALargeHistoryBatch', '-v', './internal/clickhouse/...',
+    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint|TestProjectorWritesEveryIntervalOfALargeHistoryBatch|TestMixedAgeBatchProjectsTheSharedSuccessorOnce', '-v', './internal/clickhouse/...',
   ], {
     env: {
       ...process.env,
@@ -561,8 +561,9 @@ try {
   report.assertions.counterExcludedFromGenericRollup = clickHouse(`SELECT count() FROM telemetry_history.numeric_hourly WHERE point_id IN (toUUID('${resetCounterPointId}'), toUUID('${rolloverCounterPointId}'), toUUID('${invalidCounterPointId}'), toUUID('${revisionCounterPointId}'))`);
   if (report.assertions.counterExcludedFromGenericRollup !== '0') throw new Error(`Counter leaked into generic numeric rollup: ${report.assertions.counterExcludedFromGenericRollup}`);
 
-  // The bounded counter deltas (#441) equal the unbounded view from `since` on: ANCHOR supplies
-  // the first predecessor, including its NULL unit, and PREFIX_MAX the INVALID-decrease maximum.
+  // The bounded counter deltas (#441) equal the unbounded view from `since` through `until` and
+  // at the first observation after `until`: ANCHOR supplies the first predecessor, including its
+  // NULL unit, PREFIX_MAX the INVALID-decrease maximum, and NEXT the successor's delta.
   const nullUnitCounterPointId = '01990000-1000-7000-8000-000000000050';
   clickHouse(`INSERT INTO telemetry_history.observations (
     observation_id, tenant_id, site_id, device_id, point_id,
@@ -575,13 +576,19 @@ try {
     (toUUID('01990000-2000-7000-8000-000000000502'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${nullUnitCounterPointId}'), 'gateway-a', toUUID('01990000-8000-7000-8000-000000000502'), 'counter-null-unit', 2, 'PUSH', 'pulse_total', 'COUNTER', 1, 'RESET_TO_ZERO', NULL, 'NUMBER', NULL, 12, toDateTime64('2026-08-11 11:01:00', 3, 'UTC'), toDateTime64('2026-08-11 11:01:01', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('b', 64)),
     (toUUID('01990000-2000-7000-8000-000000000503'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${nullUnitCounterPointId}'), 'gateway-a', toUUID('01990000-8000-7000-8000-000000000503'), 'counter-null-unit', 3, 'PUSH', 'pulse_total', 'COUNTER', 1, 'RESET_TO_ZERO', NULL, 'NUMBER', NULL, 15, toDateTime64('2026-08-11 11:02:00', 3, 'UTC'), toDateTime64('2026-08-11 11:02:01', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('c', 64))`);
   const counterDeltaRow = "toString(observation_id) || ':' || transition_type || ':' || ifNull(toString(delta_value), 'NULL') || ':' || ifNull(toString(previous_observation_id), '')";
-  const since = '2026-08-11 11:02:00.000';
   report.assertions.boundedCounterDeltas = {};
-  for (const pointId of [resetCounterPointId, rolloverCounterPointId, invalidCounterPointId, revisionCounterPointId, nullUnitCounterPointId]) {
-    const bounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas_from(points = [toUUID('${pointId}')], since = '${since}') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
-    const unbounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas WHERE point_id = toUUID('${pointId}') AND sampled_at >= toDateTime64('${since}', 3, 'UTC') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
-    if (bounded === '' || bounded !== unbounded) throw new Error(`bounded Counter deltas for ${pointId} differ from the unbounded view:\n${bounded}\n---\n${unbounded}`);
-    report.assertions.boundedCounterDeltas[pointId] = bounded;
+  // since, until, and the last sample the unbounded view is compared through: the second case's
+  // range holds only the 11:01 rows, so its 11:02 deltas come from NEXT.
+  for (const [since, until, through] of [
+    ['2026-08-11 11:02:00.000', '2299-12-31 23:59:59.999', '2299-12-31 23:59:59.999'],
+    ['2026-08-11 11:01:00.000', '2026-08-11 11:01:00.000', '2026-08-11 11:02:00.000'],
+  ]) {
+    for (const pointId of [resetCounterPointId, rolloverCounterPointId, invalidCounterPointId, revisionCounterPointId, nullUnitCounterPointId]) {
+      const bounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas_from(points = [toUUID('${pointId}')], since = '${since}', until = '${until}') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
+      const unbounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas WHERE point_id = toUUID('${pointId}') AND sampled_at >= toDateTime64('${since}', 3, 'UTC') AND sampled_at <= toDateTime64('${through}', 3, 'UTC') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
+      if (bounded === '' || bounded !== unbounded) throw new Error(`bounded Counter deltas for ${pointId} from ${since} through ${until} differ from the unbounded view:\n${bounded}\n---\n${unbounded}`);
+      report.assertions.boundedCounterDeltas[`${pointId}@${since}..${until}`] = bounded;
+    }
   }
 
   const metricId = '01990000-1500-7000-8000-000000000001';
@@ -788,7 +795,7 @@ try {
   const expectedForecastTraceability = '4|15|60|VALID|3|7|01990000-1720-7000-8000-000000000001|01990000-1740-7000-8000-000000000001|01990000-1760-7000-8000-000000000001|01990000-1770-7000-8000-000000000001|4';
   if (report.assertions.forecastSeriesTraceability !== expectedForecastTraceability) throw new Error(`unexpected Forecast traceability ${report.assertions.forecastSeriesTraceability}`);
 
-  report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', "SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('01990000-1000-7000-8000-000000000010')], since = '2026-08-11 11:01:00.000')"]);
+  report.assertions.readerCanSelectCanonical = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', "SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('01990000-1000-7000-8000-000000000010')], since = '2026-08-11 11:01:00.000', until = '2026-08-11 11:02:00.000')"]);
   report.assertions.readerCannotSelectRaw = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'analytics_projector_reader');
   report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);
