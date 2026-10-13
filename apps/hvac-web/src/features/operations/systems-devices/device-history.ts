@@ -45,6 +45,40 @@ export function deviceDayHistoryQuery(input: {
   });
 }
 
+const QUARTER_MS = 15 * 60_000;
+
+/**
+ * Quarter-hour gauge aggregates over the last `hours`, for the live trends of the realtime
+ * page; the window ends at the next quarter so the current partial quarter is included.
+ */
+export function deviceRecentHistoryQuery(input: {
+  readonly siteId: string;
+  readonly deviceId: string;
+  readonly keys: readonly string[];
+  readonly hours: number;
+  readonly timezone: string;
+  readonly csrfToken: string;
+}) {
+  const nextQuarter = Math.floor(Date.now() / QUARTER_MS) * QUARTER_MS + QUARTER_MS;
+  return queryOptions({
+    queryKey: ['device-history', 'recent', input.siteId, input.deviceId, input.keys, input.hours, nextQuarter],
+    queryFn: async ({ signal }) => {
+      const response = await client.queryDeviceHistoryAggregate({
+        deviceId: input.deviceId,
+        keys: [...input.keys],
+        from: new Date(nextQuarter - input.hours * HOUR_MS).toISOString(),
+        to: new Date(nextQuarter).toISOString(),
+        granularity: 'QUARTER_HOUR',
+        timezone: input.timezone,
+        qualityPolicy: 'USABLE',
+      }, { csrfToken: input.csrfToken, signal });
+      return groupByKey(response.buckets);
+    },
+    staleTime: 60_000,
+    refetchInterval: QUARTER_MS,
+  });
+}
+
 function groupByKey(buckets: readonly DeviceHistoryAggregateBucket[]): ReadonlyMap<string, readonly HourlyPoint[]> {
   const series = new Map<string, HourlyPoint[]>();
   for (const bucket of buckets) {

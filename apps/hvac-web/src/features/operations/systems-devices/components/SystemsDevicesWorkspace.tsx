@@ -185,6 +185,7 @@ export function SystemsDevicesWorkspace() {
                 value={layout}
                 onValueChange={(value) => { if (value) setSearch({ layout: value === 'cards' ? undefined : 'table' }); }}
                 aria-label="显示方式"
+                spacing={0}
                 className="h-8"
               >
                 <ToggleGroupItem value="cards" className="h-8 gap-1.5 px-2.5 text-xs"><LayoutGrid className="size-3.5" />卡片</ToggleGroupItem>
