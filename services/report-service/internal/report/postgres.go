@@ -42,9 +42,6 @@ func (store *PostgresStore) GenerationQueue() (*schedulerjob.Queue, error) {
 
 // scoped runs work in a transaction bound to one Tenant and Site.
 func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string, readOnly bool, work func(pgx.Tx) error) error {
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
-		return errors.New("report scope must contain valid tenant and site UUIDs")
-	}
 	options := pgx.TxOptions{}
 	if readOnly {
 		options.AccessMode = pgx.ReadOnly

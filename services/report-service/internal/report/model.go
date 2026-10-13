@@ -3,7 +3,6 @@
 package report
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -14,12 +13,21 @@ import (
 // SchemaVersion is the shape of a stored snapshot's payload.
 const SchemaVersion = 1
 
-// Hour is one Site-local hour of the Site's valid energy, starting at Start.
+// Hour is one Site-local hour of the Site's valid energy, starting at Start. HasElectricity is
+// false for an hour with cooling readings only.
 type Hour struct {
 	Start          time.Time
 	ElectricityKWh float64
 	CoolingKWh     float64
+	HasElectricity bool
 }
+
+// Why a snapshot has or lacks an energy cost.
+const (
+	CostPriced        = "PRICED"
+	CostNoTariff      = "NO_TARIFF"
+	CostUnpricedHours = "UNPRICED_HOURS"
+)
 
 // Tariff is a Site's import Tariff Version over the time it is in effect. EffectiveTo is nil while
 // it has no successor.
@@ -85,11 +93,12 @@ type Snapshot struct {
 	COP *float64 `json:"cop"`
 	// EnergyCostCNY is each hour's electricity at its time-of-use energy rate; nil when the Site has no
 	// import Tariff or an hour of the month is not priced. Demand charges are not in it.
-	EnergyCostCNY *float64      `json:"energyCostCNY"`
-	TariffPeriods []PeriodTotal `json:"tariffPeriods"`
-	Days          []Day         `json:"days"`
-	Findings      Findings      `json:"findings"`
-	Savings       Savings       `json:"savings"`
+	EnergyCostCNY    *float64      `json:"energyCostCNY"`
+	EnergyCostStatus string        `json:"energyCostStatus"`
+	TariffPeriods    []PeriodTotal `json:"tariffPeriods"`
+	Days             []Day         `json:"days"`
+	Findings         Findings      `json:"findings"`
+	Savings          Savings       `json:"savings"`
 }
 
 // MonthBounds is a YYYY-MM month on the Site's calendar: its first instant, the next month's first
@@ -97,7 +106,7 @@ type Snapshot struct {
 func MonthBounds(month string, location *time.Location) (time.Time, time.Time, int, error) {
 	parsed, err := time.ParseInLocation("2006-01", month, location)
 	if err != nil {
-		return time.Time{}, time.Time{}, 0, fmt.Errorf("report month %q is not YYYY-MM", month)
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("%w: %q is not YYYY-MM", ErrInvalidMonth, month)
 	}
 	end := parsed.AddDate(0, 1, 0)
 	return parsed, end, end.AddDate(0, 0, -1).Day(), nil
@@ -114,6 +123,10 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		TariffPeriods: []PeriodTotal{}, Days: []Day{}, Findings: Findings{ByType: []FindingCount{}},
 	}
 	priced := len(tariffs) > 0
+	snapshot.EnergyCostStatus = CostNoTariff
+	if priced {
+		snapshot.EnergyCostStatus = CostPriced
+	}
 	byDay := map[string]*Day{}
 	dayCost := map[string]float64{}
 	periods := map[string]*PeriodTotal{}
@@ -123,22 +136,30 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		if hour.Start.Before(from) || !hour.Start.Before(to) {
 			return Snapshot{}, fmt.Errorf("hour %s is outside %s", hour.Start.Format(time.RFC3339), month)
 		}
+		snapshot.ElectricityKWh += hour.ElectricityKWh
+		snapshot.CoolingKWh += hour.CoolingKWh
+		// A day has metering when it has an electricity reading; cooling alone still counts in the
+		// month's total.
 		date := hour.Start.In(location).Format("2006-01-02")
 		entry := byDay[date]
-		if entry == nil {
+		if entry == nil && hour.HasElectricity {
 			entry = &Day{Date: date}
 			byDay[date] = entry
 		}
-		entry.ElectricityKWh += hour.ElectricityKWh
-		entry.CoolingKWh += hour.CoolingKWh
-		snapshot.ElectricityKWh += hour.ElectricityKWh
-		snapshot.CoolingKWh += hour.CoolingKWh
+		if entry != nil {
+			entry.ElectricityKWh += hour.ElectricityKWh
+			entry.CoolingKWh += hour.CoolingKWh
+		}
 		if !priced {
+			continue
+		}
+		if !hour.HasElectricity {
 			continue
 		}
 		period, ok := coveringPeriod(tariffs, hour.Start)
 		if !ok {
 			priced = false
+			snapshot.EnergyCostStatus = CostUnpricedHours
 			continue
 		}
 		hourCost := hour.ElectricityKWh * period.EnergyRatePerKWh
@@ -193,9 +214,6 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		snapshot.Savings.UnpricedHours += verified.UnpricedHours
 	}
 	for _, count := range findings {
-		if count.Count <= 0 {
-			return Snapshot{}, errors.New("a finding count must be positive")
-		}
 		snapshot.Findings.Count += count.Count
 		snapshot.Findings.ByType = append(snapshot.Findings.ByType, count)
 	}

@@ -42,6 +42,10 @@ func RunScheduledGenerations(ctx context.Context, queue *schedulerjob.Queue, ser
 		jobID := job.JobID
 		stored, generationErr := service.Generate(jobCtx, job.TenantID, job.SiteID, month, &jobID)
 		cancel()
+		if errors.Is(generationErr, ErrInvalidMonth) || errors.Is(generationErr, ErrMonthNotOver) {
+			finish(queue.Fail(context.Background(), job, "REPORT_GENERATE_INVALID", generationErr, false, time.Now().UTC()), job)
+			continue
+		}
 		if generationErr != nil {
 			finish(queue.Fail(context.Background(), job, "REPORT_GENERATE_FAILED", generationErr, true, time.Now().UTC()), job)
 			continue
@@ -62,9 +66,6 @@ func jobMonth(ctx context.Context, service *Service, job schedulerjob.Job) (stri
 	}
 	if payload.Month != "" {
 		return payload.Month, nil
-	}
-	if job.ScheduledFor.IsZero() {
-		return "", errors.New("a report generation names a month or comes from a schedule")
 	}
 	return service.MonthBefore(ctx, job.TenantID, job.SiteID, job.ScheduledFor)
 }

@@ -3,12 +3,16 @@ package report
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
 var (
 	ErrSiteNotFound     = errors.New("site not found")
 	ErrSnapshotNotFound = errors.New("report snapshot not found")
+	// ErrInvalidMonth and ErrMonthNotOver are a job naming a month it cannot take: retrying won't help.
+	ErrInvalidMonth = errors.New("report month is invalid")
+	ErrMonthNotOver = errors.New("a month's report is taken once the month is over")
 )
 
 // StoredSnapshot is one version of a month's snapshot as kept.
@@ -73,7 +77,7 @@ func (service *Service) Generate(ctx context.Context, tenantID, siteID, month st
 	}
 	now := service.now().UTC()
 	if to.After(now) {
-		return StoredSnapshot{}, errors.New("a month's report is taken once the month is over")
+		return StoredSnapshot{}, fmt.Errorf("%w: %s", ErrMonthNotOver, month)
 	}
 	hours, err := service.hours.Hours(ctx, tenantID, siteID, location, from, to)
 	if err != nil {

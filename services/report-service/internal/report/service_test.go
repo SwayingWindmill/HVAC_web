@@ -112,8 +112,11 @@ func TestAClosedMonthIsSnapshotOverItsSiteCalendarAsTheNextVersion(t *testing.T)
 
 func TestAMonthStillRunningIsNotSnapshot(t *testing.T) {
 	service, store, _ := testService(t, time.Date(2026, 9, 30, 23, 0, 0, 0, shanghai))
-	if _, err := service.Generate(context.Background(), testTenant, testSite, "2026-09", nil); err == nil {
-		t.Fatal("snapshot a month that is not over")
+	if _, err := service.Generate(context.Background(), testTenant, testSite, "2026-09", nil); !errors.Is(err, ErrMonthNotOver) {
+		t.Fatalf("snapshot a month that is not over: %v", err)
+	}
+	if _, err := service.Generate(context.Background(), testTenant, testSite, "2026-9", nil); !errors.Is(err, ErrInvalidMonth) {
+		t.Fatalf("a malformed month: %v", err)
 	}
 	if len(store.stored) != 0 {
 		t.Fatal("stored a running month")
@@ -171,8 +174,8 @@ func TestTheInternalAPIServesTheLatestVersionAndTheYear(t *testing.T) {
 }
 
 func TestReportHoursDecodeFromClickHouse(t *testing.T) {
-	hours, err := decodeHours([]byte(`{"hour":"2026-09-14T00:00:00Z","electricity_kwh":10.5,"cooling_kwh":42}` + "\n"))
-	if err != nil || len(hours) != 1 || hours[0].ElectricityKWh != 10.5 || !hours[0].Start.Equal(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)) {
+	hours, err := decodeHours([]byte(`{"hour":"2026-09-14T00:00:00Z","electricity_kwh":10.5,"cooling_kwh":42,"has_electricity":1}` + "\n"))
+	if err != nil || len(hours) != 1 || hours[0].ElectricityKWh != 10.5 || !hours[0].HasElectricity || !hours[0].Start.Equal(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("hours = %#v err=%v", hours, err)
 	}
 	if _, err := decodeHours([]byte(`{"hour":"not a time"}`)); err == nil {

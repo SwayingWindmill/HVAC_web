@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDecimal } from '@/lib/operator-format';
 import { useYearLive, yearSnapshotsQuery } from '../query';
+import { wallTime } from '../../energy-analysis/consumption/model.ts';
 import { yearMonths, yearRows, yearTotals, type YearRow } from '../report-model';
 import { EnergyTrend, energyText, Figure, ReportSheet, Section } from './ReportParts';
 
@@ -36,7 +37,8 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
   const monthsWithData = rows.filter((row) => row.source !== 'none').length;
   const monthly = (value: number | null) => (value === null || monthsWithData === 0 ? '—' : `月均 ${energyText(value / monthsWithData)}`);
   const lastMonth = months.length;
-  const running = lastMonth > 0 && months[lastMonth - 1] === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const today = wallTime(now, site.timezone);
+  const running = lastMonth > 0 && months[lastMonth - 1] === `${today.year}-${String(today.month).padStart(2, '0')}`;
 
   return (
     <ReportSheet

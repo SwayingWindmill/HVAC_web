@@ -74,7 +74,7 @@ test('findings in the month are grouped by what they found, most frequent first'
 
 const snapshot = (month, electricityKWh, coolingKWh, energyCostCNY, days = []) => ({
   id: `snapshot-${month}`, month, version: 2, generatedAt: '2026-10-01T03:00:05Z',
-  report: { schemaVersion: 1, month, timezone: zone, daysInMonth: 30, daysWithData: days.length, electricityKWh, coolingKWh, cop: coolingKWh / electricityKWh, energyCostCNY, tariffPeriods: [], days, findings: { count: 0, byType: [] }, savings: { days: 0, adjustedBaselineKWh: 0, avoidedKWh: 0, avoidedCost: 0, unpricedHours: 0 } },
+  report: { schemaVersion: 1, month, timezone: zone, daysInMonth: 30, daysWithData: days.length, electricityKWh, coolingKWh, cop: coolingKWh / electricityKWh, energyCostCNY, energyCostStatus: energyCostCNY === null ? 'NO_TARIFF' : 'PRICED', tariffPeriods: [], days, findings: { count: 0, byType: [] }, savings: { days: 0, adjustedBaselineKWh: 0, avoidedKWh: 0, avoidedCost: 0, unpricedHours: 0 } },
 });
 
 test('a year runs January to the current month, or all twelve once it is over', () => {

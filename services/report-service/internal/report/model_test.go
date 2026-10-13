@@ -33,7 +33,7 @@ func valleyPeak(from time.Time) Tariff {
 func day(date time.Time, electricity, cooling float64) []Hour {
 	hours := make([]Hour, 0, 24)
 	for hour := 0; hour < 24; hour++ {
-		hours = append(hours, Hour{Start: date.Add(time.Duration(hour) * time.Hour), ElectricityKWh: electricity, CoolingKWh: cooling})
+		hours = append(hours, Hour{Start: date.Add(time.Duration(hour) * time.Hour), ElectricityKWh: electricity, CoolingKWh: cooling, HasElectricity: true})
 	}
 	return hours
 }
@@ -73,7 +73,19 @@ func TestAMonthWithoutATariffHasNoCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.EnergyCostCNY != nil || len(snapshot.TariffPeriods) != 0 || snapshot.Days[0].EnergyCostCNY != nil {
+	if snapshot.EnergyCostCNY != nil || len(snapshot.TariffPeriods) != 0 || snapshot.Days[0].EnergyCostCNY != nil || snapshot.EnergyCostStatus != CostNoTariff {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestADayWithCoolingReadingsOnlyHasNoMetering(t *testing.T) {
+	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
+	coolingOnly := Hour{Start: first.AddDate(0, 0, 1), CoolingKWh: 40}
+	snapshot, err := Build("2026-09", shanghai, append(day(first, 10, 40), coolingOnly), []Tariff{valleyPeak(first.AddDate(0, -1, 0))}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.DaysWithData != 1 || len(snapshot.Days) != 1 || !near(snapshot.CoolingKWh, 1000) || snapshot.EnergyCostStatus != CostPriced {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -85,7 +97,7 @@ func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.EnergyCostCNY != nil || len(snapshot.TariffPeriods) != 0 {
+	if snapshot.EnergyCostCNY != nil || len(snapshot.TariffPeriods) != 0 || snapshot.EnergyCostStatus != CostUnpricedHours {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

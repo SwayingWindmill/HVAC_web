@@ -115,7 +115,9 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
   const { range, text } = periodRange(span, site.timezone);
   const generated = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(stored.generatedAt));
   const before = previous.data?.report ?? null;
-  const beforeNote = (value: number | null, digits = 0) => (previous.isPending ? '…' : before === null ? '上月未存档' : `上月 ${digits ? (value === null ? '—' : formatDecimal(value, digits)) : energyText(value)}`);
+  const beforeMissing = previous.isError ? '上月存档暂不可用' : '上月未存档';
+  const beforeNote = (value: number | null, digits = 0) => (previous.isPending ? '…' : before === null ? beforeMissing : `上月 ${digits ? (value === null ? '—' : formatDecimal(value, digits)) : energyText(value)}`);
+  const costMissing = report.energyCostStatus === 'NO_TARIFF' ? '站点没有购电电价' : '月内有时段没有电价';
   const peak = snapshotPeak(report);
   const periods = report.tariffPeriods.map((period) => ({ code: period.code, energyKWh: period.electricityKWh, cost: period.costCNY, rate: period.electricityKWh > 0 ? period.costCNY / period.electricityKWh : 0 }));
   const demandCost = charges?.reduce((sum, charge) => sum + (charge.charge ?? 0), 0) ?? 0;
@@ -134,7 +136,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
           <Figure label="空调用电" value={formatDecimal(report.electricityKWh, 0)} unit="kWh" delta={before ? relativeChange(report.electricityKWh, before.electricityKWh) : null} invert note={beforeNote(before?.electricityKWh ?? null)} />
           <Figure label="供冷量" value={formatDecimal(report.coolingKWh, 0)} unit="kWh" delta={before ? relativeChange(report.coolingKWh, before.coolingKWh) : null} note={beforeNote(before?.coolingKWh ?? null)} />
           <Figure label="综合能效" value={report.cop === null ? null : formatDecimal(report.cop, 2)} unit="COP" delta={before ? relativeChange(report.cop, before.cop) : null} note={beforeNote(before?.cop ?? null, 2)} />
-          <Figure label="电度电费" value={report.energyCostCNY === null ? null : formatDecimal(report.energyCostCNY, 0)} unit="元" note={report.energyCostCNY === null ? '月内有时段没有电价，未计' : '按分时电价逐时计算，不含需量电费'} />
+          <Figure label="电度电费" value={report.energyCostCNY === null ? null : formatDecimal(report.energyCostCNY, 0)} unit="元" note={report.energyCostCNY === null ? `${costMissing}，未计` : '按分时电价逐时计算，不含需量电费'} />
         </div>
       </Section>
 
@@ -150,8 +152,8 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
             <FactRow label="计量覆盖">{`${report.daysWithData} / ${report.daysInMonth} 天`}</FactRow>
           </FactList>
           <FactList>
-            <FactRow label="上月空调用电">{before ? energyText(before.electricityKWh) : '上月未存档'}</FactRow>
-            <FactRow label="上月综合能效">{before ? (before.cop === null ? '—' : formatDecimal(before.cop, 2)) : '上月未存档'}</FactRow>
+            <FactRow label="上月空调用电">{before ? energyText(before.electricityKWh) : beforeMissing}</FactRow>
+            <FactRow label="上月综合能效">{before ? (before.cop === null ? '—' : formatDecimal(before.cop, 2)) : beforeMissing}</FactRow>
           </FactList>
         </div>
       </Section>
@@ -160,7 +162,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
         {report.energyCostCNY !== null ? (
           <CostTable periods={periods} charges={charges} chargesNote={NOT_ARCHIVED} energyKWh={report.electricityKWh} />
         ) : (
-          <p className="text-sm text-muted-foreground">这个月有时段没有电价，存档未计电费{demandCost ? `；需量电费现算 ${formatDecimal(demandCost, 0)} 元` : ''}。</p>
+          <p className="text-sm text-muted-foreground">{costMissing}，存档未计电费{demandCost ? `；需量电费现算 ${formatDecimal(demandCost, 0)} 元` : ''}。</p>
         )}
       </Section>
 

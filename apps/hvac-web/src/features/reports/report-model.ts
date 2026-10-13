@@ -104,6 +104,8 @@ export interface ReportSnapshot {
   readonly cop: number | null;
   /** Time-of-use energy cost; null without an import Tariff or with an hour no period priced. */
   readonly energyCostCNY: number | null;
+  /** Why the cost is there or not: priced, no import Tariff, or hours no period priced. */
+  readonly energyCostStatus: 'PRICED' | 'NO_TARIFF' | 'UNPRICED_HOURS';
   readonly tariffPeriods: readonly { readonly code: string; readonly electricityKWh: number; readonly costCNY: number }[];
   readonly days: readonly { readonly date: string; readonly electricityKWh: number; readonly coolingKWh: number; readonly cop: number | null; readonly energyCostCNY: number | null }[];
   readonly findings: { readonly count: number; readonly byType: readonly { readonly findingType: string; readonly count: number }[] };

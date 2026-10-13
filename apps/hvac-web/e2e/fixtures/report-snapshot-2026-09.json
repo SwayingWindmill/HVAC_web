@@ -13,6 +13,7 @@
     "coolingKWh": 209458.895496,
     "cop": 2.881265702343388,
     "energyCostCNY": 60258.71164632004,
+    "energyCostStatus": "PRICED",
     "tariffPeriods": [
       {
         "code": "PEAK",

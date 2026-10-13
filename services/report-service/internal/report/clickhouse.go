@@ -46,7 +46,8 @@ func hoursSQL(tenantID, siteID, timezone string, from, to time.Time) string {
 	return fmt.Sprintf(`SELECT
  formatDateTime(toStartOfHour(period_end, '%[3]s'),'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS hour,
  sumIf(energy_kwh, energy_type='electricity') AS electricity_kwh,
- sumIf(energy_kwh, energy_type='cooling') AS cooling_kwh
+ sumIf(energy_kwh, energy_type='cooling') AS cooling_kwh,
+ countIf(energy_type='electricity') > 0 AS has_electricity
 FROM analytics.energy_interval_facts_visible
 WHERE tenant_id=toUUID('%[1]s') AND site_id=toUUID('%[2]s') AND accounting_scope='SITE' AND quality='VALID'
   AND period_end >= parseDateTime64BestEffort('%[4]s',3,'UTC') AND period_end < parseDateTime64BestEffort('%[5]s',3,'UTC')
@@ -93,6 +94,7 @@ func decodeHours(payload []byte) ([]Hour, error) {
 			Hour           string  `json:"hour"`
 			ElectricityKWh float64 `json:"electricity_kwh"`
 			CoolingKWh     float64 `json:"cooling_kwh"`
+			HasElectricity uint8   `json:"has_electricity"`
 		}
 		if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
 			return hours, nil
@@ -103,6 +105,6 @@ func decodeHours(payload []byte) ([]Hour, error) {
 		if err != nil {
 			return nil, err
 		}
-		hours = append(hours, Hour{Start: start, ElectricityKWh: row.ElectricityKWh, CoolingKWh: row.CoolingKWh})
+		hours = append(hours, Hour{Start: start, ElectricityKWh: row.ElectricityKWh, CoolingKWh: row.CoolingKWh, HasElectricity: row.HasElectricity == 1})
 	}
 }
