@@ -45,7 +45,7 @@ func TestRunReplayReusesCanonicalPlantAndProducesDeterministicRequests(t *testin
 
 	nextOffset := map[string]int64{}
 	for _, request := range first {
-		if request.ReplayDatasetID != datasetID || request.DeviceID == "" || request.TelemetryKey == "" || len(request.Value) == 0 || request.SampledAt.Before(from) || request.SampledAt.After(from.Add(duration)) {
+		if request.ReplayDatasetID != datasetID || request.DeviceID == "" || request.TelemetryKey == "" || len(request.Value) == 0 || request.SampledAt.Before(from) || !request.SampledAt.Before(from.Add(duration)) {
 			t.Fatalf("request=%#v", request)
 		}
 		if request.Offset != nextOffset[request.DeviceID] {
@@ -93,7 +93,8 @@ func TestAPlannedReplayKeepsItsPointsStepsAndScheduledCommands(t *testing.T) {
 			}
 		}
 	}
-	if len(keys) != 2 || keys["energy"] != 24*60+1 {
+	// The window is [from, from+duration): the next window's replay writes its first instant.
+	if len(keys) != 2 || keys["energy"] != 24*60 {
 		t.Fatalf("replayed keys = %v", keys)
 	}
 	if setpointBefore != "7" || setpointAfter != "8" {
