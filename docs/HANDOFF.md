@@ -33,10 +33,13 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 > `docs/design-redesign/` (`DESIGN-SYSTEM.md` + `design-tokens.css`). It is implemented in phases,
 > one PR each; existing features stay, missing ones get the new visual language:
 >
-> 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done.
-> 2. 总览. 3. 告警, 工单, 设备, 资产与点位. 4. 实时运行, 故障诊断, 控制指令, 通知中心.
+> 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done (#529).
+> 2. 总览 — done (#529). 3. 告警, 工单, 设备 — done; 资产与点位 moves to phase 7 with the rest of 系统管理.
+> 4. 实时运行, 故障诊断, 控制指令, 通知中心.
 > 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标. 6. 优化建议, 节能项目, 报告.
 > 7. 集成管理, 系统管理, shared states.
+>
+> Visual checks against recorded data: run a Vite dev server on 5190 (`npm -w @hvac/web run dev -- --host localhost --port 5190`); the e2e config reuses it, so `npm run web:e2e -- e2e/<spec>` runs in seconds and a throwaway spec can screenshot pages with fixtures.
 >
 > Rules that come with it: each fact has one home page (table in `DESIGN-SYSTEM.md` §1); plain
 > operator wording (same section); charts and tables together on analysis pages only when the

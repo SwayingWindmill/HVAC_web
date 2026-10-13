@@ -93,14 +93,14 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
         ) : (
           <span className="flex h-9 items-center text-xs text-subtle-foreground">{history.isPending && pointCode ? '' : '近 24 小时没有记录'}</span>
         )}
-        <span className="flex justify-between text-[11px] text-subtle-foreground">
-          <span>24 小时</span>
-          {values.length > 1 ? (
+        {values.length > 1 ? (
+          <span className="flex justify-between text-[11px] text-subtle-foreground">
+            <span>24 小时</span>
             <span className="tabular-nums">
               {formatDecimal(Math.min(...series.map((point) => point.minimum)), 1)} – {formatDecimal(Math.max(...series.map((point) => point.maximum)), 1)} {unit ?? ''}
             </span>
-          ) : null}
-        </span>
+          </span>
+        ) : null}
       </span>
       <span className="mt-auto flex items-center gap-2 border-t border-divider px-4 py-2.5 text-xs text-muted-foreground">
         <span className={cn(healthy < points.length && 'text-warning-text')}>点位 {healthy}/{points.length}</span>
