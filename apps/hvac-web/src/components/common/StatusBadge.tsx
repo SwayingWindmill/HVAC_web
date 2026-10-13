@@ -22,58 +22,30 @@ export interface StatusBadgeProps {
   readonly className?: string;
 }
 
+// DS 1.0 soft tints: a tinted label with a still dot; the alarm dot alone pulses.
+const SUCCESS = { badge: 'bg-success-soft text-success-text', dot: 'bg-success' };
+const WARNING = { badge: 'bg-warning-soft text-warning-text', dot: 'bg-warning' };
+const DANGER = { badge: 'bg-destructive-soft text-destructive-text', dot: 'bg-destructive' };
+const INFO = { badge: 'bg-primary-soft text-primary', dot: 'bg-primary' };
+const NEUTRAL = { badge: 'bg-secondary text-secondary-foreground', dot: 'bg-subtle-foreground' };
+
 const toneMap: Readonly<Record<StatusTone, { badge: string; dot: string; defaultLabel: string }>> = {
-  success: {
-    badge: 'bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
-    dot: 'bg-emerald-600 dark:bg-emerald-400',
-    defaultLabel: '正常',
-  },
-  running: {
-    badge: 'bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
-    dot: 'bg-emerald-600 dark:bg-emerald-400',
-    defaultLabel: '运行中',
-  },
-  warning: {
-    badge: 'bg-amber-500/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
-    dot: 'bg-amber-500',
-    defaultLabel: '警告',
-  },
-  standby: {
-    badge: 'bg-amber-500/10 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
-    dot: 'bg-amber-500',
-    defaultLabel: '待机',
-  },
-  destructive: {
-    badge: 'bg-destructive/10 text-destructive dark:bg-destructive/15',
-    dot: 'bg-destructive',
-    defaultLabel: '故障',
-  },
-  alarm: {
-    badge: 'bg-destructive/10 text-destructive dark:bg-destructive/15',
-    dot: 'bg-destructive',
-    defaultLabel: '告警中',
-  },
-  'in-progress': {
-    badge: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400',
-    dot: 'bg-sky-500',
-    defaultLabel: '处理中',
-  },
-  info: {
-    badge: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400',
-    dot: 'bg-sky-500',
-    defaultLabel: '信息',
-  },
-  neutral: {
-    badge: 'bg-muted text-muted-foreground',
-    dot: 'bg-muted-foreground/60',
-    defaultLabel: '未定义',
-  },
-  offline: {
-    badge: 'bg-muted text-muted-foreground',
-    dot: 'bg-muted-foreground/40',
-    defaultLabel: '离线',
-  },
+  success: { ...SUCCESS, defaultLabel: '正常' },
+  running: { ...SUCCESS, defaultLabel: '运行中' },
+  warning: { ...WARNING, defaultLabel: '警告' },
+  standby: { ...WARNING, defaultLabel: '待机' },
+  destructive: { ...DANGER, defaultLabel: '故障' },
+  alarm: { ...DANGER, defaultLabel: '告警中' },
+  'in-progress': { ...INFO, defaultLabel: '处理中' },
+  info: { ...INFO, defaultLabel: '信息' },
+  neutral: { ...NEUTRAL, defaultLabel: '未定义' },
+  offline: { badge: 'bg-secondary text-muted-foreground', dot: 'border border-dashed border-muted-foreground bg-transparent', defaultLabel: '离线' },
 };
+
+/** The dot alone, for places that print the label themselves. */
+export function statusDotClass(tone: StatusTone): string {
+  return (toneMap[tone] ?? toneMap.neutral).dot;
+}
 
 export function StatusBadge({
   children,
@@ -88,7 +60,7 @@ export function StatusBadge({
   return (
     <Badge
       variant="outline"
-      className={cn('h-5.5 gap-1.5 rounded-md border-transparent px-1.5 text-xs font-medium select-none', config.badge, className)}
+      className={cn('h-5 gap-1.5 rounded-md border-transparent px-[7px] text-[11px] font-medium select-none', config.badge, className)}
     >
       {shouldPulse ? (
         <span className="relative flex size-1.5 shrink-0" aria-hidden="true">

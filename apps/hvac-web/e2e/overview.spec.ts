@@ -50,5 +50,5 @@ test('the overview compares today with yesterday, shows the live plant and open 
 
   await alarm.click();
   await expect(page).toHaveURL(/\/operations\/alarms\?.*inspect=/);
-  await expect(page.getByRole('dialog')).toContainText('冷冻水回水温度过低');
+  await expect(page.getByRole('region', { name: '告警详情' })).toContainText('冷冻水回水温度过低');
 });

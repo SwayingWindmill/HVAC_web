@@ -22,10 +22,15 @@ export const SEVERITY_LEVEL_LABELS: Readonly<Record<SeverityLevel, string>> = {
   info: '信息',
 };
 
+/** Pass `label=""` when a text label beside the mark already names the severity. */
 export function SeverityMark({ level, label, className }: { readonly level: SeverityLevel; readonly label?: string; readonly className?: string }) {
   const shape = SHAPES[level];
   return (
-    <svg viewBox="0 0 10 10" className={cn('size-2.5 shrink-0', className)} role="img" aria-label={label ?? SEVERITY_LEVEL_LABELS[level]}>
+    <svg
+      viewBox="0 0 10 10"
+      className={cn('size-2.5 shrink-0', className)}
+      {...(label === '' ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label ?? SEVERITY_LEVEL_LABELS[level] })}
+    >
       <path
         d={shape.d}
         strokeWidth={1.5}

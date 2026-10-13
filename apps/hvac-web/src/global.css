@@ -110,6 +110,8 @@
 }
 
 :root {
+  /* The top bar's height: the shell lays out under it and side sheets open below it. */
+  --header-height: 52px;
   --background:#f7f7f8;
   --foreground:#18181b;
   --card:#ffffff;
