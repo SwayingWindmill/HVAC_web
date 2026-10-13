@@ -105,6 +105,10 @@ export class Gateway {
   tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
   nextRecommendation: Json | null = null;
+  /** The low-delta-T rule revision FDD holds for the Tenant, as the seed publishes it; null while it cannot be read. */
+  fddRule: { revisionId: string; revision: number; minimumDeltaTC: number; windowMinutes: number; effectiveFrom: string } | null = {
+    revisionId: '01910000-0000-7000-8000-860000000001', revision: 1, minimumDeltaTC: 3.5, windowMinutes: 15, effectiveFrom: '2026-01-01T00:00:00Z',
+  };
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
   readonly writes: RecordedRequest[] = [];
@@ -144,20 +148,23 @@ export class Gateway {
     return command;
   }
 
-  // The recorded loop still runs below the rule's threshold; as the FDD owner does, a finding for the
-  // same asset and rule from the last 24 hours makes the condition ongoing rather than new.
+  // The recorded loop still runs below the rule's threshold. As the FDD owner does, the evaluation
+  // reads the window of the rule revision in effect now, and a finding for the same asset and
+  // revision from the last 24 hours makes the condition ongoing rather than new.
   private evaluateLowDeltaT(input: Json, now: string): Json {
+    const rule = this.fddRule!;
     const recorded = fixture<Json>('fdd-findings.json').items[0];
+    const evaluationFrom = new Date(Date.parse(now) - rule.windowMinutes * 60_000).toISOString();
     const finding = {
-      ...recorded, id: `finding-${this.findings.length + 1}`, assetId: input.assetId, evaluationFrom: input.evaluationFrom, evaluationTo: input.evaluationTo,
-      ruleRevisionId: input.ruleRevisionId, thresholdValue: input.minimumDeltaTC, createdAt: now,
+      ...recorded, id: `finding-${this.findings.length + 1}`, assetId: input.assetId, evaluationFrom, evaluationTo: now,
+      ruleRevisionId: rule.revisionId, thresholdValue: rule.minimumDeltaTC, createdAt: now,
     };
-    if (finding.observedValue >= input.minimumDeltaTC) return { status: 'CLEAR', deltaTC: finding.observedValue };
-    const open = this.findings.find((candidate) => candidate.assetId === input.assetId && candidate.ruleRevisionId === input.ruleRevisionId
-      && Date.parse(candidate.evaluationTo) >= Date.parse(input.evaluationTo) - 86_400_000);
-    if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, finding: open };
+    if (finding.observedValue >= rule.minimumDeltaTC) return { status: 'CLEAR', deltaTC: finding.observedValue, rule };
+    const open = this.findings.find((candidate) => candidate.assetId === input.assetId && candidate.ruleRevisionId === rule.revisionId
+      && Date.parse(candidate.evaluationTo) >= Date.parse(now) - 86_400_000);
+    if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, rule, finding: open };
     this.findings.unshift(finding);
-    return { status: 'FINDING', deltaTC: finding.observedValue, finding };
+    return { status: 'FINDING', deltaTC: finding.observedValue, rule, finding };
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
@@ -240,6 +247,9 @@ export class Gateway {
       return { body: fixture('history.json') };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/rules/low-delta-t`) {
+      return this.fddRule ? { body: this.fddRule } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/recommendations/latest`) {
       return this.optimization ? { body: this.optimization } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };

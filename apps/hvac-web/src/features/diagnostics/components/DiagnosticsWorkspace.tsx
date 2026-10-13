@@ -21,9 +21,9 @@ import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDia
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { LOW_DELTA_T, lowDeltaTTarget, ruleFor, RULES, severity, type DiagnosticRule, type Finding } from '../diagnostics-model';
+import { LOW_DELTA_T, lowDeltaTTarget, ruleFor, RULES, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
-import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, siteFindingsQuery, type EvaluationOutcome } from '../query';
+import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, lowDeltaTRuleQuery, siteFindingsQuery, type EvaluationOutcome } from '../query';
 
 const DAY_MS = 86_400_000;
 
@@ -35,15 +35,16 @@ const OUTCOME_LABEL = { FINDING: '发现问题', ONGOING: '仍在持续', CLEAR:
 const kelvin = (value: number) => `${formatDecimal(value, 1)} K`;
 
 /** A value on a scale from zero past the design value, with the rule's threshold and design marked. */
-function ThresholdBar({ rule, value }: { readonly rule: DiagnosticRule; readonly value: number | null }) {
+function ThresholdBar({ rule, threshold, value }: { readonly rule: DiagnosticRule; readonly threshold: number | null; readonly value: number | null }) {
   const top = rule.designValue + 2;
   const at = (x: number) => `${(Math.min(top, Math.max(0, x)) / top) * 100}%`;
-  const below = value !== null && value < rule.threshold;
+  const below = value !== null && threshold !== null && value < threshold;
+  const marks = [...(threshold === null ? [] : [{ x: threshold, label: `阈值 ${threshold}` }]), { x: rule.designValue, label: `设计 ${rule.designValue}` }];
   return (
     <div className="relative h-12" aria-hidden="true">
       <div className="absolute inset-x-0 top-5 h-2 rounded-full bg-muted" />
-      <div className="absolute top-5 h-2 rounded-l-full bg-destructive/20" style={{ left: 0, width: at(rule.threshold) }} />
-      {[{ x: rule.threshold, label: `阈值 ${rule.threshold}` }, { x: rule.designValue, label: `设计 ${rule.designValue}` }].map((mark) => (
+      {threshold !== null ? <div className="absolute top-5 h-2 rounded-l-full bg-destructive/20" style={{ left: 0, width: at(threshold) }} /> : null}
+      {marks.map((mark) => (
         <div key={mark.label} className="absolute top-3.5 flex -translate-x-1/2 flex-col items-center" style={{ left: at(mark.x) }}>
           <span className="h-5 w-px bg-muted-foreground/60" />
           <span className="mt-1 whitespace-nowrap text-[11px] text-muted-foreground">{mark.label}</span>
@@ -59,8 +60,10 @@ function ThresholdBar({ rule, value }: { readonly rule: DiagnosticRule; readonly
   );
 }
 
-function RuleCard({ rule, target, reading, outcome }: {
+function RuleCard({ rule, revision, target, reading, outcome }: {
   readonly rule: DiagnosticRule;
+  /** The revision FDD evaluates now; null while it cannot be read. */
+  readonly revision: RuleRevision | null;
   readonly target: { assetName: string } | null;
   readonly reading: PlantReading | null;
   readonly outcome: EvaluationOutcome | null;
@@ -87,11 +90,13 @@ function RuleCard({ rule, target, reading, outcome }: {
             <span className="ml-1 text-sm font-normal text-muted-foreground">K</span>
           </span>
         </div>
-        <ThresholdBar rule={rule} value={live} />
+        <ThresholdBar rule={rule} threshold={outcome?.rule.minimumDeltaTC ?? revision?.minimumDeltaTC ?? null} value={live} />
         <p className="text-sm text-muted-foreground">
           {outcome
-            ? `本次诊断：最近 ${rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${rule.threshold} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${rule.threshold} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${rule.threshold} K。`}`
-            : `系统每 ${rule.windowMinutes} 分钟自动诊断一次：温差低于 ${rule.threshold} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。`}
+            ? `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`
+            : revision
+              ? `系统定时自动诊断：最近 ${revision.windowMinutes} 分钟温差低于 ${revision.minimumDeltaTC} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。按第 ${revision.revision} 版规则。`
+              : '诊断规则暂不可用，暂时看不到阈值与诊断窗口。'}
         </p>
       </CardContent>
     </Card>
@@ -184,6 +189,7 @@ export function DiagnosticsWorkspace() {
   const navigate = useNavigate({ from: '/operations/diagnostics' });
   const queryClient = useQueryClient();
   const findings = useQuery(siteFindingsQuery(site.id));
+  const revision = useQuery(lowDeltaTRuleQuery(site.id));
   const { plant, registry } = useRealtimePlant();
   const [outcome, setOutcome] = useState<EvaluationOutcome | null>(null);
 
@@ -193,7 +199,7 @@ export function DiagnosticsWorkspace() {
   const inspect = (findingId: string | undefined) => void navigate({ search: (previous) => ({ ...previous, inspect: findingId }), replace: true });
 
   const run = useMutation({
-    mutationFn: () => evaluateRule(site.id, principal.session.csrfToken, LOW_DELTA_T, target!, new Date()),
+    mutationFn: () => evaluateRule(site.id, principal.session.csrfToken, target!),
     onSuccess: (result) => {
       setOutcome(result);
       if (result.status === 'FINDING') {
@@ -251,7 +257,7 @@ export function DiagnosticsWorkspace() {
             label="诊断规则"
             value={<MetricValue value={String(RULES.length)} unit="项" />}
             lead={RULES.map((rule) => rule.title).join('、')}
-            detail={`每 ${LOW_DELTA_T.windowMinutes} 分钟自动诊断`}
+            detail={revision.data ? `第 ${revision.data.revision} 版 · 阈值 ${revision.data.minimumDeltaTC} K · 窗口 ${revision.data.windowMinutes} 分钟` : revision.isError ? '规则暂不可用' : '定时自动诊断'}
           />
         </MetricGrid>
       ) : null}
@@ -259,7 +265,7 @@ export function DiagnosticsWorkspace() {
       <div className="grid items-start gap-6 @5xl/main:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <section aria-label="诊断项目" className="flex flex-col gap-4">
           {registry.isPending ? <Skeleton className="h-64 rounded-xl" /> : (
-            <RuleCard rule={LOW_DELTA_T} target={target} reading={plantReading(plant, 'btu_meter.temperature_difference')} outcome={outcome} />
+            <RuleCard rule={LOW_DELTA_T} revision={revision.data ?? null} target={target} reading={plantReading(plant, 'btu_meter.temperature_difference')} outcome={outcome} />
           )}
         </section>
 

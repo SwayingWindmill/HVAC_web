@@ -21,9 +21,10 @@ test('a finding states its measurement against the threshold and opens its cause
   await expect(sheet).toContainText('降低冷冻水泵频率');
 });
 
-test('running the diagnosis checks the last 15 minutes of the loop BTU meter and reports a condition already found today as ongoing', async ({ page, gateway }) => {
+test('running the diagnosis names the loop, and FDD reports a condition already found today as ongoing under its rule', async ({ page, gateway }) => {
   await page.goto(`/operations/diagnostics?site=${SITE_ID}`);
-  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('系统每 15 分钟自动诊断一次');
+  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('最近 15 分钟温差低于 3.5 K（设计 5 K）时记为问题');
+  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('按第 1 版规则');
   await page.getByRole('button', { name: '立即诊断' }).click();
 
   const rule = page.getByRole('region', { name: '冷冻水低温差' });
@@ -31,6 +32,17 @@ test('running the diagnosis checks the last 15 minutes of the loop BTU meter and
   await expect(rule).toContainText('问题仍在持续，24 小时内不重复记录');
   await expect(page.getByRole('table', { name: '诊断发现列表' }).getByRole('row').filter({ hasText: '冷冻水低温差' })).toHaveCount(1);
   const [run] = gateway.writes.filter((write) => write.path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`);
-  expect(run.body).toMatchObject({ deviceId: BTU_METER_DEVICE, assetId: BTU_METER_ASSET, ruleRevisionId: 'chilled-water-low-delta-t/v1', minimumDeltaTC: 3.5 });
-  expect(Date.parse(run.body!.evaluationTo) - Date.parse(run.body!.evaluationFrom)).toBe(15 * 60_000);
+  // The page names the loop only; the threshold and window are FDD's rule.
+  expect(run.body).toEqual({ deviceId: BTU_METER_DEVICE, assetId: BTU_METER_ASSET });
+});
+
+test('a revised rule is what the page shows, and an unreadable rule says so', async ({ page, gateway }) => {
+  gateway.fddRule = { ...gateway.fddRule!, revisionId: '01910000-0000-7000-8000-860000000002', revision: 2, minimumDeltaTC: 4, windowMinutes: 30 };
+  await page.goto(`/operations/diagnostics?site=${SITE_ID}`);
+  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('最近 30 分钟温差低于 4 K');
+  await expect(page.getByRole('region', { name: '诊断概况' })).toContainText('第 2 版 · 阈值 4 K · 窗口 30 分钟');
+
+  gateway.fddRule = null;
+  await page.reload();
+  await expect(page.getByRole('region', { name: '冷冻水低温差' })).toContainText('诊断规则暂不可用');
 });
