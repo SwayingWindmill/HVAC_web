@@ -45,14 +45,6 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Water moving along a plant pipe; the plant diagram applies it only while a pump runs and motion is allowed. */
-  --animate-pipe-flow: pipe-flow 1.4s linear infinite;
-  @keyframes pipe-flow {
-    to {
-      stroke-dashoffset: -24;
-    }
-  }
-
   /* The route-loading hairline sweeping across the top of the shell. */
   --animate-navigation-progress: navigation-progress 1.1s ease-in-out infinite;
   @keyframes navigation-progress {
