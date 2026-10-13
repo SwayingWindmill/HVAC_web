@@ -22,8 +22,8 @@ const summary = (rows) => {
 
 test('sites rank by plant COP, each against the fleet\'s energy-weighted COP', () => {
   const result = benchmark([
-    { siteId: 'a', name: '一号站', summary: summary([row(1, 1000, 3000), row(2, 1000, 3200)]) },
-    { siteId: 'b', name: '二号站', summary: summary([row(1, 500, 2000), row(2, 500, 2100)]) },
+    { siteId: 'a', name: '一号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 1000, 3000), row(2, 1000, 3200)]) },
+    { siteId: 'b', name: '二号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 500, 2000), row(2, 500, 2100)]) },
   ]);
   assert.deepEqual(result.sites.map((site) => site.siteId), ['b', 'a']);
   assert.equal(result.fleet.electricityKWh, 3000);
@@ -37,8 +37,8 @@ test('sites rank by plant COP, each against the fleet\'s energy-weighted COP', (
 
 test('a site without both energies has no COP and ranks last, without a gap to the fleet', () => {
   const result = benchmark([
-    { siteId: 'a', name: '一号站', summary: summary([row(1, 1000, null)]) },
-    { siteId: 'b', name: '二号站', summary: summary([row(1, 500, 2000)]) },
+    { siteId: 'a', name: '一号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 1000, null)]) },
+    { siteId: 'b', name: '二号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 500, 2000)]) },
   ]);
   assert.deepEqual(result.sites.map((site) => [site.siteId, site.rank, site.copVsFleet]), [['b', 1, 0], ['a', null, null]]);
   assert.equal(result.fleet.cop, 4);
@@ -46,11 +46,29 @@ test('a site without both energies has no COP and ranks last, without a gap to t
 
 test('daily COP lines up each site by day for one chart', () => {
   const result = benchmark([
-    { siteId: 'a', name: '一号站', summary: summary([row(1, 1000, 3000), row(2, 1000, 3200)]) },
-    { siteId: 'b', name: '二号站', summary: summary([row(2, 500, 2100)]) },
+    { siteId: 'a', name: '一号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 1000, 3000), row(2, 1000, 3200)]) },
+    { siteId: 'b', name: '二号站', floorAreaM2: null, climateZone: null, summary: summary([row(2, 500, 2100)]) },
   ]);
   assert.deepEqual(result.daily, [
     { key: '2026-10-01T16:00:00.000Z', label: '10/1', a: 3, b: null },
     { key: '2026-10-02T16:00:00.000Z', label: '10/2', a: 3.2, b: 4.2 },
   ]);
+});
+
+// Energy per square metre (GB/T 51161) compares sites of different sizes: least is best, and a site
+// without a recorded floor area stays out of that ranking rather than ranking last.
+test('energy per square metre ranks the sites with a floor area, least first', () => {
+  const result = benchmark([
+    { siteId: 'a', name: '一号站', floorAreaM2: 1000, climateZone: 'HOT_SUMMER_COLD_WINTER', summary: summary([row(1, 1000, 3000), row(2, 1000, 3200)]) },
+    { siteId: 'b', name: '二号站', floorAreaM2: 250, climateZone: 'HOT_SUMMER_WARM_WINTER', summary: summary([row(1, 500, 2000), row(2, 500, 2100)]) },
+    { siteId: 'c', name: '三号站', floorAreaM2: null, climateZone: null, summary: summary([row(1, 100, 300)]) },
+  ]);
+  const byId = Object.fromEntries(result.sites.map((site) => [site.siteId, site]));
+  assert.equal(byId.a.intensityKWhPerM2, 2);
+  assert.equal(byId.b.intensityKWhPerM2, 4);
+  assert.deepEqual([byId.a.intensityRank, byId.b.intensityRank, byId.c.intensityRank], [1, 2, null]);
+  assert.equal(byId.c.intensityKWhPerM2, null);
+  assert.equal(byId.b.climateZone, 'HOT_SUMMER_WARM_WINTER');
+  // The COP ranking is unchanged by floor area.
+  assert.deepEqual([byId.b.rank, byId.a.rank, byId.c.rank], [1, 2, 3]);
 });
