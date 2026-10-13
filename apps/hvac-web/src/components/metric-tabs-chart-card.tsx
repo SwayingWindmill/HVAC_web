@@ -36,7 +36,7 @@ export interface MetricTab {
   neutralDelta?: boolean
 }
 
-export interface MetricTabsChartCardProps extends React.ComponentProps<typeof Card> {
+export interface MetricTabsChartCardProps extends Omit<React.ComponentProps<typeof Card>, "title"> {
   metrics: MetricTab[]
   data: Record<string, unknown>[]
   xKey: string
@@ -61,6 +61,12 @@ export interface MetricTabsChartCardProps extends React.ComponentProps<typeof Ca
   /** Shown in place of the chart when there are no rows. */
   empty?: React.ReactNode
   chartClassName?: string
+  /** Panel title bar above the tabs: what the card is, a short caption and one way onward. */
+  title?: React.ReactNode
+  caption?: React.ReactNode
+  action?: React.ReactNode
+  /** A line above the chart naming what it plots. */
+  chartTitle?: React.ReactNode
 }
 
 function aggregate(
@@ -95,6 +101,10 @@ function MetricTabsChartCard({
   dots = false,
   empty,
   chartClassName,
+  title,
+  caption,
+  action,
+  chartTitle,
   className,
   ...props
 }: MetricTabsChartCardProps) {
@@ -139,11 +149,18 @@ function MetricTabsChartCard({
       className={cn("gap-0 overflow-hidden py-0", className)}
       {...props}
     >
+      {title ? (
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-divider px-4">
+          <h2 className="text-sm font-semibold whitespace-nowrap">{title}</h2>
+          {caption ? <span className="text-muted-foreground min-w-0 truncate text-xs">{caption}</span> : null}
+          {action ? <div className="ml-auto flex items-center gap-2">{action}</div> : null}
+        </div>
+      ) : null}
       <div
         role="tablist"
         aria-label="指标"
         onKeyDown={onKeyDown}
-        className="flex divide-x overflow-x-auto border-b [scrollbar-width:thin] [scrollbar-color:color-mix(in_oklab,var(--foreground)_20%,transparent)_transparent]"
+        className="flex divide-x divide-divider overflow-x-auto border-b border-divider [scrollbar-width:thin]"
       >
         {metrics.map((metric) => {
           const isSelected = metric.key === active.key
@@ -169,22 +186,22 @@ function MetricTabsChartCard({
               data-state={isSelected ? "active" : "inactive"}
               onClick={() => select(metric.key)}
               className={cn(
-                "flex flex-[1_0_auto] flex-col gap-1.5 px-4 py-3 text-left outline-none transition-colors",
-                "focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:ring-inset",
+                "flex min-w-0 flex-[1_0_0] flex-col gap-1 px-[18px] pt-[13px] pb-3 text-left shadow-[inset_0_-2px_0_transparent] outline-none transition-[background-color,box-shadow] duration-100",
+                "focus-visible:ring-ring-soft focus-visible:ring-3 focus-visible:ring-inset",
                 isSelected
-                  ? "bg-muted"
-                  : "hover:bg-muted/50"
+                  ? "shadow-[inset_0_-2px_0_var(--primary)]"
+                  : "hover:bg-accent/60"
               )}
             >
-              <span className="text-muted-foreground text-sm whitespace-nowrap">{metric.label}</span>
+              <span className={cn("text-xs font-medium whitespace-nowrap", isSelected ? "text-primary" : "text-muted-foreground")}>{metric.label}</span>
               <span className="flex items-center justify-between gap-3">
                 <MetricValue
                   value={value ?? "—"}
                   format={metric.format}
                   currency={metric.currency}
                   maximumFractionDigits={metric.fractionDigits}
-                  suffix={metric.unit && value !== null ? <span className="text-muted-foreground ml-1 text-xs font-normal">{metric.unit}</span> : undefined}
-                  className="text-lg font-semibold tracking-tight"
+                  suffix={metric.unit && value !== null ? <span className="text-subtle-foreground ml-1 text-xs font-medium">{metric.unit}</span> : undefined}
+                  className="text-2xl leading-[29px] font-semibold tracking-[-0.03em]"
                 />
                 {delta !== null ? (
                   <DeltaBadge
@@ -200,7 +217,8 @@ function MetricTabsChartCard({
           )
         })}
       </div>
-      <CardContent id={`${id}-panel`} role="tabpanel" className="pt-4 pb-4">
+      <CardContent id={`${id}-panel`} role="tabpanel" className="flex flex-col gap-2 px-5 pt-3.5 pb-3">
+        {chartTitle ? <div className="flex min-h-7 items-center gap-2.5 text-sm">{chartTitle}</div> : null}
         {data.length === 0 && empty ? (
           <div className={cn("text-muted-foreground grid h-40 place-items-center text-sm", chartClassName)}>{empty}</div>
         ) : (

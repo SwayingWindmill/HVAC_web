@@ -2,14 +2,7 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 import { type NumberFormat } from "@/lib/format"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { DeltaBadge } from "@/components/ui/delta-badge"
 import {
   HeatmapChart,
@@ -90,39 +83,33 @@ function HeatmapChartCard({
       : null
 
   return (
-    <Card data-slot="heatmap-chart-card" className={cn("@container/card gap-4", className)} {...props}>
-      <CardHeader className="@max-sm/card:[grid-template-columns:minmax(0,1fr)]!">
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="flex items-baseline gap-2 text-3xl font-semibold tabular-nums tracking-tight">
-          <MetricValue
-            value={hovered ? hovered.value : (value ?? total ?? "—")}
-            format={format}
-            currency={currency}
-            suffix={unit && (hovered || value !== undefined || total !== null) ? <span className="text-muted-foreground ml-1.5 text-base font-normal">{unit}</span> : undefined}
-          />
-          {delta !== undefined && !hovered ? (
-            <DeltaBadge delta={delta} invert={invertDelta} />
-          ) : null}
-        </CardTitle>
-        {/* Reserved even when empty so the caption does not shift the chart while hovering. */}
-        <div
-          data-slot="heatmap-chart-card-caption"
-          className="text-muted-foreground min-h-5 text-sm"
-        >
+    <Card data-slot="heatmap-chart-card" className={cn("gap-0 py-0", className)} {...props}>
+      <div className="flex h-12 items-center gap-3 border-b border-divider px-4">
+        <h2 className="text-sm font-semibold whitespace-nowrap">{title}</h2>
+        <MetricValue
+          value={hovered ? hovered.value : (value ?? total ?? "—")}
+          format={format}
+          currency={currency}
+          suffix={unit && (hovered || value !== undefined || total !== null) ? <span className="text-subtle-foreground ml-1 text-xs font-medium">{unit}</span> : undefined}
+          className="text-sm font-semibold tabular-nums"
+        />
+        {delta !== undefined && !hovered ? <DeltaBadge delta={delta} invert={invertDelta} /> : null}
+        {/* The caption names the hovered cell; it keeps its place so the chart does not shift. */}
+        <span data-slot="heatmap-chart-card-caption" className="text-muted-foreground min-w-0 truncate text-xs">
           {hovered ? hovered.label : deltaLabel}
-        </div>
+        </span>
         {periods?.length ? (
-          <CardAction className="@max-sm/card:[grid-area:auto]! @max-sm/card:justify-self-start!">
+          <div className="ml-auto">
             <PeriodTabs
               options={periods}
               value={period}
               defaultValue={defaultPeriod ?? periods[0]?.value}
               onValueChange={onPeriodChange}
             />
-          </CardAction>
+          </div>
         ) : null}
-      </CardHeader>
-      <CardContent>
+      </div>
+      <CardContent className="px-4 pt-3 pb-4">
         <HeatmapChart
           rows={rows}
           columns={columns}

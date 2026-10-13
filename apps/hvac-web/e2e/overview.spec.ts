@@ -22,29 +22,33 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(plant.getByRole('region', { name: '主要设备' })).toContainText('4 / 4 台运行');
   // The gateway is how the plant reaches the platform, not plant equipment.
   await expect(plant).toContainText('8 / 8 在线');
-  await expect(plant).toContainText('室内温度24.1°C');
+  await expect(plant).toContainText('24.1°C');
 
   await expect(page.getByRole('region', { name: '近 7 天逐时用电' })).toContainText('6,433kWh');
 
-  const alarms = page.getByRole('list').filter({ hasText: '冷冻水回水温度过低' });
-  await expect(alarms.getByRole('listitem')).toHaveCount(1);
-  await expect(alarms.getByRole('link')).toContainText('未确认');
-
-  const findings = page.getByRole('list').filter({ hasText: '冷冻水低温差' });
-  await expect(findings.getByRole('listitem')).toHaveCount(1);
-  await expect(findings).toContainText('BTU-METER-01');
-  await expect(findings).toContainText('3.4 K');
-
-  const work = page.getByRole('list').filter({ hasText: '布水器季度检查' });
-  await expect(work.getByRole('listitem')).toHaveCount(2);
+  // Alarms, findings and work orders wait in one list, most severe first.
+  const queue = page.getByRole('region', { name: '需要处理' });
+  await expect(queue.getByRole('tab', { name: /告警/ })).toContainText('1');
+  await expect(queue.getByRole('tab', { name: /诊断/ })).toContainText('1');
+  await expect(queue.getByRole('tab', { name: /工单/ })).toContainText('2');
+  const alarm = queue.getByRole('link').filter({ hasText: '冷冻水回水温度过低' });
+  await expect(alarm).toContainText('未确认');
+  const finding = queue.getByRole('link').filter({ hasText: '冷冻水低温差' });
+  await expect(finding).toContainText('BTU-METER-01');
+  await expect(finding).toContainText('3.4 K');
+  await queue.getByRole('tab', { name: /工单/ }).click();
+  await expect(queue.getByRole('listitem')).toHaveCount(2);
+  await expect(queue).toContainText('布水器季度检查');
+  await queue.getByRole('tab', { name: /全部/ }).click();
 
   // Verified savings come from the measure in verification; the recommendation stays an estimate beside them.
   const saving = page.getByRole('region', { name: '节能成效' });
-  await expect(saving).toContainText('还没有在核算的节能措施');
-  await expect(saving).toContainText('51 元/天 · 60 kWh/天');
-  await expect(saving).toContainText('供水温度 7.1 → 8.1 °C');
+  await expect(saving).toContainText('还没有在统计的节能措施');
+  await expect(saving).toContainText('51 元/天');
+  await expect(saving).toContainText('预计节电 60 kWh/天');
+  await expect(saving).toContainText('冷冻水供水 7.1 → 8.1 °C');
 
-  await alarms.getByRole('link').click();
+  await alarm.click();
   await expect(page).toHaveURL(/\/operations\/alarms\?.*inspect=/);
   await expect(page.getByRole('dialog')).toContainText('冷冻水回水温度过低');
 });
