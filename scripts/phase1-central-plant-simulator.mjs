@@ -213,9 +213,11 @@ function buildS1Seed(site, points) {
   }).join(',\n');
 
   return `BEGIN;
-INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id)
-VALUES (${sqlLiteral(siteId)}, ${sqlLiteral(site.siteCode)}, ${sqlLiteral(site.siteName)}, 'Asia/Shanghai', 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)})
-ON CONFLICT (id) DO UPDATE SET status='ACTIVE', tenant_id=EXCLUDED.tenant_id, updated_at=clock_timestamp();
+INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
+VALUES (${sqlLiteral(siteId)}, ${sqlLiteral(site.siteCode)}, ${sqlLiteral(site.siteName)}, 'Asia/Shanghai', 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)}, ${site.floorAreaM2}, ${sqlLiteral(site.climateZone)})
+-- A profile edited in the Registry stays; the seed only fills one never recorded.
+ON CONFLICT (id) DO UPDATE SET status='ACTIVE', tenant_id=EXCLUDED.tenant_id, updated_at=clock_timestamp(),
+  floor_area_m2=coalesce(core_registry.sites.floor_area_m2, EXCLUDED.floor_area_m2), climate_zone=coalesce(core_registry.sites.climate_zone, EXCLUDED.climate_zone);
 
 INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code, display_name, space_type, status, revision, created_at, updated_at) VALUES
 ${spaces}
