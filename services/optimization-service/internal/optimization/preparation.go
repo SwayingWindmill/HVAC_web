@@ -14,11 +14,18 @@ import (
 
 var ErrPreparationUnavailable = errors.New("optimization authoritative input is unavailable")
 
+// Why a run is prepared: an operator asked (MANUAL) or the Site's schedule fired (SCHEDULE).
+const (
+	TriggerManual   = "MANUAL"
+	TriggerSchedule = "SCHEDULE"
+)
+
 type PreparationRequest struct {
 	TenantID    string `json:"-"`
 	SiteID      string `json:"siteId"`
 	SubjectType string `json:"-"`
 	SubjectID   string `json:"-"`
+	Trigger     string `json:"-"`
 }
 
 func (request PreparationRequest) Validate() error {
@@ -29,6 +36,9 @@ func (request PreparationRequest) Validate() error {
 	}
 	if request.SubjectType != "SITE" || request.SubjectID != request.SiteID {
 		return errors.New("optimization subject must be the exact SITE")
+	}
+	if request.Trigger != TriggerManual && request.Trigger != TriggerSchedule {
+		return errors.New("optimization trigger must be MANUAL or SCHEDULE")
 	}
 	return nil
 }
@@ -142,6 +152,8 @@ type FrozenCurrentState struct {
 }
 
 type PreparedInput struct {
+	// Trigger is how the run's job is queued; it is not part of the frozen input.
+	Trigger                string
 	TenantID               string
 	SiteID                 string
 	SubjectType            string
@@ -234,6 +246,7 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		return PreparedOptimization{}, fmt.Errorf("%w: frozen Optimization inputs are invalid: %v", ErrPreparationUnavailable, err)
 	}
 	prepared := PreparedInput{
+		Trigger:  request.Trigger,
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
 		PolicyVersionID: definition.PolicyVersionID, TopologyVersionID: definition.TopologyVersionID,
 		LoadForecastSnapshotID: definition.LoadForecastSnapshotID, PVForecastSnapshotID: definition.PVForecastSnapshotID,

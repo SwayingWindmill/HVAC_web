@@ -34,7 +34,7 @@ func TestHistoricalReplayForecastAndCurrentStatePrepareSealedOptimization(t *tes
 	}
 	prepared, err := preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "018f1d00-0000-7000-8000-000000000001", SiteID: "018f1e00-1000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "018f1e00-1000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "018f1e00-1000-7000-8000-000000000001", Trigger: TriggerManual,
 	})
 	if err != nil {
 		t.Fatal(err)

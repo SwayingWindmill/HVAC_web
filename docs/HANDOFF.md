@@ -4,7 +4,7 @@ The current state of the work and what to pick up next. Update it in the same PR
 what it says. How to build, test and run lives in `CLAUDE.md` / `AGENTS.md`; what changed for
 users lives in `CHANGELOG.md`.
 
-Last updated: 2026-10-12.
+Last updated: 2026-10-13.
 
 ## Where the product is
 
@@ -16,7 +16,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | 监测 | 实时运行, 设备 | telemetry snapshots/push, Registry asset model, device history |
 | 能源 | 能耗分析, 需量分析 | analytics energy series, device-series hourly/quarter-hour aggregates, Site tariff |
 | 能源 | 分项能耗 | analytics energy series with `breakdown: "device"`: the total meter (SITE) and each machine's sub-meter (BRANCH) |
-| 能源 | 负荷预测, 优化建议 | forecast service, optimization service |
+| 能源 | 负荷预测, 优化建议 | forecast service (hourly at :07), optimization service (hourly at :20, and on demand; spec `docs/specs/scheduled-optimization.md`) |
 | 能源 | 节能项目 (`/energy-analysis/savings`) | mv-service: measures, frozen baselines, verified days (ADR 0021) |
 | 能源 | 能源报告 (`/reports`) | closed months from report-service snapshots (`REPORT_GENERATE`, 03:00 on the 1st); the running month and unarchived months assembled on demand; yearly view; printable to A4 |
 | 能源 | 站点对标 (platform route `/benchmark`) | each authorized site's energy series; sites without analytics access are listed but not compared |
@@ -68,7 +68,7 @@ Roadmap issues, in order:
 Smaller follow-ups:
 
 - FDD rule revisions have no publishing script yet. To change the low-delta-T threshold or window, insert the next revision (never update one): `INSERT INTO core_registry.fdd_rule_revisions (id, tenant_id, rule_code, revision, minimum_delta_tc, window_minutes, effective_from, created_at) VALUES (<uuid v7>, <tenant>, 'CHILLED_WATER_LOW_DELTA_T', <n+1>, <K>, <minutes>, <from>, now())` as the migrator. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
-
+- Unsaved drafts on platform pages (系统管理) belong to the page: `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope's own draft path (`registerDraft` / `dirtyDrafts`, the site-switch confirmation in `ShellChrome`) has no caller since that fix; keep it for Site-page forms or remove it.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
 - Polish the device inspector and the work-order sheet in the same visual system.

@@ -102,7 +102,7 @@ func TestOptimizationPreparationFreezesAuthoritativeInputsAndChecksum(t *testing
 	}
 	request := PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}
 	result, err := preparer.Prepare(t.Context(), request)
 	if err != nil {
@@ -112,6 +112,14 @@ func TestOptimizationPreparationFreezesAuthoritativeInputsAndChecksum(t *testing
 		t.Fatalf("prepared=%#v created=%d", result, len(store.created))
 	}
 	frozen := store.created[0]
+	if frozen.Trigger != TriggerManual {
+		t.Fatalf("the run is queued as %q, want the request's trigger", frozen.Trigger)
+	}
+	untriggered := request
+	untriggered.Trigger = ""
+	if _, err := preparer.Prepare(t.Context(), untriggered); err == nil {
+		t.Fatal("a run without a trigger was prepared")
+	}
 	if frozen.CurrentState.Baseline.DailyEnergyKWh != 2400 || frozen.CurrentState.Baseline.DailyCost != 360 || frozen.CurrentState.Baseline.SupplyTempC != 7 || frozen.CurrentState.Baseline.ZoneTempC != 23 {
 		t.Fatalf("baseline=%#v", frozen.CurrentState.Baseline)
 	}
@@ -132,7 +140,7 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 	}
 	_, err = preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	})
 	if !errors.Is(err, ErrPreparationUnavailable) {
 		t.Fatalf("err=%v", err)
@@ -156,7 +164,7 @@ func TestOptimizationPreparationRefusesACostFromAnotherDay(t *testing.T) {
 	}
 	if _, err := preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}); err == nil {
 		t.Fatal("prepared an optimization with a daily cost from another day")
 	}
@@ -177,7 +185,7 @@ func TestOptimizationPreparationChecksumSurvivesTheDatabaseRoundTrip(t *testing.
 	}
 	if _, err = preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,6 @@
 {
   "runId": "01a12bdc-97d7-7a23-a6df-9fb2cfcb06b8",
+  "trigger": "MANUAL",
   "runStatus": "PUBLISHED",
   "quality": "FEASIBLE",
   "recommendation": {

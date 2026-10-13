@@ -22,7 +22,6 @@ import {
   useRuleExecutionEvidence,
   useRuleRevisions,
 } from '@/api/rules';
-import type { ProtectedScopeDraft } from '@/app/protected-scope';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -57,12 +56,13 @@ import {
   makeRuleNode,
   ruleDraftFingerprint,
 } from './model';
-import { confirmDiscardRuleDraft, useRuleDirtyGuard } from './useDirtyGuard';
+import type { RegisterUnsavedDraft } from '../unsaved-drafts';
+import { confirmDiscardRuleDraft } from './confirmDiscard';
 
 interface Props {
   principal: CurrentPrincipalResponse;
   sites: readonly Site[];
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  registerUnsavedDraft: RegisterUnsavedDraft;
 }
 
 type WorkspaceTab = 'editor' | 'lifecycle' | 'evidence';
@@ -143,7 +143,6 @@ export function RuleManagement({ principal, sites, registerUnsavedDraft }: Props
   const [retireReason, setRetireReason] = useState('停止当前规则应用');
   const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
 
-  useRuleDirtyGuard(dirty);
   const catalogQuery = useRuleCatalog(tenantId, sessionId, policyRevision, canManage);
   const revisionsQuery = useRuleRevisions(tenantId, sessionId, policyRevision, undefined, canManage);
   const bindingsQuery = useRuleBindings(tenantId, sessionId, policyRevision, selectedSiteId, canManage);
