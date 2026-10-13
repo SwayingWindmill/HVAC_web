@@ -9,7 +9,7 @@ export const Route = createFileRoute('/_app/benchmark')({
   staticData: { title: '站点对标', scope: 'platform', requiresPlatform: true },
   validateSearch: z.object({
     period: z.enum(['7d', 'month']).optional(),
-    rank: z.enum(['cop', 'intensity']).optional(),
+    rank: z.enum(['cop', 'intensity', 'climate']).optional(),
     site: z.string().optional(),
   }),
   component: BenchmarkRoute,

@@ -44,6 +44,16 @@ function replayEnergy(series: Json, query: Json, recordedDay = RECORDED_DAY): Js
   return { ...series, points: replay(series.points), ...(devices ? { devices } : {}) };
 }
 
+// The recorded day's energy, once for each day of the window.
+function replayEnergyDays(series: Json, query: Json): Json {
+  const total = series.points.reduce((sum: number, point: Json) => sum + point.energyKWh, 0);
+  const points: Json[] = [];
+  for (let day = Date.parse(query.from); day < Date.parse(query.to); day += DAY_MS) {
+    points.push({ periodStart: new Date(day).toISOString(), periodEnd: new Date(day + DAY_MS).toISOString(), energyKWh: total });
+  }
+  return { ...series, points };
+}
+
 // Recorded quarter-hours answer each window the page asks for; tests pin the page clock to the recording.
 function replayDemand(recorded: Json, query: Json): Json {
   const { recordedAt: _recordedAt, ...response } = recorded;
@@ -51,6 +61,17 @@ function replayDemand(recorded: Json, query: Json): Json {
   const to = Date.parse(query.to);
   const buckets = recorded.buckets.filter((bucket: Json) => Date.parse(bucket.periodStart) >= from && Date.parse(bucket.periodStart) < to);
   return { ...response, buckets, metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length } };
+}
+
+// The weather station's recorded days of outdoor temperature, moved to start on the requested day.
+function replayOutdoorDays(recorded: Json, query: Json): Json {
+  const { recordedFrom, ...response } = recorded;
+  const shift = Date.parse(query.from) - Date.parse(recordedFrom);
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  const buckets = response.buckets
+    .map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) }))
+    .filter((bucket: Json) => Date.parse(bucket.periodStart) < Date.parse(query.to));
+  return { ...response, buckets, metadata: { ...response.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length } };
 }
 
 // A machine's recorded hours of power, moved onto the requested day.
@@ -97,6 +118,10 @@ export class Gateway {
   optimization: Json | null = null;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
+  /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
+  energyByDay = false;
+  /** Telemetry fails the weather station's daily temperature. */
+  outdoorFailing = false;
   /** Machines whose sub-meter the recorded device breakdown leaves out. */
   unmeteredDeviceIds: readonly string[] = [];
   /** report-service's kept snapshots of closed months; a month without one answers 404. */
@@ -244,6 +269,10 @@ export class Gateway {
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
       if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
+        if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
+        return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
+      }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
       return { body: fixture('history.json') };
     }
@@ -277,7 +306,10 @@ export class Gateway {
       const devices = recorded.response.devices.filter((device: Json) => !this.unmeteredDeviceIds.includes(device.deviceId));
       return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
     }
-    if (method === 'POST' && path === '/api/v1/analytics/energy-series') return { body: replayEnergy(fixture<Json>('energy-series.json')[body?.energyType], body!) };
+    if (method === 'POST' && path === '/api/v1/analytics/energy-series') {
+      const recorded = fixture<Json>('energy-series.json')[body?.energyType];
+      return { body: this.energyByDay && body?.granularity === 'day' ? replayEnergyDays(recorded, body) : replayEnergy(recorded, body!) };
+    }
 
     if (method === 'GET' && path === '/api/v1/alarms') {
       const items = this.alarms.filter((alarm) =>
