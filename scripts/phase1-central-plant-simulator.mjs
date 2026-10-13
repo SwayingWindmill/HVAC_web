@@ -546,18 +546,23 @@ ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
 COMMIT;`;
 }
 
-// FDD checks the chilled-water loop every quarter-hour: the BTU meter's supply and return
-// temperatures over the last 15 minutes against a 3.5 K floor (the loop is designed for 5 K).
+// FDD checks the chilled-water loop every quarter-hour. The rule is FDD's own (the Tenant's first
+// revision: the BTU meter's supply and return over the last 15 minutes against a 3.5 K floor, the
+// loop being designed for 5 K); the schedule names only the loop.
 function buildDiagnosisSeed(site, points) {
   const ids = buildIdentities(site, points);
   const meter = siteDevices(site).find((device) => device.name === 'BTU-METER-01');
   const assetId = ids.assetIdByKey.get('equipment-btu-meter');
   if (!meter || !assetId) throw new Error('BTU-METER-01 and its asset are required for the low-delta-T schedule');
-  const plan = { assetId, deviceId: meter.platformDeviceId, ruleRevisionId: 'chilled-water-low-delta-t/v1', minimumDeltaTC: 3.5, windowMinutes: 15 };
-  return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+  const plan = { assetId, deviceId: meter.platformDeviceId };
+  return `INSERT INTO core_registry.fdd_rule_revisions (id, tenant_id, rule_code, revision, minimum_delta_tc, window_minutes, effective_from, created_at)
+VALUES (${sqlLiteral(localUUID(0x860000000001))}, ${sqlLiteral(site.tenantId)}, 'CHILLED_WATER_LOW_DELTA_T', 1, 3.5, 15, '2026-01-01T00:00:00Z', clock_timestamp())
+ON CONFLICT (tenant_id, rule_code, revision) DO NOTHING;
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
 VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-water-low-delta-t-${site.siteCode}`)}, '冷冻水低温差诊断（每 15 分钟）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'FDD_EVALUATION', 'CRON', '*/15 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 60, ${sqlLiteral(JSON.stringify(plan))},
   date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes')
-ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
+-- The seed owns this schedule's payload and keeps it as defined here.
+ON CONFLICT (tenant_id, schedule_code) DO UPDATE SET payload_template = EXCLUDED.payload_template;`;
 }
 
 // A Site's monthly report is kept as a snapshot once the month is over (#483): report-service takes

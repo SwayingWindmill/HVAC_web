@@ -14,7 +14,8 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	tenantID := strings.TrimSpace(os.Getenv("FDD_POSTGRES_INTEGRATION_TENANT_ID"))
 	siteID := strings.TrimSpace(os.Getenv("FDD_POSTGRES_INTEGRATION_SITE_ID"))
 	assetID := strings.TrimSpace(os.Getenv("FDD_POSTGRES_INTEGRATION_ASSET_ID"))
-	if dsn == "" || tenantID == "" || siteID == "" || assetID == "" {
+	ruleID := strings.TrimSpace(os.Getenv("FDD_POSTGRES_INTEGRATION_RULE_ID"))
+	if dsn == "" || tenantID == "" || siteID == "" || assetID == "" || ruleID == "" {
 		t.Skip("FDD Postgres integration fixture is not configured")
 	}
 
@@ -22,8 +23,7 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	request.TenantID = tenantID
 	request.SiteID = siteID
 	request.AssetID = assetID
-	request.EvaluationTo = time.Now().UTC()
-	request.EvaluationFrom = request.EvaluationTo.Add(-15 * time.Minute)
+	request.At = time.Now().UTC()
 
 	store, err := OpenPostgres(t.Context(), dsn)
 	if err != nil {
@@ -31,14 +31,15 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	}
 	t.Cleanup(store.Close)
 	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time {
-		return request.EvaluationTo.Add(time.Minute)
+		return request.At.Add(time.Minute)
 	})
 
 	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "FINDING" || result.Finding == nil {
+	// The runner seeded the Tenant's rule revision; the finding cites it and its threshold.
+	if result.Status != "FINDING" || result.Finding == nil || result.Rule.ID != ruleID || result.Finding.RuleRevisionID != ruleID || result.Finding.ThresholdValue != result.Rule.MinimumDeltaTC {
 		t.Fatalf("result=%#v", result)
 	}
 	findingID := result.Finding.ID
@@ -65,7 +66,7 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	}
 
 	later := request
-	later.EvaluationFrom, later.EvaluationTo = request.EvaluationFrom.Add(15*time.Minute), request.EvaluationTo.Add(15*time.Minute)
+	later.At = request.At.Add(15 * time.Minute)
 	ongoing, err := service.EvaluateLowDeltaT(t.Context(), later)
 	if err != nil || ongoing.Status != "ONGOING" || ongoing.Finding == nil || ongoing.Finding.ID != findingID {
 		t.Fatalf("the same condition a quarter later=%#v err=%v", ongoing, err)

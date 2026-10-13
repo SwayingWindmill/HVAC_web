@@ -54,6 +54,7 @@ services:
       - ./postgres/init/022-report-snapshots.sql:/docker-entrypoint-initdb.d/380.sql:ro
       - ./postgres/init/023-savings-device-boundary.sql:/docker-entrypoint-initdb.d/390.sql:ro
       - ./postgres/init/024-site-profile.sql:/docker-entrypoint-initdb.d/400.sql:ro
+      - ./postgres/init/025-fdd-rule-revisions.sql:/docker-entrypoint-initdb.d/410.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:
