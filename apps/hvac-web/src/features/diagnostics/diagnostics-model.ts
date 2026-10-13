@@ -16,16 +16,14 @@ export interface Finding {
   readonly createdAt: string;
 }
 
+/** What a rule is to an operator; its threshold and window are FDD's, read as a RuleRevision. */
 export interface DiagnosticRule {
-  readonly revisionId: string;
   readonly findingType: string;
   readonly title: string;
   /** What the rule watches, in the operator's words. */
   readonly watches: string;
   readonly designValue: number;
-  readonly threshold: number;
   readonly unit: string;
-  readonly windowMinutes: number;
   readonly meaning: string;
   readonly causes: readonly string[];
   readonly actions: readonly string[];
@@ -34,20 +32,26 @@ export interface DiagnosticRule {
 // The chilled-water loop is designed for a 5 K rise across the coils. Well below it the pumps
 // move more water than the load needs, which costs pump energy and starves the chiller of ΔT.
 export const LOW_DELTA_T: DiagnosticRule = {
-  revisionId: 'chilled-water-low-delta-t/v1',
   findingType: 'CHILLED_WATER_LOW_DELTA_T',
   title: '冷冻水低温差',
   watches: '冷量表的冷冻水供回水温差',
   designValue: 5,
-  threshold: 3.5,
   unit: 'K',
-  windowMinutes: 15,
   meaning: '供回水温差低于设定阈值，说明冷冻水流量多于负荷所需，水泵电耗偏高，冷机也难以在高效区运行。',
   causes: ['冷冻水泵定频或频率偏高', '旁通阀常开或开度过大', '末端水阀失控、全开'],
   actions: ['降低冷冻水泵频率，使温差回到 5 K 附近', '检查旁通阀与末端水阀的开度', '确认冷量表供回水温度传感器读数'],
 };
 
 export const RULES: readonly DiagnosticRule[] = [LOW_DELTA_T];
+
+/** The revision of a rule FDD evaluates now: below minimumDeltaTC over the last windowMinutes. */
+export interface RuleRevision {
+  readonly revisionId: string;
+  readonly revision: number;
+  readonly minimumDeltaTC: number;
+  readonly windowMinutes: number;
+  readonly effectiveFrom: string;
+}
 
 export const ruleFor = (findingType: string): DiagnosticRule | undefined => RULES.find((rule) => rule.findingType === findingType);
 

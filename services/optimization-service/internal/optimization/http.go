@@ -104,6 +104,7 @@ func (handler *HTTPHandler) handleOptimize(writer http.ResponseWriter, request *
 	input.TenantID = request.Header.Get("X-Tenant-ID")
 	input.SubjectType = "SITE"
 	input.SubjectID = input.SiteID
+	input.Trigger = TriggerManual
 	prepared, err := handler.preparer.Prepare(request.Context(), input)
 	if errors.Is(err, ErrPreparationUnavailable) {
 		writeJSONError(writer, http.StatusServiceUnavailable, "optimization_input_unavailable")

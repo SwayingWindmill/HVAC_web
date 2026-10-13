@@ -62,26 +62,17 @@ type fddLinkRequest struct {
 	WorkOrderID string `json:"workOrderId"`
 }
 
+// An operator's low-delta-T evaluation names the loop; FDD's rule in effect says the rest.
 type fddLowDeltaTEvaluationRequest struct {
-	AssetID                   string    `json:"assetId"`
-	DeviceID                  string    `json:"deviceId"`
-	EvaluationFrom            time.Time `json:"evaluationFrom"`
-	EvaluationTo              time.Time `json:"evaluationTo"`
-	RuleRevisionID            string    `json:"ruleRevisionId"`
-	ModelDeploymentRevisionID string    `json:"modelDeploymentRevisionId,omitempty"`
-	MinimumDeltaTC            float64   `json:"minimumDeltaTC"`
+	AssetID  string `json:"assetId"`
+	DeviceID string `json:"deviceId"`
 }
 
 type fddLowDeltaTEvaluationUpstream struct {
-	TenantID                  string    `json:"tenantId"`
-	SiteID                    string    `json:"siteId"`
-	AssetID                   string    `json:"assetId"`
-	DeviceID                  string    `json:"deviceId"`
-	EvaluationFrom            time.Time `json:"evaluationFrom"`
-	EvaluationTo              time.Time `json:"evaluationTo"`
-	RuleRevisionID            string    `json:"ruleRevisionId"`
-	ModelDeploymentRevisionID string    `json:"modelDeploymentRevisionId,omitempty"`
-	MinimumDeltaTC            float64   `json:"minimumDeltaTC"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+	AssetID  string `json:"assetId"`
+	DeviceID string `json:"deviceId"`
 }
 
 func newIntelligenceController(config *IntelligenceConfig) *intelligenceController {
@@ -115,6 +106,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/findings", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/fdd/findings"}, method == http.MethodGet
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/rules/low-delta-t", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd-rule", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/fdd/rules/low-delta-t"}, method == http.MethodGet
 	}
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerFDD, siteID: siteID, target: "fdd-evaluate", method: http.MethodPost, publicPath: "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t"}, method == http.MethodPost
@@ -177,7 +171,7 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 			h.serveFDDLink(writer, request, session, route)
 			return
 		}
-		h.serveFDDFindings(writer, request, session, route)
+		h.serveFDDRead(writer, request, session, route)
 		return
 	}
 	if route.target == "optimization-latest" {
@@ -247,9 +241,10 @@ func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Reques
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
-func (h *handler) serveFDDFindings(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+// serveFDDRead reads a Site's FDD findings, or the low-delta-T rule in effect, on site.read.
+func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
 	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD findings were not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD resource was not found.", false, nil)
 		return
 	}
 	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
@@ -257,11 +252,13 @@ func (h *handler) serveFDDFindings(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if _, allowed := allowedSites[route.siteID]; !allowed {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD findings were not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD resource was not found.", false, nil)
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/fdd/findings"
-	if rawQuery := strings.TrimSpace(request.URL.RawQuery); rawQuery != "" {
+	if route.target == "fdd-rule" {
+		internalPath = "/v1/sites/" + url.PathEscape(route.siteID) + "/fdd/rules/low-delta-t"
+	} else if rawQuery := strings.TrimSpace(request.URL.RawQuery); rawQuery != "" {
 		internalPath += "?" + rawQuery
 	}
 	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.fddBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
@@ -404,17 +401,7 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 		return
 	}
 	// FDD reads the loop evidence itself (ADR 0020); the Gateway only decides the Site.
-	upstreamBody, err := json.Marshal(fddLowDeltaTEvaluationUpstream{
-		TenantID:                  session.TenantID,
-		SiteID:                    route.siteID,
-		AssetID:                   input.AssetID,
-		DeviceID:                  input.DeviceID,
-		EvaluationFrom:            input.EvaluationFrom,
-		EvaluationTo:              input.EvaluationTo,
-		RuleRevisionID:            input.RuleRevisionID,
-		ModelDeploymentRevisionID: input.ModelDeploymentRevisionID,
-		MinimumDeltaTC:            input.MinimumDeltaTC,
-	})
+	upstreamBody, err := json.Marshal(fddLowDeltaTEvaluationUpstream{TenantID: session.TenantID, SiteID: route.siteID, AssetID: input.AssetID, DeviceID: input.DeviceID})
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request could not be encoded.", false, nil)
 		return

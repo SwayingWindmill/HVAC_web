@@ -398,6 +398,11 @@ _Avoid_: expected consumption, reference consumption
 A Site's closed month as its energy report shows it, taken once by report-service after the month ends and never changed. Taking it again keeps a new version; the report shows the latest. Demand, alarms and work orders are not in it and are worked out live beside it.
 _Avoid_: archived report, frozen report
 
+## Rule Revision
+
+One immutable version of a diagnosis rule FDD holds for a Tenant (诊断规则版本): for chilled-water low delta-T, the threshold and the window of minutes it is read over. An evaluation uses the revision in effect at its time and its finding cites it; changing the threshold publishes a new revision.
+_Avoid_: rule config, threshold setting
+
 ## Verified Day
 
 One Site-local day of a measure's reporting period, verified once against its Baseline and never changed afterwards. Hours missing data count against its coverage; they are not filled in.
