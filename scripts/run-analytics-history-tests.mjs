@@ -34,6 +34,7 @@ const forecastPostgresDSN = `postgres://forecast_runtime:forecast-runtime-local-
 const optimizationPostgresDSN = `postgres://optimization_runtime:optimization-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const fddPostgresDSN = `postgres://fdd_runtime:fdd-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const mvPostgresDSN = `postgres://mv_runtime:mv-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
+const reportPostgresDSN = `postgres://report_runtime:report-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -713,6 +714,36 @@ try {
     if (!report.assertions.mvSavingsVerification.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
   }
 
+  // report-service takes a month's snapshot on a REPORT_GENERATE job as report_runtime, from the
+  // Site's valid total energy read as report_service_reader; invalid and sub-meter facts stay out.
+  const reportJobId = '01990000-1996-7000-8000-000000000001';
+  psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
+    VALUES ('${reportJobId}', 'BACKFILL', 'REPORT_GENERATE', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', now(), 'report-integration-2026-07', '{"month":"2026-07"}'::jsonb, 'READY', 3, 120, now(), now())`);
+  const reportFact = (id, energyType, scope, quality, periodEnd, energyKWh) => `(toUUID('01990000-2900-7000-8000-00000000000${id}'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'),
+     toUUID('01990000-2910-7000-8000-00000000000${id}'), '${energyType}', '${scope}', '${quality}', toDateTime64('${periodEnd}', 3, 'UTC') - INTERVAL 1 MINUTE, toDateTime64('${periodEnd}', 3, 'UTC'), ${energyKWh}, toUUID('01990000-2920-7000-8000-00000000000${id}'))`;
+  clickHouse(`INSERT INTO analytics.energy_interval_facts (fact_id, tenant_id, site_id, meter_binding_id, energy_type, accounting_scope, quality, period_start, period_end, energy_kwh, source_current_observation_id) VALUES ${[
+    reportFact(1, 'electricity', 'SITE', 'VALID', '2026-07-10 02:00:00', 12),
+    reportFact(2, 'electricity', 'SITE', 'VALID', '2026-07-10 03:00:00', 30),
+    reportFact(3, 'cooling', 'SITE', 'VALID', '2026-07-10 02:00:00', 40),
+    reportFact(4, 'electricity', 'SITE', 'INVALID', '2026-07-10 04:00:00', 99),
+    reportFact(5, 'electricity', 'BRANCH', 'VALID', '2026-07-10 02:00:00', 7),
+  ].join(',\n')}`);
+  report.assertions.reportSnapshots = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/report-service',
+    'test', '-count=1', '-run', 'TestReportRuntimeSnapshotsTheMonthItsJobNames', '-v', './internal/report/...',
+  ], {
+    env: {
+      ...process.env,
+      REPORT_POSTGRES_INTEGRATION_DSN: reportPostgresDSN,
+      REPORT_CLICKHOUSE_INTEGRATION_URL: clickHouseURL,
+      REPORT_INTEGRATION_TENANT_ID: '018f1d00-0000-7000-8000-000000000001',
+      REPORT_INTEGRATION_SITE_ID: '018f1e00-1000-7000-8000-000000000001',
+      REPORT_INTEGRATION_JOB_ID: reportJobId,
+    },
+  });
+  if (!report.assertions.reportSnapshots.includes('--- PASS: TestReportRuntimeSnapshotsTheMonthItsJobNames')) throw new Error('TestReportRuntimeSnapshotsTheMonthItsJobNames did not run');
+
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
     toString(count()) || '|' || toString(min(horizon_minutes)) || '|' || toString(max(horizon_minutes)) || '|'
@@ -746,6 +777,9 @@ try {
   report.assertions.mvReaderCanSelectMetricResults = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'mv_service_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
   report.assertions.mvReaderCannotSelectObservations = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'mv_service_reader');
   report.assertions.mvReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.metric_result_facts (result_id) VALUES (generateUUIDv4())', 'mv_service_reader');
+  report.assertions.reportReaderCanSelectFacts = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'report_service_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts_visible']);
+  report.assertions.reportReaderCannotSelectObservations = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'report_service_reader');
+  report.assertions.reportReaderCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'report_service_reader');
   report.assertions.cubeCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'cube_analytics_reader');
 
   report.status = 'passed';
