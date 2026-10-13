@@ -268,7 +268,7 @@ export function OptimizationWorkspace() {
               label="预计日节省"
               value={<MetricValue value={formatDecimal(recommendation.saving.costPerDay, 0)} unit="元" />}
               lead={`按昨日电费 ${formatDecimal(recommendation.baseline.dailyCost, 0)} 元折算`}
-              detail="按日均电价折算，未计峰谷时段"
+              detail="按昨日峰谷均价折算，不含需量电费"
             />
             <MetricCard
               label="预计室内温度"
