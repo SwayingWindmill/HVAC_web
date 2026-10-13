@@ -12,8 +12,6 @@ import {
 } from './shell-policy';
 import {
   createProtectedScopeCoordinator,
-  type DirtyProtectedScopeDraft,
-  type ProtectedScopeDraft,
   type ProtectedScopePurgeOutcome,
   type ProtectedScopeRequestToken,
   type ProtectedScopeResource,
@@ -59,16 +57,14 @@ export interface ShellSitesView {
 }
 
 export type SiteNavigationOutcome =
-  | 'confirmation-required'
   | 'navigated'
   | 'failed'
   | 'busy'
   | 'interrupted';
 
 export interface ShellSiteTransitionView {
-  status: 'confirmation-required' | 'purging' | 'failed';
+  status: 'purging' | 'failed';
   target: string;
-  dirtyDrafts?: readonly DirtyProtectedScopeDraft[];
   failure?: ShellFailureView;
 }
 
@@ -93,13 +89,10 @@ export interface ShellRuntime {
   retry(): Promise<void>;
   beginLogin(): void;
   activateSiteScope(siteId: string): void;
-  registerUnsavedDraft(draft: ProtectedScopeDraft): () => void;
   registerProtectedResource(resource: ProtectedScopeResource): () => void;
   protectedRequestToken(): ProtectedScopeRequestToken;
   publishRealtimeStatus(update: RealtimeStatusUpdate): void;
   requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
-  confirmSiteNavigation(): Promise<SiteNavigationOutcome>;
-  cancelSiteNavigation(): void;
   handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
   logout(): Promise<LogoutOutcome>;
   purge(reason: string, beginLogin?: boolean): void;
@@ -344,15 +337,6 @@ class BrowserShellRuntime implements ShellRuntime {
     });
   }
 
-  registerUnsavedDraft(draft: ProtectedScopeDraft): () => void {
-    const unregister = this.protectedScope.registerDraft(draft);
-    this.refreshProtectedScopeView();
-    return () => {
-      unregister();
-      this.refreshProtectedScopeView();
-    };
-  }
-
   registerProtectedResource(resource: ProtectedScopeResource): () => void {
     const unregister = this.protectedScope.registerResource(resource);
     this.refreshProtectedScopeView();
@@ -395,30 +379,7 @@ class BrowserShellRuntime implements ShellRuntime {
       return 'navigated';
     }
 
-    const dirtyDrafts = this.protectedScope.dirtyDrafts();
-    if (dirtyDrafts.length > 0) {
-      this.publishReadyTransition({
-        status: 'confirmation-required',
-        target: normalized.target,
-        dirtyDrafts,
-      });
-      return 'confirmation-required';
-    }
-
     return this.performSiteNavigation(normalized.target);
-  }
-
-  confirmSiteNavigation(): Promise<SiteNavigationOutcome> {
-    const transition = this.snapshot.siteTransition;
-    if (!transition || transition.status !== 'confirmation-required') {
-      return Promise.resolve('interrupted');
-    }
-    return this.performSiteNavigation(transition.target);
-  }
-
-  cancelSiteNavigation(): void {
-    if (this.snapshot.siteTransition?.status !== 'confirmation-required') return;
-    this.publishReadyTransition(undefined);
   }
 
   async handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'> {
@@ -590,7 +551,6 @@ class BrowserShellRuntime implements ShellRuntime {
     if (
       current.state === 'idle'
       && !current.siteId
-      && current.draftCount === 0
       && current.resourceCount === 0
     ) {
       return Promise.resolve({ status: 'completed' });

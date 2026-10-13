@@ -7,51 +7,11 @@ import { NavigationProgress, SkipToMain } from '@/components/layout/NavigationPr
 import { Toaster } from '@/components/ui/sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime-status';
 import { useAppTheme } from './ThemeGate';
-import type { ShellSnapshot } from './shell-runtime';
 import { useShellRuntime, useShellSnapshot } from './ShellRuntimeContext';
 
-function DraftConfirmation({ snapshot, confirm, cancel }: {
-  readonly snapshot: ShellSnapshot;
-  readonly confirm: () => void;
-  readonly cancel: () => void;
-}) {
-  const transition = snapshot.siteTransition;
-  if (!transition || transition.status !== 'confirmation-required') return null;
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) cancel(); }}>
-      <DialogContent showCloseButton={false} data-testid="real-site-draft-confirmation">
-        <DialogHeader>
-          <DialogTitle>切换站点会丢弃未保存内容</DialogTitle>
-          <DialogDescription>确认后，系统会结束当前站点的临时操作状态，再进入目标站点。</DialogDescription>
-        </DialogHeader>
-        {transition.dirtyDrafts?.length ? (
-          <div className="rounded-md border bg-muted/30 px-3 py-2.5 text-sm">
-            <p className="mb-2 font-medium">尚未保存</p>
-            <ul className="space-y-1 text-muted-foreground">
-              {transition.dirtyDrafts.map((draft) => <li key={draft.id}>• {draft.label}</li>)}
-            </ul>
-          </div>
-        ) : null}
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={cancel} data-testid="real-site-draft-cancel">留在当前站点</Button>
-          <Button type="button" variant="destructive" onClick={confirm} data-testid="real-site-draft-confirm">丢弃并切换</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function TransitionSurface({ state, detail, retryHref }: { readonly state: 'purging' | 'failed'; readonly detail?: string; readonly retryHref?: string }) {
   if (state === 'purging') {
@@ -158,12 +118,6 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
             <AlertDescription>{snapshot.logout.detail}</AlertDescription>
           </Alert>
         ) : null}
-
-        <DraftConfirmation
-          snapshot={snapshot}
-          confirm={() => { void runtime.confirmSiteNavigation(); }}
-          cancel={() => runtime.cancelSiteNavigation()}
-        />
 
         {transition?.status === 'purging' ? <TransitionSurface state="purging" /> : null}
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}

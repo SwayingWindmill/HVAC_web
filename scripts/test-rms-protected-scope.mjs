@@ -34,23 +34,6 @@ function deferred() {
   return { promise, resolve };
 }
 
-test('reports registered dirty drafts before any protected purge', () => {
-  const scope = scopeModule.createProtectedScopeCoordinator();
-  scope.activate('01900000-0001-7000-8000-000000000001');
-  let dirty = true;
-  scope.registerDraft({ id: 'command-form', label: 'Unsaved command', isDirty: () => dirty });
-  scope.registerDraft({ id: 'notes', label: 'Operator notes', isDirty: () => false });
-
-  assert.equal(scope.current().siteId, '01900000-0001-7000-8000-000000000001');
-  assert.equal(scope.current().draftCount, 2);
-  assert.equal(scope.dirtyDrafts().length, 1);
-  assert.equal(scope.dirtyDrafts()[0].id, 'command-form');
-  assert.equal(scope.dirtyDrafts()[0].label, 'Unsaved command');
-
-  dirty = false;
-  assert.equal(scope.dirtyDrafts().length, 0);
-});
-
 test('purge aborts old requests, closes resources in safety order, and preserves visual preferences', async () => {
   const events = [];
   const visualPreferences = { theme: 'dark', sidebarCollapsed: true };
@@ -86,7 +69,6 @@ test('purge aborts old requests, closes resources in safety order, and preserves
   ]);
   assert.equal(scope.current().state, 'idle');
   assert.equal(scope.current().resourceCount, 0);
-  assert.equal(scope.current().draftCount, 0);
   assert.equal(visualPreferences.theme, 'dark');
   assert.equal(visualPreferences.sidebarCollapsed, true);
 });
