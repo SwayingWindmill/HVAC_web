@@ -34,11 +34,12 @@ const (
 )
 
 var (
-	ErrMeasureNotFound  = errors.New("savings measure not found")
-	ErrInvalidMeasure   = errors.New("savings measure input is invalid")
-	ErrWrongStatus      = errors.New("savings measure is not in a state that allows this")
-	ErrReportingOverlap = errors.New("another measure on this Site reports over the same period")
-	ErrBaselineLocked   = errors.New("the baseline is frozen: daily results have been published")
+	ErrMeasureNotFound   = errors.New("savings measure not found")
+	ErrInvalidMeasure    = errors.New("savings measure input is invalid")
+	ErrWrongStatus       = errors.New("savings measure is not in a state that allows this")
+	ErrReportingOverlap  = errors.New("another measure on this Site reports over the same period")
+	ErrBaselineLocked    = errors.New("the baseline is frozen: daily results have been published")
+	ErrBoundaryUnmetered = errors.New("the device has no hourly energy Metric to verify on")
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -60,9 +61,12 @@ type Measure struct {
 	Evidence string
 	// EvidenceCommandID is the executed command the measure came from, when it came from one.
 	EvidenceCommandID *string
-	Status            Status
-	Baseline          *Baseline
-	CreatedBy         string
+	// BoundaryDeviceID is the device whose sub-meter bounds the measure (Option B); nil is the
+	// plant's total meter (Option C).
+	BoundaryDeviceID *string
+	Status           Status
+	Baseline         *Baseline
+	CreatedBy        string
 	// UpdatedBy is who last implemented, refitted or ended the measure.
 	UpdatedBy string
 	CreatedAt time.Time
@@ -89,9 +93,12 @@ type Store interface {
 	DailyResults(ctx context.Context, tenantID, siteID, measureID string) ([]DailyResult, error)
 }
 
-// HourlySource reads complete hours of plant electricity and cooling for a Site.
+// HourlySource reads complete hours of a measurement boundary's electricity and the plant's
+// cooling and electricity for a Site; a nil device is the plant's total meter.
 type HourlySource interface {
-	HourlySamples(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]HourSample, error)
+	HourlySamples(ctx context.Context, tenantID, siteID string, boundaryDeviceID *string, from, to time.Time) ([]HourSample, error)
+	// HasDeviceEnergy says whether the device has hourly energy Metric results on the Site.
+	HasDeviceEnergy(ctx context.Context, tenantID, siteID, deviceID string) (bool, error)
 }
 
 // SiteClock is the Site's timezone, which days are verified on, and the import Tariff in effect,
@@ -145,6 +152,7 @@ type MeasureInput struct {
 	ExpectedAnnualKWh *float64
 	Evidence          string
 	EvidenceCommandID *string
+	BoundaryDeviceID  *string
 	Actor             string
 }
 
@@ -159,6 +167,8 @@ func (input MeasureInput) validate() error {
 		return fmt.Errorf("%w: description or evidence is too long", ErrInvalidMeasure)
 	case input.EvidenceCommandID != nil && !uuidPattern.MatchString(*input.EvidenceCommandID):
 		return fmt.Errorf("%w: the cited command must be a UUID", ErrInvalidMeasure)
+	case input.BoundaryDeviceID != nil && !uuidPattern.MatchString(*input.BoundaryDeviceID):
+		return fmt.Errorf("%w: the boundary device must be a UUID", ErrInvalidMeasure)
 	case input.PlannedAt.IsZero():
 		return fmt.Errorf("%w: planned time is required", ErrInvalidMeasure)
 	case (input.InvestmentCNY != nil && *input.InvestmentCNY < 0) || (input.ExpectedAnnualKWh != nil && *input.ExpectedAnnualKWh < 0):
@@ -176,6 +186,15 @@ func (service *Service) Register(ctx context.Context, input MeasureInput) (Measu
 	if err := input.validate(); err != nil {
 		return Measure{}, err
 	}
+	if input.BoundaryDeviceID != nil {
+		metered, err := service.history.HasDeviceEnergy(ctx, input.TenantID, input.SiteID, *input.BoundaryDeviceID)
+		if err != nil {
+			return Measure{}, fmt.Errorf("read the boundary device's energy: %w", err)
+		}
+		if !metered {
+			return Measure{}, ErrBoundaryUnmetered
+		}
+	}
 	now := service.now().UTC()
 	id, err := service.newID(now)
 	if err != nil {
@@ -185,7 +204,7 @@ func (service *Service) Register(ctx context.Context, input MeasureInput) (Measu
 		ID: id, TenantID: input.TenantID, SiteID: input.SiteID, Name: strings.TrimSpace(input.Name), Kind: input.Kind,
 		Description: strings.TrimSpace(input.Description), PlannedAt: input.PlannedAt.UTC(),
 		InvestmentCNY: input.InvestmentCNY, ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID,
-		Status: StatusPlanned, CreatedBy: input.Actor, UpdatedBy: input.Actor, CreatedAt: now, UpdatedAt: now,
+		BoundaryDeviceID: input.BoundaryDeviceID, Status: StatusPlanned, CreatedBy: input.Actor, UpdatedBy: input.Actor, CreatedAt: now, UpdatedAt: now,
 	}
 	return measure, service.store.InsertMeasure(ctx, measure)
 }
@@ -208,7 +227,7 @@ func (service *Service) Implement(ctx context.Context, tenantID, siteID, id stri
 		return Measure{}, err
 	}
 	for _, other := range others {
-		if other.ID != measure.ID && other.ImplementedAt != nil && (other.EndedAt == nil || other.EndedAt.After(implementedAt)) {
+		if other.ID != measure.ID && other.ImplementedAt != nil && (other.EndedAt == nil || other.EndedAt.After(implementedAt)) && sharesBoundary(other, measure) {
 			return Measure{}, ErrReportingOverlap
 		}
 	}
@@ -277,8 +296,14 @@ func (service *Service) End(ctx context.Context, tenantID, siteID, id string, en
 	return measure, service.store.UpdateMeasure(ctx, measure)
 }
 
+// sharesBoundary says two measures would count the same energy: they are on the same device, or
+// one is on the plant's total meter, which holds every sub-meter.
+func sharesBoundary(one, other Measure) bool {
+	return one.BoundaryDeviceID == nil || other.BoundaryDeviceID == nil || *one.BoundaryDeviceID == *other.BoundaryDeviceID
+}
+
 func (service *Service) fit(ctx context.Context, measure Measure, from, to time.Time) (Baseline, error) {
-	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, from, to)
+	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, measure.BoundaryDeviceID, from, to)
 	if err != nil {
 		return Baseline{}, fmt.Errorf("read baseline hours: %w", err)
 	}
@@ -307,7 +332,7 @@ func (service *Service) verifyDay(ctx context.Context, measure Measure, clock Si
 		ended := measure.EndedAt.In(clock.Location)
 		dayEnd = time.Date(ended.Year(), ended.Month(), ended.Day(), ended.Hour(), 0, 0, 0, clock.Location)
 	}
-	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, local, dayEnd)
+	samples, err := service.history.HourlySamples(ctx, measure.TenantID, measure.SiteID, measure.BoundaryDeviceID, local, dayEnd)
 	if err != nil {
 		return fmt.Errorf("read reporting hours: %w", err)
 	}
@@ -369,6 +394,7 @@ func (measure Measure) verifiable() bool {
 
 // Totals sums verified days.
 type Totals struct {
+	// Days counts each verified day once, however many measures verified it.
 	Days int
 	// UnpricedHours were verified without an energy rate, so their avoided cost is not counted.
 	UnpricedHours       int
@@ -376,16 +402,27 @@ type Totals struct {
 	ActualKWh           float64
 	AvoidedKWh          float64
 	AvoidedCost         float64
+	// PlantKWh is the plant's electricity over the verified hours, each day counted once.
+	PlantKWh float64
 }
 
 func totalOf(days []DailyResult) Totals {
-	totals := Totals{Days: len(days)}
+	var totals Totals
 	for _, day := range days {
 		totals.AdjustedBaselineKWh += day.AdjustedBaselineKWh
 		totals.ActualKWh += day.ActualKWh
 		totals.AvoidedKWh += day.AvoidedKWh
 		totals.AvoidedCost += day.AvoidedCost
 		totals.UnpricedHours += day.UnpricedHours
+	}
+	// Measures on different devices verify the same day; the plant used its electricity once.
+	plant := map[string]float64{}
+	for _, day := range days {
+		plant[day.Day] = max(plant[day.Day], day.PlantKWh)
+	}
+	totals.Days = len(plant)
+	for _, kwh := range plant {
+		totals.PlantKWh += kwh
 	}
 	return totals
 }

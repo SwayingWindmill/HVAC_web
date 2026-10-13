@@ -52,6 +52,7 @@ services:
       - ./postgres/init/020-savings-verification.sql:/docker-entrypoint-initdb.d/360.sql:ro
       - ./postgres/init/021-metric-tariff-pricing.sql:/docker-entrypoint-initdb.d/370.sql:ro
       - ./postgres/init/022-report-snapshots.sql:/docker-entrypoint-initdb.d/380.sql:ro
+      - ./postgres/init/023-savings-device-boundary.sql:/docker-entrypoint-initdb.d/390.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

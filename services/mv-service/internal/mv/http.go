@@ -67,6 +67,7 @@ type dayView struct {
 	ActualKWh           float64 `json:"actualKWh"`
 	AvoidedKWh          float64 `json:"avoidedKWh"`
 	AvoidedCost         float64 `json:"avoidedCost"`
+	PlantKWh            float64 `json:"plantKWh"`
 }
 
 type totalsView struct {
@@ -76,6 +77,7 @@ type totalsView struct {
 	ActualKWh           float64 `json:"actualKWh"`
 	AvoidedKWh          float64 `json:"avoidedKWh"`
 	AvoidedCost         float64 `json:"avoidedCost"`
+	PlantKWh            float64 `json:"plantKWh"`
 }
 
 type measureView struct {
@@ -86,6 +88,7 @@ type measureView struct {
 	Description       string        `json:"description"`
 	Evidence          string        `json:"evidence"`
 	EvidenceCommandID *string       `json:"evidenceCommandId"`
+	BoundaryDeviceID  *string       `json:"boundaryDeviceId"`
 	Status            Status        `json:"status"`
 	PlannedAt         time.Time     `json:"plannedAt"`
 	ImplementedAt     *time.Time    `json:"implementedAt"`
@@ -100,14 +103,14 @@ type measureView struct {
 }
 
 func viewOfTotals(totals Totals) totalsView {
-	return totalsView{Days: totals.Days, UnpricedHours: totals.UnpricedHours, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost}
+	return totalsView{Days: totals.Days, UnpricedHours: totals.UnpricedHours, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost, PlantKWh: totals.PlantKWh}
 }
 
 func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 	measure, results := verified.Measure, verified.Days
 	view := measureView{
 		ID: measure.ID, SiteID: measure.SiteID, Name: measure.Name, Kind: measure.Kind, Description: measure.Description, Evidence: measure.Evidence, EvidenceCommandID: measure.EvidenceCommandID,
-		Status: measure.Status, PlannedAt: measure.PlannedAt, ImplementedAt: measure.ImplementedAt, EndedAt: measure.EndedAt,
+		BoundaryDeviceID: measure.BoundaryDeviceID, Status: measure.Status, PlannedAt: measure.PlannedAt, ImplementedAt: measure.ImplementedAt, EndedAt: measure.EndedAt,
 		InvestmentCNY: measure.InvestmentCNY, ExpectedAnnualKWh: measure.ExpectedAnnualKWh, Totals: viewOfTotals(verified.Totals()),
 		CreatedAt: measure.CreatedAt, UpdatedAt: measure.UpdatedAt,
 	}
@@ -125,7 +128,7 @@ func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 		for _, result := range results {
 			view.Days = append(view.Days, dayView{
 				Day: result.Day, ExpectedHours: result.ExpectedHours, Hours: result.Hours, UnpricedHours: result.UnpricedHours,
-				AdjustedBaselineKWh: result.AdjustedBaselineKWh, ActualKWh: result.ActualKWh, AvoidedKWh: result.AvoidedKWh, AvoidedCost: result.AvoidedCost,
+				AdjustedBaselineKWh: result.AdjustedBaselineKWh, ActualKWh: result.ActualKWh, AvoidedKWh: result.AvoidedKWh, AvoidedCost: result.AvoidedCost, PlantKWh: result.PlantKWh,
 			})
 		}
 	}
@@ -164,6 +167,7 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 		ExpectedAnnualKWh *float64  `json:"expectedAnnualKWh"`
 		Evidence          string    `json:"evidence"`
 		EvidenceCommandID *string   `json:"evidenceCommandId"`
+		BoundaryDeviceID  *string   `json:"boundaryDeviceId"`
 	}
 	if err := decodeMVJSON(request.Body, &input); err != nil {
 		writeMVError(writer, ErrInvalidMeasure)
@@ -172,7 +176,7 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 	measure, err := handler.service.Register(request.Context(), MeasureInput{
 		TenantID: request.Header.Get(headerTenant), SiteID: request.PathValue("siteId"), Name: input.Name, Kind: input.Kind,
 		Description: input.Description, PlannedAt: input.PlannedAt, InvestmentCNY: input.InvestmentCNY,
-		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, Actor: request.Header.Get(headerActor),
+		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: request.Header.Get(headerActor),
 	})
 	if err != nil {
 		writeMVError(writer, err)
@@ -275,6 +279,8 @@ func writeMVError(writer http.ResponseWriter, err error) {
 		status, code = http.StatusConflict, "savings_reporting_overlap"
 	case errors.Is(err, ErrBaselineLocked):
 		status, code = http.StatusConflict, "savings_baseline_locked"
+	case errors.Is(err, ErrBoundaryUnmetered):
+		status, code = http.StatusConflict, "savings_boundary_unmetered"
 	}
 	writeMVJSON(writer, status, map[string]any{"code": code, "status": status})
 }
