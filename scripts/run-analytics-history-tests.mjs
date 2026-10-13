@@ -452,7 +452,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/energy',
-    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', '-v', './internal/clickhouse/...',
+    'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint|TestProjectorWritesEveryIntervalOfALargeHistoryBatch', '-v', './internal/clickhouse/...',
   ], {
     env: {
       ...process.env,
