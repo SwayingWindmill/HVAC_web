@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { costBasis, dayRows, fitChecks, instantFromSiteInput, measureActions, monthToDate, savingsRate, siteInputValue } from '../apps/hvac-web/src/features/savings/savings-model.ts';
+import { boundaryLabel, costBasis, dayRows, fitChecks, instantFromSiteInput, measureActions, monthToDate, savingsRate, siteInputValue, siteSavingsRate } from '../apps/hvac-web/src/features/savings/savings-model.ts';
 
 const zone = 'Asia/Shanghai';
 const totals = (days) => ({ days, unpricedHours: 0, adjustedBaselineKWh: 0, actualKWh: 0, avoidedKWh: 0, avoidedCost: 0 });
@@ -37,6 +37,18 @@ test('verified days chart oldest first with each day\'s coverage', () => {
 test('the savings rate is avoided energy over the adjusted baseline, absent before any day', () => {
   assert.equal(savingsRate({ ...totals(2), adjustedBaselineKWh: 2000, avoidedKWh: 190 }), 0.095);
   assert.equal(savingsRate(totals(0)), null);
+});
+
+// Measures on several machines add up against the whole plant: what it used plus what it avoided.
+test("a Site's savings rate is avoided energy over what the plant would have used, absent before any day", () => {
+  assert.equal(siteSavingsRate({ avoidedKWh: 100, plantKWh: 900 }), 0.1);
+  assert.equal(siteSavingsRate({ avoidedKWh: 0, plantKWh: 0 }), null);
+});
+
+test("a measurement boundary is the plant meter or a machine's sub-meter, named as the plant page names it", () => {
+  assert.equal(boundaryLabel(null, null), '冷站总表');
+  assert.equal(boundaryLabel('chwp', new Map([['chwp', 'CHWP-01']])), 'CHWP-01 分表');
+  assert.equal(boundaryLabel('chwp', null), '设备分表');
 });
 
 test('the summary runs from the first of the Site month to the Site day', () => {

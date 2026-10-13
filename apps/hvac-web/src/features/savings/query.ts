@@ -17,7 +17,8 @@ export const savingsKeys = {
 
 // The owner's refusals, in the words of the operator who has to act on them.
 const REFUSALS: Record<string, string> = {
-  SAVINGS_REPORTING_OVERLAP: '同一站点同一时间只能有一项措施在核算，请先结束正在核算的措施',
+  SAVINGS_REPORTING_OVERLAP: '同一测量边界上同一时间只能有一项措施在核算；冷站总表的措施与任何设备措施也不能同时核算，请先结束正在核算的措施',
+  SAVINGS_BOUNDARY_UNMETERED: '这台设备没有逐时用电指标，不能作为测量边界',
   SAVINGS_BASELINE_LOCKED: '已发布核算结果，基线已冻结，不能重新拟合',
   SAVINGS_MEASURE_STATE_CONFLICT: '措施当前状态不允许此操作，请刷新后重试',
   SAVINGS_REQUEST_INVALID: '填写的内容不完整或超出范围，请检查后重试',
@@ -81,6 +82,7 @@ export interface MeasureDraft {
   readonly expectedAnnualKWh?: number;
   readonly evidence: string;
   readonly evidenceCommandId?: string;
+  readonly boundaryDeviceId?: string;
 }
 
 export const registerMeasure = (siteId: string, csrfToken: string, draft: MeasureDraft) =>

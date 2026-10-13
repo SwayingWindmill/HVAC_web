@@ -62,7 +62,7 @@ func (store *PostgresStore) scoped(ctx context.Context, tenantID, siteID string,
 	return tx.Commit(ctx)
 }
 
-const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, evidence_command_id::text, planned_at, implemented_at, ended_at,
+const measureColumns = `id::text, tenant_id::text, site_id::text, name, kind, description, evidence, evidence_command_id::text, boundary_device_id::text, planned_at, implemented_at, ended_at,
 investment_cny, expected_annual_kwh, status, baseline_from, baseline_to, baseline_intercept_kwh, baseline_slope, baseline_samples,
 baseline_expected_hours, baseline_cv_rmse, baseline_nmbe, baseline_trusted, baseline_reason, created_by::text, updated_by::text, created_at, updated_at`
 
@@ -75,7 +75,7 @@ func scanMeasure(row pgx.Row) (Measure, error) {
 	var trusted *bool
 	var reason string
 	err := row.Scan(&measure.ID, &measure.TenantID, &measure.SiteID, &measure.Name, &kind, &measure.Description, &measure.Evidence, &measure.EvidenceCommandID,
-		&measure.PlannedAt, &measure.ImplementedAt, &measure.EndedAt, &measure.InvestmentCNY, &measure.ExpectedAnnualKWh, &status,
+		&measure.BoundaryDeviceID, &measure.PlannedAt, &measure.ImplementedAt, &measure.EndedAt, &measure.InvestmentCNY, &measure.ExpectedAnnualKWh, &status,
 		&from, &to, &intercept, &slope, &samples, &expected, &cvrmse, &nmbe, &trusted, &reason,
 		&measure.CreatedBy, &measure.UpdatedBy, &measure.CreatedAt, &measure.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -114,10 +114,10 @@ func overlapError(err error) error {
 func (store *PostgresStore) InsertMeasure(ctx context.Context, measure Measure) error {
 	return store.scoped(ctx, measure.TenantID, measure.SiteID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_measures(id, tenant_id, site_id, name, kind, description, evidence, evidence_command_id,
-planned_at, investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9,$10,$11,$12,$13::uuid,$14::uuid,$15,$16)`,
+boundary_device_id, planned_at, investment_cny, expected_annual_kwh, status, created_by, updated_by, created_at, updated_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9::uuid,$10,$11,$12,$13,$14::uuid,$15::uuid,$16,$17)`,
 			measure.ID, measure.TenantID, measure.SiteID, measure.Name, string(measure.Kind), measure.Description, measure.Evidence, measure.EvidenceCommandID,
-			measure.PlannedAt, measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
+			measure.BoundaryDeviceID, measure.PlannedAt, measure.InvestmentCNY, measure.ExpectedAnnualKWh, string(measure.Status), measure.CreatedBy, measure.UpdatedBy, measure.CreatedAt, measure.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("insert savings measure: %w", err)
 		}
@@ -182,11 +182,11 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid ORDER BY planned_at DESC, id DESC 
 func (store *PostgresStore) InsertDailyResult(ctx context.Context, result DailyResult) error {
 	return store.scoped(ctx, result.TenantID, result.SiteID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO core_registry.savings_daily_results(tenant_id, site_id, measure_id, day, expected_hours, hours, unpriced_hours,
-adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, verified_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4::date,$5,$6,$7,$8,$9,$10,$11,$12)
+adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh, verified_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 ON CONFLICT (tenant_id, site_id, measure_id, day) DO NOTHING`,
 			result.TenantID, result.SiteID, result.MeasureID, result.Day, result.ExpectedHours, result.Hours, result.UnpricedHours,
-			result.AdjustedBaselineKWh, result.ActualKWh, result.AvoidedKWh, result.AvoidedCost, result.VerifiedAt)
+			result.AdjustedBaselineKWh, result.ActualKWh, result.AvoidedKWh, result.AvoidedCost, result.PlantKWh, result.VerifiedAt)
 		if err != nil {
 			return fmt.Errorf("insert savings day: %w", err)
 		}
@@ -198,7 +198,7 @@ func (store *PostgresStore) DailyResults(ctx context.Context, tenantID, siteID, 
 	results := []DailyResult{}
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT measure_id::text, to_char(day, 'YYYY-MM-DD'), expected_hours, hours, unpriced_hours,
-adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, verified_at
+adjusted_baseline_kwh, actual_kwh, avoided_kwh, avoided_cost, plant_kwh, verified_at
 FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND measure_id=$3::uuid ORDER BY day`, tenantID, siteID, measureID)
 		if err != nil {
 			return err
@@ -207,7 +207,7 @@ FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2
 		for rows.Next() {
 			result := DailyResult{TenantID: tenantID, SiteID: siteID}
 			if err := rows.Scan(&result.MeasureID, &result.Day, &result.ExpectedHours, &result.Hours, &result.UnpricedHours,
-				&result.AdjustedBaselineKWh, &result.ActualKWh, &result.AvoidedKWh, &result.AvoidedCost, &result.VerifiedAt); err != nil {
+				&result.AdjustedBaselineKWh, &result.ActualKWh, &result.AvoidedKWh, &result.AvoidedCost, &result.PlantKWh, &result.VerifiedAt); err != nil {
 				return err
 			}
 			results = append(results, result)

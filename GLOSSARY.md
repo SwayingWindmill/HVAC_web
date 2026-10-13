@@ -371,12 +371,17 @@ _Avoid_: branch meter, child meter
 
 ## Energy Conservation Measure
 
-One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended; only one measure on a Site is implemented at a time.
+One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended. Measures report at the same time only on different machines' sub-meters (see Measurement Boundary).
 _Avoid_: project, ECM record
+
+## Measurement Boundary
+
+Where a measure's electricity is measured (测量边界): the plant's total meter (IPMVP Option C) or one machine's Sub-meter (Option B). It is chosen at registration and never changes. Two measures may report over the same period only on different machines; a measure on the total meter reports alone, since the total holds every sub-meter.
+_Avoid_: scope, measurement point
 
 ## Baseline
 
-The line fitted over a period before a measure was implemented that predicts the plant's hourly electricity from the cooling it delivered. It is frozen at implementation and trusted only when it passes ASHRAE Guideline 14; it can be refitted on another period until the first Verified Day is published.
+The line fitted over a period before a measure was implemented that predicts the hourly electricity on its Measurement Boundary from the cooling the plant delivered. It is frozen at implementation and trusted only when it passes ASHRAE Guideline 14; it can be refitted on another period until the first Verified Day is published.
 
 ## Adjusted Baseline
 

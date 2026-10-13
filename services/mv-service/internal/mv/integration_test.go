@@ -23,9 +23,9 @@ func integrationEnv(t *testing.T, names ...string) []string {
 	return values
 }
 
-func TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce(t *testing.T) {
-	env := integrationEnv(t, "MV_POSTGRES_INTEGRATION_DSN", "MV_POSTGRES_INTEGRATION_TENANT_ID", "MV_POSTGRES_INTEGRATION_SITE_ID", "MV_POSTGRES_INTEGRATION_ACTOR_ID")
-	dsn, tenantID, siteID, actor := env[0], env[1], env[2], env[3]
+func TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce(t *testing.T) {
+	env := integrationEnv(t, "MV_POSTGRES_INTEGRATION_DSN", "MV_POSTGRES_INTEGRATION_TENANT_ID", "MV_POSTGRES_INTEGRATION_SITE_ID", "MV_POSTGRES_INTEGRATION_ACTOR_ID", "MV_POSTGRES_INTEGRATION_DEVICE_ID")
+	dsn, tenantID, siteID, actor, device := env[0], env[1], env[2], env[3], env[4]
 	store, err := OpenPostgres(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +71,24 @@ func TestPostgresMVRuntimeKeepsOneReportingMeasureAndVerifiesDaysOnce(t *testing
 	if len(results) != 3 || results[0].Day != "2026-08-21" || results[0].ExpectedHours != 15 || results[2].Day != "2026-08-23" || results[2].Hours != 24 {
 		t.Fatalf("results = %+v", results)
 	}
+	// On the plant's total meter the plant's electricity is the boundary's.
+	if results[2].PlantKWh <= 0 || results[2].PlantKWh != results[2].ActualKWh {
+		t.Fatalf("plant electricity = %v, actual = %v", results[2].PlantKWh, results[2].ActualKWh)
+	}
+
+	// A device's sub-meter is inside the total meter, so the table refuses it beside the plant's measure too.
+	input.Name, input.BoundaryDeviceID = "冷冻泵降频", &device
+	onDevice, err := service.Register(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read, err := store.Measure(t.Context(), tenantID, siteID, onDevice.ID); err != nil || read.BoundaryDeviceID == nil || *read.BoundaryDeviceID != device {
+		t.Fatalf("device measure = %+v err = %v", read, err)
+	}
+	onDevice.Status, onDevice.ImplementedAt, onDevice.Baseline = StatusImplemented, &later, first.Baseline
+	if err := store.UpdateMeasure(t.Context(), onDevice); !errors.Is(err, ErrReportingOverlap) {
+		t.Fatalf("device beside the plant = %v", err)
+	}
 	if _, err := service.Refit(t.Context(), tenantID, siteID, first.ID, implemented.Add(-7*24*time.Hour), implemented, actor); !errors.Is(err, ErrBaselineLocked) {
 		t.Fatalf("refit after results = %v", err)
 	}
@@ -115,7 +133,7 @@ func TestClickHouseHoursReadTheLatestRevisionOfCompleteHours(t *testing.T) {
 		t.Fatal(err)
 	}
 	from := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
-	samples, err := reader.HourlySamples(t.Context(), env[1], env[2], from, from.Add(24*time.Hour))
+	samples, err := reader.HourlySamples(t.Context(), env[1], env[2], nil, from, from.Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -104,13 +104,18 @@ func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 
 func TestAMonthCarriesItsVerifiedSavingsAndFindings(t *testing.T) {
 	snapshot, err := Build("2026-09", shanghai, nil, nil,
-		[]SavingsDay{{AdjustedBaselineKWh: 500, AvoidedKWh: 60, AvoidedCost: 50, UnpricedHours: 0}, {AdjustedBaselineKWh: 520, AvoidedKWh: 62, AvoidedCost: 52, UnpricedHours: 2}},
+		// Two measures on different devices verified the 14th; the plant's electricity counts once.
+		[]SavingsDay{
+			{Day: "2026-09-14", AdjustedBaselineKWh: 500, AvoidedKWh: 60, AvoidedCost: 50, PlantKWh: 3000},
+			{Day: "2026-09-14", AdjustedBaselineKWh: 100, AvoidedKWh: 10, AvoidedCost: 8, PlantKWh: 3000},
+			{Day: "2026-09-15", AdjustedBaselineKWh: 520, AvoidedKWh: 62, AvoidedCost: 52, UnpricedHours: 2, PlantKWh: 3100},
+		},
 		[]FindingCount{{FindingType: "CHILLED_WATER_LOW_DELTA_T", Count: 3}, {FindingType: "OTHER", Count: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	savings := snapshot.Savings
-	if savings.Days != 2 || !near(savings.AdjustedBaselineKWh, 1020) || !near(savings.AvoidedKWh, 122) || !near(savings.AvoidedCost, 102) || savings.UnpricedHours != 2 {
+	if savings.Days != 2 || !near(savings.AdjustedBaselineKWh, 1120) || !near(savings.AvoidedKWh, 132) || !near(savings.AvoidedCost, 110) || savings.UnpricedHours != 2 || !near(savings.PlantKWh, 6100) {
 		t.Fatalf("savings = %#v", savings)
 	}
 	if snapshot.Findings.Count != 4 || snapshot.Findings.ByType[0].FindingType != "CHILLED_WATER_LOW_DELTA_T" {

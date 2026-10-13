@@ -154,7 +154,7 @@ FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY da
 func (store *PostgresStore) SavingsDays(ctx context.Context, tenantID, siteID string, from, to string) ([]SavingsDay, error) {
 	var days []SavingsDay
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT adjusted_baseline_kwh, avoided_kwh, avoided_cost, unpriced_hours
+		rows, err := tx.Query(ctx, `SELECT to_char(day, 'YYYY-MM-DD'), adjusted_baseline_kwh, avoided_kwh, avoided_cost, unpriced_hours, plant_kwh
 FROM core_registry.savings_daily_results
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND day >= $3::date AND day < $4::date
 ORDER BY day`, tenantID, siteID, from, to)
@@ -164,7 +164,7 @@ ORDER BY day`, tenantID, siteID, from, to)
 		defer rows.Close()
 		for rows.Next() {
 			var day SavingsDay
-			if err := rows.Scan(&day.AdjustedBaselineKWh, &day.AvoidedKWh, &day.AvoidedCost, &day.UnpricedHours); err != nil {
+			if err := rows.Scan(&day.Day, &day.AdjustedBaselineKWh, &day.AvoidedKWh, &day.AvoidedCost, &day.UnpricedHours, &day.PlantKWh); err != nil {
 				return err
 			}
 			days = append(days, day)

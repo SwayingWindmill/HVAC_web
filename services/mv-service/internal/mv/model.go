@@ -1,6 +1,7 @@
-// Package mv verifies energy savings the IPMVP Option C way for a cold plant: a baseline line
-// of hourly plant electricity against hourly cooling, fitted before a measure and frozen, then
-// each reporting hour's adjusted baseline minus what the plant actually used (ADR 0021).
+// Package mv verifies energy savings for a cold plant the IPMVP way: a baseline line of hourly
+// electricity on the measurement boundary (the plant's total meter, Option C, or one device's
+// sub-meter, Option B) against hourly plant cooling, fitted before a measure and frozen, then each
+// reporting hour's adjusted baseline minus what the boundary actually used (ADR 0021).
 package mv
 
 import (
@@ -27,11 +28,13 @@ const (
 	ReasonPoorFit     = "POOR_FIT"
 )
 
-// HourSample is one complete hour of the measurement boundary: plant electricity and cooling delivered.
+// HourSample is one complete hour of the measurement boundary: its electricity, the plant's
+// cooling delivered, and the plant's electricity, which equals the boundary's on the total meter.
 type HourSample struct {
 	Start      time.Time
 	EnergyKWh  float64
 	CoolingKWh float64
+	PlantKWh   float64
 }
 
 // Baseline is the fitted line energy = Intercept + Slope × cooling, with how well it fits.
@@ -115,6 +118,8 @@ type DayResult struct {
 	ActualKWh           float64
 	AvoidedKWh          float64
 	AvoidedCost         float64
+	// PlantKWh is the plant's electricity over the verified hours.
+	PlantKWh float64
 }
 
 // VerifyDay compares each measured hour of [dayStart, dayEnd) from reportingFrom on with what the
@@ -139,6 +144,7 @@ func VerifyDay(baseline Baseline, samples []HourSample, dayStart, dayEnd, report
 		result.AdjustedBaselineKWh += adjusted
 		result.ActualKWh += sample.EnergyKWh
 		result.AvoidedKWh += avoided
+		result.PlantKWh += sample.PlantKWh
 		if price, ok := rate(sample.Start); ok {
 			result.AvoidedCost += avoided * price
 		} else {

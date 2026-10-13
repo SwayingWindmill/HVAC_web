@@ -6,7 +6,7 @@ import { DeltaBadge } from '@/components/ui/delta-badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SEVERITY_LABELS, SEVERITY_ORDER } from '@/features/alarms/alarm-presentation';
 import { ruleFor } from '@/features/diagnostics/diagnostics-model';
-import { costBasis, savingsRate } from '@/features/savings/savings-model';
+import { costBasis, siteSavingsRate } from '@/features/savings/savings-model';
 import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
 import { PERIOD_LABEL, type DemandCharge } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
@@ -174,15 +174,16 @@ export interface SavingsFigures {
   readonly adjustedBaselineKWh: number;
   readonly avoidedKWh: number;
   readonly avoidedCost: number;
+  readonly plantKWh: number;
 }
 
 export function SavingsGrid({ totals, daysNote }: { readonly totals: SavingsFigures; readonly daysNote: string }) {
-  const rate = savingsRate({ ...totals, actualKWh: 0 });
+  const rate = siteSavingsRate(totals);
   return (
     <div className="grid grid-cols-4 gap-8">
-      <Figure label="节电量" value={totals.days > 0 ? formatDecimal(totals.avoidedKWh, 0) : null} unit="kWh" note={totals.days > 0 ? `调整后基线 ${energyText(totals.adjustedBaselineKWh)}` : '本月没有核算结果'} />
+      <Figure label="节电量" value={totals.days > 0 ? formatDecimal(totals.avoidedKWh, 0) : null} unit="kWh" note={totals.days > 0 ? `冷站同期用电 ${energyText(totals.plantKWh)}` : '本月没有核算结果'} />
       <Figure label="节省电费" value={totals.days > 0 ? formatDecimal(totals.avoidedCost, 0) : null} unit="元" note={costBasis(totals)} />
-      <Figure label="节电率" value={rate === null ? null : formatDecimal(rate * 100, 1)} unit="%" note="节电量 ÷ 调整后基线" />
+      <Figure label="节电率" value={rate === null ? null : formatDecimal(rate * 100, 1)} unit="%" note="节电量 ÷（冷站同期用电 + 节电量）" />
       <Figure label="核算天数" value={String(totals.days)} unit="天" note={daysNote} />
     </div>
   );

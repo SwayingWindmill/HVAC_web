@@ -16,7 +16,7 @@ import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { endMeasure, implementMeasure, measureQuery, refitMeasure, savingsKeys, SavingsRequestError } from '../query';
 import {
-  costBasis, dayRows, fitChecks, instantFromSiteInput, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
+  boundaryLabel, costBasis, dayRows, fitChecks, instantFromSiteInput, ipmvpOption, KIND_LABEL, measureActions, REASON_TEXT, savingsRate, siteInputValue,
   type Measure, type MeasureAction,
 } from '../savings-model';
 import { MeasureStatusBadge } from './measure-presentation';
@@ -51,7 +51,7 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
           <>
             ，逐时
             <span className="mx-1 font-medium text-foreground tabular-nums">
-              用电 = {formatDecimal(baseline.model.interceptKWh, 1)} + {formatDecimal(baseline.model.slope, 3)} × 供冷量
+              {measure.boundaryDeviceId === null ? '用电' : '设备用电'} = {formatDecimal(baseline.model.interceptKWh, 1)} + {formatDecimal(baseline.model.slope, 3)} × 冷站供冷量
             </span>
           </>
         ) : '，数据不足，未拟合模型'}
@@ -166,8 +166,10 @@ const ACTION = {
   end: { label: '结束措施', icon: Flag },
 } as const;
 
-export function MeasureSheet({ measureId, canManage, onClose }: {
+export function MeasureSheet({ measureId, names, canManage, onClose }: {
   readonly measureId: string | undefined;
+  /** The plant's machines by device, until the asset model loads null. */
+  readonly names: ReadonlyMap<string, string> | null;
   readonly canManage: boolean;
   readonly onClose: () => void;
 }) {
@@ -251,6 +253,7 @@ export function MeasureSheet({ measureId, canManage, onClose }: {
                 <FactTile label="结束">{formatTime(measure.endedAt ?? undefined, tz)}</FactTile>
                 <FactTile label="投资额">{measure.investmentCny === null ? '—' : yuan(measure.investmentCny)}</FactTile>
                 <FactTile label="预期年节电">{measure.expectedAnnualKWh === null ? '—' : kwh(measure.expectedAnnualKWh)}</FactTile>
+                <FactTile label="测量边界">{boundaryLabel(measure.boundaryDeviceId, names)}</FactTile>
                 <div className="col-span-3"><FactTile label="依据"><Evidence measure={measure} /></FactTile></div>
               </dl>
 
@@ -269,7 +272,7 @@ export function MeasureSheet({ measureId, canManage, onClose }: {
               ) : null}
 
               <section aria-label="基线" className="flex flex-col gap-3">
-                <h3 className="text-sm font-medium">基线（IPMVP 选项 C · 冷站总表）</h3>
+                <h3 className="text-sm font-medium">基线（{ipmvpOption(measure.boundaryDeviceId)} · {boundaryLabel(measure.boundaryDeviceId, names)}）</h3>
                 <BaselineSection measure={measure} timeZone={tz} />
               </section>
 

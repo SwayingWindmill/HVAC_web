@@ -67,6 +67,7 @@ COPY infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql /opt/hvac/rep
 COPY infra/registry/postgres/init/020-savings-verification.sql /opt/hvac/repo/infra/registry/postgres/init/020-savings-verification.sql
 COPY infra/registry/postgres/init/021-metric-tariff-pricing.sql /opt/hvac/repo/infra/registry/postgres/init/021-metric-tariff-pricing.sql
 COPY infra/registry/postgres/init/022-report-snapshots.sql /opt/hvac/repo/infra/registry/postgres/init/022-report-snapshots.sql
+COPY infra/registry/postgres/init/023-savings-device-boundary.sql /opt/hvac/repo/infra/registry/postgres/init/023-savings-device-boundary.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

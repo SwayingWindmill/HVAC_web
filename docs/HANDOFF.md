@@ -56,7 +56,10 @@ Roadmap issues, in order:
      - It takes about 10 minutes per Site for three weeks, and a few minutes of Metric recalculation.
      - Replay only windows that end before live history begins, because the counters restart.
      - `tools/eg8200-simulator/configs/replay-setpoint-raise.json` is the command schedule used for acceptance.
-   - Later: Option B (one machine's savings, now that machines have sub-meters), non-routine adjustments, demand savings.
+   - **Option B (one machine's sub-meter) is live** (spec section 第二版). A measure names its measurement boundary; a device boundary fits the device's `device_hourly_energy` against plant cooling. Measures overlap only on different machines.
+     - Accepted on replayed history: Site B's chilled water pump was cut from 50 Hz to 45 Hz on 2026-09-08 09:00 (`tools/eg8200-simulator/configs/replay-chwp-frequency-cut.json`). The baseline used 336/336 hours (the pump's power does not follow cooling, so the line is flat: 45 kWh/h); six days saved 1,646 kWh (27.1 %, as (45/50)³ predicts) and ¥1,256. Recorded as `e2e/fixtures/savings-measure-device-verified.json`.
+     - A Site's savings rate is avoided ÷ (plant electricity over the verified hours + avoided), so measures on several machines add up.
+   - Later: non-routine adjustments, demand savings, apportioning savings between measures.
    - The local savings ledger was emptied by the #481 reset; the accepted result lives on as the e2e fixture.
 2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP. Still to do:
    - site profiles: floor area and climate zone, owned by the Registry, for unit-area energy and climate correction;
@@ -75,7 +78,8 @@ These are drifts from the seed in the current local database. A `npm run local:r
 
 - The stack was rebuilt from the #481 seed on 2026-10-12 22:06 (Site time); live history starts then.
 - Both Sites hold replayed meter history, sub-meters included, for 2026-09-15 to 10-06 (Site time). Site A's includes the 8 °C setpoint raise from 09-29 09:00.
-- The savings ledger is empty. The accepted M&V result lives on only as `e2e/fixtures/savings-measure-verified.json`.
+- The savings ledger holds the Option B acceptance measure on Site B (CHWP-01, 09-08 to 09-15). The Option C result lives on only as `e2e/fixtures/savings-measure-verified.json`.
+- Both Sites now also hold replayed history for 2026-08-25 to 09-14 (Site time). Site B's chilled water pump runs at 45 Hz from 09-08 09:00. Only Site B's `hourly_energy`, `hourly_cooling` and CHWP-01 `device_hourly_energy` were recalculated over it; Site A's hourly and daily Metrics for that window are missing.
 - `energy_cost` v1 (average-rate expression) was superseded by hand with v2 (`TARIFF_ENERGY_COST` on `hourly_energy`), with new bindings and the daily cost schedules repointed; a fresh seed starts at v1 = `TARIFF_ENERGY_COST`.
 - Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Earlier and later periods still hold values from before the fix.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.

@@ -14,6 +14,10 @@ const (
 	testTenant = "01990000-3000-7000-8000-000000000001"
 	testSite   = "01990000-5000-7000-8000-000000000001"
 	testActor  = "01990000-2000-7000-8000-000000000001"
+	testDevice = "01990000-6000-7000-8000-000000000001"
+	// otherDevice has a sub-meter too, as does every device but unmeteredDevice.
+	otherDevice     = "01990000-6000-7000-8000-000000000002"
+	unmeteredDevice = "01990000-6000-7000-8000-000000000003"
 )
 
 type memoryStore struct {
@@ -71,7 +75,8 @@ func (store *memoryStore) DailyResults(_ context.Context, _, _, measureID string
 }
 
 // plantHistory answers hourly samples from a plant that follows `energy` until `changedAt`,
-// then uses `factor` of it.
+// then uses `factor` of it on the measure's boundary. A device's sub-meter reads a fifth of the
+// plant; the plant's own electricity is what it would be without the change on a device.
 type plantHistory struct {
 	changedAt time.Time
 	factor    float64
@@ -79,7 +84,11 @@ type plantHistory struct {
 	gapTo     time.Time
 }
 
-func (history plantHistory) HourlySamples(_ context.Context, _, _ string, from, to time.Time) ([]HourSample, error) {
+func (history plantHistory) HasDeviceEnergy(_ context.Context, _, _, deviceID string) (bool, error) {
+	return deviceID != unmeteredDevice, nil
+}
+
+func (history plantHistory) HourlySamples(_ context.Context, _, _ string, boundaryDeviceID *string, from, to time.Time) ([]HourSample, error) {
 	var samples []HourSample
 	for at := from; at.Before(to); at = at.Add(time.Hour) {
 		if !at.Before(history.gapFrom) && at.Before(history.gapTo) {
@@ -89,11 +98,18 @@ func (history plantHistory) HourlySamples(_ context.Context, _, _ string, from, 
 		if hour := at.In(shanghai).Hour(); hour >= 8 && hour < 20 {
 			cooling = 700 + 10*float64(hour-8) + 15*float64(at.In(shanghai).Day()%3)
 		}
-		energy := 20 + 0.25*cooling
+		plant := 20 + 0.25*cooling
+		energy := plant
+		if boundaryDeviceID != nil {
+			energy = plant / 5
+		}
 		if !at.Before(history.changedAt) {
 			energy *= history.factor
 		}
-		samples = append(samples, HourSample{Start: at, CoolingKWh: cooling, EnergyKWh: energy})
+		if boundaryDeviceID == nil {
+			plant = energy
+		}
+		samples = append(samples, HourSample{Start: at, CoolingKWh: cooling, EnergyKWh: energy, PlantKWh: plant})
 	}
 	return samples, nil
 }
@@ -185,7 +201,111 @@ func TestAnUntrustedBaselineCanBeRefittedUntilResultsArePublished(t *testing.T) 
 	}
 }
 
-func TestOnlyOneMeasureReportsOnASiteAtATime(t *testing.T) {
+func registerOn(t *testing.T, service *Service, name string, device *string) Measure {
+	t.Helper()
+	measure, err := service.Register(t.Context(), MeasureInput{
+		TenantID: testTenant, SiteID: testSite, Name: name, Kind: KindControlSequence,
+		PlannedAt: time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai), BoundaryDeviceID: device, Actor: testActor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return measure
+}
+
+func TestADeviceMeasureIsVerifiedOnItsSubMeterAgainstPlantCooling(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.8})
+	device := testDevice
+	measure := registerOn(t, service, "冷冻泵降频", &device)
+	measure, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !measure.Baseline.Trusted || math.Abs(measure.Baseline.Slope-0.05) > 1e-9 {
+		t.Fatalf("baseline = %+v, want the sub-meter's fifth of the plant's slope", measure.Baseline)
+	}
+	if err := service.VerifyDay(t.Context(), measure, time.Date(2026, 10, 17, 0, 0, 0, 0, shanghai)); err != nil {
+		t.Fatal(err)
+	}
+	result := store.results[measure.ID][0]
+	if share := result.AvoidedKWh / result.AdjustedBaselineKWh; math.Abs(share-0.2) > 1e-9 {
+		t.Fatalf("avoided share = %v", share)
+	}
+	// The plant's electricity over the same hours is five times the device's adjusted baseline.
+	if math.Abs(result.PlantKWh-5*result.AdjustedBaselineKWh) > 1e-6 {
+		t.Fatalf("plant %v for adjusted baseline %v", result.PlantKWh, result.AdjustedBaselineKWh)
+	}
+}
+
+func TestADeviceWithoutAnHourlyEnergyMetricCannotBoundAMeasure(t *testing.T) {
+	service := newTestService(t, newMemoryStore(), plantHistory{})
+	device := unmeteredDevice
+	if _, err := service.Register(t.Context(), MeasureInput{
+		TenantID: testTenant, SiteID: testSite, Name: "冷却塔风机变频", Kind: KindControlSequence,
+		PlannedAt: time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai), BoundaryDeviceID: &device, Actor: testActor,
+	}); !errors.Is(err, ErrBoundaryUnmetered) {
+		t.Fatalf("register on an unmetered device = %v", err)
+	}
+}
+
+// Measures overlap only when they would count the same energy: on one device, or beside the
+// plant's total meter, which holds every sub-meter.
+func TestReportingPeriodsOverlapOnlyAcrossDifferentDevices(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	device, other := testDevice, otherDevice
+	for _, test := range []struct {
+		name          string
+		first, second *string
+		overlaps      bool
+	}{
+		{"two devices", &device, &other, false},
+		{"one device", &device, &device, true},
+		{"plant then device", nil, &device, true},
+		{"device then plant", &device, nil, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newTestService(t, newMemoryStore(), plantHistory{changedAt: implemented, factor: 0.9})
+			first := registerOn(t, service, "第一项", test.first)
+			second := registerOn(t, service, "第二项", test.second)
+			if _, err := service.Implement(t.Context(), testTenant, testSite, first.ID, implemented, testActor); err != nil {
+				t.Fatal(err)
+			}
+			_, err := service.Implement(t.Context(), testTenant, testSite, second.ID, implemented.Add(48*time.Hour), testActor)
+			if overlapped := errors.Is(err, ErrReportingOverlap); overlapped != test.overlaps || (err != nil && !overlapped) {
+				t.Fatalf("second implementation = %v", err)
+			}
+		})
+	}
+}
+
+func TestASiteSummaryCountsThePlantOnceADay(t *testing.T) {
+	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
+	store := newMemoryStore()
+	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})
+	device, other := testDevice, otherDevice
+	for _, boundary := range []*string{&device, &other} {
+		measure := registerOn(t, service, "设备措施", boundary)
+		measure, err := service.Implement(t.Context(), testTenant, testSite, measure.ID, implemented, testActor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.VerifyDay(t.Context(), measure, time.Date(2026, 10, 17, 0, 0, 0, 0, shanghai)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	totals, err := service.Savings(t.Context(), testTenant, testSite, "2026-10-17", "2026-10-17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := store.results["01990000-7000-7000-8000-000000000001"][0]
+	if totals.Days != 1 || math.Abs(totals.AvoidedKWh-2*day.AvoidedKWh) > 1e-6 || math.Abs(totals.PlantKWh-day.PlantKWh) > 1e-6 {
+		t.Fatalf("totals = %+v, day = %+v", totals, day)
+	}
+}
+
+func TestAMeasureOnThePlantMeterReportsAlone(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
 	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})

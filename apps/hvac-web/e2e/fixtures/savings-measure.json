@@ -6,6 +6,7 @@
   "description": "按优化建议提高冷冻水供水温度设定值，冷机 COP 随之提高。",
   "evidence": "10 月 12 日优化建议",
   "evidenceCommandId": null,
+  "boundaryDeviceId": null,
   "status": "IMPLEMENTED",
   "plannedAt": "2026-10-12T07:17:00Z",
   "implementedAt": "2026-10-12T07:17:00Z",
@@ -27,7 +28,8 @@
     "adjustedBaselineKWh": 0,
     "actualKWh": 0,
     "avoidedKWh": 0,
-    "avoidedCost": 0
+    "avoidedCost": 0,
+    "plantKWh": 0
   },
   "createdAt": "2026-10-12T07:17:08.220464Z",
   "updatedAt": "2026-10-12T07:17:09.768715Z"

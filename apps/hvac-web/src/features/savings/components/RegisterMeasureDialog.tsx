@@ -11,6 +11,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useExecutedCommands } from '@/features/control/use-executed-commands';
 import { registerMeasure, SavingsRequestError } from '../query';
 import { instantFromSiteInput, KIND_LABEL, siteInputValue, type Measure, type MeasureKind } from '../savings-model';
+import { useMeteredMachines } from '../use-plant-machines';
+import type { Machine } from '@/features/breakdown/breakdown-model';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -23,15 +25,20 @@ interface MeasureForm {
   expectedAnnualKWh: string;
   evidence: string;
   evidenceCommandId: string;
+  boundary: string;
 }
 
 const NO_COMMAND = 'none';
+// The plant's total meter; any other boundary is a machine's device id.
+const PLANT_METER = 'plant';
 
 const optionalNumber = (value: string) => (value.trim() === '' ? undefined : Number(value));
 const nonNegative = (value: string) => value.trim() === '' || (Number.isFinite(Number(value)) && Number(value) >= 0) || '请填写不小于 0 的数字';
 
-export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
+export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegistered }: {
   readonly open: boolean;
+  /** The plant's machines, until the asset model loads null. */
+  readonly machines: readonly Machine[] | null;
   readonly onOpenChange: (open: boolean) => void;
   readonly onRegistered: (measure: Measure) => void;
 }) {
@@ -39,7 +46,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
   const form = useForm<MeasureForm>({
     values: {
       name: '', kind: 'SETPOINT_RESET', plannedAt: siteInputValue(new Date(), site.timezone),
-      description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '', evidenceCommandId: NO_COMMAND,
+      description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '', evidenceCommandId: NO_COMMAND, boundary: PLANT_METER,
     },
   });
   const register = useMutation({
@@ -52,6 +59,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
       expectedAnnualKWh: optionalNumber(input.expectedAnnualKWh),
       evidence: input.evidence.trim(),
       evidenceCommandId: input.evidenceCommandId === NO_COMMAND ? undefined : input.evidenceCommandId,
+      boundaryDeviceId: input.boundary === PLANT_METER ? undefined : input.boundary,
     }),
     onSuccess: (measure) => {
       onRegistered(measure);
@@ -62,6 +70,7 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
   const errors = form.formState.errors;
   // A measure can cite a command that took effect on this Site, as the control page lists it.
   const commands = useExecutedCommands(site.id, site.timezone, open);
+  const metered = useMeteredMachines(machines, open);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -95,6 +104,24 @@ export function RegisterMeasureDialog({ open, onOpenChange, onRegistered }: {
               <Label htmlFor="measure-planned-at">计划实施时间</Label>
               <Input id="measure-planned-at" type="datetime-local" className="tabular-nums" {...form.register('plannedAt', { required: '请选择计划实施时间' })} />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="measure-boundary">测量边界</Label>
+            <Select value={form.watch('boundary')} onValueChange={(value) => form.setValue('boundary', value)}>
+              <SelectTrigger id="measure-boundary" className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={PLANT_METER}>冷站总表（IPMVP 选项 C）</SelectItem>
+                {(metered.machines ?? []).map((machine) => (
+                  <SelectItem key={machine.deviceId} value={machine.deviceId}>{machine.name} 分表（IPMVP 选项 B）</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {metered.isPending ? '正在读取有分表的设备…'
+                : metered.isError ? '分表数据暂不可用，现在只能选择冷站总表'
+                : metered.machines?.length === 0 ? '本站设备都没有分表，只能选择冷站总表'
+                : '措施只作用于一台设备时选它的分表：基线为该设备用电对冷站供冷量的拟合。登记后不能更改'}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="measure-description">说明</Label>

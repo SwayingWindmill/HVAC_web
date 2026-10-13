@@ -26,7 +26,7 @@ import { useDeviceNames } from "@/features/assets/use-device-names";
 import { changesSupply } from "@/features/optimization/optimization-model";
 import { latestRecommendationQuery } from "@/features/optimization/query";
 import { measuresQuery, summaryQuery } from "@/features/savings/query";
-import { monthToDate, savingsRate } from "@/features/savings/savings-model";
+import { monthToDate, siteSavingsRate } from "@/features/savings/savings-model";
 import { ruleFor } from "@/features/diagnostics/diagnostics-model";
 import { FindingSeverityBadge } from "@/features/diagnostics/finding-presentation";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
@@ -260,8 +260,8 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
   const latest = useQuery(latestRecommendationQuery(siteId, null));
   const totals = summary.data?.totals;
   const verified = totals !== undefined && totals.days > 0;
-  const reporting = measures.data?.find((measure) => measure.status === "IMPLEMENTED");
-  const rate = totals ? savingsRate(totals) : null;
+  const reporting = measures.data?.filter((measure) => measure.status === "IMPLEMENTED") ?? [];
+  const rate = totals ? siteSavingsRate(totals) : null;
   const recommendation = latest.data ?? null;
   return (
     <Card role="region" aria-label="节能成效" className="@container/card">
@@ -294,14 +294,18 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
             <FactTile className="text-lg font-semibold tracking-tight" label="节电率">{rate === null ? "—" : `${formatDecimal(rate * 100, 1)}%`}</FactTile>
             <div className="col-span-2">
               <FactTile label="核算情况">
-                {reporting ? `「${reporting.name}」核算中 · 本月已核算 ${totals.days} 天` : `本月已核算 ${totals.days} 天，措施均已结束`}
+                {reporting.length > 0
+                  ? `${reporting.length === 1 ? `「${reporting[0].name}」` : `${reporting.length} 项措施`}核算中 · 本月已核算 ${totals.days} 天`
+                  : `本月已核算 ${totals.days} 天，措施均已结束`}
               </FactTile>
             </div>
           </dl>
         ) : (
           <p className="text-muted-foreground">
-            {reporting
-              ? `「${reporting.name}」${reporting.baseline?.trusted ? "正在核算，实施满 24 小时后的次日开始出结果。" : "基线检验未通过，暂不核算。"}`
+            {reporting.length > 1
+              ? `${reporting.length} 项措施正在核算${reporting.some((measure) => !measure.baseline?.trusted) ? `，其中 ${reporting.filter((measure) => !measure.baseline?.trusted).length} 项基线不可信，暂不核算` : "，实施满 24 小时后的次日开始出结果"}。`
+              : reporting.length === 1
+              ? `「${reporting[0].name}」${reporting[0].baseline?.trusted ? "正在核算，实施满 24 小时后的次日开始出结果。" : "基线检验未通过，暂不核算。"}`
               : "还没有在核算的节能措施。登记并确认实施后，这里显示按基线核算的实际节电量与电费。"}
           </p>
         )}
@@ -327,7 +331,7 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
         ) : null}
       </CardContent>
       <CardFooter className="text-xs text-muted-foreground">
-        核算值对照基线实测（IPMVP 选项 C），建议值为预计
+        核算值对照基线实测（IPMVP 选项 C/B），节电率相对冷站同期用电；建议值为预计
       </CardFooter>
     </Card>
   );

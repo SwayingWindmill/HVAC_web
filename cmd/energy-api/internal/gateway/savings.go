@@ -127,6 +127,7 @@ func (h *handler) writeSavingsResult(writer http.ResponseWriter, request *http.R
 var savingsRefusalDetail = map[string]string{
 	"savings_request_invalid":        "The savings request is incomplete or out of range.",
 	"savings_measure_state_conflict": "The measure is not in a state that allows this.",
-	"savings_reporting_overlap":      "Another measure on this Site reports over the same period.",
+	"savings_reporting_overlap":      "Another measure on the same measurement boundary reports over the same period.",
 	"savings_baseline_locked":        "The baseline is frozen because daily results have been published.",
+	"savings_boundary_unmetered":     "The device has no hourly energy Metric to verify on.",
 }

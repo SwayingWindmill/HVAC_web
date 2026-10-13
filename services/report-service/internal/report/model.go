@@ -39,12 +39,15 @@ type Tariff struct {
 	Periods       []tariffmodel.Period
 }
 
-// SavingsDay is one verified day of a measure in the month.
+// SavingsDay is one verified day of a measure in the month, with the plant's electricity over
+// the hours it verified.
 type SavingsDay struct {
+	Day                 string
 	AdjustedBaselineKWh float64
 	AvoidedKWh          float64
 	AvoidedCost         float64
 	UnpricedHours       int
+	PlantKWh            float64
 }
 
 type FindingCount struct {
@@ -71,12 +74,15 @@ type Findings struct {
 	ByType []FindingCount `json:"byType"`
 }
 
+// Savings sums the month's verified days over every measure. Days and the plant's electricity
+// count each day once, however many measures verified it.
 type Savings struct {
 	Days                int     `json:"days"`
 	AdjustedBaselineKWh float64 `json:"adjustedBaselineKWh"`
 	AvoidedKWh          float64 `json:"avoidedKWh"`
 	AvoidedCost         float64 `json:"avoidedCost"`
 	UnpricedHours       int     `json:"unpricedHours"`
+	PlantKWh            float64 `json:"plantKWh"`
 }
 
 // Snapshot is a Site's month as its report shows it. Demand, alarms and work orders are not in it:
@@ -206,12 +212,17 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		})
 	}
 
+	plant := map[string]float64{}
 	for _, verified := range savings {
-		snapshot.Savings.Days++
+		plant[verified.Day] = max(plant[verified.Day], verified.PlantKWh)
 		snapshot.Savings.AdjustedBaselineKWh += verified.AdjustedBaselineKWh
 		snapshot.Savings.AvoidedKWh += verified.AvoidedKWh
 		snapshot.Savings.AvoidedCost += verified.AvoidedCost
 		snapshot.Savings.UnpricedHours += verified.UnpricedHours
+	}
+	snapshot.Savings.Days = len(plant)
+	for _, kwh := range plant {
+		snapshot.Savings.PlantKWh += kwh
 	}
 	for _, count := range findings {
 		snapshot.Findings.Count += count.Count
