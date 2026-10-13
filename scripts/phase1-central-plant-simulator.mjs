@@ -215,9 +215,10 @@ function buildS1Seed(site, points) {
   return `BEGIN;
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
 VALUES (${sqlLiteral(siteId)}, ${sqlLiteral(site.siteCode)}, ${sqlLiteral(site.siteName)}, 'Asia/Shanghai', 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${sqlLiteral(tenantId)}, ${site.floorAreaM2}, ${sqlLiteral(site.climateZone)})
--- A profile edited in the Registry stays; the seed only fills one never recorded.
+-- A profile edited in the Registry stays, even half of one; the seed only fills a Site with none.
 ON CONFLICT (id) DO UPDATE SET status='ACTIVE', tenant_id=EXCLUDED.tenant_id, updated_at=clock_timestamp(),
-  floor_area_m2=coalesce(core_registry.sites.floor_area_m2, EXCLUDED.floor_area_m2), climate_zone=coalesce(core_registry.sites.climate_zone, EXCLUDED.climate_zone);
+  floor_area_m2=CASE WHEN core_registry.sites.floor_area_m2 IS NULL AND core_registry.sites.climate_zone IS NULL THEN EXCLUDED.floor_area_m2 ELSE core_registry.sites.floor_area_m2 END,
+  climate_zone=CASE WHEN core_registry.sites.floor_area_m2 IS NULL AND core_registry.sites.climate_zone IS NULL THEN EXCLUDED.climate_zone ELSE core_registry.sites.climate_zone END;
 
 INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code, display_name, space_type, status, revision, created_at, updated_at) VALUES
 ${spaces}

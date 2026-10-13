@@ -37,6 +37,7 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
     queryKey: ['benchmark', period, sites.map((site) => site.id).join(',')],
     enabled: sites.length > 0,
     queryFn: async ({ signal }) => Promise.all(sites.map(async (site) => {
+      const profile = { siteId: site.id, name: site.displayName, floorAreaM2: site.floorAreaM2, climateZone: site.climateZone };
       const { from, to } = periodWindow(period, new Date(), site.timezone);
       const read = (energyType: 'electricity' | 'cooling') => client.queryEnergySeries({
         tenantId: site.tenantId, siteId: site.id, energyType, granularity: 'day', timezone: site.timezone,
@@ -44,15 +45,10 @@ function useSiteSummaries(sites: readonly Site[], period: BenchmarkPeriod, csrfT
       }, csrfToken, { signal }).then((response) => response.data);
       try {
         const [electricity, cooling] = await Promise.all([read('electricity'), read('cooling')]);
-        return {
-          siteId: site.id, name: site.displayName, floorAreaM2: site.floorAreaM2, climateZone: site.climateZone,
-          summary: summarizeEnergy(electricity, cooling, 'day', site.timezone),
-        };
+        return { ...profile, summary: summarizeEnergy(electricity, cooling, 'day', site.timezone) };
       } catch (error) {
         // A Site the principal may see but not analyze stays listed, outside the comparison.
-        if (error instanceof PlatformApiError && error.problem.status === 403) {
-          return { siteId: site.id, name: site.displayName, floorAreaM2: site.floorAreaM2, climateZone: site.climateZone, summary: null };
-        }
+        if (error instanceof PlatformApiError && error.problem.status === 403) return { ...profile, summary: null };
         throw error;
       }
     })),
@@ -135,7 +131,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
               <CardDescription>
                 {rankBy === 'cop'
                   ? '综合能效越高，同样的冷量用电越少；与整体相比按电量加权的整体能效计算'
-                  : '期间空调用电 ÷ 建筑面积，越低越好（GB/T 51161）；没有登记建筑面积的站点不参与此排名'}
+                  : '期间空调用电 ÷ 建筑面积，越低越好；没有登记建筑面积的站点不参与此排名'}
               </CardDescription>
               <CardAction>
                 <PeriodTabs aria-label="排名依据" options={RANKINGS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value as RankBy }), replace: true })} />
@@ -243,7 +239,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
               </CardHeader>
               <CardContent>
                 <FactList>
-                  <FactRow label="单位面积能耗" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`}><Badge variant="secondary" className="font-normal">已接入</Badge></FactRow>
+                  <FactRow label="单位面积用电" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`}><Badge variant="secondary" className="font-normal">已接入</Badge></FactRow>
                   <FactRow label="气候修正" detail="需要逐日气象数据（冷却度日）"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
                   <FactRow label="行业基准" detail="需要可信的同类建筑基准数据"><Badge variant="outline" className="font-normal">未接入</Badge></FactRow>
                 </FactList>

@@ -23,7 +23,7 @@ test('a site the user may see but not analyze stays listed, outside the comparis
   await expect(page.getByRole('region', { name: '对标概况' })).toContainText('1 个无权限');
 });
 
-// The Site's Registry profile: its floor area gives electricity per square metre (GB/T 51161), its
+// The Site's Registry profile: its floor area gives electricity per square metre, its
 // GB 50176 zone labels it; ranking by intensity puts the least electricity per square metre first.
 test("sites also compare on electricity per square metre of their recorded floor area", async ({ page }) => {
   await page.goto('/benchmark');

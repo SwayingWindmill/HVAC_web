@@ -7,7 +7,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
-func TestCanonicalRegistrySuccessAcceptsCentralPlantSite(t *testing.T) {
+func TestCanonicalRegistrySiteCarriesItsProfile(t *testing.T) {
 	raw := []byte(`{
 		"items":[{
 			"id":"018f3e00-1000-7000-8000-000000000001",
