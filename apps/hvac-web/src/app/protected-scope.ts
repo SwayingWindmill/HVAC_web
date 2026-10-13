@@ -11,12 +11,6 @@ export type ProtectedScopeResourceKind =
   | 'selection'
   | 'temporary-state';
 
-export interface ProtectedScopeDraft {
-  id: string;
-  label: string;
-  isDirty(): boolean;
-}
-
 export interface ProtectedScopeResource {
   id: string;
   kind: ProtectedScopeResourceKind;
@@ -33,14 +27,8 @@ export interface ProtectedScopeSnapshot {
   state: 'idle' | 'purging' | 'failed';
   siteId?: string;
   generation: number;
-  draftCount: number;
   resourceCount: number;
   failure?: ProtectedScopeFailure;
-}
-
-export interface DirtyProtectedScopeDraft {
-  id: string;
-  label: string;
 }
 
 export type ProtectedScopePurgeOutcome =
@@ -58,9 +46,7 @@ export interface ProtectedScopeRequestToken {
 export interface ProtectedScopeCoordinator {
   current(): ProtectedScopeSnapshot;
   activate(siteId: string): void;
-  registerDraft(draft: ProtectedScopeDraft): () => void;
   registerResource(resource: ProtectedScopeResource): () => void;
-  dirtyDrafts(): readonly DirtyProtectedScopeDraft[];
   requestToken(): ProtectedScopeRequestToken;
   purge(reason: ProtectedScopePurgeReason): Promise<ProtectedScopePurgeOutcome>;
 }
@@ -84,7 +70,6 @@ class BrowserProtectedScopeCoordinator implements ProtectedScopeCoordinator {
   private generation = 0;
   private failure?: ProtectedScopeFailure;
   private requestController?: AbortController;
-  private readonly drafts = new Map<string, ProtectedScopeDraft>();
   private readonly resources = new Map<ProtectedScopeResourceKind, Map<string, ProtectedScopeResource>>(
     RESOURCE_PURGE_ORDER.map((kind) => [kind, new Map()]),
   );
@@ -94,7 +79,6 @@ class BrowserProtectedScopeCoordinator implements ProtectedScopeCoordinator {
       state: this.state,
       siteId: this.siteId,
       generation: this.generation,
-      draftCount: this.drafts.size,
       resourceCount: this.resourceCount(),
       failure: this.failure,
     };
@@ -118,16 +102,6 @@ class BrowserProtectedScopeCoordinator implements ProtectedScopeCoordinator {
     this.requestController = new AbortController();
   }
 
-  registerDraft(draft: ProtectedScopeDraft): () => void {
-    this.requireActiveSite();
-    if (!draft.id || !draft.label) throw new Error('Protected draft requires an id and label.');
-    if (this.drafts.has(draft.id)) throw new Error(`Protected draft already registered: ${draft.id}`);
-    this.drafts.set(draft.id, draft);
-    return () => {
-      if (this.drafts.get(draft.id) === draft) this.drafts.delete(draft.id);
-    };
-  }
-
   registerResource(resource: ProtectedScopeResource): () => void {
     this.requireActiveSite();
     if (!resource.id) throw new Error('Protected resource requires an id.');
@@ -138,14 +112,6 @@ class BrowserProtectedScopeCoordinator implements ProtectedScopeCoordinator {
     return () => {
       if (resources.get(resource.id) === resource) resources.delete(resource.id);
     };
-  }
-
-  dirtyDrafts(): readonly DirtyProtectedScopeDraft[] {
-    const dirty: DirtyProtectedScopeDraft[] = [];
-    for (const draft of this.drafts.values()) {
-      if (draft.isDirty()) dirty.push(Object.freeze({ id: draft.id, label: draft.label }));
-    }
-    return Object.freeze(dirty);
   }
 
   requestToken(): ProtectedScopeRequestToken {
@@ -185,7 +151,6 @@ class BrowserProtectedScopeCoordinator implements ProtectedScopeCoordinator {
     this.generation += 1;
     this.requestController?.abort();
     this.requestController = undefined;
-    this.drafts.clear();
     for (const registered of this.resources.values()) registered.clear();
 
     let failed = false;

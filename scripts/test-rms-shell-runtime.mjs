@@ -542,7 +542,6 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   }), env.value);
   await runtime.bootstrap(`/operations/systems-devices?site=${site.id}`);
   runtime.activateSiteScope(site.id);
-  runtime.registerUnsavedDraft({ id: 'notes', label: 'Operator notes', isDirty: () => true });
   const request = runtime.protectedRequestToken();
 
   const outcome = await runtime.requestSiteNavigation(`/operations/alarms?site=${site.id}`);
@@ -550,11 +549,10 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   assert.equal(outcome, 'navigated');
   assert.equal(request.signal.aborted, false);
   assert.equal(runtime.current().protectedScope.siteId, site.id);
-  assert.equal(runtime.current().protectedScope.draftCount, 1);
   assert.deepEqual(env.navigations, [`/operations/alarms?site=${site.id}`]);
 });
 
-test('cross-Site navigation warns for drafts and purges before navigation', async () => {
+test('cross-Site navigation purges before navigation', async () => {
   const siteA = registrySite();
   const siteB = registrySite('01900000-0002-7000-8000-000000000002');
   const events = [];
@@ -564,7 +562,6 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
   }), env.value);
   await runtime.bootstrap(`/operations/systems-devices?site=${siteA.id}`);
   runtime.activateSiteScope(siteA.id);
-  runtime.registerUnsavedDraft({ id: 'command-form', label: 'Unsaved command', isDirty: () => true });
   runtime.registerProtectedResource({
     id: 's2-session',
     kind: 'realtime',
@@ -578,13 +575,7 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
   const request = runtime.protectedRequestToken();
   const target = `/operations/systems-devices?site=${siteB.id}`;
 
-  assert.equal(await runtime.requestSiteNavigation(target), 'confirmation-required');
-  assert.equal(runtime.current().siteTransition.status, 'confirmation-required');
-  assert.equal(runtime.current().siteTransition.dirtyDrafts[0].label, 'Unsaved command');
-  assert.equal(env.navigations.length, 0);
-  assert.equal(request.signal.aborted, false);
-
-  assert.equal(await runtime.confirmSiteNavigation(), 'navigated');
+  assert.equal(await runtime.requestSiteNavigation(target), 'navigated');
   assert.equal(request.signal.aborted, true);
   assert.deepEqual(events, ['realtime:SITE_CHANGE', 'cache:SITE_CHANGE']);
   assert.deepEqual(env.navigations, [target]);
