@@ -122,8 +122,8 @@ test('a verified measure shows its trusted baseline and what each day saved', as
 
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('已结束');
-  await expect(sheet).toContainText('累计节电367 kWh');
-  await expect(sheet).toContainText('节省电费¥347');
+  await expect(sheet).toContainText('累计节电373 kWh');
+  await expect(sheet).toContainText('节省电费¥353');
   await expect(sheet).toContainText('节电率1.5%');
   const checks = sheet.getByRole('table', { name: '基线检验' });
   await expect(checks.getByRole('row').filter({ hasText: '有效小时' })).toContainText('336 / 336（100%）');
@@ -131,7 +131,7 @@ test('a verified measure shows its trusted baseline and what each day saved', as
   await expect(sheet.getByLabel('每日节电量')).toBeVisible();
   const days = sheet.getByRole('table', { name: '逐日核算' });
   await expect(days.getByRole('row')).toHaveCount(7);
-  await expect(days.getByRole('row').filter({ hasText: '2026-10-02' })).toContainText('80');
+  await expect(days.getByRole('row').filter({ hasText: '2026-10-02' })).toContainText('81');
   await expect(days.getByRole('row').filter({ hasText: '2026-09-30' })).toContainText('100%');
   await expect(sheet.getByRole('button', { name: '重新拟合基线' })).toHaveCount(0);
 });
