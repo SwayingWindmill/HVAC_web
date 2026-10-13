@@ -48,8 +48,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 Roadmap issues, in order:
 
-1. **Counter deltas drop the interval across a window's start.** The Metric engine's `DELTA` reads only readings inside `[start, end)`, so the step from the last reading before the window to its first one is in neither window: with minute readings `hourly_energy` and `hourly_cooling` read about 1/60 (1.7 %) low and daily Metrics one minute low. `energy_cost`, M&V hours and the optimizer's baseline inherit it; energy facts and report snapshots do not. Seen on 2026-10-13: September's `energy_cost` sums to ¥59,255.50 against ¥60,258.71 priced from energy facts. Diagnose and fix next.
-2. **#484 — measured savings (M&V).** Live and accepted end to end (spec `docs/specs/savings-verification.md`, ADR 0021).
+1. **#484 — measured savings (M&V).** Live and accepted end to end (spec `docs/specs/savings-verification.md`, ADR 0021).
    - Acceptance ran on replayed history: Site A's setpoint was raised to 8 °C on 2026-09-29 09:00; the measure was implemented then and ended 10-06.
    - The baseline used 336/336 hours (CV(RMSE) 0.6 %, NMBE 0.0 %) and passed; six days were verified, saving 367 kWh and ¥347.
    - The result is recorded as `e2e/fixtures/savings-measure-verified.json`.
@@ -59,7 +58,7 @@ Roadmap issues, in order:
      - `tools/eg8200-simulator/configs/replay-setpoint-raise.json` is the command schedule used for acceptance.
    - Later: Option B (one machine's savings, now that machines have sub-meters), non-routine adjustments, demand savings.
    - The local savings ledger was emptied by the #481 reset; the accepted result lives on as the e2e fixture.
-3. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP. Still to do:
+2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP. Still to do:
    - site profiles: floor area and climate zone, owned by the Registry, for unit-area energy and climate correction;
    - a trusted industry baseline source.
 
