@@ -38,3 +38,25 @@ test("sites also compare on electricity per square metre of their recorded floor
   await expect(ranking).toContainText('没有登记建筑面积的站点不参与此排名');
   await expect(row.getByRole('cell').first()).toHaveText('1');
 });
+
+// Cooling degree days (CDD26) from the site's own weather station take out the weather: electricity
+// per square metre per degree day, read from its daily mean outdoor temperature.
+test('sites also compare on electricity per square metre per cooling degree day', async ({ page, gateway }) => {
+  gateway.energyByDay = true;
+  await page.goto('/benchmark');
+  const ranking = page.getByRole('region', { name: '站点排名' });
+  const row = ranking.getByRole('row', { name: /中央机房/ });
+  await expect(ranking.getByRole('columnheader', { name: '单位度日用电（kWh/m²·℃·d）' })).toBeVisible();
+  await expect(row.getByRole('cell').nth(6)).toHaveText(/^\d+\.\d{4}度日数 \d+\.\d ℃·d$/);
+  await expect(page.getByRole('region', { name: '更多对标维度' })).toContainText('1 / 1 个站点有气象站');
+
+  await ranking.getByRole('tab', { name: '按度日修正用电' }).click();
+  await expect(page).toHaveURL(/rank=climate/);
+  await expect(ranking).toContainText('越低越好；只算有气温记录的日子');
+  await expect(row.getByRole('cell').first()).toHaveText('1');
+
+  const reads = gateway.writes.filter((write) => write.path === '/api/v1/telemetry/device-series:aggregate');
+  expect(reads.map((read) => read.body)).toContainEqual(expect.objectContaining({
+    keys: ['ambient_dry_bulb_temperature'], granularity: 'DAY', timezone: 'Asia/Shanghai', from: expect.stringMatching(/T16:00:00\.000Z$/),
+  }));
+});
