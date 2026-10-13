@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { alarmSummary, findingSummary, recentMonths, reportWindow, workOrderSummary } from '../apps/hvac-web/src/features/reports/report-model.ts';
+import { alarmSummary, findingSummary, recentMonths, reportWindow, snapshotDays, snapshotPeak, workOrderSummary, yearMonths, yearRows, yearTotals } from '../apps/hvac-web/src/features/reports/report-model.ts';
 
 const zone = 'Asia/Shanghai';
 
@@ -70,4 +70,44 @@ test('findings in the month are grouped by what they found, most frequent first'
   ], from, to);
   assert.equal(summary.count, 3);
   assert.deepEqual(summary.byType, [{ findingType: 'CHILLED_WATER_LOW_DELTA_T', count: 2 }, { findingType: 'OTHER', count: 1 }]);
+});
+
+const snapshot = (month, electricityKWh, coolingKWh, energyCostCNY, days = []) => ({
+  id: `snapshot-${month}`, month, version: 2, generatedAt: '2026-10-01T03:00:05Z',
+  report: { schemaVersion: 1, month, timezone: zone, daysInMonth: 30, daysWithData: days.length, electricityKWh, coolingKWh, cop: coolingKWh / electricityKWh, energyCostCNY, tariffPeriods: [], days, findings: { count: 0, byType: [] }, savings: { days: 0, adjustedBaselineKWh: 0, avoidedKWh: 0, avoidedCost: 0, unpricedHours: 0 } },
+});
+
+test('a year runs January to the current month, or all twelve once it is over', () => {
+  assert.deepEqual(yearMonths(2026, new Date('2026-03-15T04:00:00Z'), zone), ['2026-01', '2026-02', '2026-03']);
+  assert.equal(yearMonths(2025, new Date('2026-03-15T04:00:00Z'), zone).length, 12);
+});
+
+test("a year's months come from their snapshots, else from the live series, else have no data", () => {
+  const rows = yearRows(['2026-08', '2026-09', '2026-10'], [snapshot('2026-09', 100, 400, 80)],
+    new Map([['2026-08', { electricityKWh: 90, coolingKWh: 360, energyCost: null }], ['2026-09', { electricityKWh: 1, coolingKWh: 1, energyCost: 1 }]]));
+  assert.deepEqual(rows.map((row) => [row.month, row.source, row.electricityKWh]), [['2026-08', 'live', 90], ['2026-09', 'snapshot', 100], ['2026-10', 'none', null]]);
+  assert.equal(rows[1].version, 2);
+  assert.equal(rows[0].cop, 4);
+  assert.equal(rows[2].daysInMonth, 31);
+});
+
+test("a year's cost is only shown when every month with energy has one", () => {
+  const priced = yearTotals(yearRows(['2026-09'], [snapshot('2026-09', 100, 400, 80)], new Map()));
+  assert.equal(priced.energyCost, 80);
+  assert.equal(priced.cop, 4);
+  const partial = yearTotals(yearRows(['2026-08', '2026-09'], [snapshot('2026-09', 100, 400, 80)], new Map([['2026-08', { electricityKWh: 90, coolingKWh: 360, energyCost: null }]])));
+  assert.equal(partial.electricityKWh, 190);
+  assert.equal(partial.energyCost, null);
+});
+
+test("a snapshot's days fill the month's axis, with gaps for days without metering", () => {
+  const stored = snapshot('2026-09', 30, 120, 25, [
+    { date: '2026-09-02', electricityKWh: 20, coolingKWh: 80, cop: 4, energyCostCNY: 16 },
+    { date: '2026-09-05', electricityKWh: 10, coolingKWh: 40, cop: 4, energyCostCNY: 9 },
+  ]);
+  const days = snapshotDays(stored.report);
+  assert.equal(days.length, 30);
+  assert.deepEqual(days[1], { label: '9/2', electricityKWh: 20, cop: 4 });
+  assert.deepEqual(days[0], { label: '9/1', electricityKWh: null, cop: null });
+  assert.deepEqual(snapshotPeak(stored.report), { label: '9/2 周三', electricityKWh: 20 });
 });

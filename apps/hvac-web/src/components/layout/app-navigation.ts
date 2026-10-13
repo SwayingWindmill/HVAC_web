@@ -59,7 +59,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
       { id: 'analytics-optimization', title: '优化建议', path: '/energy-analysis/optimization', icon: Lightbulb },
       { id: 'analytics-savings', title: '节能项目', path: '/energy-analysis/savings', icon: Leaf },
       { id: 'benchmark', title: '站点对标', path: '/benchmark', icon: Trophy },
-      { id: 'reports', title: '月度报告', path: '/reports', icon: FileText },
+      { id: 'reports', title: '能源报告', path: '/reports', icon: FileText },
     ],
   },
   {

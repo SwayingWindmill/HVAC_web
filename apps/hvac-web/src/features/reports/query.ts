@@ -1,15 +1,17 @@
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
+import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { listAlarms, type Alarm } from '@/features/alarms/alarm-api';
 import { quarterHours } from '@/features/demand/demand-model';
 import { plantPowerPoint } from '@/features/demand/query';
-import { siteFindingsQuery } from '@/features/diagnostics/query';
+import { siteDayKey, siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { siteTariffQuery } from '@/features/tariff/query';
+import { touEnergyCost } from '@/features/tariff/tariff-model';
 import { listView } from '@/features/work-orders/work-order-queries';
-import type { ReportWindow } from './report-model';
+import type { LiveMonth, ReportWindow, StoredReport } from './report-model';
 
 const telemetry = createS2TelemetryClient();
 const siteRoute = getRouteApi('/_app/_site');
@@ -30,16 +32,42 @@ async function alarmsSince(siteId: string, from: Date, signal: AbortSignal): Pro
   return { alarms, complete: false };
 }
 
-/** Everything a month's report reads, each from the owner of that record. */
-export function useMonthlyReport(month: string, span: ReportWindow) {
-  const { site, principal } = siteRoute.useRouteContext();
-  const { read, summary } = useEnergyReader();
-  const { registry } = useRealtimePlant();
-  const meter = registry.data ? plantPowerPoint(registry.data.assetModel) : null;
-  const key = ['monthly-report', site.id, month, span.to.getTime()];
+const accept = { Accept: 'application/json, application/problem+json' };
+const sitePath = (template: string, siteId: string) => template.replace('{siteId}', siteId);
 
-  const energy = useQuery({
-    queryKey: [...key, 'energy'],
+/** A month's latest snapshot, or null when the month has none. */
+export function monthlySnapshotQuery(siteId: string, month: string) {
+  return queryOptions({
+    queryKey: ['report-snapshot', siteId, month],
+    queryFn: async ({ signal }): Promise<StoredReport | null> => {
+      const response = await fetch(sitePath(intelligencePaths.siteMonthlyReport, siteId).replace('{month}', month), { credentials: 'same-origin', signal, headers: accept });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error('报告存档暂不可用');
+      return (await response.json()) as StoredReport;
+    },
+    retry: false,
+  });
+}
+
+/** The latest snapshot of each archived month of a year. */
+export function yearSnapshotsQuery(siteId: string, year: number) {
+  return queryOptions({
+    queryKey: ['report-snapshots', siteId, year],
+    queryFn: async ({ signal }): Promise<StoredReport[]> => {
+      const response = await fetch(`${sitePath(intelligencePaths.siteMonthlyReports, siteId)}?year=${year}`, { credentials: 'same-origin', signal, headers: accept });
+      if (!response.ok) throw new Error('报告存档暂不可用');
+      return ((await response.json()) as { items: StoredReport[] }).items;
+    },
+    retry: false,
+  });
+}
+
+/** The month's electricity and cooling by day against the month before, with its hourly electricity. */
+export function useMonthEnergy(month: string, span: ReportWindow, enabled = true) {
+  const { site, read, summary } = useEnergyReader();
+  return useQuery({
+    queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'energy'],
+    enabled,
     queryFn: async ({ signal }) => {
       const [current, previous, hourly] = await Promise.all([
         summary('day', span.from, span.to, signal),
@@ -50,8 +78,15 @@ export function useMonthlyReport(month: string, span: ReportWindow) {
     },
     retry: false,
   });
+}
+
+/** The plant's quarter-hour demand over the month, from the HVAC total meter's power. */
+export function useMonthDemand(month: string, span: ReportWindow) {
+  const { site, principal } = siteRoute.useRouteContext();
+  const { registry } = useRealtimePlant();
+  const meter = registry.data ? plantPowerPoint(registry.data.assetModel) : null;
   const demand = useQuery({
-    queryKey: [...key, 'demand', meter?.deviceId],
+    queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'demand', meter?.deviceId],
     enabled: meter !== null,
     queryFn: async ({ signal }) => {
       const chunks: { from: Date; to: Date }[] = [];
@@ -71,9 +106,56 @@ export function useMonthlyReport(month: string, span: ReportWindow) {
     },
     retry: false,
   });
+  return { meter, demand };
+}
+
+/** Alarms and work orders, which only their owners keep: never in a snapshot. */
+export function useMonthOperations(month: string, span: ReportWindow) {
+  const { site } = siteRoute.useRouteContext();
+  const key = ['monthly-report', site.id, month, span.to.getTime()];
   const alarms = useQuery({ queryKey: [...key, 'alarms'], queryFn: ({ signal }) => alarmsSince(site.id, span.from, signal), retry: false });
   const workOrders = useQuery({ queryKey: [...key, 'work-orders'], queryFn: ({ signal }) => listView(site.id, [], undefined, signal), retry: false });
-  const findings = useQuery(siteFindingsQuery(site.id));
-  const tariff = useQuery(siteTariffQuery(site.id));
-  return { site, meter, registry, energy, demand, alarms, workOrders, findings, tariff };
+  return { alarms, workOrders };
+}
+
+export function useSiteTariff() {
+  const { site } = siteRoute.useRouteContext();
+  return useQuery(siteTariffQuery(site.id));
+}
+
+/**
+ * The year's months on the live series: electricity and cooling by month, and each month's hourly
+ * electricity priced at the Site's Tariff. Months with a snapshot read from it instead.
+ */
+export function useYearLive(year: number, now: Date) {
+  const { site, read, summary } = useEnergyReader();
+  const tariff = useSiteTariff();
+  const from = siteMidnight(year, 1, 1, site.timezone);
+  const end = siteMidnight(year + 1, 1, 1, site.timezone);
+  const to = end.getTime() < now.getTime() ? end : now;
+  return useQuery({
+    queryKey: ['yearly-report', site.id, year, to.getTime(), tariff.data?.version ?? null],
+    enabled: !tariff.isPending && from.getTime() < to.getTime(),
+    queryFn: async ({ signal }): Promise<Map<string, LiveMonth>> => {
+      const [months, hourly] = await Promise.all([summary('month', from, to, signal), read('electricity', 'hour', from, to, signal)]);
+      const hoursByMonth = new Map<string, { periodStart: string; energyKWh: number }[]>();
+      for (const point of hourly.points) {
+        const month = siteDayKey(new Date(point.periodStart), site.timezone).slice(0, 7);
+        hoursByMonth.set(month, [...(hoursByMonth.get(month) ?? []), point]);
+      }
+      const live = new Map<string, LiveMonth>();
+      for (const row of months.rows) {
+        const local = wallTime(new Date(row.periodStart), site.timezone);
+        const month = `${local.year}-${String(local.month).padStart(2, '0')}`;
+        const hours = hoursByMonth.get(month) ?? [];
+        live.set(month, {
+          electricityKWh: row.electricityKWh,
+          coolingKWh: row.coolingKWh,
+          energyCost: tariff.data && hours.length > 0 ? touEnergyCost(hours, tariff.data, site.timezone).total : null,
+        });
+      }
+      return live;
+    },
+    retry: false,
+  });
 }

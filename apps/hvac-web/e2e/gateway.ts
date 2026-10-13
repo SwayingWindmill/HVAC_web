@@ -99,6 +99,8 @@ export class Gateway {
   analyticsDenied = false;
   /** Machines whose sub-meter the recorded device breakdown leaves out. */
   unmeteredDeviceIds: readonly string[] = [];
+  /** report-service's kept snapshots of closed months; a month without one answers 404. */
+  reportSnapshots: Json[] = [];
   /** The Site's import Tariff in effect; null when none is assigned. */
   tariff: Json | null = fixture<Json>('tariff.json');
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
@@ -247,6 +249,13 @@ export class Gateway {
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
+      return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };
+    }
+    if (method === 'GET' && path.startsWith(`/api/v1/sites/${SITE_ID}/reports/monthly/`)) {
+      const stored = this.reportSnapshots.find((candidate) => path.endsWith(`/${candidate.month}`));
+      return stored ? { body: stored } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series' && this.analyticsDenied) {
       return { status: 403, body: { type: 'about:blank', title: 'Analytics access denied', status: 403, detail: 'The requested Site is not authorized for Energy Analytics.', instance: path, code: 'ANALYTICS_ACCESS_DENIED', traceId: '0'.repeat(32), retryable: false } };
     }
