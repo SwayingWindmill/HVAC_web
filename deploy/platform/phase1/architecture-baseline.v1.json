@@ -183,7 +183,7 @@
     "defaultIdentityInfrastructure": ["identity-service"],
     "localStatefulInfrastructure": ["postgres", "clickhouse", "redis"],
     "optionalIntegration": ["connectivity", "mqtt-broker"],
-    "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service", "mv-service"],
+    "optionalIntelligence": ["forecast-service", "optimization-service", "fdd-service", "mv-service", "report-service"],
     "allComposeServicesClassified": true
   },
   "availabilityTier": {

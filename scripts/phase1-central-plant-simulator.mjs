@@ -548,6 +548,15 @@ VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-wat
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
+// A Site's monthly report is kept as a snapshot once the month is over (#483): report-service takes
+// it at 03:00 on the 1st, Site time, for the month before.
+function buildReportSeed(site) {
+  return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${sqlLiteral(siteUUID(site, 0x850000000001))}, ${sqlLiteral(`monthly-report-${site.siteCode}`)}, '月度报告快照（每月 1 日 03:00）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'REPORT_GENERATE', 'CRON', '0 3 1 * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 120, '{}',
+  (date_trunc('month', clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 month' + interval '3 hours') AT TIME ZONE 'Asia/Shanghai')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
+}
+
 // Savings verification (ADR 0021) fits plant electricity against cooling delivered, hour by hour:
 // two hourly counter-delta Metrics per Site, up to fourteen days backfilled from telemetry
 // history so a measure has its baseline period, and a daily MV_EVALUATION at 02:00 Site time.
@@ -823,6 +832,7 @@ for (const site of localSites) {
   psql('hvac_s1', buildSavingsSeed(site, seededPoints));
   psql('hvac_s1', buildOptimizationSeed(site, seededPoints));
   psql('hvac_s1', buildDiagnosisSeed(site, seededPoints));
+  psql('hvac_s1', buildReportSeed(site));
   psql('hvac_s2', buildS2Seed(site, observedPoints, rig));
 }
 for (const site of localSites) writeSimulatorConfig(site);

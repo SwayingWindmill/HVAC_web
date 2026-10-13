@@ -156,7 +156,7 @@ assert(JSON.stringify(baseline.runtimeInventory?.defaultBusinessDeployables) ===
 assert(JSON.stringify(baseline.runtimeInventory?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'baseline must classify scheduler and maintenance as supporting workloads');
 assert(JSON.stringify(baseline.runtimeInventory?.localStatefulInfrastructure) === JSON.stringify(['postgres', 'clickhouse', 'redis']), 'baseline must classify local PostgreSQL, ClickHouse and Redis separately from external state');
 assert(JSON.stringify(baseline.runtimeInventory?.optionalIntegration) === JSON.stringify(['connectivity', 'mqtt-broker']), 'baseline must classify IoT/MQTT as optional integration');
-assert(JSON.stringify(baseline.runtimeInventory?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'mv-service']), 'baseline must classify Forecast/Optimization/FDD/M&V as optional intelligence');
+assert(JSON.stringify(baseline.runtimeInventory?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'report-service']), 'baseline must classify Forecast/Optimization/FDD/M&V as optional intelligence');
 assert(baseline.availabilityTier?.contract === paths.availabilityTier && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false && baseline.availabilityTier?.numericAvailabilitySloAllowed === false, 'baseline must pin SINGLE_NODE_RECOVERABLE and forbid unmeasured numeric SLO claims');
 assert(baseline.recovery?.attainmentContract === paths.recoveryAttainment && baseline.recovery?.numericAvailabilitySloClaimForbiddenWithoutEvidence === true, 'baseline must pin the recovery attainment contract');
 assert(productRelease.deploymentTiers === paths.deploymentTiers && productRelease.runtimeInventory === paths.runtimeInventory && productRelease.availabilityTier === paths.availabilityTier && productRelease.recoveryAttainment === paths.recoveryAttainment, 'Product Release must pin runtime inventory, tier, availability and recovery attainment contracts');
@@ -178,7 +178,7 @@ assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === 
 assert(JSON.stringify(runtimeInventory.classes?.defaultIdentityInfrastructure) === JSON.stringify(['identity-service']), 'runtime inventory must keep identity-service outside business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.localStatefulInfrastructure) === JSON.stringify(['postgres', 'clickhouse', 'redis']), 'runtime inventory must freeze local PostgreSQL, ClickHouse and Redis as placement-specific services');
 assert(JSON.stringify(runtimeInventory.classes?.optionalIntegration) === JSON.stringify(['connectivity', 'mqtt-broker']), 'runtime inventory must freeze optional IoT/MQTT integration');
-assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'operations-agent-service']), 'runtime inventory must freeze all optional intelligence services');
+assert(JSON.stringify(runtimeInventory.classes?.optionalIntelligence) === JSON.stringify(['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'report-service', 'operations-agent-service']), 'runtime inventory must freeze all optional intelligence services');
 assert(runtimeInventory.semantics?.maintenanceDecision === 'KEEP_AS_SUPPORTING_WORKER' && runtimeInventory.semantics?.identityDecision === 'SEPARATE_INFRASTRUCTURE' && runtimeInventory.semantics?.integrationDecision === 'OPTIONAL_PROFILE' && runtimeInventory.semantics?.postgresPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.clickhousePlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.redisPlacementDecision === 'LOCAL_OR_EXTERNAL' && runtimeInventory.semantics?.intelligenceDecision === 'OPTIONAL_PROFILE', 'runtime inventory decisions must preserve maintenance, identity, PostgreSQL/ClickHouse/Redis placement, integration and intelligence boundaries');
 const canonicalSourceEntrypoints = {
   'energy-api': 'cmd/energy-api',
@@ -309,11 +309,11 @@ for (const [service, expectedProfiles] of Object.entries(profileExpectations)) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`profiles: ["${expectedProfiles.join('", "')}"]`), `${service} must be gated to profiles ${expectedProfiles.join(', ')}`);
 }
-for (const service of ['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'operations-agent-service']) {
+for (const service of ['forecast-service', 'optimization-service', 'fdd-service', 'mv-service', 'report-service', 'operations-agent-service']) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('profiles: ["intelligence"]'), `${service} must be an explicit optional intelligence profile service`);
 }
-assert(!compose.includes('forecast-service:\n          condition: service_healthy') && !compose.includes('optimization-service:\n          condition: service_healthy') && !compose.includes('mv-service:\n          condition: service_healthy') && !compose.includes('fdd-service:\n          condition: service_healthy'), 'energy-api must not hard-depend on optional intelligence services');
+assert(!compose.includes('forecast-service:\n          condition: service_healthy') && !compose.includes('optimization-service:\n          condition: service_healthy') && !compose.includes('mv-service:\n          condition: service_healthy') && !compose.includes('report-service:\n          condition: service_healthy') && !compose.includes('fdd-service:\n          condition: service_healthy'), 'energy-api must not hard-depend on optional intelligence services');
 assert(/^  phase1-schema-preflight:/m.test(compose), 'Compose must include the one-shot Product/Schema preflight');
 assert(compose.includes('PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json'), 'energy-api must receive the pinned LimitPolicy path');
 assert(compose.includes('./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro'), 'energy-api must mount LimitPolicy read-only');
