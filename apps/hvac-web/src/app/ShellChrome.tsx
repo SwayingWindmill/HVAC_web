@@ -73,7 +73,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const retryHref = `${location.pathname}${location.searchStr}${location.hash}`;
 
   return (
-    <SidebarProvider defaultOpen={defaultSidebarOpen} className="flex-col [--header-height:52px]">
+    <SidebarProvider defaultOpen={defaultSidebarOpen} className="flex-col">
       <SkipToMain />
       <NavigationProgress />
       <AppHeader

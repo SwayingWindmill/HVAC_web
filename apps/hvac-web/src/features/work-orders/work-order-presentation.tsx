@@ -10,10 +10,10 @@ export const PRIORITY_LABELS: Readonly<Record<WorkOrderPriority, string>> = {
 };
 
 export const PRIORITY_CLASSES: Readonly<Record<WorkOrderPriority, string>> = {
-  URGENT: 'bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-300',
-  HIGH: 'bg-orange-500/10 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
-  MEDIUM: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
-  LOW: 'bg-muted text-muted-foreground',
+  URGENT: 'bg-destructive-soft text-destructive-text',
+  HIGH: 'bg-warning-soft text-severity-major',
+  MEDIUM: 'bg-secondary text-secondary-foreground',
+  LOW: 'border border-border text-muted-foreground',
 };
 
 export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
@@ -49,7 +49,7 @@ const PRIORITY_ORDER: readonly WorkOrderPriority[] = ['URGENT', 'HIGH', 'MEDIUM'
 
 export function PriorityBadge({ priority }: { readonly priority: WorkOrderPriority }) {
   return (
-    <span className={cn('inline-flex h-5.5 items-center rounded-md px-1.5 text-xs font-medium', PRIORITY_CLASSES[priority])}>
+    <span className={cn('inline-flex h-5 items-center rounded-md px-[7px] text-[11px] font-medium', PRIORITY_CLASSES[priority])}>
       {PRIORITY_LABELS[priority]}
     </span>
   );
