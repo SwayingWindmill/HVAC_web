@@ -43,6 +43,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 - Do not add another KPI widget or status pill style; extend these.
 - 系统管理 → 设计系统 (`/system?tab=design`) shows the shipped tokens with their measured contrast, the type steps and component states; `scripts/test-real-design-tokens.mjs` keeps every listed light-theme pairing at its WCAG level.
 - `FactTile`'s `className` styles the value, not the grid cell: to span columns, wrap it in a `<div className="col-span-…">`.
+- Unsaved drafts belong to the page that owns them: 系统管理 uses `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope no longer tracks drafts (removed with its site-switch confirmation); it only purges resources and revokes request tokens. A Site page that gets a non-modal form should guard it the same way, with its own blocker.
 
 ## Next up
 
@@ -67,7 +68,6 @@ Roadmap issues, in order:
 
 Smaller follow-ups:
 
-- Unsaved drafts on platform pages (系统管理) belong to the page: `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope's own draft path (`registerDraft` / `dirtyDrafts`, the site-switch confirmation in `ShellChrome`) has no caller since that fix; keep it for Site-page forms or remove it.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
 - Move the FDD low-ΔT threshold from the schedule payload into an owner-held rule definition.
