@@ -20,7 +20,7 @@ test('a site the user may see but not analyze stays listed, outside the comparis
   gateway.analyticsDenied = true;
   await page.goto('/benchmark');
   await expect(page.getByRole('region', { name: '站点排名' }).getByRole('row', { name: /中央机房/ })).toContainText('没有该站点的能耗分析权限');
-  await expect(page.getByRole('region', { name: '对标概况' })).toContainText('1 个无权限');
+  await expect(page.getByText('全部授权站点 · 1 个 · 1 个无权限')).toBeVisible();
 });
 
 // The Site's Registry profile: its floor area gives electricity per square metre, its

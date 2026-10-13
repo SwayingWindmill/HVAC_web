@@ -11,9 +11,9 @@ test('the load forecast shows the coming day beside the last one, with its peak 
   await expect(page.getByText('按近 7 天同时段负荷预测')).toBeVisible();
 
   await expect(page.getByRole('region', { name: '实际与预测' }).locator('.recharts-line')).toHaveCount(2);
-  const hours = page.getByRole('table', { name: '逐时预测负荷' }).getByRole('row');
-  // A header and the 24 or 25 Site-local hours the 96 quarter-hours touch.
-  await expect.poll(() => hours.count()).toBeGreaterThanOrEqual(25);
+  // Two tables side by side: their headers and the 24 or 25 Site-local hours the 96 quarter-hours touch.
+  const hours = page.getByRole('region', { name: '逐时预测' }).getByRole('row');
+  await expect.poll(() => hours.count()).toBeGreaterThanOrEqual(26);
   await expect(hours.filter({ hasText: '峰值' })).toHaveCount(1);
 
   // The last day's load comes from metered electricity, hour by hour.

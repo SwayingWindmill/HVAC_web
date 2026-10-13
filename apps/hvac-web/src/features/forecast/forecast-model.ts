@@ -103,6 +103,8 @@ export function forecastChartRows(
 
 export interface HourlyForecast {
   readonly label: string;
+  /** The first forecast instant in the hour. */
+  readonly start: string;
   readonly loadKW: number;
   /** Averages of the hour's bounds; null when any point in the hour has none. */
   readonly lowerKW: number | null;
@@ -125,6 +127,7 @@ export function hourlyForecast(forecast: LoadForecast, timeZone: string): Hourly
     const banded = points.every((point) => point.lowerKW !== null && point.upperKW !== null);
     return {
       label,
+      start: points[0].at,
       loadKW: average(points.map((point) => point.loadKW)),
       lowerKW: banded ? average(points.map((point) => point.lowerKW!)) : null,
       upperKW: banded ? average(points.map((point) => point.upperKW!)) : null,
