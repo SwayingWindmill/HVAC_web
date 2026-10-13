@@ -86,6 +86,7 @@ Smaller follow-ups:
 
 - To change the FDD low-delta-T threshold or window, publish the next revision (never update one): `node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <instant>]`. Findings before 2026-10-13 in the local database cite the old string `chilled-water-low-delta-t/v1`; a reset clears them.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
+- Energy-series cost now follows the window, about 0.5 KB of ClickHouse memory per fact read. Live meters write a fact every few seconds (~24,000 per meter per day), so a month on one Site takes ~150 MiB and a year would not fit under the 1.5 GiB cap. Before long windows get used on live data, serve day and month granularity from an hourly rollup instead of raw facts.
 - Polish the device inspector and the work-order sheet in the same visual system.
 
 ## Local environment notes
@@ -101,6 +102,8 @@ These are drifts from the seed in the current local database. A `npm run local:r
 - Hourly and daily Metrics of both Sites for 2026-09-15 to 09-30 (Site time) were recalculated with the counter window-start fix on 2026-10-13: September's `hourly_energy` matches the energy facts (72,696.83 kWh) and `energy_cost` the report snapshot (¥60,258.71). Site A's `hourly_energy` and `hourly_cooling` were also recalculated through 10-05 for the M&V re-verification. Other periods and Metrics still hold values from before the fix.
 - The workload identity `internal-pki/historical-replay-runner` was issued from the local CA by the replay script.
 - The ClickHouse user `report_service_reader` was created by hand (init scripts only run on an empty volume). September 2026 was snapshot for both Sites by a hand-queued `REPORT_GENERATE` job (16 of 30 days, from the replay).
+- `analytics.energy_interval_facts_visible` was replaced by hand with the definition in `009-energy-fact-rebuild-v1.sql` (GROUP BY the logical key with `argMax`, so Site and period filters reach the table index) on 2026-10-13; a reset applies it from the init script.
+- **The energy projector is stuck (seen 2026-10-13).** Its counter-delta query uses ~800 MiB per batch and every retry hits ClickHouse's 1.5 GiB cap; the projection checkpoint has not moved since 08:21 UTC, so no new energy facts are written, and the retries crowd out other ClickHouse readers. Not fixed yet; the suspect is a batch whose `since` falls back into replayed history.
 - Energy facts written before the arrival-paging fix (2026-10-12) miss intervals. To fill them in, stop `telemetry-worker`, truncate `analytics.energy_projection_checkpoints`, then start it again. Truncating while it runs does nothing: the batch in flight writes its checkpoint back. The existing-fact check skips intervals that already have a fact.
 
 Known quirks:
