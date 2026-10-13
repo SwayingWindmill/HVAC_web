@@ -5,10 +5,13 @@ go 1.25.12
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
+	github.com/quanlaihe/hvac-web/libs/tariffmodel v0.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 )
 
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
+
+replace github.com/quanlaihe/hvac-web/libs/tariffmodel => ../../libs/tariffmodel
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
