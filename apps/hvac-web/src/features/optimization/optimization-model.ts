@@ -4,8 +4,14 @@
 
 export type RecommendationRisk = 'LOW' | 'MEDIUM' | 'HIGH';
 
+/** Why a run was made: an operator asked, or the Site's hourly schedule did. */
+export type RecommendationTrigger = 'MANUAL' | 'SCHEDULE';
+
+export const TRIGGER_LABEL: Record<RecommendationTrigger, string> = { MANUAL: '手动生成', SCHEDULE: '定时生成' };
+
 export interface OptimizationRecommendation {
   readonly runId: string;
+  readonly trigger: RecommendationTrigger;
   readonly createdAt: string;
   readonly baseline: { readonly supplyTempC: number; readonly zoneTempC: number; readonly dailyEnergyKWh: number; readonly dailyCost: number };
   readonly candidate: { readonly supplyTempC: number; readonly projectedZoneTempC: number; readonly dailyEnergyKWh: number; readonly dailyCost: number };
@@ -27,6 +33,7 @@ interface PublishedConstraint {
 
 export interface PublishedRecommendation {
   readonly runId: string;
+  readonly trigger: RecommendationTrigger;
   readonly recommendation: {
     readonly createdAt: string;
     readonly baseline: OptimizationRecommendation['baseline'];
@@ -51,6 +58,7 @@ export function parseRecommendation(published: PublishedRecommendation): Optimiz
   const comfort = constraint(recommendation.constraints, 'ZONE_COMFORT');
   return {
     runId: published.runId,
+    trigger: published.trigger,
     createdAt: recommendation.createdAt,
     baseline: recommendation.baseline,
     candidate: recommendation.candidate,

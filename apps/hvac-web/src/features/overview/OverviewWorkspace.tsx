@@ -23,7 +23,7 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle }
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
-import { changesSupply } from "@/features/optimization/optimization-model";
+import { changesSupply, TRIGGER_LABEL } from "@/features/optimization/optimization-model";
 import { latestRecommendationQuery } from "@/features/optimization/query";
 import { measuresQuery, summaryQuery } from "@/features/savings/query";
 import { monthToDate, siteSavingsRate } from "@/features/savings/savings-model";
@@ -325,8 +325,8 @@ function SavingsCard({ siteId, timeZone }: { readonly siteId: string; readonly t
         {recommendation ? (
           <p className="text-xs text-muted-foreground">
             {changesSupply(recommendation)
-              ? `供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} 生成`
-              : `保持供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} 生成`}
+              ? `供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} → ${formatDecimal(recommendation.candidate.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} ${TRIGGER_LABEL[recommendation.trigger]}`
+              : `保持供水温度 ${formatDecimal(recommendation.baseline.supplyTempC, 1)} °C，${formatTime(recommendation.createdAt, timeZone)} ${TRIGGER_LABEL[recommendation.trigger]}`}
           </p>
         ) : null}
       </CardContent>

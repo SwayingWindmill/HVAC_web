@@ -20,7 +20,7 @@ import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-pl
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { changesSupply, recommendedSetpoint, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
+import { changesSupply, recommendedSetpoint, TRIGGER_LABEL, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
 import { latestRecommendationQuery, OptimizationRequestError, requestRecommendation } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -106,7 +106,7 @@ function RecommendationHero({ recommendation, timeZone, setpoint, dispatchable, 
       <CardHeader>
         <CardDescription className="flex items-center gap-2">
           <Lightbulb className="size-4 text-primary" />
-          冷冻水供水温度建议 · 生成于 {formatTime(recommendation.createdAt, timeZone)}
+          冷冻水供水温度建议 · {TRIGGER_LABEL[recommendation.trigger]}于 {formatTime(recommendation.createdAt, timeZone)}
         </CardDescription>
         <CardTitle className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-3xl font-semibold tabular-nums">
           {change ? (
