@@ -14,8 +14,9 @@ import { Sparkline } from '@/components/ui/sparkline';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { alarmHistoryQuery } from '@/features/alarms/alarm-api';
 import { operationLabel, SEVERITY_LABELS, SEVERITY_LEVEL } from '@/features/alarms/alarm-presentation';
-import { siteCommandsQuery, type CommandStatus } from '@/features/control/command-api';
+import { siteCommandsQuery } from '@/features/control/command-api';
 import { commandSummary, STATUS_PRESENTATION } from '@/features/control/command-presentation';
+import { CommandMark } from '@/features/control/components/CommandMark';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
@@ -189,25 +190,6 @@ interface PlantEvent {
   readonly title: string;
   readonly detail: string;
   readonly to?: { readonly path: '/operations/alarms' | '/operations/control'; readonly inspect?: string };
-}
-
-function CommandMark({ status }: { readonly status: CommandStatus }) {
-  const settledOk = status === 'SUCCEEDED';
-  const failed = status === 'FAILED' || status === 'REJECTED';
-  const waiting = status === 'AWAITING_APPROVAL' || status === 'OUTCOME_UNKNOWN';
-  return (
-    <svg viewBox="0 0 10 10" className="size-2.5 shrink-0" aria-hidden="true">
-      {settledOk ? <circle cx="5" cy="5" r="5" className="fill-success" />
-        : failed ? <path d="M5 0.5 9.5 9H0.5z" className="fill-destructive" />
-        : waiting ? <path d="M5 0.5 9.5 9H0.5z" className="fill-warning" />
-        : (
-          <>
-            <circle cx="5" cy="5" r="3.8" fill="none" strokeWidth="1.5" className="stroke-muted-foreground" />
-            <path d="M5 1.2a3.8 3.8 0 0 1 0 7.6z" className="fill-muted-foreground" />
-          </>
-        )}
-    </svg>
-  );
 }
 
 /** Today at the plant, newest first: alarms, commands and devices whose data stopped. */
