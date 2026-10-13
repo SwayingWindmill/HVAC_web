@@ -9,7 +9,6 @@ import {
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
-import type { ProtectedScopeDraft } from '@/app/protected-scope';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,11 +27,12 @@ import { RegistryImportExportWorkbench } from './RegistryImportExportWorkbench';
 import { RegistryResourceWorkbench } from './RegistryResourceWorkbench';
 import { RegistryTemplateWorkbench } from './RegistryTemplateWorkbench';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
-import { confirmDiscardRegistryDraft, useRegistryDirtyGuard } from './useDirtyGuard';
+import type { RegisterUnsavedDraft } from '../unsaved-drafts';
+import { confirmDiscardRegistryDraft } from './confirmDiscard';
 
 interface Props {
   capabilities: readonly Capability[];
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  registerUnsavedDraft: RegisterUnsavedDraft;
 }
 
 type RegistryTab = 'resources' | 'templates' | 'import-export';
@@ -49,8 +49,6 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
   const [createDraft, setCreateDraft] = useState({ code: '', displayName: '', timezone: 'Asia/Shanghai', reason: '创建首个站点' });
   const siteQuery = useRegistrySite(selectedSiteId);
   const modelQuery = useRegistryAssetModel(selectedSiteId);
-
-  useRegistryDirtyGuard(dirty);
 
   useEffect(() => {
     if (!selectedSiteId && sites.length) setSelectedSiteId(sites[0].id);

@@ -9,7 +9,6 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { DataTableBlock } from '@/blocks/data-table';
 import { FactList, FactRow } from '@/blocks/fact-list';
 import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
-import type { ProtectedScopeDraft } from '@/app/protected-scope';
 import type { ShellSnapshot } from '@/app/shell-runtime';
 import { Main } from '@/components/layout/Main';
 import { Badge } from '@/components/ui/badge';
@@ -23,10 +22,11 @@ import { EmptyGovernanceState } from './EmptyGovernanceState';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { DesignSystem } from './design-system/DesignSystem';
 import { RuleManagement } from './rule-management/RuleManagement';
+import type { RegisterUnsavedDraft } from './unsaved-drafts';
 
 interface SystemManagementProps {
   snapshot: ShellSnapshot;
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  registerUnsavedDraft: RegisterUnsavedDraft;
 }
 
 type PrincipalRow = {

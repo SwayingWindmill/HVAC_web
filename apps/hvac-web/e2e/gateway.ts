@@ -225,6 +225,7 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: [], meta: { requestId: 'e2e', count: 0 } } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {

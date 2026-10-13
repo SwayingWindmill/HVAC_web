@@ -42,7 +42,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { confirmDiscardRegistryDraft } from './useDirtyGuard';
+import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import {
   makeRegistryMutationMeta,
   newRegistryIdempotencyKey,
