@@ -32,8 +32,8 @@ type FindingFilter struct {
 }
 
 type Store interface {
-	// CurrentRule is the Tenant's latest revision of a rule in effect at a time.
-	CurrentRule(ctx context.Context, tenantID, siteID, ruleCode string, at time.Time) (RuleRevision, error)
+	// CurrentRule is the Tenant's latest low-delta-T rule revision in effect at a time.
+	CurrentRule(ctx context.Context, tenantID, siteID string, at time.Time) (RuleRevision, error)
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
 	// RecentFinding is the latest finding of a type for an asset and rule whose window ended at or after since.
 	RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error)
@@ -94,7 +94,7 @@ func (service *Service) CurrentRule(ctx context.Context, tenantID, siteID string
 	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
 		return RuleRevision{}, errors.New("FDD rule scope is invalid")
 	}
-	return service.store.CurrentRule(ctx, tenantID, siteID, LowDeltaTRuleCode, service.now().UTC())
+	return service.store.CurrentRule(ctx, tenantID, siteID, service.now().UTC())
 }
 
 func (service *Service) EvaluateLowDeltaT(ctx context.Context, request EvaluationRequest) (EvaluationResult, error) {
@@ -102,7 +102,7 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 		return EvaluationResult{}, err
 	}
 	to := request.At.UTC()
-	rule, err := service.store.CurrentRule(ctx, request.TenantID, request.SiteID, LowDeltaTRuleCode, to)
+	rule, err := service.store.CurrentRule(ctx, request.TenantID, request.SiteID, to)
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read the low-delta-T rule: %w", err)
 	}

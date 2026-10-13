@@ -24,10 +24,10 @@ var testRule = RuleRevision{
 
 func newStore() *memoryStore { return &memoryStore{rules: []RuleRevision{testRule}} }
 
-func (store *memoryStore) CurrentRule(_ context.Context, _, _, ruleCode string, at time.Time) (RuleRevision, error) {
+func (store *memoryStore) CurrentRule(_ context.Context, _, _ string, at time.Time) (RuleRevision, error) {
 	var current *RuleRevision
 	for index, rule := range store.rules {
-		if ruleCode == LowDeltaTRuleCode && !rule.EffectiveFrom.After(at) && (current == nil || rule.Revision > current.Revision) {
+		if !rule.EffectiveFrom.After(at) && (current == nil || rule.Revision > current.Revision) {
 			current = &store.rules[index]
 		}
 	}
@@ -173,7 +173,7 @@ func TestANewRuleRevisionAppliesFromItsEffectiveTime(t *testing.T) {
 		t.Fatalf("revised window from=%s", evidence.query.From)
 	}
 	// At its own time the first evaluation's revision still decides.
-	if rule, err := service.store.CurrentRule(t.Context(), request.TenantID, request.SiteID, LowDeltaTRuleCode, request.At); err != nil || rule != testRule {
+	if rule, err := service.store.CurrentRule(t.Context(), request.TenantID, request.SiteID, request.At); err != nil || rule != testRule {
 		t.Fatalf("rule at the first evaluation=%#v err=%v", rule, err)
 	}
 }

@@ -556,9 +556,8 @@ ON CONFLICT (tenant_id, rule_code, revision) DO NOTHING;
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
 VALUES (${sqlLiteral(siteUUID(site, 0x820000000001))}, ${sqlLiteral(`chilled-water-low-delta-t-${site.siteCode}`)}, '冷冻水低温差诊断（每 15 分钟）', ${sqlLiteral(site.tenantId)}, ${sqlLiteral(site.siteId)}, 'FDD_EVALUATION', 'CRON', '*/15 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 60, ${sqlLiteral(JSON.stringify(plan))},
   date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes')
--- A schedule seeded when it still carried the rule's threshold names only the loop now.
-ON CONFLICT (tenant_id, schedule_code) DO UPDATE SET payload_template = EXCLUDED.payload_template
-  WHERE core_registry.schedule_definitions.payload_template IS DISTINCT FROM EXCLUDED.payload_template;`;
+-- The seed owns this schedule's payload and keeps it as defined here.
+ON CONFLICT (tenant_id, schedule_code) DO UPDATE SET payload_template = EXCLUDED.payload_template;`;
 }
 
 // A Site's monthly report is kept as a snapshot once the month is over (#483): report-service takes

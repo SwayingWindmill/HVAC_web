@@ -69,7 +69,7 @@ export async function evaluateRule(
   if (!response.ok) {
     // The owner declines, among other reasons, when the window holds no good readings.
     throw new DiagnosticsRequestError(response.status, response.status === 502
-      ? '诊断未完成：诊断窗口内缺少可用的供回水温度，或诊断服务拒绝了请求'
+      ? '诊断未完成：诊断窗口内缺少可用的供回水温度，或诊断规则暂不可用'
       : payload?.detail ?? '诊断服务暂时不可用');
   }
   const rule = payload.rule as RuleRevision;

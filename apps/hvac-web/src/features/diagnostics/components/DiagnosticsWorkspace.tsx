@@ -60,10 +60,10 @@ function ThresholdBar({ rule, threshold, value }: { readonly rule: DiagnosticRul
   );
 }
 
-function RuleCard({ rule, revision, target, reading, outcome }: {
+function RuleCard({ rule, current, target, reading, outcome }: {
   readonly rule: DiagnosticRule;
-  /** The revision FDD evaluates now; null while it cannot be read. */
-  readonly revision: RuleRevision | null;
+  /** The revision FDD evaluates now, as its query reads it. */
+  readonly current: { readonly data?: RuleRevision; readonly isPending: boolean };
   readonly target: { assetName: string } | null;
   readonly reading: PlantReading | null;
   readonly outcome: EvaluationOutcome | null;
@@ -90,13 +90,13 @@ function RuleCard({ rule, revision, target, reading, outcome }: {
             <span className="ml-1 text-sm font-normal text-muted-foreground">K</span>
           </span>
         </div>
-        <ThresholdBar rule={rule} threshold={outcome?.rule.minimumDeltaTC ?? revision?.minimumDeltaTC ?? null} value={live} />
+        <ThresholdBar rule={rule} threshold={outcome?.rule.minimumDeltaTC ?? current.data?.minimumDeltaTC ?? null} value={live} />
         <p className="text-sm text-muted-foreground">
           {outcome
             ? `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`
-            : revision
-              ? `系统定时自动诊断：最近 ${revision.windowMinutes} 分钟温差低于 ${revision.minimumDeltaTC} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。按第 ${revision.revision} 版规则。`
-              : '诊断规则暂不可用，暂时看不到阈值与诊断窗口。'}
+            : current.data
+              ? `系统定时自动诊断：最近 ${current.data.windowMinutes} 分钟温差低于 ${current.data.minimumDeltaTC} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。按第 ${current.data.revision} 版规则。`
+              : current.isPending ? '正在读取诊断规则…' : '诊断规则暂不可用，暂时看不到阈值与诊断窗口。'}
         </p>
       </CardContent>
     </Card>
@@ -189,7 +189,7 @@ export function DiagnosticsWorkspace() {
   const navigate = useNavigate({ from: '/operations/diagnostics' });
   const queryClient = useQueryClient();
   const findings = useQuery(siteFindingsQuery(site.id));
-  const revision = useQuery(lowDeltaTRuleQuery(site.id));
+  const currentRule = useQuery(lowDeltaTRuleQuery(site.id));
   const { plant, registry } = useRealtimePlant();
   const [outcome, setOutcome] = useState<EvaluationOutcome | null>(null);
 
@@ -257,7 +257,7 @@ export function DiagnosticsWorkspace() {
             label="诊断规则"
             value={<MetricValue value={String(RULES.length)} unit="项" />}
             lead={RULES.map((rule) => rule.title).join('、')}
-            detail={revision.data ? `第 ${revision.data.revision} 版 · 阈值 ${revision.data.minimumDeltaTC} K · 窗口 ${revision.data.windowMinutes} 分钟` : revision.isError ? '规则暂不可用' : '定时自动诊断'}
+            detail={currentRule.data ? `第 ${currentRule.data.revision} 版 · 阈值 ${currentRule.data.minimumDeltaTC} K · 窗口 ${currentRule.data.windowMinutes} 分钟` : currentRule.isError ? '规则暂不可用' : '定时自动诊断'}
           />
         </MetricGrid>
       ) : null}
@@ -265,7 +265,7 @@ export function DiagnosticsWorkspace() {
       <div className="grid items-start gap-6 @5xl/main:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <section aria-label="诊断项目" className="flex flex-col gap-4">
           {registry.isPending ? <Skeleton className="h-64 rounded-xl" /> : (
-            <RuleCard rule={LOW_DELTA_T} revision={revision.data ?? null} target={target} reading={plantReading(plant, 'btu_meter.temperature_difference')} outcome={outcome} />
+            <RuleCard rule={LOW_DELTA_T} current={currentRule} target={target} reading={plantReading(plant, 'btu_meter.temperature_difference')} outcome={outcome} />
           )}
         </section>
 
