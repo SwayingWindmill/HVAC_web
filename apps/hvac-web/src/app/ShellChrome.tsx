@@ -12,7 +12,6 @@ import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime
 import { useAppTheme } from './ThemeGate';
 import { useShellRuntime, useShellSnapshot } from './ShellRuntimeContext';
 
-
 function TransitionSurface({ state, detail, retryHref }: { readonly state: 'purging' | 'failed'; readonly detail?: string; readonly retryHref?: string }) {
   if (state === 'purging') {
     return (
@@ -60,7 +59,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const activeSite = protectedScope?.siteId ? snapshot.sites?.items?.find((candidate) => candidate.id === protectedScope.siteId) : undefined;
   const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
   const realtimePresentation = realtimeStatusPresentation(realtime);
-  const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
+  const transitionBlocksContent = transition !== undefined;
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? '暂无活动站点' : '平台范围');
   const principalRole = primaryRoleLabel(principal.principal.roles);
   const defaultSidebarOpen = useMemo(sidebarDefaultOpen, []);

@@ -26,7 +26,7 @@ function AppLayout() {
   useBlocker({
     enableBeforeUnload: false,
     // Leaving the active Site scope, for another Site or a platform page, goes through the runtime: it
-    // confirms the Site's unsaved drafts and purges the scope before navigating.
+    // purges the scope before navigating.
     shouldBlockFn: async ({ next }) => {
       const activeSiteId = runtime.current().protectedScope?.siteId;
       const nextSiteId = siteIdFromLocation(defaultStringifySearch(next.search));

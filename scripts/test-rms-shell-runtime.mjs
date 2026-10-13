@@ -552,7 +552,7 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   assert.deepEqual(env.navigations, [`/operations/alarms?site=${site.id}`]);
 });
 
-test('cross-Site navigation purges the old Site before navigation', async () => {
+test('cross-Site navigation purges before navigation', async () => {
   const siteA = registrySite();
   const siteB = registrySite('01900000-0002-7000-8000-000000000002');
   const events = [];
