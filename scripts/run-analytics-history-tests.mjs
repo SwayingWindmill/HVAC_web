@@ -461,6 +461,17 @@ try {
       ANALYTICS_CLICKHOUSE_TEST_ADMIN_USERNAME: 'telemetry_history',
     },
   });
+  report.assertions.metricCounterWindow = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=modules/metric',
+    'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow', '-v', './pkg/metric/...',
+  ], {
+    env: {
+      ...process.env,
+      METRIC_CLICKHOUSE_TEST_URL: clickHouseURL,
+      METRIC_CLICKHOUSE_TEST_ADMIN_USERNAME: 'telemetry_history',
+    },
+  });
   report.assertions.deviceHistoryQuery = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
