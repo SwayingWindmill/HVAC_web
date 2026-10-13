@@ -118,25 +118,3 @@ func TestMissingAndUnpricedHoursAreCountedNotFilled(t *testing.T) {
 		t.Fatalf("a plant on its baseline avoided %v kWh", result.AvoidedKWh)
 	}
 }
-
-func TestTariffRatesFollowTheSiteClockAndDayType(t *testing.T) {
-	periods := []TariffPeriod{
-		{DayType: "WEEKDAY", StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 0.32},
-		{DayType: "WEEKDAY", StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 1.2},
-		{DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: 0.5},
-	}
-	rate := TariffRates(periods, shanghai)
-	monday := time.Date(2026, 10, 12, 7, 30, 0, 0, shanghai)
-	if got, ok := rate(monday); !ok || got != 0.32 {
-		t.Fatalf("07:30 Monday = %v %v", got, ok)
-	}
-	if got, ok := rate(monday.Add(time.Hour)); !ok || got != 1.2 {
-		t.Fatalf("08:30 Monday = %v %v", got, ok)
-	}
-	if got, ok := rate(monday.AddDate(0, 0, -1)); !ok || got != 0.5 {
-		t.Fatalf("Sunday = %v %v", got, ok)
-	}
-	if _, ok := TariffRates(periods[:1], shanghai)(monday.Add(2 * time.Hour)); ok {
-		t.Fatal("an hour no period covers must not be priced")
-	}
-}

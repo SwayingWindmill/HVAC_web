@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 // DefaultBaselineDays is how far before implementation the baseline period reaches by default.
@@ -103,14 +105,14 @@ type SiteClock struct {
 // ImportTariff is the energy rate periods of the Tariff Version in effect, on the version's clock.
 type ImportTariff struct {
 	Location *time.Location
-	Periods  []TariffPeriod
+	Periods  []tariffmodel.Period
 }
 
 func (clock SiteClock) rates() func(time.Time) (float64, bool) {
 	if clock.Tariff == nil {
 		return func(time.Time) (float64, bool) { return 0, false }
 	}
-	return TariffRates(clock.Tariff.Periods, clock.Tariff.Location)
+	return tariffmodel.Rates(clock.Tariff.Periods, clock.Tariff.Location)
 }
 
 type ClockSource interface {
