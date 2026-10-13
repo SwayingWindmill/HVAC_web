@@ -453,6 +453,7 @@ function buildOptimizationSeed(site, points) {
   const electricity = '01990000-0000-7000-8000-000000000001';
   const tariffPeriods = ['WEEKDAY', 'WEEKEND'].flatMap((dayType) => touImportSlices.map(([code, start, end], ordinal) =>
     ({ id: siteID(), dayType, code, start, end, ordinal, pricingRule: touImportRates[code] })));
+  const optimizationScheduleId = siteID();
   const constraints = {
     comfort: { zoneTempMinC: 22, zoneTempMaxC: 26 },
     safety: { supplyTempMinC: 6, supplyTempMaxC: 10, maxSupplyTempStepC: 1 },
@@ -538,6 +539,10 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.ai_deployment_bindings (id, tenant_id, site_id, use_case, deployment_revision_id, status, revision, created_at, updated_at)
 VALUES (${id(deploymentBindingId)}, ${t}, ${st}, 'OPTIMIZATION', ${id(deploymentRevisionId)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
+-- Every hour, after the hourly load forecast at :07, the Site's current state is optimized again.
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at)
+VALUES (${id(optimizationScheduleId)}, ${id(`supply-temperature-optimization-${site.siteCode}`)}, '冷冻水供水温度优化建议（每小时）', ${t}, ${st}, 'OPTIMIZATION_RUN', 'CRON', '20 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 120, '{}', clock_timestamp())
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
 COMMIT;`;
 }
 
