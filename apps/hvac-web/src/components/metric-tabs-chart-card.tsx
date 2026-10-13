@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Info } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -34,6 +35,12 @@ export interface MetricTab {
   invertDelta?: boolean
   /** The change is neither good nor bad. */
   neutralDelta?: boolean
+  /** A line under the value, e.g. what it is compared with. */
+  caption?: React.ReactNode
+  /** How the figure is derived, shown on hover beside the label. */
+  info?: string
+  /** Key of the running bucket's partial value, drawn hatched on top of the bars. */
+  partialKey?: string
 }
 
 export interface MetricTabsChartCardProps extends Omit<React.ComponentProps<typeof Card>, "title"> {
@@ -67,6 +74,8 @@ export interface MetricTabsChartCardProps extends Omit<React.ComponentProps<type
   action?: React.ReactNode
   /** A line above the chart naming what it plots. */
   chartTitle?: React.ReactNode
+  /** Area against a dashed line (default), or bars beside the previous period's bars. */
+  chartType?: "area" | "bar"
 }
 
 function aggregate(
@@ -105,6 +114,7 @@ function MetricTabsChartCard({
   caption,
   action,
   chartTitle,
+  chartType = "area",
   className,
   ...props
 }: MetricTabsChartCardProps) {
@@ -193,7 +203,14 @@ function MetricTabsChartCard({
                   : "hover:bg-accent/60"
               )}
             >
-              <span className={cn("text-xs font-medium whitespace-nowrap", isSelected ? "text-primary" : "text-muted-foreground")}>{metric.label}</span>
+              <span className={cn("flex items-center gap-1 text-xs font-medium whitespace-nowrap", isSelected ? "text-primary" : "text-muted-foreground")}>
+                {metric.label}
+                {metric.info ? (
+                  <span title={metric.info} className="text-subtle-foreground inline-flex cursor-help">
+                    <Info className="size-3.5" aria-hidden="true" />
+                  </span>
+                ) : null}
+              </span>
               <span className="flex items-center justify-between gap-3">
                 <MetricValue
                   value={value ?? "—"}
@@ -213,6 +230,7 @@ function MetricTabsChartCard({
                   />
                 ) : null}
               </span>
+              {metric.caption ? <span className="text-muted-foreground truncate text-xs tabular-nums">{metric.caption}</span> : null}
             </button>
           )
         })}
@@ -225,7 +243,15 @@ function MetricTabsChartCard({
         <ComposedChart
           data={data}
           xKey={xKey}
-          series={[
+          series={chartType === "bar" ? [
+            ...(active.compareKey
+              ? [{ key: active.compareKey, label: compareLabel, type: "bar" as const, color: compareColor }]
+              : []),
+            { key: active.key, label: active.label, type: "bar" as const, color, stackId: "current" },
+            ...(active.partialKey
+              ? [{ key: active.partialKey, label: "进行中", type: "bar" as const, color, stackId: "current", pattern: "hatched" as const }]
+              : []),
+          ] : [
             ...(active.compareKey
               ? [
                   {

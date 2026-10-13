@@ -79,6 +79,31 @@ export function touEnergyCost(points: readonly { periodStart: string; energyKWh:
   return { energyKWh, total: byPeriod.reduce((sum, entry) => sum + entry.cost, 0), byPeriod, unpricedKWh };
 }
 
+/** Hourly energy priced per bucket, the buckets named by `labelOf`. */
+export function touCostByLabel(
+  points: readonly { periodStart: string; energyKWh: number }[],
+  tariff: SiteTariff,
+  timeZone: string,
+  labelOf: (periodStart: string) => string,
+): Map<string, TouCost> {
+  const groups = new Map<string, { periodStart: string; energyKWh: number }[]>();
+  for (const point of points) {
+    const label = labelOf(point.periodStart);
+    groups.set(label, [...(groups.get(label) ?? []), point]);
+  }
+  return new Map([...groups.entries()].map(([label, group]) => [label, touEnergyCost(group, tariff, timeZone)]));
+}
+
+/** The clock ranges a period covers on the Site-local day of an instant, e.g. 08:00–11:00、18:00–21:00. */
+export function periodRanges(tariff: SiteTariff, instant: Date, timeZone: string): Map<PeriodCode, string> {
+  const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+  const ranges = new Map<PeriodCode, string[]>();
+  for (const period of daySchedule(tariff, instant, timeZone)) {
+    ranges.set(period.periodCode, [...(ranges.get(period.periodCode) ?? []), `${clock(period.startMinute)}–${clock(period.endMinute)}`]);
+  }
+  return new Map([...ranges.entries()].map(([code, list]) => [code, list.join('、')]));
+}
+
 /** Each metered hour's energy cost by its label, for hours of a day lined up by the clock. */
 export function costByLabel(
   rows: readonly { label: string; periodStart: string; electricityKWh: number | null }[],

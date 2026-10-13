@@ -154,6 +154,14 @@ function bucketAt(from: Date, granularity: Granularity, ordinal: number, timeZon
   return new Date(siteMidnight(start.year, start.month, start.day, timeZone).getTime() + ordinal * HOUR_MS);
 }
 
+/**
+ * The label of the current period's bucket that an instant of a period starting at `start` lines
+ * up with: hours of a day, days of a window or months of a year, matched by their place.
+ */
+export function alignedLabel(periodStart: string, start: Date, from: Date, granularity: Granularity, timeZone: string): string {
+  return bucketLabel(bucketAt(from, granularity, bucketOrdinal(periodStart, start, granularity, timeZone), timeZone).toISOString(), granularity, timeZone);
+}
+
 export interface BucketComparison {
   readonly label: string;
   readonly electricityKWh: number | null;
