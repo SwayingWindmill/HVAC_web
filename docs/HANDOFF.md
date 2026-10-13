@@ -16,7 +16,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | 监测 | 实时运行, 设备 | telemetry snapshots/push, Registry asset model, device history |
 | 能源 | 能耗分析, 需量分析 | analytics energy series, device-series hourly/quarter-hour aggregates, Site tariff |
 | 能源 | 分项能耗 | analytics energy series with `breakdown: "device"`: the total meter (SITE) and each machine's sub-meter (BRANCH) |
-| 能源 | 负荷预测, 优化建议 | forecast service, optimization service |
+| 能源 | 负荷预测, 优化建议 | forecast service (hourly at :07), optimization service (hourly at :20, and on demand; spec `docs/specs/scheduled-optimization.md`) |
 | 能源 | 节能项目 (`/energy-analysis/savings`) | mv-service: measures, frozen baselines, verified days (ADR 0021) |
 | 能源 | 能源报告 (`/reports`) | closed months from report-service snapshots (`REPORT_GENERATE`, 03:00 on the 1st); the running month and unarchived months assembled on demand; yearly view; printable to A4 |
 | 能源 | 站点对标 (platform route `/benchmark`) | each authorized site's energy series; sites without analytics access are listed but not compared |

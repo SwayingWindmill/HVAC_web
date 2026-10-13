@@ -224,8 +224,8 @@ VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7::uuid,$8,$9,$10,$11,
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO core_registry.job_instances(
  job_id,trigger_type,job_type,tenant_id,site_id,subject_type,subject_id,scheduled_for,priority,dedup_key,payload,state,max_attempts,timeout_seconds,created_at,updated_at)
-VALUES($1::uuid,'MANUAL','OPTIMIZATION_RUN',$2::uuid,$3::uuid,$4,$5,$6,50,$7,$8::jsonb,'READY',3,120,$6,$6)`,
-		optimizationRunID, input.TenantID, input.SiteID, input.SubjectType, input.SubjectID, at.UTC(), "optimization:"+optimizationRunID, schedulerPayload); err != nil {
+VALUES($1::uuid,$9,'OPTIMIZATION_RUN',$2::uuid,$3::uuid,$4,$5,$6,50,$7,$8::jsonb,'READY',3,120,$6,$6)`,
+		optimizationRunID, input.TenantID, input.SiteID, input.SubjectType, input.SubjectID, at.UTC(), "optimization:"+optimizationRunID, schedulerPayload, input.Trigger); err != nil {
 		return PreparedOptimization{}, fmt.Errorf("insert Optimization scheduler job: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
