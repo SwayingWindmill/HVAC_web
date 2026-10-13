@@ -191,6 +191,9 @@ type Site struct {
 	Revision    int64  `json:"revision"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	// FloorAreaM2 and ClimateZone are the Site profile; null until recorded.
+	FloorAreaM2 *float64 `json:"floorAreaM2"`
+	ClimateZone *string  `json:"climateZone"`
 }
 
 type Asset struct {

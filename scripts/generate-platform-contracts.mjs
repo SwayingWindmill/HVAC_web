@@ -237,7 +237,7 @@ const schemaRequirements = {
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
-  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],

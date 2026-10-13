@@ -61,9 +61,9 @@ Roadmap issues, in order:
      - A Site's savings rate is avoided ÷ (plant electricity over the verified hours + avoided), so measures on several machines add up.
    - Later: non-routine adjustments, demand savings, apportioning savings between measures.
    - The local savings ledger was emptied by the #481 reset; the accepted result lives on as the e2e fixture.
-2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP. Still to do:
-   - site profiles: floor area and climate zone, owned by the Registry, for unit-area energy and climate correction;
-   - a trusted industry baseline source.
+2. **#485 — benchmarking, second half.** `/benchmark` ranks sites by plant COP or by electricity per square metre (spec `docs/specs/site-profile-benchmark.md`). A Site's floor area and GB 50176 climate zone are its Registry profile, edited in 系统管理 → 注册中心. Still to do:
+   - climate correction, which needs daily weather (cooling degree days) from an owner the platform does not have yet;
+   - a trusted industry baseline source; the page says 未接入 until there is one.
 
 Smaller follow-ups:
 

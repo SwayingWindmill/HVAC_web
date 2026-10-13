@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
 import { confirmDiscardRegistryDraft } from './useDirtyGuard';
 import {
   makeRegistryMutationMeta,
@@ -76,6 +77,8 @@ type EditDraft = {
   code: string;
   displayName: string;
   timezone: string;
+  floorAreaM2: string;
+  climateZone: ClimateZone | '';
   status: Site['status'];
   parentSpaceId: string;
   spaceType: RegistrySpace['spaceType'];
@@ -178,7 +181,7 @@ function entityRows(site: Site, model: SiteAssetModel, type: RegistryAdminResour
 
 function defaultEditDraft(type: RegistryAdminResourceType, entity?: ResourceEntity): EditDraft {
   const base: EditDraft = {
-    code: '', displayName: '', timezone: 'Asia/Shanghai', status: 'ACTIVE', parentSpaceId: '', spaceType: 'OTHER',
+    code: '', displayName: '', timezone: 'Asia/Shanghai', floorAreaM2: '', climateZone: '', status: 'ACTIVE', parentSpaceId: '', spaceType: 'OTHER',
     assetType: '', deviceType: '', reportingDeviceId: '', sensorId: '', pointCode: '', sourceKey: '', pointType: 'TELEMETRY',
     valueType: 'NUMBER', unit: '', writable: false, sampleIntervalMs: 1000, publishIntervalMs: 5000, staleAfterMs: 15000,
     counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: entity ? `更新${RESOURCE_LABEL[type]}` : `创建${RESOURCE_LABEL[type]}`,
@@ -186,7 +189,10 @@ function defaultEditDraft(type: RegistryAdminResourceType, entity?: ResourceEnti
   if (!entity) return base;
   if (type === 'SITE') {
     const value = entity as Site;
-    return { ...base, code: value.code, displayName: value.displayName, timezone: value.timezone, status: value.status };
+    return {
+      ...base, code: value.code, displayName: value.displayName, timezone: value.timezone, status: value.status,
+      floorAreaM2: value.floorAreaM2 === null ? '' : String(value.floorAreaM2), climateZone: value.climateZone ?? '',
+    };
   }
   if (type === 'SPACE') {
     const value = entity as RegistrySpace;
@@ -330,7 +336,10 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
   const editValid = useMemo(() => {
     if (!editTarget || !editDraft.reason.trim()) return false;
-    if (editTarget.type === 'SITE') return Boolean(editDraft.code.trim() && editDraft.displayName.trim() && editDraft.timezone.trim());
+    if (editTarget.type === 'SITE') {
+      const area = editDraft.floorAreaM2.trim();
+      return Boolean(editDraft.code.trim() && editDraft.displayName.trim() && editDraft.timezone.trim()) && (area === '' || Number(area) > 0);
+    }
     if (editTarget.type === 'SPACE') return Boolean(editDraft.code.trim() && editDraft.displayName.trim() && editDraft.spaceType);
     if (editTarget.type === 'ASSET') return Boolean(editDraft.code.trim() && editDraft.displayName.trim() && editDraft.assetType.trim());
     if (editTarget.type === 'DEVICE') return Boolean(editDraft.code.trim() && editDraft.displayName.trim() && editDraft.deviceType.trim());
@@ -353,7 +362,11 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
     try {
       let createdSiteId: string | null = null;
       if (type === 'SITE') {
-        const body = { code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), timezone: editDraft.timezone.trim(), status: editDraft.status, meta };
+        const area = editDraft.floorAreaM2.trim();
+        const body = {
+          code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), timezone: editDraft.timezone.trim(), status: editDraft.status,
+          floorAreaM2: area === '' ? undefined : Number(area), climateZone: editDraft.climateZone || undefined, meta,
+        };
         const saved = entity ? await registryAdminApi.updateSite(entity.id, body) : await registryAdminApi.createSite(body);
         createdSiteId = entity ? null : saved.id;
       } else if (type === 'SPACE') {
@@ -658,7 +671,27 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 <label className="grid gap-1.5 text-sm"><span>编码</span><Input value={editDraft.code} onChange={(event) => updateEdit('code', event.target.value)} /></label>
                 <label className="grid gap-1.5 text-sm"><span>名称</span><Input value={editDraft.displayName} onChange={(event) => updateEdit('displayName', event.target.value)} /></label>
               </> : null}
-              {editTarget.type === 'SITE' ? <label className="grid gap-1.5 text-sm"><span>时区</span><Input value={editDraft.timezone} onChange={(event) => updateEdit('timezone', event.target.value)} /></label> : null}
+              {editTarget.type === 'SITE' ? <>
+                <label className="grid gap-1.5 text-sm"><span>时区</span><Input value={editDraft.timezone} onChange={(event) => updateEdit('timezone', event.target.value)} /></label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="grid gap-1.5 text-sm">
+                    <span>建筑面积（m²，可选）</span>
+                    <Input inputMode="decimal" className="tabular-nums" value={editDraft.floorAreaM2} onChange={(event) => updateEdit('floorAreaM2', event.target.value)} />
+                    <span className="text-xs text-muted-foreground">站点对标按它计算单位面积用电</span>
+                  </label>
+                  <label className="grid gap-1.5 text-sm">
+                    <span>气候区（可选）</span>
+                    <Select value={editDraft.climateZone || '__none__'} onValueChange={(value) => updateEdit('climateZone', value === '__none__' ? '' : value as ClimateZone)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectGroup>
+                        <SelectItem value="__none__">未登记</SelectItem>
+                        {(Object.keys(CLIMATE_ZONE_LABEL) as ClimateZone[]).map((zone) => <SelectItem key={zone} value={zone}>{CLIMATE_ZONE_LABEL[zone]}</SelectItem>)}
+                      </SelectGroup></SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground">按 GB 50176 热工分区</span>
+                  </label>
+                </div>
+              </> : null}
               {editTarget.type === 'SPACE' ? <>
                 <label className="grid gap-1.5 text-sm"><span>空间类型</span><Select value={editDraft.spaceType} onValueChange={(value) => updateEdit('spaceType', value as RegistrySpace['spaceType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{SPACE_TYPES.map((value) => <SelectItem key={value} value={value}>{spaceTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <label className="grid gap-1.5 text-sm"><span>上级空间</span><Select value={editDraft.parentSpaceId || '__none__'} onValueChange={(value) => updateEdit('parentSpaceId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">无上级空间</SelectItem>{model.spaces.filter((space) => space.id !== editTarget.entity?.id).map((space) => <SelectItem key={space.id} value={space.id}>{space.displayName} · {space.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>

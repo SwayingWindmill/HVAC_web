@@ -1,11 +1,15 @@
+import type { ClimateZone } from '../../lib/climate-zone.ts';
 import type { EnergySummary } from '../energy-analysis/consumption/model.ts';
 
 // Sites compared on what every plant measures alike: HVAC electricity, cooling delivered and the
 // plant COP between them. The fleet's COP weighs each site by its energy, not one vote per site.
+// A site with a floor area in its Registry profile is also compared on electricity per square metre.
 
 export interface SiteSummary {
   readonly siteId: string;
   readonly name: string;
+  readonly floorAreaM2: number | null;
+  readonly climateZone: ClimateZone | null;
   readonly summary: EnergySummary;
 }
 
@@ -21,6 +25,12 @@ export interface BenchmarkSite {
   readonly dailyElectricityKWh: number | null;
   /** The site's COP against the fleet's, as a fraction; null without a COP. */
   readonly copVsFleet: number | null;
+  readonly floorAreaM2: number | null;
+  readonly climateZone: ClimateZone | null;
+  /** HVAC electricity over the period per square metre of floor area; null without a floor area. */
+  readonly intensityKWhPerM2: number | null;
+  /** 1 uses the least electricity per square metre; null without an intensity. */
+  readonly intensityRank: number | null;
 }
 
 export type BenchmarkDay = { readonly key: string; readonly label: string } & Readonly<Record<string, number | string | null>>;
@@ -53,10 +63,18 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
         cop: site.summary.cop,
         dailyElectricityKWh: site.summary.electricityKWh !== null && metered > 0 ? site.summary.electricityKWh / metered : null,
         copVsFleet: site.summary.cop !== null && fleetCop ? site.summary.cop / fleetCop - 1 : null,
+        floorAreaM2: site.floorAreaM2,
+        climateZone: site.climateZone,
+        intensityKWhPerM2: site.floorAreaM2 !== null && site.summary.electricityKWh !== null ? site.summary.electricityKWh / site.floorAreaM2 : null,
       };
     })
     .sort((left, right) => (right.cop ?? -Infinity) - (left.cop ?? -Infinity))
-    .map((site, index): BenchmarkSite => ({ ...site, rank: site.cop === null ? null : index + 1 }));
+    .map((site, index) => ({ ...site, rank: site.cop === null ? null : index + 1 }));
+  const byIntensity = sites.filter((site) => site.intensityKWhPerM2 !== null).sort((left, right) => left.intensityKWhPerM2! - right.intensityKWhPerM2!);
+  const rankedSites = sites.map((site): BenchmarkSite => {
+    const place = byIntensity.indexOf(site);
+    return { ...site, intensityRank: place === -1 ? null : place + 1 };
+  });
 
   const days = new Map<string, Record<string, number | string | null>>();
   for (const site of input) {
@@ -68,7 +86,7 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
   }
 
   return {
-    sites,
+    sites: rankedSites,
     fleet: { electricityKWh: total('electricityKWh'), coolingKWh: total('coolingKWh'), cop: fleetCop },
     daily: [...days.values()].sort((left, right) => String(left.key).localeCompare(String(right.key))) as BenchmarkDay[],
   };

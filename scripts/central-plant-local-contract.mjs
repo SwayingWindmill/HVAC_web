@@ -26,6 +26,8 @@ export const localSites = Object.freeze([
     gatewayDeviceId: centralPlantIdentity.gatewayDeviceId, gatewayCode: 'eg8200-commercial-001', gatewayName: 'EG8200-COMMERCIAL-001',
     simulatorService: 'eg8200-simulator', simulatorConfig: 'eg8200-mqtt.json', simulatorQueue: 'eg8200',
     dailyScenario: 'scenario-daily-a.json',
+    // An example profile for the simulated Site, so energy per square metre shows locally.
+    floorAreaM2: 32000, climateZone: 'HOT_SUMMER_COLD_WINTER',
   }),
   Object.freeze({
     index: 1, tenantId: centralPlantIdentity.tenantId, siteId: '018f3e00-1000-7000-8000-000000000002',
@@ -33,6 +35,7 @@ export const localSites = Object.freeze([
     gatewayDeviceId: '018f3e00-4000-7000-8000-000000000200', gatewayCode: 'eg8200-commercial-002', gatewayName: 'EG8200-COMMERCIAL-002',
     simulatorService: 'eg8200-simulator-b', simulatorConfig: 'eg8200-mqtt-b.json', simulatorQueue: 'eg8200-b',
     dailyScenario: 'scenario-daily-b.json',
+    floorAreaM2: 18000, climateZone: 'HOT_SUMMER_WARM_WINTER',
   }),
 ]);
 

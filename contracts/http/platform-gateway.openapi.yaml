@@ -2791,7 +2791,9 @@
           "status",
           "revision",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "floorAreaM2",
+          "climateZone"
         ],
         "properties": {
           "id": {
@@ -2832,7 +2834,9 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
-          }
+          },
+          "floorAreaM2": { "oneOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }] },
+          "climateZone": { "oneOf": [{ "type": "string", "enum": ["SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD"] }, { "type": "null" }] }
         }
       },
       "Asset": {

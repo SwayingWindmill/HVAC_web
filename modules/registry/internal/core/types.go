@@ -30,6 +30,10 @@ type Site struct {
 	Revision    int64  `json:"revision"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	// FloorAreaM2 is the building floor area energy is compared per square metre on; nil until recorded.
+	FloorAreaM2 *float64 `json:"floorAreaM2"`
+	// ClimateZone is the GB 50176 thermal design zone; nil until recorded.
+	ClimateZone *string `json:"climateZone"`
 }
 
 type Asset struct {
