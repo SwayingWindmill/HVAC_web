@@ -4,7 +4,7 @@ The current state of the work and what to pick up next. Update it in the same PR
 what it says. How to build, test and run lives in `CLAUDE.md` / `AGENTS.md`; what changed for
 users lives in `CHANGELOG.md`.
 
-Last updated: 2026-10-12.
+Last updated: 2026-10-13.
 
 ## Where the product is
 
@@ -67,6 +67,7 @@ Roadmap issues, in order:
 
 Smaller follow-ups:
 
+- Unsaved drafts have two owners: platform pages (系统管理) keep their own registry with a router blocker (`features/system/unsaved-drafts.tsx`); the protected Site scope's `registerDraft` / `dirtyDrafts` still drive the site-switch confirmation, but no Site page registers a draft yet. Wire a Site page's form into it when one needs the guard, or remove the path.
 - Counter deltas in the Metric engine do not stop at a Point revision or unit change; Energy Interval Facts (`counter_deltas_from`) do (`REVISION_BOUNDARY`, `UNIT_BOUNDARY`). This was already so inside a window, and since the window-start fix it also applies to the step from the reading before the window. Close it when a Point is first reconfigured in place.
 - The accepted M&V result (`e2e/fixtures/savings-measure-verified.json`) was computed from `hourly_energy` before the window-start fix, about 1/60 low on both the baseline and the reporting days. Re-verify it the next time M&V acceptance runs.
 - Move the FDD low-ΔT threshold from the schedule payload into an owner-held rule definition.
