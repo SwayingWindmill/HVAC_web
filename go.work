@@ -27,6 +27,7 @@ use (
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/schemagate
+	./libs/tariffmodel
 	./libs/telemetryauth
 	./libs/telemetryhistorymodel
 	./libs/testpki

@@ -142,6 +142,29 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 	}
 }
 
+// The daily cost prices the day's energy; a cost from another day would price this day's energy at
+// that day's mix of peak and valley hours. The cost is missing for a day with an hour missing.
+func TestOptimizationPreparationRefusesACostFromAnotherDay(t *testing.T) {
+	at := time.Date(2026, 8, 28, 15, 0, 0, 0, time.UTC)
+	state := testAuthoritativeState(at)
+	state.DailyCost.PeriodStart = state.DailyCost.PeriodStart.AddDate(0, 0, -7)
+	state.DailyCost.PeriodEnd = state.DailyCost.PeriodEnd.AddDate(0, 0, -7)
+	store := &preparationStoreStub{definition: testPreparationDefinition()}
+	preparer, err := NewPreparer(store, &authoritativeInputStub{state: state}, func() time.Time { return at })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparer.Prepare(t.Context(), PreparationRequest{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+	}); err == nil {
+		t.Fatal("prepared an optimization with a daily cost from another day")
+	}
+	if len(store.created) != 0 {
+		t.Fatal("preparation must not persist a snapshot with mismatched daily cost and energy")
+	}
+}
+
 // Postgres keeps timestamps to the microsecond. A run prepared on a nanosecond wall clock once
 // failed every time with "frozen Optimization input checksum does not match persisted
 // provenance", because the reloaded capture time no longer matched the one checksummed.

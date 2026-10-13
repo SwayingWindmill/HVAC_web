@@ -282,6 +282,10 @@ func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at
 			return FrozenCurrentState{}, err
 		}
 	}
+	// The cost prices that day's energy at its own mix of tariff periods, so both must be the same day.
+	if !state.DailyCost.PeriodStart.Equal(state.DailyEnergy.PeriodStart) || !state.DailyCost.PeriodEnd.Equal(state.DailyEnergy.PeriodEnd) {
+		return FrozenCurrentState{}, errors.New("authoritative daily cost and energy are for different periods")
+	}
 	for expectedKey, evidence := range map[string]TelemetryEvidence{mapping.SupplyTemperatureKey: state.SupplyTemperature, mapping.ZoneTemperatureKey: state.ZoneTemperature} {
 		if err := validateTelemetryEvidence(evidence, expectedKey, at); err != nil {
 			return FrozenCurrentState{}, err

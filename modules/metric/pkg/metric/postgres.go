@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -199,6 +200,136 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
 		Quality:         quality,
 		Completeness:    completeness,
 	}, nil
+}
+
+// LoadHourlyMetricResults is the current result of each hour of an hourly kWh Metric over a window,
+// all of the dependency's released Metric Version.
+func (s *PostgresStore) LoadHourlyMetricResults(ctx context.Context, binding Binding, dependency Dependency, start, end time.Time) ([]HourlyResult, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, binding.TenantID, binding.SiteID); err != nil {
+		return nil, err
+	}
+	var versionID, dataType, unit string
+	if err = tx.QueryRow(ctx, `SELECT id::text,data_type,coalesce(unit_code,'')
+FROM core_registry.metric_versions
+WHERE tenant_id=$1::uuid AND metric_id=$2::uuid AND status='RELEASED'
+  AND subject_type=$3 AND time_granularity='HOUR'
+  AND effective_from <= $4 AND (effective_to IS NULL OR effective_to > $4)`,
+		binding.TenantID, dependency.MetricID, binding.SubjectType, start.UTC()).Scan(&versionID, &dataType, &unit); err != nil {
+		return nil, fmt.Errorf("load hourly Metric dependency version: %w", err)
+	}
+	if dataType != "NUMBER" || unit != "kWh" {
+		return nil, errors.New("hourly Metric dependency is not energy in kWh")
+	}
+	rows, err := tx.Query(ctx, `SELECT period_start,metric_version_id::text,value_number,quality,current_result_id::text,current_revision
+FROM core_registry.metric_result_heads
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
+  AND subject_type=$4 AND subject_id=$5::uuid AND granularity='HOUR'
+  AND period_start >= $6 AND period_end <= $7 AND current_revision > 0
+ORDER BY period_start`,
+		binding.TenantID, binding.SiteID, dependency.MetricID, binding.SubjectType, binding.SubjectID, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("load hourly Metric dependency results: %w", err)
+	}
+	defer rows.Close()
+	var hours []HourlyResult
+	for rows.Next() {
+		var hour HourlyResult
+		var actualVersionID string
+		if err := rows.Scan(&hour.PeriodStart, &actualVersionID, &hour.Value, &hour.Quality, &hour.ResultID, &hour.Revision); err != nil {
+			return nil, err
+		}
+		if actualVersionID != versionID {
+			return nil, errors.New("hourly Metric dependency result does not match the released Metric Version")
+		}
+		hours = append(hours, hour)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return hours, tx.Commit(ctx)
+}
+
+// LoadImportTariffs is each import Tariff Version priced on the Site's grid connection during the
+// window, over the part of it where both the version and its assignment are in effect. A Site with
+// several import connections is priced on the first by boundary code, as M&V prices it.
+func (s *PostgresStore) LoadImportTariffs(ctx context.Context, tenantID, siteID string, start, end time.Time) ([]ImportTariff, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = scope(ctx, tx, tenantID, siteID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+SELECT boundary.boundary_code,
+       version.id::text,
+       GREATEST(version.effective_from, assignment.effective_from),
+       LEAST(version.effective_to, assignment.effective_to),
+       version.timezone
+FROM core_registry.tariff_assignments AS assignment
+JOIN core_registry.settlement_boundaries AS boundary
+  ON boundary.tenant_id = assignment.tenant_id AND boundary.site_id = assignment.site_id AND boundary.id = assignment.boundary_id
+JOIN core_registry.tariff_versions AS version
+  ON version.tenant_id = assignment.tenant_id AND version.site_id = assignment.site_id AND version.tariff_id = assignment.tariff_id
+WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
+  AND assignment.status = 'RELEASED' AND assignment.effective_from < $4 AND (assignment.effective_to IS NULL OR assignment.effective_to > $3)
+  AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
+  AND version.status = 'RELEASED' AND version.effective_from < $4 AND (version.effective_to IS NULL OR version.effective_to > $3)
+ORDER BY 1, 3`, tenantID, siteID, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("load import Tariff versions: %w", err)
+	}
+	var tariffs []ImportTariff
+	firstBoundary := ""
+	for rows.Next() {
+		var tariff ImportTariff
+		var boundaryCode, timezone string
+		if err := rows.Scan(&boundaryCode, &tariff.VersionID, &tariff.EffectiveFrom, &tariff.EffectiveTo, &timezone); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if firstBoundary == "" {
+			firstBoundary = boundaryCode
+		}
+		if boundaryCode != firstBoundary {
+			continue
+		}
+		if tariff.Location, err = time.LoadLocation(timezone); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		tariffs = append(tariffs, tariff)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range tariffs {
+		periods, err := tx.Query(ctx, `SELECT day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
+FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, tariffs[index].VersionID)
+		if err != nil {
+			return nil, fmt.Errorf("load import Tariff periods: %w", err)
+		}
+		for periods.Next() {
+			var period tariffmodel.Period
+			if err := periods.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
+				periods.Close()
+				return nil, err
+			}
+			tariffs[index].Periods = append(tariffs[index].Periods, period)
+		}
+		periods.Close()
+		if err := periods.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return tariffs, tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CreateRun(ctx context.Context, r Result, reason string, inputRefs []byte) (Result, error) {

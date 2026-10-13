@@ -6,6 +6,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 const (
@@ -99,7 +101,7 @@ func (history plantHistory) HourlySamples(_ context.Context, _, _ string, from, 
 type flatTariff struct{ rate float64 }
 
 func (tariff flatTariff) SiteClock(_ context.Context, _, _ string) (SiteClock, error) {
-	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: shanghai, Periods: []TariffPeriod{
+	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: shanghai, Periods: []tariffmodel.Period{
 		{DayType: "WEEKDAY", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
 		{DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
 	}}}, nil
@@ -332,10 +334,10 @@ func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
 type utcTariffClock struct{}
 
 func (utcTariffClock) SiteClock(context.Context, string, string) (SiteClock, error) {
-	periods := []TariffPeriod{}
+	periods := []tariffmodel.Period{}
 	for _, dayType := range []string{"WEEKDAY", "WEEKEND"} {
-		periods = append(periods, TariffPeriod{DayType: dayType, StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 1},
-			TariffPeriod{DayType: dayType, StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 0})
+		periods = append(periods, tariffmodel.Period{DayType: dayType, StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 1},
+			tariffmodel.Period{DayType: dayType, StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 0})
 	}
 	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: time.UTC, Periods: periods}}, nil
 }

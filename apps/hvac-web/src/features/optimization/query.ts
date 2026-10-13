@@ -49,7 +49,7 @@ function runRefusal(problem: { code?: string; retryable?: boolean } | null): str
   // and for good when the Site's policy or deployment cannot be used.
   if (problem?.code === 'INTELLIGENCE_UPSTREAM_REJECTED') {
     return problem.retryable
-      ? '暂时无法生成建议：昨日用电与电费、最新负荷预测或实时供水、室内温度尚未就绪'
+      ? '暂时无法生成建议：最近一天的用电与电费、最新负荷预测或实时供水、室内温度尚未就绪'
       : '无法生成建议：站点的优化策略或模型部署不可用';
   }
   return '优化服务暂时不可用';

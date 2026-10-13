@@ -237,7 +237,7 @@ export function OptimizationWorkspace() {
             <EmptyMedia variant="icon"><Lightbulb /></EmptyMedia>
             <EmptyTitle>还没有优化建议</EmptyTitle>
             <EmptyDescription>
-              建议依据昨日冷站用电与电费、最新负荷预测和实时供水、室内温度计算；昨日用电每天零点后结算。
+              建议依据最近一天的冷站用电与电费、最新负荷预测和实时供水、室内温度计算；用电与电费每天零点后结算，某天缺数据时不出电费，改用更早一天。
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
@@ -261,14 +261,14 @@ export function OptimizationWorkspace() {
             <MetricCard
               label="预计日节电"
               value={<MetricValue value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh" />}
-              lead={share !== null ? `约占昨日冷站用电 ${formatDecimal(share * 100, 1)}%` : '昨日冷站用电为零'}
+              lead={share !== null ? `约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : '最近一天冷站用电为零'}
               detail={`90% 把握在 ±${formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内`}
             />
             <MetricCard
               label="预计日节省"
               value={<MetricValue value={formatDecimal(recommendation.saving.costPerDay, 0)} unit="元" />}
-              lead={`按昨日电费 ${formatDecimal(recommendation.baseline.dailyCost, 0)} 元折算`}
-              detail="按日均电价折算，未计峰谷时段"
+              lead={`按最近一天电费 ${formatDecimal(recommendation.baseline.dailyCost, 0)} 元折算`}
+              detail="按当天峰谷均价折算，不含需量电费"
             />
             <MetricCard
               label="预计室内温度"
@@ -320,8 +320,8 @@ export function OptimizationWorkspace() {
                 </CardHeader>
                 <CardContent>
                   <FactList>
-                    <FactRow label="昨日冷站用电">{formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh</FactRow>
-                    <FactRow label="昨日电费">{formatDecimal(recommendation.baseline.dailyCost, 0)} 元</FactRow>
+                    <FactRow label="最近一天冷站用电">{formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh</FactRow>
+                    <FactRow label="最近一天电费">{formatDecimal(recommendation.baseline.dailyCost, 0)} 元</FactRow>
                     <FactRow label="供水温度">{celsius(recommendation.baseline.supplyTempC)}</FactRow>
                     <FactRow label="室内温度">{celsius(recommendation.baseline.zoneTempC)}</FactRow>
                   </FactList>

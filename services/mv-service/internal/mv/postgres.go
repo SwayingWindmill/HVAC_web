@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
@@ -262,7 +263,7 @@ FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY da
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var period TariffPeriod
+			var period tariffmodel.Period
 			if err := rows.Scan(&period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
 				return err
 			}
