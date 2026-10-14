@@ -6,6 +6,7 @@ import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { useShellNotifications } from './use-shell-notifications';
+import { BrandMark } from '@/components/brand-mark';
 
 interface AppHeaderProps {
   readonly principalSubject: string;
@@ -51,7 +52,7 @@ export function AppHeader({
           }}
           className="flex shrink-0 rounded-[7px] outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
         >
-          <img src="/quanlaihe-mark.svg" alt="" className="size-7" />
+          <BrandMark className="size-7" />
         </a>
         <span className="mx-0.5 text-xl font-light text-border" aria-hidden="true">/</span>
         <ScopeSwitcher />

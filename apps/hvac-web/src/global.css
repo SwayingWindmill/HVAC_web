@@ -330,3 +330,53 @@
     box-shadow: none !important;
   }
 }
+
+/* Sign-in illustration (app/SignInIllustration.tsx). */
+@keyframes ill-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ill-float {
+  to {
+    transform: translateY(-10px);
+  }
+}
+@keyframes ill-drift {
+  to {
+    transform: translateX(24px);
+  }
+}
+@keyframes ill-sway {
+  from {
+    transform: rotate(-5deg);
+  }
+  to {
+    transform: rotate(5deg);
+  }
+}
+@keyframes ill-bar {
+  from {
+    transform: scaleY(0.62);
+  }
+}
+@keyframes ill-rise {
+  from {
+    opacity: 0.9;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-22px);
+  }
+}
+@keyframes ill-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes ill-blink {
+  50% {
+    opacity: 0.6;
+  }
+}

@@ -26,7 +26,7 @@ test('the password goes straight to the identity service, and a wrong one comes 
   await page.goto('/sign-in?login_challenge=chal-1');
   await expect(page.getByText('使用平台账号登录')).toBeVisible();
 
-  await page.getByLabel('用户名').fill('zhou.min');
+  await page.getByLabel('用户名', { exact: true }).fill('zhou.min');
   await page.getByLabel('密码').fill('wrong password');
   await page.getByRole('button', { name: '登录', exact: true }).click();
 
@@ -34,7 +34,7 @@ test('the password goes straight to the identity service, and a wrong one comes 
   expect(posts).toHaveLength(1);
   expect(posts[0].path).toBe('/identity/login');
   expect(Object.fromEntries(posts[0].form)).toEqual({ challenge: 'chal-1', username: 'zhou.min', password: 'wrong password' });
-  await expect(page.getByLabel('用户名')).toHaveValue('zhou.min');
+  await expect(page.getByLabel('用户名', { exact: true })).toHaveValue('zhou.min');
   await expect(page.getByLabel('密码')).toHaveValue('');
   expect(page.url()).not.toContain('zhou.min');
 });
