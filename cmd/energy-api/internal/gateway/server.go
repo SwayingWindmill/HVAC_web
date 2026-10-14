@@ -380,6 +380,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.SearchAudit(writer, request)
+	case publicMembersPath:
+		h.UserAdmin(writer, request)
+	case publicOwnPasswordPath:
+		h.OwnPassword(writer, request)
 	case publicIAMAdminMutationPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -411,6 +415,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		h.Logout(writer, request, platformapi.LogoutParams{CSRFToken: request.Header.Get("X-CSRF-Token")})
 	default:
+		if strings.HasPrefix(request.URL.Path, publicMembersPrefix) {
+			h.UserAdmin(writer, request)
+			return
+		}
 		if messageID, matches := matchSessionAuditPath(request.URL.Path); matches {
 			if request.Method != http.MethodGet {
 				writeMethodNotAllowedFor(writer, request, http.MethodGet)

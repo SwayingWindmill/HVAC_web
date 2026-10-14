@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { Check, ChevronRight, Users } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import { registryAssetModelQuery } from '@/api/registry';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from '@/app/realtime-status';
 import type { ShellSnapshot } from '@/app/shell-runtime';
@@ -19,6 +19,7 @@ import { AuditLog } from './audit/AuditLog';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { RuleManagement } from './rule-management/RuleManagement';
 import type { RegisterUnsavedDraft } from './unsaved-drafts';
+import { UserAdministration } from './users/UserAdministration';
 
 const systemRouteApi = getRouteApi('/_app/system');
 
@@ -159,16 +160,8 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   );
 
   const { groups, unnamed } = capabilityGroups(capabilities);
-  const users = (
+  const selfView = (
     <div className="flex flex-col gap-[18px]">
-      <Panel aria-label="用户目录" className="flex-row items-center gap-3 px-5 py-4">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Users className="size-[18px]" aria-hidden="true" /></span>
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-sm font-semibold">用户目录未接入</span>
-          <span className="text-xs text-muted-foreground">接入企业用户目录后，这里会列出全部用户并可分配角色；现在只显示当前登录的用户</span>
-        </span>
-        <StateChip health="idle">未接入</StateChip>
-      </Panel>
       <Panel aria-label="用户">
         <PanelHeader title="用户" />
         <Table aria-label="用户与角色">
@@ -213,6 +206,11 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
       </Panel>
     </div>
   );
+
+  // Administrators manage everyone; others see their own account and what it may do.
+  const users = capabilities.includes('iam.admin')
+    ? <UserAdministration csrfToken={principal.session.csrfToken} sites={sites} />
+    : selfView;
 
   const siteTab = (
     <div className="flex flex-col gap-[18px]">

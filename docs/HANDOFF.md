@@ -4,7 +4,7 @@ The current state of the work and what to pick up next. Update it in the same PR
 what it says. How to build, test and run lives in `CLAUDE.md` / `AGENTS.md`; what changed for
 users lives in `CHANGELOG.md`.
 
-Last updated: 2026-10-13.
+Last updated: 2026-10-14.
 
 ## Where the product is
 
@@ -22,6 +22,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | 能源 | 站点对标 (platform route `/benchmark`) | each authorized site's energy series; sites without analytics access are listed but not compared |
 | 运维 | 告警, 故障诊断, 工单, 控制指令 | alarm, FDD (scheduled every 15 min; its rule revisions in `core_registry.fdd_rule_revisions`, spec `docs/specs/fdd-rule-definition.md`), work orders, command governance |
 | 平台 | 通知, 集成管理, 系统管理 | notification inbox, gateway credentials, IAM/Registry/rules/audit |
+| 平台 | 系统管理 → 用户与角色, 修改密码 | IAM Role Assignments (ADR 0022) + identity directory (`identityadmin`, embedded in energy-api); spec `docs/specs/iam-roles-and-users.md` |
 
 Costs are estimates at the Site's time-of-use tariff and are labelled as such; Settlement
 (`services/settlement-service`, a CLI) is still the authority on the bill and has no HTTP surface.
@@ -66,6 +67,8 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 ## Next up
 
+0. **Deploy to the site server (139.199.58.47, user `ubuntu`, SSH key).** It is 2 vCPU / 3.7 GB and also runs ThingsBoard (~540 MB), a 6-week-old `hvac-phase1-local` stack and an older `hvac-backend`; ClickHouse there was unhealthy at 137 % CPU on 2026-10-14. Decide with the user what to retire, the public domain and certificate, and whether the existing database is kept before rolling out. The first administrator is created with `identity-admin` and reconciled with `{"roleKey": "admin"}`; everyone else is added from 系统管理.
+
 Roadmap issues, in order:
 
 1. **#484 — measured savings (M&V).** Live and accepted end to end (spec `docs/specs/savings-verification.md`, ADR 0021).
@@ -95,7 +98,9 @@ Smaller follow-ups:
 
 ## Local environment notes
 
-These are drifts from the seed in the current local database. A `npm run local:reset` followed by `local:up` removes all of them.
+These are drifts from the seed in the current local database. 
+
+- Since 2026-10-14 the stack runs migration 026 (Role Assignments, ADR 0022): the per-domain permission tables are gone and the local administrator holds the built-in `admin` Role. `runtime/local/identity-reconcile.json` was rewritten to that shape (`roleBindings: [{"roleKey": "admin"}]`, `sourceVersion` 2); the old action-list shape no longer reconciles. A `npm run local:reset` followed by `local:up` removes all of them.
 
 - The stack was rebuilt from the #481 seed on 2026-10-12 22:06 (Site time); live history starts then.
 - Both Sites hold replayed meter history, sub-meters included, for 2026-09-15 to 10-06 (Site time). Site A's includes the 8 °C setpoint raise from 09-29 09:00.
@@ -114,6 +119,8 @@ These are drifts from the seed in the current local database. A `npm run local:r
 Known quirks:
 
 - **Host standby stops Docker Desktop.** After Windows Modern Standby (System log Kernel-Power 506/507), WSL may report `docker` missing. Start `D:\Program Files\Docker\Docker\Docker Desktop.exe`; the `hvac-local` containers come back on their own.
+- **Slow npm mirror.** Some tarballs take over four minutes from npmmirror; the web image's `npm ci` uses a 15-minute fetch timeout. If registries are unreachable, `PHASE1_BUILD_PROXY=http://host.docker.internal:7897` passes the host proxy to image builds.
+- **local:up from a worktree.** A worktree made by Windows git stores a Windows path in `.git`, so set `GIT_DIR`/`GIT_WORK_TREE`, and point `PHASE1_RUNTIME_DIR` and `PHASE1_ENV_FILE` at the main checkout's runtime and env files.
 - **Flaky Go proxy.** `goproxy.cn` sometimes drops module downloads. Run `local:up` with `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` and re-run on a network error.
 - **e2e under load.** With the local stack running, the e2e build alone can exceed Playwright's 240 s webServer timeout, and parallel workers time out on pages that never finish loading. Build `dist-e2e` once, start `vite preview --outDir dist-e2e --port 5190` yourself (the config reuses it), and run `npm run web:e2e -- --workers=1`.
 - **Integration tests only run when a module changes.** Integration scripts run only when a PR touches their module, so a migration that breaks another module's seed shows up later. Example: the Registry baseline seeding FDD findings, fixed in #504.

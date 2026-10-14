@@ -285,6 +285,16 @@ The versioned machine-readable result produced by the repository Benchmark Runne
 An IAM principal that is one of the platform's own unattended workloads, identified by its workload identity rather than by a person. It is authorized by the same Tenant memberships and role bindings as a person and acts only on its own behalf, never through a user session. It is not a tenant-created integration account.
 _Avoid_: service account, system user, robot user
 
+## Role
+
+A named set of IAM capabilities. Built-in Roles (`viewer`, `operator`, `site-manager`, `admin`; 只读、运维人员、运维主管、管理员) are shipped by the platform and cannot be edited by a Tenant; Tenant-owned roles exist only for Workload Principals.
+_Avoid_: permission group, profile
+
+## Role Assignment
+
+The only authorization fact: one Principal holds one Role in one Tenant, scoped to the whole Tenant (including Sites added later) or to one Site. Access is the union of a Principal's active Role Assignments minus explicit denies (ADR 0022). Stored in `iam.role_bindings`.
+_Avoid_: site binding, permission row, grant (a grant is the short-lived signed delegation IAM issues per decision)
+
 ## Domain Owner
 
 The single bounded context that is authoritative for creating and changing one class of business fact. Physical co-location with another module never transfers Domain Ownership; other contexts interact through governed commands, queries, owner-authored events or rebuildable projections.

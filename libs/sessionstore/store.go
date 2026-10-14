@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -68,6 +69,8 @@ type Store interface {
 	TouchSession(context.Context, string, time.Time) (Session, error)
 	SwitchTenantContext(context.Context, string, string, []byte, MutationContext) (Session, error)
 	RevokeSession(context.Context, string, MutationContext) (Session, error)
+	// ActiveSessionIDs lists the unrevoked Sessions of one person, so disabling them can end each.
+	ActiveSessionIDs(ctx context.Context, issuer, subject string) ([]string, error)
 }
 
 type MemoryStore struct {
@@ -167,6 +170,19 @@ func (store *MemoryStore) SwitchTenantContext(ctx context.Context, sessionID, te
 	store.sessions[sessionID] = cloneSession(session)
 	store.events[messageID] = event
 	return cloneSession(session), nil
+}
+
+func (store *MemoryStore) ActiveSessionIDs(_ context.Context, issuer, subject string) ([]string, error) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	ids := []string{}
+	for id, session := range store.sessions {
+		if session.RevokedAt == nil && session.Principal.Issuer == issuer && session.Principal.Subject == subject {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 func (store *MemoryStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {

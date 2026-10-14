@@ -8,11 +8,11 @@ import (
 type AuthorizationReason string
 
 const (
-	AuthorizationReasonAllowSiteBinding AuthorizationReason = "ALLOW_SITE_BINDING"
-	AuthorizationReasonDenyExplicit     AuthorizationReason = "DENY_EXPLICIT"
-	AuthorizationReasonDenyPrincipal    AuthorizationReason = "DENY_PRINCIPAL"
-	AuthorizationReasonDenyMembership   AuthorizationReason = "DENY_MEMBERSHIP"
-	AuthorizationReasonDenyAction       AuthorizationReason = "DENY_ACTION_NOT_GRANTED"
+	AuthorizationReasonAllowRole      AuthorizationReason = "ALLOW_ROLE"
+	AuthorizationReasonDenyExplicit   AuthorizationReason = "DENY_EXPLICIT"
+	AuthorizationReasonDenyPrincipal  AuthorizationReason = "DENY_PRINCIPAL"
+	AuthorizationReasonDenyMembership AuthorizationReason = "DENY_MEMBERSHIP"
+	AuthorizationReasonDenyAction     AuthorizationReason = "DENY_ACTION_NOT_GRANTED"
 )
 
 type AuthorizationDecisionRequest struct {

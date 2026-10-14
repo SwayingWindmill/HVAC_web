@@ -11,9 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
-	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 type ReconciliationStatus string
@@ -48,7 +45,6 @@ type ReconciliationRequest struct {
 	Principal      ReconciledPrincipal      `json:"principal"`
 	Memberships    []ReconciledMembership   `json:"memberships"`
 	RoleBindings   []ReconciledRoleBinding  `json:"roleBindings"`
-	SiteBindings   []ReconciledSiteBinding  `json:"siteBindings"`
 	ExplicitDenies []ReconciledExplicitDeny `json:"explicitDenies"`
 }
 
@@ -68,31 +64,23 @@ type ReconciledMembership struct {
 	ValidTo   *time.Time `json:"validTo,omitempty"`
 }
 
+// ReconciledRoleBinding assigns an existing Role (built in, or owned by the Tenant) to the whole
+// Tenant, or to one Site when SiteID is set.
 type ReconciledRoleBinding struct {
-	TenantID  string                `json:"tenantId"`
-	RoleKey   string                `json:"roleKey"`
-	Actions   []registryauth.Action `json:"actions"`
-	Effect    BindingEffect         `json:"effect"`
-	ValidFrom time.Time             `json:"validFrom"`
-	ValidTo   *time.Time            `json:"validTo,omitempty"`
-}
-
-type ReconciledSiteBinding struct {
-	TenantID  string                `json:"tenantId"`
-	SiteID    string                `json:"siteId"`
-	Actions   []registryauth.Action `json:"actions"`
-	Effect    BindingEffect         `json:"effect"`
-	ValidFrom time.Time             `json:"validFrom"`
-	ValidTo   *time.Time            `json:"validTo,omitempty"`
+	TenantID  string     `json:"tenantId"`
+	RoleKey   string     `json:"roleKey"`
+	SiteID    string     `json:"siteId,omitempty"`
+	ValidFrom time.Time  `json:"validFrom"`
+	ValidTo   *time.Time `json:"validTo,omitempty"`
 }
 
 type ReconciledExplicitDeny struct {
-	TenantID   string              `json:"tenantId"`
-	SiteID     string              `json:"siteId,omitempty"`
-	Action     registryauth.Action `json:"action"`
-	ReasonCode string              `json:"reasonCode"`
-	ValidFrom  time.Time           `json:"validFrom"`
-	ValidTo    *time.Time          `json:"validTo,omitempty"`
+	TenantID   string     `json:"tenantId"`
+	SiteID     string     `json:"siteId,omitempty"`
+	Action     string     `json:"action"`
+	ReasonCode string     `json:"reasonCode"`
+	ValidFrom  time.Time  `json:"validFrom"`
+	ValidTo    *time.Time `json:"validTo,omitempty"`
 }
 
 type ReconciliationResult struct {
@@ -136,7 +124,6 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 
 	seenMemberships := map[string]struct{}{}
 	seenRoleBindings := map[string]struct{}{}
-	seenSiteBindings := map[string]struct{}{}
 	seenExplicitDenies := map[string]struct{}{}
 
 	for index := range request.Memberships {
@@ -153,38 +140,20 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	for index := range request.RoleBindings {
 		binding := &request.RoleBindings[index]
 		binding.RoleKey = strings.TrimSpace(binding.RoleKey)
-		if binding.TenantID != request.TenantID || binding.RoleKey == "" || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
+		if binding.TenantID != request.TenantID || binding.RoleKey == "" || (binding.SiteID != "" && !isUUIDv7(binding.SiteID)) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid role binding at index %d", index)
 		}
-		roleIdentity := binding.TenantID + "\x00" + binding.RoleKey
+		roleIdentity := binding.TenantID + "\x00" + binding.RoleKey + "\x00" + binding.SiteID
 		if _, duplicate := seenRoleBindings[roleIdentity]; duplicate {
 			return ReconciliationRequest{}, "", fmt.Errorf("duplicate role binding %q", binding.RoleKey)
 		}
 		seenRoleBindings[roleIdentity] = struct{}{}
-		if err := normalizeActions(&binding.Actions); err != nil {
-			return ReconciliationRequest{}, "", fmt.Errorf("invalid role binding at index %d: %w", index, err)
-		}
-		normalizeTimes(&binding.ValidFrom, &binding.ValidTo)
-	}
-	for index := range request.SiteBindings {
-		binding := &request.SiteBindings[index]
-		if binding.TenantID != request.TenantID || !isUUIDv7(binding.SiteID) || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
-			return ReconciliationRequest{}, "", fmt.Errorf("invalid site binding at index %d", index)
-		}
-		siteIdentity := binding.TenantID + "\x00" + binding.SiteID
-		if _, duplicate := seenSiteBindings[siteIdentity]; duplicate {
-			return ReconciliationRequest{}, "", fmt.Errorf("duplicate site binding for site %q", binding.SiteID)
-		}
-		seenSiteBindings[siteIdentity] = struct{}{}
-		if err := normalizeActions(&binding.Actions); err != nil {
-			return ReconciliationRequest{}, "", fmt.Errorf("invalid site binding at index %d: %w", index, err)
-		}
 		normalizeTimes(&binding.ValidFrom, &binding.ValidTo)
 	}
 	for index := range request.ExplicitDenies {
 		deny := &request.ExplicitDenies[index]
 		deny.ReasonCode = strings.TrimSpace(deny.ReasonCode)
-		if deny.TenantID != request.TenantID || (deny.SiteID != "" && !isUUIDv7(deny.SiteID)) || !deny.Action.Valid() || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
+		if deny.TenantID != request.TenantID || (deny.SiteID != "" && !isUUIDv7(deny.SiteID)) || !catalogCapabilityValid(deny.Action) || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid explicit deny at index %d", index)
 		}
 		denyIdentity := deny.TenantID + "\x00" + deny.SiteID + "\x00" + string(deny.Action)
@@ -200,11 +169,7 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	})
 	sort.Slice(request.RoleBindings, func(i, j int) bool {
 		left, right := request.RoleBindings[i], request.RoleBindings[j]
-		return left.TenantID+"\x00"+left.RoleKey < right.TenantID+"\x00"+right.RoleKey
-	})
-	sort.Slice(request.SiteBindings, func(i, j int) bool {
-		left, right := request.SiteBindings[i], request.SiteBindings[j]
-		return left.TenantID+"\x00"+left.SiteID < right.TenantID+"\x00"+right.SiteID
+		return left.TenantID+"\x00"+left.RoleKey+"\x00"+left.SiteID < right.TenantID+"\x00"+right.RoleKey+"\x00"+right.SiteID
 	})
 	sort.Slice(request.ExplicitDenies, func(i, j int) bool {
 		left, right := request.ExplicitDenies[i], request.ExplicitDenies[j]
@@ -222,23 +187,12 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 func cloneReconciliationRequest(request ReconciliationRequest) ReconciliationRequest {
 	request.Memberships = append([]ReconciledMembership{}, request.Memberships...)
 	request.RoleBindings = append([]ReconciledRoleBinding{}, request.RoleBindings...)
-	for index := range request.RoleBindings {
-		request.RoleBindings[index].Actions = append([]registryauth.Action{}, request.RoleBindings[index].Actions...)
-	}
-	request.SiteBindings = append([]ReconciledSiteBinding{}, request.SiteBindings...)
-	for index := range request.SiteBindings {
-		request.SiteBindings[index].Actions = append([]registryauth.Action{}, request.SiteBindings[index].Actions...)
-	}
 	request.ExplicitDenies = append([]ReconciledExplicitDeny{}, request.ExplicitDenies...)
 	return request
 }
 
 func validFactStatus(status FactStatus) bool {
 	return status == FactStatusActive || status == FactStatusSuspended || status == FactStatusRevoked
-}
-
-func validBindingEffect(effect BindingEffect) bool {
-	return effect == BindingEffectAllow || effect == BindingEffectDeny
 }
 
 func validEffectiveRange(validFrom time.Time, validTo *time.Time) bool {
@@ -251,27 +205,6 @@ func normalizeTimes(validFrom *time.Time, validTo **time.Time) {
 		value := (*validTo).UTC()
 		*validTo = &value
 	}
-}
-
-func normalizeActions(actions *[]registryauth.Action) error {
-	if len(*actions) == 0 {
-		return errors.New("at least one action is required")
-	}
-	seen := map[registryauth.Action]struct{}{}
-	result := make([]registryauth.Action, 0, len(*actions))
-	for _, action := range *actions {
-		if !action.Valid() && !telemetryauth.Action(action).Valid() {
-			return fmt.Errorf("unsupported action %q", action)
-		}
-		if _, ok := seen[action]; ok {
-			continue
-		}
-		seen[action] = struct{}{}
-		result = append(result, action)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	*actions = result
-	return nil
 }
 
 func isUUIDv7(value string) bool {

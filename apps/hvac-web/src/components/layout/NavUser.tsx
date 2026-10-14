@@ -1,4 +1,5 @@
-import { ChevronDown, LogOut, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, KeyRound, LogOut, ShieldCheck } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -9,17 +10,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ChangePasswordDialog } from '@/features/account/ChangePasswordDialog';
 
 interface NavUserProps {
   readonly name: string;
   readonly role: string;
+  readonly csrfToken: string;
   readonly onNavigate: (target: string) => void;
   readonly onLogout: () => void;
 }
 
 /** The signed-in user at the right of the top bar: who they are, and the way out. */
-export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
+export function NavUser({ name, role, csrfToken, onNavigate, onLogout }: NavUserProps) {
+  const [changingPassword, setChangingPassword] = useState(false);
   return (
+    <>
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
@@ -45,6 +50,10 @@ export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
             <ShieldCheck />
             系统管理
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setChangingPassword(true)}>
+            <KeyRound />
+            修改密码
+          </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onSelect={onLogout}>
@@ -53,5 +62,7 @@ export function NavUser({ name, role, onNavigate, onLogout }: NavUserProps) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} csrfToken={csrfToken} />
+    </>
   );
 }

@@ -203,7 +203,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		allowed := !fixture.denySite && input.SiteID == analyticsGatewaySite
 		reason := analyticsmodel.AuthorizationReasonDenyAction
 		if allowed {
-			reason = analyticsmodel.AuthorizationReasonAllowSiteBinding
+			reason = analyticsmodel.AuthorizationReasonAllowRole
 		}
 		return analyticsHTTPResponse(http.StatusOK, analyticsmodel.AuthorizationDecisionResponse{Decision: analyticsmodel.AuthorizationDecision{
 			Allowed: allowed, PrincipalID: analyticsGatewayPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,

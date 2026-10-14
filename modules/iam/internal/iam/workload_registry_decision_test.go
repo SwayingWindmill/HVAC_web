@@ -139,9 +139,9 @@ func (workloadPrincipalStore) LookupRegistryAuthorization(_ context.Context, loo
 		Principal:      iam.PrincipalRecord{ID: projectorPrincipalID, SubjectIssuer: workloadTrustDomain, Subject: projectorWorkload, Status: iam.FactStatusActive},
 		TenantSiteIDs:  []string{iam.S1FixtureOwnerASite1ID},
 		Memberships:    []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive, ValidFrom: since}},
-		RoleBindings: []iam.RoleBinding{{
-			TenantID: iam.S1FixtureTenantAID, RoleKey: "energy-projection", Actions: []registryauth.Action{registryauth.ActionMeterBindingResolve},
-			Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: since,
+		Assignments: []iam.RoleAssignment{{
+			TenantID: iam.S1FixtureTenantAID, RoleKey: "energy-projection", Capabilities: []string{string(registryauth.ActionMeterBindingResolve)},
+			Status: iam.FactStatusActive, ValidFrom: since,
 		}},
 	}, nil
 }

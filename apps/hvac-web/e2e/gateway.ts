@@ -156,6 +156,19 @@ export class Gateway {
   };
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
+  /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
+  readonly members: Json[] = [
+    {
+      principalId: MY_ID, username: 'duty.engineer', displayName: principal.principal.displayName, email: principal.principal.email,
+      enabled: true, locked: false, lastLoginAt: '2026-10-14T01:20:00Z', self: true,
+      assignments: [{ bindingId: '018f3e00-2200-7000-8000-000000000001', roleKey: 'admin' }],
+    },
+    {
+      principalId: '018f3e00-2000-7000-8000-000000000002', username: 'zhou.min', displayName: '周敏', email: 'zhou.min@example.invalid',
+      enabled: true, locked: false, self: false,
+      assignments: [{ bindingId: '018f3e00-2200-7000-8000-000000000002', roleKey: 'operator', siteId: SITE_ID }],
+    },
+  ];
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -174,6 +187,7 @@ export class Gateway {
       this.unexpected.push(`${method} ${path}`);
       return route.fulfill({ status: 404, contentType: 'application/problem+json', body: JSON.stringify({ status: 404, code: 'ROUTE_NOT_FOUND', title: 'Not found' }) });
     }
+    if (reply.status === 204) return route.fulfill({ status: 204 });
     return route.fulfill({ status: reply.status ?? 200, contentType: 'application/json', body: JSON.stringify(reply.body) });
   }
 
@@ -262,6 +276,62 @@ export class Gateway {
     return { body: measure };
   }
 
+  private userAdminSequence = 100;
+  private nextUserAdminId(kind: string): string {
+    this.userAdminSequence += 1;
+    return `018f3e00-${kind}-7000-8000-${String(this.userAdminSequence).padStart(12, '0')}`;
+  }
+
+  // The Gateway's user administration as the identity directory and IAM decide it.
+  private userAdmin(method: string, path: string, body: Json | null): { status?: number; body: unknown } | undefined {
+    if (!path.startsWith('/api/v1/iam/members') && path !== '/api/v1/me/password') return undefined;
+    const refuse = (status: number, code: string) => ({ status, body: { type: 'about:blank', title: 'User administration refused', status, detail: code, instance: path, code, traceId: '0'.repeat(32), retryable: false } });
+    const password = (value: string) => (value.length < 8 ? 'PASSWORD_TOO_SHORT' : ['password1', '12345678'].includes(value.toLowerCase()) ? 'PASSWORD_TOO_COMMON' : null);
+    if (method === 'GET' && path === '/api/v1/iam/members') {
+      return { body: { roles: [
+        { roleKey: 'viewer', tenantScoped: false },
+        { roleKey: 'operator', tenantScoped: false },
+        { roleKey: 'site-manager', tenantScoped: false },
+        { roleKey: 'admin', tenantScoped: true },
+      ], members: this.members } };
+    }
+    if (method === 'POST' && path === '/api/v1/me/password') {
+      if (body!.currentPassword !== 'current-secret') return refuse(400, 'CURRENT_PASSWORD_INVALID');
+      return password(body!.newPassword) ? refuse(400, password(body!.newPassword)!) : { status: 204, body: undefined };
+    }
+    if (method === 'POST' && path === '/api/v1/iam/members') {
+      if (this.members.some((member) => member.username === body!.username)) return refuse(409, 'USERNAME_TAKEN');
+      if (password(body!.password)) return refuse(400, password(body!.password)!);
+      const principalId = this.nextUserAdminId('2000');
+      this.members.push({
+        principalId, username: body!.username, displayName: body!.displayName, email: body!.email, enabled: true, locked: false, self: false,
+        assignments: body!.assignments.map((assignment: Json) => ({ bindingId: this.nextUserAdminId('2200'), ...assignment })),
+      });
+      return { status: 201, body: { principalId } };
+    }
+    const match = path.match(/^\/api\/v1\/iam\/members\/([^/]+)\/(password|status|profile|assignments)(?:\/([^/]+)\/revoke)?$/);
+    const member = match ? this.members.find((candidate) => candidate.principalId === match[1]) : undefined;
+    if (method !== 'POST' || !match) return undefined;
+    if (!member) return refuse(404, 'RESOURCE_NOT_FOUND');
+    if (match[2] === 'password') return password(body!.password) ? refuse(400, password(body!.password)!) : { status: 204, body: undefined };
+    if (match[2] === 'status') {
+      if (member.self && !body!.enabled) return refuse(409, 'IAM_ADMIN_SELF_LOCKOUT');
+      member.enabled = body!.enabled;
+      return { status: 204, body: undefined };
+    }
+    if (match[2] === 'profile') { Object.assign(member, { displayName: body!.displayName, email: body!.email }); return { status: 204, body: undefined }; }
+    if (match[3]) {
+      const assignment = member.assignments.find((candidate: Json) => candidate.bindingId === match[3]);
+      if (!assignment) return refuse(404, 'RESOURCE_NOT_FOUND');
+      if (member.self && assignment.roleKey === 'admin') return refuse(409, 'IAM_ADMIN_SELF_LOCKOUT');
+      member.assignments = member.assignments.filter((candidate: Json) => candidate !== assignment);
+      return { status: 204, body: undefined };
+    }
+    if (body!.roleKey === 'admin' && body!.siteId) return refuse(400, 'USER_ADMIN_REQUEST_INVALID');
+    member.assignments.push({ bindingId: this.nextUserAdminId('2200'), roleKey: body!.roleKey, ...(body!.siteId ? { siteId: body!.siteId } : {}) });
+    return { status: 204, body: undefined };
+  }
+
   // The page names each request by its position in the batch, so recorded items answer by Device.
   private snapshotBatch(body: Json): Json {
     const items = body.requests.map((request: Json) => {
@@ -276,6 +346,8 @@ export class Gateway {
     const now = new Date().toISOString();
     if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
+    const userAdmin = this.userAdmin(method, path, body);
+    if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
     if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: this.notifications, meta: { requestId: 'e2e', count: this.notifications.length } } };

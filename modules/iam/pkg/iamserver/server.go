@@ -24,6 +24,14 @@ type PostgresTelemetryGrantStore = iam.PostgresTelemetryGrantStore
 type TelemetryGrantStore = iam.TelemetryGrantStore
 type StaticRegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore
 
+// User administration as the Gateway sends and reads it.
+type AdminMutationRequest = iam.AdminMutationRequest
+type AdminMutationResult = iam.AdminMutationResult
+type AdminAssignment = iam.AdminAssignment
+type AdminDirectory = iam.AdminDirectory
+type AdminMember = iam.AdminMember
+type AdminRole = iam.AdminRole
+
 const (
 	BindingEffectAllow = iam.BindingEffectAllow
 	BindingEffectDeny  = iam.BindingEffectDeny

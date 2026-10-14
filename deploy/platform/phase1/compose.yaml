@@ -167,6 +167,7 @@ services:
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
+      IDENTITY_ADMIN_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
       IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper
       CORE_URL: https://platform-core-service:18445
       CORE_SERVER_NAME: platform-core-service

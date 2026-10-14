@@ -11,6 +11,7 @@ interface AppHeaderProps {
   readonly principalSubject: string;
   readonly principalName: string;
   readonly principalRole: string;
+  readonly csrfToken: string;
   readonly onNavigate: (target: string) => void;
   readonly onLogout: () => void;
 }
@@ -20,6 +21,7 @@ export function AppHeader({
   principalSubject,
   principalName,
   principalRole,
+  csrfToken,
   onNavigate,
   onLogout,
 }: AppHeaderProps) {
@@ -76,7 +78,7 @@ export function AppHeader({
               <span className="absolute top-1.5 right-[7px] size-[7px] rounded-full bg-primary ring-2 ring-card" aria-hidden="true" />
             ) : null}
           </Button>
-          <NavUser name={principalName} role={principalRole} onNavigate={onNavigate} onLogout={onLogout} />
+          <NavUser name={principalName} role={principalRole} csrfToken={csrfToken} onNavigate={onNavigate} onLogout={onLogout} />
         </div>
       </header>
 
