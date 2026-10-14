@@ -1,8 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect x="4" y="4" width="56" height="56" rx="16" fill="#3F5BD9"/>
-  <circle cx="32" cy="16" r="3" fill="#DBE1FB"/>
-  <path d="M32 20V27" stroke="white" stroke-width="3.4" stroke-linecap="round"/>
-  <path d="M18 28C22.7 23.8 27.3 23.8 32 28C36.7 32.2 41.3 32.2 46 28" stroke="white" stroke-width="3.4" stroke-linecap="round"/>
-  <path d="M15.5 37C21 32 26.5 32 32 37C37.5 42 43 42 48.5 37" stroke="white" stroke-width="3.4" stroke-linecap="round"/>
-  <path d="M19 46C23.3 42.2 27.7 42.2 32 46C36.3 49.8 40.7 49.8 45 46" stroke="white" stroke-width="3.4" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="qlh-water" x1="16" y1="14" x2="34" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5873F2"/>
+      <stop offset="1" stop-color="#3F5BD9"/>
+    </linearGradient>
+    <linearGradient id="qlh-leaf" x1="34" y1="10" x2="50" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#16B5A2"/>
+      <stop offset="1" stop-color="#0E9384"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 6C32 6 13 27 13 40A19 19 0 0 0 32 59C41 37 24 25 32 6Z" fill="url(#qlh-water)"/>
+  <path d="M32 6C24 25 41 37 32 59A19 19 0 0 0 51 40C51 27 32 6 32 6Z" fill="url(#qlh-leaf)"/>
 </svg>
