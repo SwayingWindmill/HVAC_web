@@ -28,7 +28,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 ## Design system
 
-> **Redesign in progress (2026-10-13 →).** The approved design is the Claude Design canvas
+> **Redesign done (2026-10-13 → 10-14).** The approved design is the Claude Design canvas
 > https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm (pages 定稿, 设计系统, 页面 · 批次 1–5) and
 > `docs/design-redesign/` (`DESIGN-SYSTEM.md` + `design-tokens.css`). It is implemented in phases,
 > one PR each; existing features stay, missing ones get the new visual language:
@@ -38,7 +38,8 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 > 4. 实时运行, 故障诊断, 控制指令, 通知中心 — done (the plant system diagram is gone; a 3D view is planned instead).
 > 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标 — done. 6. 优化建议, 节能项目, 报告 — done.
 > Type scale: `text-sm` is body 13/20 and `text-xs` caption 12/18 (DS §2.2, set in `global.css` `@theme`); use `text-title` (14/20) for panel titles and `text-micro` (11/16) for units and badges.
-> 7. 集成管理, 系统管理, shared states.
+> 7. 集成管理, 系统管理, shared states, 404 — done. 数据接入 lives in 集成管理 (the data chain); the 设计系统 tab is gone, its token list (`features/system/design-system/design-tokens.ts`) stays for `scripts/test-real-design-tokens.mjs`.
+> The 用户与角色 tab is being taken over by the IAM rework (another session, `features/system/users/`); keep `lib/capability-labels.ts` and `lib/role-labels.ts` in step with the IAM catalog.
 >
 > Visual checks against recorded data: run a Vite dev server on 5190 (`npm -w @hvac/web run dev -- --host localhost --port 5190`); the e2e config reuses it, so `npm run web:e2e -- e2e/<spec>` runs in seconds and a throwaway spec can screenshot pages with fixtures.
 >
@@ -53,13 +54,13 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 - Building blocks every page uses:
   - `Main`: page padding and rhythm.
   - `PageHeader` + `PageMeta`.
-  - `MetricGrid` / `MetricCard`: the one KPI strip.
-  - `FactList` / `FactRow`: label–value rows.
-  - `DataTable` with `TableEmpty`.
+  - `Panel` / `PanelHeader` / `PanelLink` (`blocks/panel`): the one white surface with its 48px title bar. Figures sit in a panel as a divided strip; there is no separate KPI widget any more.
+  - `StateCard` (`blocks/state`): empty, failed, forbidden and not-connected states, and the route surfaces.
+  - `SeverityMark` (shape-coded severity), `InfoTip` (explanations behind ⓘ instead of grey text).
+  - `MetricTabsChartCard` (`chartType="bar"` with a hatched running bucket), `Table` from `components/ui/table`.
   - `Status` / `StatusBadge`: tinted label with a still dot.
-  - `MetricTabsChartCard`.
-- Do not add another KPI widget or status pill style; extend these.
-- 系统管理 → 设计系统 (`/system?tab=design`) shows the shipped tokens with their measured contrast, the type steps and component states; `scripts/test-real-design-tokens.mjs` keeps every listed light-theme pairing at its WCAG level.
+- Do not add another figure strip or status pill style; extend these.
+- `scripts/test-real-design-tokens.mjs` keeps every pairing listed in `features/system/design-system/design-tokens.ts` at its WCAG level.
 - `FactTile`'s `className` styles the value, not the grid cell: to span columns, wrap it in a `<div className="col-span-…">`.
 - Unsaved drafts belong to the page that owns them: 系统管理 uses `features/system/unsaved-drafts.tsx`, a router blocker. The protected Site scope no longer tracks drafts (removed with its site-switch confirmation); it only purges resources and revokes request tokens. A Site page that gets a non-modal form should guard it the same way, with its own blocker.
 
