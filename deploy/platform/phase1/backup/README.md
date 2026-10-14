@@ -30,6 +30,22 @@ Production must place `CLICKHOUSE_BACKUP_DIR` on protected backup storage rather
 
 Phase 1 operators register backup invocations in one controlled deployment scheduler (for example one managed systemd timer set on the Linux application/data host). Do not add unrelated per-service cron loops.
 
+On a single server that timer set is `hvac-backup.service` + `hvac-backup.timer` (03:30 Asia/Shanghai), which run `run-scheduled-backups.sh`: a PostgreSQL base backup, a ClickHouse backup of `telemetry_history` and `analytics`, then only the newest `BACKUP_KEEP` (default 7) of each stay. Install:
+
+```bash
+sudo install -m 644 deploy/platform/phase1/backup/hvac-backup.{service,timer} /etc/systemd/system/
+sudo install -m 600 /dev/stdin /etc/hvac/backup.env <<'ENV'
+PHASE1_RUNTIME_DIR=/opt/hvac-platform/deploy/platform/phase1/runtime/server
+PHASE1_ENV_FILE=/opt/hvac-platform/deploy/platform/phase1/environments/server.runtime.env
+PHASE1_DEPLOYMENT_TIER=single-lite
+HVAC_LOCAL_PROJECT=hvac-platform
+BACKUP_KEEP=7
+ENV
+sudo systemctl daemon-reload && sudo systemctl enable --now hvac-backup.timer
+```
+
+The backups stay on the same disk until an off-server copy is configured, so they protect against mistakes and corruption, not against losing the server.
+
 A baseline policy is:
 
 - PostgreSQL base backup: daily.
