@@ -6,20 +6,10 @@ import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { CATEGORY_ICONS, deviceStatus, formatClock, KEY_READINGS, POWER_KEY, ReadingValue } from '../../realtime/device-presentation';
-import { PLANT_CATEGORY_LABELS, type PlantDevice, type PlantReading } from '../../realtime/plant-model';
+import { PLANT_CATEGORY_LABELS, tileReadings, type PlantDevice } from '../../realtime/plant-model';
 import { deviceDayHistoryQuery } from '../device-history';
 
 const siteRoute = getRouteApi('/_app/_site');
-
-/** The device's headline reading: power for plant equipment, its first key reading otherwise. */
-function headline(device: PlantDevice): { readonly sourceKey: string; readonly reading: PlantReading } | null {
-  const keys = [POWER_KEY[device.category], ...KEY_READINGS[device.category]].filter((key): key is string => Boolean(key));
-  for (const sourceKey of keys) {
-    const reading = device.reading(sourceKey);
-    if (reading) return { sourceKey, reading };
-  }
-  return null;
-}
 
 /**
  * One device on the wall: what it is and its state, its headline reading with the last day's
@@ -33,12 +23,11 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
 }) {
   const { site, principal } = siteRoute.useRouteContext();
   const status = deviceStatus(device);
-  const lead = headline(device);
-  const facts = KEY_READINGS[device.category]
-    .filter((key) => key !== lead?.sourceKey)
-    .map((key) => device.reading(key))
-    .filter((reading): reading is PlantReading => Boolean(reading))
-    .slice(0, 2);
+  const { lead, facts } = tileReadings(
+    device,
+    [POWER_KEY[device.category], ...KEY_READINGS[device.category]].filter((key): key is string => Boolean(key)),
+    KEY_READINGS[device.category],
+  );
   const pointCode = lead ? device.row.telemetryPoints.find((point) => point.sourceKey === lead.sourceKey)?.pointCode : undefined;
   const history = useQuery({
     ...deviceDayHistoryQuery({ siteId: site.id, deviceId: device.deviceId, keys: pointCode ? [pointCode] : [], timezone: site.timezone, csrfToken: principal.session.csrfToken }),

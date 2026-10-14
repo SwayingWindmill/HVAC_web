@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。温度通道与电表的对应关系为 2026-10-14 暂定：依据现场系统图、ThingsBoard 大屏标签和 6 月旧设备的通道编号（t01 公共冷却进水、t02 公共冷冻进水、t03–t10 各机组出水、t11–t19 总管与室外）。ET1010 预留做控制，目前只读回通道状态。 场地没有总电表：网关把四块机组电表的功率和累计电量相加，作为「空调总电表（四台机组合计）」上报，能源拓扑以它为总表、四块机组电表为分表。电价为 2026-10-14 暂定的深圳工商业分时电价，按实际电费单修改。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2；其余温度通道只按读数归为冷冻水侧或冷却水侧，机组之间从未单独运行，无法分到具体机组。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -30,7 +30,7 @@
       "points": [
         {
           "code": "t1",
-          "name": "冷却水进水温度（机组共用）",
+          "name": "冷冻水侧温度（通道 1）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -38,7 +38,7 @@
         },
         {
           "code": "t2",
-          "name": "冷冻水进水温度（机组共用）",
+          "name": "冷冻水侧温度（通道 2）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -46,79 +46,71 @@
         },
         {
           "code": "t3",
-          "name": "A 机组冷冻水出水温度",
+          "name": "冷冻水侧温度（通道 3）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30403",
-          "asset": "01a14000-3000-7000-8000-000000000001"
+          "address": "UID20 输入寄存器 30403"
         },
         {
           "code": "t4",
-          "name": "A 机组冷却水出水温度",
+          "name": "冷冻水侧温度（通道 4）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30404",
-          "asset": "01a14000-3000-7000-8000-000000000001"
+          "address": "UID20 输入寄存器 30404"
         },
         {
           "code": "t5",
-          "name": "B 机组冷冻水出水温度",
+          "name": "冷却水侧温度（通道 5）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30405",
-          "asset": "01a14000-3000-7000-8000-000000000002"
+          "address": "UID20 输入寄存器 30405"
         },
         {
           "code": "t6",
-          "name": "B 机组冷却水出水温度",
+          "name": "冷却水侧温度（通道 6）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30406",
-          "asset": "01a14000-3000-7000-8000-000000000002"
+          "address": "UID20 输入寄存器 30406"
         },
         {
           "code": "t7",
-          "name": "C 机组冷冻水出水温度",
+          "name": "冷却水侧温度（通道 7）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30407",
-          "asset": "01a14000-3000-7000-8000-000000000003"
+          "address": "UID20 输入寄存器 30407"
         },
         {
           "code": "t8",
-          "name": "C 机组冷却水出水温度",
+          "name": "冷冻水侧温度（通道 8）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30408",
-          "asset": "01a14000-3000-7000-8000-000000000003"
+          "address": "UID20 输入寄存器 30408"
         },
         {
           "code": "t9",
-          "name": "D 机组冷冻水出水温度",
+          "name": "冷却水侧温度（通道 9）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30409",
-          "asset": "01a14000-3000-7000-8000-000000000004"
+          "address": "UID20 输入寄存器 30409"
         },
         {
           "code": "t10",
-          "name": "D 机组冷却水出水温度",
+          "name": "冷冻水侧温度（通道 10）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30410",
-          "asset": "01a14000-3000-7000-8000-000000000004"
+          "address": "UID20 输入寄存器 30410"
         },
         {
           "code": "t11",
-          "name": "室外冷却水回水温度",
+          "name": "备用温度通道 11",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -126,7 +118,7 @@
         },
         {
           "code": "t12",
-          "name": "室外冷却水出水温度",
+          "name": "冷却水侧温度（通道 12）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -134,7 +126,7 @@
         },
         {
           "code": "t13",
-          "name": "A 冷却塔水温",
+          "name": "冷却塔水温（通道 13）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -142,7 +134,7 @@
         },
         {
           "code": "t14",
-          "name": "B 冷却塔水温",
+          "name": "温度通道 14（读数不稳定）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -150,7 +142,7 @@
         },
         {
           "code": "t15",
-          "name": "室外环境温度",
+          "name": "室外环境温度（通道 15）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -166,7 +158,7 @@
         },
         {
           "code": "t17",
-          "name": "总冷冻水供水温度",
+          "name": "冷冻水侧温度（通道 17）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -174,7 +166,7 @@
         },
         {
           "code": "t18",
-          "name": "总冷却水回水温度",
+          "name": "总冷冻水供水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -182,7 +174,7 @@
         },
         {
           "code": "t19",
-          "name": "总冷却水供水温度",
+          "name": "冷冻水侧温度（通道 19）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -190,7 +182,7 @@
         },
         {
           "code": "t20",
-          "name": "备用温度通道",
+          "name": "备用温度通道 20",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -393,12 +385,6 @@
       "name": "空调总电表（四台机组合计）",
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
-      "derivedFrom": [
-        "ammeter-unit1",
-        "ammeter-unit2",
-        "ammeter-unit3",
-        "ammeter-unit4"
-      ],
       "points": [
         {
           "code": "power_total",
@@ -417,6 +403,96 @@
           "pointType": "COUNTER",
           "valueType": "NUMBER",
           "address": "网关计算：1–4 号电表累计电量之和"
+        }
+      ],
+      "derive": {
+        "kind": "sum-meters",
+        "from": [
+          "ammeter-unit1",
+          "ammeter-unit2",
+          "ammeter-unit3",
+          "ammeter-unit4"
+        ]
+      }
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000009",
+      "sourceKey": "btu-calc",
+      "code": "btu-calc",
+      "name": "冷量计（总冷冻水流量 × 供回水温差计算）",
+      "type": "BTU_METER",
+      "sampleSeconds": 60,
+      "derive": {
+        "kind": "cooling",
+        "flow": [
+          "waterflow",
+          "flowMeter"
+        ],
+        "supply": [
+          "temperature",
+          "t18"
+        ],
+        "return": [
+          "temperature",
+          "t16"
+        ],
+        "runningAboveKw": 20,
+        "power": "ammeter-total"
+      },
+      "points": [
+        {
+          "code": "supply_water_temperature",
+          "sourceKey": "btu_meter.supply_water_temperature",
+          "name": "冷冻水供水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：温度通道 18"
+        },
+        {
+          "code": "return_water_temperature",
+          "sourceKey": "btu_meter.return_water_temperature",
+          "name": "冷冻水回水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：温度通道 16"
+        },
+        {
+          "code": "temperature_difference",
+          "sourceKey": "btu_meter.temperature_difference",
+          "name": "供回水温差",
+          "unit": "K",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：回水 − 供水"
+        },
+        {
+          "code": "flow_rate",
+          "sourceKey": "btu_meter.flow_rate",
+          "name": "冷冻水流量",
+          "unit": "m3/h",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：流量计 UID 10"
+        },
+        {
+          "code": "instant_cooling_capacity",
+          "sourceKey": "btu_meter.instant_cooling_capacity",
+          "name": "瞬时制冷量",
+          "unit": "kW",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：机组总功率 > 20 kW 时为 1.163 × 流量 × 温差，否则为 0"
+        },
+        {
+          "code": "accumulated_cooling_energy",
+          "sourceKey": "btu_meter.accumulated_cooling_energy",
+          "name": "累计供冷量",
+          "unit": "kWh",
+          "pointType": "COUNTER",
+          "valueType": "NUMBER",
+          "address": "网关计算：瞬时制冷量对时间累加"
         }
       ]
     }
@@ -521,6 +597,7 @@
           1440
         ]
       ]
-    }
+    },
+    "coolingMeter": "btu-calc"
   }
 }

@@ -2,7 +2,7 @@
 // Input: a device function's message { <device>: [{ ts, values }] }.
 // Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per device
 // message, or nothing for devices the platform has no source key for (the Gateway's own status). A meter
-// message also yields the plant total, below. Each goes on to「Outbox·形成事件」, which stores it in the
+// message also yields the plant total, and a temperature message the calculated cooling, below. Each goes on to「Outbox·形成事件」, which stores it in the
 // durable outbox until the broker acknowledges it:
 //   msg.outboxCommand = "enqueue";
 //   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
@@ -85,6 +85,42 @@ if (METERS.includes(device)) {
     out.push(envelope("ammeter-total", sample.ts, [
       { code: "power_total", value: sum("power"), quality: 0, unit: "kW" },
       { code: "active_energy_total", value: sum("energy"), quality: 0, unit: "kWh" },
+    ]));
+  }
+}
+
+// No BTU meter either: cooling is 1.163 × chilled-water flow (m³/h) × (return t16 − supply t18) in kW
+// while the machines draw more than 20 kW, else zero (the pumps keep water moving while they are off,
+// and that warming is not cooling), never below zero, with a flow reading from the last 3 minutes,
+// integrated into kWh; a gap of more than 10 minutes is not integrated. Until all four meters have
+// reported there is no power to judge by and nothing is sent. scripts/thingsboard-history-import.mjs
+// derives the history the same way.
+if (device === "waterflow" && Number.isFinite(sample.values.flowMeter)) {
+  context.set("latestFlow", { ts: sample.ts, value: sample.values.flowMeter });
+}
+if (device === "temperature") {
+  const flow = context.get("latestFlow");
+  const meters = context.get("meterLatest") || {};
+  const plantPower = METERS.every((meter) => meters[meter] && Number.isFinite(meters[meter].power))
+    ? METERS.reduce((total, meter) => total + meters[meter].power, 0) : null;
+  const supply = sample.values.t18;
+  const returnTemperature = sample.values.t16;
+  if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && supply > 0 && returnTemperature > 0) {
+    const difference = returnTemperature - supply;
+    const capacity = plantPower > 20 ? Math.max(0, 1.163 * flow.value * difference) : 0;
+    const cooling = context.get("cooling") || { energy: 0, previous: null };
+    if (cooling.previous && sample.ts - cooling.previous.ts <= 600000) {
+      cooling.energy += (cooling.previous.capacity + capacity) / 2 * (sample.ts - cooling.previous.ts) / 3600000;
+    }
+    cooling.previous = { ts: sample.ts, capacity };
+    context.set("cooling", cooling);
+    out.push(envelope("btu-calc", sample.ts, [
+      { code: "supply_water_temperature", value: supply, quality: 0, unit: "Cel" },
+      { code: "return_water_temperature", value: returnTemperature, quality: 0, unit: "Cel" },
+      { code: "temperature_difference", value: Math.round(difference * 100) / 100, quality: 0, unit: "K" },
+      { code: "flow_rate", value: flow.value, quality: 0, unit: "m3/h" },
+      { code: "instant_cooling_capacity", value: Math.round(capacity * 10) / 10, quality: 0, unit: "kW" },
+      { code: "accumulated_cooling_energy", value: Math.round(cooling.energy * 1000) / 1000, quality: 0, unit: "kWh" },
     ]));
   }
 }
