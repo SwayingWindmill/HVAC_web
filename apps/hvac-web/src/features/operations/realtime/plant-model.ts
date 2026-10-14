@@ -13,6 +13,7 @@ export type PlantCategory =
   | 'ZONE'
   | 'METER'
   | 'WEATHER'
+  | 'ACQUISITION'
   | 'OTHER';
 
 export const PLANT_CATEGORY_ORDER: readonly PlantCategory[] = [
@@ -23,6 +24,7 @@ export const PLANT_CATEGORY_ORDER: readonly PlantCategory[] = [
   'ZONE',
   'METER',
   'WEATHER',
+  'ACQUISITION',
   'OTHER',
 ];
 
@@ -34,6 +36,7 @@ export const PLANT_CATEGORY_LABELS: Readonly<Record<PlantCategory, string>> = {
   ZONE: '室内环境',
   METER: '计量',
   WEATHER: '室外环境',
+  ACQUISITION: '采集与控制',
   OTHER: '其他设备',
 };
 
@@ -60,6 +63,17 @@ const CATEGORY_BY_SOURCE_NAMESPACE: Readonly<Record<string, PlantCategory>> = {
   btu_meter: 'METER',
   weather: 'WEATHER',
   zone: 'ZONE',
+};
+
+// A Gateway-wired device that is neither bound to an Asset nor named by a source-key namespace
+// still says what it is through its Registry device type.
+const CATEGORY_BY_DEVICE_TYPE: Readonly<Record<string, PlantCategory>> = {
+  HVAC_POWER_METER: 'METER',
+  POWER_METER: 'METER',
+  BTU_METER: 'METER',
+  FLOW_METER: 'METER',
+  TEMPERATURE_MODULE: 'ACQUISITION',
+  CONTROL_MODULE: 'ACQUISITION',
 };
 
 export type RunState = 'RUNNING' | 'STOPPED' | 'FAULT' | 'UNKNOWN';
@@ -116,7 +130,7 @@ function categoryOf(row: AssetsDeviceRow): PlantCategory {
     const fromSource = CATEGORY_BY_SOURCE_NAMESPACE[namespace];
     if (fromSource) return fromSource;
   }
-  return 'OTHER';
+  return CATEGORY_BY_DEVICE_TYPE[row.device.deviceType] ?? 'OTHER';
 }
 
 function deviceName(row: AssetsDeviceRow): string {

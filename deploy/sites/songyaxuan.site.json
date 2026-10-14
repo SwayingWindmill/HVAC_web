@@ -1,0 +1,434 @@
+{
+  "schemaVersion": 1,
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。温度通道与电表的对应关系为 2026-10-14 暂定：依据现场系统图、ThingsBoard 大屏标签和 6 月旧设备的通道编号（t01 公共冷却进水、t02 公共冷冻进水、t03–t10 各机组出水、t11–t19 总管与室外）。ET1010 预留做控制，目前只读回通道状态。",
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "site": {
+    "id": "01a14000-1000-7000-8000-000000000001",
+    "code": "songyaxuan",
+    "name": "松雅轩",
+    "timezone": "Asia/Shanghai"
+  },
+  "space": {
+    "id": "01a14000-2000-7000-8000-000000000001",
+    "code": "plant-room",
+    "name": "空调机房",
+    "type": "PLANT_ROOM"
+  },
+  "gateway": {
+    "id": "01a14000-4000-7000-8000-000000000100",
+    "code": "songyaxuan-edge",
+    "name": "松雅轩边缘网关"
+  },
+  "devices": [
+    {
+      "id": "01a14000-4000-7000-8000-000000000001",
+      "sourceKey": "temperature",
+      "code": "temperature-uid20",
+      "name": "温度采集模块（UID 20）",
+      "type": "TEMPERATURE_MODULE",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "t1",
+          "name": "冷却水进水温度（机组共用）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30401"
+        },
+        {
+          "code": "t2",
+          "name": "冷冻水进水温度（机组共用）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30402"
+        },
+        {
+          "code": "t3",
+          "name": "A 机组冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30403",
+          "asset": "01a14000-3000-7000-8000-000000000001"
+        },
+        {
+          "code": "t4",
+          "name": "A 机组冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30404",
+          "asset": "01a14000-3000-7000-8000-000000000001"
+        },
+        {
+          "code": "t5",
+          "name": "B 机组冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30405",
+          "asset": "01a14000-3000-7000-8000-000000000002"
+        },
+        {
+          "code": "t6",
+          "name": "B 机组冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30406",
+          "asset": "01a14000-3000-7000-8000-000000000002"
+        },
+        {
+          "code": "t7",
+          "name": "C 机组冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30407",
+          "asset": "01a14000-3000-7000-8000-000000000003"
+        },
+        {
+          "code": "t8",
+          "name": "C 机组冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30408",
+          "asset": "01a14000-3000-7000-8000-000000000003"
+        },
+        {
+          "code": "t9",
+          "name": "D 机组冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30409",
+          "asset": "01a14000-3000-7000-8000-000000000004"
+        },
+        {
+          "code": "t10",
+          "name": "D 机组冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30410",
+          "asset": "01a14000-3000-7000-8000-000000000004"
+        },
+        {
+          "code": "t11",
+          "name": "室外冷却水回水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30411"
+        },
+        {
+          "code": "t12",
+          "name": "室外冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30412"
+        },
+        {
+          "code": "t13",
+          "name": "A 冷却塔水温",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30413"
+        },
+        {
+          "code": "t14",
+          "name": "B 冷却塔水温",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30414"
+        },
+        {
+          "code": "t15",
+          "name": "室外环境温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30415"
+        },
+        {
+          "code": "t16",
+          "name": "总冷冻水回水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30416"
+        },
+        {
+          "code": "t17",
+          "name": "总冷冻水供水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30417"
+        },
+        {
+          "code": "t18",
+          "name": "总冷却水回水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30418"
+        },
+        {
+          "code": "t19",
+          "name": "总冷却水供水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30419"
+        },
+        {
+          "code": "t20",
+          "name": "备用温度通道",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30420"
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000002",
+      "sourceKey": "waterflow",
+      "code": "flow-uid10",
+      "name": "总冷冻水流量计（UID 10）",
+      "type": "FLOW_METER",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "flow_meter",
+          "name": "总冷冻水流量",
+          "unit": "m3/h",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID10 保持寄存器 1"
+        },
+        {
+          "code": "flow_velocity",
+          "name": "总冷冻水流速",
+          "unit": "m/s",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID10 保持寄存器 5"
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000003",
+      "sourceKey": "ammeter-unit1",
+      "code": "meter-uid5",
+      "name": "A 机组电表（1 号，UID 5）",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "points": "meter",
+      "asset": "01a14000-3000-7000-8000-000000000001"
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000004",
+      "sourceKey": "ammeter-unit2",
+      "code": "meter-uid2",
+      "name": "B 机组电表（2 号，UID 2）",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "points": "meter",
+      "asset": "01a14000-3000-7000-8000-000000000002"
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000005",
+      "sourceKey": "ammeter-unit3",
+      "code": "meter-uid3",
+      "name": "C 机组电表（3 号，UID 3）",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "points": "meter",
+      "asset": "01a14000-3000-7000-8000-000000000003"
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000006",
+      "sourceKey": "ammeter-unit4",
+      "code": "meter-uid4",
+      "name": "D 机组电表（4 号，UID 4）",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "points": "meter",
+      "asset": "01a14000-3000-7000-8000-000000000004"
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000007",
+      "sourceKey": "et1010",
+      "code": "et1010-uid31",
+      "name": "ET1010 控制模块（UID 31）",
+      "type": "CONTROL_MODULE",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "u11",
+          "name": "控制通道 1-1",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 0"
+        },
+        {
+          "code": "u12",
+          "name": "控制通道 1-2",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 1"
+        },
+        {
+          "code": "u13",
+          "name": "控制通道 1-3",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 2"
+        },
+        {
+          "code": "u14",
+          "name": "控制通道 1-4",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 3"
+        },
+        {
+          "code": "u21",
+          "name": "控制通道 2-1",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 4"
+        },
+        {
+          "code": "u22",
+          "name": "控制通道 2-2",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 5"
+        },
+        {
+          "code": "u23",
+          "name": "控制通道 2-3",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 6"
+        },
+        {
+          "code": "u24",
+          "name": "控制通道 2-4",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 7"
+        },
+        {
+          "code": "u31",
+          "name": "控制通道 3-1",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 8"
+        },
+        {
+          "code": "u32",
+          "name": "控制通道 3-2",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 9"
+        },
+        {
+          "code": "u33",
+          "name": "控制通道 3-3",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 10"
+        },
+        {
+          "code": "u34",
+          "name": "控制通道 3-4",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 11"
+        },
+        {
+          "code": "u41",
+          "name": "控制通道 4-1",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 12"
+        },
+        {
+          "code": "u42",
+          "name": "控制通道 4-2",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 13"
+        },
+        {
+          "code": "u43",
+          "name": "控制通道 4-3",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 14"
+        },
+        {
+          "code": "u44",
+          "name": "控制通道 4-4",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 15"
+        }
+      ]
+    }
+  ],
+  "meterPoints": [
+    {
+      "code": "power_total",
+      "name": "有功功率",
+      "unit": "kW",
+      "pointType": "TELEMETRY",
+      "valueType": "NUMBER",
+      "address": "保持寄存器 36"
+    },
+    {
+      "code": "active_energy_total",
+      "name": "累计电量",
+      "unit": "kWh",
+      "pointType": "COUNTER",
+      "valueType": "NUMBER",
+      "address": "保持寄存器 60（4 号表为 64）"
+    }
+  ],
+  "assets": [
+    {
+      "id": "01a14000-3000-7000-8000-000000000001",
+      "code": "chiller-a",
+      "name": "A 机组",
+      "type": "CHILLER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000002",
+      "code": "chiller-b",
+      "name": "B 机组",
+      "type": "CHILLER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000003",
+      "code": "chiller-c",
+      "name": "C 机组",
+      "type": "CHILLER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000004",
+      "code": "chiller-d",
+      "name": "D 机组",
+      "type": "CHILLER"
+    }
+  ]
+}
