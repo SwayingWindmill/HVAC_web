@@ -435,7 +435,9 @@
         "return": [
           "temperature",
           "t16"
-        ]
+        ],
+        "runningAboveKw": 20,
+        "power": "ammeter-total"
       },
       "points": [
         {
@@ -481,7 +483,7 @@
           "unit": "kW",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：1.163 × 流量 × 温差"
+          "address": "网关计算：机组总功率 > 20 kW 时为 1.163 × 流量 × 温差，否则为 0"
         },
         {
           "code": "accumulated_cooling_energy",

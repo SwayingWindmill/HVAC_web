@@ -89,19 +89,25 @@ if (METERS.includes(device)) {
   }
 }
 
-// No BTU meter either: cooling is 1.163 × chilled-water flow (m³/h) × (return t16 − supply t18) in kW,
-// never below zero, with a flow reading from the last 3 minutes, integrated into kWh; a gap of more than
-// 10 minutes is not integrated. scripts/thingsboard-history-import.mjs derives the history the same way.
+// No BTU meter either: cooling is 1.163 × chilled-water flow (m³/h) × (return t16 − supply t18) in kW
+// while the machines draw more than 20 kW, else zero (the pumps keep water moving while they are off,
+// and that warming is not cooling), never below zero, with a flow reading from the last 3 minutes,
+// integrated into kWh; a gap of more than 10 minutes is not integrated. Until all four meters have
+// reported there is no power to judge by and nothing is sent. scripts/thingsboard-history-import.mjs
+// derives the history the same way.
 if (device === "waterflow" && Number.isFinite(sample.values.flowMeter)) {
   context.set("latestFlow", { ts: sample.ts, value: sample.values.flowMeter });
 }
 if (device === "temperature") {
   const flow = context.get("latestFlow");
+  const meters = context.get("meterLatest") || {};
+  const plantPower = METERS.every((meter) => meters[meter] && Number.isFinite(meters[meter].power))
+    ? METERS.reduce((total, meter) => total + meters[meter].power, 0) : null;
   const supply = sample.values.t18;
   const returnTemperature = sample.values.t16;
-  if (flow && sample.ts - flow.ts <= 180000 && supply > 0 && returnTemperature > 0) {
+  if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && supply > 0 && returnTemperature > 0) {
     const difference = returnTemperature - supply;
-    const capacity = Math.max(0, 1.163 * flow.value * difference);
+    const capacity = plantPower > 20 ? Math.max(0, 1.163 * flow.value * difference) : 0;
     const cooling = context.get("cooling") || { energy: 0, previous: null };
     if (cooling.previous && sample.ts - cooling.previous.ts <= 600000) {
       cooling.energy += (cooling.previous.capacity + capacity) / 2 * (sample.ts - cooling.previous.ts) / 3600000;

@@ -84,22 +84,29 @@ export function deriveTotals(sources) {
 }
 
 // The cooling a calculated BTU meter reports, as the Gateway computes it live: at each temperature
-// reading with a flow reading from the last 3 minutes, 1.163 × flow (m³/h) × (return − supply) in kW,
-// never below zero, integrated over time into kWh; a gap of more than 10 minutes is not integrated.
-export function deriveCooling(flowRows, supplyRows, returnRows) {
+// reading with a flow reading from the last 3 minutes and a plant power reading from the last 10,
+// 1.163 × flow (m³/h) × (return − supply) in kW while the machines draw more than runningAboveKw, else
+// zero (the pumps keep water moving while the machines are off, and that warming is not cooling), never
+// below zero, integrated over time into kWh; a gap of more than 10 minutes is not integrated. A reading
+// without a power reading to judge by is left out.
+export function deriveCooling(flowRows, supplyRows, returnRows, powerRows, runningAboveKw) {
   const supplyAt = new Map(supplyRows);
   const flows = [...flowRows].sort((left, right) => left[0] - right[0]);
+  const powers = [...powerRows].sort((left, right) => left[0] - right[0]);
   const samples = [];
   let flowIndex = -1;
+  let powerIndex = -1;
   let energy = 0;
   let previous = null;
   for (const [ts, returnTemperature] of [...returnRows].sort((left, right) => left[0] - right[0])) {
     const supply = supplyAt.get(ts);
     while (flowIndex + 1 < flows.length && flows[flowIndex + 1][0] <= ts) flowIndex += 1;
     const flow = flowIndex >= 0 && ts - flows[flowIndex][0] <= 180000 ? flows[flowIndex][1] : null;
-    if (flow === null || !(supply > 0) || !(returnTemperature > 0)) continue;
+    while (powerIndex + 1 < powers.length && powers[powerIndex + 1][0] <= ts) powerIndex += 1;
+    const power = powerIndex >= 0 && ts - powers[powerIndex][0] <= 600000 ? powers[powerIndex][1] : null;
+    if (flow === null || power === null || !(supply > 0) || !(returnTemperature > 0)) continue;
     const difference = returnTemperature - supply;
-    const capacity = Math.max(0, 1.163 * flow * difference);
+    const capacity = power > runningAboveKw ? Math.max(0, 1.163 * flow * difference) : 0;
     if (previous && ts - previous.ts <= 600000) energy += (previous.capacity + capacity) / 2 * (ts - previous.ts) / 3600000;
     previous = { ts, capacity };
     samples.push({
@@ -132,8 +139,16 @@ function deriveHistory(profile, dir) {
       }));
       lines = deriveTotals(sources).map(([ts, power, energy]) => `${ts},power_total,${power}\n${ts},active_energy_total,${energy}\n`);
     } else if (device.derive.kind === 'cooling') {
-      const { flow, supply } = device.derive;
-      const samples = deriveCooling(readSeries(dir, ...flow), readSeries(dir, ...supply), readSeries(dir, ...device.derive.return));
+      const { flow, supply, power, runningAboveKw } = device.derive;
+      const meters = profile.devices.find((candidate) => candidate.sourceKey === power).derive.from;
+      const plantPower = deriveTotals(meters.map((key) => ({
+        key,
+        rows: readFileSync(path.join(dir, `${key}.csv`), 'utf8').split('\n').filter(Boolean).map((line) => {
+          const [ts, field, value] = line.split(',');
+          return [Number(ts), field, Number(value)];
+        }),
+      }))).map(([ts, total]) => [ts, total]);
+      const samples = deriveCooling(readSeries(dir, ...flow), readSeries(dir, ...supply), readSeries(dir, ...device.derive.return), plantPower, runningAboveKw);
       lines = samples.map((sample) => [
         ['supply_water_temperature', sample.supply], ['return_water_temperature', sample.returnTemperature],
         ['temperature_difference', sample.difference], ['flow_rate', sample.flow],
