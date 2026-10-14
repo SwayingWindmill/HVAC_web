@@ -85,7 +85,8 @@
         "infra/registry/postgres/init/022-report-snapshots.sql",
         "infra/registry/postgres/init/023-savings-device-boundary.sql",
         "infra/registry/postgres/init/024-site-profile.sql",
-        "infra/registry/postgres/init/025-fdd-rule-revisions.sql"
+        "infra/registry/postgres/init/025-fdd-rule-revisions.sql",
+        "infra/registry/postgres/init/026-iam-role-assignments.sql"
       ]
     },
     {

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -40,8 +39,7 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 			TenantID: postgresTenantAID, Status: iam.FactStatusActive, ValidFrom: validFrom,
 		}},
 		RoleBindings: []iam.ReconciledRoleBinding{{
-			TenantID: postgresTenantAID, RoleKey: "registry-reader",
-			Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, ValidFrom: validFrom,
+			TenantID: postgresTenantAID, RoleKey: "viewer", SiteID: postgresOwnerASite1ID, ValidFrom: validFrom,
 		}},
 	}
 
@@ -51,6 +49,30 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 	}
 	if applied.Status != iam.ReconciliationApplied {
 		t.Fatalf("expected APPLIED, got %#v", applied)
+	}
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var builtIn bool
+	var siteID string
+	if err := admin.QueryRow(ctx, `
+SELECT template.tenant_id IS NULL, binding.site_id::text
+FROM iam.role_bindings binding JOIN iam.role_templates template ON template.id = binding.role_template_id
+WHERE binding.principal_id = $1::uuid`, reconciliationPrincipalID).Scan(&builtIn, &siteID); err != nil {
+		t.Fatal(err)
+	}
+	if !builtIn || siteID != postgresOwnerASite1ID {
+		t.Fatalf("reconciled assignment builtIn=%v site=%q", builtIn, siteID)
+	}
+	missingRole := request
+	missingRole.SourceKey = "user-reconciliation-missing-role"
+	missingRole.Principal.ID = "018f1e00-2000-7000-8000-000000000098"
+	missingRole.Principal.Subject = "missing-role-subject"
+	missingRole.RoleBindings = []iam.ReconciledRoleBinding{{TenantID: postgresTenantAID, RoleKey: "no-such-role", ValidFrom: validFrom}}
+	if _, err := store.Reconcile(ctx, missingRole); err == nil {
+		t.Fatal("reconciliation assigned a Role that does not exist")
 	}
 	unchanged, err := store.Reconcile(ctx, request)
 	if err != nil {
@@ -80,11 +102,6 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 		t.Fatalf("expected source-to-Principal conflict quarantine, got %#v", sourceConflict)
 	}
 
-	admin, err := pgxpool.New(ctx, adminURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
 	var subject, email, conflictingSourceKey string
 	var eventCount, quarantineCount int
 	if err := admin.QueryRow(ctx, `SELECT external_subject, email FROM iam.principals WHERE id = $1::uuid`, reconciliationPrincipalID).Scan(&subject, &email); err != nil {

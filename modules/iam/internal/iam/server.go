@@ -156,11 +156,7 @@ func NewHandler(config Config) http.Handler {
 	}
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
-		principalCapabilityResolver = withManagementCapabilities(
-			newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, workOrderStore, now),
-			store,
-			now,
-		)
+		principalCapabilityResolver = newPrincipalCapabilityResolver(store, now)
 	}
 	tenantContextResolver := config.TenantContextResolver
 	if tenantContextResolver == nil {
@@ -521,24 +517,11 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 }
 
 func effectivePrincipalRoles(facts AuthorizationFacts, tenantID string, now time.Time) []string {
-	denied := map[string]struct{}{}
-	for _, binding := range facts.RoleBindings {
-		roleKey := strings.TrimSpace(binding.RoleKey)
-		if roleKey == "" || binding.Status != FactStatusActive || binding.TenantID != tenantID || !factEffective(binding.ValidFrom, binding.ValidTo, now) {
-			continue
-		}
-		if binding.Effect == BindingEffectDeny {
-			denied[roleKey] = struct{}{}
-		}
-	}
-	roles := make([]string, 0, len(facts.RoleBindings))
+	roles := []string{}
 	seen := map[string]struct{}{}
-	for _, binding := range facts.RoleBindings {
-		roleKey := strings.TrimSpace(binding.RoleKey)
-		if roleKey == "" || binding.Status != FactStatusActive || binding.TenantID != tenantID || binding.Effect != BindingEffectAllow || !factEffective(binding.ValidFrom, binding.ValidTo, now) {
-			continue
-		}
-		if _, blocked := denied[roleKey]; blocked {
+	for _, assignment := range facts.Assignments {
+		roleKey := strings.TrimSpace(assignment.RoleKey)
+		if roleKey == "" || assignment.Status != FactStatusActive || assignment.TenantID != tenantID || !factEffective(assignment.ValidFrom, assignment.ValidTo, now) {
 			continue
 		}
 		if _, duplicate := seen[roleKey]; duplicate {

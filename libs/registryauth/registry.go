@@ -160,7 +160,6 @@ type ReasonCode string
 const (
 	ReasonAllowTenantRole        ReasonCode = "ALLOW_TENANT_ROLE"
 	ReasonAllowSiteRole          ReasonCode = "ALLOW_SITE_ROLE"
-	ReasonAllowSiteBinding       ReasonCode = "ALLOW_SITE_BINDING"
 	ReasonDenyExplicit           ReasonCode = "DENY_EXPLICIT"
 	ReasonDenyPrincipalNotFound  ReasonCode = "DENY_PRINCIPAL_NOT_FOUND"
 	ReasonDenyPrincipalInactive  ReasonCode = "DENY_PRINCIPAL_INACTIVE"
@@ -171,7 +170,7 @@ const (
 
 func IsAllowReason(reason ReasonCode) bool {
 	switch reason {
-	case ReasonAllowTenantRole, ReasonAllowSiteRole, ReasonAllowSiteBinding:
+	case ReasonAllowTenantRole, ReasonAllowSiteRole:
 		return true
 	default:
 		return false

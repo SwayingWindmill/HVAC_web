@@ -36,7 +36,6 @@
     "local:reset": "node scripts/local-environment.mjs reset",
     "deployment:phase1:identity-reset": "node scripts/phase1-reset-local-identity-password.mjs",
     "deployment:phase1:local-foundation": "node scripts/phase1-bootstrap-local-foundation.mjs",
-    "deployment:phase1:local-admin": "node scripts/phase1-grant-local-admin.mjs",
     "deployment:phase1:simulator": "node scripts/phase1-central-plant-simulator.mjs",
     "deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs",
     "deployment:phase1:recovery:claim:check": "node --experimental-strip-types scripts/check-phase1-recovery-attainment.ts",

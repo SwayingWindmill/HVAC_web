@@ -9,8 +9,11 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 )
 
+// catalogCapabilityValid reports whether a Role may carry the capability. A stored capability
+// outside this set makes authorization unavailable rather than being ignored.
 func catalogCapabilityValid(value string) bool {
-	if identitycontext.Capability(value).Valid() || registryauth.Action(value).Valid() || telemetryauth.Action(value).Valid() || value == analyticsmodel.EnergySeriesAction {
+	if identitycontext.Capability(value).Valid() || registryauth.Action(value).Valid() || telemetryauth.Action(value).Valid() ||
+		value == analyticsmodel.EnergySeriesAction || commandCapabilityValid(value) {
 		return true
 	}
 	switch alarmauth.Action(value) {

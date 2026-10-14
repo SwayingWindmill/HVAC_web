@@ -139,49 +139,27 @@ function seedIAMIntegrationFixtures() {
     UPDATE iam.role_templates
     SET capabilities = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
     WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'registry-reader';
-    UPDATE iam.site_bindings
-    SET actions = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
-    WHERE id = '018f1e00-2300-7000-8000-000000000001';
 
-    INSERT INTO iam.telemetry_scope_bindings (
-      id, tenant_id, principal_id, site_id, device_id, actions, effect, status,
-      valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES (
-      '018f1e00-2600-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002',
-      '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'],
-      'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
-    );
-    INSERT INTO iam.telemetry_key_bindings (
-      id, tenant_id, principal_id, device_id, telemetry_key, actions, effect, status,
-      valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2700-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
-      ('018f1e00-2700-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
+    -- Role Assignments (ADR 0022): Owner A reads the whole Tenant and operates Site 1; the
+    -- delegated user reads Site 1 only; the denied user keeps a Tenant role under a Site 1 deny.
+    INSERT INTO iam.role_templates (id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at)
+    VALUES ('018f1e00-2b00-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', 'site-operator', 'Site operator', ARRAY[
+      'analytics.energy-series.read', 'alarm:read', 'alarm:ack',
+      'work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign', 'work-order:plan', 'work-order:start',
+      'work-order:block', 'work-order:resume', 'work-order:complete', 'work-order:cancel', 'work-order:reopen',
+      'command.submit.medium'
+    ], 'ACTIVE', 1, now(), now());
+    DELETE FROM iam.role_bindings WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND principal_id = '018f1e00-2000-7000-8000-000000000002';
+    INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at)
+    SELECT '018f1e00-2200-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', id, '018f1e00-1000-7000-8000-000000000001', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
+    FROM iam.role_templates WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'site-operator';
+    INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at)
+    SELECT '018f1e00-2200-7000-8000-000000000012', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', id, '018f1e00-1000-7000-8000-000000000001', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
+    FROM iam.role_templates WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'registry-reader';
 
-    INSERT INTO iam.alarm_permissions (
-      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2800-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:read', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
-      ('018f1e00-2800-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:ack', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
-
-    INSERT INTO iam.work_order_permissions (
-      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2900-7000-8000-000000000001','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:list','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000002','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:read','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000003','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:create','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000004','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:assign','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000005','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:plan','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000006','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:start','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000007','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:block','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000008','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:resume','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000009','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:complete','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000010','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:cancel','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000011','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:reopen','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
     INSERT INTO iam.work_order_ownership_targets (
       id, tenant_id, site_id, target_type, target_id, effect, status, valid_from, valid_to, revision, created_at, updated_at
     ) VALUES
-      ('018f1e00-2a00-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','PRINCIPAL','018f1e00-2000-7000-8000-000000000001','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
       ('018f1e00-2a00-7000-8000-000000000002','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','TEAM','operations-a','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
   `);
 }
@@ -1795,8 +1773,7 @@ try {
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000002';
     SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
     SELECT (SELECT count(*) FROM iam.tenant_memberships)::text || '|'
-      || (SELECT count(*) FROM iam.role_bindings)::text || '|'
-      || (SELECT count(*) FROM iam.site_bindings)::text || '|'
+      || (SELECT count(*) FROM iam.role_bindings WHERE site_id IS NOT NULL)::text || '|'
       || (SELECT count(*) FROM iam.explicit_denies)::text;
     ROLLBACK;
   `);
@@ -1808,7 +1785,7 @@ try {
     SELECT count(*) FROM iam.explicit_denies;
     ROLLBACK;
   `);
-  expectEqual(iamDelegated, '1|1|1|0', 'delegated IAM fixture');
+  expectEqual(iamDelegated, '1|1|0', 'delegated IAM fixture');
   expectEqual(iamDenied, '1', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
 

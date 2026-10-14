@@ -128,11 +128,9 @@ function ensureApprover() {
   return user.id;
 }
 
+// The local administrator already holds the Tenant-wide admin Role (ADR 0022). The approver is a
+// second person who approves on the ATV630 Site as its site manager.
 function authorizationSeed(adminPrincipalId, approverSubject) {
-  const telemetryActions = ['telemetry.batch.read', 'telemetry.history.read', 'telemetry.recovery.checkpoint', 'telemetry.recovery.use', 'telemetry.resubscribe', 'telemetry.snapshot.read', 'telemetry.subscribe'];
-  const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]::text[]`;
-  const permissions = (principal, purpose, offset) => commandPoints.map((point, index) => `(${sqlLiteral(id(offset + index))}, ${principal}, ${sqlLiteral(tenantId)}, ${sqlLiteral(ids.site)}, ${sqlLiteral(ids.pump)},
-    ${sqlLiteral(point.sourceMetadata.capability)}, ${sqlLiteral(point.sourceMetadata.capabilityRevision)}, ${sqlLiteral(purpose)}, 'MEDIUM', 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`);
   const approver = `(SELECT id FROM iam.principals WHERE external_subject = ${sqlLiteral(approverSubject)})`;
   return `BEGIN;
 INSERT INTO iam.principals (id, external_issuer, external_subject, display_name, email, status, revision, created_at, updated_at)
@@ -142,25 +140,10 @@ ON CONFLICT (external_issuer, external_subject) DO NOTHING;
 INSERT INTO iam.tenant_memberships (id, tenant_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at)
 SELECT ${sqlLiteral(id(71))}, ${sqlLiteral(tenantId)}, ${approver}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
 ON CONFLICT (tenant_id, principal_id) DO NOTHING;
-INSERT INTO iam.role_templates (id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at)
-VALUES (${sqlLiteral(id(73))}, ${sqlLiteral(tenantId)}, 'command-approver', '命令审批人', ARRAY['device.read']::text[], 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (tenant_id, role_key) DO NOTHING;
-INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, status, valid_from, valid_to, revision, created_at, updated_at)
-SELECT ${sqlLiteral(id(72))}, ${sqlLiteral(tenantId)}, ${approver}, template.id, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
-FROM iam.role_templates template WHERE template.tenant_id = ${sqlLiteral(tenantId)} AND template.role_key = 'command-approver'
-ON CONFLICT (tenant_id, principal_id, role_template_id) DO NOTHING;
-INSERT INTO iam.site_bindings (id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
-VALUES (${sqlLiteral(id(30))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(ids.site)}, ${sqlLiteral(adminPrincipalId)}, ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (tenant_id, site_id, principal_id) DO NOTHING;
-INSERT INTO iam.telemetry_scope_bindings (id, tenant_id, principal_id, site_id, device_id, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
-VALUES (${sqlLiteral(id(31))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(adminPrincipalId)}, ${sqlLiteral(ids.site)}, NULL, ${actions}, 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO NOTHING;
-INSERT INTO iam.telemetry_key_bindings (id, tenant_id, principal_id, device_id, telemetry_key, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
-${telemetryPoints.map((point, index) => `(${sqlLiteral(id(40 + index))}, ${sqlLiteral(tenantId)}, ${sqlLiteral(adminPrincipalId)}, ${sqlLiteral(ids.pump)}, ${sqlLiteral(point.pointCode)}, ${actions}, 'ALLOW', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
-ON CONFLICT (id) DO NOTHING;
-INSERT INTO iam.command_permissions (id,principal_id,tenant_id,site_id,device_id,capability,capability_revision,purpose,maximum_risk,effect,status,valid_from,valid_to,revision,created_at,updated_at) VALUES
-${[...permissions(sqlLiteral(adminPrincipalId), 'COMMAND_SUBMIT', 50), ...permissions(approver, 'COMMAND_APPROVE', 60)].join(',\n')}
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at)
+SELECT ${sqlLiteral(id(72))}, ${sqlLiteral(tenantId)}, ${approver}, template.id, ${sqlLiteral(ids.site)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()
+FROM iam.role_templates template WHERE template.tenant_id IS NULL AND template.role_key = 'site-manager'
+ON CONFLICT (tenant_id, principal_id, role_template_id, site_id) DO NOTHING;
 COMMIT;`;
 }
 

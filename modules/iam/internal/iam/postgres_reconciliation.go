@@ -300,7 +300,7 @@ ON CONFLICT (id) DO UPDATE SET
 
 func replaceReconciledFacts(ctx context.Context, transaction pgx.Tx, request ReconciliationRequest, now time.Time) error {
 	principalID := request.Principal.ID
-	for _, table := range []string{"explicit_denies", "site_bindings", "role_bindings", "tenant_memberships"} {
+	for _, table := range []string{"explicit_denies", "role_bindings", "tenant_memberships"} {
 		if _, err := transaction.Exec(ctx, `DELETE FROM iam.`+table+` WHERE tenant_id = $1::uuid AND principal_id = $2::uuid`, request.TenantID, principalID); err != nil {
 			return fmt.Errorf("clear reconciled IAM %s: %w", table, err)
 		}
@@ -319,73 +319,30 @@ INSERT INTO iam.tenant_memberships (
 		}
 	}
 	for _, binding := range request.RoleBindings {
-		actions := make([]string, len(binding.Actions))
-		for index, action := range binding.Actions {
-			actions[index] = string(action)
-		}
-		if binding.Effect == BindingEffectDeny {
-			for _, action := range actions {
-				id, err := newUUIDv7(now)
-				if err != nil {
-					return err
-				}
-				if _, err := transaction.Exec(ctx, `
-INSERT INTO iam.explicit_denies (
-  id, tenant_id, site_id, principal_id, action, reason_code,
-  valid_from, valid_to, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, NULL, $3::uuid, $4, 'RECONCILED_ROLE_DENY', $5, $6, $7, $8, $8)
-`, id, binding.TenantID, principalID, action, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
-					return fmt.Errorf("insert reconciled IAM role deny: %w", err)
-				}
-			}
-			continue
-		}
-		templateID, err := newUUIDv7(now)
-		if err != nil {
-			return err
-		}
-		if _, err := transaction.Exec(ctx, `
-INSERT INTO iam.role_templates (
-  id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3, $3, $4, 'ACTIVE', $5, $6, $6)
-ON CONFLICT (tenant_id, role_key) DO UPDATE SET
-  capabilities = EXCLUDED.capabilities,
-  status = 'ACTIVE',
-  revision = GREATEST(iam.role_templates.revision + 1, EXCLUDED.revision),
-  updated_at = EXCLUDED.updated_at
-`, templateID, binding.TenantID, binding.RoleKey, actions, request.SourceVersion, now); err != nil {
-			return fmt.Errorf("upsert reconciled IAM role template: %w", err)
-		}
 		bindingID, err := newUUIDv7(now)
 		if err != nil {
 			return err
 		}
-		if _, err := transaction.Exec(ctx, `
+		var siteID any
+		if binding.SiteID != "" {
+			siteID = binding.SiteID
+		}
+		// A Tenant-owned Role shadows a built-in one with the same key.
+		tag, err := transaction.Exec(ctx, `
 INSERT INTO iam.role_bindings (
-  id, tenant_id, principal_id, role_template_id, status, valid_from, valid_to, revision, created_at, updated_at
+  id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at
 )
-SELECT $1::uuid, $2::uuid, $3::uuid, template.id, 'ACTIVE', $5, $6, $7, $8, $8
+SELECT $1::uuid, $2::uuid, $3::uuid, template.id, $5::uuid, 'ACTIVE', $6, $7, $8, $9, $9
 FROM iam.role_templates template
-WHERE template.tenant_id = $2::uuid AND template.role_key = $4
-`, bindingID, binding.TenantID, principalID, binding.RoleKey, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
+WHERE (template.tenant_id = $2::uuid OR template.tenant_id IS NULL) AND template.role_key = $4 AND template.status = 'ACTIVE'
+ORDER BY template.tenant_id NULLS LAST
+LIMIT 1
+`, bindingID, binding.TenantID, principalID, binding.RoleKey, siteID, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now)
+		if err != nil {
 			return fmt.Errorf("insert reconciled IAM role binding: %w", err)
 		}
-	}
-	for _, binding := range request.SiteBindings {
-		id, err := newUUIDv7(now)
-		if err != nil {
-			return err
-		}
-		actions := make([]string, len(binding.Actions))
-		for index, action := range binding.Actions {
-			actions[index] = string(action)
-		}
-		if _, err := transaction.Exec(ctx, `
-INSERT INTO iam.site_bindings (
-  id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $10)
-`, id, binding.TenantID, binding.SiteID, principalID, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
-			return fmt.Errorf("insert reconciled IAM site binding: %w", err)
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("reconciled IAM role %q does not exist", binding.RoleKey)
 		}
 	}
 	for _, deny := range request.ExplicitDenies {
@@ -430,11 +387,11 @@ func insertReconciliationEvent(ctx context.Context, transaction pgx.Tx, request 
 	_, err := transaction.Exec(ctx, `
 INSERT INTO iam.reconciliation_events (
   id, source_system, source_key, source_version, input_hash, principal_id, status, reason_code,
-  membership_count, role_binding_count, site_binding_count, explicit_deny_count, created_at
-) VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8, $9, $10, $11, $12, $13)
+  membership_count, role_binding_count, explicit_deny_count, created_at
+) VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8, $9, $10, $11, $12)
 `, result.EventID, request.SourceSystem, request.SourceKey, request.SourceVersion, result.InputHash,
 		request.Principal.ID, result.Status, result.ReasonCode, len(request.Memberships), len(request.RoleBindings),
-		len(request.SiteBindings), len(request.ExplicitDenies), now)
+		len(request.ExplicitDenies), now)
 	if err != nil {
 		return fmt.Errorf("insert IAM reconciliation audit event: %w", err)
 	}

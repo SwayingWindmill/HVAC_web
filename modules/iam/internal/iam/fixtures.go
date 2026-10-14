@@ -39,41 +39,33 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 			Principal:     PrincipalRecord{ID: S1FixtureOwnerAPrincipalID, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
 			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
-			RoleBindings: []RoleBinding{
-				{
-					TenantID: S1FixtureTenantAID,
-					Actions:  []registryauth.Action{registryauth.ActionRegistryRead},
-					Capabilities: []identitycontext.Capability{
-						identitycontext.CapabilitySessionRevoke,
-						identitycontext.CapabilityAuditRead,
-						identitycontext.CapabilityIAMAdmin,
-						identitycontext.CapabilityAPICredentialManage,
-					},
-					Status: FactStatusActive,
-				},
-			},
-			SiteBindings: []SiteBinding{
-				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)}, Status: FactStatusActive},
+			Assignments: []RoleAssignment{
+				{TenantID: S1FixtureTenantAID, RoleKey: "owner", Status: FactStatusActive, Capabilities: []string{
+					string(registryauth.ActionRegistryRead),
+					string(identitycontext.CapabilitySessionRevoke),
+					string(identitycontext.CapabilityAuditRead),
+					string(identitycontext.CapabilityIAMAdmin),
+					string(identitycontext.CapabilityAPICredentialManage),
+				}},
+				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, RoleKey: "analyst", Status: FactStatusActive, Capabilities: []string{analyticsmodel.EnergySeriesAction}},
 			},
 		},
 		{
 			Principal:     PrincipalRecord{ID: S1FixtureDelegatedID, SubjectIssuer: subjectIssuer, Subject: "fixture-delegated-user", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
 			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
-			SiteBindings: []SiteBinding{
-				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+			Assignments: []RoleAssignment{
+				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{string(registryauth.ActionRegistryRead)}},
 			},
 		},
 		{
 			Principal:     PrincipalRecord{ID: S1FixtureDeniedID, SubjectIssuer: subjectIssuer, Subject: "fixture-denied-user", Status: FactStatusActive},
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
 			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
-			RoleBindings: []RoleBinding{
-				{TenantID: S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+			Assignments: []RoleAssignment{
+				{TenantID: S1FixtureTenantAID, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{string(registryauth.ActionRegistryRead)}},
 			},
-			ExplicitDenies: []ExplicitDeny{
-				{TenantID: S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
-			},
+			ExplicitDenies: []ExplicitDeny{{TenantID: S1FixtureTenantAID, Capability: string(registryauth.ActionRegistryRead)}},
 		},
 		{
 			Principal:   PrincipalRecord{ID: S1FixtureNoAccessID, SubjectIssuer: subjectIssuer, Subject: "fixture-no-access-user", Status: FactStatusActive},
@@ -82,8 +74,8 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal:   PrincipalRecord{ID: S1FixtureRevokedMemberID, SubjectIssuer: subjectIssuer, Subject: "fixture-revoked-user", Status: FactStatusActive},
 			Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusRevoked}},
-			SiteBindings: []SiteBinding{
-				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+			Assignments: []RoleAssignment{
+				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{string(registryauth.ActionRegistryRead)}},
 			},
 		},
 	})
@@ -93,30 +85,19 @@ func NewS2FixtureTelemetryAuthorizationStore(subjectIssuer string) TelemetryAuth
 	if subjectIssuer == "" {
 		subjectIssuer = "https://issuer.example.test"
 	}
-	actions := []telemetryauth.Action{telemetryauth.ActionSnapshotRead, telemetryauth.ActionBatchRead, telemetryauth.ActionSubscribe, telemetryauth.ActionHistoryRead}
-	registryActions := []registryauth.Action{
-		registryauth.Action(telemetryauth.ActionSnapshotRead),
-		registryauth.Action(telemetryauth.ActionBatchRead),
-		registryauth.Action(telemetryauth.ActionSubscribe),
-		registryauth.Action(telemetryauth.ActionHistoryRead),
-	}
 	return newStaticTelemetryAuthorizationStore(TelemetryAuthorizationFacts{
-		PolicyRevision: S2FixturePolicyRevision,
-		Principal:      PrincipalRecord{ID: S2FixturePrincipal, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},
-		Memberships:    []TenantMembership{{TenantID: S2FixtureTenantID, Status: FactStatusActive}},
-		RoleBindings:   []RoleBinding{{TenantID: S2FixtureTenantID, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive}},
-		SiteBindings:   []SiteBinding{{TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive}},
+		AuthorizationFacts: AuthorizationFacts{
+			PolicyRevision: S2FixturePolicyRevision,
+			Principal:      PrincipalRecord{ID: S2FixturePrincipal, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},
+			Memberships:    []TenantMembership{{TenantID: S2FixtureTenantID, Status: FactStatusActive}},
+			Assignments: []RoleAssignment{{TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, RoleKey: "viewer", Status: FactStatusActive, Capabilities: []string{
+				string(telemetryauth.ActionSnapshotRead), string(telemetryauth.ActionBatchRead),
+				string(telemetryauth.ActionSubscribe), string(telemetryauth.ActionHistoryRead),
+			}}},
+		},
 		Devices: []TelemetryDevice{
 			{ID: S2FixtureDevice, TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, Status: FactStatusActive},
 			{ID: S2FixtureDeviceTwo, TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, Status: FactStatusActive},
-		},
-		ScopeBindings: []TelemetryScopeBinding{
-			{TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, DeviceID: S2FixtureDevice, Actions: actions, Effect: BindingEffectAllow, Status: FactStatusActive},
-			{TenantID: S2FixtureTenantID, SiteID: S2FixtureSite, DeviceID: S2FixtureDeviceTwo, Actions: actions, Effect: BindingEffectAllow, Status: FactStatusActive},
-		},
-		KeyBindings: []TelemetryKeyBinding{
-			{TenantID: S2FixtureTenantID, DeviceID: S2FixtureDevice, Key: "temperature", Actions: actions, Effect: BindingEffectAllow, Status: FactStatusActive},
-			{TenantID: S2FixtureTenantID, DeviceID: S2FixtureDevice, Key: "humidity", Actions: actions, Effect: BindingEffectAllow, Status: FactStatusActive},
 		},
 	})
 }

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -29,14 +28,13 @@ type seed struct {
 	PrincipalID    string                       `json:"principalId"`
 	EffectiveAt    time.Time                    `json:"effectiveAt"`
 	RoleBindings   []roleBinding                `json:"roleBindings"`
-	SiteBindings   []iam.ReconciledSiteBinding  `json:"siteBindings"`
 	ExplicitDenies []iam.ReconciledExplicitDeny `json:"explicitDenies"`
 }
 
+// roleBinding assigns a Role by key, to the whole Tenant or to one Site.
 type roleBinding struct {
-	RoleKey string                `json:"roleKey"`
-	Actions []registryauth.Action `json:"actions"`
-	Effect  iam.BindingEffect     `json:"effect"`
+	RoleKey string `json:"roleKey"`
+	SiteID  string `json:"siteId,omitempty"`
 }
 
 type directoryUser struct {
@@ -103,15 +101,13 @@ func run(ctx context.Context, input io.Reader, output io.Writer, getenv func(str
 			Status:    iam.FactStatusActive,
 			ValidFrom: decoded.Seed.EffectiveAt,
 		}},
-		SiteBindings:   append([]iam.ReconciledSiteBinding(nil), decoded.Seed.SiteBindings...),
 		ExplicitDenies: append([]iam.ReconciledExplicitDeny(nil), decoded.Seed.ExplicitDenies...),
 	}
 	for _, binding := range decoded.Seed.RoleBindings {
 		request.RoleBindings = append(request.RoleBindings, iam.ReconciledRoleBinding{
 			TenantID:  decoded.Seed.TenantID,
 			RoleKey:   binding.RoleKey,
-			Actions:   append([]registryauth.Action(nil), binding.Actions...),
-			Effect:    binding.Effect,
+			SiteID:    binding.SiteID,
 			ValidFrom: decoded.Seed.EffectiveAt,
 		})
 	}

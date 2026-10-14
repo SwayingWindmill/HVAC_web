@@ -417,7 +417,7 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		DeniedSiteIDs:  []string{},
 		Actions:        []registryauth.Action{action},
 		PolicyRevision: testPolicy,
-		DecisionReason: registryauth.ReasonAllowSiteBinding,
+		DecisionReason: registryauth.ReasonAllowSiteRole,
 		SessionID:      "session-1",
 		ParentTokenID:  "parent-1",
 		TokenID:        "grant-1",

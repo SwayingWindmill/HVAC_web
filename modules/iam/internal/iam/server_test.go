@@ -225,10 +225,10 @@ func TestIAMIssuesRegistryGrantForAllowedDelegatedPresenter(t *testing.T) {
 	assertIAMProblem(t, recorder, http.StatusForbidden, "IAM_REGISTRY_GRANT_PRESENTER_REJECTED")
 }
 
-func TestIAMDelegatedSiteBindingIsSiteOnly(t *testing.T) {
+func TestIAMSiteAssignmentIsSiteOnly(t *testing.T) {
 	harness := newIAMHarness(t)
 	response := harness.registryDecision(t, "fixture-delegated-user", iam.S1FixtureTenantAID, registryauth.ActionDeviceRead)
-	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowSiteBinding {
+	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowSiteRole {
 		t.Fatalf("unexpected delegated decision: %#v", response.Decision)
 	}
 	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{iam.S1FixtureOwnerASite1ID})
@@ -246,6 +246,13 @@ func TestIAMDelegatedSiteBindingIsSiteOnly(t *testing.T) {
 
 func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 	validFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	assignment := func(actions ...registryauth.Action) iam.RoleAssignment {
+		capabilities := make([]string, len(actions))
+		for index, action := range actions {
+			capabilities[index] = string(action)
+		}
+		return iam.RoleAssignment{TenantID: iam.S1FixtureTenantAID, RoleKey: "reader", Capabilities: capabilities, Status: iam.FactStatusActive, ValidFrom: validFrom}
+	}
 	facts := func(actions []registryauth.Action, denies []iam.ExplicitDeny) iam.AuthorizationFacts {
 		return iam.AuthorizationFacts{
 			Found:          true,
@@ -262,23 +269,14 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 				Status:    iam.FactStatusActive,
 				ValidFrom: validFrom,
 			}},
-			RoleBindings: []iam.RoleBinding{{
-				TenantID:  iam.S1FixtureTenantAID,
-				Actions:   actions,
-				Effect:    iam.BindingEffectAllow,
-				Status:    iam.FactStatusActive,
-				ValidFrom: validFrom,
-			}},
+			Assignments:    []iam.RoleAssignment{assignment(actions...)},
 			ExplicitDenies: denies,
 		}
 	}
 
-	t.Run("actions may be aggregated across effective role bindings", func(t *testing.T) {
+	t.Run("actions may be aggregated across effective role assignments", func(t *testing.T) {
 		splitFacts := facts(nil, nil)
-		splitFacts.RoleBindings = []iam.RoleBinding{
-			{TenantID: iam.S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.ActionAssetList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
-			{TenantID: iam.S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.ActionDeviceList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
-		}
+		splitFacts.Assignments = []iam.RoleAssignment{assignment(registryauth.ActionAssetList), assignment(registryauth.ActionDeviceList)}
 		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 			config.AuthorizationStore = fixedAuthorizationStore{facts: splitFacts}
 		})
@@ -300,12 +298,7 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 	})
 
 	t.Run("a deny on either constituent action denies relationships", func(t *testing.T) {
-		denies := []iam.ExplicitDeny{{
-			TenantID:  iam.S1FixtureTenantAID,
-			Actions:   []registryauth.Action{registryauth.ActionAssetList},
-			Status:    iam.FactStatusActive,
-			ValidFrom: validFrom,
-		}}
+		denies := []iam.ExplicitDeny{{TenantID: iam.S1FixtureTenantAID, Capability: string(registryauth.ActionAssetList), ValidFrom: validFrom}}
 		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 			config.AuthorizationStore = fixedAuthorizationStore{facts: facts([]registryauth.Action{registryauth.ActionAssetList, registryauth.ActionDeviceList}, denies)}
 		})
@@ -357,22 +350,16 @@ func TestIAMExplicitSiteDenyDoesNotExpandToSiblingSite(t *testing.T) {
 				Status:    iam.FactStatusActive,
 				ValidFrom: validFrom,
 			}},
-			SiteBindings: []iam.SiteBinding{
-				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
-				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite2ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+			Assignments: []iam.RoleAssignment{
+				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "viewer", Capabilities: []string{string(registryauth.ActionSiteRead)}, Status: iam.FactStatusActive, ValidFrom: validFrom},
+				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite2ID, RoleKey: "viewer", Capabilities: []string{string(registryauth.ActionSiteRead)}, Status: iam.FactStatusActive, ValidFrom: validFrom},
 			},
-			ExplicitDenies: []iam.ExplicitDeny{{
-				TenantID:  iam.S1FixtureTenantAID,
-				SiteID:    iam.S1FixtureOwnerASite1ID,
-				Actions:   []registryauth.Action{registryauth.ActionSiteRead},
-				Status:    iam.FactStatusActive,
-				ValidFrom: validFrom,
-			}},
+			ExplicitDenies: []iam.ExplicitDeny{{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Capability: string(registryauth.ActionSiteRead), ValidFrom: validFrom}},
 		}}
 	})
 
 	response := harness.registryDecision(t, "fixture-user", iam.S1FixtureTenantAID, registryauth.ActionSiteRead)
-	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowSiteBinding {
+	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowSiteRole {
 		t.Fatalf("site-specific deny expanded to a sibling Site: %#v", response)
 	}
 	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{iam.S1FixtureOwnerASite2ID})
@@ -384,37 +371,6 @@ func TestIAMExplicitSiteDenyDoesNotExpandToSiblingSite(t *testing.T) {
 	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite2ID) {
 		t.Fatal("site-specific deny removed the sibling Site")
 	}
-}
-
-func TestIAMSiteBindingDenyOverridesAllow(t *testing.T) {
-	membership := iam.TenantMembership{
-		TenantID:  iam.S1FixtureTenantAID,
-		Status:    iam.FactStatusActive,
-		ValidFrom: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-	}
-	principal := iam.PrincipalRecord{
-		ID:            iam.S1FixtureOwnerAPrincipalID,
-		SubjectIssuer: fixtureSubjectIssuer,
-		Subject:       "fixture-user",
-		Status:        iam.FactStatusActive,
-	}
-	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
-		config.AuthorizationStore = fixedAuthorizationStore{facts: iam.AuthorizationFacts{
-			Found:          true,
-			PolicyRevision: "registry-read:7",
-			Principal:      principal,
-			Memberships:    []iam.TenantMembership{membership},
-			SiteBindings: []iam.SiteBinding{
-				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-			},
-		}}
-	})
-	response := harness.registryDecision(t, "fixture-user", iam.S1FixtureTenantAID, registryauth.ActionSiteRead)
-	if response.Decision.Allowed || response.DelegationGrant != "" || response.Decision.ReasonCode != registryauth.ReasonDenyExplicit {
-		t.Fatalf("Site binding deny did not override allow: %#v", response)
-	}
-	assertStringsEqual(t, response.Decision.DeniedSiteIDs, []string{iam.S1FixtureOwnerASite1ID})
 }
 
 func TestIAMRegistryDecisionRejectsBodyExpansionAndWrongInboundAction(t *testing.T) {

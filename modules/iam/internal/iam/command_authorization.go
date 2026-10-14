@@ -2,73 +2,89 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-type CommandPermission struct {
-	TenantID           string
-	SiteID             string
-	DeviceID           string
-	Capability         commandmodel.Capability
-	CapabilityRevision string
-	Purpose            commandmodel.AuthorizationPurpose
-	MaximumRisk        commandmodel.RiskLevel
-	Effect             BindingEffect
-	Status             FactStatus
-	ValidFrom          time.Time
-	ValidTo            *time.Time
+// commandRiskLevels orders the risk ceilings a Role can grant, lowest first.
+var commandRiskLevels = []commandmodel.RiskLevel{commandmodel.RiskLow, commandmodel.RiskMedium, commandmodel.RiskHigh, commandmodel.RiskCritical}
+
+// commandCapability names the capability that allows submitting or approving commands up to a
+// risk, for example "command.submit.medium".
+func commandCapability(purpose commandmodel.AuthorizationPurpose, risk commandmodel.RiskLevel) string {
+	verb := "submit"
+	if purpose == commandmodel.AuthorizationCommandApprove {
+		verb = "approve"
+	}
+	return "command." + verb + "." + strings.ToLower(string(risk))
 }
 
+func commandCapabilityValid(value string) bool {
+	for _, purpose := range []commandmodel.AuthorizationPurpose{commandmodel.AuthorizationCommandSubmit, commandmodel.AuthorizationCommandApprove} {
+		for _, risk := range commandRiskLevels {
+			if value == commandCapability(purpose, risk) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CommandAuthorizationFacts adds the Site the target Device belongs to ("" when IAM cannot see it).
 type CommandAuthorizationFacts struct {
-	Found                       bool
-	PolicyRevision              string
+	AuthorizationFacts
 	EmergencyRevocationRevision uint64
-	Principal                   PrincipalRecord
-	Memberships                 []TenantMembership
-	Permissions                 []CommandPermission
+	DeviceSiteID                string
+}
+
+type CommandAuthorizationLookup struct {
+	AuthorizationLookup
+	DeviceID string
 }
 
 type CommandAuthorizationStore interface {
-	LookupCommandAuthorization(context.Context, AuthorizationLookup) (CommandAuthorizationFacts, error)
+	LookupCommandAuthorization(context.Context, CommandAuthorizationLookup) (CommandAuthorizationFacts, error)
 }
 
 type staticCommandAuthorizationStore struct {
 	policyRevision              string
 	emergencyRevocationRevision uint64
-	facts                       map[string]CommandAuthorizationFacts
+	facts                       map[string]AuthorizationFacts
+	deviceSites                 map[string]string
 }
 
-func newStaticCommandAuthorizationStore(policyRevision string, emergencyRevocationRevision uint64, facts []CommandAuthorizationFacts) CommandAuthorizationStore {
-	indexed := make(map[string]CommandAuthorizationFacts, len(facts))
-	for _, value := range facts {
-		value.Found = true
-		value.PolicyRevision = policyRevision
-		value.EmergencyRevocationRevision = emergencyRevocationRevision
-		indexed[authorizationIdentityKey(value.Principal.SubjectIssuer, value.Principal.Subject)] = cloneCommandAuthorizationFacts(value)
-	}
+func newStaticCommandAuthorizationStore(policyRevision string, emergencyRevocationRevision uint64, deviceSites map[string]string, facts []AuthorizationFacts) CommandAuthorizationStore {
 	return &staticCommandAuthorizationStore{
-		policyRevision: policyRevision, emergencyRevocationRevision: emergencyRevocationRevision, facts: indexed,
+		policyRevision: policyRevision, emergencyRevocationRevision: emergencyRevocationRevision,
+		facts: indexAuthorizationFacts(policyRevision, facts), deviceSites: deviceSites,
 	}
 }
 
 func newDenyAllCommandAuthorizationStore(policyRevision string) CommandAuthorizationStore {
-	return &staticCommandAuthorizationStore{policyRevision: policyRevision, facts: map[string]CommandAuthorizationFacts{}}
+	return &staticCommandAuthorizationStore{policyRevision: policyRevision, facts: map[string]AuthorizationFacts{}}
 }
 
-func (store *staticCommandAuthorizationStore) LookupCommandAuthorization(_ context.Context, lookup AuthorizationLookup) (CommandAuthorizationFacts, error) {
-	value, ok := store.facts[authorizationIdentityKey(lookup.SubjectIssuer, lookup.Subject)]
-	if !ok {
-		return CommandAuthorizationFacts{PolicyRevision: store.policyRevision, EmergencyRevocationRevision: store.emergencyRevocationRevision}, nil
+func (store *staticCommandAuthorizationStore) LookupCommandAuthorization(_ context.Context, lookup CommandAuthorizationLookup) (CommandAuthorizationFacts, error) {
+	facts := CommandAuthorizationFacts{
+		AuthorizationFacts:          AuthorizationFacts{PolicyRevision: store.policyRevision},
+		EmergencyRevocationRevision: store.emergencyRevocationRevision,
+		DeviceSiteID:                store.deviceSites[lookup.DeviceID],
 	}
-	return cloneCommandAuthorizationFacts(value), nil
+	if value, ok := store.facts[authorizationIdentityKey(lookup.SubjectIssuer, lookup.Subject)]; ok {
+		facts.AuthorizationFacts = cloneAuthorizationFacts(value)
+	}
+	return facts, nil
 }
 
+// evaluateCommandAuthorization allows a command purpose on a Device of the requested Site; the
+// decision's maximum risk is the highest ceiling the Principal holds for that purpose there.
 func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizationStore, now time.Time, subjectIssuer, subject string, request commandauth.DecisionRequest) (commandauth.Decision, error) {
-	facts, err := store.LookupCommandAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
+	facts, err := store.LookupCommandAuthorization(ctx, CommandAuthorizationLookup{
+		AuthorizationLookup: AuthorizationLookup{SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID},
+		DeviceID:            request.DeviceID,
 	})
 	if err != nil {
 		return commandauth.Decision{}, err
@@ -84,67 +100,28 @@ func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizatio
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	membershipActive, _ := membershipState(facts.Memberships, request.TenantID, now)
-	if !membershipActive {
+	if active, _ := facts.member(request.TenantID, now); !active {
 		decision.ReasonCode = commandauth.ReasonDenyMembership
 		return decision, nil
 	}
-
-	allowFound := false
-	maximumRisk := commandmodel.RiskLevel("")
-	for _, permission := range facts.Permissions {
-		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) {
-			continue
-		}
-		if permission.TenantID != request.TenantID || permission.SiteID != request.SiteID || permission.DeviceID != request.DeviceID {
-			continue
-		}
-		if permission.Capability != request.Capability || permission.CapabilityRevision != request.CapabilityRevision {
-			continue
-		}
-		if permission.Purpose != request.Purpose {
-			continue
-		}
-		if permission.Effect == BindingEffectDeny {
-			decision.ReasonCode = commandauth.ReasonDenyExplicit
-			return decision, nil
-		}
-		if permission.Effect != BindingEffectAllow {
-			continue
-		}
-		allowFound = true
-		if maximumRisk == "" || commandRiskOrdinal(permission.MaximumRisk) > commandRiskOrdinal(maximumRisk) {
-			maximumRisk = permission.MaximumRisk
-		}
-	}
-	if !allowFound || maximumRisk == "" {
+	if facts.DeviceSiteID == "" || facts.DeviceSiteID != request.SiteID {
 		decision.ReasonCode = commandauth.ReasonDenyScope
 		return decision, nil
 	}
-	decision.Allowed = true
-	decision.MaximumRisk = maximumRisk
-	decision.ReasonCode = commandauth.ReasonAllowExactCapability
-	return decision, nil
-}
-
-func commandRiskOrdinal(value commandmodel.RiskLevel) int {
-	switch value {
-	case commandmodel.RiskLow:
-		return 1
-	case commandmodel.RiskMedium:
-		return 2
-	case commandmodel.RiskHigh:
-		return 3
-	case commandmodel.RiskCritical:
-		return 4
-	default:
-		return 99
+	for index := len(commandRiskLevels) - 1; index >= 0; index-- {
+		risk := commandRiskLevels[index]
+		allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, commandCapability(request.Purpose, risk), now)
+		if denied {
+			decision.ReasonCode = commandauth.ReasonDenyExplicit
+			return decision, nil
+		}
+		if allowed {
+			decision.Allowed = true
+			decision.MaximumRisk = risk
+			decision.ReasonCode = commandauth.ReasonAllowExactCapability
+			return decision, nil
+		}
 	}
-}
-
-func cloneCommandAuthorizationFacts(value CommandAuthorizationFacts) CommandAuthorizationFacts {
-	cloned := value
-	cloned.Memberships = append([]TenantMembership(nil), value.Memberships...)
-	cloned.Permissions = append([]CommandPermission(nil), value.Permissions...)
-	return cloned
+	decision.ReasonCode = commandauth.ReasonDenyScope
+	return decision, nil
 }

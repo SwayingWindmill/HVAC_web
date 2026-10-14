@@ -290,7 +290,7 @@ func validateAnalyticsDecision(decision analyticsmodel.AuthorizationDecision, se
 	}
 	if decision.Allowed {
 		switch decision.ReasonCode {
-		case analyticsmodel.AuthorizationReasonAllowSiteBinding:
+		case analyticsmodel.AuthorizationReasonAllowRole:
 		default:
 			return false
 		}

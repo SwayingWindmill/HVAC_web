@@ -91,7 +91,7 @@ SELECT ${sqlLiteral(energyProjector.roleBindingId)}, ${sqlLiteral(tenantId)}, pr
 FROM iam.principals principal
 JOIN iam.role_templates template ON template.tenant_id = ${sqlLiteral(tenantId)} AND template.role_key = 'energy-projection'
 WHERE principal.external_issuer = ${sqlLiteral(energyProjector.issuer)} AND principal.external_subject = ${sqlLiteral(energyProjector.subject)}
-ON CONFLICT (tenant_id, principal_id, role_template_id) DO UPDATE
+ON CONFLICT (tenant_id, principal_id, role_template_id, site_id) DO UPDATE
 SET status = 'ACTIVE', valid_to = NULL, updated_at = clock_timestamp();
 COMMIT;
 `;
