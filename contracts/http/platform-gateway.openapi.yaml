@@ -2727,7 +2727,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 33,
+            "maxItems": 34,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"

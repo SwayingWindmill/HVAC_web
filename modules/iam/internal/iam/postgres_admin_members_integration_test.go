@@ -15,6 +15,9 @@ const (
 	adminTestPrincipalID = "018f1e00-2000-7000-8000-000000000071"
 	viewerRoleTemplateID = "01a00260-0000-7000-8000-000000000001"
 	adminRoleTemplateID  = "01a00260-0000-7000-8000-000000000004"
+	// A Tenant of its own, so the revision bumps here leave the other tests' exact revisions alone.
+	adminTestTenantID = "018f1d00-0000-7000-8000-000000000071"
+	adminTestSiteID   = "018f1e00-1000-7000-8000-000000000071"
 )
 
 func TestPostgresUserAdministrationKeepsAdministratorsInControl(t *testing.T) {
@@ -23,12 +26,27 @@ func TestPostgresUserAdministrationKeepsAdministratorsInControl(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// A Tenant-wide administrator to act as.
+	// A Tenant with one Site, and a Tenant-wide administrator to act as.
 	setup, err := pgxpool.New(ctx, adminURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer setup.Close()
+	if _, err := setup.Exec(ctx, `
+INSERT INTO iam.tenants (id, code, display_name, timezone, currency, country, status, revision, created_at, updated_at)
+VALUES ($1::uuid, 'tenant-admin-it', 'Tenant Admin IT', 'Asia/Shanghai', 'CNY', 'CN', 'ACTIVE', 1, now(), now())
+`, adminTestTenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Exec(ctx, `INSERT INTO iam.authorization_revisions (tenant_id, revision, updated_at) VALUES ($1::uuid, 1, now())`, adminTestTenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Exec(ctx, `
+INSERT INTO core_registry.sites (id, tenant_id, code, display_name, timezone, status, revision, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, 'admin-it-site', 'Admin IT Site', 'Asia/Shanghai', 'ACTIVE', 1, now(), now())
+`, adminTestSiteID, adminTestTenantID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := setup.Exec(ctx, `
 INSERT INTO iam.principals (id, external_issuer, external_subject, display_name, email, status, revision, created_at, updated_at)
 VALUES ($1::uuid, $2, 'admin-it', 'Admin IT', 'admin-it@example.test', 'ACTIVE', 1, now(), now());
@@ -38,9 +56,13 @@ VALUES ($1::uuid, $2, 'admin-it', 'Admin IT', 'admin-it@example.test', 'ACTIVE',
 	if _, err := setup.Exec(ctx, `
 INSERT INTO iam.tenant_memberships (id, tenant_id, principal_id, status, valid_from, revision, created_at, updated_at)
 VALUES ('018f1e00-2100-7000-8000-000000000071', $1::uuid, $2::uuid, 'ACTIVE', now() - interval '1 hour', 1, now(), now());
+`, adminTestTenantID, adminTestPrincipalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Exec(ctx, `
 INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, status, valid_from, revision, created_at, updated_at)
 VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'ACTIVE', now() - interval '1 hour', 1, now(), now());
-`, postgresTenantAID, adminTestPrincipalID, adminRoleTemplateID); err != nil {
+`, adminTestTenantID, adminTestPrincipalID, adminRoleTemplateID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +71,7 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 		t.Fatal(err)
 	}
 	defer store.Close()
-	actor := iam.AdminActor{SubjectIssuer: postgresFixtureIssuer, Subject: "admin-it", TenantID: postgresTenantAID, CorrelationID: "it", TraceID: "it", OccurredAt: time.Now().UTC()}
+	actor := iam.AdminActor{SubjectIssuer: postgresFixtureIssuer, Subject: "admin-it", TenantID: adminTestTenantID, CorrelationID: "it", TraceID: "it", OccurredAt: time.Now().UTC()}
 
 	directory, err := store.ListMembers(ctx, actor)
 	if err != nil {
@@ -69,7 +91,7 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 	created, err := store.ApplyMutation(ctx, actor, iam.AdminMutationRequest{
 		Operation: "member.create", SubjectIssuer: postgresFixtureIssuer, Subject: "new-operator",
 		DisplayName: "New Operator", Email: "new.operator@example.test",
-		Assignments: []iam.AdminAssignment{{RoleTemplateID: viewerRoleTemplateID, SiteID: postgresOwnerASite1ID}},
+		Assignments: []iam.AdminAssignment{{RoleTemplateID: viewerRoleTemplateID, SiteID: adminTestSiteID}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +106,7 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 			member = &directory.Members[index]
 		}
 	}
-	if member == nil || member.MembershipStatus != "ACTIVE" || len(member.Assignments) != 1 || member.Assignments[0].RoleKey != "viewer" || member.Assignments[0].SiteID != postgresOwnerASite1ID {
+	if member == nil || member.MembershipStatus != "ACTIVE" || len(member.Assignments) != 1 || member.Assignments[0].RoleKey != "viewer" || member.Assignments[0].SiteID != adminTestSiteID {
 		t.Fatalf("created member = %#v", member)
 	}
 	if _, err := store.ApplyMutation(ctx, actor, iam.AdminMutationRequest{
@@ -95,7 +117,7 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 	}
 
 	if _, err := store.ApplyMutation(ctx, actor, iam.AdminMutationRequest{
-		Operation: "role-binding.upsert", PrincipalID: created.ResourceID, RoleTemplateID: adminRoleTemplateID, SiteID: postgresOwnerASite1ID, Status: "ACTIVE",
+		Operation: "role-binding.upsert", PrincipalID: created.ResourceID, RoleTemplateID: adminRoleTemplateID, SiteID: adminTestSiteID, Status: "ACTIVE",
 	}); err == nil {
 		t.Fatal("the admin Role was assigned to a single Site")
 	}
