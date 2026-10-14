@@ -111,6 +111,37 @@ When good rate falls:
 
 A high 4xx rate can be either user/scope misuse or a policy/client mismatch. Inspect operation distribution (`acknowledge`, `assign`, `suppress`, `close`, etc.) and authorization/audit evidence. Do not page the database team solely for 4xx rejection growth.
 
+## Energy projection failing
+
+`AnalyticsEnergyProjectionFailing`: the telemetry worker's energy projection has failed for 15 minutes and retries the same batch, so no meter gets new energy facts and the energy pages stop at the last projected interval. The error is redacted in the log (`analytics_energy_projection_failed`); find the batch from the checkpoint (`analytics.energy_projection_checkpoints`) and the next rows of `telemetry_history.counter_arrivals`, then reproduce with a test. On 2026-10-14 the cause was a counter without a meter binding (#551).
+
+## Telemetry ingest stopped
+
+`TelemetryIngestStopped`: nothing has been accepted for 15 minutes. Check in order: the gateway (its Node-RED status and outbox), the host's port 8884 stream to Mosquitto, `connectivity` logs, then `telemetry-worker`. A gateway that only stopped reading its field bus (Modbus timeouts) still connects but sends nothing.
+
+## Alert delivery
+
+Prometheus sends alerts to Alertmanager, the one observability service with outbound access (`alert-egress`). The repository's `deploy/platform/phase1/observability/alertmanager.yaml` sends nothing. To mail alerts, copy it into the host's runtime directory as `alertmanager.yaml`, add an email receiver and point the route at it, set `ALERTMANAGER_CONFIG_FILE` to that file in the host's runtime environment file and recreate `alertmanager`:
+
+```yaml
+global:
+  smtp_smarthost: smtp.qq.com:465
+  smtp_from: <sender address>
+  smtp_auth_username: <sender address>
+  smtp_auth_password_file: /etc/alertmanager/smtp-password
+  smtp_require_tls: false
+route:
+  receiver: mail
+  group_by: [alertname]
+receivers:
+  - name: mail
+    email_configs:
+      - to: <recipient address>
+        send_resolved: true
+```
+
+Port 465 is implicit TLS, which Alertmanager speaks when `smtp_require_tls` is false; the password file is mounted beside the configuration and stays out of the repository.
+
 ## Host disk growth and PostgreSQL WAL
 
 1. Treat `Phase1HostDiskUsageWarning` and `Phase1HostDiskUsageCritical` as capacity incidents, not as reasons to delete database files manually.

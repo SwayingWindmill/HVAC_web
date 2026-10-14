@@ -1014,6 +1014,24 @@ services:
     mem_reservation: ${PROMETHEUS_MEMORY_RESERVATION:-192m}
     logging: *default-logging
 
+  # Delivers Prometheus alerts. The only observability service with outbound access, for the mail
+  # server; ALERTMANAGER_CONFIG_FILE points at the host's receiver (runtime directory) and the
+  # default sends nothing.
+  alertmanager:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ${ALERTMANAGER_CONFIG_FILE:-./observability/alertmanager.yaml}:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    expose: ["9093"]
+    networks: [observability, alert-egress]
+    cpus: ${ALERTMANAGER_CPUS:-0.10}
+    mem_limit: ${ALERTMANAGER_MEMORY_LIMIT:-64m}
+    mem_reservation: ${ALERTMANAGER_MEMORY_RESERVATION:-32m}
+    logging: *default-logging
+
   node-exporter:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/node-exporter:v1.8.2
@@ -1086,6 +1104,8 @@ networks:
   public: {}
   # Outbound access to the model provider; only the Operations Agent joins it.
   model-egress: {}
+  # Outbound access to the alert mail server; only Alertmanager joins it.
+  alert-egress: {}
   application:
     internal: true
   data:
@@ -1100,3 +1120,4 @@ volumes:
   loki-data: {}
   tempo-data: {}
   grafana-data: {}
+  alertmanager-data: {}

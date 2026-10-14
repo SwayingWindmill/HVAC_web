@@ -1,0 +1,12 @@
+# Default receiver: alerts are grouped and kept in Alertmanager but sent nowhere. A host that should
+# mail them sets ALERTMANAGER_CONFIG_FILE to its own copy of this file with an email receiver, kept in
+# the runtime directory beside the other host secrets (docs/operations/observability-phase1.md#alert-delivery).
+route:
+  receiver: none
+  group_by: [alertname]
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 6h
+
+receivers:
+  - name: none
