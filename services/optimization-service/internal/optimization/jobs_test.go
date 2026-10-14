@@ -3,6 +3,8 @@ package optimization
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 func TestOptimizationSchedulerPayloadContainsOnlyServerOwnedIdentity(t *testing.T) {
@@ -14,7 +16,7 @@ func TestOptimizationSchedulerPayloadContainsOnlyServerOwnedIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := SchedulerJob{
+	job := schedulerjob.Job{
 		JobID: reference.OptimizationRunID, JobType: "OPTIMIZATION_RUN",
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
 		Payload: payload, AttemptNo: 1, MaxAttempts: 3, TimeoutSeconds: 120,
@@ -37,7 +39,7 @@ func TestOptimizationSchedulerPayloadContainsOnlyServerOwnedIdentity(t *testing.
 // A Site's schedule fires a job that names no run; the worker prepares one on the whole Site and
 // queues it as SCHEDULE. The run's own job carries its reference and no schedule.
 func TestAScheduleFiringPreparesARunOnTheWholeSite(t *testing.T) {
-	firing := SchedulerJob{
+	firing := schedulerjob.Job{
 		JobID: "01990000-1950-7000-8000-000000000201", ScheduleID: "01990000-1960-7000-8000-000000000001", TriggerType: "SCHEDULE", JobType: "OPTIMIZATION_RUN",
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
 		Payload: json.RawMessage(`{}`), AttemptNo: 1, MaxAttempts: 3, TimeoutSeconds: 120,

@@ -42,14 +42,18 @@ func TestHistoricalReplayForecastAndCurrentStatePrepareSealedOptimization(t *tes
 	if prepared.Status != "PENDING" || prepared.OptimizationRunID == "" || prepared.InputSnapshotID == "" {
 		t.Fatalf("prepared replay Optimization=%#v", prepared)
 	}
-	jobs, err := store.ClaimOptimizationJobs(t.Context(), "historical-replay-intelligence-acceptance", 1, time.Minute, origin.Add(time.Second))
+	queue, err := store.RunQueue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := queue.Claim(t.Context(), "historical-replay-intelligence-acceptance", 1, time.Minute, origin.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(jobs) != 1 || jobs[0].JobID != prepared.OptimizationRunID {
 		t.Fatalf("claimed replay Optimization jobs=%#v prepared=%#v", jobs, prepared)
 	}
-	started, err := store.StartOptimizationJob(t.Context(), jobs[0], time.Minute, origin.Add(2*time.Second))
+	started, err := queue.Start(t.Context(), jobs[0], time.Minute, origin.Add(2*time.Second))
 	if err != nil || !started {
 		t.Fatalf("start replay Optimization job=%t err=%v", started, err)
 	}
@@ -86,7 +90,7 @@ func TestHistoricalReplayForecastAndCurrentStatePrepareSealedOptimization(t *tes
 	if recommendation.InputSnapshotID != prepared.InputSnapshotID || recommendation.CommandIntentID != "" || recommendation.Approval != "DRAFT" {
 		t.Fatalf("replay recommendation=%#v", recommendation)
 	}
-	if err = store.CompleteOptimizationJob(t.Context(), jobs[0], map[string]any{
+	if err = queue.Complete(t.Context(), jobs[0], map[string]any{
 		"optimizationRunId": prepared.OptimizationRunID, "recommendationId": recommendation.ID,
 	}, origin.Add(4*time.Second)); err != nil {
 		t.Fatal(err)

@@ -3,10 +3,12 @@ package forecast
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
 func TestForecastSchedulerPayloadContainsOnlyServerOwnedIdentity(t *testing.T) {
-	job := SchedulerJob{
+	job := schedulerjob.Job{
 		JobID: "01990000-1880-7000-8000-000000000001", JobType: "FORECAST_RUN",
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
 		TimeoutSeconds: 120, AttemptNo: 1, MaxAttempts: 3,
@@ -26,7 +28,7 @@ func TestForecastSchedulerPayloadContainsOnlyServerOwnedIdentity(t *testing.T) {
 
 // A schedule names what to forecast; the worker prepares a fresh Forecast for the job's own Site.
 func TestScheduledForecastPlanBecomesAPreparationForTheJobsSite(t *testing.T) {
-	job := SchedulerJob{
+	job := schedulerjob.Job{
 		JobID: "01990000-1880-7000-8000-000000000002", JobType: "FORECAST_RUN", TriggerType: "SCHEDULE",
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
 		TimeoutSeconds: 120, AttemptNo: 1, MaxAttempts: 3,
