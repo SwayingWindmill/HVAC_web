@@ -102,7 +102,7 @@ func TestOptimizationPreparationFreezesAuthoritativeInputsAndChecksum(t *testing
 	}
 	request := PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}
 	result, err := preparer.Prepare(t.Context(), request)
 	if err != nil {
@@ -112,6 +112,14 @@ func TestOptimizationPreparationFreezesAuthoritativeInputsAndChecksum(t *testing
 		t.Fatalf("prepared=%#v created=%d", result, len(store.created))
 	}
 	frozen := store.created[0]
+	if frozen.Trigger != TriggerManual {
+		t.Fatalf("the run is queued as %q, want the request's trigger", frozen.Trigger)
+	}
+	untriggered := request
+	untriggered.Trigger = ""
+	if _, err := preparer.Prepare(t.Context(), untriggered); err == nil {
+		t.Fatal("a run without a trigger was prepared")
+	}
 	if frozen.CurrentState.Baseline.DailyEnergyKWh != 2400 || frozen.CurrentState.Baseline.DailyCost != 360 || frozen.CurrentState.Baseline.SupplyTempC != 7 || frozen.CurrentState.Baseline.ZoneTempC != 23 {
 		t.Fatalf("baseline=%#v", frozen.CurrentState.Baseline)
 	}
@@ -132,13 +140,36 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 	}
 	_, err = preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	})
 	if !errors.Is(err, ErrPreparationUnavailable) {
 		t.Fatalf("err=%v", err)
 	}
 	if len(store.created) != 0 {
 		t.Fatal("preparation must not persist a snapshot when authoritative state is unavailable")
+	}
+}
+
+// The daily cost prices the day's energy; a cost from another day would price this day's energy at
+// that day's mix of peak and valley hours. The cost is missing for a day with an hour missing.
+func TestOptimizationPreparationRefusesACostFromAnotherDay(t *testing.T) {
+	at := time.Date(2026, 8, 28, 15, 0, 0, 0, time.UTC)
+	state := testAuthoritativeState(at)
+	state.DailyCost.PeriodStart = state.DailyCost.PeriodStart.AddDate(0, 0, -7)
+	state.DailyCost.PeriodEnd = state.DailyCost.PeriodEnd.AddDate(0, 0, -7)
+	store := &preparationStoreStub{definition: testPreparationDefinition()}
+	preparer, err := NewPreparer(store, &authoritativeInputStub{state: state}, func() time.Time { return at })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparer.Prepare(t.Context(), PreparationRequest{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
+	}); err == nil {
+		t.Fatal("prepared an optimization with a daily cost from another day")
+	}
+	if len(store.created) != 0 {
+		t.Fatal("preparation must not persist a snapshot with mismatched daily cost and energy")
 	}
 }
 
@@ -154,7 +185,7 @@ func TestOptimizationPreparationChecksumSurvivesTheDatabaseRoundTrip(t *testing.
 	}
 	if _, err = preparer.Prepare(t.Context(), PreparationRequest{
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}); err != nil {
 		t.Fatal(err)
 	}

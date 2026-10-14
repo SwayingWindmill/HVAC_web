@@ -26,13 +26,8 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 			{TenantID: "018f1d00-0000-7000-8000-000000000001", Status: FactStatusActive, ValidFrom: validFrom},
 		},
 		RoleBindings: []ReconciledRoleBinding{
-			{
-				TenantID:  "018f1d00-0000-7000-8000-000000000001",
-				RoleKey:   " registry-reader ",
-				Actions:   []registryauth.Action{registryauth.ActionSiteRead, registryauth.ActionAssetRead, registryauth.ActionSiteRead},
-				Effect:    BindingEffectAllow,
-				ValidFrom: validFrom,
-			},
+			{TenantID: "018f1d00-0000-7000-8000-000000000001", RoleKey: " viewer ", SiteID: "018f1e00-1000-7000-8000-000000000001", ValidFrom: validFrom},
+			{TenantID: "018f1d00-0000-7000-8000-000000000001", RoleKey: "operator", ValidFrom: validFrom},
 		},
 	}
 
@@ -40,10 +35,10 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base.Memberships[0].TenantID != base.TenantID || len(base.RoleBindings[0].Actions) != 3 {
+	if base.RoleBindings[0].RoleKey != " viewer " {
 		t.Fatalf("request normalization mutated caller-owned slices: %#v", base)
 	}
-	base.RoleBindings[0].Actions[0], base.RoleBindings[0].Actions[1] = base.RoleBindings[0].Actions[1], base.RoleBindings[0].Actions[0]
+	base.RoleBindings[0], base.RoleBindings[1] = base.RoleBindings[1], base.RoleBindings[0]
 	second, secondHash, err := prepareReconciliationRequest(base)
 	if err != nil {
 		t.Fatal(err)
@@ -54,8 +49,8 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 	if first.SourceSystem != "identity" || first.Principal.SubjectIssuer != "https://identity.example.test/oidc" {
 		t.Fatalf("input was not normalized: %#v", first)
 	}
-	if len(first.RoleBindings[0].Actions) != 2 || len(second.RoleBindings[0].Actions) != 2 {
-		t.Fatalf("duplicate actions were not removed: %#v %#v", first.RoleBindings, second.RoleBindings)
+	if first.RoleBindings[0].RoleKey != "operator" || first.RoleBindings[1].RoleKey != "viewer" || second.RoleBindings[1].SiteID == "" {
+		t.Fatalf("role bindings were not trimmed and ordered: %#v %#v", first.RoleBindings, second.RoleBindings)
 	}
 	if first.Memberships[0].ValidFrom.Location() != time.UTC {
 		t.Fatalf("timestamps were not normalized to UTC: %v", first.Memberships[0].ValidFrom)
@@ -87,7 +82,7 @@ func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) 
 	deny := ReconciledExplicitDeny{
 		TenantID:   "018f1d00-0000-7000-8000-000000000001",
 		SiteID:     "018f1e00-1000-7000-8000-000000000001",
-		Action:     registryauth.ActionSiteRead,
+		Action:     string(registryauth.ActionSiteRead),
 		ReasonCode: "blocked",
 		ValidFrom:  validFrom,
 	}
@@ -132,7 +127,6 @@ func TestPrepareReconciliationRequestNormalizesNilAndEmptyCollections(t *testing
 	}
 	request.Memberships = []ReconciledMembership{}
 	request.RoleBindings = []ReconciledRoleBinding{}
-	request.SiteBindings = []ReconciledSiteBinding{}
 	request.ExplicitDenies = []ReconciledExplicitDeny{}
 	_, emptyHash, err := prepareReconciliationRequest(request)
 	if err != nil {

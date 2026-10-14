@@ -59,6 +59,7 @@ type fakeRegistryStore struct {
 	spaceChildren   PageResult[Space]
 	devicePoints    PageResult[TelemetryPoint]
 	assetModel      SiteAssetModel
+	tariff          SiteTariff
 	err             error
 	lastClaims      registryauth.GrantClaims
 	lastPage        PageRequest
@@ -108,6 +109,31 @@ func (store *fakeRegistryStore) ListDevicePoints(_ context.Context, claims regis
 func (store *fakeRegistryStore) GetSiteAssetModel(_ context.Context, claims registryauth.GrantClaims, id string) (SiteAssetModel, error) {
 	store.lastClaims, store.lastID = claims, id
 	return store.assetModel, store.err
+}
+
+func (store *fakeRegistryStore) GetSiteTariff(_ context.Context, claims registryauth.GrantClaims, id string) (SiteTariff, error) {
+	store.lastClaims, store.lastID = claims, id
+	return store.tariff, store.err
+}
+
+func TestServerReadsTheSitesTariffInEffect(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{tariff: SiteTariff{
+		SiteID: testSiteA1, DisplayName: "两部制分时电价", Version: 1, EffectiveFrom: formatInstant(now), Timezone: "Asia/Shanghai", Currency: "CNY",
+		Periods: []TariffPeriod{{PeriodCode: "PEAK", DayType: "WEEKDAY", StartMinute: 480, EndMinute: 660, EnergyRatePerKWh: 1.2, DemandRatePerKW: 38}},
+	}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/tariff", testGrantClaims(registryauth.ActionTariffRead), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var tariff SiteTariff
+	if err := json.NewDecoder(response.Body).Decode(&tariff); err != nil {
+		t.Fatal(err)
+	}
+	if store.lastID != testSiteA1 || len(tariff.Periods) != 1 || tariff.Periods[0].DemandRatePerKW != 38 || tariff.Currency != "CNY" {
+		t.Fatalf("tariff=%#v lastID=%q", tariff, store.lastID)
+	}
 }
 
 func TestServerListsSitesAndReturnsBoundCursor(t *testing.T) {
@@ -391,7 +417,7 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		DeniedSiteIDs:  []string{},
 		Actions:        []registryauth.Action{action},
 		PolicyRevision: testPolicy,
-		DecisionReason: registryauth.ReasonAllowSiteBinding,
+		DecisionReason: registryauth.ReasonAllowSiteRole,
 		SessionID:      "session-1",
 		ParentTokenID:  "parent-1",
 		TokenID:        "grant-1",

@@ -81,6 +81,7 @@ type chillerState struct {
 	loadPct               float64
 	coolingCapacityKW     float64
 	powerKW               float64
+	energyKWh             float64
 	cop                   float64
 	faultCode             string
 }
@@ -92,6 +93,7 @@ type pumpState struct {
 	frequencyHz         float64
 	flowM3H             float64
 	powerKW             float64
+	energyKWh           float64
 	faultCode           string
 	stuckHigh           bool
 }
@@ -104,11 +106,12 @@ type coolingTowerState struct {
 	enteringWaterC      float64
 	leavingWaterC       float64
 	powerKW             float64
+	energyKWh           float64
 	faultCode           string
 }
 
 func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
-	inputs := scenario.InputsAt(0)
+	inputs := scenario.InputsFor(0, now)
 	initialTowerLeavingC := inputs.AmbientWetBulbC + 4
 	initialTowerEnteringC := initialTowerLeavingC + 4
 	return &Plant{
@@ -177,7 +180,7 @@ func (plant *Plant) tickLocked(elapsed time.Duration) {
 
 	remaining := elapsed
 	for remaining > 0 {
-		plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
+		plant.inputs = plant.scenario.InputsFor(plant.scenarioElapsed, plant.now)
 		// Coupled states (zone, coil, chiller) advance together, so a long tick is taken in short steps.
 		segment := min(remaining, maximumIntegrationStep)
 		if transition, ok := plant.scenario.nextTransitionAfter(plant.scenarioElapsed); ok {
@@ -190,7 +193,7 @@ func (plant *Plant) tickLocked(elapsed time.Duration) {
 		plant.scenarioElapsed += segment
 		remaining -= segment
 	}
-	plant.inputs = plant.scenario.InputsAt(plant.scenarioElapsed)
+	plant.inputs = plant.scenario.InputsFor(plant.scenarioElapsed, plant.now)
 }
 
 func (plant *Plant) advanceLocked(elapsed time.Duration) {
@@ -202,6 +205,11 @@ func (plant *Plant) advanceLocked(elapsed time.Duration) {
 	plant.updateChiller(elapsed)
 	plant.updateZoneTemperature(elapsed)
 
+	// Each piece of equipment has its own sub-meter; the total meter sees all of them.
+	plant.chiller.energyKWh += plant.chiller.powerKW * elapsed.Hours()
+	plant.chilledWaterPump.energyKWh += plant.chilledWaterPump.powerKW * elapsed.Hours()
+	plant.coolingWaterPump.energyKWh += plant.coolingWaterPump.powerKW * elapsed.Hours()
+	plant.coolingTower.energyKWh += plant.coolingTower.powerKW * elapsed.Hours()
 	totalPowerKW := plant.chiller.powerKW + plant.chilledWaterPump.powerKW + plant.coolingWaterPump.powerKW + plant.coolingTower.powerKW
 	plant.totalEnergyKWh += totalPowerKW * elapsed.Hours()
 	plant.totalCoolingEnergyKWh += plant.chiller.coolingCapacityKW * elapsed.Hours()
@@ -371,6 +379,7 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"compressorLoadPct":                round(plant.chiller.loadPct, 3),
 				"coolingCapacityKw":                round(plant.chiller.coolingCapacityKW, 3),
 				"powerKw":                          round(plant.chiller.powerKW, 3),
+				"energyKwh":                        round(plant.chiller.energyKWh, 6),
 				"cop":                              round(plant.chiller.cop, 3),
 				"loadLimitPct":                     round(plant.chiller.loadLimitPct, 3),
 				"faultCode":                        plant.chiller.faultCode,
@@ -385,6 +394,7 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"ambientWetBulbTemperatureC": round(plant.inputs.AmbientWetBulbC, 3),
 				"approachTemperatureC":       round(plant.coolingTower.leavingWaterC-plant.inputs.AmbientWetBulbC, 3),
 				"powerKw":                    round(plant.coolingTower.powerKW, 3),
+				"energyKwh":                  round(plant.coolingTower.energyKWh, 6),
 				"faultCode":                  plant.coolingTower.faultCode,
 			},
 			plant.config.PowerMeterID: {
@@ -420,6 +430,7 @@ func pumpTelemetry(state pumpState) DeviceTelemetry {
 		"speedPct":    round(100*state.frequencyHz/pumpNominalFrequencyHz, 3),
 		"flowRateM3h": round(state.flowM3H, 3),
 		"powerKw":     round(state.powerKW, 3),
+		"energyKwh":   round(state.energyKWh, 6),
 		"faultCode":   state.faultCode,
 	}
 }

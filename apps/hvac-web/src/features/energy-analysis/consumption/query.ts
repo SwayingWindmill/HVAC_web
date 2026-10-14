@@ -19,10 +19,13 @@ const DAY_MS = 86_400_000;
 /** Reads Site energy series from the Energy analytics owner for the current Site. */
 export function useEnergyReader() {
   const { site, principal } = siteRoute.useRouteContext();
-  const read = (energyType: EnergySeriesQuery['energyType'], granularity: Granularity, from: Date, to: Date, signal: AbortSignal) =>
+  const read = (
+    energyType: EnergySeriesQuery['energyType'], granularity: Granularity, from: Date, to: Date, signal: AbortSignal,
+    breakdown?: EnergySeriesQuery['breakdown'],
+  ) =>
     client.queryEnergySeries({
       tenantId: site.tenantId, siteId: site.id, energyType, granularity, timezone: site.timezone,
-      from: from.toISOString(), to: to.toISOString(), qualityPolicy: 'VALID_ONLY',
+      from: from.toISOString(), to: to.toISOString(), qualityPolicy: 'VALID_ONLY', ...(breakdown ? { breakdown } : {}),
     }, principal.session.csrfToken, { signal }).then((response) => response.data);
   const summary = async (granularity: Granularity, from: Date, to: Date, signal: AbortSignal) => {
     const [electricity, cooling] = await Promise.all([
@@ -78,9 +81,32 @@ export function useTodayAgainstYesterday() {
         summary('hour', before.from, before.to, signal),
         summary('hour', before.from, from, signal),
       ]);
-      return { today, yesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
+      return { today, yesterday, wholeYesterday, hours: comparePeriods(today, wholeYesterday, { from, previousFrom: before.from, now, timeZone: site.timezone }) };
     },
     refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * HVAC electricity hour by hour over a period so far and over the same span before it, for
+ * pricing each bucket by time of use.
+ */
+export function useHourlyElectricity(period: EnergyPeriod) {
+  const { site, read } = useEnergyReader();
+  return useQuery({
+    queryKey: ['energy-series', site.id, 'hourly-electricity', period],
+    queryFn: async ({ signal }) => {
+      const now = new Date();
+      const current = periodWindow(period, now, site.timezone);
+      const before = previousWindow(period, now, site.timezone);
+      const [currentSeries, previousSeries] = await Promise.all([
+        read('electricity', 'hour', current.from, current.to, signal),
+        read('electricity', 'hour', before.from, before.to, signal),
+      ]);
+      return { granularity: current.granularity, from: current.from, previousFrom: before.from, current: currentSeries.points, previous: previousSeries.points };
+    },
+    refetchInterval: 5 * 60_000,
     retry: false,
   });
 }

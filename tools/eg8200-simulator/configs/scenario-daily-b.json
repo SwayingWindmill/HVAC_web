@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "mode": "DAILY",
+  "name": "office-autumn-b",
+  "description": "二号站点：负荷略小、使用时段 09–21 时",
+  "daily": {
+    "timezone": "Asia/Shanghai",
+    "dryBulbC": {
+      "mean": 28.5,
+      "amplitude": 3.5,
+      "peakHour": 14
+    },
+    "wetBulbC": {
+      "mean": 23.5,
+      "amplitude": 1.8,
+      "peakHour": 14
+    },
+    "dayToDayC": 2.5,
+    "coolingLoadKw": {
+      "unoccupied": 240,
+      "occupied": 760,
+      "occupiedFrom": 9,
+      "occupiedTo": 21,
+      "perDryBulbC": 24
+    }
+  }
+}

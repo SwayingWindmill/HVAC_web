@@ -49,6 +49,13 @@ services:
       - ./postgres/init/017-registry-read-port.sql:/docker-entrypoint-initdb.d/330.sql:ro
       - ./postgres/init/018-fdd-finding-measurement.sql:/docker-entrypoint-initdb.d/340.sql:ro
       - ./postgres/init/019-fdd-scheduled-evaluation.sql:/docker-entrypoint-initdb.d/350.sql:ro
+      - ./postgres/init/020-savings-verification.sql:/docker-entrypoint-initdb.d/360.sql:ro
+      - ./postgres/init/021-metric-tariff-pricing.sql:/docker-entrypoint-initdb.d/370.sql:ro
+      - ./postgres/init/022-report-snapshots.sql:/docker-entrypoint-initdb.d/380.sql:ro
+      - ./postgres/init/023-savings-device-boundary.sql:/docker-entrypoint-initdb.d/390.sql:ro
+      - ./postgres/init/024-site-profile.sql:/docker-entrypoint-initdb.d/400.sql:ro
+      - ./postgres/init/025-fdd-rule-revisions.sql:/docker-entrypoint-initdb.d/410.sql:ro
+      - ./postgres/init/026-iam-role-assignments.sql:/docker-entrypoint-initdb.d/420.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

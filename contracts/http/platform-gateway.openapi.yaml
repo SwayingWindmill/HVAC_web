@@ -664,6 +664,389 @@
         }
       }
     },
+    "/api/v1/iam/members": {
+      "get": {
+        "operationId": "listUserAdminMembers",
+        "summary": "List the people of the current Tenant with their Role Assignments, and the assignable built-in Roles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members and Roles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAdminDirectory"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createUserAdminMember",
+        "summary": "Create a sign-in account with an administrator-set password and add it to the Tenant with its Roles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminCreateMemberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Member created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAdminCreatedMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/password": {
+      "post": {
+        "operationId": "resetUserAdminMemberPassword",
+        "summary": "Set a member's password",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/status": {
+      "post": {
+        "operationId": "setUserAdminMemberEnabled",
+        "summary": "Enable or disable a member; disabling ends their signed-in sessions",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/profile": {
+      "post": {
+        "operationId": "updateUserAdminMemberProfile",
+        "summary": "Change a member's display name and email",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/assignments": {
+      "post": {
+        "operationId": "assignUserAdminMemberRole",
+        "summary": "Assign a built-in Role to the whole Tenant or one Site",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminRoleAssignment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/assignments/{bindingId}/revoke": {
+      "post": {
+        "operationId": "revokeUserAdminMemberRole",
+        "summary": "Revoke one of a member's Role Assignments",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "bindingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "operationId": "changeOwnPassword",
+        "summary": "Change the signed-in user's own password",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
@@ -1170,6 +1553,25 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/tariff": {
+      "get": {
+        "operationId": "getSiteTariff",
+        "summary": "Read the import Tariff in effect for one Site, with its time-of-use periods",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "The released Tariff Version assigned to the Site's grid import.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteTariff" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/devices/{deviceId}": {
       "get": {
         "operationId": "getDevice",
@@ -1583,6 +1985,15 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/fdd/rules/low-delta-t": {
+      "get": {
+        "operationId": "getSiteFddLowDeltaTRuleV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "fdd-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t": {
       "post": {
         "operationId": "evaluateSiteFddLowDeltaTV212",
@@ -1596,15 +2007,10 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["assetId", "deviceId", "evaluationFrom", "evaluationTo", "ruleRevisionId", "minimumDeltaTC"],
+                "required": ["assetId", "deviceId"],
                 "properties": {
                   "assetId": { "$ref": "#/components/schemas/UUIDv7" },
-                  "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
-                  "evaluationFrom": { "type": "string", "format": "date-time" },
-                  "evaluationTo": { "type": "string", "format": "date-time" },
-                  "ruleRevisionId": { "type": "string", "minLength": 1 },
-                  "modelDeploymentRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
-                  "minimumDeltaTC": { "type": "number", "exclusiveMinimum": 0 }
+                  "deviceId": { "$ref": "#/components/schemas/UUIDv7" }
                 }
               }
             }
@@ -1638,6 +2044,89 @@
             }
           }
         },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures": {
+      "get": {
+        "operationId": "listSiteSavingsMeasuresV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      },
+      "post": {
+        "operationId": "registerSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["name", "kind", "plannedAt"], "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 100 }, "kind": { "type": "string", "enum": ["SETPOINT_RESET", "CONTROL_SEQUENCE", "EQUIPMENT_RETROFIT", "OPERATING_SCHEDULE", "OTHER"] }, "description": { "type": "string", "maxLength": 2000 }, "plannedAt": { "type": "string", "format": "date-time" }, "investmentCny": { "type": "number", "minimum": 0 }, "expectedAnnualKWh": { "type": "number", "minimum": 0 }, "evidence": { "type": "string", "maxLength": 200 }, "evidenceCommandId": { "type": "string", "format": "uuid" }, "boundaryDeviceId": { "type": "string", "format": "uuid" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}": {
+      "get": {
+        "operationId": "getSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/implement": {
+      "post": {
+        "operationId": "implementSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["implementedAt"], "properties": { "implementedAt": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/refit": {
+      "post": {
+        "operationId": "refitSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": { "from": { "type": "string", "format": "date-time" }, "to": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/measures/{measureId}/end": {
+      "post": {
+        "operationId": "endSiteSavingsMeasureV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "measureId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["endedAt"], "properties": { "endedAt": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/savings/summary": {
+      "get": {
+        "operationId": "getSiteSavingsSummaryV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "mv-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } }, { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/reports/monthly": {
+      "get": {
+        "operationId": "listSiteMonthlyReportsV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "report-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "year", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 2000, "maximum": 9999 } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/reports/monthly/{month}": {
+      "get": {
+        "operationId": "getSiteMonthlyReportV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "report-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "name": "month", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" } }],
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
@@ -2213,7 +2702,8 @@
           "audit.read",
           "iam.admin",
           "api-credential.manage",
-          "rule.manage"
+          "rule.manage",
+          "savings.manage"
         ]
       },
       "EffectiveAuthorization": {
@@ -2228,7 +2718,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 12
+            "const": 13
           },
           "policyRevision": {
             "type": "string",
@@ -2237,7 +2727,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 33,
+            "maxItems": 34,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"
@@ -2309,6 +2799,261 @@
           }
         }
       },
+      "UserAdminRole": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roleKey",
+          "tenantScoped"
+        ],
+        "properties": {
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "tenantScoped": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserAdminMemberAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bindingId",
+          "roleKey"
+        ],
+        "properties": {
+          "bindingId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principalId",
+          "username",
+          "displayName",
+          "email",
+          "enabled",
+          "locked",
+          "self",
+          "assignments"
+        ],
+        "properties": {
+          "principalId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "self": {
+            "type": "boolean"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminMemberAssignment"
+            }
+          }
+        }
+      },
+      "UserAdminDirectory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roles",
+          "members"
+        ],
+        "properties": {
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminRole"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminMember"
+            }
+          }
+        }
+      },
+      "UserAdminRoleAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roleKey"
+        ],
+        "properties": {
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminCreateMemberRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "username",
+          "displayName",
+          "email",
+          "password",
+          "assignments"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          },
+          "assignments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/UserAdminRoleAssignment"
+            }
+          }
+        }
+      },
+      "UserAdminCreatedMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principalId"
+        ],
+        "properties": {
+          "principalId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminPasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          }
+        }
+      },
+      "UserAdminStatusRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserAdminProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "displayName",
+          "email"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          }
+        }
+      },
+      "OwnPasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          }
+        }
+      },
       "IamAdminMutationRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -2316,7 +3061,7 @@
         "properties": {
           "operation": {
             "type": "string",
-            "enum": ["tenant.update", "principal.update", "membership.upsert", "role-template.upsert", "role-binding.upsert", "site-binding.upsert", "explicit-deny.upsert", "service-account.status"]
+            "enum": ["tenant.update", "principal.update", "membership.upsert", "member.create", "role-template.upsert", "role-binding.upsert", "explicit-deny.upsert", "service-account.status"]
           },
           "expectedRevision": { "type": "integer", "minimum": 0 },
           "resourceId": { "type": "string", "maxLength": 256 },
@@ -2422,7 +3167,18 @@
           "timezone": { "type": "string" },
           "from": { "type": "string", "format": "date-time" },
           "to": { "type": "string", "format": "date-time" },
-          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "VALID_AND_SUSPECT"] }
+          "qualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "VALID_AND_SUSPECT"] },
+          "breakdown": { "type": "string", "enum": ["device"], "description": "Also return each sub-metered device's energy, already part of the Site total." }
+        }
+      },
+      "EnergySeriesPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["periodStart", "periodEnd", "energyKWh"],
+        "properties": {
+          "periodStart": { "type": "string", "format": "date-time" },
+          "periodEnd": { "type": "string", "format": "date-time" },
+          "energyKWh": { "type": "number", "minimum": 0 }
         }
       },
       "EnergySeriesResponse": {
@@ -2431,16 +3187,17 @@
         "required": ["schemaVersion", "points", "metadata"],
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
-          "points": {
+          "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } },
+          "devices": {
             "type": "array",
+            "description": "Present only for breakdown=device. Devices without a sub-meter are absent.",
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["periodStart", "periodEnd", "energyKWh"],
+              "required": ["deviceId", "points"],
               "properties": {
-                "periodStart": { "type": "string", "format": "date-time" },
-                "periodEnd": { "type": "string", "format": "date-time" },
-                "energyKWh": { "type": "number", "minimum": 0 }
+                "deviceId": { "type": "string", "format": "uuid" },
+                "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } }
               }
             }
           },
@@ -2676,7 +3433,9 @@
           "status",
           "revision",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "floorAreaM2",
+          "climateZone"
         ],
         "properties": {
           "id": {
@@ -2717,7 +3476,9 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
-          }
+          },
+          "floorAreaM2": { "oneOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }] },
+          "climateZone": { "oneOf": [{ "type": "string", "enum": ["SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD"] }, { "type": "null" }] }
         }
       },
       "Asset": {
@@ -3221,6 +3982,33 @@
           "telemetryPoints": { "type": "array", "items": { "$ref": "#/components/schemas/TelemetryPoint" } },
           "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/AssetRelationship" } },
           "counts": { "$ref": "#/components/schemas/AssetModelCounts" }
+        }
+      },
+      "SiteTariff": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "displayName", "version", "effectiveFrom", "timezone", "currency", "periods"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "version": { "type": "integer", "minimum": 1 },
+          "effectiveFrom": { "type": "string", "format": "date-time" },
+          "timezone": { "type": "string" },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "periods": { "type": "array", "items": { "$ref": "#/components/schemas/TariffPeriod" } }
+        }
+      },
+      "TariffPeriod": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["periodCode", "dayType", "startMinute", "endMinute", "energyRatePerKWh", "demandRatePerKW"],
+        "properties": {
+          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"] },
+          "dayType": { "type": "string", "enum": ["WEEKDAY", "WEEKEND", "HOLIDAY", "SPECIAL_DAY"] },
+          "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
+          "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "energyRatePerKWh": { "type": "number", "minimum": 0 },
+          "demandRatePerKW": { "type": "number", "minimum": 0 }
         }
       },
       "FieldError": {

@@ -9,7 +9,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 func (h *handler) handleAnalyticsDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims) int {
@@ -66,61 +65,19 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	active, _ := tenantMembershipState(facts.Memberships, request.TenantID, now)
-	if !active {
+	if active, _ := facts.member(request.TenantID, now); !active {
 		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyMembership
 		return decision, nil
 	}
-
-	allowed := false
-	reason := analyticsmodel.AuthorizationReasonDenyAction
-	denied := false
-	for _, binding := range facts.RoleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !analyticsActionAllowed(binding.Actions, request.Action) {
-			continue
-		}
-		if binding.Effect == BindingEffectDeny {
-			denied = true
-		}
-	}
-	for _, binding := range facts.SiteBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || binding.SiteID != request.SiteID || !analyticsActionAllowed(binding.Actions, request.Action) {
-			continue
-		}
-		if binding.Effect == BindingEffectDeny {
-			denied = true
-			continue
-		}
-		if bindingEffectAllows(binding.Effect) {
-			allowed = true
-			reason = analyticsmodel.AuthorizationReasonAllowSiteBinding
-		}
-	}
-	for _, deny := range facts.ExplicitDenies {
-		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || !analyticsActionAllowed(deny.Actions, request.Action) {
-			continue
-		}
-		if deny.TenantID != "" && deny.TenantID != request.TenantID {
-			continue
-		}
-		if deny.SiteID == "" || deny.SiteID == request.SiteID {
-			denied = true
-		}
-	}
-	if denied {
+	allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, request.Action, now)
+	switch {
+	case denied:
 		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyExplicit
-		return decision, nil
+	case !allowed:
+		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyAction
+	default:
+		decision.Allowed = true
+		decision.ReasonCode = analyticsmodel.AuthorizationReasonAllowRole
 	}
-	decision.Allowed = allowed
-	decision.ReasonCode = reason
 	return decision, nil
-}
-
-func analyticsActionAllowed(actions []registryauth.Action, requested string) bool {
-	for _, action := range actions {
-		if string(action) == requested {
-			return true
-		}
-	}
-	return false
 }

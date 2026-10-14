@@ -16,6 +16,20 @@ func (store *PostgresStore) RunQueue() (*schedulerjob.Queue, error) {
 	return schedulerjob.NewQueue(store.pool, RunJobType)
 }
 
+// IsScheduledPreparation says the job is a Site's schedule firing rather than a prepared run: it
+// names no run, so the worker prepares one from the Site's current state first.
+func IsScheduledPreparation(job schedulerjob.Job) bool { return job.ScheduleID != "" }
+
+// ScheduledPreparationRequest is what a schedule firing prepares: a run on the whole Site, queued
+// as SCHEDULE so its recommendation says it was not asked for.
+func ScheduledPreparationRequest(job schedulerjob.Job) (PreparationRequest, error) {
+	if job.JobType != RunJobType || job.TriggerType != "SCHEDULE" || !uuidPattern.MatchString(job.JobID) || !uuidPattern.MatchString(job.ScheduleID) {
+		return PreparationRequest{}, errors.New("optimization schedule firing envelope is invalid")
+	}
+	request := PreparationRequest{TenantID: job.TenantID, SiteID: job.SiteID, SubjectType: "SITE", SubjectID: job.SiteID, Trigger: TriggerSchedule}
+	return request, request.Validate()
+}
+
 type SchedulerOptimizationReference struct {
 	OptimizationRunID string `json:"optimizationRunId"`
 	InputSnapshotID   string `json:"inputSnapshotId"`

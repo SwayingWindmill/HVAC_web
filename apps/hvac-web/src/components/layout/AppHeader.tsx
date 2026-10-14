@@ -1,55 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
-import { useLocation, useMatches } from '@tanstack/react-router';
-import { Bell, Moon, Search, Sun } from 'lucide-react';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
+import { useEffect, useState } from 'react';
+import { Bell, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
-import { Separator } from '@/components/ui/separator';
-import { SidebarTrigger } from '@/components/ui/sidebar';
 import { CommandSearch } from './CommandSearch';
+import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
-import { APP_NAVIGATION_CONFIG } from './app-navigation';
 import { useShellNotifications } from './use-shell-notifications';
 
 interface AppHeaderProps {
   readonly principalSubject: string;
-  readonly themeMode: 'light' | 'dark';
-  readonly onThemeToggle: () => void;
+  readonly principalName: string;
+  readonly principalRole: string;
+  readonly csrfToken: string;
   readonly onNavigate: (target: string) => void;
+  readonly onLogout: () => void;
 }
 
-function resolveBreadcrumbs(pathname: string, routeTitle: string | undefined) {
-  for (const group of APP_NAVIGATION_CONFIG) {
-    for (const item of group.items) {
-      if (pathname === item.path || pathname.startsWith(`${item.path}/`)) {
-        // A group named like its only page adds nothing to the trail.
-        return { group: group.label === item.title ? undefined : group.label, page: item.title };
-      }
-    }
-  }
-  return { group: undefined, page: routeTitle };
-}
-
+/** The top bar across the whole window: product mark and Site on the left, search, notifications and the user on the right. */
 export function AppHeader({
   principalSubject,
-  themeMode,
-  onThemeToggle,
+  principalName,
+  principalRole,
+  csrfToken,
   onNavigate,
+  onLogout,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
-  const commandTriggerRef = useRef<HTMLButtonElement>(null);
-  const location = useLocation();
-
-  const routeTitle = useMatches({
-    select: (matches) => [...matches].reverse().find((match) => match.staticData?.title)?.staticData.title,
-  });
-  const breadcrumbs = resolveBreadcrumbs(location.pathname, routeTitle);
   const { count: unreadNotifications } = useShellNotifications(true, principalSubject);
 
   useEffect(() => {
@@ -65,103 +41,48 @@ export function AppHeader({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-2 rounded-t-[inherit] border-b bg-background px-3 sm:px-4 lg:px-6">
-        {/* Left: SidebarTrigger + Scope Switcher + Breadcrumb */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="h-4" />
+      <header className="sticky top-0 z-40 flex h-(--header-height) w-full shrink-0 items-center gap-2 border-b bg-card pr-4 pl-[18px] print:hidden">
+        <a
+          href="/overview"
+          aria-label="泉来禾智慧能源，回到总览"
+          onClick={(event) => {
+            event.preventDefault();
+            onNavigate('/overview');
+          }}
+          className="flex shrink-0 rounded-[7px] outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+        >
+          <img src="/quanlaihe-mark.svg" alt="" className="size-7" />
+        </a>
+        <span className="mx-0.5 text-xl font-light text-border" aria-hidden="true">/</span>
+        <ScopeSwitcher />
 
-          {/* Scope Switcher: URL-driven scope selector */}
-          <ScopeSwitcher />
-
-          <Separator orientation="vertical" className="hidden h-4 md:block" />
-
-          {/* Breadcrumb: pure navigational path */}
-          {breadcrumbs.page ? (
-            <Breadcrumb className="hidden lg:block">
-              <BreadcrumbList className="text-xs">
-                {breadcrumbs.group ? (
-                  <>
-                    <BreadcrumbItem>
-                      <span className="text-muted-foreground">{breadcrumbs.group}</span>
-                    </BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                  </>
-                ) : null}
-                <BreadcrumbItem>
-                  <BreadcrumbPage className="font-medium text-foreground">
-                    {breadcrumbs.page}
-                  </BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-          ) : null}
-        </div>
-
-        {/* Right: Search + My Work + Theme + User Menu */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Global Search Button */}
+        <div className="ml-auto flex items-center gap-2">
           <Button
-            ref={commandTriggerRef}
             variant="outline"
-            size="sm"
             onClick={() => setCommandOpen(true)}
-            className="hidden h-8 w-52 justify-between border-border/80 bg-background/60 text-xs text-muted-foreground sm:inline-flex md:w-60"
+            className="w-[280px] justify-start gap-2 bg-muted px-2.5 font-normal text-subtle-foreground shadow-none hover:bg-muted hover:text-muted-foreground"
           >
-            <div className="flex items-center gap-1.5">
-              <Search className="size-3.5" />
-              <span>跳转到页面...</span>
-            </div>
-            <Kbd>⌘K</Kbd>
+            <Search className="size-3.5" aria-hidden="true" />
+            <span className="flex-1 text-left">搜索页面与设备</span>
+            <Kbd>Ctrl K</Kbd>
           </Button>
-
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon"
-            onClick={() => setCommandOpen(true)}
-            className="sm:hidden"
-            aria-label="搜索"
-          >
-            <Search className="size-4" />
-          </Button>
-
-          {/* Theme Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onThemeToggle}
-            className="size-8"
-            aria-label={themeMode === 'dark' ? '切换浅色' : '切换深色'}
-          >
-            {themeMode === 'dark' ? (
-              <Sun className="size-4" />
-            ) : (
-              <Moon className="size-4" />
-            )}
-          </Button>
-
-          {/* Notification Button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="relative size-8"
+            className="relative text-muted-foreground"
             aria-label={unreadNotifications > 0 ? `通知中心，${unreadNotifications} 条未读` : '通知中心'}
             onClick={() => onNavigate('/notifications')}
           >
-            <Bell className="size-4" />
+            <Bell className="size-[15px]" />
             {unreadNotifications > 0 ? (
-              <span className="absolute right-1 top-1 size-1.5 rounded-full bg-destructive" />
+              <span className="absolute top-1.5 right-[7px] size-[7px] rounded-full bg-primary ring-2 ring-card" aria-hidden="true" />
             ) : null}
           </Button>
+          <NavUser name={principalName} role={principalRole} csrfToken={csrfToken} onNavigate={onNavigate} onLogout={onLogout} />
         </div>
       </header>
 
-      {/* Global Command Palette */}
-      <CommandSearch
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        onNavigate={onNavigate}
-      />
+      <CommandSearch open={commandOpen} onOpenChange={setCommandOpen} onNavigate={onNavigate} />
     </>
   );
 }

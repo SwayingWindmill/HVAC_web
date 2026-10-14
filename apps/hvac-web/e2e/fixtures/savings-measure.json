@@ -1,0 +1,36 @@
+{
+  "id": "01a12ef8-edfc-73f1-91ca-17a0b512668f",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "name": "冷冻水供水温度由 7 °C 提高到 8 °C",
+  "kind": "SETPOINT_RESET",
+  "description": "按优化建议提高冷冻水供水温度设定值，冷机 COP 随之提高。",
+  "evidence": "10 月 12 日优化建议",
+  "evidenceCommandId": null,
+  "boundaryDeviceId": null,
+  "status": "IMPLEMENTED",
+  "plannedAt": "2026-10-12T07:17:00Z",
+  "implementedAt": "2026-10-12T07:17:00Z",
+  "endedAt": null,
+  "investmentCny": 0,
+  "expectedAnnualKWh": 21000,
+  "baseline": {
+    "from": "2026-09-28T07:17:00Z",
+    "to": "2026-10-12T07:17:00Z",
+    "samples": 15,
+    "expectedHours": 336,
+    "model": null,
+    "trusted": false,
+    "reason": "TOO_FEW_HOURS"
+  },
+  "totals": {
+    "days": 0,
+    "unpricedHours": 0,
+    "adjustedBaselineKWh": 0,
+    "actualKWh": 0,
+    "avoidedKWh": 0,
+    "avoidedCost": 0,
+    "plantKWh": 0
+  },
+  "createdAt": "2026-10-12T07:17:08.220464Z",
+  "updatedAt": "2026-10-12T07:17:09.768715Z"
+}

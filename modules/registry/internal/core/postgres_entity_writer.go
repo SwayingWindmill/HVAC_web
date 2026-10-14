@@ -23,10 +23,10 @@ func (store *PostgresStore) SaveSite(ctx context.Context, claims registryauth.Gr
 				return mutationRecord[Site]{}, err
 			}
 			row := tx.QueryRow(ctx, `
-INSERT INTO core_registry.sites (id, tenant_id, code, display_name, timezone, status, revision, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 1, $7, $7)
-RETURNING id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
-`, id, claims.TenantID, input.Code, input.DisplayName, input.Timezone, input.Status, now)
+INSERT INTO core_registry.sites (id, tenant_id, code, display_name, timezone, status, revision, created_at, updated_at, floor_area_m2, climate_zone)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 1, $7, $7, $8, $9)
+RETURNING `+siteColumns+`
+`, id, claims.TenantID, input.Code, input.DisplayName, input.Timezone, input.Status, now, input.FloorAreaM2, input.ClimateZone)
 			created, err := scanSite(row)
 			if err != nil {
 				return mutationRecord[Site]{}, fmt.Errorf("insert Registry Site: %w", err)
@@ -35,10 +35,10 @@ RETURNING id::text, tenant_id::text, code, display_name, timezone, status, revis
 		}
 		row := tx.QueryRow(ctx, `
 UPDATE core_registry.sites
-SET code = $4, display_name = $5, timezone = $6, status = $7, revision = revision + 1, updated_at = $8
+SET code = $4, display_name = $5, timezone = $6, status = $7, floor_area_m2 = $9, climate_zone = $10, revision = revision + 1, updated_at = $8
 WHERE tenant_id = $1::uuid AND id = $2::uuid AND revision = $3
-RETURNING id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
-`, claims.TenantID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.Timezone, input.Status, now)
+RETURNING `+siteColumns+`
+`, claims.TenantID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.Timezone, input.Status, now, input.FloorAreaM2, input.ClimateZone)
 		updated, err := scanSite(row)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return mutationRecord[Site]{}, classifyRevisionMiss(ctx, tx, "SITE", input.ID)

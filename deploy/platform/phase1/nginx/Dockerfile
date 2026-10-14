@@ -6,7 +6,7 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 COPY apps/hvac-web/package.json ./apps/hvac-web/package.json
 COPY scripts/check-web-js-runtime.mjs ./scripts/check-web-js-runtime.mjs
-RUN npm ci --no-audit --no-fund --registry=${NPM_REGISTRY}
+RUN npm ci --no-audit --no-fund --fetch-timeout=900000 --fetch-retries=4 --registry=${NPM_REGISTRY}
 COPY apps/hvac-web ./apps/hvac-web
 ARG HVAC_WEB_BUILD_ID=phase1-local
 ARG HVAC_WEB_GATEWAY_BASE_PATH=

@@ -167,8 +167,8 @@ function ComposedChart({
           {series.map((s) => (
             <React.Fragment key={s.key}>
               <linearGradient id={`${id}-fill-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={`var(--color-${s.key})`} stopOpacity={0.5} />
-                <stop offset="95%" stopColor={`var(--color-${s.key})`} stopOpacity={0.05} />
+                <stop offset="5%" stopColor={`var(--color-${s.key})`} stopOpacity={0.28} />
+                <stop offset="95%" stopColor={`var(--color-${s.key})`} stopOpacity={0.02} />
               </linearGradient>
               <pattern
                 id={`${id}-hatch-${s.key}`}
@@ -290,7 +290,8 @@ function ComposedChart({
               strokeWidth={2}
               strokeDasharray={s.dashed ? "4 4" : undefined}
               fill={`url(#${id}-fill-${s.key})`}
-              dot={false}
+              dot={s.dots ? { r: 2.5, fill: color, strokeWidth: 0 } : false}
+              activeDot={{ r: 4 }}
             />
           )
         })}

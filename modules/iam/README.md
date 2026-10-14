@@ -37,7 +37,7 @@ The response exposes navigation context. Its Tenant context is not itself an aut
 }
 ```
 
-IAM resolves the configured issuer plus immutable subject into a platform Principal, verifies active TenantMembership for the requested Tenant, applies RoleBinding and SiteBinding actions within that same Tenant, and then applies explicit deny. Membership alone grants no Registry resources. Bindings for another Tenant are ignored and cannot widen the requested Tenant scope. The Tenant identifier must be a UUIDv7 and is rejected before the database boundary when malformed.
+IAM resolves the configured issuer plus immutable subject into a platform Principal, verifies active TenantMembership for the requested Tenant, applies the Principal's Role Assignments within that same Tenant (an assignment covers the whole Tenant or one Site; ADR 0022), and then applies explicit deny. Membership alone grants no Registry resources. Bindings for another Tenant are ignored and cannot widen the requested Tenant scope. The Tenant identifier must be a UUIDv7 and is rejected before the database boundary when malformed.
 
 The typed response contains allow or deny, platform Principal, Tenant, allowed and denied Site scope, one concrete action, policy revision, reason code and decision time. Deny is a successful authorization evaluation and therefore returns HTTP 200 without a downstream delegation.
 
@@ -63,10 +63,14 @@ Set `IAM_DATABASE_URL` to use the frozen `iam` PostgreSQL Schema. The connection
 
 1. `iam.resolve_principal_identity` resolves only exact external issuer plus subject and returns no mutable profile fields.
 2. IAM sets transaction-local Principal and Tenant RLS context.
-3. Membership, RoleBinding, SiteBinding, deny and active policy revision are read from the same snapshot.
+3. Membership, Role Assignments, explicit denies and the active policy revision are read from the same snapshot.
 4. Unknown stored Registry actions, missing active policy or database/RLS failure make authorization unavailable rather than broadening access.
 
 The runtime identity has no Core Schema access and no IAM mutation privilege. `IAM_DATABASE_URL` and `IAM_S1_AUTHORIZATION_FIXTURE` are mutually exclusive. With neither configured, IAM remains deny-all rather than falling back to fixture data.
+
+## User administration
+
+`POST /internal/v1/admin/members` (Gateway workload, `iam:admin` delegation, `iam.admin` capability) returns the assignable built-in Roles and every member of the acting Tenant with their Role Assignments. The administration mutation adds `member.create`, which makes an identity-directory account a member with its first assignments in one transaction. After every mutation the acting Principal must still be an active member holding `iam.admin` across the whole Tenant; otherwise the change is refused with `IAM_ADMIN_SELF_LOCKOUT`. A Role that carries a Tenant-scoped capability, such as `admin`, is assigned only to the whole Tenant, and built-in Roles cannot be changed.
 
 ## Explicit onboarding reconciliation
 
@@ -75,12 +79,12 @@ The runtime identity has no Core Schema access and no IAM mutation privilege. `I
 - The same version and hash records `NO_CHANGE` without rewriting authorization facts.
 - A stale version, same-version hash conflict, source-to-Principal reassignment, issuer/subject reassignment or Principal-ID reassignment records `QUARANTINED` evidence and does not mutate active facts.
 - Mutable email and display name can update an existing immutable issuer/subject mapping. Matching email never merges different subjects.
-- Applied snapshots replace the reconciled Principal's Membership, RoleBinding, SiteBinding and explicit-deny facts in one serializable transaction.
+- Applied snapshots replace the reconciled Principal's Membership, Role Assignment and explicit-deny facts in one serializable transaction. A Role Assignment names an existing Role by key; an unknown key fails the reconciliation.
 - Audit events persist source/version/hash, safe identifiers, result/reason and fact counts. They do not persist provider tokens, browser cookies, client credentials or raw delegations.
 
 The reconciler role is RLS-bound, cannot access `core_registry`, cannot mutate policies and is the only runtime identity allowed to write the reconciliation ledger and quarantine tables. The normal `s1_iam_runtime` decision identity cannot read them.
 
-`cmd/identity-reconciler` is the non-HTTP onboarding boundary for the platform-owned identity directory. It reads one bounded JSON command from stdin, loads only the selected user's immutable ID, display name, email and lifecycle status through the read-only `identity_directory_reader` database role, and constructs the complete `ReconciliationRequest` from explicitly approved platform Tenant, RoleBinding, SiteBinding and deny facts. No IdP role or organization claim can become authorization truth.
+`cmd/identity-reconciler` is the non-HTTP onboarding boundary for the platform-owned identity directory. It reads one bounded JSON command from stdin, loads only the selected user's immutable ID, display name, email and lifecycle status through the read-only `identity_directory_reader` database role, and constructs the complete `ReconciliationRequest` from explicitly approved platform Tenant, Role Assignment and deny facts. No IdP role or organization claim can become authorization truth.
 
 Run it as a secured management job with:
 
@@ -99,7 +103,7 @@ IAM_S1_AUTHORIZATION_FIXTURE=true
 IAM_EXTERNAL_SUBJECT_ISSUER=https://configured-identity-issuer.example
 ```
 
-The fixture covers direct Tenant membership plus role/action bindings, SiteBinding, explicit deny, membership-without-action, revoked membership and unmapped subjects. It exists for deterministic S1 integration and must not be enabled as an implicit production fallback.
+The fixture covers direct Tenant membership plus Tenant-wide and Site Role Assignments, explicit deny, membership-without-action, revoked membership and unmapped subjects. It exists for deterministic S1 integration and must not be enabled as an implicit production fallback.
 
 ## Header and claim boundary
 

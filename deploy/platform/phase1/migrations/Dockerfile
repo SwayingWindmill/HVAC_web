@@ -11,6 +11,7 @@ COPY infra/identity/postgres/init/001-identity-baseline.sql /opt/hvac/repo/infra
 COPY infra/identity/postgres/init/002-identity-runtime-grants.sql /opt/hvac/repo/infra/identity/postgres/init/002-identity-runtime-grants.sql
 COPY infra/identity/postgres/init/003-identity-directory-least-privilege.sql /opt/hvac/repo/infra/identity/postgres/init/003-identity-directory-least-privilege.sql
 COPY infra/identity/postgres/init/004-identity-auth-assurance.sql /opt/hvac/repo/infra/identity/postgres/init/004-identity-auth-assurance.sql
+COPY infra/identity/postgres/init/005-identity-user-administration.sql /opt/hvac/repo/infra/identity/postgres/init/005-identity-user-administration.sql
 COPY infra/durability/postgres/init/001-s0-durable.sql /opt/hvac/repo/infra/durability/postgres/init/001-s0-durable.sql
 COPY infra/durability/postgres/init/002-s0-session-idle.sql /opt/hvac/repo/infra/durability/postgres/init/002-s0-session-idle.sql
 COPY infra/durability/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/repo/infra/durability/postgres/init/002-s1-registry-routing-audit.sql
@@ -64,6 +65,13 @@ COPY infra/registry/postgres/init/016-s24-alarm-assign-capability.sql /opt/hvac/
 COPY infra/registry/postgres/init/017-registry-read-port.sql /opt/hvac/repo/infra/registry/postgres/init/017-registry-read-port.sql
 COPY infra/registry/postgres/init/018-fdd-finding-measurement.sql /opt/hvac/repo/infra/registry/postgres/init/018-fdd-finding-measurement.sql
 COPY infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql /opt/hvac/repo/infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql
+COPY infra/registry/postgres/init/020-savings-verification.sql /opt/hvac/repo/infra/registry/postgres/init/020-savings-verification.sql
+COPY infra/registry/postgres/init/021-metric-tariff-pricing.sql /opt/hvac/repo/infra/registry/postgres/init/021-metric-tariff-pricing.sql
+COPY infra/registry/postgres/init/022-report-snapshots.sql /opt/hvac/repo/infra/registry/postgres/init/022-report-snapshots.sql
+COPY infra/registry/postgres/init/023-savings-device-boundary.sql /opt/hvac/repo/infra/registry/postgres/init/023-savings-device-boundary.sql
+COPY infra/registry/postgres/init/024-site-profile.sql /opt/hvac/repo/infra/registry/postgres/init/024-site-profile.sql
+COPY infra/registry/postgres/init/025-fdd-rule-revisions.sql /opt/hvac/repo/infra/registry/postgres/init/025-fdd-rule-revisions.sql
+COPY infra/registry/postgres/init/026-iam-role-assignments.sql /opt/hvac/repo/infra/registry/postgres/init/026-iam-role-assignments.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

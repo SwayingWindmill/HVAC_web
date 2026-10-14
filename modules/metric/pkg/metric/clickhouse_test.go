@@ -44,7 +44,8 @@ func TestCounterDeltaAddsEveryRiseAcrossARestartInTheWindow(t *testing.T) {
 		}
 		// The working arrays once leaked into the output as two extra columns, and every
 		// read was then taken for an empty window.
-		selected := body[strings.Index(body, "SELECT ")+len("SELECT ") : strings.Index(body, " FROM ")]
+		outer := body[strings.LastIndex(body, "SELECT ")+len("SELECT "):]
+		selected := outer[:strings.Index(outer, " FROM ")]
 		if columns := strings.Count(selected, " AS "); columns != 11 {
 			t.Errorf("point read selects %d columns, want 11:\n%s", columns, selected)
 		}

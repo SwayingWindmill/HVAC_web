@@ -18,12 +18,12 @@ const (
 	alarmTestAlarmID     = "01910000-1000-7000-8000-000000000001"
 )
 
-func TestEvaluateAlarmAuthorizationAllowsExactSiteAction(t *testing.T) {
+func TestEvaluateAlarmAuthorizationAllowsTheAssignedSiteOnly(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	store := alarmAuthorizationFixture(now, []AlarmPermission{{
-		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead,
-		Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-	}})
+	store := alarmAuthorizationFixture(now, []RoleAssignment{{
+		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, RoleKey: "operator", Capabilities: []string{string(alarmauth.ActionRead)},
+		Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
+	}}, nil)
 	decision, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
 		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, AlarmID: alarmTestAlarmID, Action: alarmauth.ActionRead,
 	})
@@ -36,23 +36,6 @@ func TestEvaluateAlarmAuthorizationAllowsExactSiteAction(t *testing.T) {
 	if err := decision.Validate(); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestEvaluateAlarmAuthorizationDeniesCrossSiteAndExplicitDeny(t *testing.T) {
-	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	store := alarmAuthorizationFixture(now, []AlarmPermission{
-		{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)},
-		{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead, Effect: BindingEffectDeny, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)},
-	})
-	denied, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
-		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if denied.Allowed || denied.ReasonCode != alarmauth.ReasonDenyExplicit {
-		t.Fatalf("explicit deny was not authoritative: %#v", denied)
-	}
 	crossSite, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
 		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmauth.ActionRead,
 	})
@@ -64,24 +47,37 @@ func TestEvaluateAlarmAuthorizationDeniesCrossSiteAndExplicitDeny(t *testing.T) 
 	}
 }
 
-func TestAlarmCapabilityAllowedKeepsOtherAllowedSiteWhenOneSiteDenied(t *testing.T) {
+func TestEvaluateAlarmAuthorizationHonoursAnExplicitDenyOverATenantRole(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	facts, err := alarmAuthorizationFixture(now, []AlarmPermission{
-		{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead, Effect: BindingEffectDeny, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)},
-		{TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmauth.ActionRead, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)},
-	}).LookupAlarmAuthorization(context.Background(), AuthorizationLookup{SubjectIssuer: alarmTestIssuer, Subject: alarmTestSubject, TenantID: alarmTestTenantID})
+	store := alarmAuthorizationFixture(now,
+		[]RoleAssignment{{TenantID: alarmTestTenantID, RoleKey: "operator", Capabilities: []string{string(alarmauth.ActionRead)}, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		[]ExplicitDeny{{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Capability: string(alarmauth.ActionRead), ValidFrom: now.Add(-time.Hour)}},
+	)
+	denied, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !alarmCapabilityAllowed(facts, now, alarmTestTenantID, alarmauth.ActionRead) {
-		t.Fatal("an allowed Alarm Site did not produce an effective capability")
+	if denied.Allowed || denied.ReasonCode != alarmauth.ReasonDenyExplicit {
+		t.Fatalf("explicit deny was not authoritative: %#v", denied)
+	}
+	other, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmauth.ActionRead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other.Allowed {
+		t.Fatalf("a Site deny removed the Tenant role elsewhere: %#v", other)
 	}
 }
 
-func alarmAuthorizationFixture(now time.Time, permissions []AlarmPermission) AlarmAuthorizationStore {
-	return newStaticAlarmAuthorizationStore("alarm-policy-1", []AlarmAuthorizationFacts{{
-		Principal:   PrincipalRecord{ID: alarmTestPrincipalID, SubjectIssuer: alarmTestIssuer, Subject: alarmTestSubject, Status: FactStatusActive},
-		Memberships: []TenantMembership{{TenantID: alarmTestTenantID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
-		Permissions: permissions,
+func alarmAuthorizationFixture(now time.Time, assignments []RoleAssignment, denies []ExplicitDeny) AlarmAuthorizationStore {
+	return newStaticAlarmAuthorizationStore("alarm-policy-1", []AuthorizationFacts{{
+		Principal:      PrincipalRecord{ID: alarmTestPrincipalID, SubjectIssuer: alarmTestIssuer, Subject: alarmTestSubject, Status: FactStatusActive},
+		Memberships:    []TenantMembership{{TenantID: alarmTestTenantID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Assignments:    assignments,
+		ExplicitDenies: denies,
 	}})
 }

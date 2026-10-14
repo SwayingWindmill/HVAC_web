@@ -30,6 +30,10 @@ type Site struct {
 	Revision    int64  `json:"revision"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	// FloorAreaM2 is the building floor area energy is compared per square metre on; nil until recorded.
+	FloorAreaM2 *float64 `json:"floorAreaM2"`
+	// ClimateZone is the GB 50176 thermal design zone; nil until recorded.
+	ClimateZone *string `json:"climateZone"`
 }
 
 type Asset struct {
@@ -97,6 +101,10 @@ type MeterBindingResolution struct {
 	PointType         string     `json:"pointType,omitempty"`
 	EffectiveFrom     time.Time  `json:"effectiveFrom,omitempty"`
 	EffectiveTo       *time.Time `json:"effectiveTo,omitempty"`
+	// AccountingScope is BRANCH for a sub-meter on the feed into one piece of equipment, SITE otherwise.
+	AccountingScope string `json:"accountingScope,omitempty"`
+	// LoadDeviceID is the equipment a BRANCH sub-meter feeds, which may not be the device reporting it.
+	LoadDeviceID string `json:"loadDeviceId,omitempty"`
 }
 
 type Collection[T any] struct {

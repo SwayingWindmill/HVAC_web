@@ -31,6 +31,7 @@ func TestRegistryCanonicalRoutes(t *testing.T) {
 		{"/api/v1/sites/" + registryTestSiteID + "/devices", registryauth.ActionDeviceList, true},
 		{"/api/v1/sites/" + registryTestSiteID + "/device-bindings", registryauth.ActionDeviceBindingList, true},
 		{"/api/v1/sites/" + registryTestSiteID + "/asset-model", registryauth.ActionAssetModelRead, false},
+		{"/api/v1/sites/" + registryTestSiteID + "/tariff", registryauth.ActionTariffRead, false},
 		{"/api/v1/devices/" + registryTestDeviceID, registryauth.ActionDeviceRead, false},
 	}
 	for _, test := range tests {
@@ -94,6 +95,23 @@ func TestGatewayRegistryAcceptsCurrentSiteAssetModel(t *testing.T) {
 	}
 	if _, err := canonicalRegistrySuccess(registryauth.ActionAssetModelRead, registryTestSiteID, raw); err != nil {
 		t.Fatalf("current Site Asset Model rejected: %v", err)
+	}
+}
+
+func TestGatewayRegistryAcceptsOnlyTheRequestedSitesTariff(t *testing.T) {
+	tariff := platformapi.SiteTariff{
+		SiteID: registryTestSiteID, DisplayName: "两部制分时电价", Version: 1, EffectiveFrom: "2026-01-01T00:00:00.000Z", Timezone: "Asia/Shanghai", Currency: "CNY",
+		Periods: []platformapi.TariffPeriod{{PeriodCode: "PEAK", DayType: "WEEKDAY", StartMinute: 480, EndMinute: 660, EnergyRatePerKWh: 1.2, DemandRatePerKW: 38}},
+	}
+	raw, err := json.Marshal(tariff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalRegistrySuccess(registryauth.ActionTariffRead, registryTestSiteID, raw); err != nil {
+		t.Fatalf("the Site's Tariff was rejected: %v", err)
+	}
+	if _, err := canonicalRegistrySuccess(registryauth.ActionTariffRead, "018f1e00-1000-7000-8000-000000000008", raw); err == nil {
+		t.Fatal("another Site's Tariff was accepted")
 	}
 }
 

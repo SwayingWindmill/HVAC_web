@@ -1,14 +1,13 @@
-import { useCallback } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { fallback, zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { SystemManagement } from '@/features/system/SystemManagement';
 import { requireCapabilities, requirePlatform } from '@/app/route-access';
-import { useShellRuntime, useShellSnapshot } from '@/app/ShellRuntimeContext';
-import type { ProtectedScopeDraft } from '@/app/protected-scope';
+import { useShellSnapshot } from '@/app/ShellRuntimeContext';
+import { useUnsavedDraftGuard } from '@/features/system/unsaved-drafts';
 
 const systemSearchSchema = z.object({
-  tab: fallback(z.enum(['overview', 'users', 'site', 'registry', 'integrations', 'rules', 'audit']), 'overview').optional(),
+  tab: fallback(z.enum(['overview', 'users', 'site', 'registry', 'rules', 'audit']), 'overview').optional(),
 });
 
 export const Route = createFileRoute('/_app/system')({
@@ -28,15 +27,14 @@ export const Route = createFileRoute('/_app/system')({
 });
 
 function SystemRoute() {
-  const runtime = useShellRuntime();
-  const registerUnsavedDraft = useCallback(
-    (draft: ProtectedScopeDraft) => runtime.registerUnsavedDraft(draft),
-    [runtime],
-  );
+  const { registerUnsavedDraft, confirmation } = useUnsavedDraftGuard();
   return (
-    <SystemManagement
-      snapshot={useShellSnapshot()}
-      registerUnsavedDraft={registerUnsavedDraft}
-    />
+    <>
+      <SystemManagement
+        snapshot={useShellSnapshot()}
+        registerUnsavedDraft={registerUnsavedDraft}
+      />
+      {confirmation}
+    </>
   );
 }

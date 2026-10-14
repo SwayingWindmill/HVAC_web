@@ -42,6 +42,8 @@ func RunScheduledEvaluations(ctx context.Context, queue *schedulerjob.Queue, ser
 		result, evaluationErr := service.EvaluateLowDeltaT(jobCtx, request)
 		cancel()
 		switch {
+		case errors.Is(evaluationErr, ErrRuleNotFound):
+			finish(queue.Fail(context.Background(), job, "FDD_RULE_UNAVAILABLE", evaluationErr, false, time.Now().UTC()), job)
 		case errors.Is(evaluationErr, ErrNoLoopEvidence):
 			finish(queue.Fail(context.Background(), job, "FDD_EVIDENCE_UNAVAILABLE", evaluationErr, false, time.Now().UTC()), job)
 		case evaluationErr != nil:

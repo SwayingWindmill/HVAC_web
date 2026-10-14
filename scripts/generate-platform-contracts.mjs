@@ -90,6 +90,7 @@ const expectedOperations = {
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
+  getSiteTariff: ['get', '/api/v1/sites/{siteId}/tariff'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
   listSiteSpaceChildren: ['get', '/api/v1/sites/{siteId}/spaces/tree'],
   listDevicePoints: ['get', '/api/v1/devices/{deviceId}/points'],
@@ -122,6 +123,16 @@ const expectedOperations = {
   getSiteLoadForecastV212: ['get', '/api/v1/sites/{siteId}/forecast/load'],
   listSiteFddFindingsV212: ['get', '/api/v1/sites/{siteId}/fdd/findings'],
   evaluateSiteFddLowDeltaTV212: ['post', '/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t'],
+  getSiteFddLowDeltaTRuleV212: ['get', '/api/v1/sites/{siteId}/fdd/rules/low-delta-t'],
+  listSiteSavingsMeasuresV212: ['get', '/api/v1/sites/{siteId}/savings/measures'],
+  registerSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures'],
+  getSiteSavingsMeasureV212: ['get', '/api/v1/sites/{siteId}/savings/measures/{measureId}'],
+  implementSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/implement'],
+  refitSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/refit'],
+  endSiteSavingsMeasureV212: ['post', '/api/v1/sites/{siteId}/savings/measures/{measureId}/end'],
+  getSiteSavingsSummaryV212: ['get', '/api/v1/sites/{siteId}/savings/summary'],
+  listSiteMonthlyReportsV212: ['get', '/api/v1/sites/{siteId}/reports/monthly'],
+  getSiteMonthlyReportV212: ['get', '/api/v1/sites/{siteId}/reports/monthly/{month}'],
   createOptimizationRunV212: ['post', '/api/v1/optimization/runs'],
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
   getRuleCatalog: ['get', '/api/v1/rules/catalog'],
@@ -160,6 +171,7 @@ const expectedSuccessSchemas = {
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
   getSiteAssetModel: 'SiteAssetModel',
+  getSiteTariff: 'SiteTariff',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -226,7 +238,7 @@ const schemaRequirements = {
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
-  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
@@ -241,6 +253,8 @@ const schemaRequirements = {
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
+  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods'], ['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
+  TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW'], ['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -292,10 +306,11 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'iam.admin',
   'api-credential.manage',
   'rule.manage',
+  'savings.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 12, 'EffectiveAuthorization capability set version must be 12');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 13, 'EffectiveAuthorization capability set version must be 13');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 33, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === schemas.Capability.enum.length, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
@@ -339,6 +354,7 @@ const replacements = {
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
+  __SITE_TARIFF_PATH__: operations.getSiteTariff.path,
   __DEVICE_PATH__: operations.getDevice.path,
   __SITE_SPACE_CHILDREN_PATH__: operations.listSiteSpaceChildren.path,
   __DEVICE_POINTS_PATH__: operations.listDevicePoints.path,
@@ -367,6 +383,15 @@ const replacements = {
   __SITE_LOAD_FORECAST_PATH__: operations.getSiteLoadForecastV212.path,
   __SITE_FDD_FINDINGS_PATH__: operations.listSiteFddFindingsV212.path,
   __SITE_FDD_LOW_DELTA_T_PATH__: operations.evaluateSiteFddLowDeltaTV212.path,
+  __SITE_FDD_LOW_DELTA_T_RULE_PATH__: operations.getSiteFddLowDeltaTRuleV212.path,
+  __SITE_SAVINGS_MEASURES_PATH__: operations.listSiteSavingsMeasuresV212.path,
+  __SITE_SAVINGS_MEASURE_PATH__: operations.getSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_IMPLEMENT_PATH__: operations.implementSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_REFIT_PATH__: operations.refitSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_END_PATH__: operations.endSiteSavingsMeasureV212.path,
+  __SITE_SAVINGS_SUMMARY_PATH__: operations.getSiteSavingsSummaryV212.path,
+  __SITE_MONTHLY_REPORTS_PATH__: operations.listSiteMonthlyReportsV212.path,
+  __SITE_MONTHLY_REPORT_PATH__: operations.getSiteMonthlyReportV212.path,
   __OPTIMIZATION_RUNS_PATH__: operations.createOptimizationRunV212.path,
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
   __RULE_CATALOG_PATH__: operations.getRuleCatalog.path,

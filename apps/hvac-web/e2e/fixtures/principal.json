@@ -29,7 +29,7 @@
     "delegationExpiresAt": "2099-01-01T00:00:00Z"
   },
   "authorization": {
-    "capabilitySetVersion": 12,
+    "capabilitySetVersion": 13,
     "policyRevision": "capability-v6:0f8546a43226e4f7d8c5af27f98e7fd15f5b077cf5664ea3f5baf53d28be7710",
     "capabilities": [
       "site.list",
@@ -47,7 +47,8 @@
       "work-order.read",
       "work-order.create",
       "work-order.assign",
-      "work-order.lifecycle"
+      "work-order.lifecycle",
+      "savings.manage"
     ]
   },
   "session": {

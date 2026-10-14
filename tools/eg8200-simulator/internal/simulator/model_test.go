@@ -190,6 +190,25 @@ func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
 	}
 }
 
+func TestEachPieceOfEquipmentMetersTheEnergyItDraws(t *testing.T) {
+	config := testPlantConfig()
+	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
+	snapshot := plant.Tick(time.Hour)
+	equipment := []string{config.Chiller.ID, config.ChilledWaterPump.ID, config.CoolingWaterPump.ID, config.CoolingTower.ID}
+	branches := 0.0
+	for _, deviceID := range equipment {
+		energy, ok := snapshot.Devices[deviceID]["energyKwh"].(float64)
+		if !ok || energy <= 0 {
+			t.Fatalf("%s energy = %#v", deviceID, snapshot.Devices[deviceID]["energyKwh"])
+		}
+		branches += energy
+	}
+	total := snapshot.Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if math.Abs(total-branches) > 1e-3 {
+		t.Fatalf("sub-meters add up to %.6f kWh, total meter %.6f kWh", branches, total)
+	}
+}
+
 func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 	plant := NewPlant(testPlantConfig(), testStaticScenario(), time.Now())
 	plant.Tick(time.Second)

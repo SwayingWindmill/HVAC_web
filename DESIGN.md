@@ -17,10 +17,11 @@ architecture: docs/architecture/smart-energy-react-spa-frontend-architecture.md
 2026-10-10 用户再次确认：采用企业能源 SaaS 的标准做法，坚持 shadcn 风格，高级感来自完成度而不是标新立异；不引入行业主题化视觉（如能效标识、线网图）作为整体视觉风格；功能性的工程示意（如冷站两环路系统图）不受此限制，按 §10 规则绘制。完成度标杆是 shadcn 官方 Blocks（dashboard-01 等）与 Vercel 控制台：
 
 - 字体自托管 Geist / Geist Mono（`@fontsource-variable`），中文回退 PingFang SC / Microsoft YaHei；不依赖 Google Fonts 等境外字体服务。
-- 浅色为默认场景（办公室桌面 1440–1920），页面底为白色、侧栏为浅灰，inset 布局；页眉为 48px 实底，不用毛玻璃。
+- 浅色为默认场景（办公室桌面 1440–1920），页面面板为白色、画布与侧栏为浅灰，inset 布局（面板带描边与 shadow-xs）；页眉 48px 吸顶，`bg-background/80` 半透明模糊。
 - 图表系列色为可区分的五色（蓝、青、紫、品红、石板灰），避开状态色相（青绿信息、琥珀警告、红色危险）；状态色只表达状态。
 - 每个路由页面使用 `@/blocks/page-header` 的 `PageHeader` 与 `@/components/layout/Main` 容器；页面内不得再出现 `<main>`。
-- 用户菜单位于侧栏底部（dashboard-01 `NavUser` 模式），页眉只放侧栏开关、站点切换、面包屑、搜索、主题与通知。
+- 用户菜单位于侧栏底部（dashboard-01 `NavUser` 模式）；站点切换位于侧栏顶部（shadcn-admin team switcher 模式，产品标 + 当前站点）；页眉只放侧栏开关、面包屑、搜索（页面与设备）、主题与通知。
+- 2026-10-12 起只面向桌面端，不做移动端与响应式适配；视觉语言参照三个 shadcn admin 模板，采纳/改造/拒绝记录见 `docs/architecture/shadcn-admin-visual-language-source-review-2026-10-12.md`。
 
 主要视觉参考：
 
@@ -697,12 +698,10 @@ Current fact
 - Runtime / Connectivity / Freshness / Quality / Diagnosis / Alarm / Maintenance / Control 保持独立；
 - 用户界面显示业务事实，内部 UUID / trace / revision / raw technical enum 只留在数据、URL、请求和日志层，除非任务确实需要。
 
-## 17. Responsive
+## 17. Desktop only
 
-- desktop：完整 Sidebar + Header + multi-column content；
-- tablet：内容 grid 逐步降为两列/一列；
-- mobile：Sidebar overlay，Header 只保留关键 controls，Card/Table 改变结构而不是强行缩放；
-- Table 在小屏根据任务隐藏次要列或进入 row detail，不做不可读的横向压缩。
+2026-10-12 起只面向桌面端（1280–1920，验收宽度 1440）。不再为平板、手机设计或验收布局；
+页面按容器宽度（`@container/main`）在 1280–1920 之间调整列数即可，不新增移动端断点。
 
 ## 18. Migration policy
 

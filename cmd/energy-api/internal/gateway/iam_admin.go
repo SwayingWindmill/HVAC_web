@@ -39,7 +39,7 @@ func (h *handler) IAMAdmin(writer http.ResponseWriter, request *http.Request, ro
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if !freshMFAAssurance(session, h.now()) {
+	if route.capability == identitycontext.CapabilityAPICredentialManage && !freshMFAAssurance(session, h.now()) {
 		writeIdentityFailure(writer, request, identityFailure{428, "STEP_UP_REQUIRED", "Step-up authentication required", "IAM administration requires recent multi-factor authentication.", false})
 		return
 	}

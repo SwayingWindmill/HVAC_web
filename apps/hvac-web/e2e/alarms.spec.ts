@@ -3,26 +3,31 @@ import { expect, test } from './test';
 
 const ACTIVE_ALARM = '01a0ec45-7ab5-7e9c-aa96-927ee5e050f2';
 
+const rows = (page: import('@playwright/test').Page) => page.getByRole('list', { name: '告警记录' }).getByRole('button');
+
 test('the default view lists active alarms only', async ({ page }) => {
   await page.goto(`/operations/alarms?site=${SITE_ID}`);
-  const rows = page.locator('tbody tr');
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText('冷冻水回水温度过低');
-  await expect(rows.first()).toContainText('活动 · 未确认');
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText('冷冻水回水温度过低');
+  await expect(rows(page).first()).toContainText('未确认');
+  // The first alarm opens beside the list without a click.
+  await expect(page.getByRole('region', { name: '告警详情' })).toContainText('活动 · 未确认');
 
   await page.getByRole('radio', { name: '已恢复' }).click();
   await expect(page).toHaveURL(/view=cleared/);
-  await expect(rows.first()).toContainText('已恢复 · 已确认');
+  await expect(rows(page).first()).toContainText('已恢复');
 });
 
 test('acknowledging records the note and leaves the alarm active', async ({ page, gateway }) => {
   await page.goto(`/operations/alarms?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
-  const inspector = page.getByRole('dialog');
-  await inspector.getByPlaceholder(/确认说明/).fill('已到现场查看');
-  await inspector.getByRole('button', { name: '确认告警' }).click();
+  const detail = page.getByRole('region', { name: '告警详情' });
+  await detail.getByRole('button', { name: '确认告警' }).click();
+  await page.getByRole('textbox', { name: '确认说明' }).fill('已到现场查看');
+  await page.getByRole('button', { name: '确认', exact: true }).click();
 
-  await expect(inspector).toContainText('活动 · 已确认');
-  await expect(page.locator('tbody tr').first()).toContainText('活动 · 已确认');
+  await expect(detail).toContainText('活动 · 已确认');
+  await expect(detail).toContainText('已到现场查看');
+  await expect(rows(page).first()).toContainText('已确认');
   const ack = gateway.writes.find((write) => write.path === `/api/v1/alarms/${ACTIVE_ALARM}/ack`);
   expect(ack?.body).toEqual({ comment: '已到现场查看' });
   expect(ack?.csrfToken).toBe('e2e-csrf-token');
@@ -30,12 +35,12 @@ test('acknowledging records the note and leaves the alarm active', async ({ page
 
 test('a work order created from an alarm references it as its origin', async ({ page, gateway }) => {
   await page.goto(`/operations/alarms?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
-  const inspector = page.getByRole('dialog');
-  await inspector.getByRole('button', { name: '创建工单' }).click();
+  const detail = page.getByRole('region', { name: '告警详情' });
+  await detail.getByRole('button', { name: '创建工单', exact: true }).click();
   await page.getByLabel('说明').fill('检查冷冻水泵频率与旁通阀');
   await page.getByRole('dialog', { name: '由告警创建工单' }).getByRole('button', { name: '创建工单' }).click();
 
-  await expect(inspector.getByRole('link', { name: /冷冻水回水温度过低/ })).toBeVisible();
+  await expect(detail.getByRole('link', { name: /冷冻水回水温度过低/ })).toBeVisible();
   const create = gateway.writes.find((write) => write.method === 'POST' && write.path.endsWith('/work-orders'));
   expect(create?.body).toMatchObject({
     priority: 'HIGH',
@@ -43,20 +48,28 @@ test('a work order created from an alarm references it as its origin', async ({ 
   });
 });
 
-test('search and severity filters narrow the ledger and say when nothing matches', async ({ page }) => {
+test('search and severity filters narrow the list and say when nothing matches', async ({ page }) => {
   await page.goto(`/operations/alarms?site=${SITE_ID}&view=all`);
-  const rows = page.getByRole('table', { name: '告警记录' }).locator('tbody tr');
-  await expect(rows).toHaveCount(2);
+  await expect(rows(page)).toHaveCount(2);
 
   await page.getByRole('textbox', { name: '搜索告警' }).fill('不存在的告警');
   await expect(page).toHaveURL(/q=/);
   await expect(page.getByText('没有符合条件的告警')).toBeVisible();
 
   await page.getByRole('button', { name: '清除筛选' }).click();
-  await expect(rows).toHaveCount(2);
+  await expect(rows(page)).toHaveCount(2);
 
   await page.getByRole('toolbar').getByRole('button', { name: '严重度' }).click();
   await page.getByRole('option', { name: '紧急' }).click();
   await page.keyboard.press('Escape');
   await expect(page.getByText('没有符合条件的告警')).toBeVisible();
+});
+
+test('J and K move through the list', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=all`);
+  await expect(rows(page)).toHaveCount(2);
+  await page.keyboard.press('j');
+  await expect(rows(page).nth(1)).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('k');
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-current', 'true');
 });

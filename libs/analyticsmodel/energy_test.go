@@ -93,4 +93,28 @@ func TestEnergySeriesScopeDigestBindsTenantSiteAndQueryKind(t *testing.T) {
 	if digest == otherDigest {
 		t.Fatal("scope digest did not bind site")
 	}
+	breakdown := query
+	breakdown.Breakdown = EnergyBreakdownDevice
+	breakdownDigest, err := breakdown.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest == breakdownDigest {
+		t.Fatal("scope digest did not bind the breakdown")
+	}
+}
+
+func TestEnergySeriesQueryAcceptsOnlyAKnownBreakdown(t *testing.T) {
+	query := EnergySeriesQuery{
+		TenantID: testTenantID, SiteID: testSiteID, EnergyType: EnergyTypeElectricity, Granularity: GranularityHour,
+		Timezone: "Asia/Shanghai", From: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+		QualityPolicy: QualityPolicyValidOnly, Breakdown: EnergyBreakdownDevice,
+	}
+	if err := query.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	query.Breakdown = "meter"
+	if err := query.Validate(); err == nil {
+		t.Fatal("Validate() error = nil")
+	}
 }

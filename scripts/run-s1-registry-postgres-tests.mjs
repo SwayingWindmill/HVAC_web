@@ -28,6 +28,7 @@ async function findAvailablePort(requestedPort = 0) {
 
 const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
 const telemetryGrantPassword = randomBytes(24).toString('hex');
+const iamAdminPassword = randomBytes(24).toString('hex');
 const coreServicePassword = randomBytes(24).toString('hex');
 const connectivityPassword = randomBytes(24).toString('hex');
 const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
@@ -139,49 +140,27 @@ function seedIAMIntegrationFixtures() {
     UPDATE iam.role_templates
     SET capabilities = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
     WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'registry-reader';
-    UPDATE iam.site_bindings
-    SET actions = ARRAY['registry.read','telemetry.snapshot.read'], revision = revision + 1, updated_at = now()
-    WHERE id = '018f1e00-2300-7000-8000-000000000001';
 
-    INSERT INTO iam.telemetry_scope_bindings (
-      id, tenant_id, principal_id, site_id, device_id, actions, effect, status,
-      valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES (
-      '018f1e00-2600-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002',
-      '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'],
-      'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
-    );
-    INSERT INTO iam.telemetry_key_bindings (
-      id, tenant_id, principal_id, device_id, telemetry_key, actions, effect, status,
-      valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2700-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
-      ('018f1e00-2700-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
+    -- Role Assignments (ADR 0022): Owner A reads the whole Tenant and operates Site 1; the
+    -- delegated user reads Site 1 only; the denied user keeps a Tenant role under a Site 1 deny.
+    INSERT INTO iam.role_templates (id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at)
+    VALUES ('018f1e00-2b00-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', 'site-operator', 'Site operator', ARRAY[
+      'analytics.energy-series.read', 'alarm:read', 'alarm:ack',
+      'work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign', 'work-order:plan', 'work-order:start',
+      'work-order:block', 'work-order:resume', 'work-order:complete', 'work-order:cancel', 'work-order:reopen',
+      'command.submit.medium'
+    ], 'ACTIVE', 1, now(), now());
+    DELETE FROM iam.role_bindings WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND principal_id = '018f1e00-2000-7000-8000-000000000002';
+    INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at)
+    SELECT '018f1e00-2200-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', id, '018f1e00-1000-7000-8000-000000000001', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
+    FROM iam.role_templates WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'site-operator';
+    INSERT INTO iam.role_bindings (id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at)
+    SELECT '018f1e00-2200-7000-8000-000000000012', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', id, '018f1e00-1000-7000-8000-000000000001', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()
+    FROM iam.role_templates WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001' AND role_key = 'registry-reader';
 
-    INSERT INTO iam.alarm_permissions (
-      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2800-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:read', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now()),
-      ('018f1e00-2800-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:ack', 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, now(), now());
-
-    INSERT INTO iam.work_order_permissions (
-      id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at
-    ) VALUES
-      ('018f1e00-2900-7000-8000-000000000001','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:list','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000002','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:read','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000003','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:create','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000004','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:assign','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000005','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:plan','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000006','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:start','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000007','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:block','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000008','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:resume','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000009','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:complete','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000010','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:cancel','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
-      ('018f1e00-2900-7000-8000-000000000011','018f1e00-2000-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','work-order:reopen','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
     INSERT INTO iam.work_order_ownership_targets (
       id, tenant_id, site_id, target_type, target_id, effect, status, valid_from, valid_to, revision, created_at, updated_at
     ) VALUES
-      ('018f1e00-2a00-7000-8000-000000000001','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','PRINCIPAL','018f1e00-2000-7000-8000-000000000001','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now()),
       ('018f1e00-2a00-7000-8000-000000000002','018f1d00-0000-7000-8000-000000000001','018f1e00-1000-7000-8000-000000000001','TEAM','operations-a','ALLOW','ACTIVE','2026-07-21T00:00:00Z',NULL,1,now(),now());
   `);
 }
@@ -202,6 +181,7 @@ function scopedCounts(tenantID, siteIDs) {
 async function runIAMGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   psql(`ALTER ROLE s2_iam_grant_runtime PASSWORD '${telemetryGrantPassword}'`);
+  psql(`ALTER ROLE s1_iam_admin PASSWORD '${iamAdminPassword}'`);
   const child = spawn(goBinary, ['test', '-count=1', '-v', './modules/iam/internal/iam'], {
     cwd: root,
     stdio: 'inherit',
@@ -213,6 +193,7 @@ async function runIAMGoTests() {
       S1_IAM_DATABASE_URL: `postgres://s1_iam_runtime:s1-iam-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_RECONCILER_DATABASE_URL: `postgres://s1_iam_reconciler:s1-iam-reconciler-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S2_IAM_GRANT_DATABASE_URL: `postgres://s2_iam_grant_runtime:${telemetryGrantPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_IAM_ADMIN_DATABASE_URL: `postgres://s1_iam_admin:${iamAdminPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
@@ -463,19 +444,32 @@ try {
     ) VALUES
       ('${topologyNodeA}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'GRID', 'Grid', 'ACTIVE', 1, now(), now()),
       ('${topologyNodeB}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Site Load', 'ACTIVE', 1, now(), now()),
-      ('${topologyNodeV2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersion2Id}', 'GRID', 'Grid V2', 'ACTIVE', 1, now(), now());
+      ('${topologyNodeV2}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersion2Id}', 'GRID', 'Grid V2', 'ACTIVE', 1, now(), now()),
+      ('01990000-1310-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'HVAC', 'Plant', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at) VALUES
+      ('018f1e00-4100-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'chiller-1', 'Chiller 1', 'CHILLER', 'ACTIVE', 1, now(), now());
+    INSERT INTO core_registry.energy_nodes (
+      id, tenant_id, site_id, topology_version_id, node_type, name, device_id, status, revision, created_at, updated_at
+    ) VALUES
+      ('01990000-1310-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', 'LOAD', 'Chiller', '018f1e00-4100-7000-8000-000000000021', 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.energy_edges (
       id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id,
       energy_type_id, direction, enabled, revision, created_at, updated_at
     ) VALUES (
       '${topologyEdgeId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}',
       '${topologyNodeA}', '${topologyNodeB}', '${electricityEnergyTypeId}', 'IMPORT', true, 1, now(), now()
+    ), (
+      '01990000-1320-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}',
+      '01990000-1310-7000-8000-000000000020', '01990000-1310-7000-8000-000000000021', '${electricityEnergyTypeId}', 'CONSUME', true, 1, now(), now()
     );
     INSERT INTO core_registry.energy_meters (
       id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at
     ) VALUES (
       '${meterId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
       'main_incomer', 'Main Incomer', '018f1e00-4000-7000-8000-000000000001', '${electricityEnergyTypeId}', 'ACTIVE', 1, now(), now()
+    ), (
+      '01990000-1330-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      'chiller_energy', 'Chiller Energy', '018f1e00-4000-7000-8000-000000000001', '${electricityEnergyTypeId}', 'ACTIVE', 1, now(), now()
     );
     INSERT INTO core_registry.telemetry_points (
       id, tenant_id, site_id, reporting_device_id, point_code, source_key, display_name,
@@ -487,7 +481,10 @@ try {
        'RESET_TO_ZERO', '{}'::jsonb, 'ACTIVE', 1, now(), now()),
       ('${telemetryPointId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001',
        'active_power', 'meter.active_power', 'Active Power', 'TELEMETRY', 'NUMBER', 'kW', false, 1000, 1000, 5000,
-       NULL, '{}'::jsonb, 'ACTIVE', 1, now(), now());
+       NULL, '{}'::jsonb, 'ACTIVE', 1, now(), now()),
+      ('01990000-1340-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001',
+       'chiller_energy', 'chiller.energy', 'Chiller Energy', 'COUNTER', 'NUMBER', 'kWh', false, 1000, 1000, 5000,
+       'RESET_TO_ZERO', '{}'::jsonb, 'ACTIVE', 1, now(), now());
     INSERT INTO core_registry.meter_ratio_versions (
       id, tenant_id, site_id, meter_id, version, ct_ratio, pt_ratio, meter_multiplier,
       ratio_application_mode, effective_from, effective_to, status, revision, created_at, updated_at
@@ -503,6 +500,10 @@ try {
     ) VALUES (
       '${meterBindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '${topologyEdgeId}', '${electricityEnergyTypeId}',
       '${meterId}', '018f1e00-4000-7000-8000-000000000001', '${meterPointId}', 'COUNTER', 'PRIMARY', 'IMPORT', 0,
+      '2026-08-01T00:00:00Z', 1, 'ACTIVE', 1, now(), now()
+    ), (
+      '01990000-1360-7000-8000-000000000020', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '01990000-1320-7000-8000-000000000020', '${electricityEnergyTypeId}',
+      '01990000-1330-7000-8000-000000000020', '018f1e00-4000-7000-8000-000000000001', '01990000-1340-7000-8000-000000000020', 'COUNTER', 'PRIMARY', 'CONSUME', 0,
       '2026-08-01T00:00:00Z', 1, 'ACTIVE', 1, now(), now()
     );
     INSERT INTO core_registry.virtual_meters (
@@ -532,7 +533,7 @@ try {
       || (SELECT cloud_multiplier::text FROM core_registry.meter_ratio_versions WHERE id = '01990000-1350-7000-8000-000000000002') || '|'
       || (SELECT count(*) FROM core_registry.virtual_meter_sources)::text;
   `);
-  expectEqual(topologyFixture, '2|1|1.000000000000|30.000000000000|2', 'Topology/Metering V2 fixture');
+  expectEqual(topologyFixture, '4|2|1.000000000000|30.000000000000|2', 'Topology/Metering V2 fixture');
 
   const invalidGridDirection = psql(`
     INSERT INTO core_registry.energy_edges (
@@ -646,7 +647,7 @@ try {
       || (SELECT count(*) FROM core_registry.virtual_meters)::text;
     ROLLBACK;
   `);
-  expectEqual(topologyRls, '2|1|1|2', 'Topology/Metering runtime RLS');
+  expectEqual(topologyRls, '2|2|2|2', 'Topology/Metering runtime RLS');
   report.assertions.energyTopologyMeteringV2 = {
     fixture: topologyFixture,
     crossVersionEdgeRejected: true,
@@ -733,6 +734,22 @@ try {
       || (SELECT timezone FROM core_registry.settlement_periods WHERE id = '${settlementPeriodId}');
   `);
   expectEqual(settlementFixture, 'ACTIVE|2|Asia/Shanghai', 'Settlement/Tariff V2 fixture');
+
+  // The Metric engine prices hourly energy at the Site's import Tariff, within its Site scope only.
+  const metricTariffScope = (siteId) => psql(`
+    BEGIN;
+    SET LOCAL ROLE metric_engine_runtime;
+    SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
+    SET LOCAL app.authorized_site_ids = '{${siteId}}';
+    SELECT
+      (SELECT count(*) FROM core_registry.settlement_boundaries WHERE id = '${settlementBoundaryId}')::text || '|'
+      || (SELECT count(*) FROM core_registry.tariff_assignments WHERE tariff_id = '${tariffId}')::text || '|'
+      || (SELECT count(*) FROM core_registry.tariff_versions WHERE tariff_id = '${tariffId}')::text || '|'
+      || (SELECT count(*) FROM core_registry.tariff_periods WHERE tariff_version_id = '${tariffVersion1}')::text;
+    ROLLBACK;
+  `);
+  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000001'), '1|1|2|2', 'Metric engine reads its Site import Tariff');
+  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000002'), '0|0|0|0', 'Metric engine cannot read another Site Tariff');
 
   const wrongTariffTimezone = psql(`
     INSERT INTO core_registry.tariff_versions (
@@ -1759,8 +1776,7 @@ try {
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000002';
     SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
     SELECT (SELECT count(*) FROM iam.tenant_memberships)::text || '|'
-      || (SELECT count(*) FROM iam.role_bindings)::text || '|'
-      || (SELECT count(*) FROM iam.site_bindings)::text || '|'
+      || (SELECT count(*) FROM iam.role_bindings WHERE site_id IS NOT NULL)::text || '|'
       || (SELECT count(*) FROM iam.explicit_denies)::text;
     ROLLBACK;
   `);
@@ -1772,7 +1788,7 @@ try {
     SELECT count(*) FROM iam.explicit_denies;
     ROLLBACK;
   `);
-  expectEqual(iamDelegated, '1|1|1|0', 'delegated IAM fixture');
+  expectEqual(iamDelegated, '1|1|0', 'delegated IAM fixture');
   expectEqual(iamDenied, '1', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
 
@@ -2027,12 +2043,12 @@ try {
   psql(`
     INSERT INTO core_registry.fdd_findings (
       id, tenant_id, site_id, asset_id, finding_type, evaluation_from, evaluation_to, evidence_ids,
-      model_deployment_revision_id, rule_revision_id, confidence, quality_blocker, alarm_id, work_order_id, created_at
+      observed_value, threshold_value, value_unit, model_deployment_revision_id, rule_revision_id, confidence, quality_blocker, alarm_id, work_order_id, created_at
     ) VALUES (
       '${fddFindingId}', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
       '018f1e00-3000-7000-8000-000000000001', 'CHILLED_WATER_LOW_DELTA_T',
       '2026-08-13T00:00:00Z', '2026-08-13T00:30:00Z', ARRAY['telemetry:chw_supply','telemetry:chw_return'],
-      NULL, 'low-delta-t/v1', 0.91, NULL, NULL, NULL, '2026-08-13T00:31:00Z'
+      3.1, 5, 'K', NULL, 'low-delta-t/v1', 0.91, NULL, NULL, NULL, '2026-08-13T00:31:00Z'
     );
   `);
 

@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { queryOptions, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { ZodError } from 'zod';
 import {
   PlatformApiError,
@@ -135,6 +135,16 @@ export function useRegistrySite(siteId: string | null, enabled = true) {
     queryKey: ['registry', 'site', siteId],
     queryFn: async ({ signal }) => (await client.getSite(registryId(siteId!), { signal })).data,
     enabled: registryQueryEnabled(enabled && Boolean(siteId)),
+    retry: retryRegistryQuery,
+  });
+}
+
+/** A Site's asset model as the Registry holds it, for reading several Sites at once. */
+export function registryAssetModelQuery(siteId: string, enabled = true) {
+  return queryOptions({
+    queryKey: ['registry', 'sites', siteId, 'asset-model'],
+    queryFn: async ({ signal }) => (await client.getSiteAssetModel(registryId(siteId), { signal })).data,
+    enabled: registryQueryEnabled(enabled),
     retry: retryRegistryQuery,
   });
 }

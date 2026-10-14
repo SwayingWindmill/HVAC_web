@@ -48,12 +48,14 @@ type IdentityConfig struct {
 	TokenEncryptionKey      []byte
 	SessionStore            sessionstore.Store
 	LoginStateStore         LoginStateStore
-	SessionTTL              time.Duration
-	IdleTTL                 time.Duration
-	StateTTL                time.Duration
-	DelegationTTL           time.Duration
-	RevocationObjective     time.Duration
-	ReadinessCheck          func(context.Context) error
+	// UserDirectory is the identity directory for 系统管理 → 用户与角色; nil leaves it unavailable.
+	UserDirectory       UserDirectory
+	SessionTTL          time.Duration
+	IdleTTL             time.Duration
+	StateTTL            time.Duration
+	DelegationTTL       time.Duration
+	RevocationObjective time.Duration
+	ReadinessCheck      func(context.Context) error
 }
 
 type identityController struct {

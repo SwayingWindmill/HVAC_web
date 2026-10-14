@@ -2,6 +2,8 @@
 
 商用 HVAC 智能节能平台，第一个场景是冷站。React SPA + Go 后端；第一阶段部署形态是单台 Linux 服务器 + Docker Compose。
 
+接手工作先读 `docs/HANDOFF.md`（当前状态、下一步、本地环境偏差）；用户可见的变化记入 `CHANGELOG.md`，两者随 PR 一起更新。
+
 `docs/` 里带日期或名为 `*-source-review*` 的文档是当时的调研记录，只作背景；当前约定看 `GLOSSARY.md`、`docs/adr/` 和 AGENTS.md 列出的权威文档，与代码冲突时以代码为准。AGENTS.md 是更详细的规则来源，本文件是它的精简版。
 
 ## 仓库结构
@@ -71,7 +73,7 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 - 站点范围的页面放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读取）；对象详情用页面内的侧栏打开，由 `?inspect=<id>` 指定，不另开详情路由。
 - 组件不直接 fetch，统一走 OpenAPI 生成的客户端加 feature 内的 query。URL 状态归 Router 管，服务端状态归 Query 管。
 - 面向运维人员的界面只显示业务事实，不显示 UUID、trace ID 或内部枚举。
-- UI 改动要在 1440px 宽度下用真实数据实际看过，不能拿构建通过代替。
+- 只面向桌面端，不做移动端与响应式适配；UI 改动要在 1440px 宽度下用真实数据实际看过，不能拿构建通过代替。
 
 ## Git
 

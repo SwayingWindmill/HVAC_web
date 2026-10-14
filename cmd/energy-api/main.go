@@ -23,6 +23,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -89,6 +90,8 @@ func main() {
 	intelligenceConfig := &gateway.IntelligenceConfig{
 		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "http://forecast-service:19092"),
 		FDDBaseURL:          envOr("FDD_SERVICE_URL", "http://fdd-service:19094"),
+		MVBaseURL:           envOr("MV_SERVICE_URL", "http://mv-service:19096"),
+		ReportBaseURL:       envOr("REPORT_SERVICE_URL", "http://report-service:19097"),
 		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
 		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
 		Timeout:             8 * time.Second,
@@ -350,6 +353,20 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		closeStore()
 		return nil, nil, func() {}, err
 	}
+	var userDirectory gateway.UserDirectory
+	if dsn := strings.TrimSpace(os.Getenv("IDENTITY_ADMIN_DATABASE_URL")); dsn != "" {
+		directory, err := identityadmin.Open(ctx, dsn)
+		if err != nil {
+			closeStore()
+			return nil, nil, func() {}, errors.New("identity directory for user administration is unavailable")
+		}
+		userDirectory = directory
+		closeSessions := closeStore
+		closeStore = func() {
+			directory.Close()
+			closeSessions()
+		}
+	}
 	return &gateway.IdentityConfig{
 		OIDCIssuer:              issuer,
 		OIDCBackchannelBaseURL:  strings.TrimSpace(os.Getenv("OIDC_BACKCHANNEL_BASE_URL")),
@@ -367,6 +384,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		TokenEncryptionKey:      key,
 		SessionStore:            store,
 		LoginStateStore:         loginStateStore,
+		UserDirectory:           userDirectory,
 		SessionTTL:              sessionTTL,
 		IdleTTL:                 idleTTL,
 		StateTTL:                stateTTL,

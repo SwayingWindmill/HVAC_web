@@ -53,11 +53,13 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	if query.SubjectType != "SITE" || query.SubjectID != query.SiteID || query.At.IsZero() || query.SupplyTemperatureKey == "" || query.ZoneTemperatureKey == "" {
 		return AuthoritativeState{}, errors.New("optimization state query is invalid")
 	}
-	dailyEnergy, err := reader.readMetric(ctx, query, "daily_energy")
+	// The cost prices one day's energy at that day's mix of tariff periods; a day with an hour
+	// missing has no cost, so the energy is read for the latest priced day.
+	dailyCost, err := reader.readMetric(ctx, query, "energy_cost", time.Time{})
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
-	dailyCost, err := reader.readMetric(ctx, query, "energy_cost")
+	dailyEnergy, err := reader.readMetric(ctx, query, "daily_energy", dailyCost.PeriodEnd)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
@@ -75,7 +77,12 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	}, nil
 }
 
-func (reader *ClickHouseInputReader) readMetric(ctx context.Context, query OptimizationStateQuery, metricCode string) (MetricEvidence, error) {
+// readMetric is the latest result of a Site Metric, or of the period ending at periodEnding when set.
+func (reader *ClickHouseInputReader) readMetric(ctx context.Context, query OptimizationStateQuery, metricCode string, periodEnding time.Time) (MetricEvidence, error) {
+	day := ""
+	if !periodEnding.IsZero() {
+		day = fmt.Sprintf("\n  AND fact.period_end = parseDateTime64BestEffort('%s',3,'UTC')", formatOptimizationTime(periodEnding))
+	}
 	sql := fmt.Sprintf(`SELECT
  toString(fact.result_id) AS result_id,
  toString(fact.metric_version_id) AS metric_version_id,
@@ -91,13 +98,13 @@ WHERE fact.tenant_id=toUUID('%s')
   AND fact.subject_type='SITE'
   AND fact.subject_id=toUUID('%s')
   AND fact.metric_code='%s'
-  AND fact.period_end <= parseDateTime64BestEffort('%s',3,'UTC')
+  AND fact.period_end <= parseDateTime64BestEffort('%s',3,'UTC')%s
   AND fact.calculated_at <= parseDateTime64BestEffort('%s',3,'UTC')
   AND fact.value_type='NUMBER'
   AND fact.value_number IS NOT NULL
 ORDER BY fact.period_end DESC,fact.revision DESC,fact.calculated_at DESC,toString(fact.result_id) ASC
 LIMIT 1
-FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectID, clickHouseString(metricCode), formatOptimizationTime(query.At), formatOptimizationTime(query.At))
+FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectID, clickHouseString(metricCode), formatOptimizationTime(query.At), day, formatOptimizationTime(query.At))
 	payload, err := reader.query(ctx, sql)
 	if err != nil {
 		return MetricEvidence{}, fmt.Errorf("query authoritative Optimization metric %s: %w", metricCode, err)

@@ -27,6 +27,7 @@ use (
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/schemagate
+	./libs/tariffmodel
 	./libs/telemetryauth
 	./libs/telemetryhistorymodel
 	./libs/testpki
@@ -37,6 +38,8 @@ use (
 	./modules/command
 	./services/forecast-service
 	./services/fdd-service
+	./services/mv-service
+	./services/report-service
 	./modules/iam
 	./services/identity-service
 	./services/optimization-service

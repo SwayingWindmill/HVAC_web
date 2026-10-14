@@ -46,6 +46,8 @@ for (const marker of [
   'topology_version_id UUID',
   'energy_type_id UUID',
   'meter_role LowCardinality(String)',
+  'accounting_scope LowCardinality(String)',
+  'load_device_id Nullable(UUID)',
   'transition_type LowCardinality(String)',
   'point_id UUID',
   'sensor_id Nullable(UUID)',

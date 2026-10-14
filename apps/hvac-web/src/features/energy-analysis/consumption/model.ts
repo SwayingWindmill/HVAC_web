@@ -7,7 +7,7 @@ export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
 
-function wallTime(instant: Date, timeZone: string): WallTime {
+export function wallTime(instant: Date, timeZone: string): WallTime {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
   }).formatToParts(instant).map((part) => [part.type, Number(part.value)]));
@@ -15,7 +15,7 @@ function wallTime(instant: Date, timeZone: string): WallTime {
 }
 
 /** The instant at which the Site's wall clock shows the given local midnight. */
-function siteMidnight(year: number, month: number, day: number, timeZone: string): Date {
+export function siteMidnight(year: number, month: number, day: number, timeZone: string): Date {
   const guess = Date.UTC(year, month - 1, day);
   const shown = wallTime(new Date(guess), timeZone);
   const offset = Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute) - guess;
@@ -152,6 +152,14 @@ function bucketAt(from: Date, granularity: Granularity, ordinal: number, timeZon
   if (granularity === 'month') return siteMidnight(start.year, start.month + ordinal, 1, timeZone);
   if (granularity === 'day') return siteMidnight(start.year, start.month, start.day + ordinal, timeZone);
   return new Date(siteMidnight(start.year, start.month, start.day, timeZone).getTime() + ordinal * HOUR_MS);
+}
+
+/**
+ * The label of the current period's bucket that an instant of a period starting at `start` lines
+ * up with: hours of a day, days of a window or months of a year, matched by their place.
+ */
+export function alignedLabel(periodStart: string, start: Date, from: Date, granularity: Granularity, timeZone: string): string {
+  return bucketLabel(bucketAt(from, granularity, bucketOrdinal(periodStart, start, granularity, timeZone), timeZone).toISOString(), granularity, timeZone);
 }
 
 export interface BucketComparison {

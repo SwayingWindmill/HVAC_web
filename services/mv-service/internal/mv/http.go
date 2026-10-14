@@ -1,0 +1,286 @@
+package mv
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+)
+
+const maxMVRequestBytes = int64(64 << 10)
+
+// The Gateway reaches mv-service on the private network after deciding the caller may read the
+// Site (site.read) or manage its measures (savings.manage); it names the Tenant and the actor.
+const (
+	headerTenant = "X-Tenant-ID"
+	headerActor  = "X-Actor-ID"
+)
+
+type HTTPHandler struct{ service *Service }
+
+func NewHTTPHandler(service *Service) (http.Handler, error) {
+	if service == nil {
+		return nil, errors.New("savings service is required")
+	}
+	handler := &HTTPHandler{service: service}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures", handler.list)
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures", handler.register)
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures/{measureId}", handler.detail)
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/implement", handler.implement)
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/refit", handler.refit)
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/end", handler.end)
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/summary", handler.summary)
+	return mux, nil
+}
+
+type baselineView struct {
+	From          time.Time `json:"from"`
+	To            time.Time `json:"to"`
+	Samples       int       `json:"samples"`
+	ExpectedHours int       `json:"expectedHours"`
+	// Model is absent when the period held too little data to fit a line.
+	Model   *modelView `json:"model"`
+	Trusted bool       `json:"trusted"`
+	Reason  string     `json:"reason,omitempty"`
+}
+
+type modelView struct {
+	InterceptKWh float64 `json:"interceptKWh"`
+	Slope        float64 `json:"slope"`
+	CVRMSE       float64 `json:"cvRmse"`
+	NMBE         float64 `json:"nmbe"`
+}
+
+type dayView struct {
+	Day                 string  `json:"day"`
+	ExpectedHours       int     `json:"expectedHours"`
+	Hours               int     `json:"hours"`
+	UnpricedHours       int     `json:"unpricedHours"`
+	AdjustedBaselineKWh float64 `json:"adjustedBaselineKWh"`
+	ActualKWh           float64 `json:"actualKWh"`
+	AvoidedKWh          float64 `json:"avoidedKWh"`
+	AvoidedCost         float64 `json:"avoidedCost"`
+	PlantKWh            float64 `json:"plantKWh"`
+}
+
+type totalsView struct {
+	Days                int     `json:"days"`
+	UnpricedHours       int     `json:"unpricedHours"`
+	AdjustedBaselineKWh float64 `json:"adjustedBaselineKWh"`
+	ActualKWh           float64 `json:"actualKWh"`
+	AvoidedKWh          float64 `json:"avoidedKWh"`
+	AvoidedCost         float64 `json:"avoidedCost"`
+	PlantKWh            float64 `json:"plantKWh"`
+}
+
+type measureView struct {
+	ID                string        `json:"id"`
+	SiteID            string        `json:"siteId"`
+	Name              string        `json:"name"`
+	Kind              Kind          `json:"kind"`
+	Description       string        `json:"description"`
+	Evidence          string        `json:"evidence"`
+	EvidenceCommandID *string       `json:"evidenceCommandId"`
+	BoundaryDeviceID  *string       `json:"boundaryDeviceId"`
+	Status            Status        `json:"status"`
+	PlannedAt         time.Time     `json:"plannedAt"`
+	ImplementedAt     *time.Time    `json:"implementedAt"`
+	EndedAt           *time.Time    `json:"endedAt"`
+	InvestmentCNY     *float64      `json:"investmentCny"`
+	ExpectedAnnualKWh *float64      `json:"expectedAnnualKWh"`
+	Baseline          *baselineView `json:"baseline"`
+	Totals            totalsView    `json:"totals"`
+	Days              []dayView     `json:"days,omitempty"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	UpdatedAt         time.Time     `json:"updatedAt"`
+}
+
+func viewOfTotals(totals Totals) totalsView {
+	return totalsView{Days: totals.Days, UnpricedHours: totals.UnpricedHours, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost, PlantKWh: totals.PlantKWh}
+}
+
+func viewOf(verified VerifiedMeasure, withDays bool) measureView {
+	measure, results := verified.Measure, verified.Days
+	view := measureView{
+		ID: measure.ID, SiteID: measure.SiteID, Name: measure.Name, Kind: measure.Kind, Description: measure.Description, Evidence: measure.Evidence, EvidenceCommandID: measure.EvidenceCommandID,
+		BoundaryDeviceID: measure.BoundaryDeviceID, Status: measure.Status, PlannedAt: measure.PlannedAt, ImplementedAt: measure.ImplementedAt, EndedAt: measure.EndedAt,
+		InvestmentCNY: measure.InvestmentCNY, ExpectedAnnualKWh: measure.ExpectedAnnualKWh, Totals: viewOfTotals(verified.Totals()),
+		CreatedAt: measure.CreatedAt, UpdatedAt: measure.UpdatedAt,
+	}
+	if baseline := measure.Baseline; baseline != nil {
+		view.Baseline = &baselineView{
+			From: baseline.From, To: baseline.To, Samples: baseline.Samples, ExpectedHours: baseline.ExpectedHours,
+			Trusted: baseline.Trusted, Reason: baseline.Reason,
+		}
+		if baseline.Fitted() {
+			view.Baseline.Model = &modelView{InterceptKWh: baseline.Intercept, Slope: baseline.Slope, CVRMSE: baseline.CVRMSE, NMBE: baseline.NMBE}
+		}
+	}
+	if withDays {
+		view.Days = make([]dayView, 0, len(results))
+		for _, result := range results {
+			view.Days = append(view.Days, dayView{
+				Day: result.Day, ExpectedHours: result.ExpectedHours, Hours: result.Hours, UnpricedHours: result.UnpricedHours,
+				AdjustedBaselineKWh: result.AdjustedBaselineKWh, ActualKWh: result.ActualKWh, AvoidedKWh: result.AvoidedKWh, AvoidedCost: result.AvoidedCost, PlantKWh: result.PlantKWh,
+			})
+		}
+	}
+	return view
+}
+
+func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Request) {
+	ledger, err := handler.service.Ledger(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"))
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	items := make([]measureView, 0, len(ledger))
+	for _, verified := range ledger {
+		items = append(items, viewOf(verified, false))
+	}
+	writeMVJSON(writer, http.StatusOK, map[string]any{"items": items})
+}
+
+func (handler *HTTPHandler) detail(writer http.ResponseWriter, request *http.Request) {
+	verified, err := handler.service.Verified(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"))
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	writeMVJSON(writer, http.StatusOK, viewOf(verified, true))
+}
+
+func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Name              string    `json:"name"`
+		Kind              Kind      `json:"kind"`
+		Description       string    `json:"description"`
+		PlannedAt         time.Time `json:"plannedAt"`
+		InvestmentCNY     *float64  `json:"investmentCny"`
+		ExpectedAnnualKWh *float64  `json:"expectedAnnualKWh"`
+		Evidence          string    `json:"evidence"`
+		EvidenceCommandID *string   `json:"evidenceCommandId"`
+		BoundaryDeviceID  *string   `json:"boundaryDeviceId"`
+	}
+	if err := decodeMVJSON(request.Body, &input); err != nil {
+		writeMVError(writer, ErrInvalidMeasure)
+		return
+	}
+	measure, err := handler.service.Register(request.Context(), MeasureInput{
+		TenantID: request.Header.Get(headerTenant), SiteID: request.PathValue("siteId"), Name: input.Name, Kind: input.Kind,
+		Description: input.Description, PlannedAt: input.PlannedAt, InvestmentCNY: input.InvestmentCNY,
+		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: request.Header.Get(headerActor),
+	})
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	writeMVJSON(writer, http.StatusCreated, viewOf(VerifiedMeasure{Measure: measure}, true))
+}
+
+// transition runs a lifecycle step that takes one body and answers the measure afterwards.
+func (handler *HTTPHandler) transition(writer http.ResponseWriter, request *http.Request, body any, step func() (Measure, error)) {
+	if err := decodeMVJSON(request.Body, body); err != nil {
+		writeMVError(writer, ErrInvalidMeasure)
+		return
+	}
+	measure, err := step()
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	verified, err := handler.service.Verified(request.Context(), measure.TenantID, measure.SiteID, measure.ID)
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	writeMVJSON(writer, http.StatusOK, viewOf(verified, true))
+}
+
+func (handler *HTTPHandler) implement(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		ImplementedAt time.Time `json:"implementedAt"`
+	}
+	handler.transition(writer, request, &input, func() (Measure, error) {
+		return handler.service.Implement(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.ImplementedAt, request.Header.Get(headerActor))
+	})
+}
+
+func (handler *HTTPHandler) refit(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		From time.Time `json:"from"`
+		To   time.Time `json:"to"`
+	}
+	handler.transition(writer, request, &input, func() (Measure, error) {
+		return handler.service.Refit(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.From, input.To, request.Header.Get(headerActor))
+	})
+}
+
+func (handler *HTTPHandler) end(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		EndedAt time.Time `json:"endedAt"`
+	}
+	handler.transition(writer, request, &input, func() (Measure, error) {
+		return handler.service.End(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.EndedAt, request.Header.Get(headerActor))
+	})
+}
+
+// summary totals the Site's verified days in [from, to], given as Site-local dates.
+func (handler *HTTPHandler) summary(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	totals, err := handler.service.Savings(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), query.Get("from"), query.Get("to"))
+	if err != nil {
+		writeMVError(writer, err)
+		return
+	}
+	writeMVJSON(writer, http.StatusOK, map[string]any{"from": query.Get("from"), "to": query.Get("to"), "totals": viewOfTotals(totals)})
+}
+
+func decodeMVJSON(body io.Reader, target any) error {
+	raw, err := io.ReadAll(io.LimitReader(body, maxMVRequestBytes+1))
+	if err != nil || len(raw) == 0 || int64(len(raw)) > maxMVRequestBytes {
+		return errors.New("request body is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("request contains trailing JSON")
+	}
+	return nil
+}
+
+func writeMVJSON(writer http.ResponseWriter, status int, body any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(body)
+}
+
+func writeMVError(writer http.ResponseWriter, err error) {
+	status, code := http.StatusBadGateway, "savings_unavailable"
+	switch {
+	case errors.Is(err, ErrMeasureNotFound):
+		status, code = http.StatusNotFound, "savings_measure_not_found"
+	case errors.Is(err, ErrInvalidMeasure):
+		status, code = http.StatusBadRequest, "savings_request_invalid"
+	case errors.Is(err, ErrWrongStatus):
+		status, code = http.StatusConflict, "savings_measure_state_conflict"
+	case errors.Is(err, ErrReportingOverlap):
+		status, code = http.StatusConflict, "savings_reporting_overlap"
+	case errors.Is(err, ErrBaselineLocked):
+		status, code = http.StatusConflict, "savings_baseline_locked"
+	case errors.Is(err, ErrBoundaryUnmetered):
+		status, code = http.StatusConflict, "savings_boundary_unmetered"
+	}
+	writeMVJSON(writer, status, map[string]any{"code": code, "status": status})
+}

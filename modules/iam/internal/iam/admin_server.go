@@ -29,7 +29,7 @@ func (h *handler) handleAdminRoute(writer http.ResponseWriter, request *http.Req
 		return http.StatusServiceUnavailable
 	}
 	required := identitycontext.CapabilityIAMAdmin
-	if request.URL.Path != AdminMutationPath {
+	if request.URL.Path != AdminMutationPath && request.URL.Path != AdminMembersPath {
 		required = identitycontext.CapabilityAPICredentialManage
 	}
 	authorization, err := h.principalCapabilityResolver.ResolvePrincipalCapabilities(request.Context(), PrincipalCapabilityLookup{
@@ -55,6 +55,13 @@ func (h *handler) handleAdminRoute(writer http.ResponseWriter, request *http.Req
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
 	switch request.URL.Path {
+	case AdminMembersPath:
+		directory, err := h.adminStore.ListMembers(request.Context(), actor)
+		if err != nil {
+			return writeAdminError(writer, err)
+		}
+		writeJSON(writer, http.StatusOK, directory)
+		return http.StatusOK
 	case AdminMutationPath:
 		var input AdminMutationRequest
 		if err := decodeAdminJSON(request, &input); err != nil {
@@ -126,6 +133,9 @@ func writeAdminError(writer http.ResponseWriter, err error) int {
 	switch {
 	case errors.Is(err, ErrAdminRevisionConflict):
 		writeProblem(writer, http.StatusConflict, "IAM_ADMIN_REVISION_CONFLICT", "The IAM resource revision is stale.")
+		return http.StatusConflict
+	case errors.Is(err, ErrAdminSelfLockout):
+		writeProblem(writer, http.StatusConflict, "IAM_ADMIN_SELF_LOCKOUT", "The change would remove your own user administration.")
 		return http.StatusConflict
 	case errors.Is(err, ErrAdminResourceNotFound):
 		writeProblem(writer, http.StatusNotFound, "IAM_ADMIN_RESOURCE_NOT_FOUND", "The IAM resource was not found.")

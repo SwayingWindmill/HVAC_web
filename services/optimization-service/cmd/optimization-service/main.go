@@ -65,7 +65,7 @@ func main() {
 	leaseDuration := durationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
 	leaseRenew := durationEnv("OPTIMIZATION_LEASE_RENEW", 30*time.Second)
 	claimBatch := integerEnv("OPTIMIZATION_CLAIM_BATCH", 8)
-	go runOptimizationWorker(ctx, queue, publication, service, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
+	go runOptimizationWorker(ctx, queue, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -109,8 +109,8 @@ func requiredEnv(name string) string {
 	return value
 }
 
-func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
-	claimAndRunOptimizationJobs(ctx, queue, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+	claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
 	ticker := time.NewTicker(claimInterval)
 	defer ticker.Stop()
 	for {
@@ -118,12 +118,12 @@ func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			claimAndRunOptimizationJobs(ctx, queue, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+			claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
 		}
 	}
 }
 
-func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	jobs, err := queue.Claim(claimCtx, workerID, claimBatch, leaseDuration, time.Now().UTC())
 	cancel()
@@ -132,7 +132,47 @@ func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue,
 		return
 	}
 	for _, job := range jobs {
+		if optimization.IsScheduledPreparation(job) {
+			prepareScheduledOptimization(ctx, queue, preparer, job, leaseDuration)
+			continue
+		}
 		executeOptimizationJob(ctx, queue, store, service, job, leaseDuration, leaseRenew)
+	}
+}
+
+// prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current
+// state; the run's own job then executes like an operator's. A firing that cannot prepare fails
+// without retry: the next hour's firing reads the Site again.
+func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue, preparer *optimization.Preparer, job schedulerjob.Job, leaseDuration time.Duration) {
+	started, err := queue.Start(ctx, job, leaseDuration, time.Now().UTC())
+	if err != nil {
+		log.Printf("optimization schedule firing %s start failed: %v", job.JobID, err)
+		return
+	}
+	if !started {
+		return
+	}
+	request, err := optimization.ScheduledPreparationRequest(job)
+	if err != nil {
+		_ = queue.Fail(context.Background(), job, "OPTIMIZATION_JOB_INVALID", err, false, time.Now().UTC())
+		return
+	}
+	jobCtx, cancel := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
+	prepared, err := preparer.Prepare(jobCtx, request)
+	cancel()
+	if err != nil {
+		code := "OPTIMIZATION_PREPARATION_FAILED"
+		if errors.Is(err, optimization.ErrPreparationUnavailable) {
+			code = "OPTIMIZATION_INPUT_UNAVAILABLE"
+		}
+		if failErr := queue.Fail(context.Background(), job, code, err, false, time.Now().UTC()); failErr != nil {
+			log.Printf("optimization schedule firing %s failure finalization failed: %v", job.JobID, failErr)
+		}
+		return
+	}
+	output := map[string]any{"optimizationRunId": prepared.OptimizationRunID, "inputSnapshotId": prepared.InputSnapshotID}
+	if err = queue.Complete(context.Background(), job, output, time.Now().UTC()); err != nil {
+		log.Printf("optimization schedule firing %s success finalization failed: %v", job.JobID, err)
 	}
 }
 

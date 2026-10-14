@@ -1,33 +1,34 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
-import { Lightbulb, Send, ShieldCheck, Sparkles, TriangleAlert, Undo2 } from 'lucide-react';
+import { getRouteApi, Link } from '@tanstack/react-router';
+import { ArrowRight, ChevronRight, Lightbulb, Send, ShieldCheck, Sparkles, TriangleAlert, Undo2 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
 import { PageHeader } from '@/blocks/page-header';
+import { Panel, PanelHeader } from '@/blocks/panel';
+import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
+import { siteCommandsQuery, type Command } from '@/features/control/command-api';
+import { APPROVAL_LABEL, STATUS_PRESENTATION } from '@/features/control/command-presentation';
+import { CommandMark } from '@/features/control/components/CommandMark';
 import { ConfirmCommand, useSubmitCommand, type PendingCommand } from '@/features/control/components/CommandConfirmation';
 import { controlTargets, type ControlSetting, type ControlTarget } from '@/features/control/control-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { changesSupply, recommendedSetpoint, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
+import { changesSupply, recommendedSetpoint, TRIGGER_LABEL, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
 import { latestRecommendationQuery, OptimizationRequestError, requestRecommendation } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
 
 const RISK: Record<RecommendationRisk, { label: string; className: string }> = {
-  LOW: { label: '低风险', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' },
-  MEDIUM: { label: '中风险', className: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300' },
-  HIGH: { label: '高风险', className: 'border-destructive/30 bg-destructive/10 text-destructive' },
+  LOW: { label: '低风险', className: 'bg-success-soft text-success-text' },
+  MEDIUM: { label: '中风险', className: 'bg-warning-soft text-warning-text' },
+  HIGH: { label: '高风险', className: 'bg-destructive-soft text-destructive-text' },
 };
 
 // A requested run publishes within seconds; past this the page stops waiting and says so.
@@ -52,41 +53,39 @@ function RangeTrack({ label, axis, band, bandLabel, markers }: {
   const at = (value: number) => `${((Math.min(axis[1], Math.max(axis[0], value)) - axis[0]) / (axis[1] - axis[0])) * 100}%`;
   const summary = `${label}：${bandLabel} ${celsius(band[0])}–${celsius(band[1])}，${markers.map((marker) => `${marker.label} ${celsius(marker.value)}`).join('，')}`;
   return (
-    <figure className="flex flex-col gap-2" aria-label={summary}>
-      <figcaption className="flex items-baseline justify-between gap-3 text-sm">
-        <span className="font-medium">{label}</span>
-        <span className="text-xs text-muted-foreground">{bandLabel} {formatDecimal(band[0], 1)}–{celsius(band[1])}</span>
-      </figcaption>
+    <figure className="relative h-[60px] min-w-0 flex-1" aria-label={summary}>
+      <div className="absolute top-[22px] h-2 w-full rounded-full bg-muted" aria-hidden="true" />
+      <div className="absolute top-[22px] h-2 rounded-full bg-primary/20" style={{ left: at(band[0]), width: `calc(${at(band[1])} - ${at(band[0])})` }} aria-hidden="true" />
       {/* The proposal is labelled above the track and the present value below, so close values never collide. */}
-      <div className="relative h-16" aria-hidden="true">
-        <div className="absolute inset-x-0 top-6 h-2 rounded-full bg-muted" />
-        <div className="absolute top-6 h-2 rounded-full bg-primary/25" style={{ left: at(band[0]), width: `calc(${at(band[1])} - ${at(band[0])})` }} />
-        {markers.map((marker) => (
-          <div
-            key={marker.label}
-            className={cn('absolute flex -translate-x-1/2 items-center', marker.emphasis ? 'top-0 flex-col' : 'top-[18px] flex-col-reverse')}
-            style={{ left: at(marker.value) }}
-          >
-            <span className={cn('whitespace-nowrap text-[11px] leading-4', marker.emphasis ? 'font-semibold text-primary' : 'text-muted-foreground')}>
-              {marker.label} {formatDecimal(marker.value, 1)}
-            </span>
-            <span className={cn('size-3.5 rounded-full border-2 border-background shadow-sm', marker.emphasis ? 'mt-0.5 bg-primary' : 'mb-0.5 bg-muted-foreground')} />
-          </div>
-        ))}
-        <div className="absolute inset-x-0 top-12 flex justify-between text-[11px] tabular-nums text-muted-foreground/70">
-          <span>{axis[0]}</span>
-          <span>{axis[1]} °C</span>
+      {markers.map((marker) => (
+        <div
+          key={marker.label}
+          className={cn('absolute flex -translate-x-1/2 items-center', marker.emphasis ? 'top-0 flex-col' : 'top-[18px] flex-col-reverse')}
+          style={{ left: at(marker.value) }}
+          aria-hidden="true"
+        >
+          <span className={cn('text-[11px] leading-4 whitespace-nowrap', marker.emphasis ? 'font-semibold text-primary' : 'text-muted-foreground')}>
+            {marker.label} {formatDecimal(marker.value, 1)}
+          </span>
+          <span className={cn('size-3.5 rounded-full border-2 border-card shadow-sm', marker.emphasis ? 'mt-0.5 bg-primary' : 'mb-0.5 bg-muted-foreground')} />
         </div>
+      ))}
+      <div className="absolute inset-x-0 top-[44px] flex justify-between text-[11px] text-subtle-foreground tabular-nums" aria-hidden="true">
+        <span>{axis[0]}</span>
+        <span>{axis[1]} °C</span>
       </div>
     </figure>
   );
 }
 
-function Fact({ label, children }: { readonly label: string; readonly children: ReactNode }) {
+function ConstraintRow({ title, detail, children }: { readonly title: string; readonly detail: ReactNode; readonly children: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b py-2.5 text-sm last:border-b-0">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-medium tabular-nums">{children}</dd>
+    <div className="flex items-center gap-8 border-b border-divider px-5 py-4 last:border-b-0">
+      <span className="flex w-72 shrink-0 flex-col gap-0.5">
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="text-xs text-muted-foreground">{detail}</span>
+      </span>
+      {children}
     </div>
   );
 }
@@ -99,61 +98,15 @@ function supplySetpoint(targets: readonly ControlTarget[]): { target: ControlTar
   return null;
 }
 
-function RecommendationHero({ recommendation, timeZone, setpoint, dispatchable, onDispatch }: {
-  readonly recommendation: OptimizationRecommendation;
-  readonly timeZone: string;
-  readonly setpoint: number | null;
-  readonly dispatchable: boolean;
-  readonly onDispatch: () => void;
-}) {
-  const { baseline, candidate, comfortRange } = recommendation;
-  const change = changesSupply(recommendation);
-  const risk = RISK[recommendation.risk];
+function Effect({ label, value, unit, info, children }: { readonly label: string; readonly value: string; readonly unit?: string; readonly info?: string; readonly children: ReactNode }) {
   return (
-    <Card role="region" aria-label="当前建议" className="overflow-hidden">
-      <CardHeader>
-        <CardDescription className="flex items-center gap-2">
-          <Lightbulb className="size-4 text-primary" />
-          冷冻水供水温度建议 · 生成于 {formatTime(recommendation.createdAt, timeZone)}
-        </CardDescription>
-        <CardTitle className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-3xl font-semibold tabular-nums">
-          {change ? (
-            <>
-              <span className="text-muted-foreground">{formatDecimal(baseline.supplyTempC, 1)}</span>
-              <span aria-label="调整为" className="text-muted-foreground">→</span>
-              <span className="text-primary">{formatDecimal(candidate.supplyTempC, 1)}</span>
-              <span className="text-base font-normal text-muted-foreground">°C</span>
-            </>
-          ) : (
-            <>
-              保持 {formatDecimal(baseline.supplyTempC, 1)}
-              <span className="text-base font-normal text-muted-foreground">°C</span>
-            </>
-          )}
-        </CardTitle>
-        <CardAction>
-          <Badge variant="outline" className={risk.className}>{risk.label}</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        {change
-          ? `供水温度${candidate.supplyTempC > baseline.supplyTempC ? '升高' : '降低'}后，预计室内温度 ${celsius(candidate.projectedZoneTempC)}，仍在 ${formatDecimal(comfortRange.minC, 0)}–${formatDecimal(comfortRange.maxC, 0)} °C 舒适范围内，距边界还有 ${celsius(recommendation.comfortMarginC)}。`
-          : '在安全与舒适约束内，当前供水温度已是最省电的选择。'}
-      </CardContent>
-      {change ? (
-        <CardFooter className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30">
-          <p className="text-xs text-muted-foreground">
-            {dispatchable && setpoint !== null
-              ? `按冷机设定步长下发为 ${celsius(setpoint)}；建议不会自动执行，确认后作为控制指令提交。`
-              : '这台冷机没有登记供水温度设定点，无法从这里下发。'}
-          </p>
-          <Button size="sm" disabled={!dispatchable || setpoint === null} onClick={onDispatch}>
-            <Send data-icon="inline-start" />
-            按建议下发
-          </Button>
-        </CardFooter>
-      ) : null}
-    </Card>
+    <div className="flex flex-col gap-1">
+      <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">{label}{info ? <InfoTip>{info}</InfoTip> : null}</span>
+      <span className="text-2xl leading-[29px] font-semibold tracking-[-0.03em] tabular-nums">
+        {value}{unit ? <span className="ml-1 text-xs font-medium tracking-normal text-subtle-foreground">{unit}</span> : null}
+      </span>
+      <span className="text-xs text-muted-foreground">{children}</span>
+    </div>
   );
 }
 
@@ -164,6 +117,7 @@ export function OptimizationWorkspace() {
   const [notice, setNotice] = useState<{ readonly title: string; readonly detail: string } | null>(null);
   const [pending, setPending] = useState<PendingCommand | null>(null);
   const latest = useQuery(latestRecommendationQuery(site.id, waiting?.runId ?? null));
+  const commands = useQuery(siteCommandsQuery(site.id));
   const { plant, registry } = useRealtimePlant();
   const submit = useSubmitCommand(site.id, principal.session.csrfToken);
   const recommendation = latest.data ?? null;
@@ -200,6 +154,10 @@ export function OptimizationWorkspace() {
   const supplyReading = supply?.setting.feedbackSourceKey
     ? plant.devices.find((device) => device.deviceId === supply.target.deviceId)?.reading(supply.setting.feedbackSourceKey) ?? null
     : null;
+  // The supply setpoint command sent since this recommendation was made, newest first.
+  const sent = recommendation && supply
+    ? commands.data?.find((command) => command.pointId === supply.setting.pointId && Date.parse(command.createdAt) >= Date.parse(recommendation.createdAt))
+    : undefined;
   const dispatch = () => {
     if (!supply || setpoint === null) return;
     setPending({
@@ -210,21 +168,19 @@ export function OptimizationWorkspace() {
   };
 
   const busy = request.isPending || waiting !== null;
-  const share = recommendation && recommendation.baseline.dailyEnergyKWh > 0
-    ? recommendation.saving.energyKWhPerDay / recommendation.baseline.dailyEnergyKWh
-    : null;
+  const generateButton = (variant: 'default' | 'outline') => (
+    <Button variant={variant} size="sm" disabled={busy} onClick={() => request.mutate()}>
+      {busy ? <Spinner data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
+      {busy ? '正在计算' : recommendation ? '重新生成' : '生成建议'}
+    </Button>
+  );
 
   return (
-    <Main className="@container/main flex flex-col gap-4 md:gap-6">
+    <Main>
       <PageHeader
         title="优化建议"
-        description={`${site.displayName} · 在安全与舒适约束内，寻找更省电的冷冻水供水温度`}
-        actions={
-          <Button size="sm" disabled={busy} onClick={() => request.mutate()}>
-            {busy ? <Spinner data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
-            {busy ? '正在计算' : '生成建议'}
-          </Button>
-        }
+        description={site.displayName}
+        actions={generateButton(recommendation ? 'outline' : 'default')}
       />
 
       {notice ? (
@@ -238,115 +194,33 @@ export function OptimizationWorkspace() {
       {latest.isPending ? (
         <Skeleton className="h-64 rounded-xl" />
       ) : latest.isError ? (
-        <p className="rounded-xl border py-16 text-center text-sm text-muted-foreground">优化建议暂不可用</p>
-      ) : !recommendation ? (
-        <Empty className="rounded-xl border">
-          <EmptyHeader>
-            <EmptyMedia variant="icon"><Lightbulb /></EmptyMedia>
-            <EmptyTitle>还没有优化建议</EmptyTitle>
-            <EmptyDescription>
-              建议依据昨日冷站用电与电费、最新负荷预测和实时供水、室内温度计算；昨日用电每天零点后结算。
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button size="sm" disabled={busy} onClick={() => request.mutate()}>
-              {busy ? <Spinner data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
-              生成建议
-            </Button>
-          </EmptyContent>
-        </Empty>
-      ) : (
-        <>
-          <RecommendationHero
-            recommendation={recommendation}
-            timeZone={site.timezone}
-            setpoint={setpoint}
-            dispatchable={supply !== null}
-            onDispatch={dispatch}
-          />
-
-          <MetricGrid ariaLabel="预计效果">
-            <MetricCard
-              label="预计日节电"
-              value={<MetricValue value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh" />}
-              lead={share !== null ? `约占昨日冷站用电 ${formatDecimal(share * 100, 1)}%` : '昨日冷站用电为零'}
-              detail={`90% 把握在 ±${formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内`}
-            />
-            <MetricCard
-              label="预计日节省"
-              value={<MetricValue value={formatDecimal(recommendation.saving.costPerDay, 0)} unit="元" />}
-              lead={`按昨日电费 ${formatDecimal(recommendation.baseline.dailyCost, 0)} 元折算`}
-              detail="单一制电价，未计峰谷时段"
-            />
-            <MetricCard
-              label="预计室内温度"
-              value={<MetricValue value={formatDecimal(recommendation.candidate.projectedZoneTempC, 1)} unit="°C" />}
-              lead={`当前 ${celsius(recommendation.baseline.zoneTempC)}`}
-              detail={`90% 把握在 ±${formatDecimal(recommendation.uncertainty.zoneTempP90C, 1)} °C 内`}
-            />
-            <MetricCard
-              label="舒适余量"
-              value={<MetricValue value={formatDecimal(recommendation.comfortMarginC, 1)} unit="°C" />}
-              lead={`距舒适范围 ${formatDecimal(recommendation.comfortRange.minC, 0)}–${formatDecimal(recommendation.comfortRange.maxC, 0)} °C 边界`}
-              detail="已扣除室内温度的不确定性"
-            />
-          </MetricGrid>
-
-          <div className="grid items-start gap-4 md:gap-6 @4xl/main:grid-cols-2">
-            <Card role="region" aria-label="约束">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4 text-primary" />安全与舒适约束</CardTitle>
-                <CardDescription>建议只在两条范围之内取值，每次调整不超过 {celsius(recommendation.supplyRange.maxStepC)}</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                <RangeTrack
-                  label="冷冻水供水温度"
-                  axis={[Math.floor(recommendation.supplyRange.minC) - 1, Math.ceil(recommendation.supplyRange.maxC) + 1]}
-                  band={[recommendation.supplyRange.minC, recommendation.supplyRange.maxC]}
-                  bandLabel="安全范围"
-                  markers={changesSupply(recommendation)
-                    ? [{ value: recommendation.baseline.supplyTempC, label: '当前' }, { value: recommendation.candidate.supplyTempC, label: '建议', emphasis: true }]
-                    : [{ value: recommendation.baseline.supplyTempC, label: '当前', emphasis: true }]}
-                />
-                <RangeTrack
-                  label="室内温度"
-                  axis={[Math.floor(recommendation.comfortRange.minC) - 2, Math.ceil(recommendation.comfortRange.maxC) + 2]}
-                  band={[recommendation.comfortRange.minC, recommendation.comfortRange.maxC]}
-                  bandLabel="舒适范围"
-                  markers={changesSupply(recommendation)
-                    ? [{ value: recommendation.baseline.zoneTempC, label: '当前' }, { value: recommendation.candidate.projectedZoneTempC, label: '预计', emphasis: true }]
-                    : [{ value: recommendation.baseline.zoneTempC, label: '当前', emphasis: true }]}
-                />
-              </CardContent>
-            </Card>
-
-            <div className="flex flex-col gap-4 md:gap-6">
-              <Card role="region" aria-label="计算依据">
-                <CardHeader>
-                  <CardTitle>计算依据</CardTitle>
-                  <CardDescription>生成建议时冻结的输入</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <dl>
-                    <Fact label="昨日冷站用电">{formatDecimal(recommendation.baseline.dailyEnergyKWh, 0)} kWh</Fact>
-                    <Fact label="昨日电费">{formatDecimal(recommendation.baseline.dailyCost, 0)} 元</Fact>
-                    <Fact label="供水温度">{celsius(recommendation.baseline.supplyTempC)}</Fact>
-                    <Fact label="室内温度">{celsius(recommendation.baseline.zoneTempC)}</Fact>
-                  </dl>
-                </CardContent>
-              </Card>
-              <Card role="region" aria-label="验证与回退">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Undo2 className="size-4 text-primary" />验证与回退</CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
-                  <p>下发后观察 {recommendation.verificationMinutes} 分钟：室内温度保持在舒适范围内，冷站负荷不高于调整前。</p>
-                  <p>任一条件不满足，将供水温度恢复为 <span className="font-medium text-foreground">{celsius(recommendation.baseline.supplyTempC)}</span>。</p>
-                </CardContent>
-              </Card>
-            </div>
+        <Panel aria-label="当前建议">
+          <div className="flex flex-col items-start gap-2 px-5 py-8">
+            <p className="text-sm font-semibold">优化建议暂时读不到</p>
+            <Button variant="outline" size="sm" onClick={() => void latest.refetch()}>重试</Button>
           </div>
-        </>
+        </Panel>
+      ) : !recommendation ? (
+        <Panel aria-label="当前建议">
+          <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
+            <span className="flex size-9 items-center justify-center rounded-xl bg-primary-soft text-primary"><Lightbulb className="size-[18px]" aria-hidden="true" /></span>
+            <p className="text-sm font-semibold">还没有优化建议</p>
+            <p className="max-w-lg text-xs text-muted-foreground">
+              建议依据最近一天的冷站用电与电费、最新负荷预测和实时供水、室内温度计算；用电与电费每天零点后结算，某天缺数据时不出电费，改用更早一天。
+            </p>
+            <div className="mt-2">{generateButton('default')}</div>
+          </div>
+        </Panel>
+      ) : (
+        <Proposal
+          recommendation={recommendation}
+          timeZone={site.timezone}
+          siteId={site.id}
+          setpoint={setpoint}
+          setting={supply?.setting ?? null}
+          sent={sent}
+          onDispatch={dispatch}
+        />
       )}
 
       <ConfirmCommand
@@ -356,5 +230,171 @@ export function OptimizationWorkspace() {
         onConfirm={() => { if (pending) submit.mutate(pending, { onSettled: () => setPending(null) }); }}
       />
     </Main>
+  );
+}
+
+function Proposal({ recommendation, timeZone, siteId, setpoint, setting, sent, onDispatch }: {
+  readonly recommendation: OptimizationRecommendation;
+  readonly timeZone: string;
+  readonly siteId: string;
+  readonly setpoint: number | null;
+  readonly setting: ControlSetting | null;
+  readonly sent: Command | undefined;
+  readonly onDispatch: () => void;
+}) {
+  const { baseline, candidate, comfortRange, supplyRange } = recommendation;
+  const change = changesSupply(recommendation);
+  const risk = RISK[recommendation.risk];
+  const share = baseline.dailyEnergyKWh > 0 ? recommendation.saving.energyKWhPerDay / baseline.dailyEnergyKWh : null;
+  const stepNote = setting === null
+    ? '这台冷机没有登记供水温度设定点，无法从这里下发'
+    : setpoint !== null && Math.abs(setpoint - candidate.supplyTempC) >= 0.05
+      ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；建议不会自动执行`
+      : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；建议不会自动执行`;
+
+  return (
+    <>
+      <Panel aria-label="当前建议" className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div className="flex flex-col gap-3 border-r border-divider px-6 py-5">
+          <span className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-title font-semibold">当前建议</span>
+            <span className={cn('rounded-md px-1.5 leading-5 font-medium', risk.className)}>{risk.label}</span>
+            <span className="text-muted-foreground">{TRIGGER_LABEL[recommendation.trigger]}于 <span className="font-mono">{formatTime(recommendation.createdAt, timeZone)}</span></span>
+          </span>
+          <span className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">冷冻水供水温度</span>
+            {change ? (
+              <span className="flex items-center gap-3 text-[34px] leading-10 font-semibold tracking-[-0.03em] tabular-nums">
+                <span className="text-muted-foreground">{formatDecimal(baseline.supplyTempC, 1)}</span>
+                <ArrowRight className="size-6 text-subtle-foreground" aria-label="→" />
+                <span className="text-primary">{formatDecimal(candidate.supplyTempC, 1)}</span>
+                <span className="text-sm font-medium tracking-normal text-subtle-foreground">°C</span>
+              </span>
+            ) : (
+              <span className="text-[34px] leading-10 font-semibold tracking-[-0.03em] tabular-nums">
+                保持 {formatDecimal(baseline.supplyTempC, 1)}<span className="ml-1 text-sm font-medium tracking-normal text-subtle-foreground">°C</span>
+              </span>
+            )}
+          </span>
+          <p className="text-sm text-secondary-foreground">
+            {change
+              ? `供水温度${candidate.supplyTempC > baseline.supplyTempC ? '升高' : '降低'}后，预计室内温度 ${celsius(candidate.projectedZoneTempC)}，仍在 ${formatDecimal(comfortRange.minC, 0)}–${formatDecimal(comfortRange.maxC, 0)} °C 舒适范围内，距边界还有 ${celsius(recommendation.comfortMarginC)}。`
+              : '在安全与舒适约束内，当前供水温度已是最省电的选择。'}
+          </p>
+          {change ? (
+            sent ? (
+              <Link
+                to="/operations/control"
+                search={{ site: siteId, inspect: sent.commandId }}
+                className="flex items-center gap-3 rounded-lg border bg-muted/40 px-4 py-3 outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft"
+              >
+                <CommandMark status={sent.status} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-sm font-semibold">已提交为控制指令 · {STATUS_PRESENTATION[sent.status].label}</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {setting?.label} → {setpoint === null ? '—' : celsius(setpoint)} · <span className="font-mono">{formatTime(sent.createdAt, timeZone).slice(-5)}</span>
+                    {' · '}{APPROVAL_LABEL[sent.approvalPolicy]}{sent.requiredApprovalCount > 0 ? ` ${sent.approvalCount} / ${sent.requiredApprovalCount}` : ''}
+                  </span>
+                </span>
+                <span className="flex items-center text-xs font-medium text-primary">查看指令<ChevronRight className="size-3.5" aria-hidden="true" /></span>
+              </Link>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button disabled={setting === null || setpoint === null} onClick={onDispatch}>
+                  <Send data-icon="inline-start" />
+                  按建议下发
+                </Button>
+                <span className="text-xs text-muted-foreground">{stepNote}</span>
+              </div>
+            )
+          ) : null}
+        </div>
+        <section role="region" aria-label="预计效果" className="flex flex-col gap-5 px-6 py-5">
+          <span className="text-xs font-medium text-muted-foreground">预计效果</span>
+          <Effect label="预计日节电" value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh">
+            90% 把握在 ±{formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内{share !== null ? ` · 约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : ''}
+          </Effect>
+          <Effect label="预计日节省" info="按当天峰谷均价折算，不含需量电费" value={`¥${formatDecimal(recommendation.saving.costPerDay, 0)}`}>
+            按最近一天电费 ¥{formatDecimal(baseline.dailyCost, 0)} 折算
+          </Effect>
+        </section>
+      </Panel>
+
+      <Panel aria-label="约束">
+        <PanelHeader
+          title={<span className="flex items-center gap-1.5"><ShieldCheck className="size-4 text-primary" aria-hidden="true" />安全与舒适约束<InfoTip>舒适余量已扣除室内温度预测的不确定性</InfoTip></span>}
+          caption={`建议只在两条范围之内取值，每次调整不超过 ${celsius(supplyRange.maxStepC)}`}
+        />
+        <ConstraintRow title="冷冻水供水温度" detail={`安全范围 ${formatDecimal(supplyRange.minC, 1)}–${celsius(supplyRange.maxC)} · ${change ? `调整 ${formatDecimal(Math.abs(candidate.supplyTempC - baseline.supplyTempC), 1)} °C` : '保持当前温度'}`}>
+          <RangeTrack
+            label="冷冻水供水温度"
+            axis={[Math.floor(supplyRange.minC) - 1, Math.ceil(supplyRange.maxC) + 1]}
+            band={[supplyRange.minC, supplyRange.maxC]}
+            bandLabel="安全范围"
+            markers={change
+              ? [{ value: baseline.supplyTempC, label: '当前' }, { value: candidate.supplyTempC, label: '调整为', emphasis: true }]
+              : [{ value: baseline.supplyTempC, label: '当前', emphasis: true }]}
+          />
+        </ConstraintRow>
+        <ConstraintRow
+          title="室内温度"
+          detail={`舒适范围 ${formatDecimal(comfortRange.minC, 0)}–${formatDecimal(comfortRange.maxC, 0)} °C · 预计 ±${formatDecimal(recommendation.uncertainty.zoneTempP90C, 1)} °C · 余量 ${celsius(recommendation.comfortMarginC)}`}
+        >
+          <RangeTrack
+            label="室内温度"
+            axis={[Math.floor(comfortRange.minC) - 2, Math.ceil(comfortRange.maxC) + 2]}
+            band={[comfortRange.minC, comfortRange.maxC]}
+            bandLabel="舒适范围"
+            markers={change
+              ? [{ value: baseline.zoneTempC, label: '当前' }, { value: candidate.projectedZoneTempC, label: '预计', emphasis: true }]
+              : [{ value: baseline.zoneTempC, label: '当前', emphasis: true }]}
+          />
+        </ConstraintRow>
+      </Panel>
+
+      <div className="grid items-start gap-[18px] grid-cols-2">
+        <Panel aria-label="计算依据">
+          <PanelHeader title="计算依据" caption="生成建议时用到的数据" />
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 px-5 py-2">
+            {([
+              ['最近一天冷站用电', `${formatDecimal(baseline.dailyEnergyKWh, 0)} kWh`],
+              ['最近一天电费', `¥${formatDecimal(baseline.dailyCost, 0)} · 按当天峰谷均价`],
+              ['供水温度', celsius(baseline.supplyTempC)],
+              ['室内温度', celsius(baseline.zoneTempC)],
+              ['安全范围', `${formatDecimal(supplyRange.minC, 1)}–${celsius(supplyRange.maxC)}`],
+              ['舒适范围', `${formatDecimal(comfortRange.minC, 0)}–${formatDecimal(comfortRange.maxC, 0)} °C`],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="col-span-2 grid grid-cols-subgrid border-b border-divider py-2 last:border-b-0">
+                <dt className="text-xs leading-5 text-muted-foreground">{label}</dt>
+                <dd className="text-sm font-medium tabular-nums">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </Panel>
+        <Panel aria-label="验证与回退">
+          <PanelHeader title={<span className="flex items-center gap-1.5"><Undo2 className="size-4 text-primary" aria-hidden="true" />验证与回退</span>} />
+          <ul className="flex flex-col gap-3 px-5 py-4">
+            <li className="flex items-start gap-2.5">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">室内温度保持在 {formatDecimal(comfortRange.minC, 0)}–{formatDecimal(comfortRange.maxC, 0)} °C 舒适范围内</span>
+                <span className="text-xs text-muted-foreground">预计 {celsius(candidate.projectedZoneTempC)}，距边界 {celsius(recommendation.comfortMarginC)}</span>
+              </span>
+            </li>
+            <li className="flex items-start gap-2.5">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">冷站负荷不高于调整前</span>
+                <span className="text-xs text-muted-foreground">调整前最近一天冷站用电 {formatDecimal(baseline.dailyEnergyKWh, 0)} kWh</span>
+              </span>
+            </li>
+          </ul>
+          <p className="flex items-start gap-2 border-t border-divider bg-muted/40 px-5 py-3 text-sm text-secondary-foreground">
+            <Undo2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span>下发后观察 {recommendation.verificationMinutes} 分钟；任一条件不满足，将供水温度恢复为 <b className="font-semibold text-foreground">{celsius(baseline.supplyTempC)}</b></span>
+          </p>
+        </Panel>
+      </div>
+    </>
   );
 }

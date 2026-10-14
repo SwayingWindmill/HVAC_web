@@ -52,6 +52,10 @@ type AdminMutationRequest struct {
 	ReasonCode       string     `json:"reasonCode,omitempty"`
 	ValidFrom        time.Time  `json:"validFrom,omitempty"`
 	ValidTo          *time.Time `json:"validTo,omitempty"`
+	// member.create: the identity-directory account and its first Role Assignments.
+	SubjectIssuer string            `json:"subjectIssuer,omitempty"`
+	Subject       string            `json:"subject,omitempty"`
+	Assignments   []AdminAssignment `json:"assignments,omitempty"`
 }
 
 type AdminMutationResult struct {
@@ -87,6 +91,7 @@ type APICredentialVerification struct {
 }
 
 type AdminStore interface {
+	ListMembers(context.Context, AdminActor) (AdminDirectory, error)
 	ApplyMutation(context.Context, AdminActor, AdminMutationRequest) (AdminMutationResult, error)
 	CreateAPICredential(context.Context, AdminActor, APICredentialCreateRequest) (APICredentialIssue, error)
 	RotateAPICredential(context.Context, AdminActor, string, int64, time.Time) (APICredentialIssue, error)
@@ -168,20 +173,21 @@ func (store *PostgresAdminStore) ApplyMutation(ctx context.Context, actor AdminA
 		}
 	case "role-binding.upsert":
 		resourceID, revision, err = applyRoleBinding(ctx, tx, actor.TenantID, request, actor.OccurredAt)
-	case "site-binding.upsert":
-		if err = validateCatalogCapabilities(ctx, tx, request.Capabilities); err == nil {
-			resourceID, revision, err = applySiteBinding(ctx, tx, actor.TenantID, request, actor.OccurredAt)
-		}
 	case "explicit-deny.upsert":
 		if err = validateCatalogCapabilities(ctx, tx, []string{request.DenyCapability}); err == nil {
 			resourceID, revision, err = applyExplicitDeny(ctx, tx, actor.TenantID, request, actor.OccurredAt)
 		}
 	case "service-account.status":
 		resourceID, revision, err = applyServiceAccountStatus(ctx, tx, actor.TenantID, request, actor.OccurredAt)
+	case "member.create":
+		resourceID, revision, err = applyMemberCreate(ctx, tx, actor.TenantID, request, actor.OccurredAt)
 	default:
 		err = fmt.Errorf("unsupported IAM admin operation %q", request.Operation)
 	}
 	if err != nil {
+		return AdminMutationResult{}, err
+	}
+	if err := ensureActorStillAdministers(ctx, tx, actor.TenantID, actorPrincipalID, actor.OccurredAt); err != nil {
 		return AdminMutationResult{}, err
 	}
 	policyRevision, err := bumpAuthorizationRevision(ctx, tx, actor.TenantID, actor.OccurredAt)
@@ -559,6 +565,13 @@ func applyRoleTemplate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 	if strings.TrimSpace(request.RoleKey) == "" || strings.TrimSpace(request.DisplayName) == "" || (request.Status != "ACTIVE" && request.Status != "RETIRED") {
 		return "", 0, errors.New("role template mutation is invalid")
 	}
+	var builtIn bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM iam.role_templates WHERE tenant_id IS NULL AND role_key=$1)`, request.RoleKey).Scan(&builtIn); err != nil {
+		return "", 0, err
+	}
+	if builtIn {
+		return "", 0, errors.New("role template mutation is invalid: built-in Roles cannot be changed")
+	}
 	var id string
 	var revision int64
 	err := tx.QueryRow(ctx, `SELECT id::text,revision FROM iam.role_templates WHERE tenant_id=$1::uuid AND role_key=$2 FOR UPDATE`, tenantID, request.RoleKey).Scan(&id, &revision)
@@ -584,17 +597,34 @@ func applyRoleTemplate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 	return id, revision, err
 }
 
+// applyRoleBinding assigns a Role to the whole Tenant (SiteID "") or to one Site. A Role that
+// carries a Tenant-scoped capability, such as the built-in admin, is assigned only Tenant-wide.
 func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request AdminMutationRequest, now time.Time) (string, int64, error) {
-	if request.PrincipalID == "" || request.RoleTemplateID == "" || (request.Status != "ACTIVE" && request.Status != "SUSPENDED" && request.Status != "REVOKED") {
+	if request.PrincipalID == "" || request.RoleTemplateID == "" || (request.SiteID != "" && !isUUIDv7(request.SiteID)) ||
+		(request.Status != "ACTIVE" && request.Status != "SUSPENDED" && request.Status != "REVOKED") {
 		return "", 0, errors.New("role binding mutation is invalid")
 	}
+	var capabilities []string
+	if err := tx.QueryRow(ctx, `SELECT capabilities FROM iam.role_templates WHERE id=$1::uuid AND (tenant_id=$2::uuid OR tenant_id IS NULL) AND status='ACTIVE'`, request.RoleTemplateID, tenantID).Scan(&capabilities); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", 0, ErrAdminResourceNotFound
+		}
+		return "", 0, err
+	}
+	if request.SiteID != "" {
+		for _, capability := range capabilities {
+			if capabilityTenantScoped(capability) {
+				return "", 0, errors.New("role binding mutation is invalid: the Role can only be assigned to the whole Tenant")
+			}
+		}
+	}
 	validFrom := request.ValidFrom.UTC()
 	if request.ValidFrom.IsZero() {
 		validFrom = now.UTC()
 	}
 	var id string
 	var revision int64
-	err := tx.QueryRow(ctx, `SELECT id::text,revision FROM iam.role_bindings WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND role_template_id=$3::uuid FOR UPDATE`, tenantID, request.PrincipalID, request.RoleTemplateID).Scan(&id, &revision)
+	err := tx.QueryRow(ctx, `SELECT id::text,revision FROM iam.role_bindings WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND role_template_id=$3::uuid AND site_id IS NOT DISTINCT FROM NULLIF($4,'')::uuid FOR UPDATE`, tenantID, request.PrincipalID, request.RoleTemplateID, request.SiteID).Scan(&id, &revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if request.ExpectedRevision != 0 {
 			return "", 0, ErrAdminRevisionConflict
@@ -603,7 +633,7 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 		if err != nil {
 			return "", 0, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO iam.role_bindings (id,tenant_id,principal_id,role_template_id,status,valid_from,valid_to,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,1,$8,$8)`, id, tenantID, request.PrincipalID, request.RoleTemplateID, request.Status, validFrom, request.ValidTo, now.UTC())
+		_, err = tx.Exec(ctx, `INSERT INTO iam.role_bindings (id,tenant_id,principal_id,role_template_id,site_id,status,valid_from,valid_to,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,NULLIF($5,'')::uuid,$6,$7,$8,1,$9,$9)`, id, tenantID, request.PrincipalID, request.RoleTemplateID, request.SiteID, request.Status, validFrom, request.ValidTo, now.UTC())
 		return id, 1, err
 	}
 	if err != nil {
@@ -613,40 +643,7 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 		return "", 0, ErrAdminRevisionConflict
 	}
 	revision++
-	_, err = tx.Exec(ctx, `UPDATE iam.role_bindings SET status=$4,valid_from=$5,valid_to=$6,revision=$7,updated_at=$8 WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND role_template_id=$3::uuid`, tenantID, request.PrincipalID, request.RoleTemplateID, request.Status, validFrom, request.ValidTo, revision, now.UTC())
-	return id, revision, err
-}
-
-func applySiteBinding(ctx context.Context, tx pgx.Tx, tenantID string, request AdminMutationRequest, now time.Time) (string, int64, error) {
-	if request.PrincipalID == "" || request.SiteID == "" || (request.Status != "ACTIVE" && request.Status != "SUSPENDED" && request.Status != "REVOKED") {
-		return "", 0, errors.New("site binding mutation is invalid")
-	}
-	validFrom := request.ValidFrom.UTC()
-	if request.ValidFrom.IsZero() {
-		validFrom = now.UTC()
-	}
-	var id string
-	var revision int64
-	err := tx.QueryRow(ctx, `SELECT id::text,revision FROM iam.site_bindings WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND site_id=$3::uuid FOR UPDATE`, tenantID, request.PrincipalID, request.SiteID).Scan(&id, &revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if request.ExpectedRevision != 0 {
-			return "", 0, ErrAdminRevisionConflict
-		}
-		id, err = newUUIDv7(now)
-		if err != nil {
-			return "", 0, err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO iam.site_bindings (id,tenant_id,site_id,principal_id,actions,effect,status,valid_from,valid_to,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'ALLOW',$6,$7,$8,1,$9,$9)`, id, tenantID, request.SiteID, request.PrincipalID, request.Capabilities, request.Status, validFrom, request.ValidTo, now.UTC())
-		return id, 1, err
-	}
-	if err != nil {
-		return "", 0, err
-	}
-	if revision != request.ExpectedRevision {
-		return "", 0, ErrAdminRevisionConflict
-	}
-	revision++
-	_, err = tx.Exec(ctx, `UPDATE iam.site_bindings SET actions=$4,effect='ALLOW',status=$5,valid_from=$6,valid_to=$7,revision=$8,updated_at=$9 WHERE tenant_id=$1::uuid AND principal_id=$2::uuid AND site_id=$3::uuid`, tenantID, request.PrincipalID, request.SiteID, request.Capabilities, request.Status, validFrom, request.ValidTo, revision, now.UTC())
+	_, err = tx.Exec(ctx, `UPDATE iam.role_bindings SET status=$3,valid_from=$4,valid_to=$5,revision=$6,updated_at=$7 WHERE id=$1::uuid AND tenant_id=$2::uuid`, id, tenantID, request.Status, validFrom, request.ValidTo, revision, now.UTC())
 	return id, revision, err
 }
 
@@ -718,14 +715,12 @@ func adminResourceType(operation string) string {
 		return "TENANT"
 	case "principal.update":
 		return "PRINCIPAL"
-	case "membership.upsert":
+	case "membership.upsert", "member.create":
 		return "TENANT_MEMBERSHIP"
 	case "role-template.upsert":
 		return "ROLE_TEMPLATE"
 	case "role-binding.upsert":
 		return "ROLE_BINDING"
-	case "site-binding.upsert":
-		return "SITE_BINDING"
 	case "explicit-deny.upsert":
 		return "EXPLICIT_DENY"
 	case "service-account.status":
