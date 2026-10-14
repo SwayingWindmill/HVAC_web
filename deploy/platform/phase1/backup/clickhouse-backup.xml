@@ -7,4 +7,9 @@
       </phase1_backups>
     </disks>
   </storage_configuration>
+  <!-- BACKUP ... TO Disk(...) is refused unless the disk is allowed here. -->
+  <backups>
+    <allowed_disk>phase1_backups</allowed_disk>
+    <allowed_path>/var/lib/clickhouse/backups/</allowed_path>
+  </backups>
 </clickhouse>
