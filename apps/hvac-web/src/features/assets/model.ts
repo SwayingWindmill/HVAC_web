@@ -147,6 +147,7 @@ const DEVICE_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   FLOW_METER: '流量计',
   TEMPERATURE_MODULE: '温度采集模块',
   CONTROL_MODULE: '控制模块',
+  PROVISIONAL_READINGS: '网关转发的读数（暂定对应）',
 });
 
 const SENSOR_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2；其余温度通道只按读数归为冷冻水侧或冷却水侧，机组之间从未单独运行，无法分到具体机组。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2；其余温度通道只按读数归为冷冻水侧或冷却水侧，机组之间从未单独运行，无法分到具体机组。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 机组的进出水温度、冷却塔出水温度、室外温度和冷冻水泵是暂定对应（点位带 from，网关把对应通道复制过去），等现场给出真实对照表后修改 from 和网关函数的 COPIES。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -86,7 +86,7 @@
         },
         {
           "code": "t8",
-          "name": "冷冻水侧温度（通道 8）",
+          "name": "冷却水侧温度（通道 8）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -224,7 +224,69 @@
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
       "points": "meter",
-      "asset": "01a14000-3000-7000-8000-000000000001"
+      "asset": "01a14000-3000-7000-8000-000000000001",
+      "morePoints": [
+        {
+          "code": "run_state",
+          "sourceKey": "chiller.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+        },
+        {
+          "code": "chw_leaving_temperature",
+          "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "name": "冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 2（待现场确认）",
+          "from": [
+            "temperature",
+            "t2"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 1（待现场确认）",
+          "from": [
+            "temperature",
+            "t1"
+          ]
+        },
+        {
+          "code": "cw_entering_temperature",
+          "sourceKey": "chiller.entering_cooling_water_temperature",
+          "name": "冷却水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 5（待现场确认）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
+        },
+        {
+          "code": "cw_leaving_temperature",
+          "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "name": "冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 6（待现场确认）",
+          "from": [
+            "temperature",
+            "t6"
+          ]
+        }
+      ]
     },
     {
       "id": "01a14000-4000-7000-8000-000000000004",
@@ -234,7 +296,69 @@
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
       "points": "meter",
-      "asset": "01a14000-3000-7000-8000-000000000002"
+      "asset": "01a14000-3000-7000-8000-000000000002",
+      "morePoints": [
+        {
+          "code": "run_state",
+          "sourceKey": "chiller.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+        },
+        {
+          "code": "chw_leaving_temperature",
+          "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "name": "冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 4（待现场确认）",
+          "from": [
+            "temperature",
+            "t4"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 3（待现场确认）",
+          "from": [
+            "temperature",
+            "t3"
+          ]
+        },
+        {
+          "code": "cw_entering_temperature",
+          "sourceKey": "chiller.entering_cooling_water_temperature",
+          "name": "冷却水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 9（待现场确认）",
+          "from": [
+            "temperature",
+            "t9"
+          ]
+        },
+        {
+          "code": "cw_leaving_temperature",
+          "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "name": "冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 7（待现场确认）",
+          "from": [
+            "temperature",
+            "t7"
+          ]
+        }
+      ]
     },
     {
       "id": "01a14000-4000-7000-8000-000000000005",
@@ -244,7 +368,69 @@
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
       "points": "meter",
-      "asset": "01a14000-3000-7000-8000-000000000003"
+      "asset": "01a14000-3000-7000-8000-000000000003",
+      "morePoints": [
+        {
+          "code": "run_state",
+          "sourceKey": "chiller.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+        },
+        {
+          "code": "chw_leaving_temperature",
+          "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "name": "冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 19（待现场确认）",
+          "from": [
+            "temperature",
+            "t19"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 10（待现场确认）",
+          "from": [
+            "temperature",
+            "t10"
+          ]
+        },
+        {
+          "code": "cw_entering_temperature",
+          "sourceKey": "chiller.entering_cooling_water_temperature",
+          "name": "冷却水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 12（待现场确认）",
+          "from": [
+            "temperature",
+            "t12"
+          ]
+        },
+        {
+          "code": "cw_leaving_temperature",
+          "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "name": "冷却水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 8（待现场确认）",
+          "from": [
+            "temperature",
+            "t8"
+          ]
+        }
+      ]
     },
     {
       "id": "01a14000-4000-7000-8000-000000000006",
@@ -254,7 +440,43 @@
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
       "points": "meter",
-      "asset": "01a14000-3000-7000-8000-000000000004"
+      "asset": "01a14000-3000-7000-8000-000000000004",
+      "morePoints": [
+        {
+          "code": "run_state",
+          "sourceKey": "chiller.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+        },
+        {
+          "code": "chw_leaving_temperature",
+          "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "name": "冷冻水出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 17（待现场确认）",
+          "from": [
+            "temperature",
+            "t17"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：总冷冻水回水温度（通道 16，并联机组共用回水）",
+          "from": [
+            "temperature",
+            "t16"
+          ]
+        }
+      ]
     },
     {
       "id": "01a14000-4000-7000-8000-000000000007",
@@ -495,6 +717,83 @@
           "address": "网关计算：瞬时制冷量对时间累加"
         }
       ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000000a",
+      "sourceKey": "cooling-tower",
+      "code": "cooling-tower",
+      "name": "冷却塔",
+      "type": "PROVISIONAL_READINGS",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "leaving_water_temperature",
+          "sourceKey": "cooling_tower.leaving_water_temperature",
+          "name": "冷却塔出水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 13（待现场确认）",
+          "from": [
+            "temperature",
+            "t13"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000000b",
+      "sourceKey": "chwp-main",
+      "code": "chwp-main",
+      "name": "冷冻水泵（总管）",
+      "type": "PROVISIONAL_READINGS",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "sourceKey": "chwp.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：总冷冻水流量 > 10 m³/h 为运行"
+        },
+        {
+          "code": "flow_rate",
+          "sourceKey": "chwp.flow_rate",
+          "name": "冷冻水流量",
+          "unit": "m3/h",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：总冷冻水流量计（UID 10）",
+          "from": [
+            "waterflow",
+            "flowMeter"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000000c",
+      "sourceKey": "outdoor",
+      "code": "outdoor",
+      "name": "室外环境",
+      "type": "PROVISIONAL_READINGS",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "ambient_temperature",
+          "sourceKey": "weather.ambient_dry_bulb_temperature",
+          "name": "室外温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "暂定对应：温度模块通道 15（待现场确认）",
+          "from": [
+            "temperature",
+            "t15"
+          ]
+        }
+      ]
     }
   ],
   "meterPoints": [
@@ -504,7 +803,8 @@
       "unit": "kW",
       "pointType": "TELEMETRY",
       "valueType": "NUMBER",
-      "address": "保持寄存器 36"
+      "address": "保持寄存器 36",
+      "sourceKey": "chiller.power"
     },
     {
       "code": "active_energy_total",
@@ -512,7 +812,7 @@
       "unit": "kWh",
       "pointType": "COUNTER",
       "valueType": "NUMBER",
-      "address": "保持寄存器 60（4 号表为 64）"
+      "address": "保持寄存器 60"
     }
   ],
   "assets": [

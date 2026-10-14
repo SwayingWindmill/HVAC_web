@@ -2,7 +2,8 @@
 // Input: a device function's message { <device>: [{ ts, values }] }.
 // Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per device
 // message, or nothing for devices the platform has no source key for (the Gateway's own status). A meter
-// message also yields the plant total, and a temperature message the calculated cooling, below. Each goes on to「Outbox·形成事件」, which stores it in the
+// message also yields the plant total, a temperature message the calculated cooling, and both the
+// provisional equipment readings (COPIES), below. Each goes on to「Outbox·形成事件」, which stores it in the
 // durable outbox until the broker acknowledges it:
 //   msg.outboxCommand = "enqueue";
 //   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
@@ -17,12 +18,47 @@ const DEVICES = {
 for (const meter of METERS) {
   DEVICES[meter] = { codes: { powerTotal: ["power_total", "kW"], combinedActiveTotalElectricalEnergy: ["active_energy_total", "kWh"] } };
 }
+// Meter 4 was read from register 64, which is always 0; on 2026-10-14 its energy register was found at 60
+// (76938 kWh then). The platform had counted it from 0, so it keeps counting from there: the reading
+// less what the meter showed when the address was corrected, with no jump into one interval.
+const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
+// Provisional, until site staff say which pipe each channel is on: temperature channels and the header
+// flow copied onto the equipment they are taken to measure, as the points with `from` in
+// deploy/sites/songyaxuan.site.json.
+const COPIES = {
+  temperature: {
+    t2: [["ammeter-unit1", "chw_leaving_temperature"]],
+    t1: [["ammeter-unit1", "chw_entering_temperature"]],
+    t5: [["ammeter-unit1", "cw_entering_temperature"]],
+    t6: [["ammeter-unit1", "cw_leaving_temperature"]],
+    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
+    t3: [["ammeter-unit2", "chw_entering_temperature"]],
+    t9: [["ammeter-unit2", "cw_entering_temperature"]],
+    t7: [["ammeter-unit2", "cw_leaving_temperature"]],
+    t19: [["ammeter-unit3", "chw_leaving_temperature"]],
+    t10: [["ammeter-unit3", "chw_entering_temperature"]],
+    t12: [["ammeter-unit3", "cw_entering_temperature"]],
+    t8: [["ammeter-unit3", "cw_leaving_temperature"]],
+    t17: [["ammeter-unit4", "chw_leaving_temperature"]],
+    t16: [["ammeter-unit4", "chw_entering_temperature"]],
+    t13: [["cooling-tower", "leaving_water_temperature"]],
+    t15: [["outdoor", "ambient_temperature"]],
+  },
+  waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
+};
+const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
+// A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
+// pumps run while the header flow exceeds 10 m³/h.
+const runState = (running) => (running ? "RUNNING" : "STOPPED");
 
 const source = msg.payload;
 const device = Object.keys(source)[0];
 const mapping = DEVICES[device];
 if (!mapping) return null;
-const sample = source[device][0];
+const sample = { ...source[device][0], values: { ...source[device][0].values } };
+if (ENERGY_BASELINE[device] !== undefined && Number.isFinite(sample.values.combinedActiveTotalElectricalEnergy)) {
+  sample.values.combinedActiveTotalElectricalEnergy -= ENERGY_BASELINE[device];
+}
 
 const points = [];
 for (const [key, value] of Object.entries(sample.values)) {
@@ -40,6 +76,9 @@ for (const [key, value] of Object.entries(sample.values)) {
   points.push(point);
 }
 if (points.length === 0) return null;
+if (METERS.includes(device) && Number.isFinite(sample.values.powerTotal)) {
+  points.push({ code: "run_state", value: runState(sample.values.powerTotal > 5), quality: 0 });
+}
 
 // UUIDv7: 48-bit Unix milliseconds, version 7, variant 10, random rest.
 function uuidv7(ms) {
@@ -72,6 +111,18 @@ function envelope(deviceId, deviceTimestamp, devicePoints) {
 }
 
 const out = [envelope(device, sample.ts, points)];
+
+const copies = {};
+for (const [field, targets] of Object.entries(COPIES[device] || {})) {
+  const value = sample.values[field];
+  if (typeof value !== "number" || !Number.isFinite(value) || (device === "temperature" && value === 0)) continue;
+  for (const [target, code] of targets) {
+    if (!copies[target]) copies[target] = [];
+    copies[target].push({ code, value, quality: 0, unit: COPY_UNITS[device] });
+  }
+}
+if (copies["chwp-main"]) copies["chwp-main"].push({ code: "run_state", value: runState(sample.values.flowMeter > 10), quality: 0 });
+for (const [target, targetPoints] of Object.entries(copies)) out.push(envelope(target, sample.ts, targetPoints));
 
 // The plant room has no total meter: the four machines' meters added up stand for it
 // (「空调总电表（四台机组合计）」), once each has reported since the flow started.
