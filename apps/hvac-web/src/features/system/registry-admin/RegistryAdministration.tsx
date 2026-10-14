@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Database, FileUp, LayoutTemplate, Network, Plus } from 'lucide-react';
+import { FileUp, LayoutTemplate, Network, Plus } from 'lucide-react';
 import type { Capability } from '@/api/generated/platformGateway.gen';
 import {
   flattenRegistryPages,
@@ -10,7 +10,7 @@ import {
   useRegistrySites,
 } from '@/api/registry';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
+import { Panel } from '@/blocks/panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import { RegistryImportExportWorkbench } from './RegistryImportExportWorkbench';
 import { RegistryResourceWorkbench } from './RegistryResourceWorkbench';
 import { RegistryTemplateWorkbench } from './RegistryTemplateWorkbench';
@@ -111,7 +112,7 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
   const presentedError = error ? presentRegistryError(error) : null;
 
   if (loading && !site && !model) {
-    return <Card><CardContent className="grid min-h-32 place-items-center text-sm text-muted-foreground">正在加载登记信息…</CardContent></Card>;
+    return <Panel aria-label="登记管理" className="grid min-h-32 place-items-center text-sm text-muted-foreground">正在读取登记信息…</Panel>;
   }
 
   const tabs: ReadonlyArray<{ key: RegistryTab; label: string; icon: React.ReactNode }> = [
@@ -121,21 +122,36 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
   ];
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Database className="size-4" />登记管理范围</CardTitle>
-          <CardDescription>选择站点后管理空间、设备、测点、模板与受控导入导出。</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <Select value={selectedSiteId ?? undefined} onValueChange={changeSite} disabled={sites.length === 0}>
-            <SelectTrigger className="min-w-72" aria-label="选择管理站点"><SelectValue placeholder="选择站点" /></SelectTrigger>
-            <SelectContent><SelectGroup>{sites.map((value) => <SelectItem key={value.id} value={value.id}>{value.displayName} · {value.code}</SelectItem>)}</SelectGroup></SelectContent>
-          </Select>
-          <Badge variant="outline">正式登记数据</Badge>
-          {dirty ? <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">有未保存修改</Badge> : null}
-        </CardContent>
-      </Card>
+    <div className="flex flex-col gap-[18px]">
+      <Panel aria-label="登记管理" className="h-12 flex-row items-center gap-4 px-4">
+        <Select value={selectedSiteId ?? undefined} onValueChange={changeSite} disabled={sites.length === 0}>
+          <SelectTrigger className="h-8 w-64" aria-label="选择管理站点"><SelectValue placeholder="选择站点" /></SelectTrigger>
+          <SelectContent><SelectGroup>{sites.map((value) => <SelectItem key={value.id} value={value.id}>{value.displayName} · {value.code}</SelectItem>)}</SelectGroup></SelectContent>
+        </Select>
+        {site && model ? (
+          <div className="flex h-full items-stretch gap-5" role="tablist" aria-label="登记管理工作区">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                onClick={() => changeTab(tab.key)}
+                className={cn(
+                  'flex items-center gap-1.5 text-[13px] font-medium shadow-[inset_0_-2px_0_transparent] outline-none focus-visible:text-foreground [&_svg]:size-3.5',
+                  activeTab === tab.key ? 'text-foreground shadow-[inset_0_-2px_0_var(--primary)]' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {tab.icon}{tab.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          {model ? <span className="tabular-nums">{model.counts.spaces} 个空间 · {model.counts.assets} 项设备资产 · {model.counts.deviceEndpoints} 个设备端点 · {model.counts.points} 个测点</span> : null}
+          {dirty ? <span className="inline-flex h-5.5 items-center gap-1.5 rounded-md bg-warning-soft px-1.5 font-medium text-warning-text"><span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />有未保存修改</span> : null}
+        </span>
+      </Panel>
 
       {presentedError ? <Alert variant="destructive"><AlertTitle>{presentedError.title}</AlertTitle><AlertDescription>{presentedError.description}</AlertDescription></Alert> : null}
 
@@ -156,10 +172,7 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
           </Card>
         ) : <div className="grid min-h-32 place-items-center rounded-md border border-dashed p-6 text-sm text-muted-foreground">当前没有可管理站点，或登记服务暂时不可用。</div>
       ) : (
-        <div className="space-y-4">
-          <div className="inline-flex flex-wrap rounded-md border bg-muted/30 p-1" role="tablist" aria-label="登记管理工作区">
-            {tabs.map((tab) => <Button key={tab.key} size="sm" variant={activeTab === tab.key ? 'secondary' : 'ghost'} role="tab" aria-selected={activeTab === tab.key} onClick={() => changeTab(tab.key)}>{tab.icon}{tab.label}</Button>)}
-          </div>
+        <div>
           {activeTab === 'resources' ? <RegistryResourceWorkbench site={site} model={model} capabilities={capabilities} onDirtyChange={setDirty} onRefresh={refresh} onSiteCreated={(siteId) => setSelectedSiteId(siteId)} /> : null}
           {activeTab === 'templates' ? <RegistryTemplateWorkbench site={site} model={model} capabilities={capabilities} onDirtyChange={setDirty} /> : null}
           {activeTab === 'import-export' ? <RegistryImportExportWorkbench site={site} model={model} capabilities={capabilities} onDirtyChange={setDirty} onRefresh={refresh} /> : null}
