@@ -6,6 +6,7 @@ import { createFrontendReviewPlatformClient } from './frontend-review-platform-c
 import { useObservability } from './Observability';
 import { RouteLoading } from './RouteLoading';
 import { RuntimeFacts } from './RuntimeFacts';
+import { SignInForm, SignInNotice, readSignInRequest } from './SignInPage';
 import { FocusHeading } from './FocusHeading';
 import { ShellRuntimeProvider } from './ShellRuntimeContext';
 import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
@@ -36,33 +37,29 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
 }
 
 function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot; beginLogin: () => void }) {
-  const loggedOut = snapshot.reason === 'LOGOUT_COMPLETED' || snapshot.reason === 'SESSION_ALREADY_INVALID';
-  if (!loggedOut) {
-    return (
-      <RouteLoading
-        label="正在前往登录"
-        testId="real-shell-auth-redirect"
-        routeState="LOGIN_REQUIRED"
-        variant="shell"
-      />
-    );
+  if (window.location.pathname === '/sign-in') {
+    const request = readSignInRequest(window.location.search);
+    if (request.kind === 'form') return <SignInForm request={request} />;
+    if (request.kind === 'expired') {
+      return <SignInNotice title="登录已超时" description="登录页打开太久了，请重新登录。" action="重新登录" onAction={beginLogin} />;
+    }
   }
-
+  if (snapshot.reason === 'LOGOUT_COMPLETED') {
+    return <SignInNotice title="已退出登录" description="这台电脑上的业务数据已经清除。" action="重新登录" onAction={beginLogin} />;
+  }
+  if (snapshot.reason === 'SESSION_ALREADY_INVALID') {
+    return <SignInNotice title="登录已失效" description="请重新登录后继续使用。" action="重新登录" onAction={beginLogin} />;
+  }
+  if (window.location.pathname === '/sign-in' && snapshot.state === 'LOGIN_REQUIRED') {
+    return <SignInNotice title="登录" description="使用平台账号登录。" action="登录" onAction={beginLogin} />;
+  }
   return (
-    <section className="real-login-shell" data-testid="real-shell-login-required">
-      <div className="real-login-panel">
-        <div className="real-login-brand">
-          <img src="/quanlaihe-mark.svg" alt="" width="36" height="36" />
-          <strong>泉来禾智慧能源</strong>
-        </div>
-        <p className="real-shell-eyebrow">账户安全</p>
-        <FocusHeading>{snapshot.reason === 'SESSION_ALREADY_INVALID' ? '登录已失效' : '已安全退出'}</FocusHeading>
-        <p>受保护的业务数据已从当前浏览器内存清除。重新验证身份后可继续使用能源运营系统。</p>
-        <div className="real-shell-actions">
-          <button type="button" onClick={beginLogin}>重新登录</button>
-        </div>
-      </div>
-    </section>
+    <RouteLoading
+      label="正在前往登录"
+      testId="real-shell-auth-redirect"
+      routeState="LOGIN_REQUIRED"
+      variant="shell"
+    />
   );
 }
 

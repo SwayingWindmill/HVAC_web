@@ -16,6 +16,7 @@ It is **not** the platform authorization system. Tenant membership, Site binding
 - Minimal logout redirect endpoint.
 - Failed-password lockout: five failed attempts lock the user for 15 minutes.
 - Password rules (spec `docs/specs/iam-roles-and-users.md`, NIST SP 800-63B-4 with an 8-character minimum): 8 characters to 512 bytes, no composition rules, no forced rotation, not the username, and not one of the common passwords in `internal/identity/common-passwords.txt` (SecLists 2024.4, MIT).
+- No HTML of its own: `/authorize` and every login outcome redirect to the Web application's `/sign-in?login_challenge=…` (with `step=totp` or an `error` code), whose form posts the password or one-time code straight back to `/identity/login` and `/identity/mfa/totp`. The challenge must match the `__Host-hvac_idp_login` cookie (docs/specs/sign-in-page.md).
 - TOTP second factor for high-assurance (step-up) sign-in; enrolment is offline through `cmd/identity-admin` (`totp-start`, `totp-activate`, `totp-disable`).
 - User administration through `pkg/identityadmin`: the Platform Gateway embeds it, connected as `identity_admin`, so administrators create accounts, set passwords, update names and emails, and enable or disable sign-in from 系统管理 → 用户与角色, and every user changes their own password. Authorization stays with IAM. There is no public registration endpoint; `cmd/identity-admin` remains for the first administrator and recovery.
 

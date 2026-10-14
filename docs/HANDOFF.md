@@ -67,7 +67,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 ## Next up
 
-0. **Deploy to the site server (139.199.58.47, user `ubuntu`, SSH key).** It is 2 vCPU / 3.7 GB and also runs ThingsBoard (~540 MB), a 6-week-old `hvac-phase1-local` stack and an older `hvac-backend`; ClickHouse there was unhealthy at 137 % CPU on 2026-10-14. Decide with the user what to retire, the public domain and certificate, and whether the existing database is kept before rolling out. The first administrator is created with `identity-admin` and reconciled with `{"roleKey": "admin"}`; everyone else is added from 系统管理.
+0. **Site server (139.199.58.47, hvac.swayingwindmill.online) runs main since 2026-10-14.** Compose project `hvac-platform` in `/opt/hvac-platform`, demo tier with simulators and without the intelligence profile, behind the host nginx on 127.0.0.1:18443. Images are built locally from main and shipped with `docker save | ssh docker load`; `/opt/hvac-platform-tools/deploy.sh` replays the `local:up` steps there. ThingsBoard still runs because it receives a real Node-RED gateway over MQTT 8883 (host nginx stream); its database was dumped to `/opt/backups/thingsboard/`. Next: connect that gateway to the platform and import its ThingsBoard history before stopping ThingsBoard.
 
 Roadmap issues, in order:
 
