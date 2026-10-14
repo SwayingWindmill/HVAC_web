@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,9 +33,7 @@ type Server struct {
 	now                   func() time.Time
 	signingKey            SigningKey
 	mfaProtector          *MFAProtector
-	loginTemplate         *template.Template
-	loginAction           string
-	mfaAction             string
+	signInURL             string
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -82,24 +78,12 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
-	page, err := template.New("login").Parse(loginPageTemplate)
-	if err != nil {
-		store.Close()
-		return nil, fmt.Errorf("parse identity login page: %w", err)
-	}
-	basePath := strings.TrimRight(issuerURL.EscapedPath(), "/")
-	loginAction := basePath + "/login"
-	mfaAction := basePath + "/mfa/totp"
-	if loginAction == "" {
-		loginAction = "/login"
-	}
-	if mfaAction == "" {
-		mfaAction = "/mfa/totp"
-	}
+	// The Web application's sign-in page on the same public origin is the login interface.
+	signInURL := issuerURL.Scheme + "://" + issuerURL.Host + "/sign-in"
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
 		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
-		loginTemplate: page, loginAction: loginAction, mfaAction: mfaAction,
+		signInURL: signInURL,
 	}, nil
 }
 
@@ -178,42 +162,41 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 		Name: loginCookieName, Value: challenge, Path: "/", HttpOnly: true, Secure: true,
 		SameSite: http.SameSiteLaxMode, MaxAge: 600,
 	})
-	server.renderLogin(writer, http.StatusOK, challenge, "", "")
+	server.redirectToSignIn(writer, request, challenge, "", "")
 }
 
 func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
 	if err := request.ParseForm(); err != nil {
-		server.renderLogin(writer, http.StatusBadRequest, "", "", "登录请求无效，请重新开始登录。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
 	challenge := request.Form.Get("challenge")
 	cookie, err := request.Cookie(loginCookieName)
 	if err != nil || challenge == "" || !subtleStringCompare(challenge, cookie.Value) {
-		server.renderLogin(writer, http.StatusBadRequest, "", "", "登录请求已过期，请重新开始登录。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
-	username := request.Form.Get("username")
-	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), username, request.Form.Get("password"), server.now().UTC())
+	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), request.Form.Get("username"), request.Form.Get("password"), server.now().UTC())
 	if errors.Is(err, ErrInvalidCredentials) {
-		server.renderLogin(writer, http.StatusUnauthorized, challenge, username, "用户名或密码错误。")
+		server.redirectToSignIn(writer, request, challenge, "", "invalid_credentials")
 		return
 	}
 	if errors.Is(err, ErrMFAEnrollmentRequired) {
-		server.renderLogin(writer, http.StatusForbidden, challenge, username, "该安全操作需要多因素认证，请先由身份管理员完成 TOTP 配置。")
+		server.redirectToSignIn(writer, request, challenge, "", "mfa_enrollment_required")
 		return
 	}
 	if errors.Is(err, ErrMFARequired) && result.MFARequired {
-		server.renderTOTP(writer, http.StatusOK, challenge, "")
+		server.redirectToSignIn(writer, request, challenge, "totp", "")
 		return
 	}
 	if errors.Is(err, ErrAuthorizationRequestExpired) {
 		http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
-		server.renderLogin(writer, http.StatusBadRequest, "", username, "登录请求已过期，请重新开始登录。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
 	if err != nil {
-		server.renderLogin(writer, http.StatusServiceUnavailable, challenge, username, "身份服务暂时不可用。")
+		server.redirectToSignIn(writer, request, challenge, "", "unavailable")
 		return
 	}
 	server.redirectAuthorizationGrant(writer, request, result.Grant)
@@ -222,27 +205,27 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 func (server *Server) completeTOTP(writer http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
 	if err := request.ParseForm(); err != nil {
-		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求无效，请重新开始。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
 	challenge := request.Form.Get("challenge")
 	cookie, err := request.Cookie(loginCookieName)
 	if err != nil || challenge == "" || !subtleStringCompare(challenge, cookie.Value) {
-		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求已过期，请重新开始。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
 	grant, err := server.store.CompleteTOTP(request.Context(), hashOpaque(challenge), request.Form.Get("code"), server.mfaProtector, server.now().UTC())
 	if errors.Is(err, ErrMFAInvalid) {
-		server.renderTOTP(writer, http.StatusUnauthorized, challenge, "验证码无效或已使用。")
+		server.redirectToSignIn(writer, request, challenge, "totp", "totp_invalid")
 		return
 	}
 	if errors.Is(err, ErrAuthorizationRequestExpired) {
 		http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
-		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求已过期，请重新开始。")
+		server.redirectToSignIn(writer, request, "", "", "expired")
 		return
 	}
 	if err != nil {
-		server.renderTOTP(writer, http.StatusServiceUnavailable, challenge, "身份服务暂时不可用。")
+		server.redirectToSignIn(writer, request, challenge, "totp", "unavailable")
 		return
 	}
 	server.redirectAuthorizationGrant(writer, request, grant)
@@ -309,33 +292,24 @@ func (server *Server) endSession(writer http.ResponseWriter, request *http.Reque
 	http.Redirect(writer, request, server.postLogoutRedirectURI, http.StatusFound)
 }
 
-type loginPageView struct {
-	Challenge   string
-	Username    string
-	Message     string
-	LoginAction string
-	MFAAction   string
-	MFA         bool
+// redirectToSignIn sends the browser to the sign-in page with the login request, the step and the outcome.
+// The username never goes into the address; the page keeps what was typed itself.
+func (server *Server) redirectToSignIn(writer http.ResponseWriter, request *http.Request, challenge, step, code string) {
+	http.Redirect(writer, request, server.signInLocation(challenge, step, code), http.StatusSeeOther)
 }
 
-func (server *Server) renderLogin(writer http.ResponseWriter, status int, challenge, username, message string) {
-	server.renderAuthPage(writer, status, loginPageView{
-		Challenge: challenge, Username: username, Message: message,
-		LoginAction: server.loginAction, MFAAction: server.mfaAction,
-	})
-}
-
-func (server *Server) renderTOTP(writer http.ResponseWriter, status int, challenge, message string) {
-	server.renderAuthPage(writer, status, loginPageView{
-		Challenge: challenge, Message: message, LoginAction: server.loginAction,
-		MFAAction: server.mfaAction, MFA: true,
-	})
-}
-
-func (server *Server) renderAuthPage(writer http.ResponseWriter, status int, view loginPageView) {
-	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writer.WriteHeader(status)
-	_ = server.loginTemplate.Execute(writer, view)
+func (server *Server) signInLocation(challenge, step, code string) string {
+	query := url.Values{}
+	if challenge != "" {
+		query.Set("login_challenge", challenge)
+	}
+	if step != "" {
+		query.Set("step", step)
+	}
+	if code != "" {
+		query.Set("error", code)
+	}
+	return server.signInURL + "?" + query.Encode()
 }
 
 func scopeContains(scope, expected string) bool {
@@ -362,65 +336,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
-		writer.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		next.ServeHTTP(writer, request)
 	})
 }
-
-const loginPageTemplate = `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>智慧能源系统登录</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f3f6fb; color: #14213d; }
-    .card { width: min(420px, calc(100vw - 32px)); background: #fff; border: 1px solid #dfe6f1; border-radius: 18px; padding: 32px; box-shadow: 0 18px 50px rgba(20,33,61,.08); }
-    .eyebrow { font-size: 12px; letter-spacing: .12em; color: #64748b; text-transform: uppercase; margin-bottom: 10px; }
-    h1 { margin: 0 0 8px; font-size: 26px; }
-    .subtitle { margin: 0 0 24px; color: #64748b; font-size: 14px; line-height: 1.6; }
-    label { display: block; margin: 14px 0 7px; font-size: 13px; font-weight: 600; }
-    input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; outline: none; }
-    input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
-    button { width: 100%; height: 44px; margin-top: 22px; border: 0; border-radius: 10px; background: #1d4ed8; color: white; font: inherit; font-weight: 700; cursor: pointer; }
-    .error { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: #fff1f2; color: #be123c; font-size: 13px; }
-    .expired { text-align: center; color: #64748b; line-height: 1.7; }
-  </style>
-</head>
-<body>
-  <main class="card">
-    <div class="eyebrow">HVAC Energy Platform</div>
-    {{if .MFA}}
-    <h1>安全确认</h1>
-    <p class="subtitle">这是高保证身份确认，不是普通登录过期。请输入认证器中的一次性验证码。</p>
-    {{else}}
-    <h1>登录智慧能源系统</h1>
-    <p class="subtitle">使用平台账号完成身份认证。业务 Tenant、Site 与角色权限由平台 IAM 独立管理。</p>
-    {{end}}
-    {{if .Message}}<div class="error">{{.Message}}</div>{{end}}
-    {{if .Challenge}}
-      {{if .MFA}}
-      <form method="post" action="{{.MFAAction}}" autocomplete="off">
-        <input type="hidden" name="challenge" value="{{.Challenge}}" />
-        <label for="code">一次性验证码</label>
-        <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
-        <button type="submit">确认身份</button>
-      </form>
-      {{else}}
-      <form method="post" action="{{.LoginAction}}" autocomplete="on">
-        <input type="hidden" name="challenge" value="{{.Challenge}}" />
-        <label for="username">用户名</label>
-        <input id="username" name="username" value="{{.Username}}" autocomplete="username" required autofocus />
-        <label for="password">密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required />
-        <button type="submit">登录</button>
-      </form>
-      {{end}}
-    {{else}}
-    <p class="expired">请返回智慧能源系统重新发起登录。</p>
-    {{end}}
-  </main>
-</body>
-</html>`
