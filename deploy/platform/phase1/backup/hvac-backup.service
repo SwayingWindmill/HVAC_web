@@ -1,0 +1,14 @@
+# Install to /etc/systemd/system/ with hvac-backup.timer; /etc/hvac/backup.env sets PHASE1_RUNTIME_DIR,
+# PHASE1_ENV_FILE, PHASE1_DEPLOYMENT_TIER, HVAC_LOCAL_PROJECT and BACKUP_KEEP for this host.
+[Unit]
+Description=HVAC platform nightly backup (PostgreSQL base backup, ClickHouse)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hvac/backup.env
+WorkingDirectory=/opt/hvac-platform
+ExecStart=/opt/hvac-platform/deploy/platform/phase1/backup/run-scheduled-backups.sh
+Nice=10
+IOSchedulingClass=idle
