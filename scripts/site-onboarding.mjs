@@ -48,7 +48,7 @@ export function buildOnboardingSql(profile) {
   const deviceBindingRows = devices.filter((device) => device.asset).map((device) => `(${sqlLiteral(rowId(site.id, '6400', device.deviceIndex))}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(device.asset)}, ${device.type.endsWith('METER') ? "'METER'" : "'CONTROLLER'"}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
   const pointRows = points.map((point) => {
     const interval = point.device.sampleSeconds * 1000;
-    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
+    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
   }).join(',\n');
   // A point describes the machine it measures, else the Site.
   const subjectRows = points.map((point, index) => {
@@ -123,19 +123,130 @@ ${coverage}
 ON CONFLICT (device_id) DO UPDATE SET available=true, reason_code=NULL, updated_at=clock_timestamp();
 RESET ROLE;
 COMMIT;`;
-  return { registry, telemetry, deviceCount: devices.length, pointCount: points.length };
+  return { registry, telemetry, energy: buildEnergySql(profile, devices, points), deviceCount: devices.length, pointCount: points.length };
+}
+
+const ELECTRICITY = '01990000-0000-7000-8000-000000000001';
+
+// The Site's energy model, when its site file has one: the total meter on the grid feed into the
+// plant, each machine's meter on the plant's feed into that machine (a sub-meter inside the total),
+// the Tenant's released energy Metrics bound to those counters and calculated on schedule, the
+// import Tariff on the grid boundary, and the monthly report. A released topology is immutable, so
+// a rerun leaves it as it is.
+function buildEnergySql(profile, devices, points) {
+  const energy = profile.energy;
+  if (!energy) return '';
+  const { site } = profile;
+  const t = sqlLiteral(profile.tenantId);
+  const st = sqlLiteral(site.id);
+  const id = (kind, index) => sqlLiteral(rowId(site.id, kind, index));
+  const deviceByKey = new Map(devices.map((device) => [device.sourceKey, device]));
+  const counter = (device) => {
+    const point = points.find((candidate) => candidate.device === device && candidate.pointType === 'COUNTER');
+    if (!point) throw new Error(`${device.sourceKey} has no energy counter`);
+    return point.id;
+  };
+  const assetName = new Map((profile.assets ?? []).map((asset) => [asset.id, asset.name]));
+  const total = deviceByKey.get(energy.totalMeter);
+  const branches = energy.branchMeters.map((key) => deviceByKey.get(key));
+  const version = id('7000', 1);
+  const nodes = [
+    { key: 'grid', type: 'GRID', name: '电网' },
+    { key: 'plant', type: 'HVAC', name: energy.plantName },
+    ...branches.map((device) => ({ key: device.sourceKey, type: 'LOAD', name: assetName.get(device.asset) ?? device.name, deviceId: device.id })),
+  ].map((node, index) => ({ ...node, id: id('7100', index + 1) }));
+  const nodeId = new Map(nodes.map((node) => [node.key, node.id]));
+  const meters = [
+    { device: total, from: 'grid', to: 'plant', direction: 'IMPORT' },
+    ...branches.map((device) => ({ device, from: 'plant', to: device.sourceKey, direction: 'CONSUME' })),
+  ].map((meter, index) => ({ ...meter, edge: id('7200', index + 1), meter: id('7300', index + 1), binding: id('7400', index + 1), point: sqlLiteral(counter(meter.device)) }));
+  const draft = `WHERE EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE id = ${version} AND status = 'DRAFT')`;
+
+  // Metric definitions are the Tenant's; the Site binds their released version by Metric code.
+  const metricBinding = (binding) => `INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+SELECT ${id('7500', binding.index)}, ${t}, ${st}, v.id, v.metric_id, v.version, 1, '${binding.subject}', ${sqlLiteral(binding.subjectId)}, '${binding.granularity}', ${sqlJson(binding.source)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
+FROM core_registry.metric_versions v JOIN core_registry.metrics m ON m.id = v.metric_id
+WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'RELEASED'
+  AND NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id('7500', binding.index)});`;
+  const totalEnergy = { points: { site_energy: counter(total) }, counter: { decreaseMode: 'RESET' } };
+  const bindings = [
+    { code: 'hourly_energy', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', source: totalEnergy, cron: '5 * * * *', name: '空调逐时用电量（每小时）' },
+    { code: 'daily_energy', subject: 'SITE', subjectId: site.id, granularity: 'DAY', source: totalEnergy, cron: '10 0 * * *', name: '空调日用电量（每日零点后）' },
+    { code: 'energy_cost', subject: 'SITE', subjectId: site.id, granularity: 'DAY', source: {}, cron: '20 0 * * *', name: '空调日电度电费（每日零点后）' },
+    ...branches.map((device) => ({
+      code: 'device_hourly_energy', subject: 'DEVICE', subjectId: device.id, granularity: 'HOUR', cron: '5 * * * *',
+      source: { points: { device_energy: counter(device) }, counter: { decreaseMode: 'RESET' } },
+      name: `${assetName.get(device.asset) ?? device.name}逐时用电量（每小时）`,
+    })),
+  ].map((binding, index) => ({ ...binding, index: index + 1 }));
+  const nextFire = (cron) => cron.startsWith('5 ') ? 'clock_timestamp()'
+    : `(date_trunc('day', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 day' + interval '${Number(cron.split(' ')[0])} minutes') AT TIME ZONE '${site.timezone}'`;
+  const schedules = bindings.map((binding) => `  (${id('7600', binding.index)}, ${sqlLiteral(`${binding.code.replaceAll('_', '-')}-${site.code}${binding.subject === 'DEVICE' ? `-${binding.index}` : ''}`)}, ${sqlLiteral(binding.name)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', ${sqlLiteral(binding.cron)}, '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rowId(site.id, '7500', binding.index) })}, ${nextFire(binding.cron)})`);
+  const tariff = energy.tariff;
+  const periods = ['WEEKDAY', 'WEEKEND'].flatMap((dayType) => tariff.slices.map(([code, start, end], ordinal) => ({ dayType, code, start, end, ordinal })))
+    .map((period, index) => `  (${id('7900', index + 1)}, ${t}, ${st}, ${id('7800', 2)}, ${sqlLiteral(period.code)}, '${period.dayType}', ${period.start}, ${period.end}, ${sqlJson(tariff.rates[period.code])}, ${period.ordinal}, 1, clock_timestamp(), clock_timestamp())`);
+
+  return `BEGIN;
+INSERT INTO core_registry.energy_topology_versions (id, tenant_id, site_id, version, status, revision, created_at, updated_at)
+VALUES (${version}, ${t}, ${st}, 1, 'DRAFT', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_nodes (id, tenant_id, site_id, topology_version_id, node_type, name, device_id, status, revision, created_at, updated_at)
+SELECT node.* FROM (VALUES
+${nodes.map((node) => `  (${node.id}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${sqlLiteral(node.type)}, ${sqlLiteral(node.name)}, ${node.deviceId ? `${sqlLiteral(node.deviceId)}::uuid` : 'NULL::uuid'}, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS node ${draft}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_edges (id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id, energy_type_id, direction, enabled, revision, created_at, updated_at)
+SELECT edge.* FROM (VALUES
+${meters.map((meter) => `  (${meter.edge}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${nodeId.get(meter.from)}::uuid, ${nodeId.get(meter.to)}::uuid, '${ELECTRICITY}'::uuid, '${meter.direction}', true, 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS edge ${draft}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.energy_meters (id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at) VALUES
+${meters.map((meter) => `  (${meter.meter}, ${t}, ${st}, ${sqlLiteral(meter.device.code.replaceAll('-', '_'))}, ${sqlLiteral(meter.device.name)}, ${sqlLiteral(meter.device.id)}, '${ELECTRICITY}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.meter_bindings (id, tenant_id, site_id, topology_version_id, energy_edge_id, energy_type_id, meter_id, device_id, point_id, point_type, meter_role, direction, priority, effective_from, version, status, revision, created_at, updated_at) VALUES
+${meters.map((meter) => `  (${meter.binding}, ${t}, ${st}, ${version}, ${meter.edge}, '${ELECTRICITY}', ${meter.meter}, ${sqlLiteral(meter.device.id)}, ${meter.point}, 'COUNTER', 'PRIMARY', '${meter.direction}', 0, '2026-01-01T00:00:00Z', 1, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.energy_topology_versions
+SET status = 'ACTIVE', effective_from = '2026-01-01T00:00:00Z', released_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${version} AND status = 'DRAFT';
+
+${bindings.map(metricBinding).join('\n')}
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
+${schedules.join(',\n')},
+  (${id('7600', 90)}, ${sqlLiteral(`monthly-report-${site.code}`)}, '月度报告快照（每月 1 日 03:00）', ${t}, ${st}, 'REPORT_GENERATE', 'CRON', '0 3 1 * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 120, '{}',
+    (date_trunc('month', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 month' + interval '3 hours') AT TIME ZONE '${site.timezone}')
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+
+INSERT INTO core_registry.settlement_boundaries (id, tenant_id, site_id, topology_version_id, boundary_code, display_name, boundary_type, energy_type_id, direction, definition_mode, node_id, effective_from, status, revision, created_at, updated_at)
+VALUES (${id('7800', 1)}, ${t}, ${st}, ${version}, 'grid_import', '电网进线', 'GRID_CONNECTION', '${ELECTRICITY}', 'IMPORT', 'NODE', ${nodeId.get('grid')}, '2026-01-01T00:00:00Z', 'DRAFT', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.settlement_boundaries SET status = 'ACTIVE', revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${id('7800', 1)} AND status = 'DRAFT';
+INSERT INTO core_registry.tariffs (id, tenant_id, site_id, tariff_code, display_name, energy_type_id, status, revision, created_at, updated_at)
+VALUES (${id('7800', 3)}, ${t}, ${st}, ${sqlLiteral(tariff.code)}, ${sqlLiteral(tariff.name)}, '${ELECTRICITY}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = clock_timestamp();
+INSERT INTO core_registry.tariff_versions (id, tenant_id, site_id, tariff_id, version, effective_from, timezone, currency, billing_cycle, status, revision, created_at, updated_at)
+VALUES (${id('7800', 2)}, ${t}, ${st}, ${id('7800', 3)}, 1, '2026-01-01T00:00:00Z', ${sqlLiteral(tariff.timezone)}, 'CNY', 'CALENDAR_MONTH', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.tariff_periods (id, tenant_id, site_id, tariff_version_id, period_code, day_type, local_start_minute, local_end_minute, pricing_rule, ordinal, revision, created_at, updated_at) VALUES
+${periods.join(',\n')}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.tariff_assignments (id, tenant_id, site_id, boundary_id, tariff_id, effective_from, status, revision, created_at, updated_at)
+VALUES (${id('7800', 4)}, ${t}, ${st}, ${id('7800', 1)}, ${id('7800', 3)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+COMMIT;`;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [file, flag] = process.argv.slice(2);
   if (!file) throw new Error('usage: node scripts/site-onboarding.mjs <site file> [--print]');
   const profile = JSON.parse(readFileSync(file, 'utf8'));
-  const { registry, telemetry, deviceCount, pointCount } = buildOnboardingSql(profile);
+  const { registry, telemetry, energy, deviceCount, pointCount } = buildOnboardingSql(profile);
   if (flag === '--print') {
-    process.stdout.write(`${registry}\n\n${telemetry}\n`);
+    process.stdout.write(`${registry}\n\n${telemetry}\n\n${energy}\n`);
   } else {
     const container = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
-    for (const [database, sql] of [['hvac_s1', registry], ['hvac_s2', telemetry]]) {
+    for (const [database, sql] of [['hvac_s1', registry], ['hvac_s2', telemetry], ['hvac_s1', energy]].filter(([, sql]) => sql)) {
       const result = spawnSync('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-q'], { input: sql, stdio: ['pipe', 'inherit', 'inherit'] });
       if (result.status !== 0) throw new Error(`${database} onboarding failed with ${result.status}`);
     }
