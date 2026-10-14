@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPlantView, equipmentStatus, isRunning, soleReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
+import { buildPlantView, equipmentStatus, isRunning, soleReading, tileReadings } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 
 const device = (category, overrides = {}) => ({
   deviceId: `${category}-${Math.random()}`,
@@ -49,4 +49,18 @@ test('a Gateway-wired device without an Asset or source-key namespace is grouped
   assert.deepEqual(view.groups.map((group) => [group.label, group.devices.map((device) => device.name)]), [
     ['计量', ['流量计']], ['采集与控制', ['温度采集模块']], ['其他设备', ['未知设备']],
   ]);
+});
+
+test("a device without its role's key readings shows its own measurements, current ones first", () => {
+  const readings = { power_total: { label: '有功功率', current: false }, t1: { label: '温度 1', current: true }, t2: { label: '温度 2', current: true } };
+  const meter = {
+    row: { telemetryPoints: ['power_total', 't1', 't2', 'energy'].map((sourceKey) => ({ sourceKey, status: 'ACTIVE', pointType: sourceKey === 'energy' ? 'COUNTER' : 'TELEMETRY', valueType: 'NUMBER' })) },
+    reading: (key) => readings[key] ?? null,
+  };
+  const own = tileReadings(meter, ['chiller.power'], []);
+  assert.equal(own.lead.sourceKey, 't1');
+  assert.deepEqual(own.facts.map((reading) => reading.label), ['温度 2', '有功功率']);
+  const keyed = tileReadings({ ...meter, reading: (key) => (key === 'chiller.power' ? { label: '功率', current: true } : readings[key] ?? null) }, ['chiller.power'], ['t2']);
+  assert.equal(keyed.lead.sourceKey, 'chiller.power');
+  assert.deepEqual(keyed.facts.map((reading) => reading.label), ['温度 2']);
 });

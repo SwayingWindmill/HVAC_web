@@ -6,7 +6,8 @@
 //      platform telemetry began, into one CSV per device.
 //   1b. derive (after export):     node scripts/thingsboard-history-import.mjs derive <site file> --in <dir>
 //      writes the history of each device the site file derives from others (the plant total that the
-//      Gateway adds up from the machines' meters), by the same rule the Gateway applies live.
+//      Gateway adds up from the machines' meters, the calculated BTU meter), by the rules the Gateway
+//      applies live.
 //   2. import (inside the platform's application network, with the historical-replay-runner identity):
 //      node scripts/thingsboard-history-import.mjs import <site file> --in <dir> --dataset <uuidv7> \
 //        --telemetry-url https://telemetry-runtime-service:8446 --cert … --key … --ca … [--rate <per second>] [--resume <file>]
@@ -82,18 +83,67 @@ export function deriveTotals(sources) {
   return totals;
 }
 
+// The cooling a calculated BTU meter reports, as the Gateway computes it live: at each temperature
+// reading with a flow reading from the last 3 minutes, 1.163 × flow (m³/h) × (return − supply) in kW,
+// never below zero, integrated over time into kWh; a gap of more than 10 minutes is not integrated.
+export function deriveCooling(flowRows, supplyRows, returnRows) {
+  const supplyAt = new Map(supplyRows);
+  const flows = [...flowRows].sort((left, right) => left[0] - right[0]);
+  const samples = [];
+  let flowIndex = -1;
+  let energy = 0;
+  let previous = null;
+  for (const [ts, returnTemperature] of [...returnRows].sort((left, right) => left[0] - right[0])) {
+    const supply = supplyAt.get(ts);
+    while (flowIndex + 1 < flows.length && flows[flowIndex + 1][0] <= ts) flowIndex += 1;
+    const flow = flowIndex >= 0 && ts - flows[flowIndex][0] <= 180000 ? flows[flowIndex][1] : null;
+    if (flow === null || !(supply > 0) || !(returnTemperature > 0)) continue;
+    const difference = returnTemperature - supply;
+    const capacity = Math.max(0, 1.163 * flow * difference);
+    if (previous && ts - previous.ts <= 600000) energy += (previous.capacity + capacity) / 2 * (ts - previous.ts) / 3600000;
+    previous = { ts, capacity };
+    samples.push({
+      ts, supply, returnTemperature, flow,
+      difference: Math.round(difference * 100) / 100,
+      capacity: Math.round(capacity * 10) / 10,
+      energy: Math.round(energy * 1000) / 1000,
+    });
+  }
+  return samples;
+}
+
+function readSeries(dir, sourceKey, field) {
+  return readFileSync(path.join(dir, `${sourceKey}.csv`), 'utf8').split('\n').filter(Boolean)
+    .map((line) => line.split(','))
+    .filter(([, key]) => key === field)
+    .map(([ts, , value]) => [Number(ts), Number(value)]);
+}
+
 function deriveHistory(profile, dir) {
-  for (const device of profile.devices.filter((candidate) => candidate.derivedFrom)) {
-    const sources = device.derivedFrom.map((key) => ({
-      key,
-      rows: readFileSync(path.join(dir, `${key}.csv`), 'utf8').split('\n').filter(Boolean).map((line) => {
-        const [ts, field, value] = line.split(',');
-        return [Number(ts), field, Number(value)];
-      }),
-    }));
-    const totals = deriveTotals(sources);
-    writeFileSync(path.join(dir, `${device.sourceKey}.csv`), totals.map(([ts, power, energy]) => `${ts},powerTotal,${power}\n${ts},combinedActiveTotalElectricalEnergy,${energy}\n`).join(''));
-    console.log(`${device.sourceKey}: ${totals.length} samples from ${device.derivedFrom.join(', ')}`);
+  for (const device of profile.devices.filter((candidate) => candidate.derive)) {
+    let lines;
+    if (device.derive.kind === 'sum-meters') {
+      const sources = device.derive.from.map((key) => ({
+        key,
+        rows: readFileSync(path.join(dir, `${key}.csv`), 'utf8').split('\n').filter(Boolean).map((line) => {
+          const [ts, field, value] = line.split(',');
+          return [Number(ts), field, Number(value)];
+        }),
+      }));
+      lines = deriveTotals(sources).map(([ts, power, energy]) => `${ts},power_total,${power}\n${ts},active_energy_total,${energy}\n`);
+    } else if (device.derive.kind === 'cooling') {
+      const { flow, supply } = device.derive;
+      const samples = deriveCooling(readSeries(dir, ...flow), readSeries(dir, ...supply), readSeries(dir, ...device.derive.return));
+      lines = samples.map((sample) => [
+        ['supply_water_temperature', sample.supply], ['return_water_temperature', sample.returnTemperature],
+        ['temperature_difference', sample.difference], ['flow_rate', sample.flow],
+        ['instant_cooling_capacity', sample.capacity], ['accumulated_cooling_energy', sample.energy],
+      ].map(([code, value]) => `${sample.ts},${code},${value}\n`).join(''));
+    } else {
+      throw new Error(`${device.sourceKey}: unknown derive kind ${device.derive.kind}`);
+    }
+    writeFileSync(path.join(dir, `${device.sourceKey}.csv`), lines.join(''));
+    console.log(`${device.sourceKey}: ${lines.length} samples`);
   }
 }
 

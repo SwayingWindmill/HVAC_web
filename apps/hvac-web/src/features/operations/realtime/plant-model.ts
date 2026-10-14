@@ -254,6 +254,32 @@ export function plantReading(view: PlantView, sourceKey: string): PlantReading |
 export const EQUIPMENT_CATEGORIES: ReadonlySet<PlantCategory> = new Set(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER']);
 
 /** Running means reporting RUNNING while not offline: an offline device is offline whatever it last reported. */
+export interface TileReadings {
+  readonly lead: { readonly sourceKey: string; readonly reading: PlantReading } | null;
+  readonly facts: readonly PlantReading[];
+}
+
+/**
+ * What a device tile shows: the first of the role's preferred readings it has, then up to two of
+ * its role's other key readings. A device without any of them (a Gateway-wired meter or acquisition
+ * module) shows its own numeric measurements instead, current ones first, so its tile is never blank.
+ */
+export function tileReadings(device: PlantDevice, preferredKeys: readonly string[], factKeys: readonly string[]): TileReadings {
+  const pick = (keys: readonly string[]) => keys
+    .map((sourceKey) => ({ sourceKey, reading: device.reading(sourceKey) }))
+    .filter((entry): entry is { sourceKey: string; reading: PlantReading } => Boolean(entry.reading));
+  const preferred = pick(preferredKeys);
+  if (preferred.length > 0) {
+    const lead = preferred[0];
+    return { lead, facts: pick(factKeys).filter((entry) => entry.sourceKey !== lead.sourceKey).map((entry) => entry.reading).slice(0, 2) };
+  }
+  const own = pick(device.row.telemetryPoints
+    .filter((point) => point.status === 'ACTIVE' && point.pointType === 'TELEMETRY' && point.valueType === 'NUMBER')
+    .map((point) => point.sourceKey));
+  const ordered = [...own.filter((entry) => entry.reading.current), ...own.filter((entry) => !entry.reading.current)];
+  return { lead: ordered[0] ?? null, facts: ordered.slice(1, 3).map((entry) => entry.reading) };
+}
+
 export function isRunning(device: PlantDevice): boolean {
   return device.connection !== 'OFFLINE' && device.runState === 'RUNNING';
 }
