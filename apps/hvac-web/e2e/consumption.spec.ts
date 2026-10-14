@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
+// The recording's hours are only complete once the clock has passed them, so the page runs at the moment it was recorded.
+const recordedAt = JSON.parse(readFileSync(new URL('./fixtures/energy-series.json', import.meta.url), 'utf8')).electricity.metadata.dataWatermark;
+
 test('energy consumption compares the period with the same span before it, per Site-local hour', async ({ page, gateway }) => {
+  await page.clock.setFixedTime(new Date(recordedAt));
   await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
 
   const energy = page.getByRole('region', { name: '期间用能' });

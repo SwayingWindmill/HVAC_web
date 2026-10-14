@@ -106,6 +106,7 @@ test('a measure cites the setpoint command it came from, named as the control pa
   await page.getByRole('option', { name: /CHILLER-01 冷冻水出水设定温度 → 8\.0 °C/ }).click();
   await page.getByRole('button', { name: '登记', exact: true }).click();
 
+  await expect.poll(() => gateway.writes.filter((write) => write.path === MEASURES).length).toBe(1);
   const [registered] = gateway.writes.filter((write) => write.path === MEASURES);
   expect(registered.body?.evidenceCommandId).toBe(gateway.commands[0].commandId);
   const evidence = page.getByRole('dialog').getByRole('link', { name: /CHILLER-01 冷冻水出水设定温度 → 8\.0 °C/ });
