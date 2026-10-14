@@ -19,8 +19,9 @@ function rowId(siteId, kind, index) {
   return siteId.replace(/^([0-9a-f]{8})-[0-9a-f]{4}-7000-8000-[0-9a-f]{12}$/, (_, head) => `${head}-${kind}-7000-8000-${index.toString(16).padStart(12, '0')}`);
 }
 
+// A device's points: its own list or the shared meter list, then any it adds (morePoints).
 export function expandPoints(device, meterPoints) {
-  return (device.points === 'meter' ? meterPoints : device.points).map((point) => ({ ...point }));
+  return [...(device.points === 'meter' ? meterPoints : device.points), ...(device.morePoints ?? [])].map((point) => ({ ...point }));
 }
 
 export function buildOnboardingSql(profile) {
