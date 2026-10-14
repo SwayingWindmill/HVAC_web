@@ -31,8 +31,8 @@ Issue #542。2026-10-14 与用户确认：接入 ThingsBoard 上那台真实网�
 
 1. 已完成：站点登记、网关证书、8884 入口、Node-RED 增加「平台·形成信封 → 平台·QoS1」分支，与 ThingsBoard 分支并行。
 2. 历史导入完成后，逐台核对平台与导出文件（即 ThingsBoard 的数据）的条数和时间范围。
-3. Node-RED 耐久 Outbox 改为发往平台（「Outbox·形成事件」生成平台信封），删除 ThingsBoard 分支和「平台·QoS1」的临时直发。
-4. 停 ThingsBoard（2026-10-14 已停止并关闭自启，数据卷和 `/opt/backups/thingsboard/` 保留；用户要求不必等历史导入结束，导入读的是导出的 CSV）。宿主机 nginx 的 8883 转发和 ufw 1883 规则随后删除。
+3. Node-RED 耐久 Outbox 改为发往平台：各设备函数 →「平台·形成信封」→「Outbox·形成事件」→ 耐久 Outbox →「平台·QoS1（耐久）」，删除 ThingsBoard 的 MQTT 连接和临时直发（2026-10-14 已完成，切换时积压的 13 条 ThingsBoard 格式记录被平台以无权主题丢弃并确认，没有进入平台数据）。
+4. 停 ThingsBoard（2026-10-14 已停止并关闭自启，数据卷和 `/opt/backups/thingsboard/` 保留；用户要求不必等历史导入结束，导入读的是导出的 CSV）。宿主机 nginx 的 8883 转发和 ufw 的 1883、8883 规则已删除，只保留 8884。
 
 ## 待办
 

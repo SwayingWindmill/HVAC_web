@@ -1,7 +1,10 @@
 // Node-RED function node「平台·形成信封」on the Songyaxuan Gateway (tab「Edge·采集与上报」).
-// Input: the outbox event whose payload is { <device>: [{ ts, values }] } as the device functions build it.
+// Input: a device function's message { <device>: [{ ts, values }] }.
 // Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per message,
-// or nothing for devices the platform has no source key for (the Gateway's own status).
+// or nothing for devices the platform has no source key for (the Gateway's own status). It goes on to
+//「Outbox·形成事件」, which stores it in the durable outbox until the broker acknowledges it:
+//   msg.outboxCommand = "enqueue";
+//   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
 // Registered devices and points: deploy/sites/songyaxuan.site.json.
 const GATEWAY_ID = "01a14000-4000-7000-8000-000000000100";
 const DEVICES = {
