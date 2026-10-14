@@ -9,7 +9,9 @@ keep="${BACKUP_KEEP:-7}"
 cd "$(dirname "$0")/../../../.."
 
 compose() { node scripts/phase1-wsl-compose.mjs --profile backup "$@"; }
-compose run --rm postgres-backup
+# The base backup runs inside the PostgreSQL container: the image's pg_hba.conf allows replication
+# connections only from the container itself, and wsl.override.yaml mounts the backup directory there.
+compose exec -T -e PGHOST=127.0.0.1 -e BACKUP_ROOT=/backups/base postgres bash -s < deploy/platform/phase1/backup/postgres-base-backup.sh
 compose run --rm clickhouse-backup
 
 prune() {

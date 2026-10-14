@@ -2,7 +2,7 @@
 set -euo pipefail
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target="/backup/${stamp}"
+target="${BACKUP_ROOT:-/backup}/${stamp}"
 mkdir -p "${target}"
 
 pg_basebackup \
