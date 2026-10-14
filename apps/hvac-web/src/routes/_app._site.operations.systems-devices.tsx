@@ -5,7 +5,7 @@ import { SystemsDevicesWorkspace } from '@/features/operations/systems-devices/c
 export const Route = createFileRoute('/_app/_site/operations/systems-devices')({
   validateSearch: z.object({
     q: z.string().optional(),
-    category: z.enum(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER', 'ZONE', 'METER', 'WEATHER', 'OTHER']).optional(),
+    category: z.enum(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER', 'ZONE', 'METER', 'WEATHER', 'ACQUISITION', 'OTHER']).optional(),
     status: z.enum(['running', 'stopped', 'attention']).optional(),
     inspect: z.string().optional(),
     layout: z.enum(['cards', 'table']).optional(),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { equipmentStatus, isRunning, soleReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
+import { buildPlantView, equipmentStatus, isRunning, soleReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 
 const device = (category, overrides = {}) => ({
   deviceId: `${category}-${Math.random()}`,
@@ -36,4 +36,17 @@ test('a device probe stands for its pipe only when the category has one device',
   assert.equal(soleReading(plant([device('CHILLER')]), 'CHILLER', 'chiller.leaving_chilled_water_temperature')?.numeric, 7);
   assert.equal(soleReading(plant([device('CHILLER'), device('CHILLER')]), 'CHILLER', 'chiller.leaving_chilled_water_temperature'), null);
   assert.equal(soleReading(plant([]), 'CHILLER', 'chiller.leaving_chilled_water_temperature'), null);
+});
+
+test('a Gateway-wired device without an Asset or source-key namespace is grouped by its device type', () => {
+  const row = (deviceType, displayName) => ({
+    device: { id: displayName, deviceType, displayName },
+    binding: { state: 'unbound' },
+    telemetryPoints: [{ sourceKey: 't1', pointCode: 't1', status: 'ACTIVE' }],
+    operational: { connection: { state: 'ONLINE' }, points: [] },
+  });
+  const view = buildPlantView([row('FLOW_METER', '流量计'), row('TEMPERATURE_MODULE', '温度采集模块'), row('SOMETHING_NEW', '未知设备')]);
+  assert.deepEqual(view.groups.map((group) => [group.label, group.devices.map((device) => device.name)]), [
+    ['计量', ['流量计']], ['采集模块', ['温度采集模块']], ['其他设备', ['未知设备']],
+  ]);
 });

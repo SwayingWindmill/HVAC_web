@@ -68,6 +68,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 ## Next up
 
 0. **Site server (139.199.58.47, hvac.swayingwindmill.online) runs main since 2026-10-14.** Compose project `hvac-platform` in `/opt/hvac-platform`, demo tier with simulators and without the intelligence profile, behind the host nginx on 127.0.0.1:18443. Images are built locally from main and shipped with `docker save | ssh docker load`; `/opt/hvac-platform-tools/deploy.sh` replays the `local:up` steps there. ThingsBoard still runs because it receives a real Node-RED gateway over MQTT 8883 (host nginx stream); its database was dumped to `/opt/backups/thingsboard/`. Next: connect that gateway to the platform and import its ThingsBoard history before stopping ThingsBoard.
+   - **Songyaxuan (松雅轩), the first real Site, is live on it (#542, spec `docs/specs/site-gateway-onboarding.md`).** Its Node-RED gateway publishes the platform envelope over mutual TLS on port 8884 (host nginx stream → Mosquitto), alongside its old ThingsBoard branch. The gateway key was generated on the gateway; its certificate expires 2027-01-12. The ThingsBoard history import (dataset `01a14000-7000-7000-8000-000000000001`, window up to 2026-10-14T10:26:30Z) runs as container `tb-history-import`; when it finishes, compare counts per device, move the gateway's durable outbox to the platform, then stop ThingsBoard. What each temperature channel, meter and the ET1010 measure is still unconfirmed.
 
 Roadmap issues, in order:
 

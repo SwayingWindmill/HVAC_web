@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。温度通道、电表和 ET1010 的用途待现场确认，先按接线登记。",
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "site": {
+    "id": "01a14000-1000-7000-8000-000000000001",
+    "code": "songyaxuan",
+    "name": "松雅轩",
+    "timezone": "Asia/Shanghai"
+  },
+  "space": {
+    "id": "01a14000-2000-7000-8000-000000000001",
+    "code": "plant-room",
+    "name": "空调机房",
+    "type": "PLANT_ROOM"
+  },
+  "gateway": {
+    "id": "01a14000-4000-7000-8000-000000000100",
+    "code": "songyaxuan-edge",
+    "name": "松雅轩边缘网关"
+  },
+  "devices": [
+    {
+      "id": "01a14000-4000-7000-8000-000000000001",
+      "sourceKey": "temperature",
+      "code": "temperature-uid20",
+      "name": "温度采集模块（UID 20）",
+      "type": "TEMPERATURE_MODULE",
+      "sampleSeconds": 60,
+      "points": { "range": { "prefix": "t", "from": 1, "to": 20 }, "name": "温度通道 {n}", "unit": "Cel", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 {register}", "firstRegister": 30401 }
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000002",
+      "sourceKey": "waterflow",
+      "code": "flow-uid10",
+      "name": "流量计（UID 10）",
+      "type": "FLOW_METER",
+      "sampleSeconds": 60,
+      "points": [
+        { "code": "flow_meter", "name": "瞬时流量", "unit": "m3/h", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID10 保持寄存器 1" },
+        { "code": "flow_velocity", "name": "流速", "unit": "m/s", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID10 保持寄存器 5" }
+      ]
+    },
+    { "id": "01a14000-4000-7000-8000-000000000003", "sourceKey": "ammeter-unit1", "code": "meter-uid5", "name": "1 号电表（UID 5）", "type": "HVAC_POWER_METER", "sampleSeconds": 300, "points": "meter" },
+    { "id": "01a14000-4000-7000-8000-000000000004", "sourceKey": "ammeter-unit2", "code": "meter-uid2", "name": "2 号电表（UID 2）", "type": "HVAC_POWER_METER", "sampleSeconds": 300, "points": "meter" },
+    { "id": "01a14000-4000-7000-8000-000000000005", "sourceKey": "ammeter-unit3", "code": "meter-uid3", "name": "3 号电表（UID 3）", "type": "HVAC_POWER_METER", "sampleSeconds": 300, "points": "meter" },
+    { "id": "01a14000-4000-7000-8000-000000000006", "sourceKey": "ammeter-unit4", "code": "meter-uid4", "name": "4 号电表（UID 4）", "type": "HVAC_POWER_METER", "sampleSeconds": 300, "points": "meter" },
+    {
+      "id": "01a14000-4000-7000-8000-000000000007",
+      "sourceKey": "et1010",
+      "code": "et1010-uid31",
+      "name": "ET1010 采集模块（UID 31）",
+      "type": "IO_MODULE",
+      "sampleSeconds": 60,
+      "points": { "codes": ["u11", "u12", "u13", "u14", "u21", "u22", "u23", "u24", "u31", "u32", "u33", "u34", "u41", "u42", "u43", "u44"], "name": "通道 {code}", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID31 地址 {index}" }
+    }
+  ],
+  "meterPoints": [
+    { "code": "power_total", "name": "有功功率", "unit": "kW", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "保持寄存器 36" },
+    { "code": "active_energy_total", "name": "累计电量", "unit": "kWh", "pointType": "COUNTER", "valueType": "NUMBER", "address": "保持寄存器 60（4 号表为 64）" }
+  ]
+}
