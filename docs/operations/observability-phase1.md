@@ -142,6 +142,8 @@ receivers:
 
 Port 465 is implicit TLS, which Alertmanager speaks when `smtp_require_tls` is false; the password file is mounted beside the configuration and stays out of the repository.
 
+A host started through `scripts/phase1-wsl-compose.mjs` reads Prometheus configuration from `runtime/<env>/config/prometheus.yaml` (`wsl.override.yaml`), not from the repository file; that copy needs the same `alerting` block.
+
 ## Host disk growth and PostgreSQL WAL
 
 1. Treat `Phase1HostDiskUsageWarning` and `Phase1HostDiskUsageCritical` as capacity incidents, not as reasons to delete database files manually.
