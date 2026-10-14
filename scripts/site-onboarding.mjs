@@ -178,6 +178,11 @@ WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'R
       source: { points: { device_energy: counter(device) }, counter: { decreaseMode: 'RESET' } },
       name: `${assetName.get(device.asset) ?? device.name}逐时用电量（每小时）`,
     })),
+    // Cooling is bound after the electricity Metrics so their binding ids stay where they were.
+    ...(energy.coolingMeter ? [{
+      code: 'hourly_cooling', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', cron: '5 * * * *', name: '逐时供冷量（每小时）',
+      source: { points: { site_cooling: counter(deviceByKey.get(energy.coolingMeter)) }, counter: { decreaseMode: 'RESET' } },
+    }] : []),
   ].map((binding, index) => ({ ...binding, index: index + 1 }));
   const nextFire = (cron) => cron.startsWith('5 ') ? 'clock_timestamp()'
     : `(date_trunc('day', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 day' + interval '${Number(cron.split(' ')[0])} minutes') AT TIME ZONE '${site.timezone}'`;
