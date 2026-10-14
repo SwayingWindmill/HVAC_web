@@ -5,11 +5,13 @@ export const centralPlantAreas = Object.freeze([
   { id: 'plant-room', parentId: 'building-main', code: 'central-plant-room', name: '中央机房', type: 'PLANT_ROOM' },
   { id: 'rooftop', parentId: 'building-main', code: 'rooftop', name: '屋面', type: 'ROOFTOP' },
   { id: 'outdoor', parentId: 'building-main', code: 'outdoor', name: '室外环境', type: 'OUTDOOR' },
+  { id: 'office-zone', parentId: 'building-main', code: 'office-zone', name: '办公区', type: 'ZONE' },
 ]);
 
 const areaByDeviceType = Object.freeze({
   COOLING_TOWER: 'rooftop',
   WEATHER_STATION: 'outdoor',
+  ZONE_TEMPERATURE_SENSOR: 'office-zone',
 });
 
 const deviceEndpointType = Object.freeze({
@@ -20,6 +22,7 @@ const deviceEndpointType = Object.freeze({
   HVAC_POWER_METER: 'POWER_METER',
   BTU_METER: 'BTU_METER',
   WEATHER_STATION: 'WEATHER_STATION',
+  ZONE_TEMPERATURE_SENSOR: 'ZONE_TEMPERATURE_SENSOR',
 });
 
 export const centralPlantEquipment = Object.freeze(centralPlantDevices.map((device) => Object.freeze({
@@ -188,6 +191,8 @@ const humanize = (value) => value
 
 const subjectForDevice = (deviceId) => {
   if (deviceId === 'METER-HVAC-TOTAL' || deviceId === 'BTU-METER-01' || deviceId === 'WEATHER-STATION-01') return siteSubject();
+  // A zone temperature describes the space it is measured in.
+  if (deviceId === 'ZONE-SENSOR-01') return { subjectType: 'AREA', subjectId: 'office-zone' };
   const endpoint = centralPlantDeviceEndpoints.find((candidate) => candidate.id === deviceId);
   return equipmentSubject(endpoint.equipmentIds[0].replace(/^equipment-/, ''));
 };
@@ -253,6 +258,7 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
       powerMeterId: 'METER-HVAC-TOTAL',
       btuMeterId: 'BTU-METER-01',
       weatherStationId: 'WEATHER-STATION-01',
+      zoneSensorId: 'ZONE-SENSOR-01',
     },
     spaces: centralPlantAreas.map(({ id, parentId, name, type }) => ({ id, ...(parentId ? { parentId } : {}), name, type })),
     assets: centralPlantEquipment.map(({ id, areaId, name, type }) => ({ id, spaceId: areaId, name, type })),

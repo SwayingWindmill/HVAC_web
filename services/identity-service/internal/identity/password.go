@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -23,8 +24,8 @@ const (
 var errPasswordHashInvalid = errors.New("password hash is invalid")
 
 func HashPassword(password string) (string, error) {
-	if len(password) < 12 || len(password) > 512 {
-		return "", errors.New("password must be between 12 and 512 bytes")
+	if utf8.RuneCountInString(password) < MinimumPasswordCharacters || len(password) > maximumPasswordBytes {
+		return "", errors.New("password must be 8 characters to 512 bytes")
 	}
 	salt := make([]byte, argonSaltBytes)
 	if _, err := rand.Read(salt); err != nil {

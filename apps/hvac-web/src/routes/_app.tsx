@@ -25,10 +25,12 @@ function AppLayout() {
 
   useBlocker({
     enableBeforeUnload: false,
-    shouldBlockFn: async ({ current, next }) => {
-      const currentSiteId = siteIdFromLocation(defaultStringifySearch(current.search));
+    // Leaving the active Site scope, for another Site or a platform page, goes through the runtime: it
+    // purges the scope before navigating.
+    shouldBlockFn: async ({ next }) => {
+      const activeSiteId = runtime.current().protectedScope?.siteId;
       const nextSiteId = siteIdFromLocation(defaultStringifySearch(next.search));
-      if (!currentSiteId || !nextSiteId || currentSiteId === nextSiteId) return false;
+      if (!activeSiteId || nextSiteId === activeSiteId) return false;
 
       await runtime.requestSiteNavigation(`${next.pathname}${defaultStringifySearch(next.search)}`);
       return true;

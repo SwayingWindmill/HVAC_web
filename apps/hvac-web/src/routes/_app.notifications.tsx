@@ -1,9 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { z } from 'zod';
 import { NotificationCenter } from '@/features/notifications/NotificationCenter';
 import { requirePlatform } from '@/app/route-access';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 
 export const Route = createFileRoute('/_app/notifications')({
+  validateSearch: z.object({
+    view: z.enum(['unread', 'all']).optional(),
+    inspect: z.string().optional(),
+  }),
   beforeLoad: ({ context }) => requirePlatform(context.runtime),
   staticData: {
     title: '通知',

@@ -285,6 +285,16 @@ The versioned machine-readable result produced by the repository Benchmark Runne
 An IAM principal that is one of the platform's own unattended workloads, identified by its workload identity rather than by a person. It is authorized by the same Tenant memberships and role bindings as a person and acts only on its own behalf, never through a user session. It is not a tenant-created integration account.
 _Avoid_: service account, system user, robot user
 
+## Role
+
+A named set of IAM capabilities. Built-in Roles (`viewer`, `operator`, `site-manager`, `admin`; 只读、运维人员、运维主管、管理员) are shipped by the platform and cannot be edited by a Tenant; Tenant-owned roles exist only for Workload Principals.
+_Avoid_: permission group, profile
+
+## Role Assignment
+
+The only authorization fact: one Principal holds one Role in one Tenant, scoped to the whole Tenant (including Sites added later) or to one Site. Access is the union of a Principal's active Role Assignments minus explicit denies (ADR 0022). Stored in `iam.role_bindings`.
+_Avoid_: site binding, permission row, grant (a grant is the short-lived signed delegation IAM issues per decision)
+
 ## Domain Owner
 
 The single bounded context that is authoritative for creating and changing one class of business fact. Physical co-location with another module never transfers Domain Ownership; other contexts interact through governed commands, queries, owner-authored events or rebuildable projections.
@@ -363,3 +373,51 @@ _Avoid_: provisioning key, activation token
 
 The name a Gateway uses in its messages for one Device behind it. It is a Registry mapping scoped to that Gateway, not Device identity.
 _Avoid_: external device id, child id
+
+## Site Profile
+
+What the Registry records about a Site beyond its identity, to compare it with others: its building floor area (建筑面积, m²), which energy per square metre is taken on (GB/T 51161), and its GB 50176 thermal design zone (气候区). Both are optional; a Site without a floor area is not ranked on energy per square metre.
+_Avoid_: site metadata, site attributes
+
+## Cooling Degree Days
+
+CDD26 (冷却度日): over a period, the sum of each day's mean outdoor dry-bulb temperature above 26 °C, read from the Site's own weather station. Benchmarking divides electricity per square metre by it (单位度日用电, kWh/m²·℃·d) to compare Sites in different weather, over the days that have both electricity and a mean temperature. A Site without a weather station has none.
+_Avoid_: weather normalization, climate-adjusted energy
+
+## Sub-meter
+
+A meter on the feed into one piece of equipment (分表), as opposed to the Site's total meter. Its energy is already inside the Site total: a Meter Binding on an edge from a non-grid node into a device's load node has accounting scope BRANCH, every other one SITE, and a Site's total counts only SITE energy. What the total meter reads beyond the sub-meters is 未分项 (unallocated), shown as it is even when negative.
+_Avoid_: branch meter, child meter
+
+## Energy Conservation Measure
+
+One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended. Measures report at the same time only on different machines' sub-meters (see Measurement Boundary).
+_Avoid_: project, ECM record
+
+## Measurement Boundary
+
+Where a measure's electricity is measured (测量边界): the plant's total meter (IPMVP Option C) or one machine's Sub-meter (Option B). It is chosen at registration and never changes. Two measures may report over the same period only on different machines; a measure on the total meter reports alone, since the total holds every sub-meter.
+_Avoid_: scope, measurement point
+
+## Baseline
+
+The line fitted over a period before a measure was implemented that predicts the hourly electricity on its Measurement Boundary from the cooling the plant delivered. It is frozen at implementation and trusted only when it passes ASHRAE Guideline 14; it can be refitted on another period until the first Verified Day is published.
+
+## Adjusted Baseline
+
+What the Baseline predicts the plant would have used under the conditions actually seen after implementation. Avoided energy is the adjusted baseline minus the electricity actually used.
+_Avoid_: expected consumption, reference consumption
+
+## Report Snapshot
+
+A Site's closed month as its energy report shows it, taken once by report-service after the month ends and never changed. Taking it again keeps a new version; the report shows the latest. Demand, alarms and work orders are not in it and are worked out live beside it.
+_Avoid_: archived report, frozen report
+
+## Rule Revision
+
+One immutable version of a diagnosis rule FDD holds for a Tenant (诊断规则版本): for chilled-water low delta-T, the threshold and the window of minutes it is read over. An evaluation uses the revision in effect at its time and its finding cites it; changing the threshold publishes a new revision.
+_Avoid_: rule config, threshold setting
+
+## Verified Day
+
+One Site-local day of a measure's reporting period, verified once against its Baseline and never changed afterwards. Hours missing data count against its coverage; they are not filled in.

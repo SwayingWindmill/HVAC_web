@@ -204,3 +204,37 @@ func TestForecastDoesNotReportSuccessWhenHistoryWriteFails(t *testing.T) {
 		t.Fatalf("failure evidence=%v", publication.failed)
 	}
 }
+
+// A chiller plant's load follows the working day; a straight line through yesterday cannot.
+func TestForecastFollowsTheDailyProfileOfThePastDays(t *testing.T) {
+	sink := &captureSink{}
+	service, _ := NewService(sink, &memoryPublicationStore{}, time.Now)
+	request := validRequest()
+	request.Observations = nil
+	for at := request.ForecastOrigin.Add(-48 * time.Hour); at.Before(request.ForecastOrigin); at = at.Add(15 * time.Minute) {
+		value := 50.0
+		if hour := at.Hour(); hour >= 8 && hour < 18 {
+			value = 200
+		}
+		request.Observations = append(request.Observations, Observation{ObservedAt: at, Value: value})
+	}
+	points, err := service.Forecast(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(hour int) Point {
+		for _, point := range points {
+			if point.ForecastFor.Equal(request.ForecastOrigin.Add(time.Duration(hour) * time.Hour)) {
+				return point
+			}
+		}
+		t.Fatalf("no forecast for %02d:00", hour)
+		return Point{}
+	}
+	if day, night := at(10), at(2); day.Value != 200 || night.Value != 50 || day.Quality != "VALID" {
+		t.Fatalf("day=%#v night=%#v", day, night)
+	}
+	if band := at(10); band.LowerBound == nil || band.UpperBound == nil || *band.LowerBound > 200 || *band.UpperBound < 200 {
+		t.Fatalf("10:00 band=%#v", band)
+	}
+}

@@ -1,0 +1,81 @@
+{
+  "runId": "01a12bdc-97d7-7a23-a6df-9fb2cfcb06b8",
+  "trigger": "MANUAL",
+  "runStatus": "PUBLISHED",
+  "quality": "FEASIBLE",
+  "recommendation": {
+    "id": "01a12bdc-97d7-7e50-bc97-f14cb86800ba",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "siteId": "018f3e00-1000-7000-8000-000000000001",
+    "inputSnapshotId": "01a12bdc-97d7-7f4e-9b82-5e8fa9b31e77",
+    "deploymentRevisionId": "01910000-0000-7000-8000-80000000000a",
+    "baseline": {
+      "dailyCost": 573.56012785,
+      "dailyEnergyKWh": 674.776621,
+      "supplyTempC": 7.06,
+      "zoneTempC": 24.072
+    },
+    "objective": {
+      "horizon": "DAY_AHEAD",
+      "horizonMinutes": 1440,
+      "kind": "COST"
+    },
+    "constraints": [
+      {
+        "kind": "SUPPLY_TEMP",
+        "maxC": 10,
+        "maxStepC": 1,
+        "minC": 6
+      },
+      {
+        "kind": "ZONE_COMFORT",
+        "maxC": 26,
+        "minC": 22
+      },
+      {
+        "kind": "CURRENT_STATE_REVALIDATION",
+        "required": true
+      }
+    ],
+    "candidate": {
+      "dailyCost": 522.56012785,
+      "dailyEnergyKWh": 614.776621,
+      "projectedZoneTempC": 24.372,
+      "supplyTempC": 8.059999999999999
+    },
+    "expectedImpact": {
+      "costSavingPerDay": 51,
+      "energySavingKWhPerDay": 60
+    },
+    "uncertainty": {
+      "energyP90KWh": 20,
+      "zoneTempP90C": 0.2
+    },
+    "risk": {
+      "comfortMarginC": 1.4280000000000008,
+      "level": "LOW"
+    },
+    "rollbackPlan": {
+      "conditions": [
+        "zone_comfort_violation",
+        "energy_saving_not_observed",
+        "operator_cancelled"
+      ],
+      "restoreSupplyTempC": 7.06
+    },
+    "verificationPlan": {
+      "requiredSignals": [
+        "supply_temperature",
+        "zone_temperature",
+        "site_load"
+      ],
+      "successCriteria": [
+        "zone_temperature_within_frozen_constraint",
+        "site_load_not_worse_than_baseline"
+      ],
+      "windowMinutes": 30
+    },
+    "approval": "DRAFT",
+    "createdAt": "2026-10-11T16:47:21.47588Z"
+  }
+}

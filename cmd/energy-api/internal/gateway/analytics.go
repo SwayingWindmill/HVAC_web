@@ -290,7 +290,7 @@ func validateAnalyticsDecision(decision analyticsmodel.AuthorizationDecision, se
 	}
 	if decision.Allowed {
 		switch decision.ReasonCode {
-		case analyticsmodel.AuthorizationReasonAllowSiteBinding:
+		case analyticsmodel.AuthorizationReasonAllowRole:
 		default:
 			return false
 		}
@@ -372,8 +372,26 @@ func validateEnergySeriesResponse(response analyticsmodel.EnergySeriesResponse, 
 	if metadata.QualitySummary.Valid < 0 || metadata.QualitySummary.Suspect < 0 || metadata.QualitySummary.Invalid < 0 {
 		return errors.New("quality summary contains a negative count")
 	}
+	if err := validateEnergySeriesPoints(response.Points, query); err != nil {
+		return err
+	}
+	if query.Breakdown == "" && response.Devices != nil {
+		return errors.New("devices returned without a breakdown")
+	}
+	for _, device := range response.Devices {
+		if strings.TrimSpace(device.DeviceID) == "" || device.Points == nil {
+			return fmt.Errorf("device series %q is invalid", device.DeviceID)
+		}
+		if err := validateEnergySeriesPoints(device.Points, query); err != nil {
+			return fmt.Errorf("device %s: %w", device.DeviceID, err)
+		}
+	}
+	return nil
+}
+
+func validateEnergySeriesPoints(points []analyticsmodel.EnergySeriesPoint, query analyticsmodel.EnergySeriesQuery) error {
 	previousEnd := time.Time{}
-	for index, point := range response.Points {
+	for index, point := range points {
 		if point.PeriodStart.IsZero() || point.PeriodEnd.IsZero() {
 			return fmt.Errorf("point %d has a zero period boundary", index)
 		}

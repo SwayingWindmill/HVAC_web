@@ -1,32 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import type { ColumnDef } from '@tanstack/react-table';
-import { CircleCheck, Ellipsis, RefreshCw, Search, X } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
-import { DataTableBlock } from '@/blocks/data-table';
-import { MetricCard, MetricGrid, MetricValue } from '@/blocks/metric-card';
+import { CircleCheck, RefreshCw, Search, X } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
-import { DataTable } from '@/components/data-table/data-table';
-import { DataTableAdvancedToolbar } from '@/components/data-table/data-table-advanced-toolbar';
-import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header';
-import type { DataTableFeatures } from '@/components/data-table/data-table-features';
+import { Panel } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { BarList } from '@/components/ui/bar-list';
+import { SeverityMark } from '@/components/severity-mark';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import {
   Faceted,
   FacetedBadgeList,
@@ -38,15 +18,14 @@ import {
   FacetedTrigger,
 } from '@/components/ui/faceted';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
+import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Status, StatusIndicator, StatusLabel } from '@/components/ui/status';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDeviceNames } from '@/features/assets/use-device-names';
-import { useDataTable } from '@/hooks/use-data-table';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { useNow } from '@/hooks/use-now';
 import { formatRelative, formatTime, personLabel } from '@/lib/operator-format';
+import { cn } from '@/lib/utils';
 import {
   activeAlarmsQuery,
   alarmHistoryQuery,
@@ -58,18 +37,16 @@ import {
 } from '../alarm-api';
 import { alarmDailyCounts, alarmsByDevice, alarmsInWindow, meanTimeToClear } from '../alarm-history';
 import {
-  alarmStatusLabel,
   formatDuration,
   formatSpan,
   SEVERITY_COLORS,
   SEVERITY_LABELS,
+  SEVERITY_LEVEL,
   SEVERITY_ORDER,
-  SeverityBadge,
-  severityRank,
   sortAlarmsForOperators,
 } from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
-import { AlarmInspector } from './AlarmInspector';
+import { AlarmDetailPane } from './AlarmDetailPane';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
@@ -86,128 +63,90 @@ const VIEWS: readonly { readonly value: AlarmView; readonly label: string; reado
 // The Alarm owner has no stream yet; lists follow it on a short interval.
 const REFRESH_MS = 15_000;
 
-function AlarmStatus({ alarm }: { readonly alarm: Alarm }) {
-  const variant = alarm.condition === 'CLEARED' ? 'success' : alarm.acknowledgement ? 'warning' : 'error';
+/** The rows of the list, grouped the way an operator triages them. */
+function groupAlarms(alarms: readonly Alarm[]): { readonly label: string; readonly alarms: readonly Alarm[] }[] {
+  const groups = [
+    { label: '未确认 · 等待有人跟进', alarms: alarms.filter((alarm) => alarm.condition === 'ACTIVE' && !alarm.acknowledgement) },
+    { label: '已确认 · 跟进中', alarms: alarms.filter((alarm) => alarm.condition === 'ACTIVE' && alarm.acknowledgement) },
+    { label: '已恢复', alarms: alarms.filter((alarm) => alarm.condition === 'CLEARED') },
+  ];
+  return groups.filter((group) => group.alarms.length > 0);
+}
+
+function SummaryCell({ label, value, caption, children, className }: {
+  readonly label: string;
+  readonly value?: React.ReactNode;
+  readonly caption?: React.ReactNode;
+  readonly children?: React.ReactNode;
+  readonly className?: string;
+}) {
   return (
-    <Status variant={variant}>
-      <StatusIndicator className={alarm.condition === 'CLEARED' ? 'before:hidden' : undefined} />
-      <StatusLabel>{alarmStatusLabel(alarm)}</StatusLabel>
-    </Status>
+    <div className={cn('flex min-w-0 flex-col justify-center gap-1 border-r border-divider px-5 py-3 last:border-r-0', className)}>
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {value !== undefined ? <span className="text-lg leading-6 font-semibold tracking-[-0.02em] tabular-nums">{value}</span> : null}
+      {children}
+      {caption ? <span className="truncate text-xs text-muted-foreground">{caption}</span> : null}
+    </div>
   );
 }
 
-const AlarmActionsContext = createContext<ReturnType<typeof useAlarmActions> | null>(null);
-
-function RowActions({ alarm, onInspect }: { readonly alarm: Alarm; readonly onInspect: () => void }) {
-  const { acknowledge, claim, canClaim, myId } = useContext(AlarmActionsContext)!;
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={`${alarm.title} 的操作`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-          <Ellipsis />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40" onClick={(event) => event.stopPropagation()}>
-        <DropdownMenuGroup>
-          <DropdownMenuItem onSelect={onInspect}>查看详情</DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem disabled={Boolean(alarm.acknowledgement) || acknowledge.isPending} onSelect={() => acknowledge.mutate({ alarm, comment: '' })}>
-            确认告警
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!canClaim || alarm.assigneeId === myId || claim.isPending} onSelect={() => claim.mutate(alarm)}>
-            由我处理
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-const trendConfig = Object.fromEntries(SEVERITY_ORDER.map((severity) => [severity, { label: SEVERITY_LABELS[severity], color: SEVERITY_COLORS[severity] }]));
-
-function AlarmTrend({ alarms, complete, days, timeZone, now }: {
+/** Recent history at a glance: how fast alarms clear, how many arrive each day and where they come from. */
+function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
   readonly alarms: readonly Alarm[] | undefined;
-  readonly complete: boolean;
   readonly days: number;
   readonly timeZone: string;
   readonly now: number;
-}) {
-  const rows = useMemo(() => (alarms ? alarmDailyCounts(alarms, timeZone, days, now) : []), [alarms, timeZone, days, now]);
-  return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>近 {days} 天告警</CardTitle>
-        <CardDescription>每天新触发的告警，按触发时的严重度{complete ? '' : `；只读取了最近 ${alarms?.length ?? 0} 条`}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {!alarms ? <Skeleton className="h-[220px]" /> : alarms.length === 0 ? (
-          <Empty className="h-[220px]">
-            <EmptyHeader>
-              <EmptyMedia variant="icon"><CircleCheck /></EmptyMedia>
-              <EmptyTitle>近 {days} 天没有告警</EmptyTitle>
-              <EmptyDescription>规则触发的告警会按天出现在这里。</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <ChartContainer config={trendConfig} className="aspect-auto h-[220px] w-full">
-            <BarChart data={rows} margin={{ left: 0, right: 4 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
-              <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
-              <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
-              {SEVERITY_ORDER.map((severity, index, list) => (
-                <Bar
-                  key={severity}
-                  dataKey={severity}
-                  stackId="severity"
-                  fill={`var(--color-${severity})`}
-                  radius={index === list.length - 1 ? [3, 3, 0, 0] : 0}
-                  maxBarSize={28}
-                  isAnimationActive={false}
-                />
-              ))}
-              <ChartLegend content={<ChartLegendContent />} itemSorter={(item) => SEVERITY_ORDER.indexOf(item.dataKey as AlarmSeverity)} />
-            </BarChart>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function NoisyDevices({ alarms, deviceNames, days, onSelect }: {
-  readonly alarms: readonly Alarm[] | undefined;
   readonly deviceNames: ReadonlyMap<string, string>;
-  readonly days: number;
-  readonly onSelect: (deviceId: string) => void;
+  readonly onDevice: (deviceId: string) => void;
 }) {
-  const devices = useMemo(() => (alarms ? alarmsByDevice(alarms).slice(0, 6) : []), [alarms]);
+  const daily = useMemo(() => (alarms ? alarmDailyCounts(alarms, timeZone, days, now) : []), [alarms, timeZone, days, now]);
+  const devices = useMemo(() => (alarms ? alarmsByDevice(alarms).slice(0, 3) : []), [alarms]);
+  const mttr = alarms ? meanTimeToClear(alarms) : null;
+  const cleared = alarms?.filter((alarm) => alarm.condition === 'CLEARED').length ?? 0;
+  const total = (row: (typeof daily)[number]) => SEVERITY_ORDER.reduce((sum, severity) => sum + row[severity], 0);
+  const peak = Math.max(1, ...daily.map(total));
+  const today = daily.at(-1);
+  if (!alarms) return <Skeleton className="h-[74px] rounded-xl" />;
   return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>告警最多的设备</CardTitle>
-        <CardDescription>近 {days} 天，点击查看该设备的告警</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {!alarms ? <Skeleton className="h-[220px]" /> : devices.length === 0 ? (
-          <Empty className="h-[220px]">
-            <EmptyHeader>
-              <EmptyMedia variant="icon"><CircleCheck /></EmptyMedia>
-              <EmptyTitle>{alarms.length > 0 ? '没有设备级告警' : `近 ${days} 天没有设备告警`}</EmptyTitle>
-              <EmptyDescription>{alarms.length > 0 ? `近 ${days} 天的告警都是站点级，不针对具体设备。` : '设备触发的告警会在这里排行。'}</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <BarList
-            data={devices.map(({ deviceId, count }) => ({ key: deviceId, name: deviceNames.get(deviceId) ?? '未登记设备', value: count }))}
-            valueFormatter={(value) => `${value} 条`}
-            onItemClick={(item) => onSelect(item.key!)}
-          />
-        )}
-      </CardContent>
-    </Card>
+    <Panel aria-label="告警概况" className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1.2fr)]">
+      <SummaryCell
+        label="平均恢复时长"
+        value={mttr === null ? '—' : formatSpan(mttr)}
+        caption={`近 ${days} 天已恢复 ${cleared} 条`}
+      />
+      <SummaryCell label={`近 ${days} 天新触发`}>
+        <div className="flex items-end gap-4">
+          <span className="text-lg leading-6 font-semibold tracking-[-0.02em] tabular-nums">{alarms.length}<span className="ml-1 text-xs font-medium text-subtle-foreground">条</span></span>
+          <div className="flex h-7 flex-1 items-end gap-[3px]" role="img" aria-label={`近 ${days} 天每天新触发的告警`}>
+            {daily.map((row) => (
+              <span key={row.day} className="flex flex-1 flex-col-reverse overflow-hidden rounded-[2px]" style={{ height: `${Math.max(8, (total(row) / peak) * 100)}%` }} title={`${row.label} · ${total(row)} 条`}>
+                {total(row) === 0 ? <span className="h-full bg-chart-grid" /> : SEVERITY_ORDER.filter((severity) => row[severity] > 0).map((severity) => (
+                  <span key={severity} style={{ height: `${(row[severity] / total(row)) * 100}%`, background: SEVERITY_COLORS[severity] }} />
+                ))}
+              </span>
+            ))}
+          </div>
+          <span className="shrink-0 text-xs text-muted-foreground">今日 {today ? total(today) : 0} 条</span>
+        </div>
+      </SummaryCell>
+      <SummaryCell label="告警最多的设备" caption={devices.length === 0 ? (alarms.length > 0 ? '都是站点级告警' : `近 ${days} 天没有设备告警`) : undefined}>
+        {devices.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {devices.map(({ deviceId, count }) => (
+              <button
+                key={deviceId}
+                type="button"
+                onClick={() => onDevice(deviceId)}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-card px-2 text-xs font-medium outline-none hover:border-input-hover hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft"
+              >
+                {deviceNames.get(deviceId) ?? '未登记设备'}
+                <span className="font-mono text-subtle-foreground">{count}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </SummaryCell>
+    </Panel>
   );
 }
 
@@ -220,8 +159,9 @@ export function AlarmsWorkspace() {
   const deviceNames = useDeviceNames(site.id);
   const myId = principal.principalId;
   const now = useNow(30_000);
-  const actions = useAlarmActions();
+  const { acknowledge } = useAlarmActions();
   const [searchDraft, setSearchDraft] = useState(search.q ?? '');
+  const [creatingWorkOrder, setCreatingWorkOrder] = useState(false);
 
   const active = useQuery(activeAlarmsQuery(site.id));
   const history = useQuery(alarmHistoryQuery(site.id));
@@ -245,248 +185,223 @@ export function AlarmsWorkspace() {
     && (!search.device || alarm.deviceId === search.device)
     && (!query || [alarm.title, alarm.summary, alarm.deviceId ? deviceNames.get(alarm.deviceId) : '站点']
       .some((text) => text?.toLowerCase().includes(query)))), [loaded, severities, search.device, query, deviceNames]);
+  const groups = useMemo(() => groupAlarms(alarms), [alarms]);
+  const ordered = useMemo(() => groups.flatMap((group) => group.alarms), [groups]);
 
   const activeItems = active.data?.items ?? [];
   const unacknowledged = activeItems.filter((alarm) => !alarm.acknowledgement);
-  const oldestUnacknowledged = unacknowledged.reduce<Alarm | null>((oldest, alarm) =>
-    !oldest || Date.parse(alarm.firstOccurredAt) < Date.parse(oldest.firstOccurredAt) ? alarm : oldest, null);
-  const highest = sortAlarmsForOperators(activeItems)[0];
   const days = history.data?.days ?? 14;
   const windowed = useMemo(() => (history.data ? alarmsInWindow(history.data.alarms, site.timezone, days, now) : undefined), [history.data, site.timezone, days, now]);
-  const mttr = windowed ? meanTimeToClear(windowed) : null;
-  const cleared = windowed?.filter((alarm) => alarm.condition === 'CLEARED').length ?? 0;
   const filtered = severities.length > 0 || Boolean(search.device) || Boolean(query);
+  const selectedId = search.inspect ?? ordered[0]?.alarmId;
+  const selected = ordered.find((alarm) => alarm.alarmId === selectedId);
 
   // Severity, device and text filters run over loaded rows, so a filtered view reads every page first.
   useEffect(() => {
     if (filtered && list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   }, [filtered, list]);
 
-  const columns = useMemo<ColumnDef<DataTableFeatures, Alarm>[]>(() => [
-    {
-      id: 'severity',
-      accessorFn: (alarm) => severityRank(alarm.currentSeverity),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="严重度" />,
-      cell: ({ row }) => <SeverityBadge severity={row.original.currentSeverity} />,
-    },
-    {
-      id: 'alarm',
-      header: '告警',
-      enableSorting: false,
-      cell: ({ row }) => (
-        <div className="min-w-0 max-w-[28rem]">
-          <p className="truncate font-medium">{row.original.title}</p>
-          <p className="truncate text-xs text-muted-foreground">{row.original.summary}</p>
-        </div>
-      ),
-    },
-    {
-      id: 'device',
-      accessorFn: (alarm) => (alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '' : '站点'),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="设备" />,
-      cell: ({ getValue }) => <span className="whitespace-nowrap">{(getValue() as string) || '—'}</span>,
-    },
-    { id: 'status', header: '状态', enableSorting: false, cell: ({ row }) => <AlarmStatus alarm={row.original} /> },
-    {
-      id: 'started',
-      accessorFn: (alarm) => Date.parse(alarm.firstOccurredAt),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="开始" />,
-      cell: ({ row }) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="whitespace-nowrap tabular-nums">{formatRelative(row.original.firstOccurredAt, now)}</span>
-          </TooltipTrigger>
-          <TooltipContent>{formatTime(row.original.firstOccurredAt, site.timezone)}</TooltipContent>
-        </Tooltip>
-      ),
-    },
-    {
-      id: 'duration',
-      header: '持续',
-      enableSorting: false,
-      cell: ({ row }) => <span className="whitespace-nowrap tabular-nums">{formatDuration(row.original.firstOccurredAt, row.original.clearedAt, now)}</span>,
-    },
-    {
-      id: 'count',
-      accessorFn: (alarm) => alarm.occurrenceCount,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="次数" />,
-      cell: ({ getValue }) => <span className="tabular-nums">{getValue() as number}</span>,
-    },
-    {
-      id: 'assignee',
-      header: '负责人',
-      enableSorting: false,
-      cell: ({ row }) => (row.original.assigneeId
-        ? <span className="whitespace-nowrap">{personLabel(row.original.assigneeId, myId)}</span>
-        : <span className="whitespace-nowrap text-muted-foreground">未认领</span>),
-    },
-    {
-      id: 'actions',
-      header: () => <span className="sr-only">操作</span>,
-      enableSorting: false,
-      enableHiding: false,
-      cell: ({ row }) => <RowActions alarm={row.original} onInspect={() => setSearch({ inspect: row.original.alarmId })} />,
-    },
-  // setSearch only writes the URL; the columns do not need to change with it.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [deviceNames, myId, site.timezone, now]);
+  // J / K move through the list, A acknowledges, C raises a work order; typing in a field is left alone.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.metaKey || event.ctrlKey || event.altKey || target?.closest('input, textarea, [contenteditable], [role="dialog"]')) return;
+      const index = ordered.findIndex((alarm) => alarm.alarmId === selectedId);
+      const key = event.key.toLowerCase();
+      if ((key === 'j' || key === 'k') && ordered.length > 0) {
+        event.preventDefault();
+        const next = ordered[Math.min(ordered.length - 1, Math.max(0, index + (key === 'j' ? 1 : -1)))];
+        setSearch({ inspect: next.alarmId });
+        document.getElementById(`alarm-${next.alarmId}`)?.scrollIntoView({ block: 'nearest' });
+      } else if (key === 'a' && selected && !selected.acknowledgement && !acknowledge.isPending) {
+        event.preventDefault();
+        acknowledge.mutate({ alarm: selected, comment: '' });
+      } else if (key === 'c' && selected) {
+        event.preventDefault();
+        setCreatingWorkOrder(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
-  const table = useDataTable({ key: 'alarm-ledger', data: alarms, columns, paginate: false, getRowId: (alarm) => alarm.alarmId });
   const readingMore = filtered && list.hasNextPage;
+  const counts: Partial<Record<AlarmView, number>> = active.data ? { active: activeItems.length, unack: unacknowledged.length } : {};
 
   return (
-    <AlarmActionsContext.Provider value={actions}>
-      <Main className="@container/main flex flex-col gap-4 md:gap-6">
-        <PageHeader
-          title="异常与告警"
-          description={`${site.displayName} · 严重度优先，其次最近发生`}
-          actions={(
-            <Button variant="outline" size="sm" onClick={() => { void active.refetch(); void list.refetch(); void history.refetch(); }}>
-              <RefreshCw data-icon="inline-start" />
-              刷新
-            </Button>
-          )}
-        />
+    <Main fixed>
+      <PageHeader
+        title="告警"
+        description={site.displayName}
+        actions={(
+          <Button variant="outline" onClick={() => { void active.refetch(); void list.refetch(); void history.refetch(); }}>
+            <RefreshCw data-icon="inline-start" />
+            刷新
+          </Button>
+        )}
+      />
 
-        <MetricGrid ariaLabel="告警概况">
-          <MetricCard
-            label="活动告警"
-            value={active.data ? <MetricValue value={String(activeItems.length)} unit="条" /> : <Skeleton className="h-8 w-16" />}
-            badge={highest ? <SeverityBadge severity={highest.currentSeverity} /> : undefined}
-            lead={highest ? `最高：${highest.title}` : '没有活动告警'}
-            detail={active.data && !active.data.complete ? `只读取了前 ${activeItems.length} 条` : '工况恢复正常后自动恢复'}
-          />
-          <MetricCard
-            label="未确认"
-            value={active.data ? <MetricValue value={String(unacknowledged.length)} unit="条" /> : <Skeleton className="h-8 w-16" />}
-            lead={oldestUnacknowledged ? `最久一条已持续 ${formatDuration(oldestUnacknowledged.firstOccurredAt, undefined, now)}` : '全部已有人跟进'}
-            detail="确认表示已有人跟进"
-          />
-          <MetricCard
-            label="无人认领"
-            value={active.data ? <MetricValue value={String(activeItems.filter((alarm) => !alarm.assigneeId).length)} unit="条" /> : <Skeleton className="h-8 w-16" />}
-            lead={`其中 ${activeItems.filter((alarm) => !alarm.assigneeId && !alarm.acknowledgement).length} 条未确认`}
-            detail="认领后由负责人跟进到恢复"
-          />
-          <MetricCard
-            label="平均恢复时长"
-            value={history.data ? <MetricValue value={mttr === null ? null : formatSpan(mttr)} /> : <Skeleton className="h-8 w-24" />}
-            lead={windowed ? `近 ${days} 天触发 ${windowed.length} 条，已恢复 ${cleared} 条` : '正在读取告警历史'}
-            detail="已恢复告警从触发到恢复的平均用时"
-          />
-        </MetricGrid>
+      <AlarmSummary
+        alarms={windowed}
+        days={days}
+        timeZone={site.timezone}
+        now={now}
+        deviceNames={deviceNames}
+        onDevice={(device) => setSearch({ device, view: 'all', inspect: undefined })}
+      />
 
-        <div className="grid gap-4 md:gap-6 @5xl/main:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <AlarmTrend alarms={windowed} complete={history.data?.complete ?? true} days={days} timeZone={site.timezone} now={now} />
-          <NoisyDevices alarms={windowed} deviceNames={deviceNames} days={days} onSelect={(device) => setSearch({ device, view: 'all' })} />
+      <Panel aria-label="告警分诊" className="grid h-[calc(100svh-300px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
+        <div className="flex min-h-0 flex-col border-r">
+          <ToggleGroup
+            type="single"
+            value={view}
+            onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView, inspect: undefined }); }}
+            aria-label="告警范围"
+            className="h-11 w-full justify-start gap-5 rounded-none border-b border-divider px-4"
+          >
+            {VIEWS.map((option) => (
+              <ToggleGroupItem
+                key={option.value}
+                value={option.value}
+                className="h-full flex-none gap-1.5 rounded-none border-0 px-0 text-[13px] font-medium text-muted-foreground shadow-[inset_0_-2px_0_transparent] hover:bg-transparent hover:text-foreground data-[state=on]:bg-transparent data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_-2px_0_var(--primary)]"
+              >
+                {option.label}
+                {counts[option.value] !== undefined ? <span className="font-mono text-[11px] text-subtle-foreground">{counts[option.value]}</span> : null}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+
+          <div role="toolbar" aria-label="筛选告警" className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-2.5">
+            <InputGroup className="h-8 min-w-0 flex-1">
+              <InputGroupAddon><Search /></InputGroupAddon>
+              <InputGroupInput
+                aria-label="搜索告警"
+                placeholder="告警、说明或设备"
+                value={searchDraft}
+                onChange={(event) => {
+                  setSearchDraft(event.target.value);
+                  commitQuery(event.target.value.trim());
+                }}
+              />
+            </InputGroup>
+            <Faceted
+              multiple
+              value={severities}
+              onValueChange={(value) => setSearch({ severity: value && value.length > 0 ? value as AlarmSeverity[] : undefined })}
+            >
+              <FacetedTrigger asChild>
+                <Button variant="outline" className="border-dashed font-normal">
+                  <FacetedBadgeList options={SEVERITY_ORDER.map((severity) => ({ label: SEVERITY_LABELS[severity], value: severity }))} placeholder="严重度" />
+                </Button>
+              </FacetedTrigger>
+              <FacetedContent className="w-44">
+                <FacetedList>
+                  <FacetedEmpty>没有选项</FacetedEmpty>
+                  <FacetedGroup>
+                    {SEVERITY_ORDER.map((severity) => (
+                      <FacetedItem key={severity} value={severity}>
+                        <SeverityMark level={SEVERITY_LEVEL[severity]} label="" />
+                        <span>{SEVERITY_LABELS[severity]}</span>
+                      </FacetedItem>
+                    ))}
+                  </FacetedGroup>
+                </FacetedList>
+              </FacetedContent>
+            </Faceted>
+            {search.device ? (
+              <Button variant="outline" size="sm" aria-label={`清除设备筛选：${deviceNames.get(search.device) ?? '未登记设备'}`} onClick={() => setSearch({ device: undefined })}>
+                设备：{deviceNames.get(search.device) ?? '未登记设备'}
+                <X data-icon="inline-end" />
+              </Button>
+            ) : null}
+            {filtered ? (
+              <Button variant="ghost" size="sm" onClick={() => { setSearchDraft(''); setSearch({ severity: undefined, device: undefined, q: undefined }); }}>
+                清除筛选
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {list.isError ? (
+              <p className="px-4 py-6 text-sm text-destructive-text">告警暂时读不到：{list.error.message}</p>
+            ) : list.isPending || (readingMore && alarms.length === 0) ? (
+              <div className="flex flex-col gap-2 p-4"><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
+            ) : alarms.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><CircleCheck className="size-[18px]" aria-hidden="true" /></span>
+                <p className="text-sm font-semibold">{filtered ? '没有符合条件的告警' : view === 'active' ? '当前没有活动告警' : '没有告警'}</p>
+                <p className="text-xs text-muted-foreground">
+                  {filtered ? '调整筛选条件后再看' : windowed && windowed.length > 0 ? `近 ${days} 天触发 ${windowed.length} 条，已全部处理` : `近 ${days} 天没有触发告警`}
+                </p>
+              </div>
+            ) : (
+              <ul aria-label="告警记录">
+                {groups.map((group) => (
+                  <li key={group.label}>
+                    <div className="flex h-[34px] items-center bg-muted px-4 text-xs font-medium text-muted-foreground">
+                      {group.label}
+                      <span className="ml-auto font-mono text-subtle-foreground">{group.alarms.length}</span>
+                    </div>
+                    <ul>
+                      {group.alarms.map((alarm) => {
+                        const isSelected = alarm.alarmId === selectedId;
+                        return (
+                          <li key={alarm.alarmId} id={`alarm-${alarm.alarmId}`}>
+                            <button
+                              type="button"
+                              aria-current={isSelected ? 'true' : undefined}
+                              onClick={() => setSearch({ inspect: alarm.alarmId })}
+                              className={cn(
+                                'relative grid w-full grid-cols-[12px_minmax(0,1fr)_auto] gap-x-2.5 gap-y-[3px] border-b border-divider px-4 pt-[11px] pb-3 text-left outline-none hover:bg-accent focus-visible:bg-accent',
+                                isSelected && 'bg-primary-soft hover:bg-primary-soft before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary',
+                              )}
+                            >
+                              <SeverityMark level={SEVERITY_LEVEL[alarm.currentSeverity]} label={SEVERITY_LABELS[alarm.currentSeverity]} className="row-span-2 mt-[5px]" />
+                              <span className="truncate text-sm font-semibold">{alarm.title}</span>
+                              <span className="text-xs whitespace-nowrap text-subtle-foreground" title={formatTime(alarm.firstOccurredAt, site.timezone)}>
+                                {formatRelative(alarm.firstOccurredAt, now)}
+                              </span>
+                              <span className="col-span-2 col-start-2 truncate text-xs text-muted-foreground">
+                                {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '—' : '站点'}
+                                {' · '}持续 {formatDuration(alarm.firstOccurredAt, alarm.clearedAt, now)}
+                                {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
+                                {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
+                                {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {readingMore && alarms.length > 0 ? <p className="px-4 py-3 text-xs text-muted-foreground">正在读取全部记录以完成筛选…</p> : null}
+            {list.hasNextPage && !readingMore ? (
+              <div className="flex justify-center p-3">
+                <Button variant="outline" size="sm" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+                  {list.isFetchingNextPage ? '正在读取…' : '加载更早的告警'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex items-center gap-1.5 border-t border-divider px-4 py-2 text-[11px] text-subtle-foreground">
+            <Kbd>J</Kbd><Kbd>K</Kbd> 上下切换
+            <Kbd className="ml-2">A</Kbd> 确认
+            <Kbd className="ml-2">C</Kbd> 创建工单
+          </div>
         </div>
 
-        {list.isError ? (
-          <Alert variant="destructive">
-            <AlertTitle>告警暂不可读</AlertTitle>
-            <AlertDescription>{list.error.message}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        <DataTableBlock title="告警记录" description={!list.data ? '正在读取告警' : readingMore ? `正在读取全部记录以完成筛选，已找到 ${alarms.length} 条` : `显示 ${alarms.length} 条${list.hasNextPage ? '，还有更早的记录' : ''}`}>
-          <DataTable
-            table={table}
-            tableAriaLabel="告警记录"
-            empty={list.isPending || readingMore ? <Skeleton className="h-24" /> : (
-              <Empty className="py-10">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon"><CircleCheck /></EmptyMedia>
-                  <EmptyTitle>{filtered ? '没有符合条件的告警' : view === 'active' ? '当前没有活动告警' : '没有告警'}</EmptyTitle>
-                  <EmptyDescription>{filtered ? '调整筛选条件后再看。' : '规则触发的告警会出现在这里。'}</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-            getRowProps={(row) => ({
-              className: 'cursor-pointer focus-visible:bg-muted/50 focus-visible:outline-none',
-              tabIndex: 0,
-              'data-state': search.inspect === row.original.alarmId ? 'selected' : undefined,
-              onClick: () => setSearch({ inspect: row.original.alarmId }),
-              onKeyDown: (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  setSearch({ inspect: row.original.alarmId });
-                }
-              },
-            })}
-          >
-            <DataTableAdvancedToolbar table={table}>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                value={view}
-                onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView }); }}
-                aria-label="告警范围"
-              >
-                {VIEWS.map((option) => (
-                  <ToggleGroupItem key={option.value} value={option.value} className="gap-1.5 px-3">
-                    {option.label}
-                    {option.value === 'active' && active.data ? <Badge variant="secondary" className="h-5 px-1.5 tabular-nums">{activeItems.length}</Badge> : null}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              <InputGroup className="w-56">
-                <InputGroupAddon><Search /></InputGroupAddon>
-                <InputGroupInput
-                  aria-label="搜索告警"
-                  placeholder="告警、说明或设备"
-                  value={searchDraft}
-                  onChange={(event) => {
-                    setSearchDraft(event.target.value);
-                    commitQuery(event.target.value.trim());
-                  }}
-                />
-              </InputGroup>
-              <Faceted
-                multiple
-                value={severities}
-                onValueChange={(value) => setSearch({ severity: value && value.length > 0 ? value as AlarmSeverity[] : undefined })}
-              >
-                <FacetedTrigger asChild>
-                  <Button variant="outline" className="border-dashed font-normal">
-                    <FacetedBadgeList options={SEVERITY_ORDER.map((severity) => ({ label: SEVERITY_LABELS[severity], value: severity }))} placeholder="严重度" />
-                  </Button>
-                </FacetedTrigger>
-                <FacetedContent className="w-44">
-                  <FacetedList>
-                    <FacetedEmpty>没有选项</FacetedEmpty>
-                    <FacetedGroup>
-                      {SEVERITY_ORDER.map((severity) => (
-                        <FacetedItem key={severity} value={severity}>
-                          <span className="size-2 rounded-full" style={{ background: SEVERITY_COLORS[severity] }} aria-hidden="true" />
-                          <span>{SEVERITY_LABELS[severity]}</span>
-                        </FacetedItem>
-                      ))}
-                    </FacetedGroup>
-                  </FacetedList>
-                </FacetedContent>
-              </Faceted>
-              {search.device ? (
-                <Button variant="secondary" aria-label={`清除设备筛选：${deviceNames.get(search.device) ?? '未登记设备'}`} onClick={() => setSearch({ device: undefined })}>
-                  设备：{deviceNames.get(search.device) ?? '未登记设备'}
-                  <X data-icon="inline-end" />
-                </Button>
-              ) : null}
-              {filtered ? (
-                <Button variant="ghost" onClick={() => { setSearchDraft(''); setSearch({ severity: undefined, device: undefined, q: undefined }); }}>
-                  清除筛选
-                </Button>
-              ) : null}
-            </DataTableAdvancedToolbar>
-          </DataTable>
-          {list.hasNextPage ? (
-            <Button variant="outline" size="sm" className="self-center" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
-              {list.isFetchingNextPage ? '正在读取…' : '加载更早的告警'}
-            </Button>
-          ) : null}
-        </DataTableBlock>
-
-        <AlarmInspector alarmId={search.inspect} deviceNames={deviceNames} onClose={() => setSearch({ inspect: undefined })} />
-      </Main>
-    </AlarmActionsContext.Provider>
+        <AlarmDetailPane
+          alarmId={selected?.alarmId ?? search.inspect}
+          empty={list.isSuccess && alarms.length === 0}
+          deviceNames={deviceNames}
+          creatingWorkOrder={creatingWorkOrder}
+          onCreatingWorkOrderChange={setCreatingWorkOrder}
+        />
+      </Panel>
+    </Main>
   );
 }

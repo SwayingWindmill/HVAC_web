@@ -56,3 +56,62 @@ test('a bucket without cooling has no efficiency and stays out of the period eff
   assert.equal(summary.cop, 3.5);
   assert.equal(summarizeEnergy(series([['2026-10-10T02:00:00Z', 180]]), series([]), 'hour', 'Asia/Shanghai').cop, null);
 });
+
+test('the previous period covers the same span, ending where the current one starts', async () => {
+  const { previousWindow } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const window = (period) => {
+    const { from, to } = previousWindow(period, now, 'Asia/Shanghai');
+    return [from.toISOString(), to.toISOString()];
+  };
+  assert.deepEqual(window('today'), ['2026-10-08T16:00:00.000Z', '2026-10-09T06:30:00.000Z']);
+  assert.deepEqual(window('7d'), ['2026-09-26T16:00:00.000Z', '2026-10-03T06:30:00.000Z']);
+  assert.deepEqual(window('month'), ['2026-08-31T16:00:00.000Z', '2026-09-10T06:30:00.000Z']);
+  assert.deepEqual(window('year'), ['2024-12-31T16:00:00.000Z', '2025-10-10T06:30:00.000Z']);
+  // On 31 March the same span of February would run into March: it stops at February's end.
+  const { to } = previousWindow('month', new Date('2026-03-31T04:00:00Z'), 'Asia/Shanghai');
+  assert.equal(to.toISOString(), '2026-02-28T16:00:00.000Z');
+});
+
+test('buckets line up by their place in the period, and the bucket still running stays off the chart', async () => {
+  const { comparePeriods, completeOnly, relativeChange } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const today = summarizeEnergy(series([['2026-10-10T02:00:00Z', 200], ['2026-10-10T03:00:00Z', 250]]), series([['2026-10-10T02:00:00Z', 700]]), 'hour', 'Asia/Shanghai');
+  const yesterday = summarizeEnergy(series([['2026-10-09T02:00:00Z', 180], ['2026-10-09T05:00:00Z', 999]]), series([]), 'hour', 'Asia/Shanghai');
+  const hours = (at) => comparePeriods(today, yesterday, {
+    from: new Date('2026-10-09T16:00:00Z'), previousFrom: new Date('2026-10-08T16:00:00Z'), now: new Date(at), timeZone: 'Asia/Shanghai',
+  });
+  // At 11:20 the 11:00 hour is still running: listed, but not drawn.
+  const running = hours('2026-10-10T03:20:00Z');
+  assert.deepEqual(running.map((row) => [row.label, row.electricityKWh, row.previousElectricityKWh, row.complete]), [
+    ['10:00', 200, 180, true],
+    ['11:00', 250, null, false],
+    ['13:00', null, 999, false],
+  ]);
+  assert.deepEqual(completeOnly(running).map((row) => row.electricityKWh), [200, null, null]);
+  assert.deepEqual(completeOnly(hours('2026-10-10T04:00:00Z')).map((row) => row.electricityKWh), [200, 250, null]);
+
+  const days = (points) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
+  const month = comparePeriods(days([['2026-09-30T16:00:00Z', 50], ['2026-10-02T16:00:00Z', 70]]), days([['2026-08-31T16:00:00Z', 40], ['2026-09-01T16:00:00Z', 45]]), {
+    from: new Date('2026-09-30T16:00:00Z'), previousFrom: new Date('2026-08-31T16:00:00Z'), now, timeZone: 'Asia/Shanghai',
+  });
+  assert.deepEqual(month.map((row) => [row.label, row.electricityKWh, row.previousElectricityKWh]), [
+    ['10/1 周四', 50, 40],
+    ['10/2 周五', null, 45],
+    ['10/3 周六', 70, null],
+  ]);
+
+  assert.equal(relativeChange(450, 400), 0.125);
+  assert.equal(relativeChange(450, null), null);
+  assert.equal(relativeChange(450, 0), null);
+});
+
+test('hourly energy becomes a Site-local day by hour grid with unread hours left empty', async () => {
+  const { hourlyHeatmap, siteDays } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const days = siteDays(now, 'Asia/Shanghai', 2);
+  assert.deepEqual(days, ['2026-10-09', '2026-10-10']);
+  const grid = hourlyHeatmap(series([['2026-10-09T16:00:00Z', 12], ['2026-10-10T05:00:00Z', 30]]), 'Asia/Shanghai', days);
+  assert.deepEqual(grid.map((day) => day.label), ['10/9 周五', '10/10 周六']);
+  assert.equal(grid[1].values[0], 12);
+  assert.equal(grid[1].values[13], 30);
+  assert.equal(grid[1].values[14], null);
+  assert.equal(grid[0].values.every((value) => value === null), true);
+});

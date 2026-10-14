@@ -1,11 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
-import { BreakdownWorkspace } from "@/features/energy-analysis/breakdown/components/BreakdownWorkspace";
-export const Route = createFileRoute("/_app/_site/energy-analysis/breakdown")({
+import { createFileRoute } from '@tanstack/react-router';
+import { z } from 'zod';
+import { BreakdownWorkspace } from '@/features/breakdown/components/BreakdownWorkspace';
+
+export const Route = createFileRoute('/_app/_site/energy-analysis/breakdown')({
+  staticData: { title: '分项能耗' },
   validateSearch: z.object({
-    
-    view: z.enum(["flow", "ledger"]).optional(),
-    q: z.string().optional(),
+    period: z.enum(['today', '7d', 'month']).optional(),
   }),
   component: BreakdownWorkspace,
 });

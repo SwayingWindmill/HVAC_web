@@ -1,32 +1,33 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
-  Award,
-  BarChart3,
+  Bell,
   CalendarCheck2,
   FileText,
-  GitFork,
+  Gauge,
   LayoutDashboard,
+  Leaf,
   Lightbulb,
   LineChart,
+  Plug,
   ServerCog,
-  Settings2,
+  Settings,
   ShieldAlert,
-  Sparkles,
+  SlidersHorizontal,
+  Stethoscope,
+  TrendingUp,
+  Trophy,
   Workflow,
+  Wrench,
   Zap,
 } from 'lucide-react';
-
-export interface AppNavSubItem {
-  readonly id: string;
-  readonly title: string;
-  readonly path: string;
-}
 
 export interface AppNavigationGroup {
   readonly id: string;
   readonly label: string;
-  readonly icon?: LucideIcon;
+  readonly icon: LucideIcon;
+  /** Where the group sits in the sidebar: the operator's loop, the governed control desk, or platform administration. */
+  readonly section: 'main' | 'control' | 'platform';
   readonly items: readonly AppNavigationItem[];
 }
 
@@ -35,139 +36,102 @@ export interface AppNavigationItem {
   readonly title: string;
   readonly path: string;
   readonly icon: LucideIcon;
-  readonly children?: readonly AppNavSubItem[];
+  /** Reached from elsewhere in the shell (the notification bell), so only the command palette lists it. */
+  readonly sidebar?: false;
 }
 
+/**
+ * Navigation follows the operator's loop: watch the plant, read its energy, save, report, act on
+ * what goes wrong. Control is governed and sits apart; platform administration sits at the
+ * bottom. Only surfaces backed by a real owner are listed; a page joins when its owner does.
+ */
 export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   {
     id: 'overview-group',
     label: '总览',
+    icon: LayoutDashboard,
+    section: 'main',
+    items: [{ id: 'overview', title: '总览', path: '/overview', icon: LayoutDashboard }],
+  },
+  {
+    id: 'monitoring',
+    label: '运行',
+    icon: Activity,
+    section: 'main',
     items: [
-      {
-        id: 'overview',
-        title: '总览看板',
-        path: '/overview',
-        icon: LayoutDashboard,
-      },
+      { id: 'operations-realtime', title: '实时运行', path: '/operations/realtime', icon: Activity },
+      { id: 'operations-systems-devices', title: '设备', path: '/operations/systems-devices', icon: ServerCog },
     ],
   },
   {
-    id: 'energy-optimization',
-    label: '节能优化',
+    id: 'energy',
+    label: '能源',
+    icon: Zap,
+    section: 'main',
     items: [
-      {
-        id: 'optimization-opportunities',
-        title: '节能机会',
-        path: '/optimization/opportunities',
-        icon: Lightbulb,
-      },
-      {
-        id: 'optimization-projects',
-        title: '节能项目',
-        path: '/optimization/projects',
-        icon: Sparkles,
-      },
-      {
-        id: 'optimization-verification',
-        title: '节能验证 (M&V)',
-        path: '/optimization/verification',
-        icon: Award,
-      },
+      { id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart },
+      { id: 'analytics-breakdown', title: '分项能耗', path: '/energy-analysis/breakdown', icon: Workflow },
+      { id: 'analytics-demand', title: '需量分析', path: '/energy-analysis/demand', icon: Gauge },
+      { id: 'analytics-forecast', title: '负荷预测', path: '/energy-analysis/forecast', icon: TrendingUp },
+      { id: 'benchmark', title: '站点对标', path: '/benchmark', icon: Trophy },
     ],
   },
   {
-    id: 'energy-analytics',
-    label: '能源分析',
+    id: 'savings',
+    label: '节能',
+    icon: Leaf,
+    section: 'main',
     items: [
-      {
-        id: 'analytics-consumption',
-        title: '能耗与成本',
-        path: '/energy-analysis/consumption',
-        icon: LineChart,
-      },
-      {
-        id: 'analytics-load-demand',
-        title: '负荷与需量',
-        path: '/energy-analysis/load-demand',
-        icon: Zap,
-      },
-      {
-        id: 'analytics-breakdown',
-        title: '分项与能流',
-        path: '/energy-analysis/breakdown',
-        icon: GitFork,
-      },
-      {
-        id: 'analytics-benchmarking',
-        title: '绩效与对标',
-        path: '/energy-analysis/benchmarking',
-        icon: BarChart3,
-      },
+      { id: 'analytics-optimization', title: '优化建议', path: '/energy-analysis/optimization', icon: Lightbulb },
+      { id: 'analytics-savings', title: '节能项目', path: '/energy-analysis/savings', icon: Leaf },
     ],
   },
   {
-    id: 'operations-management',
-    label: '运行管理',
+    id: 'reports-group',
+    label: '报告',
+    icon: FileText,
+    section: 'main',
+    items: [{ id: 'reports', title: '报告', path: '/reports', icon: FileText }],
+  },
+  {
+    id: 'operations',
+    label: '运维',
+    icon: Wrench,
+    section: 'main',
     items: [
-      {
-        id: 'operations-realtime',
-        title: '实时运行',
-        path: '/operations/realtime',
-        icon: Activity,
-      },
-      {
-        id: 'operations-systems-devices',
-        title: '系统与设备',
-        path: '/operations/systems-devices',
-        icon: ServerCog,
-      },
-      {
-        id: 'operations-alarms',
-        title: '异常与告警',
-        path: '/operations/alarms',
-        icon: ShieldAlert,
-      },
-      {
-        id: 'operations-work-center',
-        title: '工作中心',
-        path: '/operations/work-center',
-        icon: CalendarCheck2,
-      },
-      {
-        id: 'operations-control',
-        title: '策略与控制',
-        path: '/operations/control',
-        icon: Workflow,
-      },
+      { id: 'operations-alarms', title: '告警', path: '/operations/alarms', icon: ShieldAlert },
+      { id: 'operations-diagnostics', title: '故障诊断', path: '/operations/diagnostics', icon: Stethoscope },
+      { id: 'operations-work-center', title: '工单', path: '/operations/work-center', icon: CalendarCheck2 },
     ],
   },
   {
-    id: 'reports-and-config',
-    label: '报告与配置',
+    id: 'control-group',
+    label: '控制指令',
+    icon: SlidersHorizontal,
+    section: 'control',
+    items: [{ id: 'operations-control', title: '控制指令', path: '/operations/control', icon: SlidersHorizontal }],
+  },
+  {
+    id: 'platform',
+    label: '平台',
+    icon: Settings,
+    section: 'platform',
     items: [
-      {
-        id: 'reports',
-        title: '报告中心',
-        path: '/reports',
-        icon: FileText,
-      },
-      {
-        id: 'settings',
-        title: '系统配置',
-        path: '/settings',
-        icon: Settings2,
-      },
+      { id: 'integrations', title: '集成管理', path: '/settings/integrations', icon: Plug },
+      { id: 'system', title: '系统管理', path: '/system', icon: Settings },
+      { id: 'notifications', title: '通知中心', path: '/notifications', icon: Bell, sidebar: false },
     ],
   },
 ];
-
-export function getFlattenedNavigationItems(): readonly AppNavigationItem[] {
-  return APP_NAVIGATION_CONFIG.flatMap((g) => g.items);
-}
 
 export function isNavActive(itemPath: string, currentPath: string): boolean {
   if (itemPath === '/overview') {
     return currentPath === '/' || currentPath === '/overview' || currentPath.startsWith('/overview');
   }
   return currentPath.startsWith(itemPath);
+}
+
+/** A group with a single page shows as one sidebar entry named after the group. */
+export function isSinglePageGroup(group: AppNavigationGroup): boolean {
+  return group.items.length === 1;
 }

@@ -22,10 +22,8 @@
     "evaluationOrder": [
       "immutable-principal",
       "tenant-membership",
-      "role-action",
-      "exact-tenant-site-binding",
-      "exact-device-permission",
-      "exact-key-permission"
+      "role-assignment-on-device-site",
+      "explicit-deny"
     ],
     "membershipGrantsAllSites": false,
     "denyPrecedence": true,
@@ -34,8 +32,7 @@
     "maximumKeysPerTarget": 64,
     "maximumTotalKeys": 2048,
     "stableDenials": {
-      "missingOrUnauthorizedDevice": "RESOURCE_NOT_FOUND",
-      "visibleUnknownUnauthorizedOrDeniedKey": "TELEMETRY_KEY_INVALID"
+      "missingOrUnauthorizedDevice": "RESOURCE_NOT_FOUND"
     }
   },
   "delegationGrant": {
@@ -104,9 +101,6 @@
   "revocationSources": [
     "MEMBERSHIP",
     "ROLE_BINDING",
-    "SITE_BINDING",
-    "DEVICE_PERMISSION",
-    "KEY_PERMISSION",
     "GRANT"
   ],
   "postgres": {
@@ -116,8 +110,6 @@
       "grantState": "s2_iam_grant_runtime"
     },
     "forceRlsTables": [
-      "telemetry_scope_bindings",
-      "telemetry_key_bindings",
       "telemetry_grant_revocations",
       "telemetry_grant_uses",
       "telemetry_revocation_facts"

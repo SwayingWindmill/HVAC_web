@@ -183,6 +183,15 @@ func (h *handler) GetSiteAssetModel(writer http.ResponseWriter, request *http.Re
 	}, platformapi.ListRegistryParams{})
 }
 
+func (h *handler) GetSiteTariff(writer http.ResponseWriter, request *http.Request, siteID string) {
+	h.serveRegistry(writer, request, publicRegistryRoute{
+		template:     platformapi.GetSiteTariffPathTemplate,
+		internalPath: "/internal/v1/registry/sites/" + siteID + "/tariff",
+		action:       registryauth.ActionTariffRead,
+		scopeID:      siteID,
+	}, platformapi.ListRegistryParams{})
+}
+
 func (h *handler) GetDevice(writer http.ResponseWriter, request *http.Request, deviceID string) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
 		template:     platformapi.GetDevicePathTemplate,
@@ -583,6 +592,10 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 			if method == http.MethodGet {
 				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/asset-model", internalPath: "/internal/v1/registry/sites/" + siteID + "/asset-model", resource: "asset-model", action: registryauth.ActionAssetModelRead, scopeID: siteID}, siteID, true
 			}
+		case "tariff":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/tariff", internalPath: "/internal/v1/registry/sites/" + siteID + "/tariff", resource: "tariff", action: registryauth.ActionTariffRead, scopeID: siteID}, siteID, true
+			}
 		case "retire":
 			if method == http.MethodPost {
 				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/retire", internalPath: "/internal/v1/registry/sites/" + siteID + "/retire", resource: "retire", action: registryauth.ActionRegistryRetire, scopeID: siteID, write: true}, siteID, true
@@ -690,6 +703,8 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		h.ListSiteDeviceBindings(writer, request, id, params)
 	case "asset-model":
 		h.GetSiteAssetModel(writer, request, id)
+	case "tariff":
+		h.GetSiteTariff(writer, request, id)
 	case "space-children", "device-points":
 		h.serveRegistry(writer, request, route, params)
 	default:
@@ -726,6 +741,13 @@ func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []
 	case registryauth.ActionAssetModelRead:
 		return decodeCanonical[platformapi.SiteAssetModel](raw, func(value platformapi.SiteAssetModel) error {
 			return validateSiteAssetModel(value, scopeID)
+		})
+	case registryauth.ActionTariffRead:
+		return decodeCanonical[platformapi.SiteTariff](raw, func(value platformapi.SiteTariff) error {
+			if value.SiteID != scopeID {
+				return errors.New("Registry Tariff is outside the requested Site")
+			}
+			return nil
 		})
 	case registryauth.ActionDeviceRead:
 		return decodeCanonical[platformapi.Device](raw, validateDevice)
@@ -961,8 +983,63 @@ func validateAssetRelationship(value platformapi.AssetRelationship, expectedSite
 	return nil
 }
 
+// siteVisibility is what the Registry says about a Site for a session: hidden when it is absent
+// or not the session's to see, unavailable (with the reason) when the Registry could not answer.
+type siteVisibility struct {
+	hidden      bool
+	unavailable string
+}
+
+func (h *handler) siteVisibility(request *http.Request, session bffSession, siteID string) siteVisibility {
+	if h.registry == nil || h.registry.coreHTTPClient == nil || strings.TrimSpace(h.registry.coreBaseURL) == "" {
+		return siteVisibility{unavailable: "Authoritative Site visibility is unavailable."}
+	}
+	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			return siteVisibility{hidden: true}
+		}
+		return siteVisibility{unavailable: "Authoritative Site authorization is temporarily unavailable."}
+	}
+	if _, allowed := authorization.allowedSiteIDs[siteID]; !allowed {
+		return siteVisibility{hidden: true}
+	}
+	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	registryRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, publicPath)
+	if !matches {
+		return siteVisibility{unavailable: "Authoritative Site route is unavailable."}
+	}
+	outer := routeDecisionFromContext(request.Context())
+	decision := ownershipregistry.Decision{
+		RouteKey: http.MethodGet + " " + registryRoute.template, PathTemplate: registryRoute.template,
+		SelectedOwner:    ownershipregistry.OwnerCore,
+		RegistryRevision: outer.RegistryRevision, RouteRevision: 1, CompatibilityMode: "native",
+	}
+	if h.routeManager != nil {
+		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
+		if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
+			return siteVisibility{unavailable: "Authoritative Site route ownership is unavailable."}
+		}
+		decision = resolved
+	}
+	result := h.executeCoreRegistry(request.Context(), registryRoute, "", authorization.coreGrant, decision)
+	if result.status == http.StatusNotFound || result.status == http.StatusForbidden {
+		return siteVisibility{hidden: true}
+	}
+	if result.status != http.StatusOK {
+		return siteVisibility{unavailable: "Authoritative Site lookup is temporarily unavailable."}
+	}
+	var site platformapi.Site
+	if decodeStrictAlarmJSON(result.body, &site) != nil || validateSite(site) != nil || site.ID != siteID || site.TenantID != session.TenantID {
+		return siteVisibility{unavailable: "Authoritative Site lookup returned an invalid projection."}
+	}
+	return siteVisibility{}
+}
+
 func validateSite(value platformapi.Site) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) ||
+		(value.FloorAreaM2 != nil && !(*value.FloorAreaM2 > 0)) ||
+		(value.ClimateZone != nil && !oneOf(*value.ClimateZone, "SEVERE_COLD", "COLD", "HOT_SUMMER_COLD_WINTER", "HOT_SUMMER_WARM_WINTER", "MILD")) {
 		return errors.New("invalid Site response")
 	}
 	return nil

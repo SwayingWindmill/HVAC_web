@@ -17,7 +17,8 @@
         "infra/identity/postgres/init/001-identity-baseline.sql",
         "infra/identity/postgres/init/002-identity-runtime-grants.sql",
         "infra/identity/postgres/init/003-identity-directory-least-privilege.sql",
-        "infra/identity/postgres/init/004-identity-auth-assurance.sql"
+        "infra/identity/postgres/init/004-identity-auth-assurance.sql",
+        "infra/identity/postgres/init/005-identity-user-administration.sql"
       ]
     },
     {
@@ -77,7 +78,16 @@
         "infra/registry/postgres/init/014-s21-rule-management-capability.sql",
         "infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql",
         "infra/registry/postgres/init/016-s24-alarm-assign-capability.sql",
-        "infra/registry/postgres/init/017-registry-read-port.sql"
+        "infra/registry/postgres/init/017-registry-read-port.sql",
+        "infra/registry/postgres/init/018-fdd-finding-measurement.sql",
+        "infra/registry/postgres/init/019-fdd-scheduled-evaluation.sql",
+        "infra/registry/postgres/init/020-savings-verification.sql",
+        "infra/registry/postgres/init/021-metric-tariff-pricing.sql",
+        "infra/registry/postgres/init/022-report-snapshots.sql",
+        "infra/registry/postgres/init/023-savings-device-boundary.sql",
+        "infra/registry/postgres/init/024-site-profile.sql",
+        "infra/registry/postgres/init/025-fdd-rule-revisions.sql",
+        "infra/registry/postgres/init/026-iam-role-assignments.sql"
       ]
     },
     {

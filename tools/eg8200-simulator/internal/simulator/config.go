@@ -34,6 +34,7 @@ type PlantConfig struct {
 	PowerMeterID     string             `json:"powerMeterId"`
 	BTUMeterID       string             `json:"btuMeterId"`
 	WeatherStationID string             `json:"weatherStationId"`
+	ZoneSensorID     string             `json:"zoneSensorId"`
 }
 
 type ChillerConfig struct {
@@ -112,7 +113,7 @@ func (config PlantConfig) Validate() error {
 			return fmt.Errorf("%s config is invalid", name)
 		}
 	}
-	if strings.TrimSpace(config.Chiller.ID) == "" || strings.TrimSpace(config.CoolingTower.ID) == "" || strings.TrimSpace(config.PowerMeterID) == "" || strings.TrimSpace(config.BTUMeterID) == "" || strings.TrimSpace(config.WeatherStationID) == "" || config.CoolingTower.RatedFanPowerKW <= 0 || config.CoolingTower.InitialFanSpeedPct < 20 || config.CoolingTower.InitialFanSpeedPct > 100 {
+	if strings.TrimSpace(config.Chiller.ID) == "" || strings.TrimSpace(config.CoolingTower.ID) == "" || strings.TrimSpace(config.PowerMeterID) == "" || strings.TrimSpace(config.BTUMeterID) == "" || strings.TrimSpace(config.WeatherStationID) == "" || strings.TrimSpace(config.ZoneSensorID) == "" || config.CoolingTower.RatedFanPowerKW <= 0 || config.CoolingTower.InitialFanSpeedPct < 20 || config.CoolingTower.InitialFanSpeedPct > 100 {
 		return errors.New("plant device config is incomplete")
 	}
 	seen := map[string]struct{}{}
@@ -134,6 +135,7 @@ func (config PlantConfig) DeviceIDs() []string {
 		config.PowerMeterID,
 		config.BTUMeterID,
 		config.WeatherStationID,
+		config.ZoneSensorID,
 	}
 }
 

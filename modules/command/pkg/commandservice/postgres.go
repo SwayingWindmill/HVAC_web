@@ -353,6 +353,47 @@ func (store *PostgresStore) Get(ctx context.Context, tenantID, commandID string)
 	return intent, nil
 }
 
+// List reads a Site's newest Commands, each as the full projection Get returns.
+func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("command store is closed")
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin command list transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+SELECT command_id::text
+FROM command_runtime.command_intents
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid
+ORDER BY created_at DESC, command_id DESC
+LIMIT $3
+`, tenantID, siteID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list command intents: %w", err)
+	}
+	commandIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list command intents: %w", err)
+	}
+	intents := make([]commandmodel.CommandIntent, 0, len(commandIDs))
+	for _, commandID := range commandIDs {
+		intent, err := loadIntent(ctx, tx, tenantID, commandID)
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit command list: %w", err)
+	}
+	return intents, nil
+}
+
 type SubmissionEvidence struct {
 	IntentCount        int
 	IdempotencyCount   int

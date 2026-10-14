@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
@@ -61,10 +60,6 @@ func (store *memoryTelemetryGrantStore) PollRevocations(_ context.Context, _ str
 }
 
 func (store fixedTelemetryStore) LookupTelemetryAuthorization(context.Context, iam.TelemetryAuthorizationLookup) (iam.TelemetryAuthorizationFacts, error) {
-	return store.facts, store.err
-}
-
-func (store fixedTelemetryStore) LookupPrincipalTelemetryCapabilities(context.Context, iam.PrincipalCapabilityLookup) (iam.TelemetryAuthorizationFacts, error) {
 	return store.facts, store.err
 }
 
@@ -146,7 +141,7 @@ func TestIAMTelemetryDecisionIssuesGrantForAllowedDelegatedPresenter(t *testing.
 func TestIAMTelemetryDecisionDeniesWithoutGrantAndFailsClosedOnDependency(t *testing.T) {
 	now := harnessTime()
 	deniedFacts := telemetryHTTPFacts(now)
-	deniedFacts.KeyBindings = nil
+	deniedFacts.Assignments = nil
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: deniedFacts}
 	})
@@ -154,7 +149,7 @@ func TestIAMTelemetryDecisionDeniesWithoutGrantAndFailsClosedOnDependency(t *tes
 	request := harness.request(t, iam.TelemetryDecisionPath, strings.NewReader(body), validIAMClaims(harness.now, "fixture-user", telemetryAuthorize), harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "delegationGrant") || !strings.Contains(recorder.Body.String(), "TELEMETRY_KEY_INVALID") {
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "delegationGrant") || !strings.Contains(recorder.Body.String(), "RESOURCE_NOT_FOUND") {
 		t.Fatalf("deny status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
@@ -172,9 +167,8 @@ func TestIAMTelemetryDecisionDeniesWithoutGrantAndFailsClosedOnDependency(t *tes
 func TestTelemetryRuntimeConsumesGrantOnceAndPollsRevocations(t *testing.T) {
 	grantStore := &memoryTelemetryGrantStore{facts: []iam.TelemetryRevocationFact{{
 		Sequence: 7, PrincipalID: "018f1e00-2000-7000-8000-000000000001",
-		TenantID: iam.S1FixtureTenantAID, SourceType: "KEY_PERMISSION",
-		DeviceID: telemetryDeviceID, TelemetryKey: "zone.temperature", PolicyRevision: "telemetry-access:1",
-		ReasonCode: "KEY_SCOPE_CHANGED", OccurredAt: "2026-07-21T12:00:00.000Z",
+		TenantID: iam.S1FixtureTenantAID, SourceType: "ROLE_BINDING", PolicyRevision: "telemetry-access:1",
+		ReasonCode: "ROLE_BINDING_CHANGED", OccurredAt: "2026-07-21T12:00:00.000Z",
 	}}}
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: telemetryHTTPFacts(harnessTime())}
@@ -234,7 +228,7 @@ func TestTelemetryRuntimeConsumesGrantOnceAndPollsRevocations(t *testing.T) {
 	pollRequest.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{harness.gatewayCert}, VerifiedChains: [][]*x509.Certificate{{harness.gatewayCert}}}
 	pollRecorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(pollRecorder, pollRequest)
-	if pollRecorder.Code != http.StatusOK || !strings.Contains(pollRecorder.Body.String(), `"nextSequence":7`) || !strings.Contains(pollRecorder.Body.String(), "KEY_SCOPE_CHANGED") {
+	if pollRecorder.Code != http.StatusOK || !strings.Contains(pollRecorder.Body.String(), `"nextSequence":7`) || !strings.Contains(pollRecorder.Body.String(), "ROLE_BINDING_CHANGED") {
 		t.Fatalf("poll status=%d body=%s", pollRecorder.Code, pollRecorder.Body.String())
 	}
 
@@ -259,21 +253,17 @@ func TestTelemetryRuntimeConsumesGrantOnceAndPollsRevocations(t *testing.T) {
 
 func telemetryHTTPFacts(now time.Time) iam.TelemetryAuthorizationFacts {
 	return iam.TelemetryAuthorizationFacts{
-		Found:          true,
-		PolicyRevision: "telemetry-access:1",
-		Principal:      iam.PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: fixtureSubjectIssuer, Subject: "fixture-user", Status: iam.FactStatusActive},
-		Memberships:    []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
-		RoleBindings: []iam.RoleBinding{{
-			TenantID: iam.S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead)},
-			Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
-		SiteBindings: []iam.SiteBinding{{
-			TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID,
-			Actions: []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead)}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
-		Devices:       []iam.TelemetryDevice{{ID: telemetryDeviceID, TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID, Status: iam.FactStatusActive}},
-		ScopeBindings: []iam.TelemetryScopeBinding{{TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID, DeviceID: telemetryDeviceID, Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
-		KeyBindings:   []iam.TelemetryKeyBinding{{TenantID: iam.S1FixtureTenantAID, DeviceID: telemetryDeviceID, Key: "zone.temperature", Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		AuthorizationFacts: iam.AuthorizationFacts{
+			Found:          true,
+			PolicyRevision: "telemetry-access:1",
+			Principal:      iam.PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: fixtureSubjectIssuer, Subject: "fixture-user", Status: iam.FactStatusActive},
+			Memberships:    []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+			Assignments: []iam.RoleAssignment{{
+				TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID, RoleKey: "viewer", Capabilities: []string{string(telemetryauth.ActionSnapshotRead)},
+				Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour),
+			}},
+		},
+		Devices: []iam.TelemetryDevice{{ID: telemetryDeviceID, TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID, Status: iam.FactStatusActive}},
 	}
 }
 

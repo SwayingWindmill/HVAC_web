@@ -77,6 +77,10 @@
       "revision": 1,
       "owner": "platform-core-service"
     },
+    "GET /api/v1/sites/{siteId}/tariff": {
+      "revision": 1,
+      "owner": "platform-core-service"
+    },
     "GET /api/v1/devices/{deviceId}": {
       "revision": 5,
       "owner": "platform-core-service"

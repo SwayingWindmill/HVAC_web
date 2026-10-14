@@ -15,9 +15,11 @@ It is **not** the platform authorization system. Tenant membership, Site binding
 - RS256 ID tokens and JWKS.
 - Minimal logout redirect endpoint.
 - Failed-password lockout: five failed attempts lock the user for 15 minutes.
-- Offline administrator user creation and password reset through `cmd/identity-admin`; there is no public registration endpoint.
+- Password rules (spec `docs/specs/iam-roles-and-users.md`, NIST SP 800-63B-4 with an 8-character minimum): 8 characters to 512 bytes, no composition rules, no forced rotation, not the username, and not one of the common passwords in `internal/identity/common-passwords.txt` (SecLists 2024.4, MIT).
+- TOTP second factor for high-assurance (step-up) sign-in; enrolment is offline through `cmd/identity-admin` (`totp-start`, `totp-activate`, `totp-disable`).
+- User administration through `pkg/identityadmin`: the Platform Gateway embeds it, connected as `identity_admin`, so administrators create accounts, set passwords, update names and emails, and enable or disable sign-in from 系统管理 → 用户与角色, and every user changes their own password. Authorization stays with IAM. There is no public registration endpoint; `cmd/identity-admin` remains for the first administrator and recovery.
 
-The service intentionally does not implement Refresh Token usage, social login, MFA, Passkeys, email/SMS login, password recovery, SAML, enterprise federation, or Tenant/Site authorization. Add those only when product requirements require them.
+The service intentionally does not implement Refresh Token usage, social login, Passkeys, email/SMS login, self-service password recovery, SAML, enterprise federation, or Tenant/Site authorization. Add those only when product requirements require them.
 
 ## Persistence
 
@@ -47,7 +49,7 @@ In Phase 1 Docker Compose the public issuer is served through nginx under `/iden
 
 `cmd/identity-admin` is an offline administrative command and must connect with the dedicated `identity_admin` database role, not `identity_runtime`. Supply the database URL and user fields through runtime environment variables; do not commit credentials or initial passwords to Git.
 
-Supported operations are `create`, `reset-password`, and `reset-password-random`. The random reset mode generates the replacement credential inside the command and prints it once. After creating a user, reconcile its immutable `issuer + subject` into IAM with `modules/iam/cmd/identity-reconciler` and an explicitly approved Tenant/Role/Site seed. The IdP never assigns platform authorization.
+Supported operations are `create`, `reset-password`, `reset-password-random`, `totp-start`, `totp-activate` and `totp-disable`. The random reset mode generates the replacement credential inside the command and prints it once. After creating the first administrator, reconcile its immutable `issuer + subject` into IAM with `modules/iam/cmd/identity-reconciler` and a seed that assigns the built-in `admin` Role; everyone after that is added from 系统管理. The IdP never assigns platform authorization.
 
 ## Signing-key behavior
 

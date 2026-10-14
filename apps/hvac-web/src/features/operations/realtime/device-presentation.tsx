@@ -1,4 +1,5 @@
-import { Fan, Gauge, Snowflake, ThermometerSun, Waves } from 'lucide-react';
+import { PageMeta } from '@/blocks/page-header';
+import { Fan, Gauge, Snowflake, Thermometer, ThermometerSun, Waves } from 'lucide-react';
 import type { StatusTone } from '@/components/common/StatusBadge';
 import { MetricValue } from '@/blocks/metric-card';
 import { formatDecimal } from '@/lib/operator-format';
@@ -28,6 +29,7 @@ export const KEY_READINGS: Readonly<Record<PlantCategory, readonly string[]>> = 
     'btu_meter.flow_rate',
   ],
   WEATHER: ['weather.ambient_dry_bulb_temperature', 'weather.ambient_wet_bulb_temperature', 'weather.relative_humidity'],
+  ZONE: ['zone.temperature'],
   OTHER: [],
 };
 
@@ -45,6 +47,7 @@ export const CATEGORY_ICONS: Partial<Record<PlantCategory, typeof Snowflake>> = 
   COOLING_TOWER: Fan,
   METER: Gauge,
   WEATHER: ThermometerSun,
+  ZONE: Thermometer,
 };
 
 export function deviceStatus(device: PlantDevice): { tone: StatusTone; label: string } {
@@ -69,16 +72,11 @@ export function formatClock(value: string | null, timezone: string): string {
 
 export function LiveIndicator({ mode }: { readonly mode: PlantLiveMode }) {
   const presentation = {
-    live: { dot: 'bg-emerald-500', label: '实时推送' },
-    connecting: { dot: 'bg-amber-500', label: '正在连接推送' },
-    polling: { dot: 'bg-muted-foreground', label: '每 30 秒刷新' },
-  }[mode];
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span className={cn('size-1.5 rounded-full', presentation.dot)} aria-hidden="true" />
-      {presentation.label}
-    </span>
-  );
+    live: { dot: 'live', label: '实时推送' },
+    connecting: { dot: 'warning', label: '正在连接推送' },
+    polling: { dot: 'idle', label: '每 30 秒刷新' },
+  } as const;
+  return <PageMeta dot={presentation[mode].dot}>{presentation[mode].label}</PageMeta>;
 }
 
 export function ReadingValue({ reading, className }: { readonly reading: PlantReading | null; readonly className?: string }) {

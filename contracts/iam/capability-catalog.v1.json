@@ -44,6 +44,7 @@
     "work-order:cancel",
     "work-order:reopen",
     "rule.manage",
+    "savings.manage",
     "session.revoke",
     "audit.read",
     "iam.admin",

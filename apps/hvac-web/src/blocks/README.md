@@ -39,7 +39,7 @@ Every route page starts with `PageHeader` inside the `Main` container: one `h1`,
 
 ```tsx
 <Main className="space-y-5">
-  <PageHeader title="能耗与成本" description="中央机房 · 按站点当地时间统计" actions={...} />
+  <PageHeader title="能耗分析" description="中央机房 · 本期与昨日同时段对比" actions={...} />
   ...
 </Main>
 ```

@@ -17,6 +17,7 @@ func testPlantConfig() PlantConfig {
 		PowerMeterID:     "METER-HVAC-TOTAL",
 		BTUMeterID:       "BTU-METER-01",
 		WeatherStationID: "WEATHER-STATION-01",
+		ZoneSensorID:     "ZONE-SENSOR-01",
 	}
 }
 
@@ -189,6 +190,25 @@ func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
 	}
 }
 
+func TestEachPieceOfEquipmentMetersTheEnergyItDraws(t *testing.T) {
+	config := testPlantConfig()
+	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
+	snapshot := plant.Tick(time.Hour)
+	equipment := []string{config.Chiller.ID, config.ChilledWaterPump.ID, config.CoolingWaterPump.ID, config.CoolingTower.ID}
+	branches := 0.0
+	for _, deviceID := range equipment {
+		energy, ok := snapshot.Devices[deviceID]["energyKwh"].(float64)
+		if !ok || energy <= 0 {
+			t.Fatalf("%s energy = %#v", deviceID, snapshot.Devices[deviceID]["energyKwh"])
+		}
+		branches += energy
+	}
+	total := snapshot.Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if math.Abs(total-branches) > 1e-3 {
+		t.Fatalf("sub-meters add up to %.6f kWh, total meter %.6f kWh", branches, total)
+	}
+}
+
 func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 	plant := NewPlant(testPlantConfig(), testStaticScenario(), time.Now())
 	plant.Tick(time.Second)
@@ -283,5 +303,56 @@ func TestTickToFollowsAWallClockCorrectedBackwards(t *testing.T) {
 	next := corrected.Add(time.Second)
 	if observed := plant.TickTo(next).ObservedAt; !observed.Equal(next) {
 		t.Fatalf("observedAt=%s, want %s", observed, next)
+	}
+}
+
+func zoneTemperature(t *testing.T, snapshot Snapshot) float64 {
+	t.Helper()
+	value, ok := snapshot.Devices["ZONE-SENSOR-01"]["zoneTemperatureC"].(float64)
+	if !ok {
+		t.Fatalf("zone sensor telemetry=%#v", snapshot.Devices["ZONE-SENSOR-01"])
+	}
+	return value
+}
+
+// The chiller delivers what the air-side coil draws to hold the zone; at design supply water the
+// coil keeps up with the building's load, so the zone stays at its setpoint and the chiller
+// carries the whole load.
+func TestZoneHoldsItsSetpointWhileTheCoilKeepsUp(t *testing.T) {
+	plant := NewPlant(testPlantConfig(), testStaticScenario(), time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
+	snapshot := plant.Tick(2 * time.Hour)
+	if zone := zoneTemperature(t, snapshot); math.Abs(zone-24) > 0.1 {
+		t.Fatalf("zone=%.3f, want the 24 °C setpoint", zone)
+	}
+	if capacity := snapshot.Devices["CHILLER-01"]["coolingCapacityKw"].(float64); math.Abs(capacity-864) > 5 {
+		t.Fatalf("chiller capacity=%.3f, want the 864 kW load", capacity)
+	}
+}
+
+// Warmer supply water saves chiller energy until the coil cannot remove the load; then the zone
+// warms to where the coil balances it. This is the trade-off a supply temperature reset weighs.
+func TestWarmerSupplyWaterLetsTheZoneDriftAboveItsSetpointUnderHeavyLoad(t *testing.T) {
+	config := testPlantConfig()
+	inputs := ScenarioInputs{AmbientDryBulbC: 34, AmbientWetBulbC: 27, CoolingLoadKW: 1100}
+	plant := NewPlant(config, Scenario{SchemaVersion: ScenarioSchemaVersion, Mode: ScenarioModeStatic, Inputs: &inputs}, time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
+	before := zoneTemperature(t, plant.Tick(2*time.Hour))
+	if result := plant.ApplyCommand(Command{DeviceID: config.Chiller.ID, Method: "setChilledWaterTemperatureSetpoint", Params: map[string]float64{"setpointC": 12}}); !result.Success {
+		t.Fatalf("setpoint rejected: %#v", result)
+	}
+	after := zoneTemperature(t, plant.Tick(4*time.Hour))
+	if math.Abs(before-24) > 0.1 || after < 25 || after > 29 {
+		t.Fatalf("zone before=%.3f after=%.3f", before, after)
+	}
+}
+
+func TestZoneWarmsWhenTheChillerStops(t *testing.T) {
+	config := testPlantConfig()
+	plant := NewPlant(config, testStaticScenario(), time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC))
+	plant.Tick(time.Hour)
+	if result := plant.ApplyCommand(Command{DeviceID: config.Chiller.ID, Method: "stop"}); !result.Success {
+		t.Fatalf("stop rejected: %#v", result)
+	}
+	if zone := zoneTemperature(t, plant.Tick(30*time.Minute)); zone < 24.5 {
+		t.Fatalf("zone=%.3f after half an hour without cooling", zone)
 	}
 }

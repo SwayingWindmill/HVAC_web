@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
@@ -49,18 +47,21 @@ func TestS2FixtureTelemetryAuthorizationSupportsBrowserSnapshotAndNondiscovery(t
 	}
 }
 
-func TestTelemetryAuthorizationRequiresExactDeviceAndKeyScope(t *testing.T) {
+func TestTelemetryAuthorizationAllowsAnyDeviceOnAnAssignedSite(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
+	facts := telemetryFixtureFacts(now)
+	// A Device added to the Site later needs no grant of its own, and keys are not authorized one by one.
+	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, Status: FactStatusActive})
 	request := telemetryauth.DecisionRequest{
 		TenantID: S1FixtureTenantAID,
 		Action:   telemetryauth.ActionSnapshotRead,
-		Targets:  []telemetryauth.Target{{DeviceID: telemetryTestDeviceID, Keys: []string{"zone.temperature"}}},
+		Targets:  []telemetryauth.Target{{DeviceID: telemetryTestDeviceID, Keys: []string{"zone.temperature"}}, {DeviceID: telemetryTestSiblingDevice, Keys: []string{"any.key"}}},
 	}
-	decision, err := evaluateTelemetryAuthorization(context.Background(), newStaticTelemetryAuthorizationStore(telemetryFixtureFacts(now)), now, telemetryTestIssuer, telemetryTestSubject, request)
+	decision, err := evaluateTelemetryAuthorization(context.Background(), newStaticTelemetryAuthorizationStore(facts), now, telemetryTestIssuer, telemetryTestSubject, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decision.Allowed || decision.ReasonCode != telemetryauth.ReasonAllowExactScope || len(decision.Targets) != 1 {
+	if !decision.Allowed || decision.ReasonCode != telemetryauth.ReasonAllowExactScope || len(decision.Targets) != 2 {
 		t.Fatalf("allow decision = %#v", decision)
 	}
 	if decision.Targets[0].TenantID != S1FixtureTenantAID || decision.Targets[0].SiteID != telemetryTestSiteID {
@@ -68,7 +69,7 @@ func TestTelemetryAuthorizationRequiresExactDeviceAndKeyScope(t *testing.T) {
 	}
 }
 
-func TestTelemetryAuthorizationDoesNotTreatTenantMembershipAsAllSites(t *testing.T) {
+func TestTelemetryAuthorizationDoesNotReachASiteWithoutAnAssignment(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)
 	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiblingSite, Status: FactStatusActive})
@@ -102,32 +103,20 @@ func TestTelemetryAuthorizationRejectsCrossTenantDevice(t *testing.T) {
 	}
 }
 
-func TestTelemetryAuthorizationDenyPrecedenceAndStableKeyFailure(t *testing.T) {
+func TestTelemetryAuthorizationTreatsADeniedSiteAsAbsent(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)
-	facts.KeyBindings = append(facts.KeyBindings, TelemetryKeyBinding{
-		TenantID: S1FixtureTenantAID, DeviceID: telemetryTestDeviceID, Key: "zone.temperature",
-		Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: BindingEffectDeny, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-	})
-	request := telemetryauth.DecisionRequest{
+	facts.ExplicitDenies = []ExplicitDeny{{TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, Capability: string(telemetryauth.ActionSnapshotRead), ValidFrom: now.Add(-time.Hour)}}
+	decision, err := evaluateTelemetryAuthorization(context.Background(), newStaticTelemetryAuthorizationStore(facts), now, telemetryTestIssuer, telemetryTestSubject, telemetryauth.DecisionRequest{
 		TenantID: S1FixtureTenantAID,
 		Action:   telemetryauth.ActionSnapshotRead,
-		Targets:  []telemetryauth.Target{{DeviceID: telemetryTestDeviceID, Keys: []string{"zone.temperature"}}},
-	}
-	decision, err := evaluateTelemetryAuthorization(context.Background(), newStaticTelemetryAuthorizationStore(facts), now, telemetryTestIssuer, telemetryTestSubject, request)
+		Targets:  []telemetryauth.Target{{DeviceID: telemetryTestDeviceID}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Allowed || decision.ReasonCode != telemetryauth.ReasonTelemetryKeyInvalid {
-		t.Fatalf("explicit key deny decision = %#v", decision)
-	}
-	request.Targets[0].Keys = []string{"unknown.key"}
-	decision, err = evaluateTelemetryAuthorization(context.Background(), newStaticTelemetryAuthorizationStore(telemetryFixtureFacts(now)), now, telemetryTestIssuer, telemetryTestSubject, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Allowed || decision.ReasonCode != telemetryauth.ReasonTelemetryKeyInvalid {
-		t.Fatalf("unknown key decision = %#v", decision)
+	if decision.Allowed || decision.ReasonCode != telemetryauth.ReasonResourceNotFound {
+		t.Fatalf("explicit deny decision = %#v", decision)
 	}
 }
 
@@ -148,42 +137,17 @@ func TestTelemetryAuthorizationIsAllOrNothing(t *testing.T) {
 	}
 }
 
-func TestPostgresTelemetryActionProjectionRejectsUnknownSchemaDrift(t *testing.T) {
-	actions, err := postgresTelemetryRegistryActions([]string{
-		string(registryauth.ActionRegistryRead),
-		analyticsmodel.EnergySeriesAction,
-		string(telemetryauth.ActionSnapshotRead),
-	})
-	if err != nil || len(actions) != 1 || string(actions[0]) != string(telemetryauth.ActionSnapshotRead) {
-		t.Fatalf("known cross-domain actions = %#v, err=%v", actions, err)
-	}
-	if _, err := postgresTelemetryRegistryActions([]string{"telemetry.unknown"}); err == nil {
-		t.Fatal("unknown IAM action schema drift was silently ignored")
-	}
-}
-
 func telemetryFixtureFacts(now time.Time) TelemetryAuthorizationFacts {
-	registryActions := []registryauth.Action{
-		registryauth.Action(telemetryauth.ActionSnapshotRead),
-		registryauth.Action(telemetryauth.ActionSubscribe),
-	}
-	telemetryActions := []telemetryauth.Action{telemetryauth.ActionSnapshotRead, telemetryauth.ActionSubscribe}
 	return TelemetryAuthorizationFacts{
-		PolicyRevision: "telemetry-access:1",
-		Principal:      PrincipalRecord{ID: telemetryTestPrincipalID, SubjectIssuer: telemetryTestIssuer, Subject: telemetryTestSubject, Status: FactStatusActive},
-		Memberships:    []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
-		RoleBindings: []RoleBinding{{
-			TenantID: S1FixtureTenantAID, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
-		SiteBindings: []SiteBinding{{
-			TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
+		AuthorizationFacts: AuthorizationFacts{
+			PolicyRevision: "telemetry-access:1",
+			Principal:      PrincipalRecord{ID: telemetryTestPrincipalID, SubjectIssuer: telemetryTestIssuer, Subject: telemetryTestSubject, Status: FactStatusActive},
+			Memberships:    []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+			Assignments: []RoleAssignment{{
+				TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, RoleKey: "viewer", Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
+				Capabilities: []string{string(telemetryauth.ActionSnapshotRead), string(telemetryauth.ActionSubscribe)},
+			}},
+		},
 		Devices: []TelemetryDevice{{ID: telemetryTestDeviceID, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, Status: FactStatusActive}},
-		ScopeBindings: []TelemetryScopeBinding{{
-			TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, DeviceID: telemetryTestDeviceID, Actions: telemetryActions, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
-		KeyBindings: []TelemetryKeyBinding{{
-			TenantID: S1FixtureTenantAID, DeviceID: telemetryTestDeviceID, Key: "zone.temperature", Actions: telemetryActions, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
-		}},
 	}
 }

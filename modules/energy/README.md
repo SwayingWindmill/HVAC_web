@@ -5,7 +5,7 @@ Energy slice. Phase 1 composes its projector package into `cmd/telemetry-worker`
 
 ```text
 telemetry_history.counter_arrivals        (after the checkpoint, History order)
-    -> telemetry_history.counter_deltas_from (the arrivals' Points, from their earliest sample)
+    -> telemetry_history.counter_deltas_from (per hour of the arrivals' samples: their Points, that hour)
     -> Core MeterBinding resolver
     -> analytics.energy_interval_facts
     -> analytics.energy_projection_checkpoints

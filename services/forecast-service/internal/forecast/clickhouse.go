@@ -15,21 +15,26 @@ import (
 )
 
 type ClickHouseConfig struct {
-	BaseURL    string
-	Database   string
-	Table      string
-	Username   string
-	Password   string
-	HTTPClient *http.Client
+	BaseURL  string
+	Database string
+	Table    string
+	Username string
+	Password string
+	// The writer may only insert, so published forecasts are read back as the reader.
+	ReaderUsername string
+	ReaderPassword string
+	HTTPClient     *http.Client
 }
 
 type ClickHouseSink struct {
-	baseURL  *url.URL
-	database string
-	table    string
-	username string
-	password string
-	client   *http.Client
+	baseURL        *url.URL
+	database       string
+	table          string
+	username       string
+	password       string
+	readerUsername string
+	readerPassword string
+	client         *http.Client
 }
 
 func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
@@ -57,7 +62,7 @@ func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 			},
 		}
 	}
-	return &ClickHouseSink{baseURL: parsed, database: database, table: table, username: config.Username, password: config.Password, client: client}, nil
+	return &ClickHouseSink{baseURL: parsed, database: database, table: table, username: config.Username, password: config.Password, readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword, client: client}, nil
 }
 
 func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []Point) error {
@@ -125,8 +130,8 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, forecastJobID s
 	if err != nil {
 		return nil, err
 	}
-	if sink.username != "" {
-		request.SetBasicAuth(sink.username, sink.password)
+	if sink.readerUsername != "" {
+		request.SetBasicAuth(sink.readerUsername, sink.readerPassword)
 	}
 	response, err := sink.client.Do(request)
 	if err != nil {
@@ -165,8 +170,8 @@ func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, forecastJobID st
 	if err != nil {
 		return false, err
 	}
-	if sink.username != "" {
-		request.SetBasicAuth(sink.username, sink.password)
+	if sink.readerUsername != "" {
+		request.SetBasicAuth(sink.readerUsername, sink.readerPassword)
 	}
 	response, err := sink.client.Do(request)
 	if err != nil {

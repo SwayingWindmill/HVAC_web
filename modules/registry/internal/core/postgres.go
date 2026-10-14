@@ -26,6 +26,7 @@ type RegistryStore interface {
 	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
 	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
+	GetSiteTariff(context.Context, registryauth.GrantClaims, string) (SiteTariff, error)
 }
 
 type PostgresStore struct {
@@ -114,7 +115,7 @@ func (store *PostgresStore) ListSites(ctx context.Context, claims registryauth.G
 	result := PageResult[Site]{Items: []Site{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
+SELECT `+siteColumns+`
 FROM core_registry.sites
 WHERE NOT (id = ANY($1::uuid[]))
   AND ($2 = '' OR (display_name COLLATE "C", id) > ($2 COLLATE "C", $3::uuid))
@@ -151,7 +152,7 @@ func (store *PostgresStore) GetSite(ctx context.Context, claims registryauth.Gra
 	var result Site
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		item, err := scanSite(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
+SELECT `+siteColumns+`
 FROM core_registry.sites
 WHERE id = $1::uuid
   AND NOT (id = ANY($2::uuid[]))
@@ -386,9 +387,15 @@ SELECT mb.tenant_id::text,
        mb.point_id::text,
        mb.point_type,
        mb.effective_from,
-       mb.effective_to
+       mb.effective_to,
+       CASE WHEN scope.branch THEN 'BRANCH' ELSE 'SITE' END,
+       CASE WHEN scope.branch THEN tn.device_id::text END
 FROM core_registry.meter_bindings AS mb
 JOIN core_registry.energy_types AS et ON et.id = mb.energy_type_id
+JOIN core_registry.energy_edges AS edge ON edge.id = mb.energy_edge_id
+JOIN core_registry.energy_nodes AS fn ON fn.id = edge.from_node_id
+JOIN core_registry.energy_nodes AS tn ON tn.id = edge.to_node_id
+CROSS JOIN LATERAL (SELECT tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID' AS branch) AS scope
 WHERE mb.site_id = $1::uuid
   AND mb.device_id = $2::uuid
   AND mb.point_id = $3::uuid
@@ -405,12 +412,16 @@ ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
 		defer rows.Close()
 		for rows.Next() {
 			var item MeterBindingResolution
+			var loadDeviceID *string
 			if err := rows.Scan(
 				&item.TenantID, &item.SiteID, &item.MeterID, &item.MeterBindingID, &item.TopologyVersionID,
 				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
-				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo,
+				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope, &loadDeviceID,
 			); err != nil {
 				return fmt.Errorf("scan Core meter binding resolution: %w", err)
+			}
+			if loadDeviceID != nil {
+				item.LoadDeviceID = *loadDeviceID
 			}
 			item.EffectiveFrom = item.EffectiveFrom.UTC()
 			if item.EffectiveTo != nil {
@@ -439,11 +450,14 @@ type rowScanner interface {
 	Scan(...any) error
 }
 
+// siteColumns are what scanSite reads, in its order.
+const siteColumns = `id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at, floor_area_m2, climate_zone`
+
 func scanSite(row rowScanner) (Site, error) {
 	var item Site
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.FloorAreaM2, &item.ClimateZone); err != nil {
 		return Site{}, err
 	}
 	item.CreatedAt = formatInstant(createdAt)

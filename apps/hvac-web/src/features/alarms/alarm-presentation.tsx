@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { SeverityMark, type SeverityLevel } from '@/components/severity-mark';
 import type { Alarm, AlarmOperation, AlarmSeverity } from './alarm-api';
 
 export const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
@@ -56,13 +57,24 @@ export const SEVERITY_COLORS: Readonly<Record<AlarmSeverity, string>> = {
   INFO: 'var(--severity-info)',
 };
 
+export const SEVERITY_LEVEL: Readonly<Record<AlarmSeverity, SeverityLevel>> = {
+  CRITICAL: 'critical',
+  MAJOR: 'major',
+  MINOR: 'minor',
+  WARNING: 'warning',
+  INFO: 'info',
+};
+
+/** Severity as a soft-tinted label led by its shape, so it reads without colour. */
 export function SeverityBadge({ severity }: { readonly severity: AlarmSeverity }) {
   const color = SEVERITY_COLORS[severity];
   return (
     <Badge
       variant="outline"
-      style={{ color, borderColor: `color-mix(in oklab, ${color} 35%, transparent)`, background: `color-mix(in oklab, ${color} 10%, transparent)` }}
+      className="gap-1 border-transparent"
+      style={{ color, background: `color-mix(in oklab, ${color} 12%, transparent)` }}
     >
+      <SeverityMark level={SEVERITY_LEVEL[severity]} label="" className="size-2" />
       {SEVERITY_LABELS[severity]}
     </Badge>
   );

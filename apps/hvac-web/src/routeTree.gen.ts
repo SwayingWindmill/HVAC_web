@@ -12,24 +12,24 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppSiteRouteImport } from './routes/_app._site'
+import { Route as AppBenchmarkRouteImport } from './routes/_app.benchmark'
 import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppSystemRouteImport } from './routes/_app.system'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
 import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
-import { Route as AppSiteEnergyAnalysisBenchmarkingRouteImport } from './routes/_app._site.energy-analysis.benchmarking'
 import { Route as AppSiteEnergyAnalysisBreakdownRouteImport } from './routes/_app._site.energy-analysis.breakdown'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
-import { Route as AppSiteEnergyAnalysisLoadDemandRouteImport } from './routes/_app._site.energy-analysis.load-demand'
+import { Route as AppSiteEnergyAnalysisDemandRouteImport } from './routes/_app._site.energy-analysis.demand'
+import { Route as AppSiteEnergyAnalysisForecastRouteImport } from './routes/_app._site.energy-analysis.forecast'
+import { Route as AppSiteEnergyAnalysisOptimizationRouteImport } from './routes/_app._site.energy-analysis.optimization'
+import { Route as AppSiteEnergyAnalysisSavingsRouteImport } from './routes/_app._site.energy-analysis.savings'
 import { Route as AppSiteOperationsAlarmsRouteImport } from './routes/_app._site.operations.alarms'
 import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._site.operations.control'
+import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app._site.operations.diagnostics'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
-import { Route as AppSiteOptimizationOpportunitiesRouteImport } from './routes/_app._site.optimization.opportunities'
-import { Route as AppSiteOptimizationProjectsRouteImport } from './routes/_app._site.optimization.projects'
-import { Route as AppSiteOptimizationVerificationRouteImport } from './routes/_app._site.optimization.verification'
-import { Route as AppSiteSettingsIndexRouteImport } from './routes/_app._site.settings.index'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -42,6 +42,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 } as any)
 const AppSiteRoute = AppSiteRouteImport.update({
   id: '/_site',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBenchmarkRoute = AppBenchmarkRouteImport.update({
+  id: '/benchmark',
+  path: '/benchmark',
   getParentRoute: () => AppRoute,
 } as any)
 const AppNotificationsRoute = AppNotificationsRouteImport.update({
@@ -69,12 +74,6 @@ const AppSettingsIntegrationsRoute = AppSettingsIntegrationsRouteImport.update({
   path: '/settings/integrations',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSiteEnergyAnalysisBenchmarkingRoute =
-  AppSiteEnergyAnalysisBenchmarkingRouteImport.update({
-    id: '/energy-analysis/benchmarking',
-    path: '/energy-analysis/benchmarking',
-    getParentRoute: () => AppSiteRoute,
-  } as any)
 const AppSiteEnergyAnalysisBreakdownRoute =
   AppSiteEnergyAnalysisBreakdownRouteImport.update({
     id: '/energy-analysis/breakdown',
@@ -87,10 +86,28 @@ const AppSiteEnergyAnalysisConsumptionRoute =
     path: '/energy-analysis/consumption',
     getParentRoute: () => AppSiteRoute,
   } as any)
-const AppSiteEnergyAnalysisLoadDemandRoute =
-  AppSiteEnergyAnalysisLoadDemandRouteImport.update({
-    id: '/energy-analysis/load-demand',
-    path: '/energy-analysis/load-demand',
+const AppSiteEnergyAnalysisDemandRoute =
+  AppSiteEnergyAnalysisDemandRouteImport.update({
+    id: '/energy-analysis/demand',
+    path: '/energy-analysis/demand',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
+const AppSiteEnergyAnalysisForecastRoute =
+  AppSiteEnergyAnalysisForecastRouteImport.update({
+    id: '/energy-analysis/forecast',
+    path: '/energy-analysis/forecast',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
+const AppSiteEnergyAnalysisOptimizationRoute =
+  AppSiteEnergyAnalysisOptimizationRouteImport.update({
+    id: '/energy-analysis/optimization',
+    path: '/energy-analysis/optimization',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
+const AppSiteEnergyAnalysisSavingsRoute =
+  AppSiteEnergyAnalysisSavingsRouteImport.update({
+    id: '/energy-analysis/savings',
+    path: '/energy-analysis/savings',
     getParentRoute: () => AppSiteRoute,
   } as any)
 const AppSiteOperationsAlarmsRoute = AppSiteOperationsAlarmsRouteImport.update({
@@ -102,6 +119,12 @@ const AppSiteOperationsControlRoute =
   AppSiteOperationsControlRouteImport.update({
     id: '/operations/control',
     path: '/operations/control',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
+const AppSiteOperationsDiagnosticsRoute =
+  AppSiteOperationsDiagnosticsRouteImport.update({
+    id: '/operations/diagnostics',
+    path: '/operations/diagnostics',
     getParentRoute: () => AppSiteRoute,
   } as any)
 const AppSiteOperationsRealtimeRoute =
@@ -122,162 +145,139 @@ const AppSiteOperationsWorkCenterRoute =
     path: '/operations/work-center',
     getParentRoute: () => AppSiteRoute,
   } as any)
-const AppSiteOptimizationOpportunitiesRoute =
-  AppSiteOptimizationOpportunitiesRouteImport.update({
-    id: '/optimization/opportunities',
-    path: '/optimization/opportunities',
-    getParentRoute: () => AppSiteRoute,
-  } as any)
-const AppSiteOptimizationProjectsRoute =
-  AppSiteOptimizationProjectsRouteImport.update({
-    id: '/optimization/projects',
-    path: '/optimization/projects',
-    getParentRoute: () => AppSiteRoute,
-  } as any)
-const AppSiteOptimizationVerificationRoute =
-  AppSiteOptimizationVerificationRouteImport.update({
-    id: '/optimization/verification',
-    path: '/optimization/verification',
-    getParentRoute: () => AppSiteRoute,
-  } as any)
-const AppSiteSettingsIndexRoute = AppSiteSettingsIndexRouteImport.update({
-  id: '/settings/',
-  path: '/settings/',
-  getParentRoute: () => AppSiteRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/benchmark': typeof AppBenchmarkRoute
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/energy-analysis/load-demand': typeof AppSiteEnergyAnalysisLoadDemandRoute
+  '/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
+  '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
+  '/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
+  '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
-  '/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
-  '/optimization/projects': typeof AppSiteOptimizationProjectsRoute
-  '/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/settings/': typeof AppSiteSettingsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/benchmark': typeof AppBenchmarkRoute
   '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/energy-analysis/load-demand': typeof AppSiteEnergyAnalysisLoadDemandRoute
+  '/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
+  '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
+  '/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
+  '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
-  '/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
-  '/optimization/projects': typeof AppSiteOptimizationProjectsRoute
-  '/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/settings': typeof AppSiteSettingsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_app/_site': typeof AppSiteRouteWithChildren
+  '/_app/benchmark': typeof AppBenchmarkRoute
   '/_app/notifications': typeof AppNotificationsRoute
   '/_app/system': typeof AppSystemRoute
   '/_app/': typeof AppIndexRoute
   '/_app/_site/overview': typeof AppSiteOverviewRoute
   '/_app/_site/reports': typeof AppSiteReportsRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
-  '/_app/_site/energy-analysis/benchmarking': typeof AppSiteEnergyAnalysisBenchmarkingRoute
   '/_app/_site/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/_app/_site/energy-analysis/load-demand': typeof AppSiteEnergyAnalysisLoadDemandRoute
+  '/_app/_site/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
+  '/_app/_site/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/_app/_site/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
+  '/_app/_site/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/_app/_site/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/_app/_site/operations/control': typeof AppSiteOperationsControlRoute
+  '/_app/_site/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
-  '/_app/_site/optimization/opportunities': typeof AppSiteOptimizationOpportunitiesRoute
-  '/_app/_site/optimization/projects': typeof AppSiteOptimizationProjectsRoute
-  '/_app/_site/optimization/verification': typeof AppSiteOptimizationVerificationRoute
-  '/_app/_site/settings/': typeof AppSiteSettingsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/benchmark'
     | '/notifications'
     | '/system'
     | '/overview'
     | '/reports'
     | '/settings/integrations'
-    | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
-    | '/energy-analysis/load-demand'
+    | '/energy-analysis/demand'
+    | '/energy-analysis/forecast'
+    | '/energy-analysis/optimization'
+    | '/energy-analysis/savings'
     | '/operations/alarms'
     | '/operations/control'
+    | '/operations/diagnostics'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
-    | '/optimization/opportunities'
-    | '/optimization/projects'
-    | '/optimization/verification'
-    | '/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/benchmark'
     | '/notifications'
     | '/system'
     | '/overview'
     | '/reports'
     | '/settings/integrations'
-    | '/energy-analysis/benchmarking'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
-    | '/energy-analysis/load-demand'
+    | '/energy-analysis/demand'
+    | '/energy-analysis/forecast'
+    | '/energy-analysis/optimization'
+    | '/energy-analysis/savings'
     | '/operations/alarms'
     | '/operations/control'
+    | '/operations/diagnostics'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
-    | '/optimization/opportunities'
-    | '/optimization/projects'
-    | '/optimization/verification'
-    | '/settings'
   id:
     | '__root__'
     | '/_app'
     | '/_app/_site'
+    | '/_app/benchmark'
     | '/_app/notifications'
     | '/_app/system'
     | '/_app/'
     | '/_app/_site/overview'
     | '/_app/_site/reports'
     | '/_app/settings/integrations'
-    | '/_app/_site/energy-analysis/benchmarking'
     | '/_app/_site/energy-analysis/breakdown'
     | '/_app/_site/energy-analysis/consumption'
-    | '/_app/_site/energy-analysis/load-demand'
+    | '/_app/_site/energy-analysis/demand'
+    | '/_app/_site/energy-analysis/forecast'
+    | '/_app/_site/energy-analysis/optimization'
+    | '/_app/_site/energy-analysis/savings'
     | '/_app/_site/operations/alarms'
     | '/_app/_site/operations/control'
+    | '/_app/_site/operations/diagnostics'
     | '/_app/_site/operations/realtime'
     | '/_app/_site/operations/systems-devices'
     | '/_app/_site/operations/work-center'
-    | '/_app/_site/optimization/opportunities'
-    | '/_app/_site/optimization/projects'
-    | '/_app/_site/optimization/verification'
-    | '/_app/_site/settings/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -305,6 +305,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppSiteRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/benchmark': {
+      id: '/_app/benchmark'
+      path: '/benchmark'
+      fullPath: '/benchmark'
+      preLoaderRoute: typeof AppBenchmarkRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/notifications': {
@@ -342,13 +349,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsIntegrationsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/_site/energy-analysis/benchmarking': {
-      id: '/_app/_site/energy-analysis/benchmarking'
-      path: '/energy-analysis/benchmarking'
-      fullPath: '/energy-analysis/benchmarking'
-      preLoaderRoute: typeof AppSiteEnergyAnalysisBenchmarkingRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
     '/_app/_site/energy-analysis/breakdown': {
       id: '/_app/_site/energy-analysis/breakdown'
       path: '/energy-analysis/breakdown'
@@ -363,11 +363,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteEnergyAnalysisConsumptionRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/_site/energy-analysis/load-demand': {
-      id: '/_app/_site/energy-analysis/load-demand'
-      path: '/energy-analysis/load-demand'
-      fullPath: '/energy-analysis/load-demand'
-      preLoaderRoute: typeof AppSiteEnergyAnalysisLoadDemandRouteImport
+    '/_app/_site/energy-analysis/demand': {
+      id: '/_app/_site/energy-analysis/demand'
+      path: '/energy-analysis/demand'
+      fullPath: '/energy-analysis/demand'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisDemandRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/energy-analysis/forecast': {
+      id: '/_app/_site/energy-analysis/forecast'
+      path: '/energy-analysis/forecast'
+      fullPath: '/energy-analysis/forecast'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisForecastRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/energy-analysis/optimization': {
+      id: '/_app/_site/energy-analysis/optimization'
+      path: '/energy-analysis/optimization'
+      fullPath: '/energy-analysis/optimization'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisOptimizationRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/energy-analysis/savings': {
+      id: '/_app/_site/energy-analysis/savings'
+      path: '/energy-analysis/savings'
+      fullPath: '/energy-analysis/savings'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisSavingsRouteImport
       parentRoute: typeof AppSiteRoute
     }
     '/_app/_site/operations/alarms': {
@@ -382,6 +403,13 @@ declare module '@tanstack/react-router' {
       path: '/operations/control'
       fullPath: '/operations/control'
       preLoaderRoute: typeof AppSiteOperationsControlRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/operations/diagnostics': {
+      id: '/_app/_site/operations/diagnostics'
+      path: '/operations/diagnostics'
+      fullPath: '/operations/diagnostics'
+      preLoaderRoute: typeof AppSiteOperationsDiagnosticsRouteImport
       parentRoute: typeof AppSiteRoute
     }
     '/_app/_site/operations/realtime': {
@@ -405,72 +433,42 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsWorkCenterRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/_site/optimization/opportunities': {
-      id: '/_app/_site/optimization/opportunities'
-      path: '/optimization/opportunities'
-      fullPath: '/optimization/opportunities'
-      preLoaderRoute: typeof AppSiteOptimizationOpportunitiesRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
-    '/_app/_site/optimization/projects': {
-      id: '/_app/_site/optimization/projects'
-      path: '/optimization/projects'
-      fullPath: '/optimization/projects'
-      preLoaderRoute: typeof AppSiteOptimizationProjectsRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
-    '/_app/_site/optimization/verification': {
-      id: '/_app/_site/optimization/verification'
-      path: '/optimization/verification'
-      fullPath: '/optimization/verification'
-      preLoaderRoute: typeof AppSiteOptimizationVerificationRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
-    '/_app/_site/settings/': {
-      id: '/_app/_site/settings/'
-      path: '/settings'
-      fullPath: '/settings/'
-      preLoaderRoute: typeof AppSiteSettingsIndexRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
   }
 }
 
 interface AppSiteRouteChildren {
   AppSiteOverviewRoute: typeof AppSiteOverviewRoute
   AppSiteReportsRoute: typeof AppSiteReportsRoute
-  AppSiteEnergyAnalysisBenchmarkingRoute: typeof AppSiteEnergyAnalysisBenchmarkingRoute
   AppSiteEnergyAnalysisBreakdownRoute: typeof AppSiteEnergyAnalysisBreakdownRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
-  AppSiteEnergyAnalysisLoadDemandRoute: typeof AppSiteEnergyAnalysisLoadDemandRoute
+  AppSiteEnergyAnalysisDemandRoute: typeof AppSiteEnergyAnalysisDemandRoute
+  AppSiteEnergyAnalysisForecastRoute: typeof AppSiteEnergyAnalysisForecastRoute
+  AppSiteEnergyAnalysisOptimizationRoute: typeof AppSiteEnergyAnalysisOptimizationRoute
+  AppSiteEnergyAnalysisSavingsRoute: typeof AppSiteEnergyAnalysisSavingsRoute
   AppSiteOperationsAlarmsRoute: typeof AppSiteOperationsAlarmsRoute
   AppSiteOperationsControlRoute: typeof AppSiteOperationsControlRoute
+  AppSiteOperationsDiagnosticsRoute: typeof AppSiteOperationsDiagnosticsRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
-  AppSiteOptimizationOpportunitiesRoute: typeof AppSiteOptimizationOpportunitiesRoute
-  AppSiteOptimizationProjectsRoute: typeof AppSiteOptimizationProjectsRoute
-  AppSiteOptimizationVerificationRoute: typeof AppSiteOptimizationVerificationRoute
-  AppSiteSettingsIndexRoute: typeof AppSiteSettingsIndexRoute
 }
 
 const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOverviewRoute: AppSiteOverviewRoute,
   AppSiteReportsRoute: AppSiteReportsRoute,
-  AppSiteEnergyAnalysisBenchmarkingRoute:
-    AppSiteEnergyAnalysisBenchmarkingRoute,
   AppSiteEnergyAnalysisBreakdownRoute: AppSiteEnergyAnalysisBreakdownRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
-  AppSiteEnergyAnalysisLoadDemandRoute: AppSiteEnergyAnalysisLoadDemandRoute,
+  AppSiteEnergyAnalysisDemandRoute: AppSiteEnergyAnalysisDemandRoute,
+  AppSiteEnergyAnalysisForecastRoute: AppSiteEnergyAnalysisForecastRoute,
+  AppSiteEnergyAnalysisOptimizationRoute:
+    AppSiteEnergyAnalysisOptimizationRoute,
+  AppSiteEnergyAnalysisSavingsRoute: AppSiteEnergyAnalysisSavingsRoute,
   AppSiteOperationsAlarmsRoute: AppSiteOperationsAlarmsRoute,
   AppSiteOperationsControlRoute: AppSiteOperationsControlRoute,
+  AppSiteOperationsDiagnosticsRoute: AppSiteOperationsDiagnosticsRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,
-  AppSiteOptimizationOpportunitiesRoute: AppSiteOptimizationOpportunitiesRoute,
-  AppSiteOptimizationProjectsRoute: AppSiteOptimizationProjectsRoute,
-  AppSiteOptimizationVerificationRoute: AppSiteOptimizationVerificationRoute,
-  AppSiteSettingsIndexRoute: AppSiteSettingsIndexRoute,
 }
 
 const AppSiteRouteWithChildren =
@@ -478,6 +476,7 @@ const AppSiteRouteWithChildren =
 
 interface AppRouteChildren {
   AppSiteRoute: typeof AppSiteRouteWithChildren
+  AppBenchmarkRoute: typeof AppBenchmarkRoute
   AppNotificationsRoute: typeof AppNotificationsRoute
   AppSystemRoute: typeof AppSystemRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -486,6 +485,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppSiteRoute: AppSiteRouteWithChildren,
+  AppBenchmarkRoute: AppBenchmarkRoute,
   AppNotificationsRoute: AppNotificationsRoute,
   AppSystemRoute: AppSystemRoute,
   AppIndexRoute: AppIndexRoute,

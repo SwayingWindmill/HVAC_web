@@ -167,7 +167,8 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	if err != nil {
 		return PreparedForecast{}, fmt.Errorf("resolve Forecast feature metric provenance: %w", err)
 	}
-	lookbackMinutes := max(definition.HorizonMinutes, granularity*4)
+	// A week of history lets the baseline average each time of day over earlier days.
+	lookbackMinutes := max(profileDays*24*60, definition.HorizonMinutes, granularity*4)
 	from := forecastOrigin.Add(-time.Duration(lookbackMinutes) * time.Minute)
 	series := make([]FrozenMetricSeries, 0, len(metricRefs))
 	latestDataTime := time.Time{}

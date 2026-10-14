@@ -99,7 +99,14 @@ func TestPostgresStoreAppliesTenantAndExactSiteRLSWithStablePagination(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices.Items) != 1 || devices.Items[0].ID != testDeviceA1 {
+	foundDeviceA1 := false
+	for _, device := range devices.Items {
+		if device.SiteID != testSiteA1 {
+			t.Fatalf("site-scoped devices leaked another Site: %#v", devices)
+		}
+		foundDeviceA1 = foundDeviceA1 || device.ID == testDeviceA1
+	}
+	if !foundDeviceA1 {
 		t.Fatalf("site-scoped devices = %#v", devices)
 	}
 	deniedDeviceClaims := integrationClaims(registryauth.ActionDeviceList)
@@ -166,8 +173,21 @@ func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testi
 	if resolved.Status != "MATCH" || resolved.TenantID != testTenantA || resolved.SiteID != testSiteA1 ||
 		resolved.MeterID != meterID || resolved.MeterBindingID != bindingID || resolved.TopologyVersionID != topologyID ||
 		resolved.EnergyTypeID != energyTypeID || resolved.EnergyType != "electricity" || resolved.MeterRole != "PRIMARY" ||
-		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 {
+		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 || resolved.AccountingScope != "SITE" || resolved.LoadDeviceID != "" {
 		t.Fatalf("resolved Meter Binding = %#v", resolved)
+	}
+
+	// A meter on the feed into one piece of equipment is a sub-meter of the Site, not its total,
+	// and its energy belongs to the equipment it feeds, not to the meter reporting it.
+	subMeter, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
+		DeviceID: meterDeviceID, PointID: "01990000-1340-7000-8000-000000000020", SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subMeter.Status != "MATCH" || subMeter.AccountingScope != "BRANCH" || subMeter.Direction != "CONSUME" ||
+		subMeter.DeviceID != meterDeviceID || subMeter.LoadDeviceID != "018f1e00-4100-7000-8000-000000000021" {
+		t.Fatalf("resolved sub-meter = %#v", subMeter)
 	}
 
 	beforeEffective, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{

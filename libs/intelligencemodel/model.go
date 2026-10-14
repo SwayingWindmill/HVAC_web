@@ -96,6 +96,10 @@ type FDDFinding struct {
 	AlarmID           string    `json:"alarmId,omitempty"`
 	WorkOrderID       string    `json:"workOrderId,omitempty"`
 	CreatedAt         time.Time `json:"createdAt"`
+	// What the evidence measured, against the threshold the rule applied, in UCUM units.
+	ObservedValue  float64 `json:"observedValue"`
+	ThresholdValue float64 `json:"thresholdValue"`
+	ValueUnit      string  `json:"valueUnit"`
 }
 
 type RecommendationApproval string

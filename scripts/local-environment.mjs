@@ -62,7 +62,7 @@ function ensureAdministrator() {
   const username = String(bootstrap.username).replaceAll("'", "''");
   if (psqlScalar('hvac_identity', `SELECT count(*) FROM identity.users WHERE username = '${username}'`) !== '0') return;
   const password = randomBytes(24).toString('base64url');
-  const created = run([launcher, 'run', '--rm', '-T', 'identity-admin'], {
+  const created = run([launcher, 'run', '--rm', '--build', '-T', 'identity-admin'], {
     input: '',
     env: {
       ...process.env,
@@ -96,7 +96,8 @@ function up() {
   }
   ensureAdministrator();
   script('phase1-bootstrap-local-foundation.mjs');
-  run([launcher, 'run', '--rm', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
+  // One-shot tools are built from the checkout too, so a changed input contract never meets a stale image.
+  run([launcher, 'run', '--rm', '--build', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });
   compose('--source-deploy', '--integration', '--intelligence', 'up', '-d');
   ensureServiceDataDirectory('data', 'eg8200');
   ensureServiceDataDirectory('data', 'eg8200-b');

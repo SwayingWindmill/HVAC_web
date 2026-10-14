@@ -43,6 +43,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('chiller.entering_chilled_water_temperature', '冷冻水回水温度', 'Cel'),
   point('chiller.chilled_water_temperature_setpoint', '冷冻水设定温度', 'Cel'),
   point('chiller.entering_cooling_water_temperature', '冷却水进水温度', 'Cel'),
+  point('chiller.energy', '累计电量', 'kWh'),
   point('chiller.fault_code', '故障代码'),
 
   point('chwp.run_state', '运行状态'),
@@ -50,6 +51,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('chwp.speed', '转速', '%', 1),
   point('chwp.flow_rate', '冷冻水流量', 'm3/h'),
   point('chwp.power', '水泵功率', 'kW'),
+  point('chwp.energy', '累计电量', 'kWh'),
   point('chwp.fault_code', '故障代码'),
 
   point('cwp.run_state', '运行状态'),
@@ -57,6 +59,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('cwp.speed', '转速', '%', 1),
   point('cwp.flow_rate', '冷却水流量', 'm3/h'),
   point('cwp.power', '水泵功率', 'kW'),
+  point('cwp.energy', '累计电量', 'kWh'),
   point('cwp.fault_code', '故障代码'),
 
   point('cooling_tower.run_state', '运行状态'),
@@ -66,6 +69,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('cooling_tower.ambient_wet_bulb_temperature', '室外湿球温度', 'Cel'),
   point('cooling_tower.approach_temperature', '冷却塔逼近温度', 'Cel'),
   point('cooling_tower.power', '冷却塔功率', 'kW'),
+  point('cooling_tower.energy', '累计电量', 'kWh'),
   point('cooling_tower.fault_code', '故障代码'),
 
   point('hvac_meter.active_power', '中央空调总功率', 'kW'),
@@ -83,6 +87,7 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('weather.ambient_dry_bulb_temperature', '室外干球温度', 'Cel'),
   point('weather.ambient_wet_bulb_temperature', '室外湿球温度', 'Cel'),
   point('weather.relative_humidity', '室外相对湿度', '%RH'),
+  point('zone.temperature', '室内温度', 'Cel'),
 ].map((definition) => [definition.key, definition])));
 
 export function telemetryPointDefinition(key: string): TelemetryPointDefinition {

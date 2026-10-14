@@ -1,15 +1,15 @@
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import { listWorkOrders } from '@/api/work-orders';
-import { Fact } from '@/components/common/Fact';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
@@ -46,7 +46,7 @@ export function DeviceInspector({ device, categoryLabel, onClose }: {
 }) {
   return (
     <Sheet modal={false} open={Boolean(device)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent showOverlay={false} className="w-[560px] overflow-y-auto sm:max-w-[560px]">
+      <SheetContent showOverlay={false} className="overflow-y-auto">
         {device ? <DeviceDetail key={device.deviceId} device={device} categoryLabel={categoryLabel} /> : null}
       </SheetContent>
     </Sheet>
@@ -70,36 +70,43 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
 
   return (
     <>
-      <SheetHeader>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{categoryLabel}</span>
+      <SheetHeader className="gap-1.5 border-b border-divider px-5 pt-4 pr-12 pb-3.5">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {categoryLabel} · {deviceLocation(device)}
           <StatusBadge tone={status.tone} label={status.label} />
         </div>
-        <SheetTitle className="text-lg">{device.name}</SheetTitle>
-        <SheetDescription>{deviceLocation(device)}</SheetDescription>
+        <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
+        <SheetDescription className="sr-only">{categoryLabel}，{deviceLocation(device)}</SheetDescription>
       </SheetHeader>
 
-      <div className="space-y-6 px-4 pb-6">
-        <dl className="divide-y rounded-lg border px-3">
-          <Fact label="通信">{CONNECTION_LABELS[device.connection]}</Fact>
-          <Fact label="最近数据">{formatTime(device.latestSampleAt ?? undefined, site.timezone)}</Fact>
-          <Fact label="登记时间">{formatTime(device.row.device.createdAt, site.timezone)}</Fact>
+      <div className="flex flex-col gap-5 px-5 py-4">
+        <dl className="grid grid-cols-3 divide-x divide-divider rounded-lg border border-divider bg-muted py-2.5">
+          {([
+            ['通信', CONNECTION_LABELS[device.connection]],
+            ['最近数据', formatTime(device.latestSampleAt ?? undefined, site.timezone)],
+            ['登记时间', formatTime(device.row.device.createdAt, site.timezone)],
+          ] as const).map(([label, value]) => (
+            <div key={label} className="flex flex-col gap-1 px-4">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="font-mono text-xs font-medium">{value}</dd>
+            </div>
+          ))}
         </dl>
 
-        <section>
-          <h3 className="mb-2 text-sm font-medium">当前读数</h3>
+        <section className="flex flex-col gap-2.5">
+          <h3 className="text-sm font-semibold">当前读数<span className="ml-2 text-xs font-normal text-muted-foreground">{points.length} 个点位</span></h3>
           {points.length === 0 ? (
-            <p className="text-sm text-muted-foreground">该设备尚未登记点位</p>
+            <p className="text-sm text-muted-foreground">该设备还没有登记点位</p>
           ) : (
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-0.5 rounded-lg border px-3 py-2">
+            <dl className="grid grid-cols-2 gap-2">
               {points.map((point) => {
                 const current = point.state === 'PRESENT' && point.freshness === 'FRESH' && point.quality === 'GOOD';
                 return (
-                  <div key={point.key} className="flex items-baseline justify-between gap-3 py-1 text-sm">
-                    <dt className="text-muted-foreground">{point.label}</dt>
-                    <dd className={cn('shrink-0 tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或质量降级'}>
+                  <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
+                    <dt className="truncate text-xs text-muted-foreground">{point.label}</dt>
+                    <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或质量降级'}>
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
-                      {point.state === 'PRESENT' && point.unit ? <span className="ml-0.5 text-xs text-muted-foreground">{point.unit}</span> : null}
+                      {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}
                     </dd>
                   </div>
                 );
@@ -111,19 +118,19 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
         <DayTrend device={device} />
 
         {assetId ? (
-          <section>
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-medium">设备工单</h3>
+          <section className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">设备工单</h3>
               {capabilities.includes('work-order.create') ? (
-                <Button size="sm" variant="outline" onClick={() => setCreatingWorkOrder(true)}>创建工单</Button>
+                <Button size="sm" variant="outline" onClick={() => setCreatingWorkOrder(true)}><Plus data-icon="inline-start" />创建工单</Button>
               ) : null}
             </div>
             {!workOrders.data ? null : workOrders.data.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">暂无工单</p>
+              <p className="text-xs text-muted-foreground">暂无工单</p>
             ) : (
-              <ul className="divide-y rounded-lg border">
+              <ul className="divide-y">
                 {workOrders.data.items.map((workOrder) => (
-                  <li key={workOrder.workOrderId} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                  <li key={workOrder.workOrderId} className="flex items-center justify-between gap-3 py-2.5 text-sm">
                     <Link
                       to="/operations/work-center"
                       search={{ site: site.id, view: 'all', inspect: workOrder.workOrderId }}
@@ -178,18 +185,16 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
   }));
 
   return (
-    <section>
-      <h3 className="mb-2 text-sm font-medium">最近 24 小时<span className="ml-2 text-xs font-normal text-muted-foreground">每小时平均值与范围</span></h3>
-      <ToggleGroup
-        type="single"
-        variant="outline"
-        size="sm"
-        className="mb-3 flex-wrap justify-start"
-        value={selected}
-        onValueChange={(value) => { if (value) setSelected(value); }}
-      >
-        {keys.map((key) => <ToggleGroupItem key={key} value={key} className="text-xs">{labelOf(key)}</ToggleGroupItem>)}
-      </ToggleGroup>
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">最近 24 小时<span className="ml-2 text-xs font-normal text-muted-foreground">每小时平均值与范围</span></h3>
+        <Select value={selected} onValueChange={setSelected}>
+          <SelectTrigger className="h-8 w-40" aria-label="趋势读数"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {keys.map((key) => <SelectItem key={key} value={key}>{labelOf(key)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
       {history.isPending ? (
         <Skeleton className="h-52" />
       ) : history.isError ? (

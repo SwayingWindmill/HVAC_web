@@ -94,6 +94,10 @@ components:
         qualityPolicy:
           type: string
           enum: [VALID_ONLY, VALID_AND_SUSPECT]
+        breakdown:
+          type: string
+          enum: [device]
+          description: Also return each sub-metered device's energy, already part of the Site total.
     EnergySeriesPoint:
       type: object
       additionalProperties: false
@@ -162,8 +166,26 @@ components:
           maxItems: 10000
           items:
             $ref: '#/components/schemas/EnergySeriesPoint'
+        devices:
+          type: array
+          description: Present only for breakdown=device. Devices without a sub-meter are absent.
+          items:
+            $ref: '#/components/schemas/EnergyDeviceSeries'
         metadata:
           $ref: '#/components/schemas/EnergySeriesMetadata'
+    EnergyDeviceSeries:
+      type: object
+      additionalProperties: false
+      required: [deviceId, points]
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        points:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/EnergySeriesPoint'
     ProblemDetails:
       type: object
       additionalProperties: true

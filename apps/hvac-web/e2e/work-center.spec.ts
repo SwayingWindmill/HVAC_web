@@ -34,11 +34,12 @@ test('an order is claimed, started and completed with a recorded result', async 
 
 test('the open view lists unfinished orders and hides completed ones', async ({ page }) => {
   await page.goto(`/operations/work-center?site=${SITE_ID}`);
-  await expect(page.locator('tbody tr')).toHaveCount(2);
-  await expect(page.locator('tbody')).not.toContainText('冷冻水回水温度过低');
-  await page.getByRole('tab', { name: '已结束' }).click();
-  await expect(page.locator('tbody tr')).toHaveCount(1);
-  await expect(page.locator('tbody')).toContainText('冷冻水回水温度过低');
+  const board = page.getByRole('region', { name: '工单看板' });
+  await expect(board.getByRole('listitem')).toHaveCount(2);
+  await expect(board).not.toContainText('冷冻水回水温度过低');
+  await page.getByRole('tab', { name: /已结束/ }).click();
+  await expect(board.getByRole('listitem')).toHaveCount(1);
+  await expect(board.getByRole('list', { name: '已完成' })).toContainText('冷冻水回水温度过低');
 });
 
 test('an order raised against equipment links back to the device', async ({ page }) => {

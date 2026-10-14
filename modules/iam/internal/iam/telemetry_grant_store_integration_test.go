@@ -11,6 +11,9 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
+// The S1 runner seeds the delegated user as registry-reader on Site 1 with this binding.
+const postgresDelegatedSiteBindingID = "018f1e00-2200-7000-8000-000000000012"
+
 func TestPostgresTelemetryRevocationPoll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -28,12 +31,14 @@ func TestPostgresTelemetryRevocationPoll(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT COALESCE(max(sequence), 0) FROM iam.telemetry_revocation_facts`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, `UPDATE iam.telemetry_key_bindings SET telemetry_key='fan.velocity', status='SUSPENDED', revision=revision+1, updated_at=clock_timestamp() WHERE id='018f1e00-2700-7000-8000-000000000003'::uuid`); err != nil {
+	// Suspending the delegated user's Site assignment revokes its live telemetry.
+	const setStatus = `UPDATE iam.role_bindings SET status=$2, revision=revision+1, updated_at=clock_timestamp() WHERE id=$1::uuid`
+	if _, err := admin.Exec(ctx, setStatus, postgresDelegatedSiteBindingID, "SUSPENDED"); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Exec(context.Background(), `UPDATE iam.telemetry_key_bindings SET telemetry_key='fan.speed', status='ACTIVE', revision=revision+1, updated_at=clock_timestamp() WHERE id='018f1e00-2700-7000-8000-000000000003'::uuid`)
+	defer admin.Exec(context.Background(), setStatus, postgresDelegatedSiteBindingID, "ACTIVE")
 	facts, err := store.PollRevocations(ctx, postgresTenantAID, before, 10)
-	if err != nil || len(facts) != 1 || facts[0].SourceType != "KEY_PERMISSION" || facts[0].TelemetryKey != "fan.speed" {
+	if err != nil || len(facts) != 1 || facts[0].SourceType != "ROLE_BINDING" || facts[0].PrincipalID != postgresDelegatedPrincipalID {
 		t.Fatalf("facts=%#v err=%v", facts, err)
 	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, facts[0].OccurredAt)

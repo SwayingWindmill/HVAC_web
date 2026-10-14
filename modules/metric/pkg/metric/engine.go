@@ -14,7 +14,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
+
+// TariffEnergyCost prices a window's hourly energy at the import Tariff in effect each hour.
+const TariffEnergyCost = "TARIFF_ENERGY_COST"
 
 type Dependency struct {
 	Type     string
@@ -54,6 +59,12 @@ type Input struct {
 	Count           int64   `json:"count"`
 	DurationSeconds float64 `json:"durationSeconds"`
 	Integral        float64 `json:"integral"`
+	// A counter's steps between consecutive readings: the sum of its rises, how often and by how
+	// much it fell, and the readings right after each fall.
+	Rise            float64 `json:"rise"`
+	Drops           int64   `json:"drops"`
+	DropSum         float64 `json:"dropSum"`
+	ValueAfterDrops float64 `json:"valueAfterDrops"`
 	Quality         string  `json:"quality"`
 	Completeness    float64 `json:"completeness"`
 }
@@ -83,9 +94,30 @@ type RunRequest struct {
 	Reason         string
 }
 
+// HourlyResult is one hour of an hourly Metric dependency's current result.
+type HourlyResult struct {
+	PeriodStart time.Time
+	Value       float64
+	Quality     string
+	ResultID    string
+	Revision    uint64
+}
+
+// ImportTariff is a Site's import Tariff Version over the time it is in effect, priced on its own
+// clock. EffectiveTo is nil while it has no successor.
+type ImportTariff struct {
+	VersionID     string
+	EffectiveFrom time.Time
+	EffectiveTo   *time.Time
+	Location      *time.Location
+	Periods       []tariffmodel.Period
+}
+
 type Registry interface {
 	LoadBinding(context.Context, string, string, string, time.Time) (Binding, error)
 	LoadCurrentMetricInput(context.Context, Binding, Dependency, time.Time, time.Time) (Input, error)
+	LoadHourlyMetricResults(context.Context, Binding, Dependency, time.Time, time.Time) ([]HourlyResult, error)
+	LoadImportTariffs(ctx context.Context, tenantID, siteID string, start, end time.Time) ([]ImportTariff, error)
 	CreateRun(context.Context, Result, string, []byte) (Result, error)
 	MarkRunRunning(context.Context, string, string, string, time.Time) error
 	BeginPublication(context.Context, Result, time.Time) (Result, error)
@@ -140,6 +172,10 @@ func (e *Engine) Execute(ctx context.Context, request RunRequest) (Result, error
 			}
 			input, err = e.series.ReadPoint(ctx, binding, pointID, request.PeriodStart, request.PeriodEnd)
 		case "METRIC":
+			if strings.EqualFold(strings.TrimSpace(binding.CalculationMethod), TariffEnergyCost) {
+				input, err = e.tariffPricedInput(ctx, binding, dep, request.PeriodStart, request.PeriodEnd)
+				break
+			}
 			input, err = e.registry.LoadCurrentMetricInput(ctx, binding, dep, request.PeriodStart, request.PeriodEnd)
 		case "EXTERNAL":
 			value, ok := numberMap(binding.SourceDefinition, "externals", dep.Code)
@@ -360,6 +396,11 @@ func calculate(binding Binding, inputs []Input) (float64, error) {
 			return 0, errors.New("EXPRESSION requires sourceDefinition.expression")
 		}
 		return evaluateExpression(expression, byCode)
+	case TariffEnergyCost:
+		if len(inputs) != 1 {
+			return 0, errors.New("TARIFF_ENERGY_COST requires one hourly energy input")
+		}
+		return inputs[0].Value, nil
 	case "MODEL":
 		return 0, errors.New("MODEL calculation requires a registered Metric model evaluator")
 	default:
@@ -367,25 +408,99 @@ func calculate(binding Binding, inputs []Input) (float64, error) {
 	}
 }
 
+func (e *Engine) tariffPricedInput(ctx context.Context, binding Binding, dependency Dependency, start, end time.Time) (Input, error) {
+	hours, err := e.registry.LoadHourlyMetricResults(ctx, binding, dependency, start, end)
+	if err != nil {
+		return Input{}, err
+	}
+	tariffs, err := e.registry.LoadImportTariffs(ctx, binding.TenantID, binding.SiteID, start, end)
+	if err != nil {
+		return Input{}, err
+	}
+	return priceHours(hours, tariffs, start, end)
+}
+
+// priceHours is every hour of the window's energy at the rate of the Tariff Version in effect at
+// the hour's start. A window with an hour missing, not GOOD, or not priced has no cost: a partial
+// sum would read as a lower bill.
+func priceHours(hours []HourlyResult, tariffs []ImportTariff, start, end time.Time) (Input, error) {
+	byStart := make(map[int64]HourlyResult, len(hours))
+	for _, hour := range hours {
+		byStart[hour.PeriodStart.UTC().Unix()] = hour
+	}
+	rates := make([]func(time.Time) (float64, bool), len(tariffs))
+	for index, tariff := range tariffs {
+		rates[index] = tariffmodel.Rates(tariff.Periods, tariff.Location)
+	}
+	var cost float64
+	var count int64
+	used := map[string]bool{}
+	var versions, results []string
+	for at := start.UTC(); at.Before(end); at = at.Add(time.Hour) {
+		hour, ok := byStart[at.Unix()]
+		if !ok {
+			return Input{}, fmt.Errorf("hourly energy for %s is missing", at.Format(time.RFC3339))
+		}
+		if hour.Quality != "GOOD" {
+			return Input{}, fmt.Errorf("hourly energy for %s is %s", at.Format(time.RFC3339), hour.Quality)
+		}
+		results = append(results, fmt.Sprintf("%s@%d", hour.ResultID, hour.Revision))
+		priced := false
+		for index, tariff := range tariffs {
+			if at.Before(tariff.EffectiveFrom) || (tariff.EffectiveTo != nil && !at.Before(*tariff.EffectiveTo)) {
+				continue
+			}
+			rate, ok := rates[index](at)
+			if !ok {
+				break
+			}
+			cost += hour.Value * rate
+			if !used[tariff.VersionID] {
+				used[tariff.VersionID] = true
+				versions = append(versions, tariff.VersionID)
+			}
+			priced = true
+			break
+		}
+		if !priced {
+			return Input{}, fmt.Errorf("no import Tariff prices %s", at.Format(time.RFC3339))
+		}
+		count++
+	}
+	return Input{
+		Reference:       "tariff-versions:" + strings.Join(versions, ",") + ";metric-results:" + strings.Join(results, ","),
+		Value:           cost,
+		FirstValue:      cost,
+		LastValue:       cost,
+		Count:           count,
+		DurationSeconds: end.Sub(start).Seconds(),
+		Quality:         "GOOD",
+		Completeness:    1,
+	}, nil
+}
+
+// counterDelta is what a counter accumulated over a window: every rise between consecutive
+// readings, plus what each fall stands for under the binding's declared decrease mode.
 func counterDelta(binding Binding, input Input) (float64, error) {
-	if input.LastValue >= input.FirstValue {
-		return input.LastValue - input.FirstValue, nil
+	if input.Drops == 0 {
+		return input.Rise, nil
 	}
 	counter, _ := binding.SourceDefinition["counter"].(map[string]any)
 	mode, _ := counter["decreaseMode"].(string)
-	mode = strings.ToUpper(strings.TrimSpace(mode))
-	switch mode {
+	switch strings.ToUpper(strings.TrimSpace(mode)) {
 	case "RESET":
-		return input.LastValue, nil
+		// The counter restarted from zero, so the reading after the fall is all new.
+		return input.Rise + input.ValueAfterDrops, nil
 	case "ROLLOVER":
 		modulus, ok := counter["rolloverModulus"].(float64)
-		if !ok || modulus <= input.FirstValue {
-			return 0, errors.New("counter rollover requires rolloverModulus greater than first value")
+		if !ok || modulus <= 0 {
+			return 0, errors.New("counter rollover requires a positive rolloverModulus")
 		}
-		return modulus - input.FirstValue + input.LastValue, nil
+		// Each wrap counted up to the modulus and on from zero: the fall plus one modulus.
+		return input.Rise + input.DropSum + float64(input.Drops)*modulus, nil
 	case "METER_REPLACEMENT":
 		carry, _ := counter["replacementCarry"].(float64)
-		return carry + input.LastValue, nil
+		return input.Rise + input.ValueAfterDrops + float64(input.Drops)*carry, nil
 	default:
 		return 0, errors.New("counter decreased without RESET, ROLLOVER, or METER_REPLACEMENT policy")
 	}

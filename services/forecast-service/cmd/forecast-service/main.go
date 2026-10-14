@@ -19,11 +19,13 @@ func main() {
 	ctx := context.Background()
 	clickHouseURL := requiredEnv("FORECAST_CLICKHOUSE_HTTP_URL")
 	sink, err := forecast.NewClickHouseSink(forecast.ClickHouseConfig{
-		BaseURL:  clickHouseURL,
-		Database: envOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
-		Table:    envOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
-		Username: envOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
-		Password: os.Getenv("FORECAST_CLICKHOUSE_PASSWORD"),
+		BaseURL:        clickHouseURL,
+		Database:       envOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
+		Table:          envOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
+		Username:       envOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
+		Password:       os.Getenv("FORECAST_CLICKHOUSE_PASSWORD"),
+		ReaderUsername: envOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
+		ReaderPassword: os.Getenv("FORECAST_CLICKHOUSE_READER_PASSWORD"),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -62,7 +64,7 @@ func main() {
 	leaseDuration := durationEnv("FORECAST_LEASE_DURATION", 2*time.Minute)
 	leaseRenew := durationEnv("FORECAST_LEASE_RENEW", 30*time.Second)
 	claimBatch := integerEnv("FORECAST_CLAIM_BATCH", 8)
-	go runForecastWorker(ctx, publication, service, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
+	go runForecastWorker(ctx, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
 
 	// Cross-store repair is part of the Forecast runtime itself. It only repairs
 	// stale PERSISTING jobs after proving the expected result count in ClickHouse.
@@ -109,8 +111,8 @@ func requiredEnv(name string) string {
 	return value
 }
 
-func runForecastWorker(ctx context.Context, store *forecast.PostgresStore, service *forecast.Service, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
-	claimAndRunForecastJobs(ctx, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+func runForecastWorker(ctx context.Context, store *forecast.PostgresStore, service *forecast.Service, preparer *forecast.Preparer, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+	claimAndRunForecastJobs(ctx, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
 	ticker := time.NewTicker(claimInterval)
 	defer ticker.Stop()
 	for {
@@ -118,12 +120,12 @@ func runForecastWorker(ctx context.Context, store *forecast.PostgresStore, servi
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			claimAndRunForecastJobs(ctx, store, service, workerID, claimBatch, leaseDuration, leaseRenew)
+			claimAndRunForecastJobs(ctx, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
 		}
 	}
 }
 
-func claimAndRunForecastJobs(ctx context.Context, store *forecast.PostgresStore, service *forecast.Service, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+func claimAndRunForecastJobs(ctx context.Context, store *forecast.PostgresStore, service *forecast.Service, preparer *forecast.Preparer, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	jobs, err := store.ClaimForecastJobs(claimCtx, workerID, claimBatch, leaseDuration, time.Now().UTC())
 	cancel()
@@ -132,7 +134,44 @@ func claimAndRunForecastJobs(ctx context.Context, store *forecast.PostgresStore,
 		return
 	}
 	for _, job := range jobs {
+		if job.TriggerType == "SCHEDULE" {
+			prepareScheduledForecast(ctx, store, preparer, job, leaseDuration)
+			continue
+		}
 		executeForecastJob(ctx, store, service, job, leaseDuration, leaseRenew)
+	}
+}
+
+// prepareScheduledForecast turns a scheduled plan into a Forecast job: preparation freezes the
+// latest metric history and enqueues the run, which this worker then claims like any other.
+func prepareScheduledForecast(ctx context.Context, store *forecast.PostgresStore, preparer *forecast.Preparer, job forecast.SchedulerJob, leaseDuration time.Duration) {
+	started, err := store.StartForecastJob(ctx, job, leaseDuration, time.Now().UTC())
+	if err != nil {
+		log.Printf("scheduled forecast %s start failed: %v", job.JobID, err)
+		return
+	}
+	if !started {
+		return
+	}
+	request, err := forecast.ValidateScheduledForecastPlan(job)
+	if err != nil {
+		_ = store.FailForecastJob(context.Background(), job, "FORECAST_PLAN_INVALID", err, false, time.Now().UTC())
+		return
+	}
+	jobCtx, cancel := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
+	defer cancel()
+	prepared, err := preparer.Prepare(jobCtx, request)
+	if err != nil {
+		// Too little history is not retried: the next scheduled plan reads newer history anyway.
+		retryable := !errors.Is(err, forecast.ErrPreparationUnavailable)
+		if failErr := store.FailForecastJob(context.Background(), job, "FORECAST_PREPARATION_FAILED", err, retryable, time.Now().UTC()); failErr != nil {
+			log.Printf("scheduled forecast %s failure finalization failed: %v", job.JobID, failErr)
+		}
+		return
+	}
+	output := map[string]any{"forecastJobId": prepared.ForecastJobID, "forecastSnapshotId": prepared.ForecastSnapshotID}
+	if err = store.CompleteForecastJob(context.Background(), job, output, time.Now().UTC()); err != nil {
+		log.Printf("scheduled forecast %s success finalization failed: %v", job.JobID, err)
 	}
 }
 

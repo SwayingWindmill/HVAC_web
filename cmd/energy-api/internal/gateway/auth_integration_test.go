@@ -380,7 +380,7 @@ func newAuthHarness(t *testing.T) *authHarness {
 	return newAuthHarnessWithIAMFactory(t, nil)
 }
 
-func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID string) http.Handler) *authHarness {
+func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID string) http.Handler, configure ...func(*gateway.IdentityConfig)) *authHarness {
 	t.Helper()
 	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", "spiffe://hvac.local/platform-gateway", time.Now().UTC())
 	if err != nil {
@@ -435,16 +435,20 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	}
 	var logs bytes.Buffer
 	sessionStore := sessionstore.NewMemoryStore()
+	identity := &gateway.IdentityConfig{
+		OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,
+		DefaultTenantID: authFixtureTenantID,
+		IAMURL:          iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
+		OIDCHTTPClient: oidcServer.Client(), IAMHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: clientTLS}},
+		DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionStore: sessionStore, LoginStateStore: gateway.NewMemoryLoginStateStoreForTest(), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
+	}
+	for _, apply := range configure {
+		apply(identity)
+	}
 	handler := gateway.NewHandler(gateway.Config{
-		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-		Build:  platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
-		Identity: &gateway.IdentityConfig{
-			OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,
-			DefaultTenantID: authFixtureTenantID,
-			IAMURL:          iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
-			OIDCHTTPClient: oidcServer.Client(), IAMHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: clientTLS}},
-			DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionStore: sessionStore, LoginStateStore: gateway.NewMemoryLoginStateStoreForTest(), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
-		},
+		Logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		Build:    platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
+		Identity: identity,
 	})
 	gatewayServer.Config.Handler = handler
 	gatewayServer.StartTLS()

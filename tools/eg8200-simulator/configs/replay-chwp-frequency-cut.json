@@ -1,0 +1,8 @@
+[
+  {
+    "at": "2026-09-08T09:00:00+08:00",
+    "deviceId": "CHWP-01",
+    "method": "setFrequency",
+    "params": { "frequencyHz": 45 }
+  }
+]

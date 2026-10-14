@@ -43,8 +43,8 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(adapters) != 7 {
-		t.Fatalf("expected 7 simulated Device Adapters, got %d", len(adapters))
+	if len(adapters) != 8 {
+		t.Fatalf("expected 8 simulated Device Adapters, got %d", len(adapters))
 	}
 	for _, adapter := range adapters {
 		if err := host.RegisterAdapter(adapter); err != nil {
@@ -55,7 +55,7 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Components) != 7 || len(manifest.Channels) != 61 || len(manifest.CapabilityProfiles) != 6 {
+	if len(manifest.Components) != 8 || len(manifest.Channels) != 66 || len(manifest.CapabilityProfiles) != 7 {
 		t.Fatalf("unexpected Edge Manifest sizes: components=%d channels=%d profiles=%d", len(manifest.Components), len(manifest.Channels), len(manifest.CapabilityProfiles))
 	}
 
@@ -68,8 +68,8 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 		}
 		updates += result.Updates
 	}
-	if updates != 44 {
-		t.Fatalf("expected 44 observed Channel updates, got %d", updates)
+	if updates != 49 {
+		t.Fatalf("expected 49 observed Channel updates, got %d", updates)
 	}
 	image := runtime.SwitchProcessImage(time.Unix(2001, 0).UTC())
 	available := 0
@@ -78,7 +78,7 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 			available++
 		}
 	}
-	if available != 44 {
-		t.Fatalf("expected 44 values in Process Image, got %d", available)
+	if available != 49 {
+		t.Fatalf("expected 49 values in Process Image, got %d", available)
 	}
 }

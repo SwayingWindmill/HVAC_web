@@ -221,7 +221,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
 			reason := analyticsmodel.AuthorizationReasonDenyAction
 			if allowed {
-				reason = analyticsmodel.AuthorizationReasonAllowSiteBinding
+				reason = analyticsmodel.AuthorizationReasonAllowRole
 			}
 			return telemetryJSONResponse(http.StatusOK, analyticsmodel.AuthorizationDecisionResponse{
 				Decision: analyticsmodel.AuthorizationDecision{

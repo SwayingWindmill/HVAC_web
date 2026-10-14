@@ -252,6 +252,8 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 	startLocal := query.From.In(location)
 	var cursor time.Time
 	switch query.Granularity {
+	case telemetryhistorymodel.AggregateGranularityQuarterHour:
+		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%15, 0, 0, location)
 	case telemetryhistorymodel.AggregateGranularityHour:
 		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), 0, 0, 0, location)
 	case telemetryhistorymodel.AggregateGranularityDay:
@@ -288,6 +290,8 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 
 func nextCalendarBoundary(value time.Time, granularity telemetryhistorymodel.AggregateGranularity) time.Time {
 	switch granularity {
+	case telemetryhistorymodel.AggregateGranularityQuarterHour:
+		return value.Add(15 * time.Minute)
 	case telemetryhistorymodel.AggregateGranularityHour:
 		return value.Add(time.Hour)
 	case telemetryhistorymodel.AggregateGranularityDay:
@@ -510,6 +514,8 @@ FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID
 
 func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, string) {
 	switch query.Granularity {
+	case telemetryhistorymodel.AggregateGranularityQuarterHour:
+		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 15)"
 	case telemetryhistorymodel.AggregateGranularityHour:
 		return fmt.Sprintf("toStartOfHour(sampled_at, '%s')", query.Timezone), "addHours(bucket, 1)"
 	case telemetryhistorymodel.AggregateGranularityDay:

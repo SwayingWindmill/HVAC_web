@@ -22,6 +22,8 @@ const (
 	OwnerOperationsAgent  = "operations-agent-service"
 	OwnerForecast         = "forecast-service"
 	OwnerFDD              = "fdd-service"
+	OwnerMV               = "mv-service"
+	OwnerReport           = "report-service"
 	OwnerOptimization     = "optimization-service"
 	OwnerAlarm            = "alarm-service"
 	OwnerNotification     = "notification-service"
@@ -195,7 +197,7 @@ func validateEntry(entry RouteEntry) error {
 
 func isCurrentOwner(owner string) bool {
 	switch owner {
-	case OwnerGateway, OwnerCore, OwnerConnectivity, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerRuleRuntime:
+	case OwnerGateway, OwnerCore, OwnerConnectivity, OwnerTelemetryRuntime, OwnerCommand, OwnerAnalyticsQuery, OwnerOperationsAgent, OwnerForecast, OwnerFDD, OwnerMV, OwnerReport, OwnerOptimization, OwnerAlarm, OwnerNotification, OwnerWorkOrder, OwnerRuleRuntime:
 		return true
 	default:
 		return false

@@ -97,6 +97,52 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 	}
 }
 
+func TestPostgresListReturnsTheSitesNewestCommandsWithinTheTenant(t *testing.T) {
+	runtimeURL, adminURL := commandPostgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetCommandFixture(t, admin)
+
+	opened, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	// Each submission happens later than the one before, as on a real plant.
+	at := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	store := NewPostgresStore(opened.pool, func() time.Time { at = at.Add(time.Second); return at }, nil)
+
+	first, err := store.Submit(ctx, postgresCommandRequest("postgres-list-1", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Submit(ctx, postgresCommandRequest("postgres-list-2", 23.5))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := store.List(ctx, commandTenantA, commandSiteA, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 || listed[0].ID != second.Intent.ID || listed[1].ID != first.Intent.ID || len(listed[0].Transitions) != 3 {
+		t.Fatalf("listed=%#v", listed)
+	}
+	if limited, err := store.List(ctx, commandTenantA, commandSiteA, 1); err != nil || len(limited) != 1 || limited[0].ID != second.Intent.ID {
+		t.Fatalf("limited=%#v err=%v", limited, err)
+	}
+	if otherSite, err := store.List(ctx, commandTenantA, "018f3e00-1000-7000-8000-000000000002", 10); err != nil || len(otherSite) != 0 {
+		t.Fatalf("another Site's list=%#v err=%v", otherSite, err)
+	}
+	if otherTenant, err := store.List(ctx, commandTenantB, commandSiteA, 10); err != nil || len(otherTenant) != 0 {
+		t.Fatalf("another tenant's list=%#v err=%v", otherTenant, err)
+	}
+}
+
 func TestPostgresConcurrentIdempotencyConvergesToOneIntent(t *testing.T) {
 	runtimeURL, adminURL := commandPostgresTestURLs(t)
 	ctx := t.Context()

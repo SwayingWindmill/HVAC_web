@@ -126,7 +126,7 @@ function cubeToken(overrides = {}) {
   return `${unsigned}.${signature}`;
 }
 
-function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'] } = {}) {
+function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'], accountingScope = 'SITE' } = {}) {
   return {
     measures: [
       'energy_usage.energy_valid_kwh',
@@ -140,6 +140,7 @@ function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z'
       { member: 'energy_usage.tenant_id', operator: 'equals', values: [tenantId] },
       { member: 'energy_usage.site_id', operator: 'equals', values: [siteId] },
       { member: 'energy_usage.energy_type', operator: 'equals', values: ['electricity'] },
+      { member: 'energy_usage.accounting_scope', operator: 'equals', values: [accountingScope] },
     ],
     timeDimensions: [{
       dimension: 'energy_usage.period_end',
@@ -244,6 +245,10 @@ try {
   if (local.map((row) => String(row['energy_usage.max_data_watermark'])).join(',') !== rows.map((row) => String(row['energy_usage.max_data_watermark'])).join(',')) {
     throw new Error(`Asia/Shanghai Cube watermark differs from UTC ${JSON.stringify(local)}`);
   }
+
+  // The projected meter is the Site's total, so it has no equipment sub-meter share.
+  const branch = (await queryCube(cubeToken(), energyQuery({ accountingScope: 'BRANCH' }))).data ?? [];
+  if (branch.length !== 0) throw new Error(`Site meter facts were counted as sub-meters ${JSON.stringify(branch)}`);
 
   const denied = await queryCube(cubeToken({ siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] }));
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');

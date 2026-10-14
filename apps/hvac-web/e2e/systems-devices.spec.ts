@@ -4,21 +4,28 @@ import { expect, test } from './test';
 test('a workspace opened without a Site carries the default Site in the URL', async ({ page }) => {
   await page.goto('/operations/systems-devices');
   await expect(page).toHaveURL(new RegExp(`[?&]site=${SITE_ID}`));
-  await expect(page.getByRole('heading', { name: '系统与设备' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '设备' })).toBeVisible();
 });
 
-test('the ledger lists registered equipment and counts only observed points', async ({ page }) => {
+test('the device wall lists registered equipment and counts only observed points', async ({ page }) => {
   await page.goto(`/operations/systems-devices?site=${SITE_ID}`);
-  const chiller = page.getByRole('row', { name: /CHILLER-01/ });
+  const chiller = page.getByRole('button', { name: /CHILLER-01/ });
   await expect(chiller).toContainText('运行');
   // Command points are written, never observed; they must not count as missing data.
-  await expect(chiller).toContainText('11 / 11');
-  await expect(page.getByRole('row', { name: /WEATHER-STATION-01/ })).toContainText('室外环境');
+  await expect(chiller).toContainText('点位 11/11');
+  await expect(page.getByRole('button', { name: /WEATHER-STATION-01/ })).toContainText('室外环境');
+});
+
+test('the table view keeps the ledger columns', async ({ page }) => {
+  await page.goto(`/operations/systems-devices?site=${SITE_ID}`);
+  await page.getByRole('radio', { name: '表格' }).click();
+  await expect(page).toHaveURL(/layout=table/);
+  await expect(page.getByRole('row', { name: /CHILLER-01/ })).toContainText('11 / 11');
 });
 
 test('the device inspector shows current readings and the 24-hour trend', async ({ page }) => {
   await page.goto(`/operations/systems-devices?site=${SITE_ID}`);
-  await page.getByRole('row', { name: /CHILLER-01/ }).click();
+  await page.getByRole('button', { name: /CHILLER-01/ }).click();
   await expect(page).toHaveURL(/inspect=018f3e00-4000-7000-8000-000000000001/);
 
   const inspector = page.getByRole('dialog');

@@ -56,6 +56,7 @@ const (
 	ActionDeviceBindingList   Action = "device-binding.list"
 	ActionMeterBindingResolve Action = "meter-binding.resolve"
 	ActionAssetModelRead      Action = "asset-model.read"
+	ActionTariffRead          Action = "tariff.read"
 	ActionSiteWrite           Action = "site.write"
 	ActionSpaceWrite          Action = "space.write"
 	ActionAssetWrite          Action = "asset.write"
@@ -66,6 +67,8 @@ const (
 	ActionTemplateManage      Action = "template.manage"
 	ActionRegistryImport      Action = "registry.import"
 	ActionRegistryRetire      Action = "registry.retire"
+	// ActionSavingsManage registers and lifecycles a Site's energy conservation measures (ADR 0021).
+	ActionSavingsManage Action = "savings.manage"
 )
 
 func (action Action) Valid() bool {
@@ -80,6 +83,7 @@ func (action Action) Valid() bool {
 		ActionDeviceBindingList,
 		ActionMeterBindingResolve,
 		ActionAssetModelRead,
+		ActionTariffRead,
 		ActionSiteWrite,
 		ActionSpaceWrite,
 		ActionAssetWrite,
@@ -89,7 +93,8 @@ func (action Action) Valid() bool {
 		ActionBindingWrite,
 		ActionTemplateManage,
 		ActionRegistryImport,
-		ActionRegistryRetire:
+		ActionRegistryRetire,
+		ActionSavingsManage:
 		return true
 	default:
 		return false
@@ -98,9 +103,9 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead,
+	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead, ActionTariffRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
-		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire:
+		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire, ActionSavingsManage:
 		return true
 	default:
 		return false
@@ -114,7 +119,7 @@ func (action Action) TenantScoped() bool {
 func ActionAllows(granted, requested Action) bool {
 	if granted == ActionRegistryRead {
 		return requested == ActionSiteList || requested == ActionSiteRead || requested == ActionAssetList || requested == ActionAssetRead ||
-			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead
+			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead || requested == ActionTariffRead
 	}
 	return granted == requested
 }
@@ -155,7 +160,6 @@ type ReasonCode string
 const (
 	ReasonAllowTenantRole        ReasonCode = "ALLOW_TENANT_ROLE"
 	ReasonAllowSiteRole          ReasonCode = "ALLOW_SITE_ROLE"
-	ReasonAllowSiteBinding       ReasonCode = "ALLOW_SITE_BINDING"
 	ReasonDenyExplicit           ReasonCode = "DENY_EXPLICIT"
 	ReasonDenyPrincipalNotFound  ReasonCode = "DENY_PRINCIPAL_NOT_FOUND"
 	ReasonDenyPrincipalInactive  ReasonCode = "DENY_PRINCIPAL_INACTIVE"
@@ -166,7 +170,7 @@ const (
 
 func IsAllowReason(reason ReasonCode) bool {
 	switch reason {
-	case ReasonAllowTenantRole, ReasonAllowSiteRole, ReasonAllowSiteBinding:
+	case ReasonAllowTenantRole, ReasonAllowSiteRole:
 		return true
 	default:
 		return false

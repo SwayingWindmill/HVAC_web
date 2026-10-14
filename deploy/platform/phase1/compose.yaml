@@ -161,10 +161,13 @@ services:
       NOTIFICATION_SERVICE_SERVER_NAME: notification-service
       FORECAST_SERVICE_URL: http://forecast-service:19092
       FDD_SERVICE_URL: http://fdd-service:19094
+      MV_SERVICE_URL: http://mv-service:19096
+      REPORT_SERVICE_URL: http://report-service:19097
       OPTIMIZATION_SERVICE_URL: http://optimization-service:19093
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
+      IDENTITY_ADMIN_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
       IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper
       CORE_URL: https://platform-core-service:18445
       CORE_SERVER_NAME: platform-core-service
@@ -585,16 +588,12 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FDD_HTTP_ADDR: :19094
       FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
-      FDD_HISTORY_QUERY_URL: ${FDD_HISTORY_QUERY_URL:-https://telemetry-query-service:18447}
-      FDD_HISTORY_SERVER_NAME: ${FDD_HISTORY_SERVER_NAME:-telemetry-query-service}
-      FDD_HISTORY_TLS_CERT: ${FDD_HISTORY_TLS_CERT:-/run/hvac/fdd/client-cert.pem}
-      FDD_HISTORY_TLS_KEY: ${FDD_HISTORY_TLS_KEY:-/run/hvac/fdd/client-key.pem}
-      FDD_HISTORY_SERVER_CA: ${FDD_HISTORY_SERVER_CA:-/run/hvac/fdd/ca.pem}
+      FDD_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      FDD_CLICKHOUSE_READER_USERNAME: fdd_service_reader
+      FDD_CLICKHOUSE_READER_PASSWORD: ${FDD_CLICKHOUSE_READER_PASSWORD:-}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
-    volumes:
-      - ${FDD_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/fdd}:/run/hvac/fdd:ro
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
@@ -606,6 +605,66 @@ services:
     cpus: ${FDD_SERVICE_CPUS:-0.50}
     mem_limit: ${FDD_SERVICE_MEMORY_LIMIT:-256m}
     mem_reservation: ${FDD_SERVICE_MEMORY_RESERVATION:-96m}
+
+  mv-service:
+    profiles: ["intelligence"]
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/mv-service/cmd/mv-service }
+    image: ${MV_SERVICE_IMAGE:-hvac/mv-service:0.1.0-dev}
+    environment:
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+      MV_HTTP_ADDR: :19096
+      MV_DATABASE_URL: ${MV_DATABASE_URL:-}
+      MV_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      MV_CLICKHOUSE_READER_USERNAME: mv_service_reader
+      MV_CLICKHOUSE_READER_PASSWORD: ${MV_CLICKHOUSE_READER_PASSWORD:-}
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+    expose: ["19096"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19096/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${MV_SERVICE_CPUS:-0.25}
+    mem_limit: ${MV_SERVICE_MEMORY_LIMIT:-256m}
+    mem_reservation: ${MV_SERVICE_MEMORY_RESERVATION:-96m}
+
+  report-service:
+    profiles: ["intelligence"]
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/report-service/cmd/report-service }
+    image: ${REPORT_SERVICE_IMAGE:-hvac/report-service:0.1.0-dev}
+    environment:
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+      REPORT_HTTP_ADDR: :19097
+      REPORT_DATABASE_URL: ${REPORT_DATABASE_URL:-}
+      REPORT_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+      REPORT_CLICKHOUSE_READER_USERNAME: report_service_reader
+      REPORT_CLICKHOUSE_READER_PASSWORD: ${REPORT_CLICKHOUSE_READER_PASSWORD:-}
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+    expose: ["19097"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19097/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${REPORT_SERVICE_CPUS:-0.25}
+    mem_limit: ${REPORT_SERVICE_MEMORY_LIMIT:-256m}
+    mem_reservation: ${REPORT_SERVICE_MEMORY_RESERVATION:-96m}
 
   connectivity:
     <<: *go-service

@@ -15,8 +15,8 @@ func TestGeneratedCentralPlantConfigLoadsCanonicalObservedAndCommandPoints(t *te
 	if err != nil {
 		t.Fatalf("generated central-plant config is invalid: %v", err)
 	}
-	if len(config.Points) != 61 {
-		t.Fatalf("expected 61 canonical Points, got %d", len(config.Points))
+	if len(config.Points) != 66 {
+		t.Fatalf("expected 66 canonical Points, got %d", len(config.Points))
 	}
 	commandCount := 0
 	pointIDs := map[string]struct{}{}
@@ -36,7 +36,7 @@ func TestGeneratedCentralPlantConfigLoadsCanonicalObservedAndCommandPoints(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(scheduler.points) != 44 {
+	if len(scheduler.points) != 49 {
 		t.Fatalf("COMMAND Points leaked into measurement scheduler: scheduled=%d", len(scheduler.points))
 	}
 }

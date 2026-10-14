@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "id": "01a12b42-d652-7ce2-a179-aa92a96a7481",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "assetId": "01910000-0000-7000-8000-00000000000a",
+      "findingType": "CHILLED_WATER_LOW_DELTA_T",
+      "evaluationFrom": "2026-10-11T13:44:22.898Z",
+      "evaluationTo": "2026-10-11T13:59:22.898Z",
+      "evidenceIds": [
+        "01a12b42-cf8c-7b70-a5ff-2e11e3a3bda6",
+        "01a12b42-cf7f-7791-ab2d-8fcd90d33319"
+      ],
+      "ruleRevisionId": "01910000-0000-7000-8000-860000000001",
+      "confidence": 0.5175714285714285,
+      "createdAt": "2026-10-11T13:59:22.962948Z",
+      "observedValue": 3.3770000000000007,
+      "thresholdValue": 3.5,
+      "valueUnit": "K"
+    }
+  ]
+}

@@ -36,7 +36,7 @@ func TestOptimizationInputReaderDoesNotFallbackToOlderGoodQuality(t *testing.T) 
 		SubjectType: "SITE",
 		SubjectID:   "018f1e00-1000-7000-8000-000000000001",
 		At:          at,
-	}, "daily_energy")
+	}, "daily_energy", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,35 @@ func TestOptimizationInputReaderDoesNotFallbackToOlderGoodQuality(t *testing.T) 
 	}
 	if err := validateMetricEvidence(fact, "daily_energy", at); err == nil {
 		t.Fatal("latest non-GOOD authoritative fact must block Optimization preparation")
+	}
+}
+
+// The daily energy is read for the day the latest daily cost prices, not its own latest day.
+func TestOptimizationInputReaderReadsTheMetricOfAGivenDay(t *testing.T) {
+	at := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 8, 26, 16, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query, _ := io.ReadAll(request.Body)
+		if !strings.Contains(string(query), "fact.period_end = parseDateTime64BestEffort('2026-08-26T16:00:00.000Z',3,'UTC')") {
+			t.Errorf("query does not pin the day:\n%s", query)
+		}
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = writer.Write([]byte(`{"result_id":"01990000-2840-7000-8000-000000000001","metric_version_id":"01990000-2810-7000-8000-000000000001","metric_code":"daily_energy","period_start":"2026-08-25T16:00:00.000Z","period_end":"2026-08-26T16:00:00.000Z","calculated_at":"2026-08-26T16:10:00.000Z","value":2400,"unit":"kWh","quality":"GOOD","revision":1}` + "\n"))
+	}))
+	defer server.Close()
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := reader.readMetric(t.Context(), OptimizationStateQuery{
+		TenantID: "018f1d00-0000-7000-8000-000000000001", SiteID: "018f1e00-1000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "018f1e00-1000-7000-8000-000000000001", At: at,
+	}, "daily_energy", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fact.PeriodEnd.Equal(day) {
+		t.Fatalf("period end = %s", fact.PeriodEnd)
 	}
 }
 

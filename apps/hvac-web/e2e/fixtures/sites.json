@@ -9,7 +9,9 @@
       "status": "ACTIVE",
       "revision": 1,
       "createdAt": "2026-09-28T07:11:40.006Z",
-      "updatedAt": "2026-09-29T08:51:35.732Z"
+      "updatedAt": "2026-09-29T08:51:35.732Z",
+      "floorAreaM2": 32000,
+      "climateZone": "HOT_SUMMER_COLD_WINTER"
     }
   ],
   "nextCursor": null,

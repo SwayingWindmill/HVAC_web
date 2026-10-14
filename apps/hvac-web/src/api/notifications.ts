@@ -103,7 +103,5 @@ export async function markNotificationRead(
 }
 
 export function notificationErrorMessage(error: unknown): string {
-  return error instanceof NotificationApiError
-    ? `${error.code} · ${error.message}`
-    : '通知服务暂时不可用。';
+  return error instanceof NotificationApiError ? error.message : '通知服务暂时不可用。';
 }

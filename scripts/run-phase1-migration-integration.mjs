@@ -175,9 +175,8 @@ try {
   const seedCounts = {
     policies: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.policies')),
     roleBindings: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.role_bindings')),
-    alarmPermissions: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.alarm_permissions')),
-    workOrderPermissions: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.work_order_permissions')),
-    telemetryScopeBindings: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.telemetry_scope_bindings')),
+    explicitDenies: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.explicit_denies')),
+    tenantRoles: Number(psql('hvac_s1', 'SELECT count(*) FROM iam.role_templates WHERE tenant_id IS NOT NULL')),
   };
   for (const [name, count] of Object.entries(seedCounts)) {
     if (count !== 0) throw new Error(`production migration unexpectedly seeded ${name}: ${count}`);

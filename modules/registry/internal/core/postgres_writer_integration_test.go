@@ -288,3 +288,33 @@ func writerIntegrationClaims(action registryauth.Action, siteIDs ...string) regi
 	claims.AllowedSiteIDs = append([]string(nil), siteIDs...)
 	return claims
 }
+
+// A Site's profile is optional and kept with the rest of it; a mutation without it clears it.
+func TestPostgresRegistryWriterKeepsTheSiteProfile(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+	claims := writerIntegrationClaims(registryauth.ActionSiteWrite)
+	area, zone := 32000.0, "HOT_SUMMER_COLD_WINTER"
+	create := SiteMutation{
+		Code: "s485-profile-site", DisplayName: "S485 Profile Site", Timezone: "Asia/Shanghai", Status: "ACTIVE", FloorAreaM2: &area, ClimateZone: &zone,
+		Meta: MutationMeta{IdempotencyKey: "s485-profile-create-01", Reason: "verify the Site profile is kept"},
+	}
+	created, _, err := store.SaveSite(ctx, claims, create)
+	if err != nil || created.FloorAreaM2 == nil || *created.FloorAreaM2 != area || created.ClimateZone == nil || *created.ClimateZone != zone {
+		t.Fatalf("create Site = %#v err=%v", created, err)
+	}
+	invalid := create
+	invalid.Meta.IdempotencyKey = "s485-profile-invalid-01"
+	unknown := "TROPICAL"
+	invalid.ClimateZone = &unknown
+	if _, _, err := store.SaveSite(ctx, claims, invalid); !errors.Is(err, ErrInvalidMutation) {
+		t.Fatalf("unknown climate zone err=%v", err)
+	}
+	clear := SiteMutation{
+		ID: created.ID, Code: created.Code, DisplayName: created.DisplayName, Timezone: created.Timezone, Status: created.Status,
+		Meta: MutationMeta{ExpectedRevision: created.Revision, IdempotencyKey: "s485-profile-clear-01", Reason: "verify the Site profile can be cleared"},
+	}
+	cleared, _, err := store.SaveSite(ctx, claims, clear)
+	if err != nil || cleared.FloorAreaM2 != nil || cleared.ClimateZone != nil {
+		t.Fatalf("clear Site profile = %#v err=%v", cleared, err)
+	}
+}

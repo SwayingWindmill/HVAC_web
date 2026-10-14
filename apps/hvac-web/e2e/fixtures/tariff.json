@@ -1,0 +1,154 @@
+{
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "displayName": "两部制分时电价",
+  "version": 1,
+  "effectiveFrom": "2026-01-01T00:00:00.000Z",
+  "timezone": "Asia/Shanghai",
+  "currency": "CNY",
+  "periods": [
+    {
+      "periodCode": "VALLEY",
+      "dayType": "WEEKDAY",
+      "startMinute": 0,
+      "endMinute": 360,
+      "energyRatePerKWh": 0.32,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKDAY",
+      "startMinute": 360,
+      "endMinute": 480,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKDAY",
+      "startMinute": 480,
+      "endMinute": 660,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKDAY",
+      "startMinute": 660,
+      "endMinute": 780,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKDAY",
+      "startMinute": 780,
+      "endMinute": 900,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKDAY",
+      "startMinute": 900,
+      "endMinute": 1080,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKDAY",
+      "startMinute": 1080,
+      "endMinute": 1260,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKDAY",
+      "startMinute": 1260,
+      "endMinute": 1320,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "VALLEY",
+      "dayType": "WEEKDAY",
+      "startMinute": 1320,
+      "endMinute": 1440,
+      "energyRatePerKWh": 0.32,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "VALLEY",
+      "dayType": "WEEKEND",
+      "startMinute": 0,
+      "endMinute": 360,
+      "energyRatePerKWh": 0.32,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKEND",
+      "startMinute": 360,
+      "endMinute": 480,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKEND",
+      "startMinute": 480,
+      "endMinute": 660,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKEND",
+      "startMinute": 660,
+      "endMinute": 780,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKEND",
+      "startMinute": 780,
+      "endMinute": 900,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKEND",
+      "startMinute": 900,
+      "endMinute": 1080,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "PEAK",
+      "dayType": "WEEKEND",
+      "startMinute": 1080,
+      "endMinute": 1260,
+      "energyRatePerKWh": 1.2,
+      "demandRatePerKW": 38
+    },
+    {
+      "periodCode": "FLAT",
+      "dayType": "WEEKEND",
+      "startMinute": 1260,
+      "endMinute": 1320,
+      "energyRatePerKWh": 0.72,
+      "demandRatePerKW": 0
+    },
+    {
+      "periodCode": "VALLEY",
+      "dayType": "WEEKEND",
+      "startMinute": 1320,
+      "endMinute": 1440,
+      "energyRatePerKWh": 0.32,
+      "demandRatePerKW": 0
+    }
+  ]
+}

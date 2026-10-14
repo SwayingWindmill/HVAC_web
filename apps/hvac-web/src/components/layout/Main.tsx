@@ -6,14 +6,16 @@ type MainProps = ComponentProps<'div'> & {
   readonly fluid?: boolean;
 };
 
+/** A route's page: one padding and one vertical rhythm for every Surface. */
 export function Main({ fixed = false, fluid = false, className, ...props }: MainProps) {
   return (
     <div
       data-layout={fixed ? 'fixed' : 'auto'}
       className={cn(
-        'w-full px-4 py-6 md:px-6',
-        fixed && 'flex min-h-0 flex-1 flex-col overflow-hidden',
+        '@container/main flex w-full flex-col gap-[18px] px-7 pt-[22px] pb-6',
+        fixed && 'min-h-0 flex-1 overflow-hidden',
         !fluid && 'mx-auto max-w-[1600px]',
+        'print:max-w-none print:p-0',
         className,
       )}
       {...props}

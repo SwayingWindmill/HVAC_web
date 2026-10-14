@@ -203,6 +203,20 @@ WHERE job_id=$1::uuid AND attempt_no=$2 AND worker_id=$3 AND completed_at IS NUL
 	return tx.Commit(ctx)
 }
 
+// IsScheduledPreparation says the job is a Site's schedule firing rather than a prepared run: it
+// names no run, so the worker prepares one from the Site's current state first.
+func IsScheduledPreparation(job SchedulerJob) bool { return job.ScheduleID != "" }
+
+// ScheduledPreparationRequest is what a schedule firing prepares: a run on the whole Site, queued
+// as SCHEDULE so its recommendation says it was not asked for.
+func ScheduledPreparationRequest(job SchedulerJob) (PreparationRequest, error) {
+	if job.JobType != "OPTIMIZATION_RUN" || job.TriggerType != "SCHEDULE" || !uuidPattern.MatchString(job.JobID) || !uuidPattern.MatchString(job.ScheduleID) {
+		return PreparationRequest{}, errors.New("optimization schedule firing envelope is invalid")
+	}
+	request := PreparationRequest{TenantID: job.TenantID, SiteID: job.SiteID, SubjectType: "SITE", SubjectID: job.SiteID, Trigger: TriggerSchedule}
+	return request, request.Validate()
+}
+
 type SchedulerOptimizationReference struct {
 	OptimizationRunID string `json:"optimizationRunId"`
 	InputSnapshotID   string `json:"inputSnapshotId"`
