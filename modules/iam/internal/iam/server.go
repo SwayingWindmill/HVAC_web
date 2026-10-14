@@ -22,6 +22,7 @@ import (
 const (
 	CurrentPrincipalPath       = "/internal/v1/principal/current"
 	AdminMutationPath          = "/internal/v1/admin/mutations"
+	AdminMembersPath           = "/internal/v1/admin/members"
 	APICredentialCreatePath    = "/internal/v1/admin/api-credentials/create"
 	APICredentialRotatePath    = "/internal/v1/admin/api-credentials/rotate"
 	APICredentialRevokePath    = "/internal/v1/admin/api-credentials/revoke"
@@ -390,7 +391,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
 	case TenantContextsPath:
 		status = h.handleTenantContexts(request.Context(), writer, claims)
-	case AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
+	case AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
 		status = h.handleAdminRoute(writer, request, claims)
 	case RegistryDecisionPath:
 		status = h.handleRegistryDecision(writer, request, claims, spiffeID)
@@ -680,7 +681,7 @@ func expectedInboundAction(path string) (string, bool) {
 		return "principal:read", true
 	case TenantContextsPath:
 		return "tenant-context:list", true
-	case AdminMutationPath:
+	case AdminMutationPath, AdminMembersPath:
 		return "iam:admin", true
 	case APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
 		return "api-credential:manage", true
@@ -718,7 +719,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath:
+	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath:
 		return path
 	default:
 		return "unmatched"

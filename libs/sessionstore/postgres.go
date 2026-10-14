@@ -214,6 +214,23 @@ func (store *PostgresStore) SwitchTenantContext(ctx context.Context, sessionID, 
 	return cloneSession(session), nil
 }
 
+func (store *PostgresStore) ActiveSessionIDs(ctx context.Context, issuer, subject string) ([]string, error) {
+	rows, err := store.pool.Query(ctx, `SELECT session_id FROM gateway.sessions WHERE principal_issuer = $1 AND principal_subject = $2 AND revoked_at IS NULL ORDER BY session_id`, issuer, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
 	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.revoke"})
 	defer span.End()

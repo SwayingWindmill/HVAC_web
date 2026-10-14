@@ -25,6 +25,8 @@ require (
 	github.com/quanlaihe/hvac-web/services/notification-service v0.0.0
 	github.com/quanlaihe/hvac-web/modules/registry v0.0.0
 	github.com/quanlaihe/hvac-web/services/rule-runtime-service v0.0.0
+	github.com/quanlaihe/hvac-web/services/identity-service v0.0.0
+	github.com/quanlaihe/hvac-web/libs/schemagate v0.0.0
 	github.com/quanlaihe/hvac-web/modules/telemetry v0.0.0
 	github.com/quanlaihe/hvac-web/modules/workorder v0.0.0
 )
@@ -81,6 +83,8 @@ replace github.com/quanlaihe/hvac-web/services/notification-service => ../../ser
 replace github.com/quanlaihe/hvac-web/services/outbound-delivery-service => ../../services/outbound-delivery-service
 replace github.com/quanlaihe/hvac-web/modules/registry => ../../modules/registry
 replace github.com/quanlaihe/hvac-web/services/rule-runtime-service => ../../services/rule-runtime-service
+replace github.com/quanlaihe/hvac-web/services/identity-service => ../../services/identity-service
+replace github.com/quanlaihe/hvac-web/libs/schemagate => ../../libs/schemagate
 replace github.com/quanlaihe/hvac-web/modules/telemetry => ../../modules/telemetry
 replace github.com/quanlaihe/hvac-web/modules/workorder => ../../modules/workorder
 replace github.com/quanlaihe/hvac-web/libs/registryauth => ../../libs/registryauth

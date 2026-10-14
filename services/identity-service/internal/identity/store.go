@@ -114,11 +114,11 @@ func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (Crea
 	if username == "" || len(username) > 128 {
 		return CreatedUser{}, errors.New("identity username is required and must not exceed 128 bytes")
 	}
-	if displayName == "" || len(displayName) > 256 {
-		return CreatedUser{}, errors.New("identity display name is required and must not exceed 256 bytes")
+	if err := validateProfile(displayName, email); err != nil {
+		return CreatedUser{}, err
 	}
-	if email == "" || len(email) > 320 || !strings.Contains(email, "@") {
-		return CreatedUser{}, errors.New("identity email is invalid")
+	if err := ValidatePassword(username, input.Password); err != nil {
+		return CreatedUser{}, err
 	}
 	passwordPHC, err := HashPassword(input.Password)
 	if err != nil {
@@ -140,6 +140,9 @@ INSERT INTO identity.users (
   failed_attempts, locked_until, revision, created_at, updated_at
 ) VALUES ($1::uuid, $2, $3, $4, $5, $6, 'ACTIVE', 0, NULL, 1, $7, $7)
 `, userID, username, normalizeUsername(username), displayName, email, passwordPHC, now)
+	if isUniqueViolation(err) {
+		return CreatedUser{}, ErrUsernameTaken
+	}
 	if err != nil {
 		return CreatedUser{}, fmt.Errorf("create identity user: %w", err)
 	}
@@ -156,6 +159,9 @@ func (store *Store) ResetPassword(ctx context.Context, username, password string
 	normalized := normalizeUsername(username)
 	if normalized == "" {
 		return errors.New("identity username is required")
+	}
+	if err := ValidatePassword(username, password); err != nil {
+		return err
 	}
 	passwordPHC, err := HashPassword(password)
 	if err != nil {

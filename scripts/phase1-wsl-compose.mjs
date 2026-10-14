@@ -199,6 +199,9 @@ if (sourceDeploy) {
     ['WEB_BUILD_IMAGE', process.env.PHASE1_WEB_BUILD_IMAGE],
     ['NGINX_RUNTIME_IMAGE', process.env.PHASE1_NGINX_RUNTIME_IMAGE],
     ['NPM_REGISTRY', process.env.PHASE1_NPM_REGISTRY],
+    // An outbound proxy for image builds when the package registries are unreachable directly.
+    ['HTTPS_PROXY', process.env.PHASE1_BUILD_PROXY],
+    ['HTTP_PROXY', process.env.PHASE1_BUILD_PROXY],
   ].flatMap(([name, value]) => value ? ['--build-arg', `${name}=${value}`] : []);
   const buildStatus = runCompose(['build', ...buildArgs, ...runtimeServices]);
   if (buildStatus !== 0) process.exit(buildStatus);

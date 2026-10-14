@@ -109,7 +109,7 @@
     "analytics:history:check": "node scripts/check-analytics-history.mjs",
     "analytics:history:integration": "node scripts/run-analytics-history-tests.mjs && node scripts/run-analytics-cube-tests.mjs",
     "test:analytics-gateway": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./modules/iam/... ./cmd/energy-api/... ./modules/telemetry/...",
-    "test:identity": "node scripts/run-go.mjs test ./libs/identitycontext/... ./libs/oidctest/... ./libs/registryauth/... ./libs/telemetryauth/... ./libs/testpki/... ./modules/iam/... ./modules/registry/... ./modules/telemetry/... ./cmd/energy-api/...",
+    "test:identity": "node scripts/run-go.mjs test ./libs/identitycontext/... ./libs/oidctest/... ./libs/registryauth/... ./libs/telemetryauth/... ./libs/testpki/... ./libs/sessionstore/... ./services/identity-service/... ./modules/iam/... ./modules/registry/... ./modules/telemetry/... ./cmd/energy-api/...",
     "test:durable-unit": "node scripts/run-go.mjs test ./libs/observability/... ./libs/operationsauditevent/... ./libs/sessionevent/... ./libs/sessionstore/... ./modules/audit/... ./services/outbox-relay/... ./cmd/energy-api/...",
     "test:observability": "node scripts/check-observability-assets.mjs && node scripts/run-go.mjs test ./libs/observability/... ./libs/sessionevent/... ./libs/sessionstore/... ./modules/iam/... ./modules/registry/... ./cmd/energy-api/... ./services/outbox-relay/... ./modules/audit/...",
     "test:ownership": "node scripts/run-go.mjs test ./libs/ownershipregistry/... ./cmd/energy-api/...",

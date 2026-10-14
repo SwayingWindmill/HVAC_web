@@ -80,6 +80,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         principalSubject={principal.principal.subject}
         principalName={principal.principal.displayName}
         principalRole={principalRole}
+        csrfToken={principal.session.csrfToken}
         onNavigate={navigate}
         onLogout={() => { void runtime.logout(); }}
       />

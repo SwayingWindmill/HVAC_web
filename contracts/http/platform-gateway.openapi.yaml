@@ -664,6 +664,389 @@
         }
       }
     },
+    "/api/v1/iam/members": {
+      "get": {
+        "operationId": "listUserAdminMembers",
+        "summary": "List the people of the current Tenant with their Role Assignments, and the assignable built-in Roles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members and Roles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAdminDirectory"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createUserAdminMember",
+        "summary": "Create a sign-in account with an administrator-set password and add it to the Tenant with its Roles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminCreateMemberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Member created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAdminCreatedMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/password": {
+      "post": {
+        "operationId": "resetUserAdminMemberPassword",
+        "summary": "Set a member's password",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/status": {
+      "post": {
+        "operationId": "setUserAdminMemberEnabled",
+        "summary": "Enable or disable a member; disabling ends their signed-in sessions",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/profile": {
+      "post": {
+        "operationId": "updateUserAdminMemberProfile",
+        "summary": "Change a member's display name and email",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/assignments": {
+      "post": {
+        "operationId": "assignUserAdminMemberRole",
+        "summary": "Assign a built-in Role to the whole Tenant or one Site",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAdminRoleAssignment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/iam/members/{principalId}/assignments/{bindingId}/revoke": {
+      "post": {
+        "operationId": "revokeUserAdminMemberRole",
+        "summary": "Revoke one of a member's Role Assignments",
+        "parameters": [
+          {
+            "name": "principalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "name": "bindingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUIDv7"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "operationId": "changeOwnPassword",
+        "summary": "Change the signed-in user's own password",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Change committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
@@ -2416,6 +2799,265 @@
           }
         }
       },
+      "UserAdminRole": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roleKey",
+          "displayName",
+          "tenantScoped"
+        ],
+        "properties": {
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "tenantScoped": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserAdminMemberAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bindingId",
+          "roleKey"
+        ],
+        "properties": {
+          "bindingId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principalId",
+          "username",
+          "displayName",
+          "email",
+          "enabled",
+          "locked",
+          "self",
+          "assignments"
+        ],
+        "properties": {
+          "principalId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "self": {
+            "type": "boolean"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminMemberAssignment"
+            }
+          }
+        }
+      },
+      "UserAdminDirectory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roles",
+          "members"
+        ],
+        "properties": {
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminRole"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAdminMember"
+            }
+          }
+        }
+      },
+      "UserAdminRoleAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roleKey"
+        ],
+        "properties": {
+          "roleKey": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "operator",
+              "site-manager",
+              "admin"
+            ]
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminCreateMemberRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "username",
+          "displayName",
+          "email",
+          "password",
+          "assignments"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          },
+          "assignments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/UserAdminRoleAssignment"
+            }
+          }
+        }
+      },
+      "UserAdminCreatedMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principalId"
+        ],
+        "properties": {
+          "principalId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          }
+        }
+      },
+      "UserAdminPasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          }
+        }
+      },
+      "UserAdminStatusRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserAdminProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "displayName",
+          "email"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          }
+        }
+      },
+      "OwnPasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 512
+          }
+        }
+      },
       "IamAdminMutationRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -2423,7 +3065,7 @@
         "properties": {
           "operation": {
             "type": "string",
-            "enum": ["tenant.update", "principal.update", "membership.upsert", "role-template.upsert", "role-binding.upsert", "site-binding.upsert", "explicit-deny.upsert", "service-account.status"]
+            "enum": ["tenant.update", "principal.update", "membership.upsert", "member.create", "role-template.upsert", "role-binding.upsert", "explicit-deny.upsert", "service-account.status"]
           },
           "expectedRevision": { "type": "integer", "minimum": 0 },
           "resourceId": { "type": "string", "maxLength": 256 },

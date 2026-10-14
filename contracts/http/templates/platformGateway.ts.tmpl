@@ -13,6 +13,37 @@ export const gatewayEnrollmentCodeSchema = z.object({
 export type GatewayCredentialStatus = z.infer<typeof gatewayCredentialStatusSchema>;
 export type GatewayEnrollmentCode = z.infer<typeof gatewayEnrollmentCodeSchema>;
 
+// User administration (系统管理 → 用户与角色) and the signed-in user's own password.
+export const builtInRoleKeySchema = z.enum(['viewer', 'operator', 'site-manager', 'admin']);
+const userAdminUUIDv7 = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const userAdminRoleSchema = z.object({ roleKey: builtInRoleKeySchema, displayName: z.string(), tenantScoped: z.boolean() }).strict();
+export const userAdminMemberAssignmentSchema = z.object({ bindingId: userAdminUUIDv7, roleKey: builtInRoleKeySchema, siteId: userAdminUUIDv7.optional() }).strict();
+export const userAdminMemberSchema = z.object({
+  principalId: userAdminUUIDv7, username: z.string(), displayName: z.string(), email: z.string(),
+  enabled: z.boolean(), locked: z.boolean(), lastLoginAt: z.string().datetime().optional(), self: z.boolean(),
+  assignments: z.array(userAdminMemberAssignmentSchema),
+}).strict();
+export const userAdminDirectorySchema = z.object({ roles: z.array(userAdminRoleSchema), members: z.array(userAdminMemberSchema) }).strict();
+export const userAdminRoleAssignmentSchema = z.object({ roleKey: builtInRoleKeySchema, siteId: userAdminUUIDv7.optional() }).strict();
+const userAdminPasswordSchema = z.string().min(8).max(512);
+export const userAdminCreateMemberRequestSchema = z.object({
+  username: z.string().trim().min(1).max(128), displayName: z.string().trim().min(1).max(256), email: z.string().trim().email().max(320),
+  password: userAdminPasswordSchema, assignments: z.array(userAdminRoleAssignmentSchema).min(1),
+}).strict();
+export const userAdminCreatedMemberSchema = z.object({ principalId: userAdminUUIDv7 }).strict();
+export const userAdminPasswordRequestSchema = z.object({ password: userAdminPasswordSchema }).strict();
+export const userAdminStatusRequestSchema = z.object({ enabled: z.boolean() }).strict();
+export const userAdminProfileRequestSchema = z.object({ displayName: z.string().trim().min(1).max(256), email: z.string().trim().email().max(320) }).strict();
+export const ownPasswordRequestSchema = z.object({ currentPassword: z.string().min(1).max(512), newPassword: userAdminPasswordSchema }).strict();
+export type BuiltInRoleKey = z.infer<typeof builtInRoleKeySchema>;
+export type UserAdminRole = z.infer<typeof userAdminRoleSchema>;
+export type UserAdminMember = z.infer<typeof userAdminMemberSchema>;
+export type UserAdminDirectory = z.infer<typeof userAdminDirectorySchema>;
+export type UserAdminRoleAssignment = z.infer<typeof userAdminRoleAssignmentSchema>;
+export type UserAdminCreateMemberRequest = z.infer<typeof userAdminCreateMemberRequestSchema>;
+export type UserAdminProfileRequest = z.infer<typeof userAdminProfileRequestSchema>;
+export type OwnPasswordRequest = z.infer<typeof ownPasswordRequestSchema>;
+
 export const alarmPaths = {
   list: '__ALARMS_PATH__',
   detail: '__ALARM_PATH__',
@@ -749,6 +780,28 @@ export function createPlatformGatewayClient(baseUrl = '') {
     generateGatewayEnrollmentCode: (gatewayId: string, csrfToken: string, init?: RequestInit) => request(
       `/api/v1/gateways/${encodeURIComponent(gatewayId)}/enrollment-code`, gatewayEnrollmentCodeSchema,
       { ...init, method: 'POST', headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listUserAdminMembers: (init?: RequestInit) => request('/api/v1/iam/members', userAdminDirectorySchema, { ...init, method: 'GET' }),
+    createUserAdminMember: (body: UserAdminCreateMemberRequest, init?: RequestInit) => mutation(
+      '/api/v1/iam/members', 'POST', body, userAdminCreateMemberRequestSchema, userAdminCreatedMemberSchema, init,
+    ),
+    resetUserAdminMemberPassword: (principalId: string, password: string, init?: RequestInit) => mutation(
+      `/api/v1/iam/members/${encodeURIComponent(principalId)}/password`, 'POST', { password }, userAdminPasswordRequestSchema, z.undefined(), init,
+    ),
+    setUserAdminMemberEnabled: (principalId: string, enabled: boolean, init?: RequestInit) => mutation(
+      `/api/v1/iam/members/${encodeURIComponent(principalId)}/status`, 'POST', { enabled }, userAdminStatusRequestSchema, z.undefined(), init,
+    ),
+    updateUserAdminMemberProfile: (principalId: string, body: UserAdminProfileRequest, init?: RequestInit) => mutation(
+      `/api/v1/iam/members/${encodeURIComponent(principalId)}/profile`, 'POST', body, userAdminProfileRequestSchema, z.undefined(), init,
+    ),
+    assignUserAdminMemberRole: (principalId: string, body: UserAdminRoleAssignment, init?: RequestInit) => mutation(
+      `/api/v1/iam/members/${encodeURIComponent(principalId)}/assignments`, 'POST', body, userAdminRoleAssignmentSchema, z.undefined(), init,
+    ),
+    revokeUserAdminMemberRole: (principalId: string, bindingId: string, init?: RequestInit) => request(
+      `/api/v1/iam/members/${encodeURIComponent(principalId)}/assignments/${encodeURIComponent(bindingId)}/revoke`, z.undefined(), { ...init, method: 'POST' },
+    ),
+    changeOwnPassword: (body: OwnPasswordRequest, init?: RequestInit) => mutation(
+      '/api/v1/me/password', 'POST', body, ownPasswordRequestSchema, z.undefined(), init,
     ),
     revokeGatewayCredential: (gatewayId: string, csrfToken: string, init?: RequestInit) => request(
       `/api/v1/gateways/${encodeURIComponent(gatewayId)}/revoke`, gatewayCredentialStatusSchema,

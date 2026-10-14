@@ -68,6 +68,10 @@ Set `IAM_DATABASE_URL` to use the frozen `iam` PostgreSQL Schema. The connection
 
 The runtime identity has no Core Schema access and no IAM mutation privilege. `IAM_DATABASE_URL` and `IAM_S1_AUTHORIZATION_FIXTURE` are mutually exclusive. With neither configured, IAM remains deny-all rather than falling back to fixture data.
 
+## User administration
+
+`POST /internal/v1/admin/members` (Gateway workload, `iam:admin` delegation, `iam.admin` capability) returns the assignable built-in Roles and every member of the acting Tenant with their Role Assignments. The administration mutation adds `member.create`, which makes an identity-directory account a member with its first assignments in one transaction. After every mutation the acting Principal must still be an active member holding `iam.admin` across the whole Tenant; otherwise the change is refused with `IAM_ADMIN_SELF_LOCKOUT`. A Role that carries a Tenant-scoped capability, such as `admin`, is assigned only to the whole Tenant, and built-in Roles cannot be changed.
+
 ## Explicit onboarding reconciliation
 
 `PostgresReconciliationStore` is a separate management-plane boundary that accepts only the `s1_iam_reconciler` database identity. It applies a complete, approved Principal authorization snapshot and records a SHA-256 input hash against `(source_system, source_key, source_version)`.

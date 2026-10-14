@@ -28,6 +28,7 @@ async function findAvailablePort(requestedPort = 0) {
 
 const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
 const telemetryGrantPassword = randomBytes(24).toString('hex');
+const iamAdminPassword = randomBytes(24).toString('hex');
 const coreServicePassword = randomBytes(24).toString('hex');
 const connectivityPassword = randomBytes(24).toString('hex');
 const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
@@ -180,6 +181,7 @@ function scopedCounts(tenantID, siteIDs) {
 async function runIAMGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   psql(`ALTER ROLE s2_iam_grant_runtime PASSWORD '${telemetryGrantPassword}'`);
+  psql(`ALTER ROLE s1_iam_admin PASSWORD '${iamAdminPassword}'`);
   const child = spawn(goBinary, ['test', '-count=1', '-v', './modules/iam/internal/iam'], {
     cwd: root,
     stdio: 'inherit',
@@ -191,6 +193,7 @@ async function runIAMGoTests() {
       S1_IAM_DATABASE_URL: `postgres://s1_iam_runtime:s1-iam-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_RECONCILER_DATABASE_URL: `postgres://s1_iam_reconciler:s1-iam-reconciler-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S2_IAM_GRANT_DATABASE_URL: `postgres://s2_iam_grant_runtime:${telemetryGrantPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_IAM_ADMIN_DATABASE_URL: `postgres://s1_iam_admin:${iamAdminPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');

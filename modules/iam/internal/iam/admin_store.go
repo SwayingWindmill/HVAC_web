@@ -52,6 +52,10 @@ type AdminMutationRequest struct {
 	ReasonCode       string     `json:"reasonCode,omitempty"`
 	ValidFrom        time.Time  `json:"validFrom,omitempty"`
 	ValidTo          *time.Time `json:"validTo,omitempty"`
+	// member.create: the identity-directory account and its first Role Assignments.
+	SubjectIssuer string            `json:"subjectIssuer,omitempty"`
+	Subject       string            `json:"subject,omitempty"`
+	Assignments   []AdminAssignment `json:"assignments,omitempty"`
 }
 
 type AdminMutationResult struct {
@@ -87,6 +91,7 @@ type APICredentialVerification struct {
 }
 
 type AdminStore interface {
+	ListMembers(context.Context, AdminActor) (AdminDirectory, error)
 	ApplyMutation(context.Context, AdminActor, AdminMutationRequest) (AdminMutationResult, error)
 	CreateAPICredential(context.Context, AdminActor, APICredentialCreateRequest) (APICredentialIssue, error)
 	RotateAPICredential(context.Context, AdminActor, string, int64, time.Time) (APICredentialIssue, error)
@@ -174,10 +179,15 @@ func (store *PostgresAdminStore) ApplyMutation(ctx context.Context, actor AdminA
 		}
 	case "service-account.status":
 		resourceID, revision, err = applyServiceAccountStatus(ctx, tx, actor.TenantID, request, actor.OccurredAt)
+	case "member.create":
+		resourceID, revision, err = applyMemberCreate(ctx, tx, actor.TenantID, request, actor.OccurredAt)
 	default:
 		err = fmt.Errorf("unsupported IAM admin operation %q", request.Operation)
 	}
 	if err != nil {
+		return AdminMutationResult{}, err
+	}
+	if err := ensureActorStillAdministers(ctx, tx, actor.TenantID, actorPrincipalID, actor.OccurredAt); err != nil {
 		return AdminMutationResult{}, err
 	}
 	policyRevision, err := bumpAuthorizationRevision(ctx, tx, actor.TenantID, actor.OccurredAt)
@@ -705,7 +715,7 @@ func adminResourceType(operation string) string {
 		return "TENANT"
 	case "principal.update":
 		return "PRINCIPAL"
-	case "membership.upsert":
+	case "membership.upsert", "member.create":
 		return "TENANT_MEMBERSHIP"
 	case "role-template.upsert":
 		return "ROLE_TEMPLATE"
