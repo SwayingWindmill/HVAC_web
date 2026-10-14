@@ -1,14 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>g{fill:#18181b}@media (prefers-color-scheme:dark){g{fill:#f4f4f5}}</style>
   <defs>
-    <linearGradient id="qlh-water" x1="16" y1="14" x2="34" y2="58" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#5873F2"/>
-      <stop offset="1" stop-color="#3F5BD9"/>
-    </linearGradient>
-    <linearGradient id="qlh-leaf" x1="34" y1="10" x2="50" y2="56" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#16B5A2"/>
-      <stop offset="1" stop-color="#0E9384"/>
-    </linearGradient>
+    <mask id="gap">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M32 2V62M2 32H62" stroke="#000" stroke-width="3"/>
+    </mask>
   </defs>
-  <path d="M32 6C32 6 13 27 13 40A19 19 0 0 0 32 59C41 37 24 25 32 6Z" fill="url(#qlh-water)"/>
-  <path d="M32 6C24 25 41 37 32 59A19 19 0 0 0 51 40C51 27 32 6 32 6Z" fill="url(#qlh-leaf)"/>
+  <g mask="url(#gap)">
+    <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z"/>
+    <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(90 32 32)"/>
+    <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(180 32 32)"/>
+    <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(270 32 32)"/>
+  </g>
 </svg>

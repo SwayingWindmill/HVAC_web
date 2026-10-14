@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -86,7 +87,7 @@ function BrandPanel() {
   return (
     <div className={`relative flex flex-col justify-between overflow-hidden bg-muted p-12 ${ILLUSTRATION_COLORS}`}>
       <div className="flex items-center gap-3 text-lg font-semibold">
-        <img src="/quanlaihe-mark.svg" alt="" className="size-9" />
+        <BrandMark className="size-8" />
         泉来禾智慧能源
       </div>
       <div className="flex flex-1 items-center justify-center py-6">
