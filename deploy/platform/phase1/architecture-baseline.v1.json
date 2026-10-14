@@ -101,11 +101,13 @@
       "observability-core": [
         "prometheus",
         "node-exporter",
+        "alertmanager",
         "grafana"
       ],
       "observability-logs": [
         "prometheus",
         "node-exporter",
+        "alertmanager",
         "grafana",
         "otel-collector",
         "loki"
@@ -113,6 +115,7 @@
       "observability-full": [
         "prometheus",
         "node-exporter",
+        "alertmanager",
         "grafana",
         "otel-collector",
         "loki",

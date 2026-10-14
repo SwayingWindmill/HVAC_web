@@ -38,6 +38,7 @@
       "otel-collector",
       "prometheus",
       "node-exporter",
+      "alertmanager",
       "loki",
       "tempo",
       "grafana"

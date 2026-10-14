@@ -29,7 +29,7 @@
       "purpose": "Forecast, optimization, FDD, M&V and the Operations Agent (Ask AI) are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
     },
     "observability-core": {
-      "services": ["prometheus", "node-exporter", "grafana"],
+      "services": ["prometheus", "node-exporter", "alertmanager", "grafana"],
       "signals": ["metrics", "events", "audit"],
       "purpose": "Metrics, host monitoring, dashboards and alerts. Docker JSON logs remain available on the host with bounded rotation."
     },
@@ -37,6 +37,7 @@
       "services": [
         "prometheus",
         "node-exporter",
+        "alertmanager",
         "grafana",
         "otel-collector",
         "loki"
@@ -48,6 +49,7 @@
       "services": [
         "prometheus",
         "node-exporter",
+        "alertmanager",
         "grafana",
         "otel-collector",
         "loki",
@@ -94,8 +96,9 @@
         "PROMETHEUS_CPUS": "0.5",
         "PROMETHEUS_MEMORY_LIMIT": "320m",
         "NODE_EXPORTER_CPUS": "0.1",
-        "GRAFANA_CPUS": "0.25",
-        "GRAFANA_MEMORY_LIMIT": "192m"
+        "GRAFANA_CPUS": "0.2",
+        "GRAFANA_MEMORY_LIMIT": "192m",
+        "ALERTMANAGER_CPUS": "0.05"
       },
       "runtimeOverrides": {
         "CLICKHOUSE_SERVER_MEMORY_USAGE": "939524096"
@@ -130,6 +133,7 @@
         "POSTGRES_MEMORY_LIMIT": "1536m",
         "PROMETHEUS_MEMORY_LIMIT": "512m",
         "LOKI_MEMORY_LIMIT": "384m",
+        "GRAFANA_CPUS": "0.4",
         "GRAFANA_MEMORY_LIMIT": "256m",
         "OTEL_COLLECTOR_MEMORY_LIMIT": "256m"
       },
@@ -151,6 +155,7 @@
         "note": "Full single-server signals including centralized traces. Still single-node recoverable, not HA."
       },
       "resourceOverrides": {
+        "GRAFANA_CPUS": "0.4",
         "OPERATIONS_AGENT_CPUS": "0.5",
         "FORECAST_SERVICE_CPUS": "0.5",
         "OPTIMIZATION_SERVICE_CPUS": "0.5",
