@@ -161,7 +161,9 @@ func TestProjectorDoesNotWriteWhenBindingIsNotUnique(t *testing.T) {
 	}
 }
 
-func TestProjectorDoesNotWriteWhenBindingIsMissing(t *testing.T) {
+// A counter no meter binding names (a calculated BTU meter's cooling, say) is not electricity in the
+// energy topology: the projector passes over it rather than stopping every Site's facts behind it.
+func TestProjectorPassesOverCountersNoMeterBindingNames(t *testing.T) {
 	source := &fakeSource{deltas: []CounterDelta{validDelta()}}
 	resolver := &fakeResolver{resolution: BindingResolution{Status: BindingNoMatch}}
 	sink := &fakeSink{}
@@ -169,8 +171,9 @@ func TestProjectorDoesNotWriteWhenBindingIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := projector.ProjectOnce(context.Background()); err == nil || sink.called {
-		t.Fatalf("ProjectOnce() err=%v sink=%#v", err, sink)
+	projected, err := projector.ProjectOnce(context.Background())
+	if err != nil || projected != 0 || sink.called || len(sink.advanced) != 1 || sink.advanced[0] != fakeThrough {
+		t.Fatalf("ProjectOnce() projected=%d err=%v sink=%#v", projected, err, sink)
 	}
 }
 
