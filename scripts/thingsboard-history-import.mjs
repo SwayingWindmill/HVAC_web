@@ -6,7 +6,10 @@
 //      platform telemetry began, into one CSV per device.
 //   2. import (inside the platform's application network, with the historical-replay-runner identity):
 //      node scripts/thingsboard-history-import.mjs import <site file> --in <dir> --dataset <uuidv7> \
-//        --telemetry-url https://telemetry-runtime-service:8446 --cert … --key … --ca …
+//        --telemetry-url https://telemetry-runtime-service:8446 --cert … --key … --ca … [--rate <per second>] [--resume <file>]
+//
+// --resume takes a JSON object of Device id → last offset already replayed (the maximum source_offset
+// of the dataset's partition for that device), so an interrupted import continues where it stopped.
 //
 // Each device replays in its own partition in sampled order, so offsets only grow; a rerun with the
 // same dataset is refused as duplicates rather than doubled. Key names and the unconnected-probe rule
@@ -64,9 +67,28 @@ async function importHistory(profile, options) {
     request.on('error', reject);
     request.end(JSON.stringify(body));
   });
+  // --rate caps observations per second across all devices, so live ingestion on a small server keeps up.
+  let nextSlot = 0;
+  const pace = async () => {
+    if (!options.rate) return;
+    const now = Date.now();
+    const at = Math.max(now, nextSlot);
+    nextSlot = at + 1000 / options.rate;
+    if (at > now) await new Promise((resolve) => setTimeout(resolve, at - now));
+  };
   const send = async (body) => {
     for (let attempt = 1; ; attempt += 1) {
-      const { status, text } = await post(body);
+      await pace();
+      let reply;
+      try {
+        reply = await post(body);
+      } catch (error) {
+        // The service closes idle keep-alive connections; a dropped connection is sent again.
+        if (attempt === 40) throw error;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5000, attempt * 250)));
+        continue;
+      }
+      const { status, text } = reply;
       if (status === 200) return JSON.parse(text);
       if ((status !== 429 && status !== 503) || attempt === 40) throw new Error(`replay refused (HTTP ${status}): ${text.slice(0, 300)}`);
       await new Promise((resolve) => setTimeout(resolve, Math.min(5000, attempt * 250)));
@@ -77,7 +99,9 @@ async function importHistory(profile, options) {
   await Promise.all(siteDevices(profile).map(async (device) => {
     const file = path.join(options.in, `${device.sourceKey}.csv`);
     if (!existsSync(file)) return;
-    const counts = tally[device.sourceKey] = { sent: 0, skipped: 0, outcomes: {} };
+    const counts = tally[device.sourceKey] = { sent: 0, skipped: 0, resumed: 0, outcomes: {} };
+    // --resume names the last offset each device already reached, so a restart continues there.
+    const reached = options.resume?.[device.id] ?? 0;
     let offset = 0;
     for await (const line of readline.createInterface({ input: createReadStream(file) })) {
       const [ts, key, raw] = line.split(',');
@@ -85,6 +109,7 @@ async function importHistory(profile, options) {
       const observation = point ? platformObservation(device, point, key, Number(raw)) : null;
       if (!observation) { counts.skipped += 1; continue; }
       offset += 1;
+      if (offset <= reached) { counts.resumed += 1; continue; }
       const result = await send({ replayDatasetId: options.dataset, deviceId: device.id, ...observation, sampledAt: new Date(Number(ts)).toISOString(), offset });
       const outcome = result.status ?? result.outcome ?? 'OK';
       counts.outcomes[outcome] = (counts.outcomes[outcome] ?? 0) + 1;
@@ -102,6 +127,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     until: { type: 'string' }, out: { type: 'string' }, in: { type: 'string' }, dataset: { type: 'string' },
     'telemetry-url': { type: 'string' }, 'server-name': { type: 'string', default: 'telemetry-runtime-service' },
     cert: { type: 'string' }, key: { type: 'string' }, ca: { type: 'string' },
+    resume: { type: 'string' }, rate: { type: 'string' },
   } });
   const profile = JSON.parse(readFileSync(siteFile, 'utf8'));
   if (step === 'export') {
@@ -110,7 +136,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     exportHistory(profile, until, values.out);
   } else if (step === 'import') {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(values.dataset ?? '')) throw new Error('import needs --dataset <uuidv7>');
-    await importHistory(profile, { in: values.in, dataset: values.dataset, telemetryUrl: values['telemetry-url'], serverName: values['server-name'], cert: values.cert, key: values.key, ca: values.ca });
+    await importHistory(profile, { in: values.in, dataset: values.dataset, telemetryUrl: values['telemetry-url'], serverName: values['server-name'], cert: values.cert, key: values.key, ca: values.ca,
+      resume: values.resume ? JSON.parse(readFileSync(values.resume, 'utf8')) : undefined, rate: values.rate ? Number(values.rate) : undefined });
   } else {
     throw new Error('usage: thingsboard-history-import.mjs export|import <site file> …');
   }
