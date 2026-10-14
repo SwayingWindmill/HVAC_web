@@ -279,6 +279,11 @@ func (p *Projector) ProjectOnce(ctx context.Context) (int, error) {
 		if resolveErr != nil {
 			return 0, fmt.Errorf("resolve meter binding for observation %s: %w", delta.CurrentObservationID, resolveErr)
 		}
+		// A counter no meter binding names (a calculated BTU meter's cooling, say) is outside the
+		// energy topology and makes no fact; only an ambiguous binding stops the projection.
+		if resolution.Status == BindingNoMatch {
+			continue
+		}
 		if resolution.Status != BindingMatch {
 			return 0, fmt.Errorf("resolve meter binding for observation %s: %s", delta.CurrentObservationID, resolution.Status)
 		}
