@@ -19,20 +19,28 @@ const databaseRole = "identity_admin"
 type User = identity.DirectoryUser
 
 var (
-	ErrUsernameTaken           = identity.ErrUsernameTaken
-	ErrUserNotFound            = identity.ErrUserNotFound
-	ErrInvalidCredentials      = identity.ErrInvalidCredentials
+	ErrUsernameTaken      = identity.ErrUsernameTaken
+	ErrUserNotFound       = identity.ErrUserNotFound
+	ErrInvalidCredentials = identity.ErrInvalidCredentials
+	ErrProfileInvalid     = identity.ErrProfileInvalid
+
 	ErrPasswordTooShort        = identity.ErrPasswordTooShort
 	ErrPasswordTooLong         = identity.ErrPasswordTooLong
 	ErrPasswordCommon          = identity.ErrPasswordCommon
 	ErrPasswordMatchesUsername = identity.ErrPasswordMatchesUsername
 )
 
-// PasswordRejected reports whether err is one of the password rules, which the caller shows to
-// the person choosing the password.
-func PasswordRejected(err error) bool {
-	return errors.Is(err, ErrPasswordTooShort) || errors.Is(err, ErrPasswordTooLong) ||
-		errors.Is(err, ErrPasswordCommon) || errors.Is(err, ErrPasswordMatchesUsername)
+// RejectedPasswordRule names the password rule err reports, for the person choosing the password.
+func RejectedPasswordRule(err error) (string, bool) {
+	for rule, name := range map[error]string{
+		ErrPasswordTooShort: "TOO_SHORT", ErrPasswordTooLong: "TOO_LONG",
+		ErrPasswordCommon: "TOO_COMMON", ErrPasswordMatchesUsername: "MATCHES_USERNAME",
+	} {
+		if errors.Is(err, rule) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 type NewUser struct {
@@ -85,25 +93,23 @@ func (directory *Directory) UsersByID(ctx context.Context, ids []string) ([]User
 	return directory.store.UsersByID(ctx, ids)
 }
 
-func (directory *Directory) UserByUsername(ctx context.Context, username string) (User, error) {
-	return directory.store.UserByUsername(ctx, username)
-}
+// The administrator arguments name who made the change in the identity security audit.
 
-func (directory *Directory) SetPassword(ctx context.Context, userID, password string) error {
-	return directory.store.SetPassword(ctx, userID, password, directory.now())
+func (directory *Directory) SetPassword(ctx context.Context, administrator, userID, password string) error {
+	return directory.store.SetPassword(ctx, administrator, userID, password, directory.now())
 }
 
 // SetEnabled lets an account sign in again, or stops it from signing in.
-func (directory *Directory) SetEnabled(ctx context.Context, userID string, enabled bool) error {
+func (directory *Directory) SetEnabled(ctx context.Context, administrator, userID string, enabled bool) error {
 	status := "DISABLED"
 	if enabled {
 		status = "ACTIVE"
 	}
-	return directory.store.SetStatus(ctx, userID, status, directory.now())
+	return directory.store.SetStatus(ctx, administrator, userID, status, directory.now())
 }
 
-func (directory *Directory) UpdateProfile(ctx context.Context, userID, displayName, email string) error {
-	return directory.store.UpdateProfile(ctx, userID, displayName, email, directory.now())
+func (directory *Directory) UpdateProfile(ctx context.Context, administrator, userID, displayName, email string) error {
+	return directory.store.UpdateProfile(ctx, administrator, userID, displayName, email, directory.now())
 }
 
 func (directory *Directory) ChangePassword(ctx context.Context, userID, current, next string) error {

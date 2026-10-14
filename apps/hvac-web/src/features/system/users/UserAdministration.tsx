@@ -1,5 +1,6 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Controller, useForm, useWatch, type Control } from 'react-hook-form';
 import { MoreHorizontal, Plus, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BuiltInRoleKey, UserAdminMember, UserAdminRole } from '@/api/generated/platformGateway.gen';
@@ -16,41 +17,29 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Status, StatusIndicator } from '@/components/ui/status';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { PASSWORD_HINT } from '@/features/account/password';
 import { ROLE_SUMMARIES, roleLabel } from '@/lib/role-labels';
-import { cn } from '@/lib/utils';
 import { userAdminApi, userAdminErrorMessage, userAdminKey, userAdminQuery } from './user-admin-api';
 
 interface SiteOption { readonly id: string; readonly displayName: string }
+interface RoleScope { roleKey: BuiltInRoleKey | ''; siteId: string }
 
 const ALL_SITES = 'all';
-const PASSWORD_HINT = '至少 8 位，不能是常见密码，也不能和用户名相同';
+const EMPTY_SCOPE: RoleScope = { roleKey: '', siteId: ALL_SITES };
 
 const clock = (value: string) => new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
+const scopeOf = (siteId: string) => (siteId === ALL_SITES ? {} : { siteId });
 
-function Chip({ tone, children }: { readonly tone: 'success' | 'warning' | 'neutral'; readonly children: ReactNode }) {
-  const styles = {
-    success: ['bg-success-soft text-success-text', 'bg-success'],
-    warning: ['bg-warning-soft text-warning-text', 'bg-warning'],
-    neutral: ['bg-secondary text-secondary-foreground', 'bg-subtle-foreground'],
-  }[tone];
-  return (
-    <span className={cn('inline-flex h-5.5 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium whitespace-nowrap', styles[0])}>
-      <span className={cn('size-1.5 rounded-full', styles[1])} aria-hidden="true" />
-      {children}
-    </span>
-  );
-}
-
-function memberState(member: UserAdminMember) {
-  if (!member.enabled) return <Chip tone="neutral">已停用</Chip>;
-  if (member.locked) return <Chip tone="warning">密码输错锁定中</Chip>;
-  return <Chip tone="success">可登录</Chip>;
+function MemberState({ member }: { readonly member: UserAdminMember }) {
+  const [variant, label] = !member.enabled ? ['default', '已停用'] as const : member.locked ? ['warning', '密码输错锁定中'] as const : ['success', '可登录'] as const;
+  return <Status variant={variant}><StatusIndicator />{label}</Status>;
 }
 
 /** 系统管理 → 用户与角色 for administrators: who can sign in, with which Roles on which Sites. */
 export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: string; readonly sites: readonly SiteOption[] }) {
-  const directory = useQuery(userAdminQuery(true));
+  const directory = useQuery(userAdminQuery);
   const [creating, setCreating] = useState(false);
   const [editingRoles, setEditingRoles] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState<UserAdminMember | null>(null);
@@ -118,7 +107,7 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
                       </span>
                     )}
                   </TableCell>
-                  <TableCell>{memberState(member)}</TableCell>
+                  <TableCell><MemberState member={member} /></TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{member.lastLoginAt ? clock(member.lastLoginAt) : '从未登录'}</TableCell>
                   <TableCell className="pr-5 text-right">
                     <DropdownMenu modal={false}>
@@ -128,9 +117,9 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onSelect={() => setEditingRoles(member.principalId)}>角色与站点</DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => setEditingProfile(member)}>修改姓名和邮箱</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => setResetting(member)}>重置密码</DropdownMenuItem>
                         {member.self ? null : (
                           <>
+                            <DropdownMenuItem onSelect={() => setResetting(member)}>重置密码</DropdownMenuItem>
                             <DropdownMenuSeparator />
                             {member.enabled
                               ? <DropdownMenuItem variant="destructive" onSelect={() => setDisabling(member)}>停用</DropdownMenuItem>
@@ -168,39 +157,51 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
   );
 }
 
-function RoleScopeFields({ roles, sites, roleKey, siteId, onRole, onSite }: {
+/** A Role and where it applies; a Role with Tenant-scoped capabilities always covers every Site. */
+function RoleScopeFields<Form extends RoleScope>({ control, roles, sites }: {
+  readonly control: Control<Form>;
   readonly roles: readonly UserAdminRole[];
   readonly sites: readonly SiteOption[];
-  readonly roleKey: BuiltInRoleKey | '';
-  readonly siteId: string;
-  readonly onRole: (value: BuiltInRoleKey) => void;
-  readonly onSite: (value: string) => void;
 }) {
+  const scopeControl = control as unknown as Control<RoleScope>;
+  const roleKey = useWatch({ control: scopeControl, name: 'roleKey' });
   const tenantScoped = roles.find((role) => role.roleKey === roleKey)?.tenantScoped ?? false;
   return (
     <div className="grid grid-cols-2 gap-3">
       <Field>
         <FieldLabel>角色</FieldLabel>
-        <Select value={roleKey} onValueChange={(value) => { onRole(value as BuiltInRoleKey); if (roles.find((role) => role.roleKey === value)?.tenantScoped) onSite(ALL_SITES); }}>
-          <SelectTrigger aria-label="角色"><SelectValue placeholder="选择角色" /></SelectTrigger>
-          <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
-        </Select>
+        <Controller control={scopeControl} name="roleKey" rules={{ required: '请选择角色' }} render={({ field, fieldState }) => (
+          <>
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger aria-label="角色" aria-invalid={Boolean(fieldState.error) || undefined}><SelectValue placeholder="选择角色" /></SelectTrigger>
+              <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
+            </Select>
+            {fieldState.error ? <FieldDescription className="text-destructive-text">{fieldState.error.message}</FieldDescription> : null}
+          </>
+        )} />
       </Field>
       <Field>
         <FieldLabel>站点</FieldLabel>
-        <Select value={siteId} onValueChange={onSite} disabled={tenantScoped}>
-          <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_SITES}>全部站点</SelectItem>
-            {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <Controller control={scopeControl} name="siteId" render={({ field }) => (
+          <Select value={tenantScoped ? ALL_SITES : field.value} onValueChange={field.onChange} disabled={tenantScoped}>
+            <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_SITES}>全部站点</SelectItem>
+              {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )} />
       </Field>
     </div>
   );
 }
 
-const scopeOf = (siteId: string) => (siteId === ALL_SITES ? {} : { siteId });
+const assignmentOf = (scope: RoleScope, roles: readonly UserAdminRole[]) => ({
+  roleKey: scope.roleKey as BuiltInRoleKey,
+  ...(roles.find((role) => role.roleKey === scope.roleKey)?.tenantScoped ? {} : scopeOf(scope.siteId)),
+});
+
+interface CreateForm extends RoleScope { displayName: string; username: string; email: string; password: string }
 
 function CreateUserDialog({ open, onOpenChange, csrfToken, roles, sites, onDone }: {
   readonly open: boolean;
@@ -210,43 +211,45 @@ function CreateUserDialog({ open, onOpenChange, csrfToken, roles, sites, onDone 
   readonly sites: readonly SiteOption[];
   readonly onDone: () => void;
 }) {
-  const empty = { displayName: '', username: '', email: '', password: '', roleKey: '' as BuiltInRoleKey | '', siteId: ALL_SITES };
-  const [form, setForm] = useState(empty);
+  const empty: CreateForm = { displayName: '', username: '', email: '', password: '', ...EMPTY_SCOPE };
+  const form = useForm<CreateForm>({ defaultValues: empty });
   const create = useMutation({
-    mutationFn: () => userAdminApi.create(csrfToken, {
-      displayName: form.displayName, username: form.username, email: form.email, password: form.password,
-      assignments: [{ roleKey: form.roleKey as BuiltInRoleKey, ...scopeOf(form.siteId) }],
+    mutationFn: (values: CreateForm) => userAdminApi.create(csrfToken, {
+      displayName: values.displayName, username: values.username, email: values.email, password: values.password,
+      assignments: [assignmentOf(values, roles)],
     }),
-    onSuccess: () => { toast.success(`已创建 ${form.displayName}，请把用户名和密码告诉对方`); setForm(empty); onOpenChange(false); onDone(); },
+    onSuccess: (_, values) => { toast.success(`已创建 ${values.displayName}，请把用户名和密码告诉对方`); close(); onDone(); },
   });
-  const submit = (event: FormEvent) => { event.preventDefault(); create.mutate(); };
-  const set = (key: keyof typeof empty) => (event: { target: { value: string } }) => setForm({ ...form, [key]: event.target.value });
+  function close() {
+    form.reset(empty);
+    create.reset();
+    onOpenChange(false);
+  }
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) { create.reset(); setForm(empty); } onOpenChange(next); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
       <DialogContent className="sm:max-w-[480px]">
-        <form onSubmit={submit} className="flex flex-col gap-5">
+        <form onSubmit={form.handleSubmit((values) => create.mutate(values))} className="flex flex-col gap-5">
           <DialogHeader>
             <DialogTitle>新建用户</DialogTitle>
             <DialogDescription>由你设定登录密码，创建后告诉对方；对方登录后可以在右上角菜单里改成自己的密码。</DialogDescription>
           </DialogHeader>
           <FieldGroup className="gap-4">
             <div className="grid grid-cols-2 gap-3">
-              <Field><FieldLabel htmlFor="new-user-name">姓名</FieldLabel><Input id="new-user-name" value={form.displayName} onChange={set('displayName')} required maxLength={256} /></Field>
-              <Field><FieldLabel htmlFor="new-user-username">用户名</FieldLabel><Input id="new-user-username" value={form.username} onChange={set('username')} required maxLength={128} autoComplete="off" /></Field>
+              <Field><FieldLabel htmlFor="new-user-name">姓名</FieldLabel><Input id="new-user-name" maxLength={256} {...form.register('displayName', { required: true })} /></Field>
+              <Field><FieldLabel htmlFor="new-user-username">用户名</FieldLabel><Input id="new-user-username" maxLength={128} autoComplete="off" {...form.register('username', { required: true })} /></Field>
             </div>
-            <Field><FieldLabel htmlFor="new-user-email">邮箱</FieldLabel><Input id="new-user-email" type="email" value={form.email} onChange={set('email')} required maxLength={320} /></Field>
+            <Field><FieldLabel htmlFor="new-user-email">邮箱</FieldLabel><Input id="new-user-email" type="email" maxLength={320} {...form.register('email', { required: true })} /></Field>
             <Field>
               <FieldLabel htmlFor="new-user-password">登录密码</FieldLabel>
-              <Input id="new-user-password" type="password" value={form.password} onChange={set('password')} required minLength={8} maxLength={512} autoComplete="new-password" />
+              <Input id="new-user-password" type="password" autoComplete="new-password" {...form.register('password', { required: true, minLength: 8, maxLength: 512 })} />
               <FieldDescription>{PASSWORD_HINT}</FieldDescription>
             </Field>
-            <RoleScopeFields roles={roles} sites={sites} roleKey={form.roleKey} siteId={form.siteId}
-              onRole={(roleKey) => setForm((current) => ({ ...current, roleKey }))} onSite={(siteId) => setForm((current) => ({ ...current, siteId }))} />
+            <RoleScopeFields control={form.control} roles={roles} sites={sites} />
           </FieldGroup>
           {create.isError ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(create.error)}</p> : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="submit" disabled={create.isPending || !form.roleKey}>{create.isPending ? '创建中…' : '创建'}</Button>
+            <Button type="button" variant="outline" onClick={close}>取消</Button>
+            <Button type="submit" disabled={create.isPending}>{create.isPending ? '创建中…' : '创建'}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -263,11 +266,10 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
   readonly siteName: (siteId?: string) => string;
   readonly onDone: () => void;
 }) {
-  const [roleKey, setRoleKey] = useState<BuiltInRoleKey | ''>('');
-  const [siteId, setSiteId] = useState(ALL_SITES);
+  const form = useForm<RoleScope>({ defaultValues: EMPTY_SCOPE });
   const assign = useMutation({
-    mutationFn: () => userAdminApi.assign(csrfToken, member!.principalId, { roleKey: roleKey as BuiltInRoleKey, ...scopeOf(siteId) }),
-    onSuccess: () => { setRoleKey(''); setSiteId(ALL_SITES); onDone(); },
+    mutationFn: (values: RoleScope) => userAdminApi.assign(csrfToken, member!.principalId, assignmentOf(values, roles)),
+    onSuccess: () => { form.reset(EMPTY_SCOPE); onDone(); },
   });
   const revoke = useMutation({
     mutationFn: (bindingId: string) => userAdminApi.revoke(csrfToken, member!.principalId, bindingId),
@@ -275,7 +277,7 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
   });
   const error = assign.error ?? revoke.error;
   return (
-    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) { assign.reset(); revoke.reset(); onClose(); } }}>
+    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) { form.reset(EMPTY_SCOPE); assign.reset(); revoke.reset(); onClose(); } }}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>{member?.displayName} 的角色与站点</DialogTitle>
@@ -292,10 +294,10 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
             </li>
           )) : <li className="px-4 py-3 text-sm text-muted-foreground">还没有角色，登录后看不到任何数据</li>}
         </ul>
-        <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
-          <RoleScopeFields roles={roles} sites={sites} roleKey={roleKey} siteId={siteId} onRole={setRoleKey} onSite={setSiteId} />
-          <Button className="self-end" size="sm" disabled={!roleKey || assign.isPending} onClick={() => assign.mutate()}><Plus data-icon="inline-start" />添加角色</Button>
-        </div>
+        <form onSubmit={form.handleSubmit((values) => assign.mutate(values))} className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
+          <RoleScopeFields control={form.control} roles={roles} sites={sites} />
+          <Button type="submit" className="self-end" size="sm" disabled={assign.isPending}><Plus data-icon="inline-start" />添加角色</Button>
+        </form>
         {error ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(error)}</p> : null}
       </DialogContent>
     </Dialog>
@@ -318,15 +320,17 @@ function ProfileDialog({ member, onClose, csrfToken, onDone }: {
 }
 
 function ProfileForm({ member, csrfToken, onSaved, onCancel }: { readonly member: UserAdminMember; readonly csrfToken: string; readonly onSaved: () => void; readonly onCancel: () => void }) {
-  const [displayName, setDisplayName] = useState(member.displayName);
-  const [email, setEmail] = useState(member.email);
-  const save = useMutation({ mutationFn: () => userAdminApi.updateProfile(csrfToken, member.principalId, { displayName, email }), onSuccess: () => { toast.success('已保存'); onSaved(); } });
+  const form = useForm({ defaultValues: { displayName: member.displayName, email: member.email } });
+  const save = useMutation({
+    mutationFn: (values: { displayName: string; email: string }) => userAdminApi.updateProfile(csrfToken, member.principalId, values),
+    onSuccess: () => { toast.success('已保存'); onSaved(); },
+  });
   return (
-    <form onSubmit={(event) => { event.preventDefault(); save.mutate(); }} className="flex flex-col gap-5">
+    <form onSubmit={form.handleSubmit((values) => save.mutate(values))} className="flex flex-col gap-5">
       <DialogHeader><DialogTitle>修改姓名和邮箱</DialogTitle><DialogDescription>用户名 {member.username} 不能修改。</DialogDescription></DialogHeader>
       <FieldGroup className="gap-4">
-        <Field><FieldLabel htmlFor="profile-name">姓名</FieldLabel><Input id="profile-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={256} /></Field>
-        <Field><FieldLabel htmlFor="profile-email">邮箱</FieldLabel><Input id="profile-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={320} /></Field>
+        <Field><FieldLabel htmlFor="profile-name">姓名</FieldLabel><Input id="profile-name" maxLength={256} {...form.register('displayName', { required: true })} /></Field>
+        <Field><FieldLabel htmlFor="profile-email">邮箱</FieldLabel><Input id="profile-email" type="email" maxLength={320} {...form.register('email', { required: true })} /></Field>
       </FieldGroup>
       {save.isError ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(save.error)}</p> : null}
       <DialogFooter><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="submit" disabled={save.isPending}>保存</Button></DialogFooter>
@@ -335,26 +339,31 @@ function ProfileForm({ member, csrfToken, onSaved, onCancel }: { readonly member
 }
 
 function ResetPasswordDialog({ member, onClose, csrfToken }: { readonly member: UserAdminMember | null; readonly onClose: () => void; readonly csrfToken: string }) {
-  const [password, setPassword] = useState('');
+  const form = useForm({ defaultValues: { password: '' } });
   const reset = useMutation({
-    mutationFn: () => userAdminApi.resetPassword(csrfToken, member!.principalId, password),
-    onSuccess: () => { toast.success(`已为 ${member!.displayName} 设置新密码，请告诉对方`); setPassword(''); onClose(); },
+    mutationFn: ({ password }: { password: string }) => userAdminApi.resetPassword(csrfToken, member!.principalId, password),
+    onSuccess: () => { toast.success(`已为 ${member!.displayName} 设置新密码，请告诉对方`); close(); },
   });
+  function close() {
+    form.reset({ password: '' });
+    reset.reset();
+    onClose();
+  }
   return (
-    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) { reset.reset(); setPassword(''); onClose(); } }}>
+    <Dialog open={Boolean(member)} onOpenChange={(open) => { if (!open) close(); }}>
       <DialogContent className="sm:max-w-[420px]">
-        <form onSubmit={(event) => { event.preventDefault(); reset.mutate(); }} className="flex flex-col gap-5">
+        <form onSubmit={form.handleSubmit((values) => reset.mutate(values))} className="flex flex-col gap-5">
           <DialogHeader>
             <DialogTitle>重置 {member?.displayName} 的密码</DialogTitle>
             <DialogDescription>新密码立即生效，同时解除密码输错造成的锁定。</DialogDescription>
           </DialogHeader>
           <Field>
             <FieldLabel htmlFor="reset-password">新密码</FieldLabel>
-            <Input id="reset-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} maxLength={512} autoComplete="new-password" />
+            <Input id="reset-password" type="password" autoComplete="new-password" {...form.register('password', { required: true, minLength: 8, maxLength: 512 })} />
             <FieldDescription>{PASSWORD_HINT}</FieldDescription>
           </Field>
           {reset.isError ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(reset.error)}</p> : null}
-          <DialogFooter><Button type="button" variant="outline" onClick={onClose}>取消</Button><Button type="submit" disabled={reset.isPending}>设置密码</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" onClick={close}>取消</Button><Button type="submit" disabled={reset.isPending}>设置密码</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

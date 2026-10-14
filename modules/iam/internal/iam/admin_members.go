@@ -23,8 +23,9 @@ type AdminAssignment struct {
 // AdminDirectory is what 系统管理 → 用户与角色 shows: the assignable built-in Roles and every
 // member of the Tenant with their assignments.
 type AdminDirectory struct {
-	Roles   []AdminRole   `json:"roles"`
-	Members []AdminMember `json:"members"`
+	ActorPrincipalID string        `json:"actorPrincipalId"`
+	Roles            []AdminRole   `json:"roles"`
+	Members          []AdminMember `json:"members"`
 }
 
 type AdminRole struct {
@@ -40,6 +41,7 @@ type AdminMember struct {
 	Subject            string                  `json:"subject"`
 	DisplayName        string                  `json:"displayName"`
 	Email              string                  `json:"email"`
+	PrincipalStatus    string                  `json:"principalStatus"`
 	PrincipalRevision  int64                   `json:"principalRevision"`
 	MembershipStatus   string                  `json:"membershipStatus"`
 	MembershipRevision int64                   `json:"membershipRevision"`
@@ -56,12 +58,12 @@ type AdminMemberAssignment struct {
 }
 
 func (store *PostgresAdminStore) ListMembers(ctx context.Context, actor AdminActor) (AdminDirectory, error) {
-	tx, _, err := store.beginActorTransaction(ctx, actor)
+	tx, actorPrincipalID, err := store.beginActorTransaction(ctx, actor)
 	if err != nil {
 		return AdminDirectory{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	directory := AdminDirectory{Roles: []AdminRole{}, Members: []AdminMember{}}
+	directory := AdminDirectory{ActorPrincipalID: actorPrincipalID, Roles: []AdminRole{}, Members: []AdminMember{}}
 
 	rows, err := tx.Query(ctx, `SELECT id::text, role_key, display_name, capabilities FROM iam.role_templates WHERE tenant_id IS NULL AND status = 'ACTIVE' ORDER BY cardinality(capabilities), role_key`)
 	if err != nil {
@@ -84,7 +86,7 @@ func (store *PostgresAdminStore) ListMembers(ctx context.Context, actor AdminAct
 
 	rows, err = tx.Query(ctx, `
 SELECT principal.id::text, principal.external_issuer, principal.external_subject, principal.display_name, principal.email,
-       principal.revision, membership.status, membership.revision
+       principal.status, principal.revision, membership.status, membership.revision
 FROM iam.tenant_memberships membership
 JOIN iam.principals principal ON principal.id = membership.principal_id
 WHERE membership.tenant_id = $1::uuid
@@ -97,7 +99,7 @@ ORDER BY principal.display_name, principal.id
 	for rows.Next() {
 		member := AdminMember{Assignments: []AdminMemberAssignment{}}
 		if err := rows.Scan(&member.PrincipalID, &member.SubjectIssuer, &member.Subject, &member.DisplayName, &member.Email,
-			&member.PrincipalRevision, &member.MembershipStatus, &member.MembershipRevision); err != nil {
+			&member.PrincipalStatus, &member.PrincipalRevision, &member.MembershipStatus, &member.MembershipRevision); err != nil {
 			rows.Close()
 			return AdminDirectory{}, err
 		}
@@ -114,7 +116,7 @@ SELECT binding.id::text, binding.principal_id::text, template.id::text, template
        binding.status, binding.revision
 FROM iam.role_bindings binding
 JOIN iam.role_templates template ON template.id = binding.role_template_id
-WHERE binding.tenant_id = $1::uuid AND binding.status <> 'REVOKED'
+WHERE binding.tenant_id = $1::uuid
 ORDER BY binding.site_id NULLS FIRST, template.role_key
 `, actor.TenantID)
 	if err != nil {
@@ -205,9 +207,16 @@ SELECT EXISTS (
   FROM iam.tenant_memberships membership
   JOIN iam.role_bindings binding ON binding.tenant_id = membership.tenant_id AND binding.principal_id = membership.principal_id
   JOIN iam.role_templates template ON template.id = binding.role_template_id
+  JOIN iam.principals principal ON principal.id = membership.principal_id
   WHERE membership.tenant_id = $1::uuid AND membership.principal_id = $2::uuid AND membership.status = 'ACTIVE'
+    AND principal.status = 'ACTIVE'
     AND binding.site_id IS NULL AND binding.status = 'ACTIVE' AND binding.valid_from <= $3 AND (binding.valid_to IS NULL OR binding.valid_to > $3)
     AND template.status = 'ACTIVE' AND template.capabilities @> ARRAY['iam.admin']::text[]
+    AND NOT EXISTS (
+      SELECT 1 FROM iam.explicit_denies deny
+      WHERE deny.tenant_id = $1::uuid AND deny.principal_id = $2::uuid AND deny.site_id IS NULL AND deny.action = 'iam.admin'
+        AND deny.valid_from <= $3 AND (deny.valid_to IS NULL OR deny.valid_to > $3)
+    )
 )`, tenantID, actorPrincipalID, now.UTC()).Scan(&administers)
 	if err != nil {
 		return err

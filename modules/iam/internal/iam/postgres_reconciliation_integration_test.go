@@ -74,6 +74,10 @@ WHERE binding.principal_id = $1::uuid`, reconciliationPrincipalID).Scan(&builtIn
 	if _, err := store.Reconcile(ctx, missingRole); err == nil {
 		t.Fatal("reconciliation assigned a Role that does not exist")
 	}
+	missingRole.RoleBindings = []iam.ReconciledRoleBinding{{TenantID: postgresTenantAID, RoleKey: "admin", SiteID: postgresOwnerASite1ID, ValidFrom: validFrom}}
+	if _, err := store.Reconcile(ctx, missingRole); err == nil {
+		t.Fatal("reconciliation assigned the admin Role to a single Site")
+	}
 	unchanged, err := store.Reconcile(ctx, request)
 	if err != nil {
 		t.Fatal(err)

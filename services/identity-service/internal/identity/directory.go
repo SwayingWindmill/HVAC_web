@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	ErrUsernameTaken = errors.New("identity username is already taken")
-	ErrUserNotFound  = errors.New("identity user not found")
+	ErrUsernameTaken  = errors.New("identity username is already taken")
+	ErrUserNotFound   = errors.New("identity user not found")
+	ErrProfileInvalid = errors.New("identity username, display name or email is invalid")
 )
 
 // DirectoryUser is what user administration shows about an account; it never carries the
@@ -57,20 +58,9 @@ func (store *Store) UsersByID(ctx context.Context, ids []string) ([]DirectoryUse
 	return users, rows.Err()
 }
 
-func (store *Store) UserByUsername(ctx context.Context, username string) (DirectoryUser, error) {
-	user, err := scanDirectoryUser(store.pool.QueryRow(ctx, `SELECT `+directoryColumns+` FROM identity.users WHERE username_normalized = $1`, normalizeUsername(username)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return DirectoryUser{}, ErrUserNotFound
-	}
-	if err != nil {
-		return DirectoryUser{}, fmt.Errorf("read identity user: %w", err)
-	}
-	return user, nil
-}
-
 // SetPassword replaces an account's password on an administrator's behalf and clears any lockout.
-func (store *Store) SetPassword(ctx context.Context, userID, password string, now time.Time) error {
-	return store.updateUser(ctx, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
+func (store *Store) SetPassword(ctx context.Context, administrator, userID, password string, now time.Time) error {
+	return store.updateUser(ctx, administrator, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
 		if err := ValidatePassword(user.username, password); err != nil {
 			return "", err
 		}
@@ -84,23 +74,23 @@ func (store *Store) SetPassword(ctx context.Context, userID, password string, no
 }
 
 // SetStatus enables (ACTIVE) or disables (DISABLED) sign-in for an account.
-func (store *Store) SetStatus(ctx context.Context, userID, status string, now time.Time) error {
+func (store *Store) SetStatus(ctx context.Context, administrator, userID, status string, now time.Time) error {
 	event := map[string]string{"ACTIVE": "USER_ENABLED", "DISABLED": "USER_DISABLED"}[status]
 	if event == "" {
 		return fmt.Errorf("unsupported identity user status %q", status)
 	}
-	return store.updateUser(ctx, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
+	return store.updateUser(ctx, administrator, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
 		_, err := tx.Exec(ctx, `UPDATE identity.users SET status = $2, failed_attempts = 0, locked_until = NULL, revision = revision + 1, updated_at = $3 WHERE id = $1::uuid`, userID, status, user.now)
 		return event, err
 	})
 }
 
-func (store *Store) UpdateProfile(ctx context.Context, userID, displayName, email string, now time.Time) error {
+func (store *Store) UpdateProfile(ctx context.Context, administrator, userID, displayName, email string, now time.Time) error {
 	displayName, email = strings.TrimSpace(displayName), strings.TrimSpace(email)
 	if err := validateProfile(displayName, email); err != nil {
 		return err
 	}
-	return store.updateUser(ctx, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
+	return store.updateUser(ctx, administrator, userID, now, func(ctx context.Context, tx pgx.Tx, user lockedUser) (string, error) {
 		_, err := tx.Exec(ctx, `UPDATE identity.users SET display_name = $2, email = $3, revision = revision + 1, updated_at = $4 WHERE id = $1::uuid`, userID, displayName, email, user.now)
 		return "PROFILE_UPDATED", err
 	})
@@ -171,8 +161,9 @@ type lockedUser struct {
 	now      time.Time
 }
 
-// updateUser locks one account, applies change and records its audit event in one transaction.
-func (store *Store) updateUser(ctx context.Context, userID string, now time.Time, change func(context.Context, pgx.Tx, lockedUser) (string, error)) error {
+// updateUser locks one account, applies change and records its audit event, naming the
+// administrator who made it, in one transaction.
+func (store *Store) updateUser(ctx context.Context, administrator, userID string, now time.Time, change func(context.Context, pgx.Tx, lockedUser) (string, error)) error {
 	now = resolveIdentityTime(now)
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -190,7 +181,7 @@ func (store *Store) updateUser(ctx context.Context, userID string, now time.Time
 	if err != nil {
 		return err
 	}
-	if err := insertSecurityAudit(ctx, tx, event, userID, user.username, "SUCCEEDED", event, now, map[string]any{}); err != nil {
+	if err := insertSecurityAudit(ctx, tx, event, userID, user.username, "SUCCEEDED", event, now, map[string]any{"administeredBy": administrator}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -200,11 +191,8 @@ func (store *Store) updateUser(ctx context.Context, userID string, now time.Time
 }
 
 func validateProfile(displayName, email string) error {
-	if displayName == "" || len(displayName) > 256 {
-		return errors.New("identity display name is required and must not exceed 256 bytes")
-	}
-	if email == "" || len(email) > 320 || !strings.Contains(email, "@") {
-		return errors.New("identity email is invalid")
+	if displayName == "" || len(displayName) > 256 || email == "" || len(email) > 320 || !strings.Contains(email, "@") {
+		return ErrProfileInvalid
 	}
 	return nil
 }

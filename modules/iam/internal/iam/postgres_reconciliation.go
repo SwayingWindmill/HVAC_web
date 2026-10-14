@@ -327,7 +327,18 @@ INSERT INTO iam.tenant_memberships (
 		if binding.SiteID != "" {
 			siteID = binding.SiteID
 		}
-		// A Tenant-owned Role shadows a built-in one with the same key.
+		// A Tenant-owned Role shadows a built-in one with the same key; one carrying a
+		// Tenant-scoped capability, such as admin, is assigned only to the whole Tenant.
+		if binding.SiteID != "" {
+			var capabilities []string
+			err := transaction.QueryRow(ctx, `
+SELECT capabilities FROM iam.role_templates
+WHERE (tenant_id = $1::uuid OR tenant_id IS NULL) AND role_key = $2 AND status = 'ACTIVE'
+ORDER BY tenant_id NULLS LAST LIMIT 1`, binding.TenantID, binding.RoleKey).Scan(&capabilities)
+			if err == nil && roleTenantScoped(capabilities) {
+				return fmt.Errorf("reconciled IAM role %q can only be assigned to the whole Tenant", binding.RoleKey)
+			}
+		}
 		tag, err := transaction.Exec(ctx, `
 INSERT INTO iam.role_bindings (
   id, tenant_id, principal_id, role_template_id, site_id, status, valid_from, valid_to, revision, created_at, updated_at

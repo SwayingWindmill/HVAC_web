@@ -9,15 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
 )
 
 // User administration (spec docs/specs/iam-roles-and-users.md) composes two owners: the identity
-// directory holds accounts and passwords, IAM holds membership and Role Assignments. The Gateway
-// checks iam.admin, keeps every account it touches inside the acting Tenant's members, and
-// changes IAM first so a refused IAM change never leaves the account half-updated.
+// directory holds accounts and passwords, IAM holds membership and Role Assignments and decides
+// who may administer. Every request first reads IAM's member list as the acting administrator,
+// so IAM authorizes it and an account outside the acting Tenant is never touched. Changes go to
+// IAM before the directory, so a refused IAM change leaves the account as it was.
 const (
 	publicMembersPath        = "/api/v1/iam/members"
 	publicMembersPrefix      = "/api/v1/iam/members/"
@@ -26,48 +27,15 @@ const (
 	maximumUserAdminBodySize = 16 << 10
 )
 
-// UserDirectory is the identity directory as user administration uses it.
+// UserDirectory is the identity directory as user administration uses it. Administrator
+// arguments name who made a change, for the directory's security audit.
 type UserDirectory interface {
 	CreateUser(context.Context, identityadmin.NewUser) (identityadmin.User, error)
 	UsersByID(context.Context, []string) ([]identityadmin.User, error)
-	UserByUsername(context.Context, string) (identityadmin.User, error)
-	SetPassword(context.Context, string, string) error
-	SetEnabled(context.Context, string, bool) error
-	UpdateProfile(context.Context, string, string, string) error
-	ChangePassword(context.Context, string, string, string) error
-}
-
-type iamRole struct {
-	RoleTemplateID string `json:"roleTemplateId"`
-	RoleKey        string `json:"roleKey"`
-	DisplayName    string `json:"displayName"`
-	TenantScoped   bool   `json:"tenantScoped"`
-}
-
-type iamAssignment struct {
-	BindingID      string `json:"bindingId"`
-	RoleTemplateID string `json:"roleTemplateId"`
-	RoleKey        string `json:"roleKey"`
-	SiteID         string `json:"siteId,omitempty"`
-	Status         string `json:"status"`
-	Revision       int64  `json:"revision"`
-}
-
-type iamMember struct {
-	PrincipalID        string          `json:"principalId"`
-	SubjectIssuer      string          `json:"subjectIssuer"`
-	Subject            string          `json:"subject"`
-	DisplayName        string          `json:"displayName"`
-	Email              string          `json:"email"`
-	PrincipalRevision  int64           `json:"principalRevision"`
-	MembershipStatus   string          `json:"membershipStatus"`
-	MembershipRevision int64           `json:"membershipRevision"`
-	Assignments        []iamAssignment `json:"assignments"`
-}
-
-type iamDirectory struct {
-	Roles   []iamRole   `json:"roles"`
-	Members []iamMember `json:"members"`
+	SetPassword(ctx context.Context, administrator, userID, password string) error
+	SetEnabled(ctx context.Context, administrator, userID string, enabled bool) error
+	UpdateProfile(ctx context.Context, administrator, userID, displayName, email string) error
+	ChangePassword(ctx context.Context, userID, current, next string) error
 }
 
 type memberAssignment struct {
@@ -90,7 +58,6 @@ type memberView struct {
 
 type roleView struct {
 	RoleKey      string `json:"roleKey"`
-	DisplayName  string `json:"displayName"`
 	TenantScoped bool   `json:"tenantScoped"`
 }
 
@@ -112,16 +79,19 @@ type createMemberRequest struct {
 	Assignments []assignmentInput `json:"assignments"`
 }
 
-type userAdminContext struct {
-	session bffSession
-	actorID string
+// userAdminRequest is one administrator's request with IAM's view of their Tenant.
+type userAdminRequest struct {
+	session   bffSession
+	directory iamserver.AdminDirectory
 }
+
+func (admin userAdminRequest) administrator() string { return admin.session.Principal.Subject }
 
 // UserAdmin serves 系统管理 → 用户与角色.
 func (h *handler) UserAdmin(writer http.ResponseWriter, request *http.Request) {
 	path := request.URL.Path
 	if path == publicMembersPath && request.Method == http.MethodGet {
-		h.listMembers(writer, request)
+		h.withUserAdmin(writer, request, h.listMembers)
 		return
 	}
 	if request.Method != http.MethodPost {
@@ -129,30 +99,46 @@ func (h *handler) UserAdmin(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if path == publicMembersPath {
-		h.createMember(writer, request)
+		h.withUserAdmin(writer, request, h.createMember)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(path, publicMembersPrefix), "/")
+	var change memberChangeFunc
 	switch {
 	case len(parts) == 2 && parts[1] == "password":
-		h.memberChange(writer, request, parts[0], h.resetMemberPassword)
+		change = h.resetMemberPassword
 	case len(parts) == 2 && parts[1] == "status":
-		h.memberChange(writer, request, parts[0], h.setMemberStatus)
+		change = h.setMemberStatus
 	case len(parts) == 2 && parts[1] == "profile":
-		h.memberChange(writer, request, parts[0], h.updateMemberProfile)
+		change = h.updateMemberProfile
 	case len(parts) == 2 && parts[1] == "assignments":
-		h.memberChange(writer, request, parts[0], h.assignMemberRole)
+		change = h.assignMemberRole
 	case len(parts) == 4 && parts[1] == "assignments" && parts[3] == "revoke":
 		bindingID := parts[2]
-		h.memberChange(writer, request, parts[0], func(writer http.ResponseWriter, request *http.Request, admin userAdminContext, directory iamDirectory, member iamMember) {
-			h.revokeMemberRole(writer, request, admin, directory, member, bindingID)
-		})
+		change = func(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
+			h.revokeMemberRole(writer, request, admin, member, bindingID)
+		}
 	default:
 		writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "Not found", "The user administration route does not exist.", false})
+		return
 	}
+	principalID := parts[0]
+	h.withUserAdmin(writer, request, func(writer http.ResponseWriter, request *http.Request, admin userAdminRequest) {
+		for _, member := range admin.directory.Members {
+			if member.PrincipalID == principalID {
+				change(writer, request, admin, member)
+				return
+			}
+		}
+		writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "User not found", "This user is not a member of the current organization.", false})
+	})
 }
 
-func (h *handler) userAdminContext(writer http.ResponseWriter, request *http.Request) (userAdminContext, bool) {
+type memberChangeFunc func(http.ResponseWriter, *http.Request, userAdminRequest, iamserver.AdminMember)
+
+// withUserAdmin checks the Session and CSRF token, then reads IAM's member list as the acting
+// administrator; IAM refuses anyone without iam.admin.
+func (h *handler) withUserAdmin(writer http.ResponseWriter, request *http.Request, serve func(http.ResponseWriter, *http.Request, userAdminRequest)) {
 	session, failure := h.identitySession(request)
 	if failure == nil && request.Method != http.MethodGet {
 		failure = h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token"))
@@ -160,63 +146,34 @@ func (h *handler) userAdminContext(writer http.ResponseWriter, request *http.Req
 	if failure == nil && h.identity.config.UserDirectory == nil {
 		failure = &identityFailure{503, "USER_ADMIN_UNAVAILABLE", "User administration unavailable", "The identity directory is not configured for this Gateway.", true}
 	}
-	var principal identitycontext.InternalPrincipalResponse
-	if failure == nil {
-		principal, failure = h.identity.fetchPrincipal(request.Context(), session)
-	}
-	if failure == nil && !principal.Authorization.Has(identitycontext.CapabilityIAMAdmin) {
-		failure = &identityFailure{403, "IAM_ADMIN_FORBIDDEN", "User administration forbidden", "Only administrators can manage users.", false}
-	}
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
-		return userAdminContext{}, false
+		return
 	}
-	return userAdminContext{session: session, actorID: principal.PrincipalID}, true
-}
-
-func (h *handler) loadIAMDirectory(writer http.ResponseWriter, request *http.Request, admin userAdminContext) (iamDirectory, bool) {
-	status, body, _, failure := h.identity.forwardIAMAdmin(request.Context(), admin.session, iamAdminRoute{internalPath: internalIAMMembersPath, action: "iam:admin"}, nil)
-	if failure != nil {
-		writeIdentityFailure(writer, request, *failure)
-		return iamDirectory{}, false
-	}
-	if status != http.StatusOK {
-		writeIAMProblem(writer, request, status, body)
-		return iamDirectory{}, false
-	}
-	var directory iamDirectory
-	if err := json.Unmarshal(body, &directory); err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an unreadable member list.", true})
-		return iamDirectory{}, false
+	var directory iamserver.AdminDirectory
+	if !h.callIAMAdmin(writer, request, session, internalIAMMembersPath, nil, &directory) {
+		return
 	}
 	// Only people who sign in through this platform's identity directory are users; Workload
 	// Principals are members too but are not managed here.
-	people := directory.Members[:0]
+	people := []iamserver.AdminMember{}
 	for _, member := range directory.Members {
-		if member.SubjectIssuer == admin.session.Principal.Issuer {
+		if member.SubjectIssuer == session.Principal.Issuer {
 			people = append(people, member)
 		}
 	}
 	directory.Members = people
-	return directory, true
+	serve(writer, request, userAdminRequest{session: session, directory: directory})
 }
 
-func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request) {
-	admin, ok := h.userAdminContext(writer, request)
-	if !ok {
-		return
-	}
-	directory, ok := h.loadIAMDirectory(writer, request, admin)
-	if !ok {
-		return
-	}
-	subjects := make([]string, len(directory.Members))
-	for index, member := range directory.Members {
+func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request, admin userAdminRequest) {
+	subjects := make([]string, len(admin.directory.Members))
+	for index, member := range admin.directory.Members {
 		subjects[index] = member.Subject
 	}
 	accounts, err := h.identity.config.UserDirectory.UsersByID(request.Context(), subjects)
 	if err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_DIRECTORY_UNAVAILABLE", "Identity directory unavailable", "The identity directory could not be read.", true})
+		writeDirectoryFailure(writer, request, err)
 		return
 	}
 	byID := make(map[string]identityadmin.User, len(accounts))
@@ -225,19 +182,20 @@ func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request)
 	}
 	now := h.now()
 	response := membersResponse{Roles: []roleView{}, Members: []memberView{}}
-	for _, role := range directory.Roles {
-		response.Roles = append(response.Roles, roleView{RoleKey: role.RoleKey, DisplayName: role.DisplayName, TenantScoped: role.TenantScoped})
+	for _, role := range admin.directory.Roles {
+		response.Roles = append(response.Roles, roleView{RoleKey: role.RoleKey, TenantScoped: role.TenantScoped})
 	}
-	for _, member := range directory.Members {
+	for _, member := range admin.directory.Members {
 		account, found := byID[member.Subject]
 		if !found {
 			continue
 		}
+		// A person can sign in only while both owners let them: the membership and the account.
 		view := memberView{
 			PrincipalID: member.PrincipalID, Username: account.Username, DisplayName: account.DisplayName, Email: account.Email,
 			Enabled:     member.MembershipStatus == "ACTIVE" && account.Status == "ACTIVE",
 			Locked:      account.LockedUntil != nil && account.LockedUntil.After(now),
-			Self:        member.PrincipalID == admin.actorID,
+			Self:        member.PrincipalID == admin.directory.ActorPrincipalID,
 			Assignments: []memberAssignment{},
 		}
 		if account.LastLoginAt != nil {
@@ -256,97 +214,61 @@ func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func (h *handler) createMember(writer http.ResponseWriter, request *http.Request) {
-	admin, ok := h.userAdminContext(writer, request)
-	if !ok {
-		return
-	}
+func (h *handler) createMember(writer http.ResponseWriter, request *http.Request, admin userAdminRequest) {
 	var input createMemberRequest
 	if !decodeUserAdminBody(writer, request, &input) {
 		return
 	}
-	directory, ok := h.loadIAMDirectory(writer, request, admin)
-	if !ok {
-		return
-	}
-	assignments, ok := resolveAssignments(writer, request, directory, input.Assignments)
-	if !ok {
-		return
-	}
-	if len(assignments) == 0 {
+	if len(input.Assignments) == 0 {
 		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Request invalid", "A new user needs at least one role.", false})
 		return
 	}
-	users := h.identity.config.UserDirectory
-	account, err := users.CreateUser(request.Context(), identityadmin.NewUser{Username: input.Username, DisplayName: input.DisplayName, Email: input.Email, Password: input.Password})
-	if errors.Is(err, identityadmin.ErrUsernameTaken) {
-		// A username without a membership here is left over from an attempt IAM refused; take it over.
-		existing, lookupErr := users.UserByUsername(request.Context(), input.Username)
-		if lookupErr != nil {
-			writeDirectoryFailure(writer, request, lookupErr)
+	assignments := make([]iamserver.AdminAssignment, len(input.Assignments))
+	for index, input := range input.Assignments {
+		role, ok := roleNamed(admin.directory, input.RoleKey)
+		// IAM decides scope too, but by then the account would exist; refuse before creating it.
+		if !ok || (role.TenantScoped && input.SiteID != "") {
+			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role or its scope is not valid.", false})
 			return
 		}
-		for _, member := range directory.Members {
-			if member.Subject == existing.ID {
-				writeIdentityFailure(writer, request, identityFailure{409, "USERNAME_TAKEN", "Username taken", "This username is already in use.", false})
-				return
-			}
-		}
-		if err = users.SetPassword(request.Context(), existing.ID, input.Password); err == nil {
-			err = users.UpdateProfile(request.Context(), existing.ID, input.DisplayName, input.Email)
-		}
-		account = existing
+		assignments[index] = iamserver.AdminAssignment{RoleTemplateID: role.RoleTemplateID, SiteID: input.SiteID}
 	}
+	account, err := h.identity.config.UserDirectory.CreateUser(request.Context(), identityadmin.NewUser{
+		Username: input.Username, DisplayName: input.DisplayName, Email: input.Email, Password: input.Password,
+	})
 	if err != nil {
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
-	result, ok := h.applyIAMMutation(writer, request, admin, map[string]any{
-		"operation": "member.create", "subjectIssuer": admin.session.Principal.Issuer, "subject": account.ID,
-		"displayName": strings.TrimSpace(input.DisplayName), "email": strings.TrimSpace(input.Email), "assignments": assignments,
-	})
-	if !ok {
+	var result iamserver.AdminMutationResult
+	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+		Operation: "member.create", SubjectIssuer: admin.session.Principal.Issuer, Subject: account.ID,
+		DisplayName: account.DisplayName, Email: account.Email, Assignments: assignments,
+	}, &result) {
 		return
 	}
 	writeJSON(writer, http.StatusCreated, map[string]string{"principalId": result.ResourceID})
 }
 
-type memberChangeFunc func(http.ResponseWriter, *http.Request, userAdminContext, iamDirectory, iamMember)
-
-// memberChange resolves the target as a member of the acting Tenant before any change.
-func (h *handler) memberChange(writer http.ResponseWriter, request *http.Request, principalID string, change memberChangeFunc) {
-	admin, ok := h.userAdminContext(writer, request)
-	if !ok {
+func (h *handler) resetMemberPassword(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
+	if member.PrincipalID == admin.directory.ActorPrincipalID {
+		writeIdentityFailure(writer, request, identityFailure{409, "OWN_PASSWORD_REQUIRES_CURRENT", "Use password change", "Change your own password with your current password.", false})
 		return
 	}
-	directory, ok := h.loadIAMDirectory(writer, request, admin)
-	if !ok {
-		return
-	}
-	for _, member := range directory.Members {
-		if member.PrincipalID == principalID {
-			change(writer, request, admin, directory, member)
-			return
-		}
-	}
-	writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "User not found", "This user is not a member of the current organization.", false})
-}
-
-func (h *handler) resetMemberPassword(writer http.ResponseWriter, request *http.Request, _ userAdminContext, _ iamDirectory, member iamMember) {
 	var input struct {
 		Password string `json:"password"`
 	}
 	if !decodeUserAdminBody(writer, request, &input) {
 		return
 	}
-	if err := h.identity.config.UserDirectory.SetPassword(request.Context(), member.Subject, input.Password); err != nil {
+	if err := h.identity.config.UserDirectory.SetPassword(request.Context(), admin.administrator(), member.Subject, input.Password); err != nil {
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (h *handler) setMemberStatus(writer http.ResponseWriter, request *http.Request, admin userAdminContext, _ iamDirectory, member iamMember) {
+func (h *handler) setMemberStatus(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
 	var input struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -357,12 +279,12 @@ func (h *handler) setMemberStatus(writer http.ResponseWriter, request *http.Requ
 	if input.Enabled {
 		status = "ACTIVE"
 	}
-	if _, ok := h.applyIAMMutation(writer, request, admin, map[string]any{
-		"operation": "membership.upsert", "principalId": member.PrincipalID, "status": status, "expectedRevision": member.MembershipRevision,
-	}); !ok {
+	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+		Operation: "membership.upsert", PrincipalID: member.PrincipalID, Status: status, ExpectedRevision: member.MembershipRevision,
+	}, nil) {
 		return
 	}
-	if err := h.identity.config.UserDirectory.SetEnabled(request.Context(), member.Subject, input.Enabled); err != nil {
+	if err := h.identity.config.UserDirectory.SetEnabled(request.Context(), admin.administrator(), member.Subject, input.Enabled); err != nil {
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
@@ -376,7 +298,7 @@ func (h *handler) setMemberStatus(writer http.ResponseWriter, request *http.Requ
 }
 
 // revokePersonSessions ends every signed-in Session of a disabled person, each with its own audit event.
-func (h *handler) revokePersonSessions(request *http.Request, member iamMember) *identityFailure {
+func (h *handler) revokePersonSessions(request *http.Request, member iamserver.AdminMember) *identityFailure {
 	unavailable := &identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The user was disabled, but their signed-in sessions could not be ended.", true}
 	ids, err := h.identity.store.ActiveSessionIDs(request.Context(), member.SubjectIssuer, member.Subject)
 	if err != nil {
@@ -391,7 +313,7 @@ func (h *handler) revokePersonSessions(request *http.Request, member iamMember) 
 	return nil
 }
 
-func (h *handler) updateMemberProfile(writer http.ResponseWriter, request *http.Request, admin userAdminContext, _ iamDirectory, member iamMember) {
+func (h *handler) updateMemberProfile(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
 	var input struct {
 		DisplayName string `json:"displayName"`
 		Email       string `json:"email"`
@@ -399,49 +321,53 @@ func (h *handler) updateMemberProfile(writer http.ResponseWriter, request *http.
 	if !decodeUserAdminBody(writer, request, &input) {
 		return
 	}
-	if _, ok := h.applyIAMMutation(writer, request, admin, map[string]any{
-		"operation": "principal.update", "resourceId": member.PrincipalID, "displayName": strings.TrimSpace(input.DisplayName),
-		"email": strings.TrimSpace(input.Email), "status": "ACTIVE", "expectedRevision": member.PrincipalRevision,
-	}); !ok {
+	if !h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+		Operation: "principal.update", ResourceID: member.PrincipalID, DisplayName: strings.TrimSpace(input.DisplayName),
+		Email: strings.TrimSpace(input.Email), Status: member.PrincipalStatus, ExpectedRevision: member.PrincipalRevision,
+	}, nil) {
 		return
 	}
-	if err := h.identity.config.UserDirectory.UpdateProfile(request.Context(), member.Subject, input.DisplayName, input.Email); err != nil {
+	if err := h.identity.config.UserDirectory.UpdateProfile(request.Context(), admin.administrator(), member.Subject, input.DisplayName, input.Email); err != nil {
 		writeDirectoryFailure(writer, request, err)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminContext, directory iamDirectory, member iamMember) {
+func (h *handler) assignMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember) {
 	var input assignmentInput
 	if !decodeUserAdminBody(writer, request, &input) {
 		return
 	}
-	assignments, ok := resolveAssignments(writer, request, directory, []assignmentInput{input})
+	role, ok := roleNamed(admin.directory, input.RoleKey)
 	if !ok {
+		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role is not valid.", false})
 		return
 	}
-	target := assignments[0]
 	// Re-assigning a revoked Role reactivates its row, which carries the revision to check.
 	var expectedRevision int64
 	for _, existing := range member.Assignments {
-		if existing.RoleTemplateID == target["roleTemplateId"] && existing.SiteID == target["siteId"] {
+		if existing.RoleTemplateID == role.RoleTemplateID && existing.SiteID == input.SiteID {
 			expectedRevision = existing.Revision
 		}
 	}
-	h.writeIAMMutation(writer, request, admin, map[string]any{
-		"operation": "role-binding.upsert", "principalId": member.PrincipalID, "roleTemplateId": target["roleTemplateId"],
-		"siteId": target["siteId"], "status": "ACTIVE", "expectedRevision": expectedRevision,
-	})
+	if h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+		Operation: "role-binding.upsert", PrincipalID: member.PrincipalID, RoleTemplateID: role.RoleTemplateID,
+		SiteID: input.SiteID, Status: "ACTIVE", ExpectedRevision: expectedRevision,
+	}, nil) {
+		writer.WriteHeader(http.StatusNoContent)
+	}
 }
 
-func (h *handler) revokeMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminContext, _ iamDirectory, member iamMember, bindingID string) {
+func (h *handler) revokeMemberRole(writer http.ResponseWriter, request *http.Request, admin userAdminRequest, member iamserver.AdminMember, bindingID string) {
 	for _, existing := range member.Assignments {
-		if existing.BindingID == bindingID {
-			h.writeIAMMutation(writer, request, admin, map[string]any{
-				"operation": "role-binding.upsert", "principalId": member.PrincipalID, "roleTemplateId": existing.RoleTemplateID,
-				"siteId": existing.SiteID, "status": "REVOKED", "expectedRevision": existing.Revision,
-			})
+		if existing.BindingID == bindingID && existing.Status == "ACTIVE" {
+			if h.callIAMAdmin(writer, request, admin.session, internalIAMAdminMutationPath, iamserver.AdminMutationRequest{
+				Operation: "role-binding.upsert", PrincipalID: member.PrincipalID, RoleTemplateID: existing.RoleTemplateID,
+				SiteID: existing.SiteID, Status: "REVOKED", ExpectedRevision: existing.Revision,
+			}, nil) {
+				writer.WriteHeader(http.StatusNoContent)
+			}
 			return
 		}
 	}
@@ -487,50 +413,38 @@ func (h *handler) OwnPassword(writer http.ResponseWriter, request *http.Request)
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-// resolveAssignments turns built-in Role keys into IAM assignments. The admin Role, and any Role
-// with Tenant-scoped capabilities, is assigned only to the whole Tenant.
-func resolveAssignments(writer http.ResponseWriter, request *http.Request, directory iamDirectory, inputs []assignmentInput) ([]map[string]string, bool) {
-	assignments := []map[string]string{}
-	for _, input := range inputs {
-		var role *iamRole
-		for index := range directory.Roles {
-			if directory.Roles[index].RoleKey == input.RoleKey {
-				role = &directory.Roles[index]
-			}
+func roleNamed(directory iamserver.AdminDirectory, roleKey string) (iamserver.AdminRole, bool) {
+	for _, role := range directory.Roles {
+		if role.RoleKey == roleKey {
+			return role, true
 		}
-		if role == nil || (role.TenantScoped && input.SiteID != "") || (input.SiteID != "" && !isLowerUUIDv7(input.SiteID)) {
-			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Role invalid", "The role or its scope is not valid.", false})
-			return nil, false
-		}
-		assignments = append(assignments, map[string]string{"roleTemplateId": role.RoleTemplateID, "siteId": input.SiteID})
 	}
-	return assignments, true
+	return iamserver.AdminRole{}, false
 }
 
-type iamMutationResult struct {
-	ResourceID string `json:"resourceId"`
-}
-
-func (h *handler) applyIAMMutation(writer http.ResponseWriter, request *http.Request, admin userAdminContext, mutation map[string]any) (iamMutationResult, bool) {
-	payload, _ := json.Marshal(mutation)
-	status, body, _, failure := h.identity.forwardIAMAdmin(request.Context(), admin.session, iamAdminRoute{internalPath: internalIAMAdminMutationPath, action: "iam:admin"}, payload)
+// callIAMAdmin sends one IAM administration request as the acting administrator and decodes the
+// reply into result when it is not nil. It writes the failure and returns false when IAM refuses.
+func (h *handler) callIAMAdmin(writer http.ResponseWriter, request *http.Request, session bffSession, internalPath string, body any, result any) bool {
+	var payload []byte
+	if body != nil {
+		payload, _ = json.Marshal(body)
+	}
+	status, reply, _, failure := h.identity.forwardIAMAdmin(request.Context(), session, iamAdminRoute{internalPath: internalPath, action: "iam:admin"}, payload)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
-		return iamMutationResult{}, false
+		return false
 	}
 	if status != http.StatusOK {
-		writeIAMProblem(writer, request, status, body)
-		return iamMutationResult{}, false
+		writeIAMProblem(writer, request, status, reply)
+		return false
 	}
-	var result iamMutationResult
-	_ = json.Unmarshal(body, &result)
-	return result, true
-}
-
-func (h *handler) writeIAMMutation(writer http.ResponseWriter, request *http.Request, admin userAdminContext, mutation map[string]any) {
-	if _, ok := h.applyIAMMutation(writer, request, admin, mutation); ok {
-		writer.WriteHeader(http.StatusNoContent)
+	if result != nil {
+		if err := json.Unmarshal(reply, result); err != nil {
+			writeIdentityFailure(writer, request, identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an unreadable reply.", true})
+			return false
+		}
 	}
+	return true
 }
 
 // writeIAMProblem re-issues an IAM refusal as a Gateway problem the browser understands.
@@ -549,33 +463,24 @@ func writeIAMProblem(writer http.ResponseWriter, request *http.Request, status i
 	case "IAM_ADMIN_REQUEST_REJECTED", "IAM_ADMIN_REQUEST_INVALID", "IAM_ADMIN_RESOURCE_NOT_FOUND":
 		writeIdentityFailure(writer, request, identityFailure{400, problem.Code, "Request refused", "The change was not accepted.", false})
 	default:
-		writeIdentityFailure(writer, request, identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "IAM could not complete the change.", status >= 500})
+		writeIdentityFailure(writer, request, identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "IAM could not complete the request.", status >= 500})
 	}
 }
 
 func writeDirectoryFailure(writer http.ResponseWriter, request *http.Request, err error) {
+	if rule, rejected := identityadmin.RejectedPasswordRule(err); rejected {
+		writeIdentityFailure(writer, request, identityFailure{400, "PASSWORD_" + rule, "Password not accepted", err.Error(), false})
+		return
+	}
 	switch {
-	case identityadmin.PasswordRejected(err):
-		code := map[error]string{
-			identityadmin.ErrPasswordTooShort: "PASSWORD_TOO_SHORT", identityadmin.ErrPasswordTooLong: "PASSWORD_TOO_LONG",
-			identityadmin.ErrPasswordCommon: "PASSWORD_TOO_COMMON", identityadmin.ErrPasswordMatchesUsername: "PASSWORD_MATCHES_USERNAME",
-		}
-		for rule, value := range code {
-			if errors.Is(err, rule) {
-				writeIdentityFailure(writer, request, identityFailure{400, value, "Password not accepted", err.Error(), false})
-				return
-			}
-		}
 	case errors.Is(err, identityadmin.ErrUsernameTaken):
 		writeIdentityFailure(writer, request, identityFailure{409, "USERNAME_TAKEN", "Username taken", "This username is already in use.", false})
+	case errors.Is(err, identityadmin.ErrProfileInvalid):
+		writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Request invalid", "The username, name or email is not valid.", false})
 	case errors.Is(err, identityadmin.ErrUserNotFound):
 		writeIdentityFailure(writer, request, identityFailure{404, "RESOURCE_NOT_FOUND", "User not found", "The account does not exist.", false})
 	default:
-		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
-			writeIdentityFailure(writer, request, identityFailure{400, "USER_ADMIN_REQUEST_INVALID", "Request invalid", err.Error(), false})
-			return
-		}
-		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_DIRECTORY_UNAVAILABLE", "Identity directory unavailable", "The identity directory could not complete the change.", true})
+		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_DIRECTORY_UNAVAILABLE", "Identity directory unavailable", "The identity directory could not complete the request.", true})
 	}
 }
 

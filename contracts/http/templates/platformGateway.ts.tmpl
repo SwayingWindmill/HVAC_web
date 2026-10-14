@@ -16,7 +16,7 @@ export type GatewayEnrollmentCode = z.infer<typeof gatewayEnrollmentCodeSchema>;
 // User administration (系统管理 → 用户与角色) and the signed-in user's own password.
 export const builtInRoleKeySchema = z.enum(['viewer', 'operator', 'site-manager', 'admin']);
 const userAdminUUIDv7 = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-export const userAdminRoleSchema = z.object({ roleKey: builtInRoleKeySchema, displayName: z.string(), tenantScoped: z.boolean() }).strict();
+export const userAdminRoleSchema = z.object({ roleKey: builtInRoleKeySchema, tenantScoped: z.boolean() }).strict();
 export const userAdminMemberAssignmentSchema = z.object({ bindingId: userAdminUUIDv7, roleKey: builtInRoleKeySchema, siteId: userAdminUUIDv7.optional() }).strict();
 export const userAdminMemberSchema = z.object({
   principalId: userAdminUUIDv7, username: z.string(), displayName: z.string(), email: z.string(),

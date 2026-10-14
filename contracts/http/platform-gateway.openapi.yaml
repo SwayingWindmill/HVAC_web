@@ -2804,7 +2804,6 @@
         "additionalProperties": false,
         "required": [
           "roleKey",
-          "displayName",
           "tenantScoped"
         ],
         "properties": {
@@ -2816,9 +2815,6 @@
               "site-manager",
               "admin"
             ]
-          },
-          "displayName": {
-            "type": "string"
           },
           "tenantScoped": {
             "type": "boolean"

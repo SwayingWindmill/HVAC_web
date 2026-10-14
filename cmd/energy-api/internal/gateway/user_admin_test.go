@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -20,20 +21,33 @@ const (
 	userAdminAdminRoleID    = "01a00260-0000-7000-8000-000000000004"
 	userAdminMemberID       = "018f3e00-2000-7000-8000-000000000010"
 	userAdminSiteID         = "018f3e00-1000-7000-8000-000000000001"
+	userAdminActorID        = "018f3e00-2000-7000-8000-000000000001"
 )
 
-// adminCapabilityResolver makes fixture-admin an administrator and everyone else a reader.
-type adminCapabilityResolver struct{}
-
-func (adminCapabilityResolver) ResolvePrincipalCapabilities(_ context.Context, lookup iamserver.PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
-	capabilities := []identitycontext.Capability{identitycontext.CapabilitySiteRead}
-	if lookup.Subject == "fixture-admin" {
-		capabilities = append(capabilities, identitycontext.CapabilityIAMAdmin)
+// delegatedSubject reads who the Gateway acts for from the IAM delegation it presents.
+func delegatedSubject(request *http.Request) string {
+	payload, _, _ := strings.Cut(request.Header.Get("X-Delegation-Grant"), ".")
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
 	}
-	return identitycontext.EffectiveAuthorization{CapabilitySetVersion: identitycontext.CapabilitySetVersion, PolicyRevision: "registry-read:test", Capabilities: capabilities}, nil
+	var claims struct {
+		Subject string `json:"subject"`
+	}
+	_ = json.Unmarshal(decoded, &claims)
+	return claims.Subject
 }
 
-// fakeIAMAdmin answers IAM's member list and records the mutations the Gateway sends.
+// readerCapabilityResolver answers the Gateway's principal lookups; user administration itself is
+// authorized by the member list, which fakeIAMAdmin refuses to anyone but fixture-admin.
+type readerCapabilityResolver struct{}
+
+func (readerCapabilityResolver) ResolvePrincipalCapabilities(context.Context, iamserver.PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
+	return identitycontext.EffectiveAuthorization{CapabilitySetVersion: identitycontext.CapabilitySetVersion, PolicyRevision: "registry-read:test", Capabilities: []identitycontext.Capability{identitycontext.CapabilitySiteRead}}, nil
+}
+
+// fakeIAMAdmin answers IAM's member list for fixture-admin, refuses everyone else as IAM does,
+// and records the mutations the Gateway sends.
 type fakeIAMAdmin struct {
 	mu        sync.Mutex
 	issuer    string
@@ -42,6 +56,12 @@ type fakeIAMAdmin struct {
 
 func (fake *fakeIAMAdmin) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/internal/v1/admin/") && delegatedSubject(request) != "fixture-admin" {
+			writer.Header().Set("Content-Type", "application/problem+json")
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`{"code":"IAM_ADMIN_FORBIDDEN"}`))
+			return
+		}
 		switch request.URL.Path {
 		case "/internal/v1/admin/members":
 			fake.mu.Lock()
@@ -49,13 +69,17 @@ func (fake *fakeIAMAdmin) wrap(next http.Handler) http.Handler {
 			fake.mu.Unlock()
 			writer.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"actorPrincipalId": userAdminActorID,
 				"roles": []map[string]any{
 					{"roleTemplateId": userAdminOperatorRoleID, "roleKey": "operator", "displayName": "运维人员", "tenantScoped": false},
 					{"roleTemplateId": userAdminAdminRoleID, "roleKey": "admin", "displayName": "管理员", "tenantScoped": true},
 				},
 				"members": []map[string]any{{
 					"principalId": userAdminMemberID, "subjectIssuer": issuer, "subject": "fixture-user", "displayName": "Fixture User",
-					"email": "fixture@example.test", "principalRevision": 1, "membershipStatus": "ACTIVE", "membershipRevision": 3, "assignments": []any{},
+					"email": "fixture@example.test", "principalStatus": "ACTIVE", "principalRevision": 1, "membershipStatus": "ACTIVE", "membershipRevision": 3, "assignments": []any{},
+				}, {
+					"principalId": userAdminActorID, "subjectIssuer": issuer, "subject": "fixture-admin", "displayName": "Fixture Admin",
+					"email": "fixture.admin@example.test", "principalStatus": "ACTIVE", "principalRevision": 1, "membershipStatus": "ACTIVE", "membershipRevision": 1, "assignments": []any{},
 				}},
 			})
 		case "/internal/v1/admin/mutations":
@@ -83,10 +107,11 @@ func (fake *fakeIAMAdmin) lastMutation(t *testing.T) map[string]any {
 }
 
 type fakeUserDirectory struct {
-	mu        sync.Mutex
-	createErr error
-	created   []identityadmin.NewUser
-	enabled   map[string]bool
+	mu             sync.Mutex
+	createErr      error
+	created        []identityadmin.NewUser
+	enabled        map[string]bool
+	administrators []string
 }
 
 func (directory *fakeUserDirectory) CreateUser(_ context.Context, user identityadmin.NewUser) (identityadmin.User, error) {
@@ -107,20 +132,19 @@ func (directory *fakeUserDirectory) UsersByID(_ context.Context, ids []string) (
 	return users, nil
 }
 
-func (directory *fakeUserDirectory) UserByUsername(context.Context, string) (identityadmin.User, error) {
-	return identityadmin.User{}, identityadmin.ErrUserNotFound
-}
-
-func (directory *fakeUserDirectory) SetPassword(context.Context, string, string) error { return nil }
-
-func (directory *fakeUserDirectory) SetEnabled(_ context.Context, userID string, enabled bool) error {
-	directory.mu.Lock()
-	defer directory.mu.Unlock()
-	directory.enabled[userID] = enabled
+func (directory *fakeUserDirectory) SetPassword(context.Context, string, string, string) error {
 	return nil
 }
 
-func (directory *fakeUserDirectory) UpdateProfile(context.Context, string, string, string) error {
+func (directory *fakeUserDirectory) SetEnabled(_ context.Context, administrator, userID string, enabled bool) error {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	directory.enabled[userID] = enabled
+	directory.administrators = append(directory.administrators, administrator)
+	return nil
+}
+
+func (directory *fakeUserDirectory) UpdateProfile(context.Context, string, string, string, string) error {
 	return nil
 }
 
@@ -134,7 +158,7 @@ func newUserAdminHarness(t *testing.T) (*authHarness, *fakeIAMAdmin, *fakeUserDi
 	directory := &fakeUserDirectory{enabled: map[string]bool{}}
 	harness := newAuthHarnessWithIAMFactory(t, func(clientSPIFFEID string) http.Handler {
 		return iam.wrap(iamserver.NewHandler(iamserver.Config{
-			AllowedWorkloadSPIFFE: clientSPIFFEID, Audience: "iam-service", PrincipalCapabilityResolver: adminCapabilityResolver{},
+			AllowedWorkloadSPIFFE: clientSPIFFEID, Audience: "iam-service", PrincipalCapabilityResolver: readerCapabilityResolver{},
 		}))
 	}, func(config *gateway.IdentityConfig) { config.UserDirectory = directory })
 	iam.issuer = harness.oidcServer.URL
@@ -181,6 +205,15 @@ func TestUserAdministrationCreatesTheAccountThenItsMembership(t *testing.T) {
 		`{"username":"li.na","displayName":"李娜","email":"li.na@example.test","password":"chiller-night-shift","assignments":[{"roleKey":"admin","siteId":"`+userAdminSiteID+`"}]}`)
 	assertProblemCode(t, siteAdmin, http.StatusBadRequest, "USER_ADMIN_REQUEST_INVALID")
 
+	directory.createErr = identityadmin.ErrUsernameTaken
+	taken := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members",
+		`{"username":"zhang.wei","displayName":"张伟","email":"zhang.wei@example.test","password":"chiller-night-shift","assignments":[{"roleKey":"operator"}]}`)
+	assertProblemCode(t, taken, http.StatusConflict, "USERNAME_TAKEN")
+
+	// The administrator changes their own password with the current one, never by reset.
+	own := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members/"+userAdminActorID+"/password", `{"password":"chiller-night-shift"}`)
+	assertProblemCode(t, own, http.StatusConflict, "OWN_PASSWORD_REQUIRES_CURRENT")
+
 	directory.createErr = identityadmin.ErrPasswordCommon
 	common := postAsUser(t, admin, harness, principal.Session.CSRFToken, "/api/v1/iam/members",
 		`{"username":"wang.fang","displayName":"王芳","email":"wang.fang@example.test","password":"password1","assignments":[{"roleKey":"operator"}]}`)
@@ -214,8 +247,8 @@ func TestDisablingAUserEndsTheirSignedInSessions(t *testing.T) {
 	if mutation["operation"] != "membership.upsert" || mutation["status"] != "SUSPENDED" || mutation["expectedRevision"] != float64(3) {
 		t.Fatalf("IAM mutation = %#v", mutation)
 	}
-	if enabled, set := directory.enabled["fixture-user"]; !set || enabled {
-		t.Fatalf("account sign-in = %#v", directory.enabled)
+	if enabled, set := directory.enabled["fixture-user"]; !set || enabled || directory.administrators[0] != "fixture-admin" {
+		t.Fatalf("account sign-in = %#v by %v", directory.enabled, directory.administrators)
 	}
 	after, err := user.Get(harness.gatewayURL + "/api/v1/principal")
 	if err != nil {

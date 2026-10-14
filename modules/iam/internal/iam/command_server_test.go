@@ -116,3 +116,12 @@ func commandFacts(now time.Time, assignments ...RoleAssignment) AuthorizationFac
 		Assignments: assignments,
 	}
 }
+
+func TestIAMCommandDenyRemovesOnlyItsOwnCeiling(t *testing.T) {
+	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
+	facts := commandFacts(now, RoleAssignment{TenantID: S1FixtureTenantAID, RoleKey: "custom", Capabilities: []string{"command.submit.critical", "command.submit.medium"}, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)})
+	facts.ExplicitDenies = []ExplicitDeny{{TenantID: S1FixtureTenantAID, Capability: "command.submit.critical", ValidFrom: now.Add(-time.Hour)}}
+	if decision := decideCommand(t, now, facts, "device-1", "site-1", commandmodel.AuthorizationCommandSubmit); !decision.Allowed || decision.MaximumRisk != commandmodel.RiskMedium {
+		t.Fatalf("decision %#v", decision)
+	}
+}

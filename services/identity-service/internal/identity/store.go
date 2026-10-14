@@ -112,7 +112,7 @@ func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (Crea
 	displayName := strings.TrimSpace(input.DisplayName)
 	email := strings.TrimSpace(input.Email)
 	if username == "" || len(username) > 128 {
-		return CreatedUser{}, errors.New("identity username is required and must not exceed 128 bytes")
+		return CreatedUser{}, ErrProfileInvalid
 	}
 	if err := validateProfile(displayName, email); err != nil {
 		return CreatedUser{}, err

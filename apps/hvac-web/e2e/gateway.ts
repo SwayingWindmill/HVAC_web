@@ -289,10 +289,10 @@ export class Gateway {
     const password = (value: string) => (value.length < 8 ? 'PASSWORD_TOO_SHORT' : ['password1', '12345678'].includes(value.toLowerCase()) ? 'PASSWORD_TOO_COMMON' : null);
     if (method === 'GET' && path === '/api/v1/iam/members') {
       return { body: { roles: [
-        { roleKey: 'viewer', displayName: '只读', tenantScoped: false },
-        { roleKey: 'operator', displayName: '运维人员', tenantScoped: false },
-        { roleKey: 'site-manager', displayName: '运维主管', tenantScoped: false },
-        { roleKey: 'admin', displayName: '管理员', tenantScoped: true },
+        { roleKey: 'viewer', tenantScoped: false },
+        { roleKey: 'operator', tenantScoped: false },
+        { roleKey: 'site-manager', tenantScoped: false },
+        { roleKey: 'admin', tenantScoped: true },
       ], members: this.members } };
     }
     if (method === 'POST' && path === '/api/v1/me/password') {

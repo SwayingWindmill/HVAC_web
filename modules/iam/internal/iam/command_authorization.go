@@ -108,12 +108,14 @@ func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizatio
 		decision.ReasonCode = commandauth.ReasonDenyScope
 		return decision, nil
 	}
+	// An explicit deny removes its own ceiling; a lower ceiling still applies.
+	decision.ReasonCode = commandauth.ReasonDenyScope
 	for index := len(commandRiskLevels) - 1; index >= 0; index-- {
 		risk := commandRiskLevels[index]
 		allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, commandCapability(request.Purpose, risk), now)
 		if denied {
 			decision.ReasonCode = commandauth.ReasonDenyExplicit
-			return decision, nil
+			continue
 		}
 		if allowed {
 			decision.Allowed = true
@@ -122,6 +124,5 @@ func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizatio
 			return decision, nil
 		}
 	}
-	decision.ReasonCode = commandauth.ReasonDenyScope
 	return decision, nil
 }

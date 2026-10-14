@@ -350,9 +350,12 @@ func TestIAMExplicitSiteDenyDoesNotExpandToSiblingSite(t *testing.T) {
 				Status:    iam.FactStatusActive,
 				ValidFrom: validFrom,
 			}},
+			TenantSiteIDs: []string{iam.S1FixtureOwnerASite1ID, iam.S1FixtureOwnerASite2ID},
 			Assignments: []iam.RoleAssignment{
 				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "viewer", Capabilities: []string{string(registryauth.ActionSiteRead)}, Status: iam.FactStatusActive, ValidFrom: validFrom},
 				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite2ID, RoleKey: "viewer", Capabilities: []string{string(registryauth.ActionSiteRead)}, Status: iam.FactStatusActive, ValidFrom: validFrom},
+				// A Site outside the Tenant grants nothing, even when an assignment names it.
+				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerBSite1ID, RoleKey: "viewer", Capabilities: []string{string(registryauth.ActionSiteRead)}, Status: iam.FactStatusActive, ValidFrom: validFrom},
 			},
 			ExplicitDenies: []iam.ExplicitDeny{{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Capability: string(registryauth.ActionSiteRead), ValidFrom: validFrom}},
 		}}

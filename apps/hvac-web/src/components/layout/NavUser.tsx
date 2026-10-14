@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ChangePasswordDialog } from '@/features/system/users/ChangePasswordDialog';
+import { ChangePasswordDialog } from '@/features/account/ChangePasswordDialog';
 
 interface NavUserProps {
   readonly name: string;
