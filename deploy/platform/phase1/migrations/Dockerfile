@@ -86,6 +86,7 @@ COPY infra/telemetry/postgres/init/006-alarm-evaluation-delivery.sql /opt/hvac/r
 COPY infra/telemetry/postgres/init/007-historical-replay.sql /opt/hvac/repo/infra/telemetry/postgres/init/007-historical-replay.sql
 COPY infra/telemetry/postgres/init/008-subscription-client-handle.sql /opt/hvac/repo/infra/telemetry/postgres/init/008-subscription-client-handle.sql
 COPY infra/telemetry/postgres/init/009-realtime-revocation-relay.sql /opt/hvac/repo/infra/telemetry/postgres/init/009-realtime-revocation-relay.sql
+COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/010-runtime-retention.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
