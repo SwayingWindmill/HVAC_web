@@ -77,7 +77,7 @@ export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegister
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>登记节能措施</DialogTitle>
-          <DialogDescription>登记后为“计划中”。实施时再确认实施时间，系统据此冻结实施前 14 天的基线。</DialogDescription>
+          <DialogDescription>登记后为“计划中”。实施时再确认实施时间，系统据此用实施前 14 天的数据算出对比基线。</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={form.handleSubmit((values) => register.mutate(values))}>
           <div className="space-y-1.5">
@@ -106,21 +106,21 @@ export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegister
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="measure-boundary">测量边界</Label>
+            <Label htmlFor="measure-boundary">计量电表</Label>
             <Select value={form.watch('boundary')} onValueChange={(value) => form.setValue('boundary', value)}>
               <SelectTrigger id="measure-boundary" className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value={PLANT_METER}>冷站总表（IPMVP 选项 C）</SelectItem>
+                <SelectItem value={PLANT_METER}>冷站总电表（IPMVP 选项 C）</SelectItem>
                 {(metered.machines ?? []).map((machine) => (
-                  <SelectItem key={machine.deviceId} value={machine.deviceId}>{machine.name} 分表（IPMVP 选项 B）</SelectItem>
+                  <SelectItem key={machine.deviceId} value={machine.deviceId}>{machine.name} 电表（IPMVP 选项 B）</SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              {metered.isPending ? '正在读取有分表的设备…'
-                : metered.isError ? '分表数据暂不可用，现在只能选择冷站总表'
-                : metered.machines?.length === 0 ? '本站设备都没有分表，只能选择冷站总表'
-                : '措施只作用于一台设备时选它的分表：基线为该设备用电对冷站供冷量的拟合。登记后不能更改'}
+              {metered.isPending ? '正在读取有电表的设备…'
+                : metered.isError ? '设备电表数据暂不可用，现在只能选择冷站总电表'
+                : metered.machines?.length === 0 ? '本站设备都没有单独的电表，只能选择冷站总电表'
+                : '措施只作用于一台设备时选它的电表：对比基线按该设备用电与冷站供冷量的关系算出。登记后不能更改'}
             </p>
           </div>
           <div className="space-y-1.5">
@@ -159,7 +159,7 @@ export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegister
             <Input id="measure-evidence" maxLength={200} placeholder="例如：10 月 12 日优化建议、改造合同编号" {...form.register('evidence')} />
           </div>
           {register.isError ? (
-            <p className="text-sm text-destructive">{register.error instanceof SavingsRequestError ? register.error.message : '节能核算服务暂时不可用，请稍后重试'}</p>
+            <p className="text-sm text-destructive">{register.error instanceof SavingsRequestError ? register.error.message : '节能统计服务暂时不可用，请稍后重试'}</p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>

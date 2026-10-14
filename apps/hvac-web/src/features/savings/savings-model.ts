@@ -30,9 +30,9 @@ export type BaselineReason = 'TOO_FEW_HOURS' | 'LOW_COVERAGE' | 'POOR_FIT';
 
 /** Why a baseline is not trusted, in the operator's words. */
 export const REASON_TEXT: Record<BaselineReason, string> = {
-  TOO_FEW_HOURS: `基线期完整小时不足 72 小时`,
-  LOW_COVERAGE: '基线期数据覆盖率低于 90%',
-  POOR_FIT: '模型未通过 ASHRAE Guideline 14 检验',
+  TOO_FEW_HOURS: `对比基线期完整小时不足 72 小时`,
+  LOW_COVERAGE: '对比基线期数据完整度低于 90%',
+  POOR_FIT: '对比基线未通过 ASHRAE Guideline 14 检验',
 };
 
 export interface SavingsTotals {
@@ -119,17 +119,17 @@ export function fitChecks(baseline: Pick<Baseline, 'samples' | 'expectedHours' |
   const model = baseline.model;
   return [
     {
-      label: '有效小时',
+      label: '数据完整度',
       value: `${baseline.samples} / ${baseline.expectedHours}（${percent(coverage, 0)}）`,
       limit: `≥ ${LIMITS.minimumHours} 小时且覆盖 ≥ ${percent(LIMITS.minimumCoverage, 0)}`,
       pass: baseline.samples >= LIMITS.minimumHours && coverage >= LIMITS.minimumCoverage,
     },
     {
-      label: 'CV(RMSE)', value: model ? percent(model.cvRmse) : '未拟合', limit: `≤ ${percent(LIMITS.cvRmse, 0)}`,
+      label: '预测误差 CV(RMSE)', value: model ? percent(model.cvRmse) : '未拟合', limit: `≤ ${percent(LIMITS.cvRmse, 0)}`,
       pass: model ? model.cvRmse <= LIMITS.cvRmse : null,
     },
     {
-      label: 'NMBE', value: model ? percent(model.nmbe) : '未拟合', limit: `±${percent(LIMITS.nmbe, 0)} 以内`,
+      label: '总体偏差 NMBE', value: model ? percent(model.nmbe) : '未拟合', limit: `±${percent(LIMITS.nmbe, 0)} 以内`,
       pass: model ? Math.abs(model.nmbe) <= LIMITS.nmbe : null,
     },
   ];
@@ -191,11 +191,11 @@ export function siteSavingsRate(totals: Pick<SavingsTotals, 'avoidedKWh' | 'plan
   return without > 0 ? totals.avoidedKWh / without : null;
 }
 
-/** The measurement boundary in the operator's words: the plant's total meter or one machine's sub-meter. */
+/** The measurement boundary in the operator's words (计量电表): the plant's total meter or one machine's own meter. */
 export function boundaryLabel(boundaryDeviceId: string | null, names: ReadonlyMap<string, string> | null): string {
-  if (boundaryDeviceId === null) return '冷站总表';
+  if (boundaryDeviceId === null) return '冷站总电表';
   const name = names?.get(boundaryDeviceId);
-  return name ? `${name} 分表` : '设备分表';
+  return name ? `${name} 电表` : '设备电表';
 }
 
 /** The IPMVP option a boundary makes a measure. */

@@ -24,7 +24,7 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
   });
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('计划中');
-  await expect(sheet).toContainText('确认实施后，系统用实施前 14 天的逐时用电与供冷量拟合基线并冻结');
+  await expect(sheet).toContainText('确认实施后，系统用实施前 14 天的逐时用电与供冷量算出对比基线');
 
   await sheet.getByRole('button', { name: '确认实施' }).click();
   await page.getByLabel('实施时间').fill('2026-10-12T15:17');
@@ -32,18 +32,18 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
 
   const [implemented] = gateway.writes.filter((write) => write.path.endsWith('/implement'));
   expect(implemented.body).toEqual({ implementedAt: '2026-10-12T07:17:00.000Z' });
-  await expect(sheet).toContainText('基线不可信，暂不核算');
-  await expect(sheet).toContainText('基线期完整小时不足 72 小时');
+  await expect(sheet).toContainText('对比基线不可靠，暂不统计');
+  await expect(sheet).toContainText('对比基线期完整小时不足 72 小时');
   const checks = sheet.getByRole('table', { name: '基线检验' });
-  await expect(checks.getByRole('row').filter({ hasText: '有效小时' })).toContainText('15 / 336（4%）');
+  await expect(checks.getByRole('row').filter({ hasText: '数据完整度' })).toContainText('15 / 336（4%）');
   await expect(checks.getByRole('row').filter({ hasText: 'CV(RMSE)' })).toContainText('未拟合');
   await expect(sheet).toContainText('数据不足，未拟合模型');
   await expect(sheet.getByRole('button', { name: '重新拟合基线' })).toBeVisible();
 
   await page.keyboard.press('Escape');
   const row = page.getByRole('table', { name: '节能措施列表' }).getByRole('row').filter({ hasText: '冷冻水供水温度' });
-  await expect(row).toContainText('基线不可信');
-  await expect(page.getByRole('region', { name: '节能成效' })).toContainText('基线不可信，暂不核算');
+  await expect(row).toContainText('对比基线不可靠');
+  await expect(page.getByRole('region', { name: '节能成效' })).toContainText('1 项对比基线不可靠，暂不统计');
 });
 
 test('a measure on the plant meter reports alone, and the owner says so', async ({ page, gateway }) => {
@@ -56,9 +56,9 @@ test('a measure on the plant meter reports alone, and the owner says so', async 
     await sheet.getByRole('button', { name: '确认实施' }).click();
     await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
     if (name === '冷却塔风机变频') {
-      await expect(page.getByRole('dialog', { name: '确认实施' })).toContainText('冷站总表的措施与任何设备措施也不能同时核算');
+      await expect(page.getByRole('dialog', { name: '确认实施' })).toContainText('也不能和单台设备的措施同时统计');
     } else {
-      await expect(sheet).toContainText('基线不可信');
+      await expect(sheet).toContainText('对比基线不可靠');
       await page.keyboard.press('Escape');
     }
   }
@@ -71,14 +71,14 @@ test("measures on two machines' sub-meters report side by side", async ({ page, 
   for (const [name, machine] of [['冷冻泵降频', 'CHWP-01'], ['冷却塔风机变频', 'CT-01']]) {
     await page.getByRole('button', { name: '登记措施' }).first().click();
     await page.getByLabel('名称').fill(name);
-    await page.getByLabel('测量边界').click();
-    await page.getByRole('option', { name: `${machine} 分表（IPMVP 选项 B）` }).click();
+    await page.getByLabel('计量电表').click();
+    await page.getByRole('option', { name: `${machine} 电表（IPMVP 选项 B）` }).click();
     await page.getByRole('button', { name: '登记', exact: true }).click();
     const sheet = page.getByRole('dialog');
-    await expect(sheet).toContainText(`基线（IPMVP 选项 B · ${machine} 分表）`);
+    await expect(sheet).toContainText(`IPMVP 选项 B · ${machine} 电表`);
     await sheet.getByRole('button', { name: '确认实施' }).click();
     await page.getByRole('button', { name: '确认实施并拟合基线' }).click();
-    await expect(sheet).toContainText('基线不可信');
+    await expect(sheet).toContainText('对比基线不可靠');
     await page.keyboard.press('Escape');
   }
   const registered = gateway.writes.filter((write) => write.path === MEASURES).map((write) => write.body?.boundaryDeviceId);
@@ -86,8 +86,8 @@ test("measures on two machines' sub-meters report side by side", async ({ page, 
   expect(new Set(registered).size).toBe(2);
   expect(gateway.measures.filter((measure) => measure.status === 'IMPLEMENTED')).toHaveLength(2);
   const ledger = page.getByRole('table', { name: '节能措施列表' });
-  await expect(ledger.getByRole('row', { name: /冷冻泵降频/ })).toContainText('CHWP-01 分表');
-  await expect(ledger.getByRole('row', { name: /冷却塔风机变频/ })).toContainText('CT-01 分表');
+  await expect(ledger.getByRole('row', { name: /冷冻泵降频/ })).toContainText('CHWP-01 电表');
+  await expect(ledger.getByRole('row', { name: /冷却塔风机变频/ })).toContainText('CT-01 电表');
   await expect(page.getByRole('region', { name: '节能成效' })).toContainText('2 项措施');
 });
 
@@ -126,7 +126,7 @@ test('a verified measure shows its trusted baseline and what each day saved', as
   await expect(sheet).toContainText('节省电费¥353');
   await expect(sheet).toContainText('节电率1.5%');
   const checks = sheet.getByRole('table', { name: '基线检验' });
-  await expect(checks.getByRole('row').filter({ hasText: '有效小时' })).toContainText('336 / 336（100%）');
+  await expect(checks.getByRole('row').filter({ hasText: '数据完整度' })).toContainText('336 / 336（100%）');
   await expect(checks.getByLabel('未通过')).toHaveCount(0);
   await expect(sheet.getByLabel('每日节电量')).toBeVisible();
   const days = sheet.getByRole('table', { name: '逐日核算' });
@@ -144,8 +144,8 @@ test("a measure verified on a machine's sub-meter fits that machine against plan
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}&inspect=${verified.id}`);
 
   const sheet = page.getByRole('dialog');
-  await expect(sheet).toContainText('测量边界CHWP-01 分表');
-  await expect(sheet).toContainText('基线（IPMVP 选项 B · CHWP-01 分表）');
+  await expect(sheet).toContainText('计量电表CHWP-01 电表');
+  await expect(sheet).toContainText('IPMVP 选项 B · CHWP-01 电表');
   await expect(sheet).toContainText('设备用电 = 45.0 + 0.000 × 冷站供冷量');
   await expect(sheet).toContainText('累计节电1,646 kWh');
   await expect(sheet).toContainText('节电率27.1%');

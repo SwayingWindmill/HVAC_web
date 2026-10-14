@@ -20,13 +20,13 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   await page.getByRole('button', { name: '生成建议' }).first().click();
 
   const proposal = page.getByRole('region', { name: '当前建议' });
-  await expect(proposal).toContainText('7.1→8.1°C');
+  await expect(proposal).toContainText('7.18.1°C');
   await expect(proposal).toContainText('手动生成于');
   await expect(proposal).toContainText('低风险');
   await expect(proposal).toContainText('预计室内温度 24.4 °C，仍在 22–26 °C 舒适范围内');
   const impact = page.getByRole('region', { name: '预计效果' });
   await expect(impact).toContainText('预计日节电60kWh');
-  await expect(impact).toContainText('预计日节省51元');
+  await expect(impact).toContainText('预计日节省¥51');
   await expect(page.getByRole('region', { name: '计算依据' })).toContainText('最近一天冷站用电675 kWh');
 
   await proposal.getByRole('button', { name: '按建议下发' }).click();
@@ -35,6 +35,8 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   await expect(confirm).toContainText('8.0 °C');
   await confirm.getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByText('指令已提交，正在下发')).toBeVisible();
+  // The proposal now follows the command it was sent as.
+  await expect(proposal.getByRole('link', { name: /已提交为控制指令/ })).toBeVisible();
   const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
   expect(submitted?.body).toEqual({ assetId: expect.any(String), commandPointId: expect.any(String), parameters: { setpointC: 8 } });
 });

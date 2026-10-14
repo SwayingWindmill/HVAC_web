@@ -36,7 +36,8 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 > 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done (#529).
 > 2. 总览 — done (#529). 3. 告警, 工单, 设备 — done; 资产与点位 moves to phase 7 with the rest of 系统管理.
 > 4. 实时运行, 故障诊断, 控制指令, 通知中心 — done (the plant system diagram is gone; a 3D view is planned instead).
-> 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标 — done. 6. 优化建议, 节能项目, 报告.
+> 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标 — done. 6. 优化建议, 节能项目, 报告 — done.
+> Type scale: `text-sm` is body 13/20 and `text-xs` caption 12/18 (DS §2.2, set in `global.css` `@theme`); use `text-title` (14/20) for panel titles and `text-micro` (11/16) for units and badges.
 > 7. 集成管理, 系统管理, shared states.
 >
 > Visual checks against recorded data: run a Vite dev server on 5190 (`npm -w @hvac/web run dev -- --host localhost --port 5190`); the e2e config reuses it, so `npm run web:e2e -- e2e/<spec>` runs in seconds and a throwaway spec can screenshot pages with fixtures.
