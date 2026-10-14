@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。温度通道与电表的对应关系为 2026-10-14 暂定：依据现场系统图、ThingsBoard 大屏标签和 6 月旧设备的通道编号（t01 公共冷却进水、t02 公共冷冻进水、t03–t10 各机组出水、t11–t19 总管与室外）。ET1010 预留做控制，目前只读回通道状态。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。温度通道与电表的对应关系为 2026-10-14 暂定：依据现场系统图、ThingsBoard 大屏标签和 6 月旧设备的通道编号（t01 公共冷却进水、t02 公共冷冻进水、t03–t10 各机组出水、t11–t19 总管与室外）。ET1010 预留做控制，目前只读回通道状态。 场地没有总电表：网关把四块机组电表的功率和累计电量相加，作为「空调总电表（四台机组合计）」上报，能源拓扑以它为总表、四块机组电表为分表。电价为 2026-10-14 暂定的深圳工商业分时电价，按实际电费单修改。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -385,6 +385,40 @@
           "address": "UID31 地址 15"
         }
       ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000008",
+      "sourceKey": "ammeter-total",
+      "code": "meter-total",
+      "name": "空调总电表（四台机组合计）",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "derivedFrom": [
+        "ammeter-unit1",
+        "ammeter-unit2",
+        "ammeter-unit3",
+        "ammeter-unit4"
+      ],
+      "points": [
+        {
+          "code": "power_total",
+          "sourceKey": "hvac_meter.active_power",
+          "name": "空调总有功功率",
+          "unit": "kW",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "网关计算：1–4 号电表有功功率之和"
+        },
+        {
+          "code": "active_energy_total",
+          "sourceKey": "hvac_meter.energy",
+          "name": "空调总累计电量",
+          "unit": "kWh",
+          "pointType": "COUNTER",
+          "valueType": "NUMBER",
+          "address": "网关计算：1–4 号电表累计电量之和"
+        }
+      ]
     }
   ],
   "meterPoints": [
@@ -430,5 +464,63 @@
       "name": "D 机组",
       "type": "CHILLER"
     }
-  ]
+  ],
+  "energy": {
+    "plantName": "空调机房",
+    "totalMeter": "ammeter-total",
+    "branchMeters": [
+      "ammeter-unit1",
+      "ammeter-unit2",
+      "ammeter-unit3",
+      "ammeter-unit4"
+    ],
+    "tariff": {
+      "code": "grid_import_tou",
+      "name": "深圳工商业分时电价（暂定）",
+      "timezone": "Asia/Shanghai",
+      "rates": {
+        "PEAK": {
+          "energyRatePerKWh": 1.03
+        },
+        "FLAT": {
+          "energyRatePerKWh": 0.62
+        },
+        "VALLEY": {
+          "energyRatePerKWh": 0.24
+        }
+      },
+      "slices": [
+        [
+          "VALLEY",
+          0,
+          480
+        ],
+        [
+          "FLAT",
+          480,
+          600
+        ],
+        [
+          "PEAK",
+          600,
+          720
+        ],
+        [
+          "FLAT",
+          720,
+          840
+        ],
+        [
+          "PEAK",
+          840,
+          1140
+        ],
+        [
+          "FLAT",
+          1140,
+          1440
+        ]
+      ]
+    }
+  }
 }

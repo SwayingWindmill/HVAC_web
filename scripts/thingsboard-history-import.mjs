@@ -4,6 +4,9 @@
 //   1. export (on the server):  node scripts/thingsboard-history-import.mjs export <site file> --until <instant> --out <dir>
 //      reads ThingsBoard's ts_kv for every device the site file names, up to the moment live
 //      platform telemetry began, into one CSV per device.
+//   1b. derive (after export):     node scripts/thingsboard-history-import.mjs derive <site file> --in <dir>
+//      writes the history of each device the site file derives from others (the plant total that the
+//      Gateway adds up from the machines' meters), by the same rule the Gateway applies live.
 //   2. import (inside the platform's application network, with the historical-replay-runner identity):
 //      node scripts/thingsboard-history-import.mjs import <site file> --in <dir> --dataset <uuidv7> \
 //        --telemetry-url https://telemetry-runtime-service:8446 --cert … --key … --ca … [--rate <per second>] [--resume <file>]
@@ -52,6 +55,45 @@ function exportHistory(profile, until, out) {
     if (result.status !== 0) throw new Error(`export ${device.sourceKey}: ${result.stderr}`);
     writeFileSync(path.join(out, `${device.sourceKey}.csv`), result.stdout);
     console.log(`${device.sourceKey}: ${result.stdout.toString().split('\n').filter(Boolean).length} rows`);
+  }
+}
+
+// A derived device's history, as the Gateway produces it live: at each reading of one of its source
+// meters, once every source has reported, the sum of their latest power and energy readings.
+export function deriveTotals(sources) {
+  const events = sources.flatMap(({ key, rows }) => {
+    const byTime = new Map();
+    for (const [ts, field, value] of rows) {
+      const sample = byTime.get(ts) ?? { ts, key };
+      sample[field] = value;
+      byTime.set(ts, sample);
+    }
+    return [...byTime.values()];
+  }).sort((left, right) => left.ts - right.ts || left.key.localeCompare(right.key));
+  const latest = new Map();
+  const totals = [];
+  for (const event of events) {
+    latest.set(event.key, { ...latest.get(event.key), ...event });
+    const readings = sources.map(({ key }) => latest.get(key));
+    if (readings.some((reading) => !Number.isFinite(reading?.powerTotal) || !Number.isFinite(reading?.combinedActiveTotalElectricalEnergy))) continue;
+    const sum = (field) => Math.round(readings.reduce((total, reading) => total + reading[field], 0) * 1000) / 1000;
+    totals.push([event.ts, sum('powerTotal'), sum('combinedActiveTotalElectricalEnergy')]);
+  }
+  return totals;
+}
+
+function deriveHistory(profile, dir) {
+  for (const device of profile.devices.filter((candidate) => candidate.derivedFrom)) {
+    const sources = device.derivedFrom.map((key) => ({
+      key,
+      rows: readFileSync(path.join(dir, `${key}.csv`), 'utf8').split('\n').filter(Boolean).map((line) => {
+        const [ts, field, value] = line.split(',');
+        return [Number(ts), field, Number(value)];
+      }),
+    }));
+    const totals = deriveTotals(sources);
+    writeFileSync(path.join(dir, `${device.sourceKey}.csv`), totals.map(([ts, power, energy]) => `${ts},powerTotal,${power}\n${ts},combinedActiveTotalElectricalEnergy,${energy}\n`).join(''));
+    console.log(`${device.sourceKey}: ${totals.length} samples from ${device.derivedFrom.join(', ')}`);
   }
 }
 
@@ -134,11 +176,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const until = new Date(values.until ?? '');
     if (Number.isNaN(until.getTime()) || !values.out) throw new Error('export needs --until <instant> and --out <dir>');
     exportHistory(profile, until, values.out);
+  } else if (step === 'derive') {
+    if (!values.in) throw new Error('derive needs --in <dir>');
+    deriveHistory(profile, values.in);
   } else if (step === 'import') {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(values.dataset ?? '')) throw new Error('import needs --dataset <uuidv7>');
     await importHistory(profile, { in: values.in, dataset: values.dataset, telemetryUrl: values['telemetry-url'], serverName: values['server-name'], cert: values.cert, key: values.key, ca: values.ca,
       resume: values.resume ? JSON.parse(readFileSync(values.resume, 'utf8')) : undefined, rate: values.rate ? Number(values.rate) : undefined });
   } else {
-    throw new Error('usage: thingsboard-history-import.mjs export|import <site file> …');
+    throw new Error('usage: thingsboard-history-import.mjs export|derive|import <site file> …');
   }
 }
