@@ -47,6 +47,8 @@ const COPIES = {
   waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
+// Spare inputs with no probe read 0 every minute; the platform has them INACTIVE and they are not sent.
+const SPARE = { temperature: ["t11", "t20"] };
 // A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
 // pumps run while the header flow exceeds 10 m³/h.
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
@@ -69,6 +71,7 @@ for (const [key, value] of Object.entries(sample.values)) {
     [code, unit] = mapping.codes[key];
   }
   if (typeof value !== "number" || !Number.isFinite(value)) continue;
+  if ((SPARE[device] || []).includes(key)) continue;
   // An unconnected temperature input reads exactly 0; it is not a 0 °C measurement.
   const quality = device === "temperature" && value === 0 ? 1 : 0;
   const point = { code, value, quality };

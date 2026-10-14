@@ -110,11 +110,12 @@
         },
         {
           "code": "t11",
-          "name": "备用温度通道 11",
+          "name": "备用通道 11（未接探头）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30411"
+          "address": "UID20 输入寄存器 30411",
+          "status": "INACTIVE"
         },
         {
           "code": "t12",
@@ -182,11 +183,12 @@
         },
         {
           "code": "t20",
-          "name": "备用温度通道 20",
+          "name": "备用通道 20（未接探头）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30420"
+          "address": "UID20 输入寄存器 30420",
+          "status": "INACTIVE"
         }
       ]
     },
