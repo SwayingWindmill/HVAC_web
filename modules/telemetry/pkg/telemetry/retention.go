@@ -12,18 +12,26 @@ import (
 // window only keeps recent rows for diagnosis.
 const RuntimeHistoryRetention = time.Hour
 
+// SourceObservationRetention is how long a received observation stays once its history event is
+// delivered and pruned. Its receipt answers duplicate checks while a Gateway may still replay it (up
+// to a day late); ClickHouse holds the history.
+const SourceObservationRetention = 7 * 24 * time.Hour
+
 const pruneBatchSize = 5000
 
 type PrunedRuntimeHistory struct {
-	PresenceSignals int64
-	Publications    int64
+	PresenceSignals    int64
+	Publications       int64
+	HistoryEvents      int64
+	SourceObservations int64
 }
 
 // PruneRuntimeHistory deletes presence signals older than the retention window that a
 // newer accepted signal of the same type supersedes, and publications older than the
 // window whose every delivery finished. The last signal of each type of a Device stays,
 // so presence still reports when a long-offline Device was last seen; dead publications
-// stay as failure evidence.
+// stay as failure evidence. History events go an hour after ClickHouse has them, and received
+// observations a week old once their event is gone; an undelivered event keeps its observation.
 func (store *PostgresStore) PruneRuntimeHistory(ctx context.Context, now time.Time) (PrunedRuntimeHistory, error) {
 	if store == nil || store.pool == nil {
 		return PrunedRuntimeHistory{}, errors.New("telemetry runtime store is closed")
@@ -59,7 +67,33 @@ WHERE event_id IN (
 	if err != nil {
 		return PrunedRuntimeHistory{}, fmt.Errorf("prune telemetry publications: %w", err)
 	}
-	return PrunedRuntimeHistory{PresenceSignals: signals, Publications: publications}, nil
+	historyEvents, err := store.pruneInBatches(ctx, `
+DELETE FROM telemetry_runtime.telemetry_history_outbox
+WHERE event_id IN (
+  SELECT event_id
+  FROM telemetry_runtime.telemetry_history_outbox
+  WHERE delivery_state = 'PUBLISHED' AND published_at < $1
+  LIMIT $2
+)`, cutoff)
+	if err != nil {
+		return PrunedRuntimeHistory{}, fmt.Errorf("prune telemetry history events: %w", err)
+	}
+	observations, err := store.pruneInBatches(ctx, `
+DELETE FROM telemetry_runtime.source_observations
+WHERE observation_id IN (
+  SELECT observation.observation_id
+  FROM telemetry_runtime.source_observations AS observation
+  WHERE observation.created_at < $1
+    AND NOT EXISTS (
+      SELECT 1 FROM telemetry_runtime.telemetry_history_outbox AS event
+      WHERE event.event_id = observation.observation_id
+    )
+  LIMIT $2
+)`, now.UTC().Add(-SourceObservationRetention))
+	if err != nil {
+		return PrunedRuntimeHistory{}, fmt.Errorf("prune telemetry source observations: %w", err)
+	}
+	return PrunedRuntimeHistory{PresenceSignals: signals, Publications: publications, HistoryEvents: historyEvents, SourceObservations: observations}, nil
 }
 
 // pruneInBatches repeats a bounded delete until a batch comes back short, so no single

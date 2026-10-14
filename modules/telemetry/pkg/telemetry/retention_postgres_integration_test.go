@@ -15,9 +15,11 @@ func retentionID(suffix int) string {
 }
 
 // Pruning removes only what nothing reads any more: presence signals older than an hour
-// that a newer signal of the same type supersedes, and publications older than an hour
-// whose every delivery finished. The last signal of a long-offline Device stays, because
-// presence reports when it was last seen.
+// that a newer signal of the same type supersedes, publications older than an hour whose
+// every delivery finished, history events an hour after ClickHouse has them, and received
+// observations a week old whose event is gone. The last signal of a long-offline Device
+// stays, because presence reports when it was last seen; an undelivered event keeps its
+// observation.
 func TestPostgresPruneRemovesOnlyFinishedHistory(t *testing.T) {
 	runtimeURL, adminURL := postgresTestURLs(t)
 	ctx := t.Context()
@@ -27,6 +29,8 @@ func TestPostgresPruneRemovesOnlyFinishedHistory(t *testing.T) {
 	}
 	defer admin.Close()
 	cleanup := func() {
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE event_id::text LIKE '018f2e00-9900-%'`)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_observations WHERE observation_id::text LIKE '018f2e00-9900-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE event_id::text LIKE '018f2e00-9900-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.presence_signals WHERE signal_id::text LIKE '018f2e00-9900-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.devices WHERE device_id = $1::uuid`, retentionDevice)
@@ -84,6 +88,33 @@ WHERE event_id = $1::uuid`, retentionID(suffix), delivery, latestCache, alarm); 
 	publication(14, 900014, "PUBLISHED", "PENDING", nil, old)                           // latest cache pending: kept
 	publication(15, 900015, "PUBLISHED", "MATERIALIZED", nil, now.Add(-10*time.Minute)) // recent: kept
 
+	// A rejected observation has no history event; an accepted one carries one until pruned.
+	observation := func(suffix int, createdAt time.Time, event string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.source_observations
+  (observation_id, source_id, source_event_id, source_partition, source_offset, telemetry_key, sampled_at, received_at,
+   acceptance_status, payload_sha256, created_at, source_path, quality)
+VALUES ($1::uuid, 'retention-test', $1::uuid, 'retention', $2::bigint, 'temperature', $3::timestamptz, $3::timestamptz, 'REJECTED', repeat('a', 64), $3::timestamptz, 'PUSH', 'INVALID')`,
+			retentionID(suffix), suffix, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if event == "" {
+			return
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.telemetry_history_outbox
+  (event_id, payload, outbox_payload_sha256, delivery_state, available_at, published_at, created_at)
+VALUES ($1::uuid, '{}'::jsonb, repeat('a', 64), $2::text, $3::timestamptz, CASE WHEN $2::text = 'PUBLISHED' THEN $3::timestamptz END, $3::timestamptz)`,
+			retentionID(suffix), event, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observation(21, now.Add(-10*24*time.Hour), "PUBLISHED") // delivered long ago: event and observation pruned
+	observation(22, now.Add(-10*24*time.Hour), "PENDING")   // undelivered: event and observation kept
+	observation(23, now.Add(-2*24*time.Hour), "PUBLISHED")  // delivered, observation within the week: event pruned
+	observation(24, now.Add(-10*24*time.Hour), "")          // rejected long ago, no event: observation pruned
+
 	store, err := OpenPostgresStore(ctx, runtimeURL)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +124,7 @@ WHERE event_id = $1::uuid`, retentionID(suffix), delivery, latestCache, alarm); 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pruned != (PrunedRuntimeHistory{PresenceSignals: 1, Publications: 1}) {
+	if pruned != (PrunedRuntimeHistory{PresenceSignals: 1, Publications: 1, HistoryEvents: 2, SourceObservations: 2}) {
 		t.Fatalf("pruned=%#v", pruned)
 	}
 	var remaining string
@@ -102,10 +133,14 @@ SELECT string_agg(right(id, 2), ',' ORDER BY id) FROM (
   SELECT signal_id::text AS id FROM telemetry_runtime.presence_signals WHERE signal_id::text LIKE '018f2e00-9900-%'
   UNION ALL
   SELECT event_id::text FROM telemetry_runtime.telemetry_publication_outbox WHERE event_id::text LIKE '018f2e00-9900-%'
+  UNION ALL
+  SELECT 'o' || observation_id::text FROM telemetry_runtime.source_observations WHERE observation_id::text LIKE '018f2e00-9900-%'
+  UNION ALL
+  SELECT 'h' || event_id::text FROM telemetry_runtime.telemetry_history_outbox WHERE event_id::text LIKE '018f2e00-9900-%'
 ) rows`).Scan(&remaining); err != nil {
 		t.Fatal(err)
 	}
-	if remaining != "02,03,12,13,14,15" {
+	if remaining != "02,03,12,13,14,15,22,22,23" {
 		t.Fatalf("remaining=%s", remaining)
 	}
 }
