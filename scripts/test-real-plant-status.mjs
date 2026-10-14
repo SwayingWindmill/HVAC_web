@@ -47,6 +47,6 @@ test('a Gateway-wired device without an Asset or source-key namespace is grouped
   });
   const view = buildPlantView([row('FLOW_METER', '流量计'), row('TEMPERATURE_MODULE', '温度采集模块'), row('SOMETHING_NEW', '未知设备')]);
   assert.deepEqual(view.groups.map((group) => [group.label, group.devices.map((device) => device.name)]), [
-    ['计量', ['流量计']], ['采集模块', ['温度采集模块']], ['其他设备', ['未知设备']],
+    ['计量', ['流量计']], ['采集与控制', ['温度采集模块']], ['其他设备', ['未知设备']],
   ]);
 });

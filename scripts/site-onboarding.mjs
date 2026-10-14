@@ -1,7 +1,8 @@
 // Registers a real Site behind one Edge Gateway from its site file (deploy/sites/*.site.json):
 // the Site, its plant room, the Gateway, every Device the Gateway names by source key, their
 // Points, and the Telemetry presence and freshness policies. Same tables as the simulator seed.
-// Idempotent; names edited later in the Registry are overwritten by the file.
+// Idempotent; names edited later in the Registry are overwritten by the file. Machines the
+// site file lists become Assets, with the meter wired to each bound to it.
 //
 //   node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json [--print]
 //
@@ -19,23 +20,7 @@ function rowId(siteId, kind, index) {
 }
 
 export function expandPoints(device, meterPoints) {
-  const spec = device.points;
-  if (spec === 'meter') return meterPoints.map((point) => ({ ...point }));
-  if (Array.isArray(spec)) return spec.map((point) => ({ ...point }));
-  if (spec.range) {
-    const points = [];
-    for (let n = spec.range.from; n <= spec.range.to; n += 1) {
-      points.push({
-        code: `${spec.range.prefix}${n}`, name: spec.name.replace('{n}', n), unit: spec.unit, pointType: spec.pointType, valueType: spec.valueType,
-        address: spec.address.replace('{register}', spec.firstRegister + n - spec.range.from),
-      });
-    }
-    return points;
-  }
-  return spec.codes.map((code, index) => ({
-    code, name: spec.name.replace('{code}', code), unit: spec.unit, pointType: spec.pointType, valueType: spec.valueType,
-    address: spec.address.replace('{index}', index),
-  }));
+  return (device.points === 'meter' ? meterPoints : device.points).map((point) => ({ ...point }));
 }
 
 export function buildOnboardingSql(profile) {
@@ -56,11 +41,20 @@ export function buildOnboardingSql(profile) {
   ].join(',\n');
   const sourceKeyRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6100', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(gateway.id)}, ${sqlLiteral(device.sourceKey)}, ${sqlLiteral(device.id)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   const placementRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6200', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
+  const assets = profile.assets ?? [];
+  const assetRows = assets.map((asset) => `(${sqlLiteral(asset.id)}, ${siteId}, ${sqlLiteral(asset.code)}, ${sqlLiteral(asset.name)}, ${sqlLiteral(asset.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
+  const assetPlacementRows = assets.map((asset, index) => `(${sqlLiteral(rowId(site.id, '6500', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(asset.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
+  // A meter wired to one machine is that machine's meter.
+  const deviceBindingRows = devices.filter((device) => device.asset).map((device) => `(${sqlLiteral(rowId(site.id, '6400', device.deviceIndex))}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(device.asset)}, ${device.type.endsWith('METER') ? "'METER'" : "'CONTROLLER'"}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
   const pointRows = points.map((point) => {
     const interval = point.device.sampleSeconds * 1000;
     return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
   }).join(',\n');
-  const subjectRows = points.map((point, index) => `(${sqlLiteral(rowId(site.id, '6300', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, 'SITE', NULL, NULL, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
+  // A point describes the machine it measures, else the Site.
+  const subjectRows = points.map((point, index) => {
+    const asset = point.asset ?? point.device.asset;
+    return `(${sqlLiteral(rowId(site.id, '6300', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+  }).join(',\n');
 
   const registry = `BEGIN;
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
@@ -71,6 +65,14 @@ INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code,
 VALUES (${sqlLiteral(space.id)}, ${tenant}, ${siteId}, NULL, ${sqlLiteral(space.code)}, ${sqlLiteral(space.name)}, ${sqlLiteral(space.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, space_type=EXCLUDED.space_type, status='ACTIVE', updated_at=clock_timestamp();
 
+${assets.length ? `INSERT INTO core_registry.assets (id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at, tenant_id) VALUES
+${assetRows}
+ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, asset_type=EXCLUDED.asset_type, status='ACTIVE', updated_at=clock_timestamp();
+
+INSERT INTO core_registry.asset_space_bindings (id, tenant_id, site_id, asset_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+${assetPlacementRows}
+ON CONFLICT (id) DO UPDATE SET asset_id=EXCLUDED.asset_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+` : ''}
 INSERT INTO core_registry.devices (id, site_id, code, display_name, device_type, status, revision, created_at, updated_at, tenant_id, product_id, template_version_id) VALUES
 ${deviceRows}
 ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, device_type=EXCLUDED.device_type, status='ACTIVE', updated_at=clock_timestamp();
@@ -83,13 +85,17 @@ INSERT INTO core_registry.device_space_bindings (id, tenant_id, site_id, device_
 ${placementRows}
 ON CONFLICT (id) DO UPDATE SET device_id=EXCLUDED.device_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
 
+${deviceBindingRows ? `INSERT INTO core_registry.device_bindings (id, site_id, device_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at, tenant_id) VALUES
+${deviceBindingRows}
+ON CONFLICT (id) DO UPDATE SET device_id=EXCLUDED.device_id, asset_id=EXCLUDED.asset_id, binding_role=EXCLUDED.binding_role, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+` : ''}
 INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id, counter_decrease_mode, counter_rollover_modulus) VALUES
 ${pointRows}
 ON CONFLICT (id) DO UPDATE SET point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, counter_decrease_mode=EXCLUDED.counter_decrease_mode, status='ACTIVE', updated_at=clock_timestamp();
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${subjectRows}
-ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED.subject_type, space_id=EXCLUDED.space_id, asset_id=EXCLUDED.asset_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
 COMMIT;`;
 
   // A Device is online while it reported within two of its sample periods. The Gateway's outbox

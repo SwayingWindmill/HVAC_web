@@ -36,7 +36,7 @@ export const PLANT_CATEGORY_LABELS: Readonly<Record<PlantCategory, string>> = {
   ZONE: '室内环境',
   METER: '计量',
   WEATHER: '室外环境',
-  ACQUISITION: '采集模块',
+  ACQUISITION: '采集与控制',
   OTHER: '其他设备',
 };
 
@@ -73,7 +73,7 @@ const CATEGORY_BY_DEVICE_TYPE: Readonly<Record<string, PlantCategory>> = {
   BTU_METER: 'METER',
   FLOW_METER: 'METER',
   TEMPERATURE_MODULE: 'ACQUISITION',
-  IO_MODULE: 'ACQUISITION',
+  CONTROL_MODULE: 'ACQUISITION',
 };
 
 export type RunState = 'RUNNING' | 'STOPPED' | 'FAULT' | 'UNKNOWN';
