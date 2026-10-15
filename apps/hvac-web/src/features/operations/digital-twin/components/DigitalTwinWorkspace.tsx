@@ -17,7 +17,7 @@ import { DeviceInspector } from '../../systems-devices/components/DeviceInspecto
 import { formatClock, LiveIndicator, ReadingValue } from '../../realtime/device-presentation';
 import { PLANT_CATEGORY_LABELS, plantReading } from '../../realtime/plant-model';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
-import { TWIN_STATUS_TONE } from '../scene/Labels';
+import { TWIN_STATUS_TONE } from '../twin-presentation';
 import { BUILDING_PLANS, buildingTerminals } from '../twin-building';
 import { buildTwinPlant, TWIN_STATE_LABELS, type TwinEquipment, type TwinKind } from '../twin-model';
 import { useScenePalette } from '../use-scene-palette';

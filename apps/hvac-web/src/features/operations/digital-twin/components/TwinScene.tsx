@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useImperativeHandle, useMemo, useState, type Ref } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { CameraControls } from '@react-three/drei';
 import { EffectComposer, N8AO, ToneMapping } from '@react-three/postprocessing';
@@ -7,7 +7,6 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { TwinBuildingPlan } from '../twin-building';
 import type { TwinEquipment, TwinPlant } from '../twin-model';
-import type { PlantReading } from '../../realtime/plant-model';
 import type { ScenePalette } from '../use-scene-palette';
 import { SceneMaterialsContext } from '../scene/assets/AssetMesh';
 import type { V3 } from '../scene/assets/kit';
@@ -16,8 +15,6 @@ import { Building } from '../scene/Building';
 import { buildBuildingLayout } from '../scene/building-layout';
 import { Chiller, Pump, Tower } from '../scene/Devices';
 import { Grounds } from '../scene/Grounds';
-import { AreaCaption, ChillerCard, FloorTag, NameTag, PipeTag } from '../scene/Labels';
-import { Label, LabelProjector, useLabelStore } from '../scene/label-layer';
 import { createFlowMaterial, FlowClock, PipeNetwork, type FlowMaterial } from '../scene/Pipes';
 import { buildSiteLayout, type CameraView, type SiteLayout } from '../scene/site-layout';
 
@@ -81,10 +78,12 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
  * Turns to the isometric angle and frames the view's part of the site, or glides to a selected machine.
  * Framing is computed here: CameraControls.fitToBox would snap the camera to the box's nearest axis.
  */
-function CameraRig({ frame, focus, controls }: {
+function CameraRig({ frame, focus, controls, reset }: {
   readonly frame: readonly [V3, V3];
   readonly focus: V3 | null;
   readonly controls: CameraControls | null;
+  /** Bumped by the toolbar's home button to frame the view again. */
+  readonly reset: number;
 }) {
   const size = useThree((state) => state.size);
   useEffect(() => {
@@ -109,7 +108,7 @@ function CameraRig({ frame, focus, controls }: {
     const distance = Math.max(across, up) * (focus ? 1.1 : 0.82) + (extent.max.z - extent.min.z) / 2;
     const eye = new THREE.Vector3().setFromSphericalCoords(distance, ISO_POLAR, ISO_AZIMUTH).add(centre);
     void controls.setLookAt(eye.x, eye.y, eye.z, centre.x, centre.y, centre.z, true);
-  }, [controls, focus, frame, size.height, size.width]);
+  }, [controls, focus, frame, reset, size.height, size.width]);
   return null;
 }
 
@@ -180,12 +179,17 @@ export interface TwinSceneProps {
   readonly emphasis: boolean;
   readonly selectedId: string | null;
   readonly onSelect: (item: TwinEquipment | null) => void;
+  /** The corner toolbar's handle on the camera. */
+  readonly camera?: Ref<TwinCamera>;
 }
 
-/** A plant reading as the labels show it: present readings only. */
-const reading = (value: PlantReading | null) => (value && value.state === 'PRESENT' ? { label: value.label, display: value.display, unit: value.unit } : null);
+export interface TwinCamera {
+  zoom(step: 1 | -1): void;
+  rotate(step: 1 | -1): void;
+  reset(): void;
+}
 
-export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, selectedId, onSelect }: TwinSceneProps) {
+export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, selectedId, onSelect, camera }: TwinSceneProps) {
   const layout = useMemo(() => buildSiteLayout({
     chillers: plant.chillers.length,
     coolingPumps: plant.coolingPumps.length,
@@ -196,16 +200,21 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   const library = useMemo(() => createMaterialLibrary(palette), [palette]);
   useEffect(() => () => disposeMaterialLibrary(library), [library]);
   const flows = useFlows(palette, emphasis);
-  const labels = useLabelStore();
   // State, not a ref: the rig must run again once the controls exist.
   const [controls, setControls] = useState<CameraControls | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [lowQuality, setLowQuality] = useState(false);
+  const [reset, setReset] = useState(0);
+  useImperativeHandle(camera, () => ({
+    zoom: (step) => { void controls?.dolly(step * Math.max(4, controls.distance * 0.25), true); },
+    rotate: (step) => { void controls?.rotate(step * (Math.PI / 6), 0, true); },
+    reset: () => setReset((value) => value + 1),
+  }), [controls]);
   const onHover = (item: TwinEquipment | null) => setHoveredId(item?.assetId ?? null);
   const events = { onSelect, onHover };
   const lifted = (item: TwinEquipment) => item.assetId === selectedId || item.assetId === hoveredId;
 
-  // Where each selectable thing is, for the camera and its label.
+  // Where each selectable thing is, for the camera to glide to.
   const origin = layout.buildingOrigin ?? [0, 0, 0];
   const markers = useMemo(() => {
     const at = (position: V3, height: number): V3 => [position[0], position[1] + height, position[2]];
@@ -227,11 +236,6 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
 
   const spinning = [...plant.towers, ...plant.coolingPumps, ...plant.chilledPumps].some((item) => item.state === 'running');
   const animating = plant.chilledFlow || plant.coolingFlow || spinning;
-  const close = view === 'plant' || focus !== null;
-  const tags = [...markers.values()].filter(({ item }) => item.kind !== 'chiller' && (item.assetId === selectedId || item.assetId === hoveredId));
-  const visibleFloors = building?.floors.filter((floor) => cut === null || floor.level <= cut) ?? [];
-  const captionFloor = cut !== null ? visibleFloors[visibleFloors.length - 1] : null;
-  const rackX = layout.racks.length ? (layout.racks[0][0][0] + layout.racks[layout.racks.length - 1][0][0]) / 2 : layout.riser.supply[0];
 
   return (
     <div className="relative h-full w-full">
@@ -246,9 +250,8 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis }}>
           <Ticker active={animating} />
           <FlowClock materials={[flows.chilled, flows.cooling]} />
-          <LabelProjector store={labels} />
           <CameraControls ref={setControls} minDistance={10} maxDistance={320} minPolarAngle={0.5} maxPolarAngle={1.2} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
-          <CameraRig frame={frame} focus={focus} controls={controls} />
+          <CameraRig frame={frame} focus={focus} controls={controls} reset={reset} />
           <Lighting layout={layout} />
           <fog attach="fog" args={[palette.background, 150, 460]} />
           <Grounds layout={layout} />
@@ -286,38 +289,6 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         </SceneMaterialsContext.Provider>
       </Canvas>
 
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <Label store={labels} id="area-plant" anchor={[(layout.plantRoom.x[0] + layout.plantRoom.x[1]) / 2, 0.1, layout.plantRoom.z[1] + 0.9]}><AreaCaption>冷站机房</AreaCaption></Label>
-        {layout.towers.length ? <Label store={labels} id="area-towers" anchor={[(layout.towerPad.x[0] + layout.towerPad.x[1]) / 2, 0.3, layout.towerPad.z[1] + 0.8]}><AreaCaption>冷却塔</AreaCaption></Label> : null}
-        {plant.chillers.map((item, index) => {
-          // The whole site at once has no room for four cards; they appear near the plant or on hover.
-          if (!close && !lifted(item)) return null;
-          const [x, y, z] = layout.chillers[index];
-          return (
-            <Label key={item.assetId} store={labels} id={`chiller-${item.assetId}`} anchor={[x + 1.6, y + 2.0, z]} interactive>
-              <ChillerCard item={item} open={lifted(item)} selected={selectedId === item.assetId} onSelect={() => onSelect(item)} />
-            </Label>
-          );
-        })}
-        {tags.map(({ item, position }) => (
-          <Label key={item.assetId} store={labels} id={`tag-${item.assetId}`} anchor={position}>
-            <NameTag item={item} selected={selectedId === item.assetId} />
-          </Label>
-        ))}
-        <Label store={labels} id="mains" anchor={[rackX, 5.0, (layout.riser.supply[2] + layout.riser.return[2]) / 2]}>
-          <PipeTag title="冷冻水 · 去末端" swatch={palette.chilled} items={[['供水', reading(plant.supply)], ['回水', reading(plant.return)], ['流量', reading(plant.flow)]]} />
-        </Label>
-        {building && view !== 'plant' && !focus ? visibleFloors.map((floor) => (
-          <Label key={floor.level} store={labels} id={`floor-${floor.level}`} anchor={[origin[0] + building.width + 0.4, floor.y + 0.4, origin[2] + building.depth + 0.4]}>
-            <FloorTag>{floor.label}</FloorTag>
-          </Label>
-        )) : null}
-        {captionFloor ? captionFloor.captions.map(({ room, at }) => (
-          <Label key={room.id} store={labels} id={`room-${room.id}`} anchor={[origin[0] + at[0], at[1], origin[2] + at[2]]}>
-            <AreaCaption>{room.name}</AreaCaption>
-          </Label>
-        )) : null}
-      </div>
     </div>
   );
 }
