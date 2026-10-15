@@ -122,8 +122,8 @@ function stairFlight(): Asset {
 
 function lamp(): Asset {
   const kit = new Kit();
-  kit.add('paintDark', drum(0.05, 4.2, 0.01, 10));
-  kit.add('paintDark', box(0.7, 0.06, 0.16, 0.02), { at: [0.3, 4.2, 0] });
+  kit.add('steel', drum(0.05, 4.2, 0.01, 10));
+  kit.add('steel', box(0.7, 0.06, 0.16, 0.02), { at: [0.3, 4.2, 0] });
   kit.add('panel', dome(0.12, 0.04, 16), { at: [0.55, 4.16, 0], rotate: [Math.PI, 0, 0] });
   return kit.build();
 }
