@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useImperativeHandle, useMemo, useState, useSyncExternalStore, type Ref } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { CameraControls } from '@react-three/drei';
 import { EffectComposer, N8AO, ToneMapping } from '@react-three/postprocessing';
@@ -7,7 +7,6 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { TwinBuildingPlan } from '../twin-building';
 import type { TwinEquipment, TwinPlant } from '../twin-model';
-import type { PlantReading } from '../../realtime/plant-model';
 import type { ScenePalette } from '../use-scene-palette';
 import { SceneMaterialsContext } from '../scene/assets/AssetMesh';
 import type { V3 } from '../scene/assets/kit';
@@ -16,12 +15,10 @@ import { Building } from '../scene/Building';
 import { buildBuildingLayout } from '../scene/building-layout';
 import { Chiller, Pump, Tower } from '../scene/Devices';
 import { Grounds } from '../scene/Grounds';
-import { AreaCaption, ChillerCard, FloorTag, NameTag, PipeTag } from '../scene/Labels';
-import { Label, LabelProjector, useLabelStore } from '../scene/label-layer';
 import { createFlowMaterial, FlowClock, PipeNetwork, type FlowMaterial } from '../scene/Pipes';
 import { buildSiteLayout, type CameraView, type SiteLayout } from '../scene/site-layout';
 
-// The site as a lit architectural model under an orthographic camera at the isometric angle. Light is
+// The site as a lit architectural model under a narrow perspective camera at the isometric angle. Light is
 // a procedural room environment plus one sun whose shadow map is drawn once per layout; ambient
 // occlusion and tone mapping run as one post pass. Frames are drawn on demand: only moving water,
 // turning machines and camera moves request them (docs/specs/digital-twin.md 性能).
@@ -30,7 +27,21 @@ export type { CameraView };
 
 const ANIMATION_FPS = 30;
 const ISO_AZIMUTH = Math.PI / 4;
-const ISO_POLAR = 0.98;
+const ISO_POLAR = 0.92;
+const FOV = 28;
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
+
+/** The viewer's reduced-motion setting: with it, water stands still, nothing turns, the camera cuts. */
+function useReducedMotion(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(REDUCED_MOTION);
+      query.addEventListener('change', onChange);
+      return () => query.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia(REDUCED_MOTION).matches,
+  );
+}
 
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
@@ -40,7 +51,7 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
     const generator = new THREE.PMREMGenerator(gl);
     const environment = generator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = environment;
-    scene.environmentIntensity = 0.62;
+    scene.environmentIntensity = 0.7;
     return () => { scene.environment = null; environment.dispose(); generator.dispose(); };
   }, [gl, scene]);
   useEffect(() => {
@@ -52,10 +63,11 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
   const half = Math.max(layout.plinth.x[1] - layout.plinth.x[0], layout.plinth.z[1] - layout.plinth.z[0]) / 2 + 6;
   return (
     <>
-      <hemisphereLight args={['#ffffff', '#c9ccd3', 0.5]} />
+      {/* A blue-grey ground bounce: shade reads cool, like the world, never grey. */}
+      <hemisphereLight args={['#ffffff', '#c3caf0', 0.85]} />
       <directionalLight
         position={[cx - 34, 60, cz + 22]}
-        intensity={2.1}
+        intensity={1.75}
         color="#fffaf2"
         castShadow
         shadow-mapSize={[2048, 2048]}
@@ -79,10 +91,12 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
  * Turns to the isometric angle and frames the view's part of the site, or glides to a selected machine.
  * Framing is computed here: CameraControls.fitToBox would snap the camera to the box's nearest axis.
  */
-function CameraRig({ frame, focus, controls }: {
+function CameraRig({ frame, focus, controls, reset }: {
   readonly frame: readonly [V3, V3];
   readonly focus: V3 | null;
   readonly controls: CameraControls | null;
+  /** Bumped by the toolbar's home button to frame the view again. */
+  readonly reset: number;
 }) {
   const size = useThree((state) => state.size);
   useEffect(() => {
@@ -99,11 +113,15 @@ function CameraRig({ frame, focus, controls }: {
     const inverse = view.matrixWorld.clone().invert();
     const extent = new THREE.Box3();
     for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) extent.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(inverse));
-    const zoom = Math.min(size.width / (extent.max.x - extent.min.x), size.height / (extent.max.y - extent.min.y)) * 0.86;
-    void controls.rotateTo(ISO_AZIMUTH, ISO_POLAR, true);
-    void controls.moveTo(centre.x, centre.y, centre.z, true);
-    void controls.zoomTo(zoom, true);
-  }, [controls, focus, frame, size.height, size.width]);
+    // Perspective: back off until the box's extent across and up the view fits the field of view.
+    const half = THREE.MathUtils.degToRad(FOV / 2);
+    const across = (extent.max.x - extent.min.x) / 2 / (Math.tan(half) * (size.width / size.height));
+    const up = (extent.max.y - extent.min.y) / 2 / Math.tan(half);
+    // The overview crops into the town around the site; a part or a machine is framed whole.
+    const distance = Math.max(across, up) * (focus ? 1.1 : 0.82) + (extent.max.z - extent.min.z) / 2;
+    const eye = new THREE.Vector3().setFromSphericalCoords(distance, ISO_POLAR, ISO_AZIMUTH).add(centre);
+    void controls.setLookAt(eye.x, eye.y, eye.z, centre.x, centre.y, centre.z, true);
+  }, [controls, focus, frame, reset, size.height, size.width]);
   return null;
 }
 
@@ -128,7 +146,7 @@ function QualityGuard({ onLow }: { readonly onLow: () => void }) {
   useFrame((_, delta) => {
     if (delta > 0.5) return;
     samples.push(delta);
-    if (samples.length < 45) return;
+    if (samples.length < 20) return;
     const median = [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)];
     samples.length = 0;
     if (median > 1 / 15) onLow();
@@ -174,12 +192,17 @@ export interface TwinSceneProps {
   readonly emphasis: boolean;
   readonly selectedId: string | null;
   readonly onSelect: (item: TwinEquipment | null) => void;
+  /** The corner toolbar's handle on the camera. */
+  readonly camera?: Ref<TwinCamera>;
 }
 
-/** A plant reading as the labels show it: present readings only. */
-const reading = (value: PlantReading | null) => (value && value.state === 'PRESENT' ? { label: value.label, display: value.display, unit: value.unit } : null);
+export interface TwinCamera {
+  zoom(step: 1 | -1): void;
+  rotate(step: 1 | -1): void;
+  reset(): void;
+}
 
-export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, selectedId, onSelect }: TwinSceneProps) {
+export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, selectedId, onSelect, camera }: TwinSceneProps) {
   const layout = useMemo(() => buildSiteLayout({
     chillers: plant.chillers.length,
     coolingPumps: plant.coolingPumps.length,
@@ -190,16 +213,21 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   const library = useMemo(() => createMaterialLibrary(palette), [palette]);
   useEffect(() => () => disposeMaterialLibrary(library), [library]);
   const flows = useFlows(palette, emphasis);
-  const labels = useLabelStore();
   // State, not a ref: the rig must run again once the controls exist.
   const [controls, setControls] = useState<CameraControls | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [lowQuality, setLowQuality] = useState(false);
+  const [reset, setReset] = useState(0);
+  useImperativeHandle(camera, () => ({
+    zoom: (step) => { void controls?.dolly(step * Math.max(4, controls.distance * 0.25), true); },
+    rotate: (step) => { void controls?.rotate(step * (Math.PI / 6), 0, true); },
+    reset: () => setReset((value) => value + 1),
+  }), [controls]);
   const onHover = (item: TwinEquipment | null) => setHoveredId(item?.assetId ?? null);
   const events = { onSelect, onHover };
   const lifted = (item: TwinEquipment) => item.assetId === selectedId || item.assetId === hoveredId;
 
-  // Where each selectable thing is, for the camera and its label.
+  // Where each selectable thing is, for the camera to glide to.
   const origin = layout.buildingOrigin ?? [0, 0, 0];
   const markers = useMemo(() => {
     const at = (position: V3, height: number): V3 => [position[0], position[1] + height, position[2]];
@@ -220,40 +248,35 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   }, [building, cut, layout, origin, view]);
 
   const spinning = [...plant.towers, ...plant.coolingPumps, ...plant.chilledPumps].some((item) => item.state === 'running');
-  const animating = plant.chilledFlow || plant.coolingFlow || spinning;
-  const close = view === 'plant' || focus !== null;
-  const tags = [...markers.values()].filter(({ item }) => item.kind !== 'chiller' && (item.assetId === selectedId || item.assetId === hoveredId));
-  const visibleFloors = building?.floors.filter((floor) => cut === null || floor.level <= cut) ?? [];
-  const captionFloor = cut !== null ? visibleFloors[visibleFloors.length - 1] : null;
-  const rackX = layout.racks.length ? (layout.racks[0][0][0] + layout.racks[layout.racks.length - 1][0][0]) / 2 : layout.riser.supply[0];
+  const still = useReducedMotion();
+  const animating = !still && (plant.chilledFlow || plant.coolingFlow || spinning);
 
   return (
     <div className="relative h-full w-full">
       <Canvas
-        orthographic
         shadows="soft"
         frameloop="demand"
         dpr={lowQuality ? 1 : [1, 1.5]}
-        camera={{ position: [70, 62, 70], zoom: 9, near: 0.1, far: 1000 }}
+        camera={{ position: [90, 80, 90], fov: FOV, near: 1, far: 900 }}
         onPointerMissed={() => onSelect(null)}
         gl={{ antialias: lowQuality, alpha: true, powerPreference: 'high-performance', stencil: false, toneMapping: THREE.NeutralToneMapping }}
       >
-        <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis }}>
+        <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis, still }}>
           <Ticker active={animating} />
           <FlowClock materials={[flows.chilled, flows.cooling]} />
-          <LabelProjector store={labels} />
-          <CameraControls ref={setControls} minZoom={4} maxZoom={90} minPolarAngle={0.55} maxPolarAngle={1.25} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
-          <CameraRig frame={frame} focus={focus} controls={controls} />
+          <CameraControls ref={setControls} minDistance={10} maxDistance={320} minPolarAngle={0.5} maxPolarAngle={1.2} smoothTime={still ? 0 : 0.5} draggingSmoothTime={still ? 0 : 0.15} dollyToCursor />
+          <CameraRig frame={frame} focus={focus} controls={controls} reset={reset} />
           <Lighting layout={layout} />
+          <fog attach="fog" args={[palette.background, 150, 460]} />
           <Grounds layout={layout} />
 
-          <PipeNetwork runs={layout.cooling.runs} valves={layout.cooling.valves} flow={flows.cooling} moving={plant.coolingFlow} />
-          <PipeNetwork runs={layout.chilled.runs} valves={layout.chilled.valves} flow={flows.chilled} moving={plant.chilledFlow} />
+          <PipeNetwork runs={layout.cooling.runs} valves={layout.cooling.valves} flow={flows.cooling} moving={!still && plant.coolingFlow} />
+          <PipeNetwork runs={layout.chilled.runs} valves={layout.chilled.valves} flow={flows.chilled} moving={!still && plant.chilledFlow} />
 
-          {plant.chillers.map((item, index) => <Chiller key={item.assetId} {...events} item={item} position={layout.chillers[index]} lifted={lifted(item)} />)}
-          {plant.coolingPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.coolingPumps[index]} lifted={lifted(item)} />)}
-          {plant.chilledPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.chilledPumps[index]} lifted={lifted(item)} />)}
-          {plant.towers.map((item, index) => <Tower key={item.assetId} {...events} item={item} position={layout.towers[index]} lifted={lifted(item)} />)}
+          {plant.chillers.map((item, index) => <Chiller key={item.assetId} {...events} item={item} position={layout.chillers[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.coolingPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.coolingPumps[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.chilledPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.chilledPumps[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.towers.map((item, index) => <Tower key={item.assetId} {...events} item={item} position={layout.towers[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
           {building ? (
             <Building
               {...events}
@@ -262,8 +285,9 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
               cut={cut}
               shell={shell && !emphasis}
               flows={flows}
-              chilledMoving={plant.chilledFlow}
+              chilledMoving={!still && plant.chilledFlow}
               liftedId={hoveredId ?? selectedId}
+              selectedId={selectedId}
             />
           ) : null}
 
@@ -279,38 +303,6 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         </SceneMaterialsContext.Provider>
       </Canvas>
 
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <Label store={labels} id="area-plant" anchor={[(layout.plantRoom.x[0] + layout.plantRoom.x[1]) / 2, 0.1, layout.plantRoom.z[1] + 0.9]}><AreaCaption>冷站机房</AreaCaption></Label>
-        {layout.towers.length ? <Label store={labels} id="area-towers" anchor={[(layout.towerPad.x[0] + layout.towerPad.x[1]) / 2, 0.3, layout.towerPad.z[1] + 0.8]}><AreaCaption>冷却塔</AreaCaption></Label> : null}
-        {plant.chillers.map((item, index) => {
-          // The whole site at once has no room for four cards; they appear near the plant or on hover.
-          if (!close && !lifted(item)) return null;
-          const [x, y, z] = layout.chillers[index];
-          return (
-            <Label key={item.assetId} store={labels} id={`chiller-${item.assetId}`} anchor={[x + 1.6, y + 2.0, z]} interactive>
-              <ChillerCard item={item} open={lifted(item)} selected={selectedId === item.assetId} onSelect={() => onSelect(item)} />
-            </Label>
-          );
-        })}
-        {tags.map(({ item, position }) => (
-          <Label key={item.assetId} store={labels} id={`tag-${item.assetId}`} anchor={position}>
-            <NameTag item={item} selected={selectedId === item.assetId} />
-          </Label>
-        ))}
-        <Label store={labels} id="mains" anchor={[rackX, 5.0, (layout.riser.supply[2] + layout.riser.return[2]) / 2]}>
-          <PipeTag title="冷冻水 · 去末端" swatch={palette.chilled} items={[['供水', reading(plant.supply)], ['回水', reading(plant.return)], ['流量', reading(plant.flow)]]} />
-        </Label>
-        {building && view !== 'plant' && !focus ? visibleFloors.map((floor) => (
-          <Label key={floor.level} store={labels} id={`floor-${floor.level}`} anchor={[origin[0] + building.width + 0.4, floor.y + 0.4, origin[2] + building.depth + 0.4]}>
-            <FloorTag>{floor.label}</FloorTag>
-          </Label>
-        )) : null}
-        {captionFloor ? captionFloor.captions.map(({ room, at }) => (
-          <Label key={room.id} store={labels} id={`room-${room.id}`} anchor={[origin[0] + at[0], at[1], origin[2] + at[2]]}>
-            <AreaCaption>{room.name}</AreaCaption>
-          </Label>
-        )) : null}
-      </div>
     </div>
   );
 }

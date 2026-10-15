@@ -26,9 +26,10 @@ interface BuildingProps extends DeviceEvents {
   readonly flows: BuildingFlows;
   readonly chilledMoving: boolean;
   readonly liftedId: string | null;
+  readonly selectedId: string | null;
 }
 
-function Floor({ floor, shell, flows, chilledMoving, liftedId, onSelect, onHover }: Omit<BuildingProps, 'layout' | 'origin' | 'cut'> & { readonly floor: FloorLayout }) {
+function Floor({ floor, shell, flows, chilledMoving, liftedId, selectedId, onSelect, onHover }: Omit<BuildingProps, 'layout' | 'origin' | 'cut'> & { readonly floor: FloorLayout }) {
   const set = useMaterialSet();
   return (
     <group>
@@ -48,6 +49,7 @@ function Floor({ floor, shell, flows, chilledMoving, liftedId, onSelect, onHover
           position={placement.at}
           turn={placement.turn}
           lifted={liftedId === placement.terminal.equipment.assetId}
+          selected={selectedId === placement.terminal.equipment.assetId}
           onSelect={onSelect}
           onHover={onHover}
         />

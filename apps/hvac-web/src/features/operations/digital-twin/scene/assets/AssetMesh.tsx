@@ -12,6 +12,8 @@ export interface SceneMaterials {
   readonly library: MaterialLibrary;
   /** True while the pipe view washes out everything but water. */
   readonly ghosted: boolean;
+  /** True when the viewer asked for reduced motion: moving parts stay put. */
+  readonly still: boolean;
 }
 
 export const SceneMaterialsContext = createContext<SceneMaterials | null>(null);

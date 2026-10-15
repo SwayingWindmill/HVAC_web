@@ -2,7 +2,7 @@ import { useRef, type ReactNode } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { TwinEquipment } from '../twin-model';
-import { AssetMesh, useMaterialSet } from './assets/AssetMesh';
+import { AssetMesh, useMaterialSet, useSceneMaterials } from './assets/AssetMesh';
 import { equipmentAsset, type EquipmentAsset } from './assets/equipment';
 import type { V3 } from './assets/kit';
 import type { MaterialSet } from './assets/materials';
@@ -23,13 +23,49 @@ interface DeviceProps extends DeviceEvents {
   readonly turn?: number;
   readonly scale?: number;
   readonly lifted: boolean;
+  readonly selected?: boolean;
   readonly children?: (set: MaterialSet) => ReactNode;
 }
 
 const lampKey = (item: TwinEquipment) => (item.state === 'running' ? 'ledRun' : item.state === 'fault' ? 'ledFault' : 'ledOff');
 const lampGeometry = new THREE.BoxGeometry(0.014, 0.035, 0.12);
 
-export function Device({ item, asset, position, turn = 0, scale = 1, lifted, onSelect, onHover, children }: DeviceProps) {
+const bounds = new Map<EquipmentAsset, THREE.Box3>();
+
+/** The model's bounding box, computed once per asset. */
+function assetBounds(name: EquipmentAsset): THREE.Box3 {
+  const cached = bounds.get(name);
+  if (cached) return cached;
+  const box = new THREE.Box3();
+  for (const geometry of equipmentAsset(name).parts.values()) {
+    geometry.computeBoundingBox();
+    if (geometry.boundingBox) box.union(geometry.boundingBox);
+  }
+  bounds.set(name, box);
+  return box;
+}
+
+const bracketBar = new THREE.BoxGeometry(1, 1, 1);
+
+/** Corner brackets around a selected machine: three short bars at each corner of its box. */
+function SelectionBrackets({ box, material }: { readonly box: THREE.Box3; readonly material: THREE.Material }) {
+  const size = box.getSize(new THREE.Vector3());
+  const arm = Math.min(size.x, size.y, size.z, 1.2) * 0.35 + 0.15;
+  const pad = 0.12;
+  const thick = 0.045;
+  const bars: { at: V3; scale: V3 }[] = [];
+  for (const x of [box.min.x - pad, box.max.x + pad]) for (const y of [box.min.y, box.max.y + pad]) for (const z of [box.min.z - pad, box.max.z + pad]) {
+    const sx = x === box.min.x - pad ? 1 : -1;
+    const sy = y === box.min.y ? 1 : -1;
+    const sz = z === box.min.z - pad ? 1 : -1;
+    bars.push({ at: [x + (sx * arm) / 2, y, z], scale: [arm, thick, thick] });
+    bars.push({ at: [x, y + (sy * arm) / 2, z], scale: [thick, arm, thick] });
+    bars.push({ at: [x, y, z + (sz * arm) / 2], scale: [thick, thick, arm] });
+  }
+  return <group>{bars.map((bar, index) => <mesh key={index} geometry={bracketBar} material={material} position={bar.at} scale={bar.scale} />)}</group>;
+}
+
+export function Device({ item, asset, position, turn = 0, scale = 1, lifted, selected = false, onSelect, onHover, children }: DeviceProps) {
   const set = useMaterialSet(lifted);
   const model = equipmentAsset(asset);
   const lamp = model.ports.led;
@@ -41,6 +77,7 @@ export function Device({ item, asset, position, turn = 0, scale = 1, lifted, onS
       <AssetMesh asset={model} set={set} />
       {lamp ? <mesh geometry={lampGeometry} material={set[lampKey(item)]} position={lamp} rotation={asset === 'chiller' ? [0, 0, 0] : [0, Math.PI / 2, 0]} /> : null}
       {children?.(set)}
+      {selected ? <SelectionBrackets box={assetBounds(asset)} material={set.brand} /> : null}
     </group>
   );
 }
@@ -48,13 +85,14 @@ export function Device({ item, asset, position, turn = 0, scale = 1, lifted, onS
 /** A part turning about one axis while its machine runs; rev/s kept low and mechanical. */
 function Spinner({ axis, speed, running, children, position }: { readonly axis: 'x' | 'y'; readonly speed: number; readonly running: boolean; readonly children: ReactNode; readonly position: V3 }) {
   const ref = useRef<THREE.Group>(null);
+  const { still } = useSceneMaterials();
   useFrame((_, delta) => {
-    if (running && ref.current) ref.current.rotation[axis] += Math.min(delta, 0.1) * speed;
+    if (running && !still && ref.current) ref.current.rotation[axis] += Math.min(delta, 0.1) * speed;
   });
   return <group ref={ref} position={position}>{children}</group>;
 }
 
-type MachineProps = DeviceEvents & { readonly item: TwinEquipment; readonly position: V3; readonly lifted: boolean };
+type MachineProps = DeviceEvents & { readonly item: TwinEquipment; readonly position: V3; readonly lifted: boolean; readonly selected?: boolean };
 
 export function Chiller(props: MachineProps) {
   return <Device {...props} asset="chiller" />;
