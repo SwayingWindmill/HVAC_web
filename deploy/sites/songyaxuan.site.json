@@ -913,6 +913,78 @@
       "code": "chiller-d",
       "name": "D 机组",
       "type": "CHILLER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000005",
+      "code": "cooling-tower-1",
+      "name": "1 号冷却塔",
+      "type": "COOLING_TOWER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000006",
+      "code": "cooling-tower-2",
+      "name": "2 号冷却塔",
+      "type": "COOLING_TOWER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000007",
+      "code": "cooling-tower-3",
+      "name": "3 号冷却塔",
+      "type": "COOLING_TOWER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000008",
+      "code": "cooling-tower-4",
+      "name": "4 号冷却塔",
+      "type": "COOLING_TOWER"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000009",
+      "code": "chwp-1",
+      "name": "1 号冷冻泵",
+      "type": "CHILLED_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000a",
+      "code": "chwp-2",
+      "name": "2 号冷冻泵",
+      "type": "CHILLED_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000b",
+      "code": "chwp-3",
+      "name": "3 号冷冻泵",
+      "type": "CHILLED_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000c",
+      "code": "chwp-4",
+      "name": "4 号冷冻泵",
+      "type": "CHILLED_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000d",
+      "code": "cwp-1",
+      "name": "1 号冷却泵",
+      "type": "COOLING_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000e",
+      "code": "cwp-2",
+      "name": "2 号冷却泵",
+      "type": "COOLING_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-00000000000f",
+      "code": "cwp-3",
+      "name": "3 号冷却泵",
+      "type": "COOLING_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000010",
+      "code": "cwp-4",
+      "name": "4 号冷却泵",
+      "type": "COOLING_WATER_PUMP"
     }
   ],
   "energy": {

@@ -24,6 +24,8 @@ function manualChunks(id: string) {
   if (/node_modules\/@tanstack\/(?:react-router|router-core|history)\//.test(normalized)) return 'vendor-router';
   if (/node_modules\/@tanstack\//.test(normalized)) return 'vendor-query';
   if (/node_modules\/zustand\//.test(normalized)) return 'vendor-state';
+  // The digital twin's 3D stack loads only with its route (docs/specs/digital-twin.md).
+  if (/node_modules\/(?:three|three-stdlib|@react-three|camera-controls|troika-[a-z-]+|maath|meshline|stats-gl|detect-gpu)\//.test(normalized)) return 'vendor-three';
 
   return undefined;
 }
