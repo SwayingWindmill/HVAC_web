@@ -3,7 +3,7 @@
 // Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per device
 // message, or nothing for devices the platform has no source key for (the Gateway's own status). A meter
 // message also yields the plant total, a temperature message the calculated cooling, and both the
-// provisional equipment readings (COPIES), below. Each goes on to「Outbox·形成事件」, which stores it in the
+// equipment readings (COPIES), below. Each goes on to「Outbox·形成事件」, which stores it in the
 // durable outbox until the broker acknowledges it:
 //   msg.outboxCommand = "enqueue";
 //   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
@@ -22,27 +22,25 @@ for (const meter of METERS) {
 // (76938 kWh then). The platform had counted it from 0, so it keeps counting from there: the reading
 // less what the meter showed when the address was corrected, with no jump into one interval.
 const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
-// Provisional, until site staff say which pipe each channel is on: temperature channels and the header
-// flow copied onto the equipment they are taken to measure, as the points with `from` in
-// deploy/sites/songyaxuan.site.json.
+// Temperature channels and the header flow copied onto the equipment they measure, per the site's
+// channel table (2026-10-15), as the points with `from` in deploy/sites/songyaxuan.site.json: the
+// evaporator inlet (t2) and condenser inlet (t1) are shared by the four machines.
 const COPIES = {
   temperature: {
-    t2: [["ammeter-unit1", "chw_leaving_temperature"]],
-    t1: [["ammeter-unit1", "chw_entering_temperature"]],
-    t5: [["ammeter-unit1", "cw_entering_temperature"]],
-    t6: [["ammeter-unit1", "cw_leaving_temperature"]],
-    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
-    t3: [["ammeter-unit2", "chw_entering_temperature"]],
-    t9: [["ammeter-unit2", "cw_entering_temperature"]],
-    t7: [["ammeter-unit2", "cw_leaving_temperature"]],
-    t19: [["ammeter-unit3", "chw_leaving_temperature"]],
-    t10: [["ammeter-unit3", "chw_entering_temperature"]],
-    t12: [["ammeter-unit3", "cw_entering_temperature"]],
+    t2: METERS.map((meter) => [meter, "chw_entering_temperature"]),
+    t1: METERS.map((meter) => [meter, "cw_entering_temperature"]),
+    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
+    t4: [["ammeter-unit1", "cw_leaving_temperature"]],
+    t5: [["ammeter-unit2", "chw_leaving_temperature"]],
+    t6: [["ammeter-unit2", "cw_leaving_temperature"]],
+    t7: [["ammeter-unit3", "chw_leaving_temperature"]],
     t8: [["ammeter-unit3", "cw_leaving_temperature"]],
-    t17: [["ammeter-unit4", "chw_leaving_temperature"]],
-    t16: [["ammeter-unit4", "chw_entering_temperature"]],
-    t13: [["cooling-tower", "leaving_water_temperature"]],
-    t15: [["outdoor", "ambient_temperature"]],
+    t9: [["ammeter-unit4", "chw_leaving_temperature"]],
+    t10: [["ammeter-unit4", "cw_leaving_temperature"]],
+    t12: [["room", "room_temperature"]],
+    t13: [["outdoor", "ambient_temperature"]],
+    t14: [["outdoor", "ambient_temperature_2"]],
+    t15: [["outdoor", "ambient_wet_bulb_temperature"]],
   },
   waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
 };
