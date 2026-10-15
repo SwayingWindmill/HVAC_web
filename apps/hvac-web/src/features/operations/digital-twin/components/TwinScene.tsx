@@ -21,7 +21,7 @@ import { Label, LabelProjector, useLabelStore } from '../scene/label-layer';
 import { createFlowMaterial, FlowClock, PipeNetwork, type FlowMaterial } from '../scene/Pipes';
 import { buildSiteLayout, type CameraView, type SiteLayout } from '../scene/site-layout';
 
-// The site as a lit architectural model under an orthographic camera at the isometric angle. Light is
+// The site as a lit architectural model under a narrow perspective camera at the isometric angle. Light is
 // a procedural room environment plus one sun whose shadow map is drawn once per layout; ambient
 // occlusion and tone mapping run as one post pass. Frames are drawn on demand: only moving water,
 // turning machines and camera moves request them (docs/specs/digital-twin.md 性能).
@@ -30,7 +30,8 @@ export type { CameraView };
 
 const ANIMATION_FPS = 30;
 const ISO_AZIMUTH = Math.PI / 4;
-const ISO_POLAR = 0.98;
+const ISO_POLAR = 0.92;
+const FOV = 28;
 
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
@@ -40,7 +41,7 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
     const generator = new THREE.PMREMGenerator(gl);
     const environment = generator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = environment;
-    scene.environmentIntensity = 0.62;
+    scene.environmentIntensity = 0.7;
     return () => { scene.environment = null; environment.dispose(); generator.dispose(); };
   }, [gl, scene]);
   useEffect(() => {
@@ -52,10 +53,11 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
   const half = Math.max(layout.plinth.x[1] - layout.plinth.x[0], layout.plinth.z[1] - layout.plinth.z[0]) / 2 + 6;
   return (
     <>
-      <hemisphereLight args={['#ffffff', '#c9ccd3', 0.5]} />
+      {/* A blue-grey ground bounce: shade reads cool, like the world, never grey. */}
+      <hemisphereLight args={['#ffffff', '#c3caf0', 0.85]} />
       <directionalLight
         position={[cx - 34, 60, cz + 22]}
-        intensity={2.1}
+        intensity={1.75}
         color="#fffaf2"
         castShadow
         shadow-mapSize={[2048, 2048]}
@@ -99,10 +101,14 @@ function CameraRig({ frame, focus, controls }: {
     const inverse = view.matrixWorld.clone().invert();
     const extent = new THREE.Box3();
     for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) extent.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(inverse));
-    const zoom = Math.min(size.width / (extent.max.x - extent.min.x), size.height / (extent.max.y - extent.min.y)) * 0.86;
-    void controls.rotateTo(ISO_AZIMUTH, ISO_POLAR, true);
-    void controls.moveTo(centre.x, centre.y, centre.z, true);
-    void controls.zoomTo(zoom, true);
+    // Perspective: back off until the box's extent across and up the view fits the field of view.
+    const half = THREE.MathUtils.degToRad(FOV / 2);
+    const across = (extent.max.x - extent.min.x) / 2 / (Math.tan(half) * (size.width / size.height));
+    const up = (extent.max.y - extent.min.y) / 2 / Math.tan(half);
+    // The overview crops into the town around the site; a part or a machine is framed whole.
+    const distance = Math.max(across, up) * (focus ? 1.1 : 0.82) + (extent.max.z - extent.min.z) / 2;
+    const eye = new THREE.Vector3().setFromSphericalCoords(distance, ISO_POLAR, ISO_AZIMUTH).add(centre);
+    void controls.setLookAt(eye.x, eye.y, eye.z, centre.x, centre.y, centre.z, true);
   }, [controls, focus, frame, size.height, size.width]);
   return null;
 }
@@ -230,11 +236,10 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   return (
     <div className="relative h-full w-full">
       <Canvas
-        orthographic
         shadows="soft"
         frameloop="demand"
         dpr={lowQuality ? 1 : [1, 1.5]}
-        camera={{ position: [70, 62, 70], zoom: 9, near: 0.1, far: 1000 }}
+        camera={{ position: [90, 80, 90], fov: FOV, near: 1, far: 900 }}
         onPointerMissed={() => onSelect(null)}
         gl={{ antialias: lowQuality, alpha: true, powerPreference: 'high-performance', stencil: false, toneMapping: THREE.NeutralToneMapping }}
       >
@@ -242,18 +247,19 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
           <Ticker active={animating} />
           <FlowClock materials={[flows.chilled, flows.cooling]} />
           <LabelProjector store={labels} />
-          <CameraControls ref={setControls} minZoom={4} maxZoom={90} minPolarAngle={0.55} maxPolarAngle={1.25} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
+          <CameraControls ref={setControls} minDistance={10} maxDistance={320} minPolarAngle={0.5} maxPolarAngle={1.2} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
           <CameraRig frame={frame} focus={focus} controls={controls} />
           <Lighting layout={layout} />
+          <fog attach="fog" args={[palette.background, 150, 460]} />
           <Grounds layout={layout} />
 
           <PipeNetwork runs={layout.cooling.runs} valves={layout.cooling.valves} flow={flows.cooling} moving={plant.coolingFlow} />
           <PipeNetwork runs={layout.chilled.runs} valves={layout.chilled.valves} flow={flows.chilled} moving={plant.chilledFlow} />
 
-          {plant.chillers.map((item, index) => <Chiller key={item.assetId} {...events} item={item} position={layout.chillers[index]} lifted={lifted(item)} />)}
-          {plant.coolingPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.coolingPumps[index]} lifted={lifted(item)} />)}
-          {plant.chilledPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.chilledPumps[index]} lifted={lifted(item)} />)}
-          {plant.towers.map((item, index) => <Tower key={item.assetId} {...events} item={item} position={layout.towers[index]} lifted={lifted(item)} />)}
+          {plant.chillers.map((item, index) => <Chiller key={item.assetId} {...events} item={item} position={layout.chillers[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.coolingPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.coolingPumps[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.chilledPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.chilledPumps[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
+          {plant.towers.map((item, index) => <Tower key={item.assetId} {...events} item={item} position={layout.towers[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
           {building ? (
             <Building
               {...events}
@@ -264,6 +270,7 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
               flows={flows}
               chilledMoving={plant.chilledFlow}
               liftedId={hoveredId ?? selectedId}
+              selectedId={selectedId}
             />
           ) : null}
 

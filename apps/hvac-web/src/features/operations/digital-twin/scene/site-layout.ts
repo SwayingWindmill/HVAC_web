@@ -49,6 +49,10 @@ export interface SiteLayout {
   readonly shrubs: readonly Placement[];
   readonly cars: readonly Placement[];
   readonly lamps: readonly Placement[];
+  /** The neighbourhood around the site: plain white blocks, centre and size. */
+  readonly blocks: readonly (readonly [V3, V3])[];
+  /** Fence runs around the site, start and end on the ground. */
+  readonly fences: readonly (readonly [V3, V3])[];
   readonly plantRoom: Rect & { readonly height: number };
   readonly towerPad: Rect;
   readonly chillers: readonly V3[];
@@ -176,16 +180,19 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
   const right = PLANT_X[1] + 6;
   const front = Math.max(towerZ + 6, buildingRect ? buildingRect.z[1] + 12 : 0);
   const plinth: Rect = { x: [(buildingRect?.x[0] ?? PLANT_X[0]) - 7, right + 6.5], z: [PLANT_BACK - 5, front + 6.5] };
+  // The world runs past the frame: roads continue into the fog instead of ending at a plinth edge.
+  const far = 160;
   const roads: Rect[] = [
-    { x: [plinth.x[0], plinth.x[1]], z: [front, front + 5.5] },
-    { x: [right, right + 5.5], z: [plinth.z[0], front] },
+    { x: [plinth.x[0] - far, plinth.x[1] + far], z: [front, front + 5.5] },
+    { x: [right, right + 5.5], z: [plinth.z[0] - far, front] },
   ];
   const markings: Rect[] = [];
-  for (let x = plinth.x[0] + 1; x < plinth.x[1] - 2; x += 3.2) markings.push({ x: [x, x + 1.6], z: [front + 2.68, front + 2.82] });
-  for (let z = plinth.z[0] + 1; z < front - 1; z += 3.2) markings.push({ x: [right + 2.68, right + 2.82], z: [z, z + 1.6] });
+  for (let x = plinth.x[0] - far; x < plinth.x[1] + far; x += 3.2) markings.push({ x: [x, x + 1.6], z: [front + 2.68, front + 2.82] });
+  for (let z = plinth.z[0] - far; z < front - 1; z += 3.2) markings.push({ x: [right + 2.68, right + 2.82], z: [z, z + 1.6] });
   const curbs: Rect[] = [
-    { x: [plinth.x[0], right], z: [front - 1.4, front] },
-    { x: [right - 1.4, right], z: [plinth.z[0], front - 1.4] },
+    { x: [plinth.x[0] - far, right], z: [front - 1.4, front] },
+    { x: [right - 1.4, right], z: [plinth.z[0] - far, front - 1.4] },
+    { x: [plinth.x[0] - far, plinth.x[1] + far], z: [front + 5.5, front + 6.9] },
   ];
   const pavings: Rect[] = [];
   const cars: Placement[] = [];
@@ -201,6 +208,46 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
   // Low planting only beside the plant room: trees there would stand between the viewer and the machines.
   for (let z = PLANT_BACK + 1; z < front - 3; z += 3.2) shrubs.push({ at: [right - 3.2, 0, z], turn: z });
   for (let x = plinth.x[0] + 6; x < right; x += 12) lamps.push({ at: [x, 0, front - 0.7], turn: Math.PI / 2 });
+  // The neighbourhood: rows of white blocks across the roads and behind the site, street trees and a
+  // few cars, so the site sits in a town rather than on a tabletop. Sizes vary by a fixed hash.
+  const blocks: [V3, V3][] = [];
+  const hash = (n: number) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const row = (from: number, to: number, place: (along: number, width: number, depth: number) => V3, seed: number, depthRange: [number, number], storeys: [number, number], alongZ = false) => {
+    let along = from;
+    let index = 0;
+    while (along < to) {
+      const width = 11 + hash(seed + index) * 9;
+      const depth = depthRange[0] + hash(seed + index + 50) * (depthRange[1] - depthRange[0]);
+      const height = 0.6 + (storeys[0] + Math.round(hash(seed + index + 100) * (storeys[1] - storeys[0]))) * 3.4;
+      const centre = place(along + width / 2, width, depth);
+      blocks.push([centre, alongZ ? [depth, height, width] : [width, height, depth]]);
+      along += width + 5 + hash(seed + index + 150) * 4;
+      index += 1;
+    }
+  };
+  const across = front + 7.4;
+  // Between the viewer and the site only low shops stand; the towers are behind and to the left.
+  row(plinth.x[0] - far * 0.5, plinth.x[1] + far * 0.5, (x, _w, d) => [x, 0, across + 2 + d / 2], 1, [9, 12], [1, 1]);
+  row(plinth.x[0] - far * 0.5, right - 4, (x, _w, d) => [x, 0, plinth.z[0] - 4 - d / 2], 3, [12, 18], [3, 6]);
+  row(plinth.z[0] - far * 0.4, front - 4, (z, _w, d) => [plinth.x[0] - 4 - d / 2, 0, z], 4, [12, 16], [2, 4], true);
+  for (let x = plinth.x[0] - far * 0.5; x < plinth.x[1] + far * 0.5; x += 9) trees.push({ at: [x, 0, front + 6.2], turn: x });
+  for (let z = plinth.z[0] - far * 0.4; z < front; z += 9) trees.push({ at: [right + 6.2, 0, z], turn: z * 3 });
+  // Zebra crossings either side of the junction: bars run with the traffic.
+  for (let z = front + 0.4; z < front + 5.2; z += 0.9) markings.push({ x: [right - 6, right - 3], z: [z, z + 0.45] });
+  for (let x = right + 0.4; x < right + 5.2; x += 0.9) markings.push({ x: [x, x + 0.45], z: [front - 6, front - 3] });
+  // A white fence along the site's street edges, open where the plaza and the car park meet the road.
+  const fences: [V3, V3][] = [];
+  const fenceZ = front - 1.7;
+  const fenceX = right - 1.7;
+  const gaps = buildingRect ? [[buildingRect.x[0] + 7, buildingRect.x[0] + 15], [buildingRect.x[0] + 16, buildingRect.x[0] + 27.5]] : [];
+  let fenceStart = plinth.x[0] + 1;
+  for (const [from, to] of gaps) {
+    if (from > fenceStart) fences.push([[fenceStart, 0, fenceZ], [from, 0, fenceZ]]);
+    fenceStart = to;
+  }
+  fences.push([[fenceStart, 0, fenceZ], [fenceX, 0, fenceZ]]);
+  fences.push([[fenceX, 0, plinth.z[0] + 1], [fenceX, 0, fenceZ]]);
+  cars.push({ at: [plinth.x[0] + 12, 0, front + 1.4], turn: 0 }, { at: [right - 30, 0, front + 4.1], turn: Math.PI }, { at: [right + 1.4, 0, PLANT_BACK - 8], turn: -Math.PI / 2 });
   if (buildingRect) {
     const [bx0, bx1] = buildingRect.x;
     const [bz0, bz1] = buildingRect.z;
@@ -229,7 +276,7 @@ export function buildSiteLayout(counts: EquipmentCounts, plan: TwinBuildingPlan 
   if (origin && plan) for (const x of [PLANT_X[0] - 0.9, origin[0] + plan.width + 0.9]) racks.push([[x, 0, (riserSupply[2] + riserReturn[2]) / 2], 4.4]);
   const height = plan ? plan.floors.reduce((sum, floor) => sum + floor.height, 0.3) + 1 : 5;
   return {
-    plinth, roads, markings, curbs, lawns, pavings, trees, shrubs, cars, lamps,
+    plinth, roads, markings, curbs, lawns, pavings, trees, shrubs, cars, lamps, blocks, fences,
     plantRoom, towerPad, chillers, coolingPumps, chilledPumps, towers, cooling, chilled, racks,
     buildingOrigin: origin,
     riser: { supply: riserSupply, return: riserReturn },

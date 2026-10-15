@@ -21,7 +21,7 @@ function buildChiller(): Asset {
 
   const shells = [
     { z: 0.33, y: 0.58, r: 0.3, skin: 'insulation' as const, ports: ['chwIn', 'chwOut'] as const },
-    { z: -0.33, y: 0.55, r: 0.27, skin: 'paint' as const, ports: ['cwIn', 'cwOut'] as const },
+    { z: -0.33, y: 0.55, r: 0.27, skin: 'brand' as const, ports: ['cwIn', 'cwOut'] as const },
   ];
   for (const shell of shells) {
     for (const x of [-1.05, 0.85]) kit.add('paint', box(0.2, 0.3, 0.52, 0.02), { at: [x, 0.3, shell.z] });
@@ -78,8 +78,8 @@ function buildPump(): Asset {
   kit.add('paintDark', box(1.74, 0.09, 0.52, 0.012), { at: [0.05, 0.225, 0] });
   const axis = 0.64;
   // Volute: casing, offset scroll, cover flange, foot, nozzles.
-  kit.add('paint', drumX(0.25, 0.2, 0.05, 40), { at: [-0.5, axis, 0] });
-  kit.add('paint', drumX(0.27, 0.15, 0.05, 40), { at: [-0.5, axis - 0.02, 0.04] });
+  kit.add('brand', drumX(0.25, 0.2, 0.05, 40), { at: [-0.5, axis, 0] });
+  kit.add('brand', drumX(0.27, 0.15, 0.05, 40), { at: [-0.5, axis - 0.02, 0.04] });
   addFlange(kit, 'paint', 0.24, { at: [-0.39, axis, 0], rotate: TO_X }, 12);
   kit.add('paint', box(0.24, 0.24, 0.3, 0.02), { at: [-0.5, 0.39, 0] });
   kit.add('paint', drum(0.08, 0.36, 0.01, 24), { at: [-0.5, axis + 0.1, 0.14] });
@@ -90,8 +90,8 @@ function buildPump(): Asset {
   kit.ports.suction = [-0.95, axis, 0];
   kit.ports.discharge = [-0.5, axis + 0.49, 0.14];
   // Bearing frame on its pedestal; an open coupling guard (a trough) so the turning coupling shows.
-  kit.add('paint', drumX(0.11, 0.36, 0.02, 28), { at: [-0.18, axis, 0] });
-  kit.add('paint', box(0.22, 0.34, 0.26, 0.02), { at: [-0.18, 0.43, 0] });
+  kit.add('brand', drumX(0.11, 0.36, 0.02, 28), { at: [-0.18, axis, 0] });
+  kit.add('brand', box(0.22, 0.34, 0.26, 0.02), { at: [-0.18, 0.43, 0] });
   const trough = new THREE.CylinderGeometry(0.17, 0.17, 0.3, 24, 1, true, 0, Math.PI);
   trough.rotateZ(-HALF_PI);
   kit.add('steel', trough, { at: [0.1, axis, 0] });
@@ -135,7 +135,7 @@ function buildTower(): Asset {
   }
   kit.add('steel', torus(1.15, 0.05, 40), { at: [0, 0.42, 0] });
   // Basin with a rolled lip.
-  kit.add('paint', lathe([[0, 0.4], [1.58, 0.4], [1.66, 0.43], [1.75, 0.9], [1.82, 0.94], [1.82, 0.99], [1.7, 0.99], [1.6, 0.98]], 64));
+  kit.add('brand', lathe([[0, 0.4], [1.58, 0.4], [1.66, 0.43], [1.75, 0.9], [1.82, 0.94], [1.82, 0.99], [1.7, 0.99], [1.6, 0.98]], 64));
   // Air inlet: dark fill behind horizontal louvre rings and posts.
   kit.add('rubber', drum(1.62, 0.66, 0.01, 48), { at: [0, 0.97, 0] });
   for (let index = 0; index < 5; index += 1) {
@@ -154,7 +154,7 @@ function buildTower(): Asset {
     kit.add('paint', tube(points, 0.022, 6, 0.2));
   }
   // Fan stack: a shroud with wall thickness and a rolled rim.
-  kit.add('panel', lathe([[1.32, 3.0], [1.32, 3.08], [1.17, 3.1], [1.17, 3.62], [1.21, 3.65], [1.21, 3.71], [1.13, 3.71], [1.13, 3.12], [0, 3.12]], 64));
+  kit.add('brand', lathe([[1.32, 3.0], [1.32, 3.08], [1.17, 3.1], [1.17, 3.62], [1.21, 3.65], [1.21, 3.71], [1.13, 3.71], [1.13, 3.12], [0, 3.12]], 64));
   // Guard over the fan.
   kit.add('steel', torus(1.15, 0.018, 64), { at: [0, 3.73, 0] });
   for (const radius of [0.42, 0.8]) kit.add('steel', torus(radius, 0.01, 48), { at: [0, 3.73, 0] });
@@ -206,7 +206,7 @@ function buildAhu(): Asset {
     const centre = x + length / 2;
     kit.add('panel', box(length - 0.014, 1.58, 1.5, 0.03), { at: [centre, 0.91, 0] });
     if (index > 0 && index < 4) {
-      kit.add('paint', box(length - 0.16, 1.3, 0.022, 0.008), { at: [centre, 0.92, 0.761] });
+      kit.add('brand', box(length - 0.16, 1.3, 0.022, 0.008), { at: [centre, 0.92, 0.761] });
       for (const y of [0.62, 1.22]) kit.add('steel', box(0.03, 0.1, 0.03, 0.008), { at: [centre + length / 2 - 0.15, y, 0.785] });
       for (const y of [0.42, 1.42]) kit.add('darkSteel', drum(0.014, 0.08, 0.004, 8), { at: [centre - length / 2 + 0.1, y - 0.04, 0.775] });
     }

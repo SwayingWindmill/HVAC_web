@@ -256,7 +256,7 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
     }
     curtainWall(facade, plan, floorY, height, floorIndex === 0);
     if (floorIndex === 0) {
-      structure.add('panel', box(8.4, 0.24, 2.8, 0.04), { at: [ENTRANCE_X, floorY + 3.9, plan.depth + 1.4] });
+      structure.add('brand', box(8.4, 0.24, 2.8, 0.04), { at: [ENTRANCE_X, floorY + 3.9, plan.depth + 1.4] });
       structure.add('mullion', box(8.44, 0.06, 2.84, 0.01), { at: [ENTRANCE_X, floorY + 3.76, plan.depth + 1.4] });
       for (const x of [ENTRANCE_X - 3.8, ENTRANCE_X + 3.8]) structure.add('mullion', box(0.12, 3.8, 0.12, 0.02), { at: [x, floorY + 1.9, plan.depth + 2.6] });
     }
@@ -351,7 +351,7 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
   roof.add('panel', box(plan.width + 0.04, 0.42, 0.06, 0.012), { at: [plan.width / 2, roofY - 0.12, plan.depth + 0.01] });
   roof.add('panel', box(0.06, 0.42, plan.depth + 0.04, 0.012), { at: [plan.width + 0.01, roofY - 0.12, plan.depth / 2] });
   for (const [a, b] of [[[0, 0.14], [plan.width, 0.14]], [[0, plan.depth - 0.14], [plan.width, plan.depth - 0.14]], [[0.14, 0], [0.14, plan.depth]], [[plan.width - 0.14, 0], [plan.width - 0.14, plan.depth]]] as const) {
-    addWall(roof, 'panel', a, b, roofY, 0.95, 0.28);
+    addWall(roof, 'brand', a, b, roofY, 0.95, 0.28);
   }
   roof.add('wall', box(4.2, 2.6, 4.6, 0.04), { at: [24.9, roofY + 1.3, 3.0] });
   roof.add('paintDark', box(4.4, 0.12, 4.8, 0.02), { at: [24.9, roofY + 2.66, 3.0] });

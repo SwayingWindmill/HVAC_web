@@ -8,7 +8,7 @@ import type { ScenePalette } from '../../use-scene-palette';
 // colour), and ghosted (washed out, for the view that brings the pipework forward).
 
 export type MaterialKey =
-  | 'paint' | 'panel' | 'paintDark' | 'steel' | 'darkSteel' | 'galvanized' | 'insulation' | 'rubber'
+  | 'brand' | 'window' | 'paint' | 'panel' | 'paintDark' | 'steel' | 'darkSteel' | 'galvanized' | 'insulation' | 'rubber'
   | 'screen' | 'dial' | 'concrete' | 'glass' | 'mullion' | 'wall' | 'slab' | 'floorStone' | 'floorWood'
   | 'floorCarpet' | 'wood' | 'fabric' | 'cloth' | 'leaf' | 'bark' | 'stainless' | 'grille'
   | 'plinth' | 'plinthSide' | 'road' | 'marking' | 'lawn' | 'curb' | 'paving'
@@ -27,44 +27,48 @@ type Spec = THREE.MeshStandardMaterialParameters;
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
 function specs(palette: ScenePalette): Record<MaterialKey, Spec> {
-  const ground = (amount: number) => mix(palette.background, palette.foreground, amount);
-  const top = ground(0.05);
+  // A cool, pale world tinted toward the primary colour; the machines a viewer can click wear the
+  // primary itself, white and silver carry the rest, and only furniture and timber stay warm.
+  const world = (amount: number) => mix(palette.background, palette.chilled, amount);
+  const ground = world(0.08);
   return {
-    paint: { color: '#ebe9e4', roughness: 0.48, metalness: 0.18 },
-    panel: { color: '#f7f6f3', roughness: 0.55, metalness: 0.05 },
-    paintDark: { color: '#4b4f58', roughness: 0.42, metalness: 0.4 },
-    steel: { color: '#c7cbd1', roughness: 0.28, metalness: 0.92 },
-    darkSteel: { color: '#70747d', roughness: 0.38, metalness: 0.75 },
-    galvanized: { color: '#d3d7dc', roughness: 0.36, metalness: 0.7 },
-    insulation: { color: '#f2f1ed', roughness: 0.82, metalness: 0 },
-    rubber: { color: '#2c2e33', roughness: 0.88, metalness: 0 },
-    screen: { color: '#1b2030', roughness: 0.15, metalness: 0.2, emissive: palette.chilled, emissiveIntensity: 0.18 },
-    dial: { color: '#fbfbfa', roughness: 0.5, metalness: 0 },
-    concrete: { color: mix('#deded9', palette.background, 0.25), roughness: 0.95, metalness: 0 },
-    glass: { color: '#dce8f1', roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.16, depthWrite: false, envMapIntensity: 1.4 },
-    mullion: { color: '#5c6069', roughness: 0.36, metalness: 0.65 },
-    wall: { color: '#f3f1ec', roughness: 0.9, metalness: 0 },
-    slab: { color: '#e2e1dc', roughness: 0.88, metalness: 0 },
-    floorStone: { color: '#eeece7', roughness: 0.42, metalness: 0 },
-    floorWood: { color: '#e1cfb3', roughness: 0.62, metalness: 0 },
-    floorCarpet: { color: '#d4d3d6', roughness: 1, metalness: 0 },
-    wood: { color: '#c7a27a', roughness: 0.55, metalness: 0 },
-    fabric: { color: '#e4ded5', roughness: 0.95, metalness: 0 },
-    cloth: { color: '#fcfbf9', roughness: 0.9, metalness: 0 },
-    leaf: { color: mix('#a9bf9b', palette.background, 0.1), roughness: 0.85, metalness: 0 },
-    bark: { color: '#9a8977', roughness: 0.9, metalness: 0 },
-    stainless: { color: '#d9dce0', roughness: 0.22, metalness: 0.9 },
-    grille: { color: '#3a3d44', roughness: 0.6, metalness: 0.5 },
-    plinth: { color: top, roughness: 0.95, metalness: 0 },
-    plinthSide: { color: ground(0.12), roughness: 0.9, metalness: 0 },
-    road: { color: ground(0.1), roughness: 0.95, metalness: 0 },
-    marking: { color: mix(top, '#ffffff', 0.85), roughness: 0.8, metalness: 0 },
-    lawn: { color: mix(top, '#86a874', 0.32), roughness: 1, metalness: 0 },
-    curb: { color: ground(0.025), roughness: 0.9, metalness: 0 },
-    paving: { color: ground(0.035), roughness: 0.85, metalness: 0 },
+    brand: { color: palette.chilled, roughness: 0.42, metalness: 0.12 },
+    window: { color: mix('#d3defb', palette.background, 0.3), roughness: 0.25, metalness: 0.15 },
+    paint: { color: '#f4f5f9', roughness: 0.46, metalness: 0.1 },
+    panel: { color: '#fbfbfd', roughness: 0.55, metalness: 0.04 },
+    paintDark: { color: '#3d4356', roughness: 0.42, metalness: 0.35 },
+    steel: { color: '#c9cedb', roughness: 0.28, metalness: 0.9 },
+    darkSteel: { color: '#727a8f', roughness: 0.38, metalness: 0.72 },
+    galvanized: { color: '#d8dce7', roughness: 0.36, metalness: 0.68 },
+    insulation: { color: '#f6f7fa', roughness: 0.8, metalness: 0 },
+    rubber: { color: '#2b2f3c', roughness: 0.88, metalness: 0 },
+    screen: { color: '#1a2036', roughness: 0.15, metalness: 0.2, emissive: palette.chilled, emissiveIntensity: 0.25 },
+    dial: { color: '#fbfbfd', roughness: 0.5, metalness: 0 },
+    concrete: { color: world(0.08), roughness: 0.95, metalness: 0 },
+    glass: { color: mix('#d6e2ff', palette.background, 0.2), roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.24, depthWrite: false, envMapIntensity: 1.4 },
+    mullion: { color: '#b9c1d9', roughness: 0.36, metalness: 0.5 },
+    wall: { color: '#fbfbfd', roughness: 0.88, metalness: 0 },
+    slab: { color: '#eceef5', roughness: 0.88, metalness: 0 },
+    floorStone: { color: '#f2f3f7', roughness: 0.42, metalness: 0 },
+    floorWood: { color: '#e6d6bd', roughness: 0.62, metalness: 0 },
+    floorCarpet: { color: '#dadced', roughness: 1, metalness: 0 },
+    wood: { color: '#d0ac83', roughness: 0.55, metalness: 0 },
+    fabric: { color: '#e8e4f0', roughness: 0.95, metalness: 0 },
+    cloth: { color: '#fdfdff', roughness: 0.9, metalness: 0 },
+    leaf: { color: mix('#6fc39a', palette.background, 0.08), roughness: 0.82, metalness: 0 },
+    bark: { color: '#b8a58f', roughness: 0.9, metalness: 0 },
+    stainless: { color: '#dde1ea', roughness: 0.22, metalness: 0.9 },
+    grille: { color: '#363b4d', roughness: 0.6, metalness: 0.5 },
+    plinth: { color: ground, roughness: 0.96, metalness: 0 },
+    plinthSide: { color: world(0.1), roughness: 0.9, metalness: 0 },
+    road: { color: world(0.2), roughness: 0.95, metalness: 0 },
+    marking: { color: mix(ground, '#ffffff', 0.92), roughness: 0.8, metalness: 0 },
+    lawn: { color: mix(ground, '#8fd3a8', 0.42), roughness: 1, metalness: 0 },
+    curb: { color: mix(ground, '#ffffff', 0.7), roughness: 0.9, metalness: 0 },
+    paving: { color: mix(ground, '#ffffff', 0.45), roughness: 0.85, metalness: 0 },
     ledRun: { color: palette.running, emissive: palette.running, emissiveIntensity: 1.6, roughness: 0.3, toneMapped: false },
     ledFault: { color: palette.fault, emissive: palette.fault, emissiveIntensity: 1.4, roughness: 0.3, toneMapped: false },
-    ledOff: { color: '#3a3d44', roughness: 0.3, metalness: 0.2 },
+    ledOff: { color: '#3a3d4a', roughness: 0.3, metalness: 0.2 },
     chilledAccent: { color: palette.chilled, roughness: 0.4, metalness: 0.2 },
     coolingAccent: { color: palette.cooling, roughness: 0.4, metalness: 0.2 },
   };

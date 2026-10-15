@@ -83,10 +83,9 @@ function hood(): Asset {
 
 function tree(): Asset {
   const kit = new Kit();
-  kit.add('bark', lathe([[0.13, 0], [0.09, 0.5], [0.07, 2.1], [0.001, 2.2]], 10));
-  kit.add('leaf', new THREE.IcosahedronGeometry(1.25, 2), { at: [0, 2.9, 0], scale: [1, 1.08, 1] });
-  kit.add('leaf', new THREE.IcosahedronGeometry(0.85, 2), { at: [0.55, 3.55, 0.25] });
-  kit.add('leaf', new THREE.IcosahedronGeometry(0.8, 2), { at: [-0.5, 3.45, -0.35] });
+  // A street tree as a model maker cuts it: a slim trunk and one smooth crown.
+  kit.add('bark', lathe([[0.09, 0], [0.07, 0.4], [0.055, 1.9], [0.001, 2.0]], 10));
+  kit.add('leaf', new THREE.IcosahedronGeometry(1.0, 4), { at: [0, 2.55, 0], scale: [1, 1.12, 1] });
   return kit.build();
 }
 
