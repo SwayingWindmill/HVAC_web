@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { CameraControls } from '@react-three/drei';
 import { EffectComposer, N8AO, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
@@ -57,7 +57,7 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
         intensity={2.1}
         color="#fffaf2"
         castShadow
-        shadow-mapSize={[4096, 4096]}
+        shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0003}
         shadow-normalBias={0.04}
         shadow-radius={4}
@@ -74,21 +74,35 @@ function Lighting({ layout }: { readonly layout: SiteLayout }) {
   );
 }
 
-/** Turns to the isometric angle and fits the view's part of the site; or glides to a selected machine. */
+/**
+ * Turns to the isometric angle and frames the view's part of the site, or glides to a selected machine.
+ * Framing is computed here: CameraControls.fitToBox would snap the camera to the box's nearest axis.
+ */
 function CameraRig({ frame, focus, controls }: {
   readonly frame: readonly [V3, V3];
   readonly focus: V3 | null;
-  readonly controls: RefObject<CameraControls | null>;
+  readonly controls: CameraControls | null;
 }) {
+  const size = useThree((state) => state.size);
   useEffect(() => {
-    const camera = controls.current;
-    if (!camera) return;
-    const target = focus
-      ? new THREE.Box3(new THREE.Vector3(focus[0] - 4.5, focus[1] - 1, focus[2] - 4.5), new THREE.Vector3(focus[0] + 4.5, focus[1] + 2.5, focus[2] + 4.5))
+    if (!controls) return;
+    const box = focus
+      ? new THREE.Box3(new THREE.Vector3(focus[0] - 4, focus[1] - 2, focus[2] - 4), new THREE.Vector3(focus[0] + 4, focus[1] + 1.5, focus[2] + 4))
       : new THREE.Box3(new THREE.Vector3(...frame[0]), new THREE.Vector3(...frame[1]));
-    void camera.rotateTo(ISO_AZIMUTH, ISO_POLAR, true);
-    void camera.fitToBox(target, true, { paddingTop: 1.5, paddingBottom: 0.5, paddingLeft: 0.5, paddingRight: 0.5 });
-  }, [controls, focus, frame]);
+    const centre = box.getCenter(new THREE.Vector3());
+    // The camera's right and up directions at the isometric angle; the box's extent along each sets the zoom.
+    const view = new THREE.Object3D();
+    view.position.copy(centre).add(new THREE.Vector3().setFromSphericalCoords(10, ISO_POLAR, ISO_AZIMUTH));
+    view.lookAt(centre);
+    view.updateMatrixWorld();
+    const inverse = view.matrixWorld.clone().invert();
+    const extent = new THREE.Box3();
+    for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) extent.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(inverse));
+    const zoom = Math.min(size.width / (extent.max.x - extent.min.x), size.height / (extent.max.y - extent.min.y)) * 0.86;
+    void controls.rotateTo(ISO_AZIMUTH, ISO_POLAR, true);
+    void controls.moveTo(centre.x, centre.y, centre.z, true);
+    void controls.zoomTo(zoom, true);
+  }, [controls, focus, frame, size.height, size.width]);
   return null;
 }
 
@@ -100,6 +114,24 @@ function Ticker({ active }: { readonly active: boolean }) {
     const timer = window.setInterval(() => invalidate(), 1000 / ANIMATION_FPS);
     return () => window.clearInterval(timer);
   }, [active, invalidate]);
+  return null;
+}
+
+/**
+ * Watches frame times while the scene animates; when a machine cannot hold ~15 fps (a weak or software
+ * GPU), it reports once so the scene drops the ambient-occlusion pass and renders at device pixel ratio 1.
+ * Gaps longer than half a second are idle time between on-demand frames, not slowness.
+ */
+function QualityGuard({ onLow }: { readonly onLow: () => void }) {
+  const samples = useMemo<number[]>(() => [], []);
+  useFrame((_, delta) => {
+    if (delta > 0.5) return;
+    samples.push(delta);
+    if (samples.length < 45) return;
+    const median = [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)];
+    samples.length = 0;
+    if (median > 1 / 15) onLow();
+  });
   return null;
 }
 
@@ -159,8 +191,10 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   useEffect(() => () => disposeMaterialLibrary(library), [library]);
   const flows = useFlows(palette, emphasis);
   const labels = useLabelStore();
-  const controls = useRef<CameraControls>(null);
+  // State, not a ref: the rig must run again once the controls exist.
+  const [controls, setControls] = useState<CameraControls | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [lowQuality, setLowQuality] = useState(false);
   const onHover = (item: TwinEquipment | null) => setHoveredId(item?.assetId ?? null);
   const events = { onSelect, onHover };
   const lifted = (item: TwinEquipment) => item.assetId === selectedId || item.assetId === hoveredId;
@@ -199,16 +233,16 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         orthographic
         shadows="soft"
         frameloop="demand"
-        dpr={[1, 1.5]}
+        dpr={lowQuality ? 1 : [1, 1.5]}
         camera={{ position: [70, 62, 70], zoom: 9, near: 0.1, far: 1000 }}
         onPointerMissed={() => onSelect(null)}
-        gl={{ antialias: false, alpha: true, powerPreference: 'high-performance', stencil: false }}
+        gl={{ antialias: lowQuality, alpha: true, powerPreference: 'high-performance', stencil: false, toneMapping: THREE.NeutralToneMapping }}
       >
         <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis }}>
           <Ticker active={animating} />
           <FlowClock materials={[flows.chilled, flows.cooling]} />
           <LabelProjector store={labels} />
-          <CameraControls ref={controls} minZoom={4} maxZoom={90} minPolarAngle={0.55} maxPolarAngle={1.25} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
+          <CameraControls ref={setControls} minZoom={4} maxZoom={90} minPolarAngle={0.55} maxPolarAngle={1.25} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
           <CameraRig frame={frame} focus={focus} controls={controls} />
           <Lighting layout={layout} />
           <Grounds layout={layout} />
@@ -233,10 +267,15 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
             />
           ) : null}
 
-          <EffectComposer multisampling={4} enableNormalPass={false}>
-            <N8AO aoRadius={1.6} distanceFalloff={0.8} intensity={2.2} aoSamples={12} denoiseSamples={4} denoiseRadius={10} halfRes />
-            <ToneMapping mode={ToneMappingMode.NEUTRAL} />
-          </EffectComposer>
+          {lowQuality ? null : (
+            <>
+              <QualityGuard onLow={() => setLowQuality(true)} />
+              <EffectComposer multisampling={4} enableNormalPass={false}>
+                <N8AO aoRadius={1.6} distanceFalloff={0.8} intensity={2.2} aoSamples={12} denoiseSamples={4} denoiseRadius={10} halfRes />
+                <ToneMapping mode={ToneMappingMode.NEUTRAL} />
+              </EffectComposer>
+            </>
+          )}
         </SceneMaterialsContext.Provider>
       </Canvas>
 
@@ -244,10 +283,12 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         <Label store={labels} id="area-plant" anchor={[(layout.plantRoom.x[0] + layout.plantRoom.x[1]) / 2, 0.1, layout.plantRoom.z[1] + 0.9]}><AreaCaption>冷站机房</AreaCaption></Label>
         {layout.towers.length ? <Label store={labels} id="area-towers" anchor={[(layout.towerPad.x[0] + layout.towerPad.x[1]) / 2, 0.3, layout.towerPad.z[1] + 0.8]}><AreaCaption>冷却塔</AreaCaption></Label> : null}
         {plant.chillers.map((item, index) => {
+          // The whole site at once has no room for four cards; they appear near the plant or on hover.
+          if (!close && !lifted(item)) return null;
           const [x, y, z] = layout.chillers[index];
           return (
-            <Label key={item.assetId} store={labels} id={`chiller-${item.assetId}`} anchor={[x + 1.2, y + 2.1, z]} interactive>
-              <ChillerCard item={item} open={close || lifted(item)} selected={selectedId === item.assetId} onSelect={() => onSelect(item)} />
+            <Label key={item.assetId} store={labels} id={`chiller-${item.assetId}`} anchor={[x + 1.6, y + 2.0, z]} interactive>
+              <ChillerCard item={item} open={lifted(item)} selected={selectedId === item.assetId} onSelect={() => onSelect(item)} />
             </Label>
           );
         })}

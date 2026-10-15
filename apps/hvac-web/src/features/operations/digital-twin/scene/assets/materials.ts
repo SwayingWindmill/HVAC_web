@@ -22,7 +22,7 @@ export interface MaterialLibrary {
   readonly ghost: MaterialSet;
 }
 
-type Spec = THREE.MeshPhysicalMaterialParameters;
+type Spec = THREE.MeshStandardMaterialParameters;
 
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
@@ -30,9 +30,9 @@ function specs(palette: ScenePalette): Record<MaterialKey, Spec> {
   const ground = (amount: number) => mix(palette.background, palette.foreground, amount);
   const top = ground(0.05);
   return {
-    paint: { color: '#ebe9e4', roughness: 0.48, metalness: 0.18, clearcoat: 0.35, clearcoatRoughness: 0.4 },
+    paint: { color: '#ebe9e4', roughness: 0.48, metalness: 0.18 },
     panel: { color: '#f7f6f3', roughness: 0.55, metalness: 0.05 },
-    paintDark: { color: '#4b4f58', roughness: 0.42, metalness: 0.4, clearcoat: 0.2, clearcoatRoughness: 0.5 },
+    paintDark: { color: '#4b4f58', roughness: 0.42, metalness: 0.4 },
     steel: { color: '#c7cbd1', roughness: 0.28, metalness: 0.92 },
     darkSteel: { color: '#70747d', roughness: 0.38, metalness: 0.75 },
     galvanized: { color: '#d3d7dc', roughness: 0.36, metalness: 0.7 },
@@ -45,10 +45,10 @@ function specs(palette: ScenePalette): Record<MaterialKey, Spec> {
     mullion: { color: '#5c6069', roughness: 0.36, metalness: 0.65 },
     wall: { color: '#f3f1ec', roughness: 0.9, metalness: 0 },
     slab: { color: '#e2e1dc', roughness: 0.88, metalness: 0 },
-    floorStone: { color: '#eeece7', roughness: 0.42, metalness: 0, clearcoat: 0.3, clearcoatRoughness: 0.3 },
+    floorStone: { color: '#eeece7', roughness: 0.42, metalness: 0 },
     floorWood: { color: '#e1cfb3', roughness: 0.62, metalness: 0 },
     floorCarpet: { color: '#d4d3d6', roughness: 1, metalness: 0 },
-    wood: { color: '#c7a27a', roughness: 0.55, metalness: 0, clearcoat: 0.3, clearcoatRoughness: 0.35 },
+    wood: { color: '#c7a27a', roughness: 0.55, metalness: 0 },
     fabric: { color: '#e4ded5', roughness: 0.95, metalness: 0 },
     cloth: { color: '#fcfbf9', roughness: 0.9, metalness: 0 },
     leaf: { color: mix('#a9bf9b', palette.background, 0.1), roughness: 0.85, metalness: 0 },
@@ -70,11 +70,9 @@ function specs(palette: ScenePalette): Record<MaterialKey, Spec> {
   };
 }
 
-/** Clearcoat needs the physical shader; every other surface takes the cheaper standard one. */
+/** Every surface uses the standard material, so the whole scene compiles a handful of shader programs. */
 function create(spec: Spec): THREE.Material {
-  if (spec.clearcoat) return new THREE.MeshPhysicalMaterial(spec);
-  const { clearcoat: _clearcoat, clearcoatRoughness: _roughness, ...standard } = spec;
-  return new THREE.MeshStandardMaterial(standard);
+  return new THREE.MeshStandardMaterial(spec);
 }
 
 export function createMaterialLibrary(palette: ScenePalette): MaterialLibrary {
@@ -82,10 +80,10 @@ export function createMaterialLibrary(palette: ScenePalette): MaterialLibrary {
   const entries = Object.entries(all) as [MaterialKey, Spec][];
   const lift = new THREE.Color(palette.chilled);
   const base = Object.fromEntries(entries.map(([key, spec]) => [key, create(spec)])) as MaterialSet;
-  const hover = Object.fromEntries(entries.map(([key, spec]) => [key, create({ ...spec, emissive: spec.emissive ?? lift, emissiveIntensity: spec.emissive ? spec.emissiveIntensity : 0.16 })])) as MaterialSet;
+  const hover = Object.fromEntries(entries.map(([key, spec]) => [key, create({ ...spec, emissive: spec.emissive ?? lift, emissiveIntensity: spec.emissive ? spec.emissiveIntensity : 0.07 })])) as MaterialSet;
   const ghost = Object.fromEntries(entries.map(([key, spec]) => {
     if (key === 'glass') return [key, create({ ...spec, opacity: 0.05 })];
-    const { emissive: _emissive, emissiveIntensity: _intensity, clearcoat: _clearcoat, clearcoatRoughness: _coat, ...rest } = spec;
+    const { emissive: _emissive, emissiveIntensity: _intensity, ...rest } = spec;
     return [key, create({ ...rest, color: mix(spec.color as string, palette.background, 0.62), metalness: 0, roughness: 1 })];
   })) as MaterialSet;
   return { base, hover, ghost };

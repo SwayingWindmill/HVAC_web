@@ -60,6 +60,11 @@ const SLAB = 0.3;
 const WALL = 0.12;
 const SKIN = 0.28;
 const MULLION_PITCH = 1.5;
+/** Centre of the street entrance on the front face, and where the fresh air riser rises in the shaft. */
+const ENTRANCE_X = 11;
+const FRESH_RISER = 27.0;
+/** Room partitions are cut at door-head height, so a cut floor reads from above like a plan. */
+const PARTITION = 2.4;
 
 const FLOOR_FINISH: Readonly<Record<RoomKind, MaterialKey>> = {
   hall: 'floorStone',
@@ -70,9 +75,10 @@ const FLOOR_FINISH: Readonly<Record<RoomKind, MaterialKey>> = {
   service: 'slab',
   corridor: 'floorCarpet',
   core: 'slab',
+  shaft: 'slab',
 };
 
-const WALLED: ReadonlySet<RoomKind> = new Set(['private', 'smallPrivate', 'kitchen', 'plantRoom', 'service', 'core']);
+const WALLED: ReadonlySet<RoomKind> = new Set(['private', 'smallPrivate', 'kitchen', 'plantRoom', 'service', 'core', 'shaft']);
 const OPEN: ReadonlySet<RoomKind> = new Set(['hall', 'corridor']);
 
 const centre = (space: TwinRoom) => [(space.x[0] + space.x[1]) / 2, (space.z[0] + space.z[1]) / 2] as const;
@@ -116,8 +122,8 @@ function partitions(kit: Kit, plan: TwinBuildingPlan, floor: TwinFloor, y: numbe
       const mid = [(a[0] + b[0]) / 2 + normal[0] * 0.3, (a[1] + b[1]) / 2 + normal[1] * 0.3] as const;
       const neighbour = floor.rooms.find((other) => other !== space && inside(other, mid[0], mid[1]));
       const door = neighbour && OPEN.has(neighbour.kind) ? 1.0 : 0;
-      const full = space.kind === 'core' || space.kind === 'service';
-      addWall(kit, 'wall', a, b, y, full ? height - SLAB : Math.min(height - 1.2, 3.2), WALL, door);
+      const full = space.kind === 'core' || space.kind === 'shaft';
+      addWall(kit, 'wall', a, b, y, full ? height - SLAB : PARTITION, WALL, door);
     }
   }
 }
@@ -155,7 +161,7 @@ function curtainWall(kit: Kit, plan: TwinBuildingPlan, y: number, height: number
     kit.add('mullion', box(0.1, glassHeight, 0.06, 0.01), { at: [plan.width - 0.06, mid, along] });
   }
   for (let along = MULLION_PITCH; along < plan.width; along += MULLION_PITCH) {
-    if (entrance && along > 14.5 && along < 19.5) continue;
+    if (entrance && Math.abs(along - ENTRANCE_X) < 2.5) continue;
     kit.add('mullion', box(0.06, glassHeight, 0.1, 0.01), { at: [along, mid, plan.depth - 0.06] });
   }
   const transom = y + 0.15 + glassHeight - 0.7;
@@ -177,15 +183,15 @@ function furnish(floor: TwinFloor, y: number): Map<FurnitureAsset, Placement[]> 
     const [cx, cz] = centre(space);
     const back = space.z[1] <= 8.5;
     if (space.kind === 'hall') {
-      for (const x of [8.4, 11.2, 15.8, 18.4, 22.8, 25.6]) {
+      for (const x of [2.4, 5.2, 9.6, 12.2, 16.8, 19.6]) {
         for (const z of [2.4, 5.2, 8.0, 10.8, 13.6]) {
-          if (x > 14 && x < 20 && z > 12) continue;
+          if (Math.abs(x - ENTRANCE_X) < 3 && z > 12) continue;
           put('hallTable', { at: [x, y, z] });
           put('chair', ...ring(4, 0.82, x, z, y, Math.PI / 4));
         }
       }
-      put('reception', { at: [17, y, 15.6] });
-      put('plant', { at: [6.7, y, 0.7] }, { at: [27.3, y, 0.7] }, { at: [27.3, y, 17.3] }, { at: [13.2, y, 17.3] }, { at: [20.8, y, 17.3] });
+      put('reception', { at: [ENTRANCE_X, y, 15.6] });
+      put('plant', { at: [21.3, y, 0.7] }, { at: [0.7, y, 0.7] }, { at: [0.7, y, 17.3] }, { at: [ENTRANCE_X - 3.8, y, 17.3] }, { at: [ENTRANCE_X + 3.8, y, 17.3] });
     }
     if (space.kind === 'private') {
       const tableZ = back ? space.z[1] - 3.5 : space.z[0] + 2.9;
@@ -207,7 +213,7 @@ function furnish(floor: TwinFloor, y: number): Map<FurnitureAsset, Placement[]> 
     }
     if (space.kind === 'service' && space.name === '备餐间') put('counter', { at: [cx, y, cz - 1.5], turn: Math.PI / 2 });
     if (space.kind === 'core') {
-      put('stairFlight', { at: [0.7, y, 1.2] }, { at: [4.3, y + 2.1, 2.5], turn: Math.PI });
+      put('stairFlight', { at: [space.x[0] + 0.7, y, 1.2] }, { at: [space.x[0] + 4.3, y + 2.1, 2.5], turn: Math.PI });
     }
     if (space.kind === 'corridor' && space.x[1] - space.x[0] > 10) put('plant', { at: [space.x[1] - 0.5, y, cz] });
   }
@@ -240,7 +246,7 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
       structure.add('panel', box(0.5, height - SLAB, 0.5, 0.03), { at: [x, floorY + (height - SLAB) / 2, z] });
     }
     if (floor.rooms.some((space) => space.kind === 'hall')) {
-      for (const [x, z] of [[13.5, 6], [20.5, 6], [13.5, 12], [20.5, 12]]) structure.add('panel', box(0.5, height - SLAB, 0.5, 0.03), { at: [x, floorY + (height - SLAB) / 2, z] });
+      for (const [x, z] of [[7.5, 6], [14.5, 6], [7.5, 12], [14.5, 12]]) structure.add('panel', box(0.5, height - SLAB, 0.5, 0.03), { at: [x, floorY + (height - SLAB) / 2, z] });
     }
     // Lift car in the core.
     const core = floor.rooms.find((space) => space.kind === 'core');
@@ -250,9 +256,9 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
     }
     curtainWall(facade, plan, floorY, height, floorIndex === 0);
     if (floorIndex === 0) {
-      structure.add('panel', box(8.4, 0.24, 2.8, 0.04), { at: [17, floorY + 3.9, plan.depth + 1.4] });
-      structure.add('mullion', box(8.44, 0.06, 2.84, 0.01), { at: [17, floorY + 3.76, plan.depth + 1.4] });
-      for (const x of [13.2, 20.8]) structure.add('mullion', box(0.12, 3.8, 0.12, 0.02), { at: [x, floorY + 1.9, plan.depth + 2.6] });
+      structure.add('panel', box(8.4, 0.24, 2.8, 0.04), { at: [ENTRANCE_X, floorY + 3.9, plan.depth + 1.4] });
+      structure.add('mullion', box(8.44, 0.06, 2.84, 0.01), { at: [ENTRANCE_X, floorY + 3.76, plan.depth + 1.4] });
+      for (const x of [ENTRANCE_X - 3.8, ENTRANCE_X + 3.8]) structure.add('mullion', box(0.12, 3.8, 0.12, 0.02), { at: [x, floorY + 1.9, plan.depth + 2.6] });
     }
 
     // Air side and water branches, hung under the slab above.
@@ -274,7 +280,7 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
         const at: V3 = [cx, floorY, cz];
         placed.push({ terminal, asset: 'ahu', at, turn: 0 });
         const duct = ceiling - 0.5;
-        supplyDucts.push({ points: [[cx + 1.45, floorY + 1.8, cz], [cx + 1.45, duct, cz], [6.8, duct, cz], [6.8, duct, 9], [26.6, duct, 9]], width: 1.0, height: 0.5 });
+        supplyDucts.push({ points: [[cx + 1.45, floorY + 1.8, cz], [cx + 1.45, duct, cz], [21.4, duct, cz], [21.4, duct, 9], [1.4, duct, 9]], width: 1.0, height: 0.5 });
         pipes.push({ points: [[RISER_LOCAL.supply[0], 3.8, RISER_LOCAL.supply[1]], [RISER_LOCAL.supply[0], 3.8, cz + 1.65], [cx, 3.8, cz + 1.65], [cx, floorY + 0.45, cz + 1.65], [cx, floorY + 0.45, cz + 1.08]], radius: 0.06 });
         pipes.push({ points: [[RISER_LOCAL.return[0], 4.4, RISER_LOCAL.return[1]], [RISER_LOCAL.return[0], 4.4, cz + 2.1], [cx + 0.0, 4.4, cz + 2.1], [cx, floorY + 0.85, cz + 2.1], [cx, floorY + 0.85, cz + 1.08]], radius: 0.06 });
       }
@@ -307,14 +313,14 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
     }
     if (floorTerminals.some((terminal) => terminal.equipment.kind === 'fcu')) {
       const branchY = ceiling - 0.5;
-      pipes.push({ points: [[RISER_LOCAL.supply[0], branchY, RISER_LOCAL.supply[1]], [RISER_LOCAL.supply[0], branchY, 9.0], [27.4, branchY, 9.0]], radius: 0.06 });
-      pipes.push({ points: [[RISER_LOCAL.return[0], branchY - 0.28, RISER_LOCAL.return[1]], [RISER_LOCAL.return[0], branchY - 0.28, 9.35], [27.4, branchY - 0.28, 9.35]], radius: 0.06 });
+      pipes.push({ points: [[RISER_LOCAL.supply[0], branchY, RISER_LOCAL.supply[1]], [RISER_LOCAL.supply[0], branchY, 9.0], [0.6, branchY, 9.0]], radius: 0.06 });
+      pipes.push({ points: [[RISER_LOCAL.return[0], branchY - 0.28, RISER_LOCAL.return[1]], [RISER_LOCAL.return[0], branchY - 0.28, 9.35], [0.6, branchY - 0.28, 9.35]], radius: 0.06 });
       const freshY = ceiling - 0.75;
-      freshDucts.push({ points: [[1.0, floorY - SLAB, 6.35], [1.0, top ? freshY : floorY + height, 6.35]], width: 0.4, height: 0.3 });
-      freshDucts.push({ points: [[1.0, freshY, 6.35], [2.6, freshY, 6.35], [2.6, freshY, 10.0], [27.4, freshY, 10.0]], width: 0.44, height: 0.28 });
+      freshDucts.push({ points: [[FRESH_RISER, floorY - SLAB, 6.35], [FRESH_RISER, top ? freshY : floorY + height, 6.35]], width: 0.4, height: 0.3 });
+      freshDucts.push({ points: [[FRESH_RISER, freshY, 6.35], [25.4, freshY, 6.35], [25.4, freshY, 10.0], [0.6, freshY, 10.0]], width: 0.44, height: 0.28 });
     }
     const captions = floor.rooms
-      .filter((space) => space.kind !== 'corridor' && space.kind !== 'service' && space.kind !== 'core')
+      .filter((space) => space.kind !== 'corridor' && space.kind !== 'shaft' && space.kind !== 'core')
       .map((space) => {
         const [cx, cz] = centre(space);
         return { room: space, at: [cx, floorY + 0.05, space.kind === 'hall' ? 16.9 : cz] as V3 };
@@ -347,10 +353,10 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
   for (const [a, b] of [[[0, 0.14], [plan.width, 0.14]], [[0, plan.depth - 0.14], [plan.width, plan.depth - 0.14]], [[0.14, 0], [0.14, plan.depth]], [[plan.width - 0.14, 0], [plan.width - 0.14, plan.depth]]] as const) {
     addWall(roof, 'panel', a, b, roofY, 0.95, 0.28);
   }
-  roof.add('wall', box(4.2, 2.6, 4.6, 0.04), { at: [3.1, roofY + 1.3, 3.0] });
-  roof.add('paintDark', box(4.4, 0.12, 4.8, 0.02), { at: [3.1, roofY + 2.66, 3.0] });
-  for (const [x, z] of [[9, 1.4], [9, 6.0], [20, 1.4], [20, 6.0]]) roof.add('concrete', box(3.6, 0.2, 0.3, 0.02), { at: [x + 1.5, roofY + 0.1, z] });
-  const pau: V3 = [10.5, roofY + 0.2, 3.7];
+  roof.add('wall', box(4.2, 2.6, 4.6, 0.04), { at: [24.9, roofY + 1.3, 3.0] });
+  roof.add('paintDark', box(4.4, 0.12, 4.8, 0.02), { at: [24.9, roofY + 2.66, 3.0] });
+  const pau: V3 = [14.5, roofY + 0.2, 3.7];
+  for (const z of [3.2, 4.2]) roof.add('concrete', box(3.2, 0.2, 0.3, 0.02), { at: [pau[0], roofY + 0.1, z] });
   const roofDuctY = roofY + 1.75;
   const highest = floors[floors.length - 1];
   return {
@@ -362,11 +368,11 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
       structure: roof.build(),
       equipment: [
         { asset: 'ahu', at: pau, turn: 0, scale: 0.8 },
-        { asset: 'exhaustFan', at: [2.2, roofY, 15.4], turn: 0, scale: 1 },
-        { asset: 'exhaustFan', at: [4.4, roofY, 15.4], turn: 0, scale: 1 },
-        { asset: 'exhaustFan', at: [20, roofY, 15.6], turn: 0, scale: 1 },
+        { asset: 'exhaustFan', at: [25.8, roofY, 15.4], turn: 0, scale: 1 },
+        { asset: 'exhaustFan', at: [23.6, roofY, 15.4], turn: 0, scale: 1 },
+        { asset: 'exhaustFan', at: [8, roofY, 15.6], turn: 0, scale: 1 },
       ],
-      ducts: [{ points: [[pau[0] + 1.16, pau[1] + 1.5, pau[2]], [pau[0] + 1.16, roofDuctY, pau[2]], [pau[0] + 1.16, roofDuctY, 6.35], [1.0, roofDuctY, 6.35], [1.0, highest ? highest.y + highest.height - SLAB - 0.75 : roofY, 6.35]], width: 0.5, height: 0.32 }],
+      ducts: [{ points: [[pau[0] + 1.16, pau[1] + 1.5, pau[2]], [pau[0] + 1.16, roofDuctY, pau[2]], [pau[0] + 1.16, roofDuctY, 6.35], [FRESH_RISER, roofDuctY, 6.35], [FRESH_RISER, highest ? highest.y + highest.height - SLAB - 0.75 : roofY, 6.35]], width: 0.5, height: 0.32 }],
     },
     height: roofY + 1,
   };

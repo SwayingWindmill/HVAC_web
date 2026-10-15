@@ -92,8 +92,8 @@ function tree(): Asset {
 
 function shrub(): Asset {
   const kit = new Kit();
-  kit.add('leaf', new THREE.IcosahedronGeometry(0.55, 2), { at: [0, 0.38, 0], scale: [1.3, 0.8, 1] });
-  kit.add('leaf', new THREE.IcosahedronGeometry(0.4, 2), { at: [0.45, 0.32, 0.1], scale: [1.2, 0.8, 1] });
+  kit.add('leaf', new THREE.IcosahedronGeometry(0.42, 2), { at: [0, 0.3, 0], scale: [1.3, 0.75, 1] });
+  kit.add('leaf', new THREE.IcosahedronGeometry(0.3, 2), { at: [0.36, 0.25, 0.08], scale: [1.2, 0.75, 1] });
   return kit.build();
 }
 

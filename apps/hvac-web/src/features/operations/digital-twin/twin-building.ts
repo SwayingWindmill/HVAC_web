@@ -6,7 +6,7 @@ import type { TwinEquipment } from './twin-model';
 // (docs/specs/digital-twin.md). A site without a declaration shows the cold side only.
 // Plans are in metres, x along the building's width and z along its depth, origin at the back-left.
 
-export type RoomKind = 'hall' | 'private' | 'smallPrivate' | 'kitchen' | 'plantRoom' | 'service' | 'corridor' | 'core';
+export type RoomKind = 'hall' | 'private' | 'smallPrivate' | 'kitchen' | 'plantRoom' | 'service' | 'corridor' | 'core' | 'shaft';
 
 export interface TwinRoom {
   readonly id: string;
@@ -40,23 +40,25 @@ function diningFloor(level: number): TwinFloor {
     label: `${level}F 包间`,
     height: 4.2,
     rooms: [
-      room(`${level}-core`, '楼梯 · 电梯', 'core', [0, 6], [0, 6]),
-      room(`${level}-shaft`, '管井', 'service', [0, 2], [6, 8.5]),
-      room(`${level}-corridor`, '走廊', 'corridor', [2, 28], [8.5, 10.5]),
-      room(`${level}-lobby`, '电梯厅', 'corridor', [2, 6], [6, 8.5]),
-      room(`${level}-r1`, `${n(1)} 包间`, 'private', [6, 12], [0, 8.5]),
-      room(`${level}-r2`, `${n(2)} 包间`, 'private', [12, 18], [0, 8.5]),
-      room(`${level}-r3`, `${n(3)} 小包间`, 'smallPrivate', [18, 23], [0, 8.5]),
-      room(`${level}-r4`, `${n(4)} 小包间`, 'smallPrivate', [23, 28], [0, 8.5]),
-      room(`${level}-pantry`, '备餐间', 'service', [0, 4], [10.5, 18]),
-      room(`${level}-r5`, `${n(5)} 小包间`, 'smallPrivate', [4, 8.5], [10.5, 18]),
-      room(`${level}-r6`, `${n(6)} 小包间`, 'smallPrivate', [8.5, 13], [10.5, 18]),
-      room(`${level}-r7`, `${n(7)} 包间`, 'private', [13, 20.5], [10.5, 18]),
-      room(`${level}-r8`, `${n(8)} 包间`, 'private', [20.5, 28], [10.5, 18]),
+      room(`${level}-core`, '楼梯 · 电梯', 'core', [22, 28], [0, 6]),
+      room(`${level}-shaft`, '管井', 'shaft', [26, 28], [6, 8.5]),
+      room(`${level}-corridor`, '走廊', 'corridor', [0, 26], [8.5, 10.5]),
+      room(`${level}-lobby`, '电梯厅', 'corridor', [22, 26], [6, 8.5]),
+      room(`${level}-r1`, `${n(1)} 包间`, 'private', [16, 22], [0, 8.5]),
+      room(`${level}-r2`, `${n(2)} 包间`, 'private', [10, 16], [0, 8.5]),
+      room(`${level}-r3`, `${n(3)} 小包间`, 'smallPrivate', [5, 10], [0, 8.5]),
+      room(`${level}-r4`, `${n(4)} 小包间`, 'smallPrivate', [0, 5], [0, 8.5]),
+      room(`${level}-pantry`, '备餐间', 'service', [24, 28], [10.5, 18]),
+      room(`${level}-r5`, `${n(5)} 小包间`, 'smallPrivate', [19.5, 24], [10.5, 18]),
+      room(`${level}-r6`, `${n(6)} 小包间`, 'smallPrivate', [15, 19.5], [10.5, 18]),
+      room(`${level}-r7`, `${n(7)} 包间`, 'private', [7.5, 15], [10.5, 18]),
+      room(`${level}-r8`, `${n(8)} 包间`, 'private', [0, 7.5], [10.5, 18]),
     ],
   };
 }
 
+/** Songyaxuan: a three-storey restaurant, the hall on the ground floor and private rooms above. Core,
+ * shaft and plant room are on the side facing the cold plant. */
 export const BUILDING_PLANS: Readonly<Record<string, TwinBuildingPlan>> = {
   songyaxuan: {
     name: '松雅轩',
@@ -68,12 +70,12 @@ export const BUILDING_PLANS: Readonly<Record<string, TwinBuildingPlan>> = {
         label: '1F 大厅',
         height: 4.8,
         rooms: [
-          room('1-core', '楼梯 · 电梯', 'core', [0, 6], [0, 6]),
-          room('1-shaft', '管井', 'service', [0, 2], [6, 8.5]),
-          room('1-passage', '通道', 'corridor', [2, 6], [6, 8.5]),
-          room('1-ahu', '空调机房', 'plantRoom', [0, 6], [8.5, 13]),
-          room('1-kitchen', '后厨', 'kitchen', [0, 6], [13, 18]),
-          room('1-hall', '大厅', 'hall', [6, 28], [0, 18]),
+          room('1-core', '楼梯 · 电梯', 'core', [22, 28], [0, 6]),
+          room('1-shaft', '管井', 'shaft', [26, 28], [6, 8.5]),
+          room('1-passage', '通道', 'corridor', [22, 26], [6, 8.5]),
+          room('1-ahu', '空调机房', 'plantRoom', [22, 28], [8.5, 13]),
+          room('1-kitchen', '后厨', 'kitchen', [22, 28], [13, 18]),
+          room('1-hall', '大厅', 'hall', [0, 22], [0, 18]),
         ],
       },
       diningFloor(2),
@@ -93,7 +95,7 @@ export interface TwinTerminal {
   readonly branch?: { readonly index: number; readonly side: -1 | 1 };
 }
 
-export const HALL_BRANCHES = [9.5, 14.5, 19.5, 24.5] as const;
+export const HALL_BRANCHES = [3.2, 10.8, 18.2] as const;
 
 const unconnected = (assetId: string, name: string, kind: TerminalKind): TwinEquipment => ({
   assetId, name, kind, state: 'unconnected', device: null, readings: [], values: {},
