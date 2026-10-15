@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useMemo, useState, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useMemo, useState, useSyncExternalStore, type Ref } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { CameraControls } from '@react-three/drei';
 import { EffectComposer, N8AO, ToneMapping } from '@react-three/postprocessing';
@@ -29,6 +29,19 @@ const ANIMATION_FPS = 30;
 const ISO_AZIMUTH = Math.PI / 4;
 const ISO_POLAR = 0.92;
 const FOV = 28;
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
+
+/** The viewer's reduced-motion setting: with it, water stands still, nothing turns, the camera cuts. */
+function useReducedMotion(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(REDUCED_MOTION);
+      query.addEventListener('change', onChange);
+      return () => query.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia(REDUCED_MOTION).matches,
+  );
+}
 
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
@@ -133,7 +146,7 @@ function QualityGuard({ onLow }: { readonly onLow: () => void }) {
   useFrame((_, delta) => {
     if (delta > 0.5) return;
     samples.push(delta);
-    if (samples.length < 45) return;
+    if (samples.length < 20) return;
     const median = [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)];
     samples.length = 0;
     if (median > 1 / 15) onLow();
@@ -235,7 +248,8 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   }, [building, cut, layout, origin, view]);
 
   const spinning = [...plant.towers, ...plant.coolingPumps, ...plant.chilledPumps].some((item) => item.state === 'running');
-  const animating = plant.chilledFlow || plant.coolingFlow || spinning;
+  const still = useReducedMotion();
+  const animating = !still && (plant.chilledFlow || plant.coolingFlow || spinning);
 
   return (
     <div className="relative h-full w-full">
@@ -247,17 +261,17 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
         onPointerMissed={() => onSelect(null)}
         gl={{ antialias: lowQuality, alpha: true, powerPreference: 'high-performance', stencil: false, toneMapping: THREE.NeutralToneMapping }}
       >
-        <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis }}>
+        <SceneMaterialsContext.Provider value={{ library, ghosted: emphasis, still }}>
           <Ticker active={animating} />
           <FlowClock materials={[flows.chilled, flows.cooling]} />
-          <CameraControls ref={setControls} minDistance={10} maxDistance={320} minPolarAngle={0.5} maxPolarAngle={1.2} smoothTime={0.5} draggingSmoothTime={0.15} dollyToCursor />
+          <CameraControls ref={setControls} minDistance={10} maxDistance={320} minPolarAngle={0.5} maxPolarAngle={1.2} smoothTime={still ? 0 : 0.5} draggingSmoothTime={still ? 0 : 0.15} dollyToCursor />
           <CameraRig frame={frame} focus={focus} controls={controls} reset={reset} />
           <Lighting layout={layout} />
           <fog attach="fog" args={[palette.background, 150, 460]} />
           <Grounds layout={layout} />
 
-          <PipeNetwork runs={layout.cooling.runs} valves={layout.cooling.valves} flow={flows.cooling} moving={plant.coolingFlow} />
-          <PipeNetwork runs={layout.chilled.runs} valves={layout.chilled.valves} flow={flows.chilled} moving={plant.chilledFlow} />
+          <PipeNetwork runs={layout.cooling.runs} valves={layout.cooling.valves} flow={flows.cooling} moving={!still && plant.coolingFlow} />
+          <PipeNetwork runs={layout.chilled.runs} valves={layout.chilled.valves} flow={flows.chilled} moving={!still && plant.chilledFlow} />
 
           {plant.chillers.map((item, index) => <Chiller key={item.assetId} {...events} item={item} position={layout.chillers[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
           {plant.coolingPumps.map((item, index) => <Pump key={item.assetId} {...events} item={item} position={layout.coolingPumps[index]} lifted={lifted(item)} selected={item.assetId === selectedId} />)}
@@ -271,7 +285,7 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
               cut={cut}
               shell={shell && !emphasis}
               flows={flows}
-              chilledMoving={plant.chilledFlow}
+              chilledMoving={!still && plant.chilledFlow}
               liftedId={hoveredId ?? selectedId}
               selectedId={selectedId}
             />

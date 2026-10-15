@@ -2,7 +2,7 @@ import { useRef, type ReactNode } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { TwinEquipment } from '../twin-model';
-import { AssetMesh, useMaterialSet } from './assets/AssetMesh';
+import { AssetMesh, useMaterialSet, useSceneMaterials } from './assets/AssetMesh';
 import { equipmentAsset, type EquipmentAsset } from './assets/equipment';
 import type { V3 } from './assets/kit';
 import type { MaterialSet } from './assets/materials';
@@ -85,8 +85,9 @@ export function Device({ item, asset, position, turn = 0, scale = 1, lifted, sel
 /** A part turning about one axis while its machine runs; rev/s kept low and mechanical. */
 function Spinner({ axis, speed, running, children, position }: { readonly axis: 'x' | 'y'; readonly speed: number; readonly running: boolean; readonly children: ReactNode; readonly position: V3 }) {
   const ref = useRef<THREE.Group>(null);
+  const { still } = useSceneMaterials();
   useFrame((_, delta) => {
-    if (running && ref.current) ref.current.rotation[axis] += Math.min(delta, 0.1) * speed;
+    if (running && !still && ref.current) ref.current.rotation[axis] += Math.min(delta, 0.1) * speed;
   });
   return <group ref={ref} position={position}>{children}</group>;
 }

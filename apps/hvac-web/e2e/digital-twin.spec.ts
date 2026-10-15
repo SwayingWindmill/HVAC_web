@@ -1,8 +1,11 @@
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
+// The scene renders on a software GPU in CI; with reduced motion nothing animates, as for any viewer who asks.
+test.use({ reducedMotion: 'reduce' });
+
 test('the digital twin shows the plant in the corners and keeps view and selection in the URL', async ({ page }) => {
-  test.slow(); // the scene renders on a software GPU here
+  test.slow();
   await page.goto(`/operations/digital-twin?site=${SITE_ID}`);
   await expect(page.locator('canvas')).toBeVisible();
   await expect(page.getByText('冷站功率')).toBeVisible();
