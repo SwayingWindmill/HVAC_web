@@ -109,7 +109,7 @@ export function buildTwinPlant(assets: readonly Asset[], plant: PlantView): Twin
 
 export const TWIN_STATE_LABELS: Readonly<Record<TwinState, string>> = {
   running: '运行',
-  stopped: '停止',
+  stopped: '停机',
   fault: '故障',
   offline: '离线',
   unknown: '状态未知',

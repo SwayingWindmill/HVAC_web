@@ -27,7 +27,8 @@ export function LabelProjector({ store }: { readonly store: LabelStore }) {
       const anchor = store.anchors.get(id);
       if (!anchor) continue;
       point.set(anchor[0], anchor[1], anchor[2]).project(camera);
-      const visible = point.z < 1 && point.x > -1.2 && point.x < 1.2 && point.y > -1.2 && point.y < 1.2;
+      // Labels whose anchor nears the top edge would be cut off by the panel; they hide instead.
+      const visible = point.z < 1 && point.x > -1 && point.x < 1 && point.y > -1 && point.y < 0.8;
       element.style.visibility = visible ? 'visible' : 'hidden';
       if (!visible) continue;
       element.style.transform = `translate3d(${((point.x + 1) / 2) * size.width}px, ${((1 - point.y) / 2) * size.height}px, 0)`;

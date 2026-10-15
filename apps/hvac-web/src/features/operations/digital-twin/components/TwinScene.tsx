@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { TwinBuildingPlan } from '../twin-building';
 import type { TwinEquipment, TwinPlant } from '../twin-model';
+import type { PlantReading } from '../../realtime/plant-model';
 import type { ScenePalette } from '../use-scene-palette';
 import { SceneMaterialsContext } from '../scene/assets/AssetMesh';
 import type { V3 } from '../scene/assets/kit';
@@ -175,9 +176,8 @@ export interface TwinSceneProps {
   readonly onSelect: (item: TwinEquipment | null) => void;
 }
 
-const show = (reading: { display: string; unit: string | null } | null) => (reading
-  ? <>{reading.display}<span className="ml-0.5 text-[10px] font-normal text-muted-foreground">{reading.unit}</span></>
-  : '—');
+/** A plant reading as the labels show it: present readings only. */
+const reading = (value: PlantReading | null) => (value && value.state === 'PRESENT' ? { label: value.label, display: value.display, unit: value.unit } : null);
 
 export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, selectedId, onSelect }: TwinSceneProps) {
   const layout = useMemo(() => buildSiteLayout({
@@ -298,7 +298,7 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
           </Label>
         ))}
         <Label store={labels} id="mains" anchor={[rackX, 5.0, (layout.riser.supply[2] + layout.riser.return[2]) / 2]}>
-          <PipeTag title="冷冻水 · 去末端" items={[['供水', show(plant.supply)], ['回水', show(plant.return)], ['流量', show(plant.flow)]]} />
+          <PipeTag title="冷冻水 · 去末端" swatch={palette.chilled} items={[['供水', reading(plant.supply)], ['回水', reading(plant.return)], ['流量', reading(plant.flow)]]} />
         </Label>
         {building && view !== 'plant' && !focus ? visibleFloors.map((floor) => (
           <Label key={floor.level} store={labels} id={`floor-${floor.level}`} anchor={[origin[0] + building.width + 0.4, floor.y + 0.4, origin[2] + building.depth + 0.4]}>
