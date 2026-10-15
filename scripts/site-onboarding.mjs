@@ -128,10 +128,12 @@ COMMIT;`;
 }
 
 const ELECTRICITY = '01990000-0000-7000-8000-000000000001';
+const COOLING = '01990000-0000-7000-8000-000000000006';
 
 // The Site's energy model, when its site file has one: the total meter on the grid feed into the
 // plant, each machine's meter on the plant's feed into that machine (a sub-meter inside the total),
-// the Tenant's released energy Metrics bound to those counters and calculated on schedule, the
+// a cooling meter (when the site has one) on the plant's chilled-water supply to the building, the
+// Tenant's released energy Metrics bound to those counters and calculated on schedule, the
 // import Tariff on the grid boundary, and the monthly report. A released topology is immutable, so
 // a rerun leaves it as it is.
 function buildEnergySql(profile, devices, points) {
@@ -150,16 +152,19 @@ function buildEnergySql(profile, devices, points) {
   const assetName = new Map((profile.assets ?? []).map((asset) => [asset.id, asset.name]));
   const total = deviceByKey.get(energy.totalMeter);
   const branches = energy.branchMeters.map((key) => deviceByKey.get(key));
+  const cooling = energy.coolingMeter ? deviceByKey.get(energy.coolingMeter) : null;
   const version = id('7000', 1);
   const nodes = [
     { key: 'grid', type: 'GRID', name: '电网' },
     { key: 'plant', type: 'HVAC', name: energy.plantName },
     ...branches.map((device) => ({ key: device.sourceKey, type: 'LOAD', name: assetName.get(device.asset) ?? device.name, deviceId: device.id })),
+    ...(cooling ? [{ key: 'building', type: 'BUILDING', name: '建筑冷负荷' }] : []),
   ].map((node, index) => ({ ...node, id: id('7100', index + 1) }));
   const nodeId = new Map(nodes.map((node) => [node.key, node.id]));
   const meters = [
-    { device: total, from: 'grid', to: 'plant', direction: 'IMPORT' },
-    ...branches.map((device) => ({ device, from: 'plant', to: device.sourceKey, direction: 'CONSUME' })),
+    { device: total, from: 'grid', to: 'plant', direction: 'IMPORT', energyType: ELECTRICITY },
+    ...branches.map((device) => ({ device, from: 'plant', to: device.sourceKey, direction: 'CONSUME', energyType: ELECTRICITY })),
+    ...(cooling ? [{ device: cooling, from: 'plant', to: 'building', direction: 'CONSUME', energyType: COOLING }] : []),
   ].map((meter, index) => ({ ...meter, edge: id('7200', index + 1), meter: id('7300', index + 1), binding: id('7400', index + 1), point: sqlLiteral(counter(meter.device)) }));
   const draft = `WHERE EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE id = ${version} AND status = 'DRAFT')`;
 
@@ -180,9 +185,9 @@ WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'R
       name: `${assetName.get(device.asset) ?? device.name}逐时用电量（每小时）`,
     })),
     // Cooling is bound after the electricity Metrics so their binding ids stay where they were.
-    ...(energy.coolingMeter ? [{
+    ...(cooling ? [{
       code: 'hourly_cooling', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', cron: '5 * * * *', name: '逐时供冷量（每小时）',
-      source: { points: { site_cooling: counter(deviceByKey.get(energy.coolingMeter)) }, counter: { decreaseMode: 'RESET' } },
+      source: { points: { site_cooling: counter(cooling) }, counter: { decreaseMode: 'RESET' } },
     }] : []),
   ].map((binding, index) => ({ ...binding, index: index + 1 }));
   const nextFire = (cron) => cron.startsWith('5 ') ? 'clock_timestamp()'
@@ -203,14 +208,14 @@ ${nodes.map((node) => `  (${node.id}::uuid, ${t}::uuid, ${st}::uuid, ${version}:
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.energy_edges (id, tenant_id, site_id, topology_version_id, from_node_id, to_node_id, energy_type_id, direction, enabled, revision, created_at, updated_at)
 SELECT edge.* FROM (VALUES
-${meters.map((meter) => `  (${meter.edge}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${nodeId.get(meter.from)}::uuid, ${nodeId.get(meter.to)}::uuid, '${ELECTRICITY}'::uuid, '${meter.direction}', true, 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${meters.map((meter) => `  (${meter.edge}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${nodeId.get(meter.from)}::uuid, ${nodeId.get(meter.to)}::uuid, '${meter.energyType}'::uuid, '${meter.direction}', true, 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ) AS edge ${draft}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.energy_meters (id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at) VALUES
-${meters.map((meter) => `  (${meter.meter}, ${t}, ${st}, ${sqlLiteral(meter.device.code.replaceAll('-', '_'))}, ${sqlLiteral(meter.device.name)}, ${sqlLiteral(meter.device.id)}, '${ELECTRICITY}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${meters.map((meter) => `  (${meter.meter}, ${t}, ${st}, ${sqlLiteral(meter.device.code.replaceAll('-', '_'))}, ${sqlLiteral(meter.device.name)}, ${sqlLiteral(meter.device.id)}, '${meter.energyType}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.meter_bindings (id, tenant_id, site_id, topology_version_id, energy_edge_id, energy_type_id, meter_id, device_id, point_id, point_type, meter_role, direction, priority, effective_from, version, status, revision, created_at, updated_at) VALUES
-${meters.map((meter) => `  (${meter.binding}, ${t}, ${st}, ${version}, ${meter.edge}, '${ELECTRICITY}', ${meter.meter}, ${sqlLiteral(meter.device.id)}, ${meter.point}, 'COUNTER', 'PRIMARY', '${meter.direction}', 0, '2026-01-01T00:00:00Z', 1, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+${meters.map((meter) => `  (${meter.binding}, ${t}, ${st}, ${version}, ${meter.edge}, '${meter.energyType}', ${meter.meter}, ${sqlLiteral(meter.device.id)}, ${meter.point}, 'COUNTER', 'PRIMARY', '${meter.direction}', 0, '2026-01-01T00:00:00Z', 1, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.energy_topology_versions
 SET status = 'ACTIVE', effective_from = '2026-01-01T00:00:00Z', released_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
