@@ -69,8 +69,9 @@ export function buildGrounds(layout: SiteLayout): Asset {
       }
     }
   }
-  for (const [x, z] of [[room.x[0], room.z[0]], [room.x[1], room.z[0]], [room.x[0], room.z[1]], [room.x[1], room.z[1]]]) {
-    kit.add('brand', box(0.42, room.height + 0.1, 0.42, 0.03), { at: [x, 0.06 + (room.height + 0.1) / 2, z] });
+  // Corner posts in the primary colour; the near corner, between the two cut-down walls, stays low.
+  for (const [x, z, height] of [[room.x[0], room.z[0], room.height], [room.x[1], room.z[0], room.height], [room.x[0], room.z[1], room.height], [room.x[1], room.z[1], 1.1]]) {
+    kit.add('brand', box(0.42, height + 0.1, 0.42, 0.03), { at: [x, 0.06 + (height + 0.1) / 2, z] });
   }
   // Louvres high on the back wall, a door in the front wall's line.
   for (let x = room.x[0] + 2; x < room.x[1] - 2; x += 4) {

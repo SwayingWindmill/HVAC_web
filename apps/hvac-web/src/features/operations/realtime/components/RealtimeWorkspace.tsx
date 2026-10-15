@@ -20,35 +20,16 @@ import { CommandMark } from '@/features/control/components/CommandMark';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import type { HourlyPoint } from '../../systems-devices/device-history';
 import { equipmentStatus, plantReading, type PlantReading, type PlantView } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
+import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
 import { formatClock, LiveIndicator, ReadingMetric, ReadingValue } from '../device-presentation';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 
 type Metric = 'power' | 'cooling' | 'cop';
 type Window = '6h' | '24h';
-
-const POWER_KEY = 'hvac_meter.active_power';
-const COOLING_KEY = 'btu_meter.instant_cooling_capacity';
-const HOUR_MS = 3_600_000;
-
-/** COP per quarter: cooling over power where both were recorded and power is positive. */
-function copSeries(power: readonly HourlyPoint[], cooling: readonly HourlyPoint[]): { periodStart: string; value: number }[] {
-  const coolingAt = new Map(cooling.map((point) => [point.periodStart, point.average]));
-  return power
-    .filter((point) => point.average > 0 && coolingAt.has(point.periodStart))
-    .map((point) => ({ periodStart: point.periodStart, value: coolingAt.get(point.periodStart)! / point.average }));
-}
-
-/** The value an hour ago: the last quarter that started at least an hour before now. */
-function hourAgo(points: readonly { periodStart: string; value: number }[]): number | null {
-  const cutoff = Date.now() - HOUR_MS;
-  const before = points.filter((point) => Date.parse(point.periodStart) <= cutoff);
-  return before.length > 0 ? before[before.length - 1].value : null;
-}
 
 function MetricTab({ label, selected, onSelect, value, unit, values, caption, info }: {
   readonly label: string;
