@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   Bell,
+  Box,
   CalendarCheck2,
   FileText,
   Gauge,
@@ -61,6 +62,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     items: [
       { id: 'operations-realtime', title: '实时运行', path: '/operations/realtime', icon: Activity },
       { id: 'operations-systems-devices', title: '设备', path: '/operations/systems-devices', icon: ServerCog },
+      { id: 'operations-digital-twin', title: '数字孪生', path: '/operations/digital-twin', icon: Box },
     ],
   },
   {

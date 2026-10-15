@@ -27,6 +27,7 @@ import { Route as AppSiteEnergyAnalysisSavingsRouteImport } from './routes/_app.
 import { Route as AppSiteOperationsAlarmsRouteImport } from './routes/_app._site.operations.alarms'
 import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._site.operations.control'
 import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app._site.operations.diagnostics'
+import { Route as AppSiteOperationsDigitalTwinRouteImport } from './routes/_app._site.operations.digital-twin'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
@@ -127,6 +128,12 @@ const AppSiteOperationsDiagnosticsRoute =
     path: '/operations/diagnostics',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsDigitalTwinRoute =
+  AppSiteOperationsDigitalTwinRouteImport.update({
+    id: '/operations/digital-twin',
+    path: '/operations/digital-twin',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteOperationsRealtimeRoute =
   AppSiteOperationsRealtimeRouteImport.update({
     id: '/operations/realtime',
@@ -163,6 +170,7 @@ export interface FileRoutesByFullPath {
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
+  '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -184,6 +192,7 @@ export interface FileRoutesByTo {
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/operations/control': typeof AppSiteOperationsControlRoute
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
+  '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -208,6 +217,7 @@ export interface FileRoutesById {
   '/_app/_site/operations/alarms': typeof AppSiteOperationsAlarmsRoute
   '/_app/_site/operations/control': typeof AppSiteOperationsControlRoute
   '/_app/_site/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
+  '/_app/_site/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -231,6 +241,7 @@ export interface FileRouteTypes {
     | '/operations/alarms'
     | '/operations/control'
     | '/operations/diagnostics'
+    | '/operations/digital-twin'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -252,6 +263,7 @@ export interface FileRouteTypes {
     | '/operations/alarms'
     | '/operations/control'
     | '/operations/diagnostics'
+    | '/operations/digital-twin'
     | '/operations/realtime'
     | '/operations/systems-devices'
     | '/operations/work-center'
@@ -275,6 +287,7 @@ export interface FileRouteTypes {
     | '/_app/_site/operations/alarms'
     | '/_app/_site/operations/control'
     | '/_app/_site/operations/diagnostics'
+    | '/_app/_site/operations/digital-twin'
     | '/_app/_site/operations/realtime'
     | '/_app/_site/operations/systems-devices'
     | '/_app/_site/operations/work-center'
@@ -412,6 +425,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsDiagnosticsRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/digital-twin': {
+      id: '/_app/_site/operations/digital-twin'
+      path: '/operations/digital-twin'
+      fullPath: '/operations/digital-twin'
+      preLoaderRoute: typeof AppSiteOperationsDigitalTwinRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/realtime': {
       id: '/_app/_site/operations/realtime'
       path: '/operations/realtime'
@@ -448,6 +468,7 @@ interface AppSiteRouteChildren {
   AppSiteOperationsAlarmsRoute: typeof AppSiteOperationsAlarmsRoute
   AppSiteOperationsControlRoute: typeof AppSiteOperationsControlRoute
   AppSiteOperationsDiagnosticsRoute: typeof AppSiteOperationsDiagnosticsRoute
+  AppSiteOperationsDigitalTwinRoute: typeof AppSiteOperationsDigitalTwinRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
@@ -466,6 +487,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOperationsAlarmsRoute: AppSiteOperationsAlarmsRoute,
   AppSiteOperationsControlRoute: AppSiteOperationsControlRoute,
   AppSiteOperationsDiagnosticsRoute: AppSiteOperationsDiagnosticsRoute,
+  AppSiteOperationsDigitalTwinRoute: AppSiteOperationsDigitalTwinRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,
