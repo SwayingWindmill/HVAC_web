@@ -32,8 +32,9 @@ const ACTION = 'operations:investigate';
 
 // What one question may cost. Tools read at most a month of history.
 const BUDGET: AgentRunBudget = Object.freeze({
-  maxModelCalls: 8,
-  maxToolCalls: 16,
+  // Explaining a day takes about eight turns; four more leave room to correct a rejected finding.
+  maxModelCalls: 12,
+  maxToolCalls: 24,
   maxWallClockMs: 120_000,
   maxParallelToolCalls: 4,
   maxQueryRangeMs: 31 * 86_400_000,

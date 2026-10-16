@@ -514,6 +514,18 @@ const energyPayloadFrom = (result: OwnerReadResult): EnergySeriesResponseDto => 
   return payload;
 };
 
+/** An instant as the Site reads it, "2026-10-15 18:00", so the model never mistakes UTC hours for local ones. */
+const siteTime = (instant: string, timezone: string): string => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+};
+
+const sitePoints = (points: readonly { readonly periodStart: string; readonly energyKWh: number }[], timezone: string) => (
+  points.map((point) => ({ siteTime: siteTime(point.periodStart, timezone), energyKWh: point.energyKWh }))
+);
+
 const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate => {
   const payload = result.payload as TelemetryHistoryAggregate;
   if (payload.schemaVersion !== 1 || !Array.isArray(payload.buckets)) fail('TOOL_OWNER_RESPONSE_INVALID');
@@ -557,7 +569,7 @@ const readHistory = async (
       unit: first.unit,
       kind,
       points: buckets.map((bucket) => ({
-        periodStart: bucket.periodStart,
+        siteTime: siteTime(bucket.periodStart, timezone),
         ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
         ...(bucket.counter === undefined ? {} : { increase: bucket.counter.deltaSum }),
         ...(bucket.state === undefined ? {} : { lastValue: bucket.state.lastValue }),
@@ -758,7 +770,7 @@ const readEnergy = async (
       timezone,
       qualityPolicy: query.qualityPolicy,
     },
-    points: payload.points,
+    points: sitePoints(payload.points, timezone),
     pointCount: payload.points.length,
     totalKWh,
     completeness,
@@ -827,7 +839,7 @@ const readEquipmentEnergy = async (
         machine: known?.machine ?? null,
         totalKWh,
         shareOfSite: siteTotalKWh === null || siteTotalKWh === 0 ? null : Number((totalKWh / siteTotalKWh).toFixed(3)),
-        points: device.points,
+        points: sitePoints(device.points, timezone),
       };
     })
     .sort((left, right) => right.totalKWh - left.totalKWh);

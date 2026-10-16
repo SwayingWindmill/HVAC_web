@@ -652,6 +652,10 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
   assert.match(system.text, /site_get_context/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
+  // Each read tells the model the id its evidence cites.
+  const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
+  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
+  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, 'COMPARABLE');
   assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });

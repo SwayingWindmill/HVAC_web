@@ -161,8 +161,9 @@ const adaptProjectTool = (
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
       state.completedToolIds.add(toolCallId);
+      // The model cites a read in investigation_complete by this id.
       return {
-        content: [{ type: 'text', text: serialized }],
+        content: [{ type: 'text', text: JSON.stringify({ evidenceId: toolCallId, result }) }],
         details: { kind: 'project-tool', result },
       };
     } catch (error) {

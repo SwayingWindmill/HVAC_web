@@ -471,7 +471,8 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
   assert.deepEqual(result.devices.map(({ points: _points, ...device }) => device), [
     { deviceId: meterDeviceId, name: 'C 机组电表', machine: { name: 'Chiller 1', type: 'CHILLER' }, totalKWh: 879, shareOfSite: 0.538 },
   ]);
-  assert.equal(result.devices[0].points.length, 2);
+  // Points read in the Site's own calendar (America/Phoenix is UTC−7), so hours are not mistaken for UTC.
+  assert.deepEqual(result.devices[0].points[0], { siteTime: '2026-10-16 03:00', energyKWh: 300 });
   assert.equal(result.completeness, 'COMPLETE');
   assert.equal(result.source.revision, 'energy-breakdown-1');
 });
@@ -526,8 +527,8 @@ test('telemetry_query_history aggregates one device readings over time in the Si
     qualityPolicy: 'VALID_ONLY',
   });
   assert.deepEqual(result.series, [
-    { key: 'chw_supply_temp', unit: '°C', kind: 'reading', points: [{ periodStart: '2026-10-16T10:00:00.000Z', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
-    { key: 'active_energy_total', unit: 'kWh', kind: 'counter', points: [{ periodStart: '2026-10-16T10:00:00.000Z', increase: 88.5, coverage: 0.5 }] },
+    { key: 'chw_supply_temp', unit: '°C', kind: 'reading', points: [{ siteTime: '2026-10-16 03:00', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
+    { key: 'active_energy_total', unit: 'kWh', kind: 'counter', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
   ]);
   assert.equal(result.completeness, 'PARTIAL');
   assert.equal(result.source.revision, 'history:2026-10-16T16:00:00.000Z');
@@ -546,4 +547,10 @@ test('telemetry_query_history refuses a range that would return more buckets tha
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /粒度|granularity/u.test(error.message),
   );
   assert.equal(harness.historyInputs.length, 0);
+});
+
+test('energy_query_series points carry Site-local times', async () => {
+  const harness = createHarness();
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { from: '2026-10-16T01:00:00.000Z', to: '2026-10-16T02:00:00.000Z' });
+  assert.deepEqual(result.points, [{ siteTime: '2026-10-15 18:00', energyKWh: 12 }]);
 });
