@@ -320,7 +320,9 @@ test('a later Run reconstructs Pi context from committed finalized project Messa
   });
 
   assert.equal(result.runStatus, 'COMPLETED');
-  assert.deepEqual(runtime.requests[0], [
+  // Since pi 0.86 the system policy travels as the first transcript message; the rest is the committed conversation.
+  assert.equal(runtime.requests[0]?.[0]?.role, 'system');
+  assert.deepEqual(runtime.requests[0]?.slice(1), [
     { role: 'user', text: previousOperator.content },
     { role: 'assistant', text: previousAssistant.content },
     { role: 'user', text: currentOperator.content },

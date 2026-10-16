@@ -5,6 +5,7 @@ import {
   fauxText,
   fauxThinking,
   fauxToolCall,
+  type JsonObject,
   type Message,
 } from '@earendil-works/pi-ai';
 
@@ -22,7 +23,7 @@ import {
 export type ScriptedPiPart =
   | Readonly<{ type: 'text'; text: string }>
   | Readonly<{ type: 'thinking'; text: string }>
-  | Readonly<{ type: 'tool-call'; name: string; arguments: Record<string, unknown>; id?: string }>;
+  | Readonly<{ type: 'tool-call'; name: string; arguments: JsonObject; id?: string }>;
 
 export interface ScriptedPiResponse {
   readonly parts: readonly ScriptedPiPart[];

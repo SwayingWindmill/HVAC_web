@@ -268,22 +268,25 @@ export const createPiAgentEngine = ({
     streamFn,
     sessionId: input.session.id,
     toolExecution: 'parallel',
-    shouldStopAfterTurn: () => {
-      if (artifacts.length > 0) return true;
-      if (budgetFailureCode !== null) return true;
+    // After each turn: a terminal Tool produced the Run's Artifact, or the budget is spent.
+    // Otherwise pi schedules the next request as usual.
+    finishTurn: () => {
+      const end = { action: 'end' } as const;
+      if (artifacts.length > 0) return end;
+      if (budgetFailureCode !== null) return end;
       if (inputTokens >= input.budget.maxInputTokens) {
         markBudgetFailure('INPUT_TOKEN_LIMIT');
-        return true;
+        return end;
       }
       if (outputTokens >= input.budget.maxOutputTokens) {
         markBudgetFailure('OUTPUT_TOKEN_LIMIT');
-        return true;
+        return end;
       }
       if (modelCalls >= input.budget.maxModelCalls) {
         markBudgetFailure('MODEL_CALL_LIMIT');
-        return true;
+        return end;
       }
-      return false;
+      return undefined;
     },
   });
 
