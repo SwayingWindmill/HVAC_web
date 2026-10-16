@@ -19,40 +19,27 @@ handling, conversion to additive interval energy, canonical units, quality,
 dataset revision and data watermark are owned by the upstream Analytics Read
 Model Projector.
 
-## Energy Usage model
+## Energy model: views over internal cubes
 
-`energy_usage` maps to:
+Views are Cube's only public surface (ADR 0023). `telemetry-query-service` queries
+them, and the Operations Agent will choose among their members; every member has
+a Chinese title and description for both.
 
-```text
-analytics.energy_interval_facts_visible
-```
+| View | Cube (internal) | Rows | Members beyond the shared ones |
+|---|---|---|---|
+| `site_energy` | `site_energy_facts` | SITE facts: the Site's total | `electricity_valid_kwh`, `cooling_valid_kwh`, `cop` (cooling ÷ electricity in the same bucket) |
+| `equipment_energy` | `equipment_energy_facts` | BRANCH facts: equipment sub-meters, already inside the total | `equipment_id` (the metered equipment) |
 
-Important members include:
+Both cubes extend `energy_facts` (`cubes/energy_facts.yml`) over
+`analytics.energy_interval_facts_visible`, and each fixes its accounting scope
+in its own SQL, so a view cannot mix the total with its sub-meters. Shared
+members: `energy_valid_kwh`, `energy_valid_and_suspect_kwh`, the three quality
+counts, `max_data_watermark`, `max_dataset_revision`, `tenant_id`, `site_id`,
+`energy_type`, `quality`, `period_start`, `period_end`. Meter, point and sensor
+identities are not in the model.
 
-| Member | Meaning |
-|---|---|
-| `organization_id` | Immutable tenant boundary |
-| `site_id` | Authorized Site boundary |
-| `energy_type` | Canonical energy type; first slice is `electricity` |
-| `period_start` | Inclusive source interval start |
-| `period_end` | Exclusive source interval end and aggregation bucket dimension |
-| `energy_kwh` | Additive normalized interval energy |
-| `quality` | `VALID`, `SUSPECT` or `INVALID` |
-| `observation_count` | Number of source observations contributing to the interval |
-| `data_watermark` | Latest source sample covered by the fact |
-| `dataset_revision` | Numeric source revision for the fact |
-
-The Query Service groups by `period_end` at hour/day/month granularity. This
-attributes the complete interval to the bucket containing its end. Cross-boundary
-prorating is not part of the first slice.
-
-The semantic model exposes separate energy measures for:
-
-- `VALID` facts only;
-- `VALID` and `SUSPECT` facts;
-- quality counts;
-- maximum data watermark;
-- maximum dataset revision.
+The Query Service groups by `period_end` at hour/day/month granularity, which
+attributes the complete interval to the bucket containing its end.
 
 Cube pre-aggregations are intentionally disabled. ClickHouse facts remain the
 durable authority, while the visible view applies latest-revision-wins before
@@ -63,16 +50,17 @@ enforcement.
 
 The Query Service creates a 30-second HS256 JWT containing:
 
-- `organizationId`;
+- `tenantId`;
 - `siteId` and `siteIds`;
 - `principalId`;
 - `policyRevision`;
 - group `analytics_reader`.
 
-`cube.py` maps the JWT security context to Cube groups. `energy_usage.yml`
-applies deny-by-default access policies: only `analytics_reader` receives member
-access, with row filters bound to `securityContext.organizationId` and
-`securityContext.siteId`.
+`cube.py` maps the JWT security context to Cube groups. The views
+(`views/energy.yml`) carry deny-by-default access policies: only
+`analytics_reader` receives member access, with row filters bound to
+`securityContext.tenantId` and `securityContext.siteId`. The cubes are
+`public: false`, so a query naming a cube member is rejected.
 
 The ClickHouse account configured for Cube is `cube_analytics_reader`, which has
 SELECT access to `analytics.energy_interval_facts_visible` and no write access.

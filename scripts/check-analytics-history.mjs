@@ -15,6 +15,7 @@ const [
   projectorModule,
   queryModule,
   cubeModel,
+  cubeViews,
   queryClient,
   compose,
   integration,
@@ -30,7 +31,8 @@ const [
   read('modules/energy/cmd/energy-projector/main.go'),
   read('modules/energy/go.mod'),
   read('modules/telemetry/go.mod'),
-  read('semantic/cube/model/cubes/energy_usage.yml'),
+  read('semantic/cube/model/cubes/energy_facts.yml'),
+  read('semantic/cube/model/views/energy.yml'),
   read('modules/telemetry/internal/cube/client.go'),
   read('infra/telemetry/compose.yaml'),
   read('scripts/run-analytics-history-tests.mjs'),
@@ -101,10 +103,13 @@ for (const marker of [
 assert(!projectorModule.includes('telemetry-runtime-service'), 'analytics projector must not import Telemetry Runtime implementation');
 assert(!queryModule.includes('analytics-read-model-projector'), 'Query Service must not import Analytics Projector implementation');
 
-for (const marker of ['max_data_watermark', 'max_dataset_revision', 'tenant_id', 'device_id', 'point_id', 'sensor_id', 'telemetry_key', 'period_end', 'access_policy']) {
+for (const marker of ['max_data_watermark', 'max_dataset_revision', 'tenant_id', 'period_end', 'public: false', "accounting_scope = 'SITE'", "accounting_scope = 'BRANCH'"]) {
   assert(cubeModel.includes(marker), `missing Cube semantic marker ${marker}`);
 }
-for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', 'energy_usage.max_data_watermark', 'energy_usage.max_dataset_revision', 'partial = watermark.Before']) {
+for (const marker of ['name: site_energy', 'name: equipment_energy', 'access_policy']) {
+  assert(cubeViews.includes(marker), `missing Cube view marker ${marker}`);
+}
+for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', 'siteView      = "site_energy"', 'equipmentView = "equipment_energy"', 'partial = watermark.Before']) {
   assert(queryClient.includes(marker), `missing Query Service metadata marker ${marker}`);
 }
 for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
@@ -114,8 +119,9 @@ for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently'
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
 for (const marker of [
-  'energy_usage.energy_valid_kwh',
-  'energy_usage.max_data_watermark',
+  '${view}.energy_valid_kwh',
+  '${view}.max_data_watermark',
+  'site_energy_facts.energy_valid_kwh',
   'deniedSiteRows',
   'randomBytes(32)',
   "CUBEJS_DB_HOST: 'clickhouse'",

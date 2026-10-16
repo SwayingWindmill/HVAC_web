@@ -1,0 +1,143 @@
+# Internal cubes over the projected energy facts. Nothing queries them directly: the views in
+# ../views are the public surface (ADR 0023). Titles and descriptions are Chinese because the
+# views carry them to operators and to the Operations Agent.
+
+cubes:
+  - name: energy_facts
+    public: false
+    title: 能耗区间
+    description: 电表累计读数投影成的可相加能耗区间，带质量、数据截至时间和数据版本。
+    sql: SELECT * FROM analytics.energy_interval_facts_visible
+
+    measures:
+      - name: energy_valid_kwh
+        title: 能耗（有效数据）
+        description: 只累计质量为「有效」的区间，单位 kWh。能耗分析默认用它。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: energy_valid_and_suspect_kwh
+        title: 能耗（含可疑数据）
+        description: 累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: valid_count
+        title: 有效区间数
+        description: 质量为「有效」的计量区间个数。
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: suspect_count
+        title: 可疑区间数
+        description: 质量为「可疑」的计量区间个数，例如读数跳变或计数器回绕附近。
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'SUSPECT'"
+
+      - name: invalid_count
+        title: 无效区间数
+        description: 质量为「无效」的计量区间个数，这些区间不计入任何能耗。
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'INVALID'"
+
+      - name: max_data_watermark
+        title: 数据截至
+        description: 参与计算的读数里最新的采样时间（UTC），之后的能耗还没有到。
+        sql: data_watermark
+        type: max
+
+      - name: max_dataset_revision
+        title: 数据版本
+        description: 参与计算的区间里最大的数据版本号，数据重算后会变大。
+        sql: dataset_revision
+        type: max
+
+    dimensions:
+      - name: tenant_id
+        title: 租户
+        description: 数据所属租户的编号，用于访问控制。
+        sql: tenant_id
+        type: string
+
+      - name: site_id
+        title: 站点
+        description: 站点编号；每个查询只能看到被授权的站点。
+        sql: site_id
+        type: string
+
+      - name: energy_type
+        title: 能源类型
+        description: electricity 是用电量，cooling 是供冷量，都以 kWh 计。
+        sql: energy_type
+        type: string
+
+      - name: quality
+        title: 数据质量
+        description: VALID 有效、SUSPECT 可疑、INVALID 无效。
+        sql: quality
+        type: string
+
+      - name: period_start
+        title: 区间开始
+        description: 计量区间的开始时间。
+        sql: period_start
+        type: time
+
+      - name: period_end
+        title: 区间结束
+        description: 计量区间的结束时间；按小时、日、月汇总时，整个区间算在它结束的那个时段里。
+        sql: period_end
+        type: time
+
+  # The Site's total: SITE facts only.
+  - name: site_energy_facts
+    extends: energy_facts
+    public: false
+    title: 站点总能耗
+    description: 站点总表的能耗区间，不含已经算在总表里的设备分表。
+    sql: SELECT * FROM analytics.energy_interval_facts_visible WHERE accounting_scope = 'SITE'
+
+    measures:
+      - name: electricity_valid_kwh
+        title: 用电量
+        description: 站点总表的用电量（有效数据），单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'electricity'"
+
+      - name: cooling_valid_kwh
+        title: 供冷量
+        description: 站点的供冷量（有效数据），单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'cooling'"
+
+      - name: cop
+        title: 综合能效
+        description: 同一时段的供冷量 ÷ 用电量（COP）；没有用电量的时段为空。
+        sql: "{cooling_valid_kwh} / NULLIF({electricity_valid_kwh}, 0)"
+        type: number
+
+  # Equipment sub-meters: BRANCH facts, already inside the Site's total.
+  - name: equipment_energy_facts
+    extends: energy_facts
+    public: false
+    title: 设备分项能耗
+    description: 各设备分表的能耗区间；这些能耗已经包含在站点总表里，不能再与总表相加。
+    sql: SELECT * FROM analytics.energy_interval_facts_visible WHERE accounting_scope = 'BRANCH'
+
+    dimensions:
+      - name: equipment_id
+        title: 设备
+        description: 分表所计量的设备编号，与资产模型里的设备一致。
+        sql: load_device_id
+        type: string
