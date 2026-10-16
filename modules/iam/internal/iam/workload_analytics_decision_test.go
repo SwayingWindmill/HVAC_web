@@ -116,3 +116,27 @@ func (reportPrincipalStore) LookupRegistryAuthorization(_ context.Context, looku
 		}},
 	}, nil
 }
+
+// A Tenant-wide role covers the Tenant's Sites only: a Site id the Tenant does not hold is not found.
+func TestIAMTenantWideWorkloadRoleCoversOnlyTheTenantsSites(t *testing.T) {
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.AuthorizationStore = tenantWideReportStore{}
+		config.AnalyticsGrantAudience = queryAudience
+		config.AllowedAnalyticsWorkloads = []string{reportWorkload}
+	})
+	if recorder := harness.analyticsWorkloadDecision(t, reportWorkload, reportQuery(iam.S1FixtureOwnerASite2ID)); recorder.Code != http.StatusOK {
+		t.Fatalf("Tenant Site status = %d; body=%s", recorder.Code, recorder.Body.String())
+	}
+	recorder := harness.analyticsWorkloadDecision(t, reportWorkload, reportQuery("018f1e00-1000-7000-8000-0000000000ff"))
+	assertIAMProblem(t, recorder, http.StatusNotFound, "IAM_RESOURCE_NOT_FOUND")
+}
+
+type tenantWideReportStore struct{}
+
+func (tenantWideReportStore) LookupRegistryAuthorization(ctx context.Context, lookup iam.AuthorizationLookup) (iam.AuthorizationFacts, error) {
+	facts, err := reportPrincipalStore{}.LookupRegistryAuthorization(ctx, lookup)
+	for index := range facts.Assignments {
+		facts.Assignments[index].SiteID = ""
+	}
+	return facts, err
+}

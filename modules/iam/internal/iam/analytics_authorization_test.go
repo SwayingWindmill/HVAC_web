@@ -69,8 +69,9 @@ func TestEvaluateAnalyticsAuthorizationExplicitDenyWins(t *testing.T) {
 
 func analyticsAuthorizationFacts(now time.Time, siteID string) AuthorizationFacts {
 	return AuthorizationFacts{
-		Principal:   PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: "https://issuer.example.test", Subject: "energy-user", Status: FactStatusActive},
-		Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Principal:     PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: "https://issuer.example.test", Subject: "energy-user", Status: FactStatusActive},
+		Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		TenantSiteIDs: []string{analyticsTestSite, analyticsOtherSite},
 		Assignments: []RoleAssignment{{
 			TenantID: S1FixtureTenantAID, SiteID: siteID, RoleKey: "viewer", Capabilities: []string{analyticsmodel.EnergySeriesAction},
 			Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),

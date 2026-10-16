@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
@@ -71,6 +72,9 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 	}
 	allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, request.Action, now)
 	switch {
+	case !slices.Contains(facts.TenantSiteIDs, request.SiteID):
+		// A Site the Tenant does not hold is granted by no role, Tenant-wide ones included.
+		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyAction
 	case denied:
 		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyExplicit
 	case !allowed:
