@@ -49,6 +49,8 @@ interface ProjectToolBudgetState {
   terminalToolCallId: string | null;
   calls: number;
   active: number;
+  /** Calls waiting for a free slot, released in order as running calls finish. */
+  readonly waiting: (() => void)[];
 }
 
 const safeToolFailure = (error: unknown): Error => {
@@ -144,9 +146,9 @@ const adaptProjectTool = (
       state.onBudgetExhausted('TOOL_CALL_LIMIT');
       throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
     }
+    // A batch wider than the limit waits for slots rather than failing the Run.
     if (state.active >= state.budget.maxParallelToolCalls) {
-      state.onBudgetExhausted('TOOL_CONCURRENCY_LIMIT');
-      throw safeToolFailure(new AgentToolError('TOOL_CONCURRENCY_LIMIT'));
+      await new Promise<void>((resolve) => state.waiting.push(resolve));
     }
     state.active += 1;
     try {
@@ -170,6 +172,7 @@ const adaptProjectTool = (
       throw safeToolFailure(error);
     } finally {
       state.active -= 1;
+      state.waiting.shift()?.();
     }
   },
 });
@@ -245,6 +248,7 @@ export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
     terminalToolCallId: null,
     calls: 0,
     active: 0,
+    waiting: [],
   };
   return [
     ...input.tools.map((tool) => adaptProjectTool(tool, input.context, input.runSignal, state)),
