@@ -128,8 +128,7 @@
 | 设备 | `operations/systems-devices/components/SystemsDevicesWorkspace.tsx` / `DeviceInspector.tsx` | 267 / 223 | MetricGrid、Table、Select、Sheet、ComposedChart | 分组表行 |
 | 能耗分析 | `energy-analysis/consumption/components/ConsumptionWorkspace.tsx` | 255 | MetricTabsChartCard、FactList、DataTable、PeriodTabs | TouCostCard |
 | 分项能耗 | `breakdown/components/BreakdownWorkspace.tsx` | 280 | MetricGrid、PeriodTabs、Chart | 桑基、排行 |
-| 需量分析 | `demand/components/DemandWorkspace.tsx` | 221 | MetricGrid、Chart | 峰段底色、最大日标红 |
-| 负荷预测 | `forecast/components/ForecastWorkspace.tsx` | 186 | MetricGrid、Chart、Table | 预测区间 |
+| 用电负荷 | `load/components/LoadWorkspace.tsx` + `LoadCurve`、`ForecastHours`、`DailyPeaks`、`DemandCharge` | 280 | 指标条、Chart、Tabs、Table | 今天与明天一条轴、预测区间、电价高峰底色、本月最高参考线、最高日标红 |
 | 优化建议 | `optimization/components/OptimizationWorkspace.tsx` | 352 | MetricGrid、FactList、Card | 建议主卡、约束滑轨 |
 | 节能项目 | `savings/components/*` | 171 + 299 + 148 + 72 | Empty、Dialog、Sheet、Chart | MeasureSheet、RegisterMeasureDialog、MeasureTimeDialog |
 | 站点对标 | `benchmark/components/BenchmarkWorkspace.tsx` | 223 | MetricGrid、PeriodTabs、Table、Chart | 排名条 |
