@@ -15,12 +15,13 @@
 // already holds history is refused: replaying it again would keep the old observations (same
 // dataset) or interleave two sets of counters (another one); `npm run local:reset` clears it.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { centralPlantDevices, localSites, siteDeviceId, sqlJobId, sqlLiteral } from './central-plant-local-contract.mjs';
 import { localContainer, repoRoot, runtimePath } from './lib/local-environment.mjs';
+import { ensureWorkloadIdentity } from './lib/workload-identity.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -42,7 +43,6 @@ const commandsBySite = new Map(values.commands.map((entry) => {
 const out = path.join(repoRoot, 'out', 'history-replay');
 mkdirSync(out, { recursive: true });
 const pki = runtimePath('internal-pki');
-const identity = path.join(pki, 'historical-replay-runner');
 
 const psql = (sql) => execFileSync('docker', ['exec', '-i', localContainer('postgres'), 'psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-Atq'], { input: sql }).toString().trim();
 const clickhouse = (sql) => execFileSync('docker', ['exec', localContainer('clickhouse'), 'clickhouse-client', '--query', sql]).toString().trim();
@@ -54,22 +54,9 @@ function run(command, args, options = {}) {
 
 // The replay runner presents its own workload identity, issued by the local CA like every other.
 function ensureReplayIdentity() {
-  if (existsSync(path.join(identity, 'tls.crt'))) return;
-  mkdirSync(identity, { recursive: true, mode: 0o750 });
-  writeFileSync(path.join(identity, 'extensions.cnf'), [
-    'basicConstraints=critical,CA:FALSE',
-    'keyUsage=critical,digitalSignature',
-    'extendedKeyUsage=clientAuth',
-    'subjectAltName=URI:spiffe://hvac.local/historical-replay-runner',
-    '',
-  ].join('\n'), { mode: 0o640 });
-  const file = (name) => path.join(identity, name);
-  execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', file('tls.key')]);
-  execFileSync('chmod', ['640', file('tls.key')]);
-  execFileSync('openssl', ['req', '-new', '-key', file('tls.key'), '-subj', '/CN=historical-replay-runner', '-out', file('request.csr')]);
-  execFileSync('openssl', ['x509', '-req', '-in', file('request.csr'), '-CA', path.join(pki, 'ca.crt'), '-CAkey', path.join(pki, 'ca.key'),
-    '-CAserial', path.join(pki, 'ca.srl'), '-days', '365', '-sha256', '-extfile', file('extensions.cnf'), '-out', file('tls.crt')], { stdio: 'ignore' });
-  console.log('Issued the historical-replay-runner workload identity.');
+  if (ensureWorkloadIdentity(pki, 'historical-replay-runner', 'spiffe://hvac.local/historical-replay-runner')) {
+    console.log('Issued the historical-replay-runner workload identity.');
+  }
 }
 
 // A deterministic UUIDv7 per Site and window, so a rerun replays into the same dataset.
