@@ -52,11 +52,7 @@ func queryHoursFixture(t *testing.T, siteBound bool) (*QueryHours, *[]analyticsm
 		_ = json.NewEncoder(writer).Encode(analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points})
 	}))
 	t.Cleanup(query.Close)
-	reader, err := NewQueryHours(QueryHoursConfig{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return reader, &asked
+	return NewQueryHours(QueryHoursConfig{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()}), &asked
 }
 
 func TestQueryHoursReadsElectricityAndCoolingAsTheReportsOwnWorkload(t *testing.T) {

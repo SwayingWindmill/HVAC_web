@@ -43,10 +43,7 @@ func main() {
 		return httpClient
 	}
 	iamURL, queryURL := requiredEnv("REPORT_IAM_URL"), requiredEnv("REPORT_QUERY_URL")
-	hours, err := report.NewQueryHours(report.QueryHoursConfig{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)})
-	if err != nil {
-		log.Fatal(err)
-	}
+	hours := report.NewQueryHours(report.QueryHoursConfig{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)})
 	service, err := report.NewService(store, hours, time.Now, schedulerjob.UUIDv7)
 	if err != nil {
 		log.Fatal(err)

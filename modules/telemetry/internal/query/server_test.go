@@ -411,8 +411,8 @@ func TestHandlerRefusesWorkloadGrantsThatAreNotTheWorkloadsOwn(t *testing.T) {
 	}
 	for name, testCase := range cases {
 		response := harness.serveGrant(t, query, testCase.grant, testCase.presenter)
-		if response.Code != http.StatusForbidden && response.Code != http.StatusUnauthorized {
-			t.Errorf("%s: status = %d; body=%s", name, response.Code, response.Body.String())
+		if response.Code != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want %d; body=%s", name, response.Code, http.StatusForbidden, response.Body.String())
 		}
 	}
 	if engine.calls != 0 {

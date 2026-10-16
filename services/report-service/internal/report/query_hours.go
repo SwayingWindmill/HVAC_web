@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -42,20 +41,11 @@ type QueryHoursConfig struct {
 	QueryClient *http.Client
 }
 
-func NewQueryHours(config QueryHoursConfig) (*QueryHours, error) {
-	for _, origin := range []string{config.IAMURL, config.QueryURL} {
-		parsed, err := url.Parse(strings.TrimSpace(origin))
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return nil, errors.New("report IAM and query URLs must be HTTP(S) origins")
-		}
-	}
-	if config.IAMClient == nil || config.QueryClient == nil {
-		return nil, errors.New("report IAM and query clients are required")
-	}
+func NewQueryHours(config QueryHoursConfig) *QueryHours {
 	return &QueryHours{
 		iamURL: strings.TrimRight(config.IAMURL, "/"), queryURL: strings.TrimRight(config.QueryURL, "/"),
 		iamClient: config.IAMClient, queryClient: config.QueryClient,
-	}, nil
+	}
 }
 
 func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) ([]Hour, error) {

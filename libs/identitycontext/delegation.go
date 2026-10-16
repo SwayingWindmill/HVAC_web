@@ -211,7 +211,7 @@ func ValidateDelegationFromIssuerAnyScope(
 // ValidateWorkloadDelegation checks a grant a Workload Principal holds for itself (ADR 0017):
 // its subject is the workload presenting it, and no user Session stands behind it.
 func ValidateWorkloadDelegation(claims DelegationClaims, now time.Time, issuer, workload, audience, action, scope string) error {
-	if claims.Subject != workload || claims.SessionID != "" || len(claims.Scopes) != 1 {
+	if claims.Subject != workload || claims.SessionID != "" {
 		return errors.New("workload delegation must name the presenting workload and no Session")
 	}
 	return validateDelegation(claims, now, issuer, workload, audience, action, []string{scope})

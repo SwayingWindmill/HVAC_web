@@ -37,6 +37,11 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		return http.StatusBadRequest
 	}
 	return h.issueRegistryDecision(writer, request, decisionRequest, registryGrantActor{
-		subjectIssuer: "spiffe://" + strings.SplitN(strings.TrimPrefix(workload, "spiffe://"), "/", 2)[0], subject: workload, presenter: workload,
+		subjectIssuer: workloadSubjectIssuer(workload), subject: workload, presenter: workload,
 	})
+}
+
+// workloadSubjectIssuer is the issuer a Workload Principal is recorded under: its SPIFFE trust domain.
+func workloadSubjectIssuer(workload string) string {
+	return "spiffe://" + strings.SplitN(strings.TrimPrefix(workload, "spiffe://"), "/", 2)[0]
 }

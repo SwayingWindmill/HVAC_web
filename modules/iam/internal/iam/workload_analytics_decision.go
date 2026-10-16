@@ -49,7 +49,7 @@ func (h *handler) handleAnalyticsWorkloadDecision(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusBadRequest, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
 		return http.StatusBadRequest
 	}
-	subjectIssuer := "spiffe://" + strings.SplitN(strings.TrimPrefix(workload, "spiffe://"), "/", 2)[0]
+	subjectIssuer := workloadSubjectIssuer(workload)
 	now := h.now().UTC()
 	decision, err := evaluateAnalyticsAuthorization(request.Context(), h.authorizationStore, now, subjectIssuer, workload, analyticsmodel.AuthorizationDecisionRequest{
 		TenantID: query.TenantID, SiteID: query.SiteID, Action: analyticsmodel.EnergySeriesAction,
