@@ -4,7 +4,7 @@ import { Download, ReceiptText, RefreshCw, TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import type { SiteTariff } from "@/api/generated/platformGateway.gen";
 import { PageHeader } from "@/blocks/page-header";
-import { Panel, PanelHeader } from "@/blocks/panel";
+import { Panel } from "@/blocks/panel";
 import { InfoTip } from "@/components/info-tip";
 import { MetricTabsChartCard, type MetricTab } from "@/components/metric-tabs-chart-card";
 import { Main } from "@/components/layout/Main";
@@ -13,7 +13,10 @@ import { DeltaBadge } from "@/components/ui/delta-badge";
 import { PeriodTabs } from "@/components/ui/period-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { TouCostPanel } from "@/features/tariff/components/TouCostPanel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CategoryTrend, destinationCsv, EnergyDestination } from "@/features/breakdown/components/EnergyDestination";
+import { useEnergyBreakdown } from "@/features/breakdown/query";
+import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
 import { PERIOD_LABEL, touCostByLabel, touEnergyCost, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
@@ -42,6 +45,7 @@ const BUCKET_HEADER: Record<Granularity, string> = { hour: "时段", day: "日�
 const PERIOD_ORDER: readonly PeriodCode[] = ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"];
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
+type ConsumptionView = "trend" | "tou" | "detail";
 
 /** Energy in kWh, or in MWh once `scale` (the largest figure shown beside it) reaches 10,000 kWh. */
 function energy(value: number | null, scale = value ?? 0): { value: string | null; unit: string } {
@@ -68,10 +72,12 @@ export function ConsumptionWorkspace() {
   const navigate = useNavigate({ from: "/energy-analysis/consumption" });
   const period: EnergyPeriod = search.period ?? "today";
   const metric: ConsumptionMetric = search.metric ?? "electricityKWh";
+  const view: ConsumptionView = search.view ?? "trend";
   const previousLabel = PREVIOUS_LABEL[period];
   const query = useEnergyComparison(period);
   const tariff = useQuery(siteTariffQuery(site.id));
   const hourly = useHourlyElectricity(period);
+  const destination = useEnergyBreakdown(period);
   const comparison = query.data;
 
   // Each bucket priced by time of use, the previous period's lined up with the current one's.
@@ -87,7 +93,7 @@ export function ConsumptionWorkspace() {
     };
   }, [tariff.data, hourly.data, site.timezone]);
 
-  const setSearch = (patch: { period?: EnergyPeriod; metric?: ConsumptionMetric }) =>
+  const setSearch = (patch: { period?: EnergyPeriod; metric?: ConsumptionMetric; view?: ConsumptionView }) =>
     void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
 
   const exportCsv = () => {
@@ -104,6 +110,7 @@ export function ConsumptionWorkspace() {
           row.coolingKWh ?? "", row.cop?.toFixed(2) ?? "", ...(pricing ? [cost?.total.toFixed(0) ?? ""] : []),
         ];
       }),
+      ...destinationCsv(destination, previousLabel),
     ];
     const url = URL.createObjectURL(new Blob(["﻿" + lines.map((line) => line.join(",")).join("\n")], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
@@ -117,7 +124,7 @@ export function ConsumptionWorkspace() {
     <Main>
       <PageHeader
         title="能耗分析"
-        description={site.displayName}
+        description={`${site.displayName} · 用了多少电、用在哪台设备、花了多少钱`}
         actions={
           <>
             <span className="text-xs text-muted-foreground">
@@ -129,7 +136,7 @@ export function ConsumptionWorkspace() {
               ) : null}
             </span>
             <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value as EnergyPeriod })} />
-            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void hourly.refetch(); }}>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void hourly.refetch(); void destination.query.refetch(); void destination.previous.refetch(); }}>
               <RefreshCw />
             </Button>
             <Button variant="outline" disabled={!comparison?.buckets.length} onClick={exportCsv}>
@@ -152,8 +159,32 @@ export function ConsumptionWorkspace() {
       ) : (
         <>
           <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} />
-          <TouSection tariff={tariff} pricing={pricing} hourlyFailed={hourly.isError} pending={tariff.isPending || (Boolean(tariff.data) && hourly.isPending)} timeZone={site.timezone} />
-          <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} />
+          <EnergyDestination result={destination} previousLabel={previousLabel} />
+          <Panel aria-label="能耗明细">
+            <Tabs value={view} onValueChange={(value) => setSearch({ view: value as ConsumptionView })} className="gap-0">
+              <header className="flex h-12 shrink-0 items-center gap-4 border-b border-divider px-5">
+                <TabsList variant="line" className="h-12 gap-5 p-0">
+                  <TabsTrigger value="trend" className="h-12 flex-none px-0 after:bottom-0!">分项趋势</TabsTrigger>
+                  <TabsTrigger value="tou" className="h-12 flex-none px-0 after:bottom-0!">分时电费</TabsTrigger>
+                  <TabsTrigger value="detail" className="h-12 flex-none px-0 after:bottom-0!">{`分${BUCKET_NOUN[comparison.current.granularity]}明细`}</TabsTrigger>
+                </TabsList>
+                <span className="ml-auto flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
+                  {view === "trend" ? "各类设备按自身刻度 · 浅色为进行中"
+                    : view === "tou" ? (tariff.data ? <>{tariff.data.displayName}<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></> : null)
+                      : "kWh · 最新在前"}
+                </span>
+              </header>
+              <TabsContent value="trend">
+                <CategoryTrend result={destination} granularity={comparison.current.granularity} timeZone={site.timezone} />
+              </TabsContent>
+              <TabsContent value="tou">
+                <TouSection tariff={tariff} pricing={pricing} hourlyFailed={hourly.isError} pending={tariff.isPending || (Boolean(tariff.data) && hourly.isPending)} timeZone={site.timezone} />
+              </TabsContent>
+              <TabsContent value="detail">
+                <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} />
+              </TabsContent>
+            </Tabs>
+          </Panel>
         </>
       )}
     </Main>
@@ -275,28 +306,20 @@ function TouSection({ tariff, pricing, hourlyFailed, pending, timeZone }: {
   readonly pending: boolean;
   readonly timeZone: string;
 }) {
-  if (pending) return <Skeleton className="h-[188px] rounded-xl" />;
+  if (pending) return <Skeleton className="m-5 h-[140px] rounded-lg" />;
   if (tariff.data === null) {
     return (
-      <Panel aria-label="分时电费">
-        <PanelHeader title="分时电费" />
-        <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground"><ReceiptText className="size-[18px]" aria-hidden="true" /></span>
-          <p className="text-sm font-semibold">站点还没有配置电价</p>
-          <p className="text-xs text-muted-foreground">为站点的电网进线发布电价后，这里按峰平谷时段估算电费</p>
-        </div>
-      </Panel>
+      <div role="region" aria-label="分时电费" className="flex flex-col items-center gap-2 px-6 py-8 text-center">
+        <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground"><ReceiptText className="size-[18px]" aria-hidden="true" /></span>
+        <p className="text-sm font-semibold">站点还没有配置电价</p>
+        <p className="text-xs text-muted-foreground">为站点的电网进线发布电价后，这里按峰平谷时段估算电费</p>
+      </div>
     );
   }
   if (tariff.isError || hourlyFailed || !tariff.data || !pricing) {
-    return (
-      <Panel aria-label="分时电费">
-        <PanelHeader title="分时电费" />
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">电价或逐时用电暂时读不到</p>
-      </Panel>
-    );
+    return <p role="region" aria-label="分时电费" className="px-5 py-8 text-center text-sm text-muted-foreground">电价或逐时用电暂时读不到</p>;
   }
-  return <TouCostPanel tariff={tariff.data} cost={pricing.current} timeZone={timeZone} />;
+  return <TouCostDetail tariff={tariff.data} cost={pricing.current} timeZone={timeZone} />;
 }
 
 function DetailTable({ comparison, pricing, previousLabel }: {
@@ -310,9 +333,7 @@ function DetailTable({ comparison, pricing, previousLabel }: {
   // Newest first: the bucket still running leads.
   const rows = [...comparison.buckets].filter((bucket) => bucket.electricityKWh !== null || bucket.coolingKWh !== null || bucket.complete).reverse();
   return (
-    <Panel aria-label={title}>
-      <PanelHeader title={title} caption={`kWh · ${rows.length} ${granularity === "hour" ? "个时段" : granularity === "day" ? "天" : "个月"}`} />
-      <Table aria-label={title} className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+    <Table aria-label={title} className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="pl-5">{BUCKET_HEADER[granularity]}</TableHead>
@@ -351,7 +372,6 @@ function DetailTable({ comparison, pricing, previousLabel }: {
             );
           })}
         </TableBody>
-      </Table>
-    </Panel>
+    </Table>
   );
 }

@@ -1,6 +1,4 @@
 import type { SiteTariff } from '@/api/generated/platformGateway.gen';
-import { Panel, PanelHeader } from '@/blocks/panel';
-import { InfoTip } from '@/components/info-tip';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
@@ -47,7 +45,7 @@ function ratesOn(tariff: SiteTariff, now: Date, timeZone: string): Map<PeriodCod
  * The period's metered HVAC electricity priced by the Site's time-of-use Tariff, split by
  * period, beside today's periods. An estimate at published rates; the bill is Settlement's.
  */
-export function TouCostPanel({ tariff, cost, timeZone }: {
+export function TouCostDetail({ tariff, cost, timeZone }: {
   readonly tariff: SiteTariff;
   readonly cost: TouCost;
   readonly timeZone: string;
@@ -57,11 +55,7 @@ export function TouCostPanel({ tariff, cost, timeZone }: {
   const ranges = periodRanges(tariff, now, timeZone);
   const share = (energy: number) => (cost.energyKWh > 0 ? energy / cost.energyKWh : 0);
   return (
-    <Panel aria-label="分时电费">
-      <PanelHeader
-        title={<span className="flex items-center gap-1.5">分时电费<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></span>}
-        caption={tariff.displayName}
-      />
+    <div role="region" aria-label="分时电费">
       <div className="grid grid-cols-[260px_minmax(0,1fr)] gap-8 px-5 py-4">
         <div className="flex flex-col gap-3">
           <span className="text-xs text-muted-foreground">今日电价时段</span>
@@ -125,6 +119,6 @@ export function TouCostPanel({ tariff, cost, timeZone }: {
           有 {formatDecimal(cost.unpricedKWh, 0)} kWh 落在电价未覆盖的时段，未计入电费
         </p>
       ) : null}
-    </Panel>
+    </div>
   );
 }

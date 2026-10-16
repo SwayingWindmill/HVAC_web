@@ -5,6 +5,7 @@ export const Route = createFileRoute("/_app/_site/energy-analysis/consumption")(
   validateSearch: z.object({
     period: z.enum(["today", "7d", "month", "year"]).optional(),
     metric: z.enum(["electricityKWh", "coolingKWh", "cop", "cost"]).optional(),
+    view: z.enum(["trend", "tou", "detail"]).optional(),
   }),
   component: ConsumptionWorkspace,
 });

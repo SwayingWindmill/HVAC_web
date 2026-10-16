@@ -65,7 +65,7 @@
 | Sparkline | `components/ui/sparkline.tsx` | 1 | 迷你趋势 | 保留 |
 | BarList | `components/ui/bar-list.tsx` | 1 | 横向排行条 | 合并：分项排行、对标排名、告警设备排行用统一的排行组件 |
 | PlantDiagram | `features/operations/realtime/components/PlantDiagram.tsx` | 页面专用 | 冷站两环路示意（HTML 卡 + SVG 管段 + 流动动画） | 保留工程规则，重设计外观 |
-| 桑基（自绘） | `features/breakdown/components/BreakdownWorkspace.tsx` | 页面专用 | 能流 | 保留，统一配色 |
+| 桑基（自绘） | `features/breakdown/components/EnergyDestination.tsx` | 能耗分析专用 | 能流 | 保留，统一配色 |
 | 分时电价条 / 电价时段轴 | `features/tariff/components/TouCostCard.tsx` | 2 页 | 峰平谷占比和 24h 时段 | 重设计：峰时段别用警告色 |
 | 约束滑轨 / 阈值轨 | `OptimizationWorkspace`、`DiagnosticsWorkspace` 内联 | 页面专用 | 当前值、建议值、阈值在范围中的位置 | 抽成一个共享的“范围标尺”组件 |
 | KpiCard、DistributionBar、RadialGauge | `components/ui/` | 0 | 从 dashboardcn 拷入，未使用 | 删除候选 |
@@ -127,7 +127,6 @@
 | 实时运行 | `operations/realtime/components/RealtimeWorkspace.tsx` | 266 | MetricGrid、FactList、Table | PlantDiagram、device-presentation |
 | 设备 | `operations/systems-devices/components/SystemsDevicesWorkspace.tsx` / `DeviceInspector.tsx` | 267 / 223 | MetricGrid、Table、Select、Sheet、ComposedChart | 分组表行 |
 | 能耗分析 | `energy-analysis/consumption/components/ConsumptionWorkspace.tsx` | 255 | MetricTabsChartCard、FactList、DataTable、PeriodTabs | TouCostCard |
-| 分项能耗 | `breakdown/components/BreakdownWorkspace.tsx` | 280 | MetricGrid、PeriodTabs、Chart | 桑基、排行 |
 | 用电负荷 | `load/components/LoadWorkspace.tsx` + `LoadCurve`、`ForecastHours`、`DailyPeaks`、`DemandCharge` | 280 | 指标条、Chart、Tabs、Table | 今天与明天一条轴、预测区间、电价高峰底色、本月最高参考线、最高日标红 |
 | 优化建议 | `optimization/components/OptimizationWorkspace.tsx` | 352 | MetricGrid、FactList、Card | 建议主卡、约束滑轨 |
 | 节能项目 | `savings/components/*` | 171 + 299 + 148 + 72 | Empty、Dialog、Sheet、Chart | MeasureSheet、RegisterMeasureDialog、MeasureTimeDialog |

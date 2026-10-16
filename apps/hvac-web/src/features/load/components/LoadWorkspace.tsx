@@ -170,7 +170,7 @@ export function LoadWorkspace() {
     <Main>
       <PageHeader
         title="用电负荷"
-        description={`${site.displayName} · 空调总电表`}
+        description={`${site.displayName} · 空调总电表现在的负荷、最高负荷和接下来的预测`}
         meta={forecast.data ? (
           <PageMeta dot={forecast.data.quality === 'VALID' ? 'live' : 'warning'}>
             {forecast.data.quality === 'VALID' ? '预测按近 7 天同时段' : '预测历史不足，暂按最近读数延续'}
