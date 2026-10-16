@@ -1,6 +1,6 @@
 # The public energy surface (ADR 0023). telemetry-query-service queries these views only, and
-# the Operations Agent's semantic query Tool will choose among their members. Each view sees
-# only the caller's Tenant and Site.
+# the Operations Agent's semantic query Tool will choose among their members. The cubes' row
+# policy keeps each view to the caller's Tenant and Site; the views grant the members.
 
 views:
   - name: site_energy
@@ -19,24 +19,14 @@ views:
           - invalid_count
           - max_data_watermark
           - max_dataset_revision
-          - tenant_id
           - site_id
           - energy_type
           - quality
-          - period_start
           - period_end
     access_policy:
       - group: analytics_reader
         member_level:
           includes: "*"
-        row_level:
-          filters:
-            - member: tenant_id
-              operator: equals
-              values: ["{ securityContext.tenantId }"]
-            - member: site_id
-              operator: equals
-              values: ["{ securityContext.siteId }"]
 
   - name: equipment_energy
     title: 设备分项能耗
@@ -51,22 +41,12 @@ views:
           - invalid_count
           - max_data_watermark
           - max_dataset_revision
-          - tenant_id
           - site_id
           - equipment_id
           - energy_type
           - quality
-          - period_start
           - period_end
     access_policy:
       - group: analytics_reader
         member_level:
           includes: "*"
-        row_level:
-          filters:
-            - member: tenant_id
-              operator: equals
-              values: ["{ securityContext.tenantId }"]
-            - member: site_id
-              operator: equals
-              values: ["{ securityContext.siteId }"]

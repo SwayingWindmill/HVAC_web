@@ -12,7 +12,7 @@ cubes:
     measures:
       - name: energy_valid_kwh
         title: 能耗（有效数据）
-        description: 只累计质量为「有效」的区间，单位 kWh。能耗分析默认用它。
+        description: 只累计质量为「有效」的区间，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
         sql: energy_kwh
         type: sum
         filters:
@@ -20,7 +20,7 @@ cubes:
 
       - name: energy_valid_and_suspect_kwh
         title: 能耗（含可疑数据）
-        description: 累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。
+        description: 累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。同样必须按能源类型筛选。
         sql: energy_kwh
         type: sum
         filters:
@@ -96,6 +96,21 @@ cubes:
         sql: period_end
         type: time
 
+    # Every cube that extends this one sees only the caller's Tenant and Site. Cube combines these
+    # row filters with the views' own policies, so the Tenant never has to be a view member.
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: tenant_id
+              operator: equals
+              values: ["{ securityContext.tenantId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]
+
   # The Site's total: SITE facts only.
   - name: site_energy_facts
     extends: energy_facts
@@ -123,7 +138,7 @@ cubes:
 
       - name: cop
         title: 综合能效
-        description: 同一时段的供冷量 ÷ 用电量（COP）；没有用电量的时段为空。
+        description: 同一时段的供冷量 ÷ 用电量（COP），两者都只算有效数据；没有用电量的时段为空。不要再按能源类型筛选，否则分子或分母为空。
         sql: "{cooling_valid_kwh} / NULLIF({electricity_valid_kwh}, 0)"
         type: number
 

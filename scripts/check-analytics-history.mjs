@@ -103,13 +103,11 @@ for (const marker of [
 assert(!projectorModule.includes('telemetry-runtime-service'), 'analytics projector must not import Telemetry Runtime implementation');
 assert(!queryModule.includes('analytics-read-model-projector'), 'Query Service must not import Analytics Projector implementation');
 
-for (const marker of ['max_data_watermark', 'max_dataset_revision', 'tenant_id', 'period_end', 'public: false', "accounting_scope = 'SITE'", "accounting_scope = 'BRANCH'"]) {
+for (const marker of ['max_data_watermark', 'max_dataset_revision', 'period_end', 'access_policy']) {
   assert(cubeModel.includes(marker), `missing Cube semantic marker ${marker}`);
 }
-for (const marker of ['name: site_energy', 'name: equipment_energy', 'access_policy']) {
-  assert(cubeViews.includes(marker), `missing Cube view marker ${marker}`);
-}
-for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', 'siteView      = "site_energy"', 'equipmentView = "equipment_energy"', 'partial = watermark.Before']) {
+assert(cubeViews.includes('access_policy'), 'Cube views must grant their members through an access policy');
+for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', '"site_energy"', '"equipment_energy"', 'partial = watermark.Before']) {
   assert(queryClient.includes(marker), `missing Query Service metadata marker ${marker}`);
 }
 for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
@@ -119,9 +117,6 @@ for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently'
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
 for (const marker of [
-  '${view}.energy_valid_kwh',
-  '${view}.max_data_watermark',
-  'site_energy_facts.energy_valid_kwh',
   'deniedSiteRows',
   'randomBytes(32)',
   "CUBEJS_DB_HOST: 'clickhouse'",

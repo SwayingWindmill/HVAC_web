@@ -32,11 +32,11 @@ a Chinese title and description for both.
 
 Both cubes extend `energy_facts` (`cubes/energy_facts.yml`) over
 `analytics.energy_interval_facts_visible`, and each fixes its accounting scope
-in its own SQL, so a view cannot mix the total with its sub-meters. Shared
-members: `energy_valid_kwh`, `energy_valid_and_suspect_kwh`, the three quality
-counts, `max_data_watermark`, `max_dataset_revision`, `tenant_id`, `site_id`,
-`energy_type`, `quality`, `period_start`, `period_end`. Meter, point and sensor
-identities are not in the model.
+in its own SQL, so a view cannot mix the total with its sub-meters. Shared view
+members: `energy_valid_kwh`, `energy_valid_and_suspect_kwh` (both need an
+`energy_type` filter), the three quality counts, `max_data_watermark`,
+`max_dataset_revision`, `site_id`, `energy_type`, `quality`, `period_end`.
+The Tenant, meter, point and sensor identities are not view members.
 
 The Query Service groups by `period_end` at hour/day/month granularity, which
 attributes the complete interval to the bucket containing its end.
@@ -56,11 +56,13 @@ The Query Service creates a 30-second HS256 JWT containing:
 - `policyRevision`;
 - group `analytics_reader`.
 
-`cube.py` maps the JWT security context to Cube groups. The views
-(`views/energy.yml`) carry deny-by-default access policies: only
-`analytics_reader` receives member access, with row filters bound to
-`securityContext.tenantId` and `securityContext.siteId`. The cubes are
-`public: false`, so a query naming a cube member is rejected.
+`cube.py` maps the JWT security context to Cube groups. The base cube
+`energy_facts` carries the row policy, inherited by both cubes: rows are bound
+to `securityContext.tenantId` and `securityContext.siteId`. Cube combines a
+cube's row filters with the view's when a view is queried, so the Tenant does
+not have to be a view member. The views (`views/energy.yml`) grant their members
+to `analytics_reader` only (deny by default). The cubes are `public: false`, so a
+query naming a cube member is refused as a hidden member.
 
 The ClickHouse account configured for Cube is `cube_analytics_reader`, which has
 SELECT access to `analytics.energy_interval_facts_visible` and no write access.

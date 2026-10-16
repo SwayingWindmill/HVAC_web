@@ -245,9 +245,9 @@ func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery, location 
 	}
 }
 
+// The Tenant comes from the token: Cube's row policy applies it, and the views do not expose it.
 func energyFilters(view string, productQuery analyticsmodel.EnergySeriesQuery) []cubeFilter {
 	return []cubeFilter{
-		{Member: member(view, "tenant_id"), Operator: "equals", Values: []string{productQuery.TenantID}},
 		{Member: member(view, "site_id"), Operator: "equals", Values: []string{productQuery.SiteID}},
 		{Member: member(view, "energy_type"), Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
 	}

@@ -8,12 +8,18 @@
 
 ## Findings
 
+Upstream files read in the image: `@cubejs-backend/schema-compiler/dist/src/compiler/CubeValidator.js`
+(view schema: `includes`/`excludes`, `accessPolicy`, `folders`, `defaultFilters`) and
+`CubeEvaluator.js` (`prepareAccessPolicy`, `prepareViewFilters`). Behaviour was then checked
+against the image in `scripts/run-analytics-cube-tests.mjs`.
+
 - **Views and hidden cubes.** A view with `cubes: [{ join_path, includes }]` exposes members of a
-  `public: false` cube; querying the cube's members directly is rejected. Verified in
-  `scripts/run-analytics-cube-tests.mjs` against the real image.
-- **Access policies on views.** For a view, only the view's member-level rules apply, while
-  row-level filters of the view and of the underlying cubes are combined. The row filters
-  (`tenant_id`, `site_id`) must be members the view includes.
+  `public: false` cube. Querying a cube member directly fails with "You requested hidden member"
+  (reported as HTTP 500 in 1.6.51).
+- **Access policies.** For a view, only the view's member-level rules apply, while row-level
+  filters of the view and of the underlying cubes are combined. A row policy on a base cube is
+  inherited through `extends`, so the Tenant/Site filter lives on `energy_facts` and the Tenant
+  is not a view member; the test shows both views return nothing for another Site or Tenant.
 - **`default_filters` on views.** Present in 1.6.51 (`CubeValidator` `defaultFilters`,
   `CubeEvaluator.prepareViewFilters`), resolved for the Rust planner's filter dispatch.
 - **Measures in views.** A view only re-exposes cube members; a calculated measure such as COP
@@ -21,7 +27,8 @@
 
 ## Decision
 
-- **ADOPT** views as the public surface, cubes `public: false`, access policies on the views.
+- **ADOPT** views as the public surface, cubes `public: false`; the row policy on the base cube,
+  member grants on the views.
 - **ADAPT** the scope split: `site_energy_facts` and `equipment_energy_facts` extend one internal
   `energy_facts` cube and fix `accounting_scope` in their own SQL. This holds whichever SQL
   planner Cube uses.

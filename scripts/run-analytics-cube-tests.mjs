@@ -138,7 +138,6 @@ function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z'
       `${view}.max_dataset_revision`,
     ],
     filters: [
-      { member: `${view}.tenant_id`, operator: 'equals', values: [tenantId] },
       { member: `${view}.site_id`, operator: 'equals', values: [siteId] },
       { member: `${view}.energy_type`, operator: 'equals', values: ['electricity'] },
     ],
@@ -159,14 +158,15 @@ async function cubeMeta(token) {
   return response.json();
 }
 
-async function rejectedByCube(token, query) {
+// The error Cube answers a query with, or null when it returns data.
+async function cubeRefusal(token, query) {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
-  const decoded = await response.json().catch(() => ({}));
-  return !response.ok || Boolean(decoded.error);
+  const decoded = await response.json();
+  return decoded.error ?? null;
 }
 
 async function queryCube(token, query = energyQuery()) {
@@ -275,11 +275,27 @@ try {
       if (!/[\u4e00-\u9fff]/u.test(member.title ?? '') || !/[\u4e00-\u9fff]/u.test(member.description ?? '')) {
         throw new Error(`${member.name} lacks a Chinese title or description`);
       }
-      if (/point_id|sensor_id|accounting_scope/u.test(member.name)) throw new Error(`${member.name} is an internal identity`);
+      if (/tenant_id|point_id|sensor_id|accounting_scope|period_start/u.test(member.name)) throw new Error(`${member.name} is not a consumer member`);
     }
   }
-  if (!await rejectedByCube(cubeToken(), { measures: ['site_energy_facts.energy_valid_kwh'], limit: 1 })) {
-    throw new Error('Cube answered a query that names an internal cube member');
+  for (const internal of ['site_energy_facts.energy_valid_kwh', 'equipment_energy_facts.energy_valid_kwh']) {
+    const refusal = await cubeRefusal(cubeToken(), { measures: [internal], limit: 1 });
+    // Cube 1.6 reports a hidden member with this message (as a 500), so the message is what is checked.
+    if (!refusal?.includes(`You requested hidden member: '${internal}'`)) throw new Error(`Cube did not refuse ${internal} as hidden: ${refusal}`);
+  }
+
+  // Sub-meters: copies of the Site meter's facts as one machine's BRANCH facts, read per equipment and with suspect data.
+  const machine = '018f4f00-4000-7000-8000-000000000011';
+  clickHouse(`INSERT INTO analytics.energy_interval_facts SELECT * REPLACE (generateUUIDv4() AS fact_id, generateUUIDv4() AS meter_binding_id, generateUUIDv4() AS source_current_observation_id, 'BRANCH' AS accounting_scope, toUUID('${machine}') AS load_device_id) FROM (SELECT * FROM analytics.energy_interval_facts WHERE site_id = '${siteId}' AND energy_type = 'electricity' AND accounting_scope = 'SITE')`);
+  const equipment = (await queryCube(cubeToken(), {
+    measures: ['equipment_energy.energy_valid_kwh', 'equipment_energy.energy_valid_and_suspect_kwh'],
+    dimensions: ['equipment_energy.equipment_id'],
+    filters: [{ member: 'equipment_energy.site_id', operator: 'equals', values: [siteId] }],
+    timezone: 'UTC',
+    limit: 10,
+  })).data ?? [];
+  if (equipment.map((row) => `${row['equipment_energy.equipment_id']}=${Number(row['equipment_energy.energy_valid_kwh'])}/${Number(row['equipment_energy.energy_valid_and_suspect_kwh'])}`).join(',') !== `${machine}=4/4`) {
+    throw new Error(`unexpected equipment energy ${JSON.stringify(equipment)}`);
   }
 
   // COP is cooling over electricity in the same bucket: cooling facts at four times the electricity read 4.
@@ -296,7 +312,14 @@ try {
     throw new Error(`unexpected Cube COP ${JSON.stringify(cop)}`);
   }
 
-  const denied = await queryCube(cubeToken({ siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] }));
+  // Both views see only the caller's Tenant and Site, though neither exposes the Tenant.
+  const otherSite = { siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] };
+  const otherTenant = { tenantId: '018f4f00-0100-7000-8000-000000000099' };
+  const denied = await queryCube(cubeToken(otherSite));
+  for (const [view, context] of [['site_energy', otherSite], ['site_energy', otherTenant], ['equipment_energy', otherSite], ['equipment_energy', otherTenant]]) {
+    const leaked = (await queryCube(cubeToken(context), { ...energyQuery({ view }), filters: [] })).data ?? [];
+    if (leaked.length !== 0) throw new Error(`${view} leaked rows outside the caller's scope ${JSON.stringify(context)}`);
+  }
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   report.assertions.energyQuery = rows;
   report.assertions.deniedSiteRows = (denied.data ?? []).length;

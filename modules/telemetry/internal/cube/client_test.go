@@ -83,8 +83,13 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 		dateRange[0] != "2026-07-01T00:00:00.000" || dateRange[1] != "2026-07-02T23:59:59.999" {
 		t.Fatalf("date range = %#v, want Asia/Shanghai wall time", dateRange)
 	}
-	if !hasCubeFilter(seriesQuery.Filters, "site_energy.tenant_id", testCubeTenantID) ||
-		!hasCubeFilter(seriesQuery.Filters, "site_energy.site_id", testCubeSiteID) ||
+	// The Tenant is the token's: Cube's row policy applies it and the views do not expose it.
+	for _, filter := range seriesQuery.Filters {
+		if strings.HasSuffix(filter.Member, ".tenant_id") {
+			t.Fatalf("filters name the Tenant: %#v", seriesQuery.Filters)
+		}
+	}
+	if !hasCubeFilter(seriesQuery.Filters, "site_energy.site_id", testCubeSiteID) ||
 		!hasCubeFilter(metadataQuery.Filters, "site_energy.site_id", testCubeSiteID) {
 		t.Fatalf("filters = %#v", seriesQuery.Filters)
 	}
