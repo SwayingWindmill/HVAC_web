@@ -51,6 +51,7 @@ type operationsGatewayFixture struct {
 	rejectUnsafe     atomic.Bool
 	lastUpstream     atomic.Pointer[http.Request]
 	lastUpstreamBody atomic.Pointer[string]
+	registryActions  []registryauth.Action
 }
 
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {
@@ -141,9 +142,10 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			}
 			var input registryauth.DecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil ||
-				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList) {
+				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList && input.Action != registryauth.ActionAssetModelRead) {
 				t.Fatal("invalid Registry authorization request")
 			}
+			fixture.registryActions = append(fixture.registryActions, input.Action)
 			allowedSites := []string{fixture.siteID}
 			allowed := !fixture.denySite.Load()
 			if !allowed {
@@ -473,5 +475,24 @@ func TestOperationsToolAuthorizationFailsClosedBeforeIAM(t *testing.T) {
 	}
 	if fixture.iamCalls.Load() != 0 {
 		t.Fatalf("invalid internal requests reached IAM %d times", fixture.iamCalls.Load())
+	}
+}
+
+func TestOperationsToolAuthorizationGrantsTheSiteAssetModelOnlyForTheOperatorsSite(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	body := `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"registry-asset-model-001","tool":"registry.getSiteAssetModel","input":{"siteId":"` + fixture.siteID + `"}}}`
+	response := fixture.authorizeTool(t, body, serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected an asset model grant, got %d: %s", response.Code, response.Body.String())
+	}
+	if len(fixture.registryActions) != 1 || fixture.registryActions[0] != registryauth.ActionAssetModelRead {
+		t.Fatalf("IAM was asked for %v, want asset-model.read", fixture.registryActions)
+	}
+
+	fixture.denySite.Store(true)
+	denied := fixture.authorizeTool(t, strings.Replace(body, "registry-asset-model-001", "registry-asset-model-002", 2), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if denied.Code != http.StatusNotFound {
+		t.Fatalf("a Site the operator cannot see must be not found, got %d", denied.Code)
 	}
 }

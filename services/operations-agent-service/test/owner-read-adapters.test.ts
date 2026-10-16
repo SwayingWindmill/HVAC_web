@@ -33,6 +33,7 @@ const context = Object.freeze({
     toolDelegationGrants: {
       'registry.getSite': 'registry-site-grant-value',
       'registry.listSiteAssets': 'registry-asset-grant-value',
+      'registry.getSiteAssetModel': 'registry-asset-model-grant-value',
     },
     policyRevision: 'registry-policy-42',
     traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
@@ -236,6 +237,54 @@ test('Registry reader exposes only Site and Site Asset reads with authoritative 
     assert.equal(call.init.headers['X-Request-ID'].startsWith('read-'), true);
     assert.equal(call.init.headers.traceparent, context.authorization.traceparent);
   }
+});
+
+const assetModelDto = Object.freeze({
+  schemaVersion: 2,
+  tenantId,
+  siteId,
+  spaces: [],
+  assets: [assetDto],
+  devices: [{ id: deviceId, tenantId, siteId, code: 'meter-c', displayName: 'C 机组电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE', revision: 4, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }],
+  sensors: [],
+  telemetryPoints: [{ id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708201', tenantId, siteId, reportingDeviceId: deviceId, sensorId: null, pointCode: 'power_total', sourceKey: 'hvac_meter.active_power', displayName: '有功功率', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kW', writable: false, sampleIntervalMs: 60000, publishIntervalMs: 60000, staleAfterMs: 300000, counterDecreaseMode: null, counterRolloverModulus: null, sourceMetadata: {}, status: 'ACTIVE', revision: 2, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }],
+  relationships: [],
+  counts: { spaces: 0, assets: 1, deviceEndpoints: 1, physicalSensors: 0, points: 1 },
+});
+
+test('Registry reader reads the Site asset model from its owner route with its own grant', async () => {
+  const calls = [];
+  const reader = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return jsonResponse(assetModelDto);
+    },
+  });
+
+  const result = await reader.read({
+    request: { requestId: 'read-asset-model-001', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `https://platform-core.internal/internal/v1/registry/sites/${siteId}/asset-model`);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'registry-asset-model-grant-value');
+  assert.equal(result.owner, 'registry');
+  assert.match(result.revision, /^registry-asset-model:sha256:[0-9a-f]{64}$/);
+  assert.equal(result.provenance, 'platform-core-service:registry-asset-model/v2');
+  assert.equal(result.payload.kind, 'SITE_ASSET_MODEL');
+  assert.deepEqual(result.payload.model.devices.map((device) => device.displayName), ['C 机组电表']);
+
+  const otherSite = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async () => jsonResponse({ ...assetModelDto, siteId: deviceId }),
+  });
+  await expectOwnerError(() => otherSite.read({
+    request: { requestId: 'read-asset-model-002', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  }), 'OWNER_RESPONSE_INVALID');
 });
 
 test('Energy reader calls only the fixed Energy Series product contract and preserves readiness metadata', async () => {

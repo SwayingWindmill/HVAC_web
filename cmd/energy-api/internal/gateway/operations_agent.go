@@ -177,6 +177,15 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetList
+	case "registry.getSiteAssetModel":
+		var registryInput struct {
+			SiteID string `json:"siteId"`
+		}
+		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry asset model request is invalid.", false, nil)
+			return
+		}
+		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetModelRead
 	case "analytics.getEnergySeries":
 		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil || energyQuery.Validate() != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)

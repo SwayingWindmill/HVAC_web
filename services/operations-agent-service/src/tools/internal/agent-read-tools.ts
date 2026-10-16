@@ -29,6 +29,7 @@ import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'site_get_context',
   'assets_list',
+  'equipment_list',
   'telemetry_get_current',
   'energy_query_series',
   'energy_compare_periods',
@@ -64,6 +65,7 @@ const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
 
 const SITE_CAPABILITIES = Object.freeze(['site.read']);
 const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
+const EQUIPMENT_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read']);
 const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
 
@@ -405,6 +407,14 @@ const assetsPayloadFrom = (
   return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSETS' }>;
 };
 
+const assetModelPayloadFrom = (
+  result: OwnerReadResult,
+): Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }> => {
+  const payload = result.payload as RegistryOwnerPayload;
+  if (payload.kind !== 'SITE_ASSET_MODEL') fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>;
+};
+
 const telemetryPayloadFrom = (result: OwnerReadResult): DeviceObservationSnapshotDto => {
   const payload = result.payload as DeviceObservationSnapshotDto;
   if (payload.schemaVersion !== 1 || !Array.isArray(payload.values)) {
@@ -457,6 +467,44 @@ const readAssets = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
   return { result, payload: assetsPayloadFrom(result) };
+};
+
+const readAssetModel = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  registry: RegistryReader,
+): Promise<{ readonly result: OwnerReadResult; readonly model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model'] }> => {
+  const draft = {
+    tool: 'registry.getSiteAssetModel' as const,
+    input: { siteId: context.siteId },
+  };
+  const request: RegistryReadRequest = {
+    ...draft,
+    requestId: requestIdFor(context, 'equipment_list', draft),
+  };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await registry.read({ request, context: ownerContext });
+  return { result, model: assetModelPayloadFrom(result).model };
+};
+
+/** Each device with the machine it belongs to and its active points, the keys other Tools read by. */
+const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model']) => {
+  const assetsById = new Map(model.assets.map((asset) => [asset.id, asset]));
+  return model.devices.map((device) => {
+    const link = model.relationships.find((relationship) => relationship.status === 'ACTIVE'
+      && relationship.fromType === 'DEVICE' && relationship.fromId === device.id && relationship.toType === 'ASSET');
+    const asset = link === undefined ? undefined : assetsById.get(link.toId);
+    return {
+      deviceId: device.id,
+      name: device.displayName,
+      type: device.deviceType,
+      machine: asset === undefined ? null : { name: asset.displayName, type: asset.assetType },
+      points: model.telemetryPoints
+        .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: point.pointType })),
+    };
+  });
 };
 
 const readTelemetry = async (
@@ -702,6 +750,38 @@ export const createHvacReadTools = ({
     },
   });
 
+  const equipmentTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'equipment_list',
+      'List the current Site\'s devices with their names, the machine each belongs to and their point keys. Use the device IDs and point keys with the other Tools.',
+      emptyInputSchema,
+      EQUIPMENT_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      exactEmptyArguments(argumentsValue);
+      assertExecutionCapability(context, EQUIPMENT_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { result, model } = await readAssetModel(context, authorization, toolAuthorizationReader, registryReader);
+        const devices = describeEquipment(model);
+        const bounded = devices.slice(0, limits.maxAssets);
+        const completeness = devices.length > bounded.length ? 'PARTIAL' as const : 'COMPLETE' as const;
+        return assertResultBytes({
+          siteId: context.siteId,
+          devices: bounded,
+          totalCount: devices.length,
+          completeness,
+          source: {
+            owner: result.owner,
+            revision: result.revision,
+            quality: result.quality,
+            completeness,
+            provenance: result.provenance,
+          },
+        }, limits);
+      });
+    },
+  });
+
   const telemetryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'telemetry_get_current',
@@ -796,6 +876,7 @@ export const createHvacReadTools = ({
   return Object.freeze([
     siteTool,
     assetsTool,
+    equipmentTool,
     telemetryTool,
     energyQueryTool,
     energyCompareTool,

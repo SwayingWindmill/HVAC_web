@@ -35,6 +35,11 @@ export type RegistryReadRequest =
     readonly requestId: string;
     readonly tool: 'registry.listSiteAssets';
     readonly input: { readonly siteId: string };
+  }
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.getSiteAssetModel';
+    readonly input: { readonly siteId: string };
   };
 
 export interface DeviceTelemetryReadRequest {

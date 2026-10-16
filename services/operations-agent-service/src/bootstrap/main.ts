@@ -49,6 +49,7 @@ const BUDGET: AgentRunBudget = Object.freeze({
 const READ_TOOL_CAPABILITIES = Object.freeze([
   'site.read',
   'asset.list',
+  'asset-model.read',
   'telemetry.snapshot.read',
   'analytics.energy-series.read',
 ]);

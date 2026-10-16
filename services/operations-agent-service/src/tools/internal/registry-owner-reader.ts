@@ -43,13 +43,43 @@ export interface RegistryAssetDto {
   readonly updatedAt: string;
 }
 
+/** The parts of the Registry's Site asset model the Agent reads: equipment, its machines and points. */
+export interface RegistryAssetModelDto {
+  readonly schemaVersion: 2;
+  readonly tenantId: string;
+  readonly siteId: string;
+  readonly assets: readonly RegistryAssetDto[];
+  readonly devices: readonly {
+    readonly id: string;
+    readonly displayName: string;
+    readonly deviceType: string;
+    readonly status: string;
+  }[];
+  readonly telemetryPoints: readonly {
+    readonly reportingDeviceId: string;
+    readonly pointCode: string;
+    readonly displayName: string;
+    readonly pointType: string;
+    readonly unit: string | null;
+    readonly status: string;
+  }[];
+  readonly relationships: readonly {
+    readonly fromType: string;
+    readonly fromId: string;
+    readonly toType: string;
+    readonly toId: string;
+    readonly status: string;
+  }[];
+}
+
 export type RegistryOwnerPayload =
   | { readonly kind: 'SITE'; readonly site: RegistrySiteDto }
   | {
     readonly kind: 'SITE_ASSETS';
     readonly siteId: string;
     readonly assets: readonly RegistryAssetDto[];
-  };
+  }
+  | { readonly kind: 'SITE_ASSET_MODEL'; readonly model: RegistryAssetModelDto };
 
 export type RegistryOwnerReaderConfig = OwnerReaderHttpConfig;
 
@@ -291,6 +321,65 @@ const readSiteAssets = async (
   };
 };
 
+const isStringField = (value: Record<string, unknown>, key: string): boolean => typeof value[key] === 'string';
+
+const decodeAssetModel = (value: unknown): RegistryAssetModelDto => {
+  const invalid = (): never => {
+    throw new OwnerReadError('OWNER_RESPONSE_INVALID', 'The Registry Owner returned an invalid Site asset model.');
+  };
+  if (!isRecord(value) || value.schemaVersion !== 2 || !isNonEmptyString(value.tenantId) || !isNonEmptyString(value.siteId)) return invalid();
+  const { assets, devices, telemetryPoints, relationships } = value;
+  if (!Array.isArray(assets) || !Array.isArray(devices) || !Array.isArray(telemetryPoints) || !Array.isArray(relationships)) return invalid();
+  const records = (items: unknown[], keys: readonly string[]) => items.every((item) => (
+    isRecord(item) && keys.every((key) => isStringField(item, key))
+  ));
+  if (!records(devices, ['id', 'displayName', 'deviceType', 'status'])
+    || !records(telemetryPoints, ['reportingDeviceId', 'pointCode', 'displayName', 'pointType', 'status'])
+    || !telemetryPoints.every((point) => isRecord(point) && (point.unit === null || typeof point.unit === 'string'))
+    || !records(relationships, ['fromType', 'fromId', 'toType', 'toId', 'status'])) {
+    return invalid();
+  }
+  return {
+    schemaVersion: 2,
+    tenantId: value.tenantId,
+    siteId: value.siteId,
+    assets: assets.map(decodeAsset),
+    devices: devices as RegistryAssetModelDto['devices'],
+    telemetryPoints: telemetryPoints as RegistryAssetModelDto['telemetryPoints'],
+    relationships: relationships as RegistryAssetModelDto['relationships'],
+  };
+};
+
+const readSiteAssetModel = async (
+  input: OwnerReadInput<RegistryReadRequest>,
+  config: ReturnType<typeof normalizeOwnerReaderHttpConfig>,
+): Promise<OwnerReadResult> => {
+  const requestedScope = assertSiteScope(input);
+  const payload = await fetchOwnerJson(config, {
+    path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}/asset-model`,
+    method: 'GET',
+    headers: createOwnerHeaders(input.request.requestId, input.context, {
+      logicalTool: input.request.tool,
+      includePolicyRevision: true,
+      hasBody: false,
+    }),
+  });
+  const model = decodeAssetModel(payload);
+  if (model.tenantId !== requestedScope.tenantId || model.siteId !== requestedScope.siteId) {
+    throw new OwnerReadError('OWNER_RESPONSE_INVALID', 'The Registry asset model does not match the authorized Site.');
+  }
+  const revision = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  return {
+    requestId: input.request.requestId,
+    owner: 'registry',
+    scope: { ...input.context.scope },
+    revision: `registry-asset-model:sha256:${revision}`,
+    quality: 'GOOD',
+    provenance: 'platform-core-service:registry-asset-model/v2',
+    payload: { kind: 'SITE_ASSET_MODEL', model } satisfies RegistryOwnerPayload,
+  };
+};
+
 export const createRegistryOwnerReader = (
   input: RegistryOwnerReaderConfig,
 ): RegistryReader => {
@@ -299,10 +388,14 @@ export const createRegistryOwnerReader = (
     async read(
       readInput: OwnerReadInput<RegistryReadRequest>,
     ): Promise<OwnerReadResult> {
-      if (readInput.request.tool === 'registry.getSite') {
-        return readSite(readInput, config);
+      switch (readInput.request.tool) {
+        case 'registry.getSite':
+          return readSite(readInput, config);
+        case 'registry.listSiteAssets':
+          return readSiteAssets(readInput, config);
+        case 'registry.getSiteAssetModel':
+          return readSiteAssetModel(readInput, config);
       }
-      return readSiteAssets(readInput, config);
     },
   };
   return Object.freeze(reader);

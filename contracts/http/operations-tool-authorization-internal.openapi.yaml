@@ -79,6 +79,7 @@ components:
           oneOf:
             - $ref: '#/components/schemas/RegistrySiteRequest'
             - $ref: '#/components/schemas/RegistryAssetRequest'
+            - $ref: '#/components/schemas/RegistryAssetModelRequest'
             - $ref: '#/components/schemas/EnergySeriesRequest'
     RegistrySiteRequest:
       type: object
@@ -96,6 +97,15 @@ components:
       properties:
         requestId: { type: string, minLength: 1, maxLength: 256 }
         tool: { const: registry.listSiteAssets }
+        input:
+          $ref: '#/components/schemas/SiteInput'
+    RegistryAssetModelRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: registry.getSiteAssetModel }
         input:
           $ref: '#/components/schemas/SiteInput'
     SiteInput:

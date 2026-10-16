@@ -12,7 +12,7 @@ const context = Object.freeze({
   tenantId,
   siteId,
   principalId: 'principal-1',
-  capabilities: Object.freeze(['site.read', 'asset.list', 'telemetry.snapshot.read', 'analytics.energy-series.read']),
+  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'analytics.energy-series.read']),
   sessionId: 'session-1',
   runId: 'run-1',
   correlationId: 'correlation-1',
@@ -42,6 +42,30 @@ const assets = Object.freeze([
   Object.freeze({ id: 'asset-2', tenantId, siteId, code: 'CH-2', displayName: 'Chiller 2', assetType: 'CHILLER', status: 'ACTIVE', revision: 3, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }),
   Object.freeze({ id: 'asset-3', tenantId, siteId, code: 'CT-1', displayName: 'Cooling Tower 1', assetType: 'COOLING_TOWER', status: 'ACTIVE', revision: 4, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }),
 ]);
+
+const chillerDeviceId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708196';
+const meterDeviceId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708197';
+const assetModel = Object.freeze({
+  schemaVersion: 2,
+  tenantId,
+  siteId,
+  spaces: [],
+  assets: [assets[0]],
+  devices: [
+    { id: chillerDeviceId, tenantId, siteId, code: 'ch-1-controller', displayName: 'C 机组控制器', deviceType: 'CHILLER', status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+    { id: meterDeviceId, tenantId, siteId, code: 'meter-c', displayName: 'C 机组电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+  ],
+  sensors: [],
+  telemetryPoints: [
+    { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708201', tenantId, siteId, reportingDeviceId: meterDeviceId, sensorId: null, pointCode: 'power_total', sourceKey: 'hvac_meter.active_power', displayName: '有功功率', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kW', writable: false, sampleIntervalMs: 60000, publishIntervalMs: 60000, staleAfterMs: 300000, counterDecreaseMode: null, counterRolloverModulus: null, sourceMetadata: {}, status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+    { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708202', tenantId, siteId, reportingDeviceId: meterDeviceId, sensorId: null, pointCode: 'active_energy_total', sourceKey: 'hvac_meter.energy', displayName: '累计电量', pointType: 'COUNTER', valueType: 'NUMBER', unit: 'kWh', writable: false, sampleIntervalMs: 60000, publishIntervalMs: 60000, staleAfterMs: 300000, counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, sourceMetadata: {}, status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+    { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708203', tenantId, siteId, reportingDeviceId: meterDeviceId, sensorId: null, pointCode: 'spare_input', sourceKey: 'hvac_meter.spare', displayName: '备用', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: null, writable: false, sampleIntervalMs: 60000, publishIntervalMs: 60000, staleAfterMs: 300000, counterDecreaseMode: null, counterRolloverModulus: null, sourceMetadata: {}, status: 'INACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+  ],
+  relationships: [
+    { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708301', tenantId, siteId, fromType: 'DEVICE', fromId: meterDeviceId, toType: 'ASSET', toId: 'asset-1', role: 'METERS', status: 'ACTIVE', validFrom: '2026-01-01T00:00:00.000Z', validTo: null, revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+  ],
+  counts: { spaces: 0, assets: 1, deviceEndpoints: 2, physicalSensors: 0, points: 3 },
+});
 
 const ownerResult = (request, owner, revision, quality, provenance, payload) => ({
   requestId: request.requestId,
@@ -86,6 +110,9 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
       if (registryFailure) throw registryFailure;
       if (input.request.tool === 'registry.getSite') {
         return ownerResult(input.request, 'registry', 'registry-site:7', 'GOOD', 'registry:site/v1', { kind: 'SITE', site });
+      }
+      if (input.request.tool === 'registry.getSiteAssetModel') {
+        return ownerResult(input.request, 'registry', 'registry-asset-model:11', 'GOOD', 'registry:asset-model/v2', { kind: 'SITE_ASSET_MODEL', model: assetModel });
       }
       return ownerResult(input.request, 'registry', 'registry-assets:9', 'GOOD', 'registry:assets/v1', { kind: 'SITE_ASSETS', siteId, assets });
     },
@@ -162,9 +189,9 @@ const execute = (tool, args, toolContext = context) => tool.execute({
   signal: new AbortController().signal,
 });
 
-test('HVAC catalog contains the five capability-filtered READ Tools', () => {
+test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -366,4 +393,30 @@ test('Owner failures are stable Agent Tool failures rather than successful strin
     () => execute(byName(harness.tools, 'site_get_context'), {}),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_OWNER_UNAVAILABLE' && !error.message.includes('secret upstream detail'),
   );
+});
+
+test('equipment_list names each device, its machine and its active points so other Tools can be called with real keys', async () => {
+  const harness = createHarness();
+  const result = await execute(byName(harness.tools, 'equipment_list'), {});
+
+  const lastRegistry = harness.registryInputs.at(-1);
+  assert.equal(lastRegistry.request.tool, 'registry.getSiteAssetModel');
+  assert.deepEqual(lastRegistry.request.input, { siteId });
+  assert.equal(harness.authorizationInputs.at(-1).request.tool, 'registry.getSiteAssetModel');
+
+  assert.deepEqual(result.devices, [
+    { deviceId: chillerDeviceId, name: 'C 机组控制器', type: 'CHILLER', machine: null, points: [] },
+    {
+      deviceId: meterDeviceId,
+      name: 'C 机组电表',
+      type: 'HVAC_POWER_METER',
+      machine: { name: 'Chiller 1', type: 'CHILLER' },
+      points: [
+        { key: 'power_total', name: '有功功率', unit: 'kW', kind: 'TELEMETRY' },
+        { key: 'active_energy_total', name: '累计电量', unit: 'kWh', kind: 'COUNTER' },
+      ],
+    },
+  ]);
+  assert.equal(result.completeness, 'COMPLETE');
+  assert.equal(result.source.revision, 'registry-asset-model:11');
 });
