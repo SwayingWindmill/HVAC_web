@@ -20,8 +20,7 @@ import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
 import { Route as AppSiteEnergyAnalysisBreakdownRouteImport } from './routes/_app._site.energy-analysis.breakdown'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
-import { Route as AppSiteEnergyAnalysisDemandRouteImport } from './routes/_app._site.energy-analysis.demand'
-import { Route as AppSiteEnergyAnalysisForecastRouteImport } from './routes/_app._site.energy-analysis.forecast'
+import { Route as AppSiteEnergyAnalysisLoadRouteImport } from './routes/_app._site.energy-analysis.load'
 import { Route as AppSiteEnergyAnalysisOptimizationRouteImport } from './routes/_app._site.energy-analysis.optimization'
 import { Route as AppSiteEnergyAnalysisSavingsRouteImport } from './routes/_app._site.energy-analysis.savings'
 import { Route as AppSiteOperationsAlarmsRouteImport } from './routes/_app._site.operations.alarms'
@@ -87,16 +86,10 @@ const AppSiteEnergyAnalysisConsumptionRoute =
     path: '/energy-analysis/consumption',
     getParentRoute: () => AppSiteRoute,
   } as any)
-const AppSiteEnergyAnalysisDemandRoute =
-  AppSiteEnergyAnalysisDemandRouteImport.update({
-    id: '/energy-analysis/demand',
-    path: '/energy-analysis/demand',
-    getParentRoute: () => AppSiteRoute,
-  } as any)
-const AppSiteEnergyAnalysisForecastRoute =
-  AppSiteEnergyAnalysisForecastRouteImport.update({
-    id: '/energy-analysis/forecast',
-    path: '/energy-analysis/forecast',
+const AppSiteEnergyAnalysisLoadRoute =
+  AppSiteEnergyAnalysisLoadRouteImport.update({
+    id: '/energy-analysis/load',
+    path: '/energy-analysis/load',
     getParentRoute: () => AppSiteRoute,
   } as any)
 const AppSiteEnergyAnalysisOptimizationRoute =
@@ -163,8 +156,7 @@ export interface FileRoutesByFullPath {
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
-  '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
   '/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
@@ -185,8 +177,7 @@ export interface FileRoutesByTo {
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
-  '/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
   '/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/operations/alarms': typeof AppSiteOperationsAlarmsRoute
@@ -210,8 +201,7 @@ export interface FileRoutesById {
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
   '/_app/_site/energy-analysis/breakdown': typeof AppSiteEnergyAnalysisBreakdownRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
-  '/_app/_site/energy-analysis/demand': typeof AppSiteEnergyAnalysisDemandRoute
-  '/_app/_site/energy-analysis/forecast': typeof AppSiteEnergyAnalysisForecastRoute
+  '/_app/_site/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/_app/_site/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
   '/_app/_site/energy-analysis/savings': typeof AppSiteEnergyAnalysisSavingsRoute
   '/_app/_site/operations/alarms': typeof AppSiteOperationsAlarmsRoute
@@ -234,8 +224,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
-    | '/energy-analysis/demand'
-    | '/energy-analysis/forecast'
+    | '/energy-analysis/load'
     | '/energy-analysis/optimization'
     | '/energy-analysis/savings'
     | '/operations/alarms'
@@ -256,8 +245,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/energy-analysis/breakdown'
     | '/energy-analysis/consumption'
-    | '/energy-analysis/demand'
-    | '/energy-analysis/forecast'
+    | '/energy-analysis/load'
     | '/energy-analysis/optimization'
     | '/energy-analysis/savings'
     | '/operations/alarms'
@@ -280,8 +268,7 @@ export interface FileRouteTypes {
     | '/_app/settings/integrations'
     | '/_app/_site/energy-analysis/breakdown'
     | '/_app/_site/energy-analysis/consumption'
-    | '/_app/_site/energy-analysis/demand'
-    | '/_app/_site/energy-analysis/forecast'
+    | '/_app/_site/energy-analysis/load'
     | '/_app/_site/energy-analysis/optimization'
     | '/_app/_site/energy-analysis/savings'
     | '/_app/_site/operations/alarms'
@@ -376,18 +363,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteEnergyAnalysisConsumptionRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/_app/_site/energy-analysis/demand': {
-      id: '/_app/_site/energy-analysis/demand'
-      path: '/energy-analysis/demand'
-      fullPath: '/energy-analysis/demand'
-      preLoaderRoute: typeof AppSiteEnergyAnalysisDemandRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
-    '/_app/_site/energy-analysis/forecast': {
-      id: '/_app/_site/energy-analysis/forecast'
-      path: '/energy-analysis/forecast'
-      fullPath: '/energy-analysis/forecast'
-      preLoaderRoute: typeof AppSiteEnergyAnalysisForecastRouteImport
+    '/_app/_site/energy-analysis/load': {
+      id: '/_app/_site/energy-analysis/load'
+      path: '/energy-analysis/load'
+      fullPath: '/energy-analysis/load'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisLoadRouteImport
       parentRoute: typeof AppSiteRoute
     }
     '/_app/_site/energy-analysis/optimization': {
@@ -461,8 +441,7 @@ interface AppSiteRouteChildren {
   AppSiteReportsRoute: typeof AppSiteReportsRoute
   AppSiteEnergyAnalysisBreakdownRoute: typeof AppSiteEnergyAnalysisBreakdownRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
-  AppSiteEnergyAnalysisDemandRoute: typeof AppSiteEnergyAnalysisDemandRoute
-  AppSiteEnergyAnalysisForecastRoute: typeof AppSiteEnergyAnalysisForecastRoute
+  AppSiteEnergyAnalysisLoadRoute: typeof AppSiteEnergyAnalysisLoadRoute
   AppSiteEnergyAnalysisOptimizationRoute: typeof AppSiteEnergyAnalysisOptimizationRoute
   AppSiteEnergyAnalysisSavingsRoute: typeof AppSiteEnergyAnalysisSavingsRoute
   AppSiteOperationsAlarmsRoute: typeof AppSiteOperationsAlarmsRoute
@@ -479,8 +458,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteReportsRoute: AppSiteReportsRoute,
   AppSiteEnergyAnalysisBreakdownRoute: AppSiteEnergyAnalysisBreakdownRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
-  AppSiteEnergyAnalysisDemandRoute: AppSiteEnergyAnalysisDemandRoute,
-  AppSiteEnergyAnalysisForecastRoute: AppSiteEnergyAnalysisForecastRoute,
+  AppSiteEnergyAnalysisLoadRoute: AppSiteEnergyAnalysisLoadRoute,
   AppSiteEnergyAnalysisOptimizationRoute:
     AppSiteEnergyAnalysisOptimizationRoute,
   AppSiteEnergyAnalysisSavingsRoute: AppSiteEnergyAnalysisSavingsRoute,
