@@ -90,7 +90,7 @@ invariant(alarmPublic.paths?.['/api/v1/alarms']?.get, 'Alarm list Contract URI m
 invariant(alarmPublic.paths?.['/api/v1/alarms/{alarmId}']?.get, 'Alarm detail Contract URI must be /api/v1/alarms/{alarmId}');
 invariant(alarmPublic.paths?.['/api/v1/alarms/{alarmId}/ack']?.post, 'Alarm ACK Contract URI must use /ack');
 invariant(!Object.keys(alarmPublic.paths ?? {}).some((path) => path.includes('/sites/{siteId}/alarms') || path.includes(':acknowledge')), 'legacy Site-scoped/colon Alarm public URI must not remain contracted');
-const operationsInternal = await readFile(resolve(root, 'contracts/http/operations-agent-internal.openapi.yaml'), 'utf8');
+const operationsInternal = await readFile(resolve(root, 'contracts/http/operations-tool-authorization-internal.openapi.yaml'), 'utf8');
 const telemetryQueryInternal = await readFile(resolve(root, 'contracts/http/telemetry-query-internal.openapi.yaml'), 'utf8');
 invariant(!operationsInternal.includes('Organization') && !telemetryQueryInternal.includes('Organization'), 'HTTP machine contracts must be Tenant-only');
 
@@ -101,9 +101,6 @@ const gatewayServer = await readFile(resolve(root, 'cmd/energy-api/internal/gate
 invariant(gatewayServer.includes('contractOnlyRoute.template != "/api/v1/sites" || request.Method == contractOnlyRoute.method'), 'SE-API-001 contract-only interception must preserve active GET /api/v1/sites while holding POST contract-only');
 invariant(!gatewayServer.includes('header == "X-Organization-ID" && isVerifiedTelemetryWorkloadRequest(request)'), 'verified Telemetry workloads must not receive an X-Organization-ID compatibility exception');
 invariant(gatewayServer.includes('"X-Operations-Registry-Asset-Grant"'), 'Platform Gateway must guard the canonical Operations Registry Asset grant header');
-const operationsAgentHttp = await readFile(resolve(root, 'services/operations-agent-service/src/transport-http/internal/operations-agent-http.ts'), 'utf8');
-invariant(operationsAgentHttp.includes("'X-Operations-Registry-Asset-Grant'"), 'Operations Agent must consume the canonical Registry Asset grant header');
-invariant(!operationsAgentHttp.includes("'X-Operations-Registry-Equipment-Grant'"), 'Operations Agent must not consume the legacy Registry Equipment grant header');
 const commandService = await readFile(resolve(root, 'modules/command/pkg/commandservice/http.go'), 'utf8');
 invariant(commandService.includes('strings.HasSuffix(raw, "/approve")'), 'Command Service must route canonical /approve');
 invariant(!commandService.includes('strings.HasSuffix(raw, ":approve")'), 'Command Service production route must not parse legacy :approve');

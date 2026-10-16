@@ -7,13 +7,11 @@ import {
   AgentSessionLifecycleError,
   createAgentSessionLifecycle,
 } from '../dist/application/index.js';
-import { createPostgresOperationsAgentPersistence } from '../dist/persistence/index.js';
+import { createPostgresAgentSessionPersistence } from '../dist/persistence/index.js';
 
 const operationsConnectionString = process.env.OPERATIONS_AGENT_OPERATIONS_DATABASE_URL;
-const checkpointsConnectionString = process.env.OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL;
-
-if (!operationsConnectionString || !checkpointsConnectionString) {
-  throw new Error('Operations Agent PostgreSQL integration database URLs are required.');
+if (!operationsConnectionString) {
+  throw new Error('The Operations Agent PostgreSQL integration database URL is required.');
 }
 
 const modelRef = Object.freeze({ provider: 'faux', model: 'faux-1' });
@@ -91,13 +89,9 @@ const completedRun = (value, finishedAt, usage) => Object.freeze({
   failureCode: null,
 });
 
-const createPersistence = () => createPostgresOperationsAgentPersistence({
-  operationsConnectionString,
-  checkpointsConnectionString,
-  checkpointRetentionMs: 60_000,
-});
+const createPersistence = () => createPostgresAgentSessionPersistence({ connectionString: operationsConnectionString });
 
-test('PostgreSQL Pi Session state survives restart without checkpoint or partial-stream authority', async (t) => {
+test('PostgreSQL Pi Session state survives restart without partial-stream authority', async (t) => {
   let persistence = createPersistence();
   const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
   t.after(async () => {
@@ -170,17 +164,6 @@ test('PostgreSQL Pi Session state survives restart without checkpoint or partial
 
   const recovered = await lifecycle.get(sessionDescriptor.id);
   assert.deepEqual(recovered, waiting);
-
-  await persistence.checkpointRepository.save({
-    id: 'legacy-langgraph-checkpoint-for-pi-session',
-    investigationId: sessionDescriptor.id,
-    runId: firstRun.id,
-    runtimeRevision: 'legacy-langgraph-runtime',
-    position: 'legacy-position',
-    opaqueState: 'legacy checkpoint text that must never become Pi Session context',
-    savedAt: 10_250,
-  });
-  assert.deepEqual(await lifecycle.get(sessionDescriptor.id), waiting);
 
   const secondRun = run('pi-run-postgres-2', 10_300);
   const secondOperator = operatorMessage(
@@ -287,7 +270,6 @@ test('PostgreSQL Pi Session state survives restart without checkpoint or partial
     [sessionDescriptor.id],
   );
   assert.equal(JSON.stringify(persistedText.rows).includes('UNCOMMITTED_STREAM_TEXT'), false);
-  assert.equal(JSON.stringify(persistedText.rows).includes('legacy checkpoint text'), false);
 });
 
 test('PostgreSQL serializes concurrent replacement starts to one durable active Run', async (t) => {

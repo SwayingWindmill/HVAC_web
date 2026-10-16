@@ -98,9 +98,9 @@ npm run repo:clean:local
 - Telemetry/Analytics：`settlement-service/`。
 - Control/Rules/Delivery：`rule-runtime-service/`、`notification-service/`、`outbound-delivery-service/`。
 - Intelligence：`forecast-service/`、`optimization-service/`、`fdd-service/`、`mv-service/`、`report-service/`。
-- 智能运维：`operations-agent-service/`，TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、受控模型调用、业务记录和 AG-UI 投影。
+- 智能运维：`operations-agent-service/`，基于 pi（`@earendil-works/pi-agent-core`）的 AI 运维助手：站点范围的会话、只读工具和结论产出。
 
-Operations Agent 通过 `energy-api`/Platform Gateway 边界暴露受保护调查接口；模型不能选择工具、扩大 Scope 或提交业务效果。`npm run operations-agent:safety-certification` 统一验证授权负向、精确重试、重启、并发和事件流恢复。
+Operations Agent 只通过 `energy-api`/Platform Gateway 暴露 Agent Session 接口；每次工具调用前由 Gateway 按操作人的权限换取 owner 授权，模型不能扩大站点范围，也没有下发控制的工具。
 
 ## 契约和所有权
 

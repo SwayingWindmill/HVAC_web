@@ -15,24 +15,8 @@ CREATE ROLE operations_agent_operations_runtime
   NOBYPASSRLS
   PASSWORD 'operations-runtime-local-only';
 
-CREATE ROLE operations_agent_checkpoints_migrator
-  LOGIN
-  NOINHERIT
-  NOBYPASSRLS
-  PASSWORD 'checkpoints-migrator-local-only';
-
-CREATE ROLE operations_agent_checkpoints_runtime
-  LOGIN
-  NOINHERIT
-  NOBYPASSRLS
-  PASSWORD 'checkpoints-runtime-local-only';
-
 GRANT CONNECT ON DATABASE hvac_operations_agent TO
   operations_agent_operations_migrator,
-  operations_agent_operations_runtime,
-  operations_agent_checkpoints_migrator,
-  operations_agent_checkpoints_runtime;
+  operations_agent_operations_runtime;
 
-GRANT CREATE ON DATABASE hvac_operations_agent TO
-  operations_agent_operations_migrator,
-  operations_agent_checkpoints_migrator;
+GRANT CREATE ON DATABASE hvac_operations_agent TO operations_agent_operations_migrator;

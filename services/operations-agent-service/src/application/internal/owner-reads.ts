@@ -1,0 +1,159 @@
+// What an Agent Tool needs to read a platform owner on the operator's behalf: the authorization
+// the Gateway granted for this Session, the narrow read requests each owner accepts, and the
+// bounded result every owner reader returns. The Gateway exchanges the Session's service
+// delegation for an owner grant right before each read.
+
+/** The Tenant and Site a read stays within; a device read narrows it to one device. */
+export interface OwnerScope {
+  readonly tenantId: string;
+  readonly siteId: string | null;
+  readonly assetId: string | null;
+  readonly deviceId: string | null;
+}
+
+export interface AuthorizationDecision {
+  readonly decision: 'ALLOW' | 'DENY';
+  readonly decisionId: string;
+  readonly reason?: string;
+  readonly delegationGrant?: string;
+  readonly toolDelegationGrants?: Readonly<Partial<Record<ToolAuthorizableReadRequest['tool'], string>>>;
+  readonly policyRevision?: string;
+  /** The signed-in operator the Session acts for. */
+  readonly operator?: { readonly id: string; readonly issuer: string };
+  readonly capabilities?: readonly string[];
+  readonly traceparent?: string;
+  readonly tracestate?: string;
+}
+
+export type RegistryReadRequest =
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.getSite';
+    readonly input: { readonly siteId: string };
+  }
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.listSiteAssets';
+    readonly input: { readonly siteId: string };
+  };
+
+export interface DeviceTelemetryReadRequest {
+  readonly requestId: string;
+  readonly tool: 'telemetry.current.getDeviceObservationSnapshot';
+  readonly input: {
+    readonly siteId: string;
+    readonly deviceId: string;
+    readonly pointKeys: readonly string[];
+  };
+}
+
+export type EnergyGranularity = 'hour' | 'day' | 'month';
+export type EnergyQualityPolicy = 'VALID_ONLY' | 'VALID_AND_SUSPECT';
+
+export interface EnergyAnalyticsReadRequest {
+  readonly requestId: string;
+  readonly tool: 'analytics.getEnergySeries';
+  readonly input: {
+    readonly tenantId: string;
+    readonly siteId: string;
+    readonly energyType: 'electricity';
+    readonly granularity: EnergyGranularity;
+    readonly timezone: string;
+    readonly from: string;
+    readonly to: string;
+    readonly qualityPolicy: EnergyQualityPolicy;
+  };
+}
+
+export type ToolAuthorizableReadRequest = RegistryReadRequest | DeviceTelemetryReadRequest | EnergyAnalyticsReadRequest;
+
+/** The Energy analytics owner's series: points plus the provenance that says how complete they are. */
+export interface EnergySeriesPoint {
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly energyKWh: number;
+}
+
+export interface EnergyQualitySummary {
+  readonly valid: number;
+  readonly suspect: number;
+  readonly invalid: number;
+}
+
+export interface EnergySeriesMetadata {
+  readonly requestedGranularity: EnergyGranularity;
+  readonly actualGranularity: EnergyGranularity;
+  readonly dataWatermark?: string;
+  readonly aggregateWatermark?: string;
+  readonly datasetRevision: string;
+  readonly partial: boolean;
+  readonly qualitySummary: EnergyQualitySummary;
+}
+
+export interface EnergySeries {
+  readonly schemaVersion: 1;
+  readonly points: readonly EnergySeriesPoint[];
+  readonly metadata: EnergySeriesMetadata;
+}
+
+export interface OwnerReadResult {
+  readonly requestId: string;
+  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service';
+  readonly scope: OwnerScope;
+  readonly revision: string;
+  readonly quality: 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
+  readonly provenance: string;
+  readonly payload: unknown;
+}
+
+export type OwnerReadErrorCode =
+  | 'OWNER_REQUEST_INVALID'
+  | 'OWNER_RESOURCE_NOT_FOUND'
+  | 'OWNER_READ_TIMEOUT'
+  | 'OWNER_READ_UNAVAILABLE'
+  | 'OWNER_RESPONSE_TOO_LARGE'
+  | 'OWNER_RESPONSE_INVALID';
+
+export class OwnerReadError extends Error {
+  readonly code: OwnerReadErrorCode;
+
+  constructor(code: OwnerReadErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'OwnerReadError';
+    this.code = code;
+  }
+}
+
+export interface OwnerReadContext {
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly scope: OwnerScope;
+  readonly authorization: AuthorizationDecision;
+  readonly correlationId: string;
+}
+
+export interface OwnerReadInput<TRequest extends ToolAuthorizableReadRequest> {
+  readonly request: TRequest;
+  readonly context: OwnerReadContext;
+}
+
+export interface ToolAuthorizationGrant {
+  readonly delegationGrant: string;
+  readonly policyRevision?: string;
+}
+
+export interface ToolAuthorizationReader {
+  authorize(input: OwnerReadInput<ToolAuthorizableReadRequest>): Promise<ToolAuthorizationGrant>;
+}
+
+export interface RegistryReader {
+  read(input: OwnerReadInput<RegistryReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface DeviceTelemetryReader {
+  read(input: OwnerReadInput<DeviceTelemetryReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface EnergyAnalyticsReader {
+  read(input: OwnerReadInput<EnergyAnalyticsReadRequest>): Promise<OwnerReadResult>;
+}

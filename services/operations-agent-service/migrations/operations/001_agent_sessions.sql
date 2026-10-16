@@ -1,6 +1,16 @@
 \set ON_ERROR_STOP on
 
+-- The Operations Agent's product records: Sessions, their Runs, finalized messages, Tool
+-- executions and typed Artifacts. Pi's own state is never stored; a new Run starts from these.
+
 BEGIN;
+
+CREATE SCHEMA IF NOT EXISTS agent_operations
+  AUTHORIZATION operations_agent_operations_migrator;
+
+REVOKE ALL ON SCHEMA agent_operations FROM PUBLIC;
+GRANT USAGE ON SCHEMA agent_operations TO operations_agent_operations_runtime;
+
 
 CREATE TABLE IF NOT EXISTS agent_operations.agent_sessions (
   session_id text PRIMARY KEY CHECK (btrim(session_id) <> ''),
@@ -94,7 +104,7 @@ CREATE TABLE IF NOT EXISTS agent_operations.agent_artifacts (
   artifact_id text PRIMARY KEY CHECK (btrim(artifact_id) <> ''),
   session_id text NOT NULL,
   run_id text NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('EVIDENCE_REF', 'FINDING', 'PROPOSAL', 'INPUT_REQUEST', 'LIMITATION')),
+  kind text NOT NULL CONSTRAINT agent_artifacts_kind_check CHECK (kind IN ('EVIDENCE_REF', 'FINDING', 'PROPOSAL', 'INPUT_REQUEST', 'INPUT_RESPONSE', 'LIMITATION')),
   artifact_payload jsonb NOT NULL CHECK (jsonb_typeof(artifact_payload) = 'object'),
   created_at_ms bigint NOT NULL CHECK (created_at_ms >= 0),
   FOREIGN KEY (session_id, run_id)

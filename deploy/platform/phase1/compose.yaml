@@ -720,7 +720,6 @@ services:
       AGENT_TLS_CA: /run/hvac/pki/ca.crt
       AGENT_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
       OPERATIONS_DATABASE_URL: ${OPERATIONS_AGENT_DATABASE_URL:-}
-      CHECKPOINTS_DATABASE_URL: ${OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL:-}
       REGISTRY_URL: https://platform-core-service:18445
       TELEMETRY_RUNTIME_URL: https://telemetry-runtime-service:8446
       TELEMETRY_QUERY_URL: https://telemetry-query-service:18447

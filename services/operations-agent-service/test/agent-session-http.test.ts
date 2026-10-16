@@ -27,13 +27,7 @@ const authorization = Object.freeze({
   decisionId: 'decision-1',
   policyRevision: 'policy-1',
   capabilities: Object.freeze(['site.read', 'analytics.energy-series.read']),
-  auditActor: Object.freeze({
-    actorType: 'OPERATOR',
-    actorId: 'principal-authenticated',
-    actorIssuer: 'issuer-1',
-    executingService: 'operations-agent-service',
-    executingSpiffeId: 'spiffe://hvac.local/operations-agent-service',
-  }),
+  operator: Object.freeze({ id: 'principal-authenticated', issuer: 'issuer-1' }),
 });
 
 const headers = Object.freeze({

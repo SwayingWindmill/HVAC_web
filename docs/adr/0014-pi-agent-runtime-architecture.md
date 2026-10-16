@@ -411,6 +411,8 @@ During development, the old runtime may exist only long enough to provide compar
 
 Cutover is complete when the Pi vertical slice passes the framework-independent Agent benchmark, recovery/security acceptance and Web/Gateway acceptance. Then remove LangGraph-specific source, dependency, checkpoints, scripts and documentation rather than retaining fallback code.
 
+2026-10-16: done ahead of the benchmark gate. The LangGraph investigation path was never wired into the service entry, so it was deleted with its checkpoint database, investigation routes and contracts, typed investigation records, audit outbox, OpenAI finding synthesizer, tool catalog generator, benchmark and safety certification (they validated only that path). Pi Sessions are the only runtime; the per-Run budget lives in the pi runtime. Session audit and an Agent benchmark for Pi are not built yet.
+
 ## Consequences
 
 ### Benefits

@@ -340,7 +340,7 @@ const baseOwnerContext = (
     fail('TOOL_UNAUTHORIZED', 'The server authorization context is incomplete.');
   }
   return {
-    investigationId: context.sessionId,
+    sessionId: context.sessionId,
     runId: context.runId,
     scope: {
       tenantId: context.tenantId,

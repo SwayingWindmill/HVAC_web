@@ -86,7 +86,7 @@ const requireAuthorizationContext = (
       && (tracestate.length > 512
         || tracestate.includes(String.fromCharCode(13))
         || tracestate.includes(String.fromCharCode(10))))
-    || context.investigationId.trim().length === 0
+    || context.sessionId.trim().length === 0
     || context.runId.trim().length === 0
     || context.correlationId.trim().length === 0) {
     throw new OwnerReadError(
@@ -118,7 +118,6 @@ export const createOwnerHeaders = (
     Accept: 'application/json, application/problem+json',
     'X-Delegation-Grant': authorization.delegationGrant,
     'X-Request-ID': requestId,
-    'X-Operations-Investigation-ID': context.investigationId,
     'X-Operations-Agent-Run-ID': context.runId,
     'X-Operations-Correlation-ID': context.correlationId,
   };

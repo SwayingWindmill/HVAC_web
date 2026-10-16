@@ -8,7 +8,7 @@ import type {
   AgentRunContext,
   AgentTool,
 } from '../../agent/index.js';
-import type { AuthorizationDecision } from './ports.js';
+import type { AuthorizationDecision } from './owner-reads.js';
 import {
   HVAC_AGENT_EVENT_VERSION,
 } from '../../agent/index.js';

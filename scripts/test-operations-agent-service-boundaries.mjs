@@ -38,8 +38,8 @@ test('repository Operations Agent service exposes the accepted module skeleton',
   assert.equal(result.sourceFiles > 0, true);
 });
 
-test('domain and application cannot import adapters or external packages', async () => {
-  for (const moduleName of ['domain', 'application']) {
+test('agent and application cannot import adapters or external packages', async () => {
+  for (const moduleName of ['agent', 'application']) {
     await withTemporaryService(async (root) => {
       await writeSource(root, `${moduleName}/index.ts`, [
         "import { persistenceModule } from '../persistence/index.js';",
@@ -83,12 +83,12 @@ test('cross-module imports must use the target public index', async () => {
   });
 });
 
-test('application may depend on domain', async () => {
+test('application may depend on agent', async () => {
   await withTemporaryService(async (root) => {
-    await writeSource(root, 'domain/index.ts', "export const domainModule = 'domain';\n");
+    await writeSource(root, 'agent/index.ts', "export const agentModule = 'agent';\n");
     await writeSource(root, 'application/index.ts', [
-      "import { domainModule } from '../domain/index.js';",
-      'export const applicationModule = domainModule;',
+      "import { agentModule } from '../agent/index.js';",
+      'export const applicationModule = agentModule;',
       '',
     ].join('\n'));
 
@@ -103,10 +103,10 @@ test('application may depend on domain', async () => {
 
 test('adapters cannot depend on another adapter', async () => {
   await withTemporaryService(async (root) => {
-    await writeSource(root, 'model/index.ts', "export const modelModule = 'model';\n");
+    await writeSource(root, 'persistence/index.ts', "export const persistenceModule = 'persistence';\n");
     await writeSource(root, 'tools/index.ts', [
-      "import { modelModule } from '../model/index.js';",
-      'export const toolsModule = modelModule;',
+      "import { persistenceModule } from '../persistence/index.js';",
+      'export const toolsModule = persistenceModule;',
       '',
     ].join('\n'));
 

@@ -22,7 +22,7 @@ const scope = Object.freeze({
 });
 
 const context = Object.freeze({
-  investigationId: 'investigation-owner-read-001',
+  sessionId: 'session-owner-read-001',
   runId: 'run-owner-read-001',
   scope,
   correlationId: 'request-owner-read-001',
@@ -480,7 +480,7 @@ test('Gateway Tool authorization exchanges the service delegation for an exact O
   assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'operations-service-grant');
   assert.equal(calls[0].init.headers['X-Request-ID'], energyRequest.requestId);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
-    investigationId: authorizationContext.investigationId,
+    sessionId: authorizationContext.sessionId,
     runId: authorizationContext.runId,
     request: energyRequest,
   });

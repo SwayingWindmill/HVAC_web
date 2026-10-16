@@ -56,7 +56,7 @@ const paths = {
   observabilityRuntime: 'libs/observability/runtime.go',
   gatewayMain: 'cmd/energy-api/main.go',
   embeddedEnergy: 'cmd/energy-api/embedded_energy.go',
-  operationsGateway: 'cmd/energy-api/internal/gateway/operations_agent.go',
+  operationsGateway: 'cmd/energy-api/internal/gateway/operations_agent_sessions.go',
   identityMain: 'services/identity-service/cmd/identity-service/main.go',
   schedulerMain: 'cmd/scheduler/main.go',
   maintenanceMain: 'cmd/maintenance-worker/main.go',

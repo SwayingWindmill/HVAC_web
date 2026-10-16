@@ -30,7 +30,7 @@ export const createGatewayToolAuthorizationReader = (
       if (context.authorization.decision !== 'ALLOW'
         || serviceDelegation === undefined
         || serviceDelegation.trim().length === 0
-        || context.investigationId.trim().length === 0
+        || context.sessionId.trim().length === 0
         || context.runId.trim().length === 0) {
         throw new OwnerReadError(
           'OWNER_REQUEST_INVALID',
@@ -53,7 +53,7 @@ export const createGatewayToolAuthorizationReader = (
             : { tracestate: context.authorization.tracestate }),
         },
         body: JSON.stringify({
-          investigationId: context.investigationId,
+          sessionId: context.sessionId,
           runId: context.runId,
           request,
         }),

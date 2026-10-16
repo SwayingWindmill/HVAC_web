@@ -1,6 +1,5 @@
 export {
-  createPostgresOperationsAgentPersistence,
-  type PostgresCheckpointRepository,
-  type PostgresOperationsAgentPersistence,
-  type PostgresOperationsAgentPersistenceOptions,
-} from './internal/postgres-persistence.js';
+  createPostgresAgentSessionPersistence,
+  type PostgresAgentSessionPersistence,
+  type PostgresAgentSessionPersistenceOptions,
+} from './internal/postgres-agent-session-store.js';
