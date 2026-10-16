@@ -17,7 +17,7 @@ export function plantMachines(devices: readonly PlantDevice[]): Machine[] {
  * The HVAC total meter and each machine's sub-meter over a period and over the same span before
  * it, from the Energy analytics owner.
  */
-export function useEnergyBreakdown(period: Exclude<EnergyPeriod, 'year'>) {
+export function useEnergyBreakdown(period: EnergyPeriod) {
   const { site, read } = useEnergyReader();
   const { plant, registry } = useRealtimePlant();
   // The plant's devices come from the Registry asset model; until it loads there is no machine list.
