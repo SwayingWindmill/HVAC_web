@@ -4,7 +4,7 @@ The current state of the work and what to pick up next. Update it in the same PR
 what it says. How to build, test and run lives in `CLAUDE.md` / `AGENTS.md`; what changed for
 users lives in `CHANGELOG.md`.
 
-Last updated: 2026-10-14.
+Last updated: 2026-10-16.
 
 ## Where the product is
 
@@ -23,6 +23,7 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | 运维 | 告警, 故障诊断, 工单, 控制指令 | alarm, FDD (scheduled every 15 min; its rule revisions in `core_registry.fdd_rule_revisions`, spec `docs/specs/fdd-rule-definition.md`), work orders, command governance |
 | 平台 | 通知, 集成管理, 系统管理 | notification inbox, gateway credentials, IAM/Registry/rules/audit |
 | 平台 | 系统管理 → 用户与角色, 修改密码 | IAM Role Assignments (ADR 0022) + identity directory (`identityadmin`, embedded in energy-api); spec `docs/specs/iam-roles-and-users.md` |
+| 全站点 | AI 助手（页头按钮，右侧 420px 面板；能耗分析上的「解释」） | Operations Agent Sessions through the Gateway (`/api/v1/sites/{site}/operations/agent-sessions`, snapshot + SSE); answers only where the service runs with `DEEPSEEK_API_KEY`, otherwise the panel says 未接入 |
 | 运行 | 数字孪生 (`/operations/digital-twin`) | Registry plant assets + realtime plant (the same reads as 实时运行); the terminal building is declared per site in `twin-building.ts` (Songyaxuan only) and all terminal units show 未接入 until the Registry holds rooms and terminal devices (spec `docs/specs/digital-twin.md`) |
 
 Costs are estimates at the Site's time-of-use tariff and are labelled as such; Settlement
@@ -74,7 +75,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
    - **Digital twin (#559, #563).** A full-bleed perspective scene in a cool, primary-tinted world (neighbourhood blocks, street trees, fences) built from a procedural asset library (`features/operations/digital-twin/scene/assets/`), with N8AO post-processing and a frame-rate guard that drops it on weak GPUs. The UI is four corner panels (`components/TwinCorners.tsx`), designed on the canvas https://claude.ai/artifact/M9fhveMZf6K6iFBEgif7og after the reference warehouse twin; the scene draws no labels, only selection brackets. Not yet measured on a real GPU at 1440 px: first-load time to an interactive scene and steady CPU while water flows (the in-app preview pane was hidden during development, which throttles rendering). Next (P2): register Songyaxuan's rooms and terminal units so the building comes from the Registry, colour rooms by temperature.
 
-   - **Operations Agent (AI 运维助手).** Pi (`@earendil-works/pi-agent-core` 1.3.0) is the only runtime since 2026-10-16: the LangGraph investigation path, its checkpoint database and the investigation routes were deleted (ADR 0014, migration rule). The service has five read-only Tools (Site, assets, current readings, energy series, period comparison), runs on DeepSeek and is not deployed on the server (needs `DEEPSEEK_API_KEY`); the Web has no assistant UI yet. Next: the energy-anomaly explanation scenario, its UI (to be agreed with the user) and the Tools it needs. Session audit and a Pi benchmark do not exist yet.
+   - **Operations Agent (AI 运维助手), first release (#577, spec `docs/specs/operations-assistant-v1.md`).** Pi (`@earendil-works/pi-agent-core` 1.3.0) is the only runtime (ADR 0014). Read-only Tools: Site, assets, `equipment_list` (devices, machines and active point keys from the asset model), current readings, `telemetry_query_history` (device-history aggregate; Gateway authorizes `telemetry.history.read` and signs a query-bound grant for the Agent), energy series and period comparison (both take `energyType: cooling`), `energy_by_equipment` (Energy Series `breakdown: device`). The system policy is Chinese and carries the Run's start time; findings carry up to four key figures. The Web panel is built on assistant-ui (`docs/architecture/assistant-ui-source-review-2026-10-16.md`) over the Session snapshot and events; 解释 on 能耗分析 prefills a question with the bucket's date and energy. Next: on the server, recreate the empty `hvac_operations_agent` database before the next full deploy, enable the service with `DEEPSEEK_API_KEY` (the user provides it), and accept on Songyaxuan by asking why 10/15 used more than 10/08 (expected: about +762 kWh, mostly 18–21 h, B 机组 ran, cooling up, COP close; no outdoor temperature as a limitation). Not yet: history list, Cube semantic query Tool (#573), alarm/FDD/work-order Tools, session audit, a Pi benchmark, Chinese wording in the finding's physical-execution guard (it matches English phrases only).
 
 Roadmap issues, in order:
 
