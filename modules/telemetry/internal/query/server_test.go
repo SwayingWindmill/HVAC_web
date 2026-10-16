@@ -30,6 +30,9 @@ const (
 	testOrganizationID      = "018f1e00-0000-7000-8000-000000000001"
 	testSiteID              = "018f1e00-1000-7000-8000-000000000001"
 	testPrincipalID         = "018f1e00-2000-7000-8000-000000000001"
+	testIAM                 = "spiffe://hvac.local/iam-service"
+	testReportWorkload      = "spiffe://hvac.local/report-service"
+	testReportPrincipalID   = "018f1e00-2000-7000-8000-0000000000bb"
 )
 
 type engineStub struct {
@@ -186,14 +189,19 @@ func TestHandlerFailsClosedForScopeMismatchAndForgedHeaders(t *testing.T) {
 }
 
 type serverHarness struct {
-	handler http.Handler
-	signer  crypto.Signer
-	now     time.Time
+	handler   http.Handler
+	signer    crypto.Signer
+	iamSigner crypto.Signer
+	now       time.Time
 }
 
 func newServerHarness(t *testing.T, now time.Time, engine analytics.EnergySeriesEngine) serverHarness {
 	t.Helper()
 	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iamSigner, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,13 +211,16 @@ func newServerHarness(t *testing.T, now time.Time, engine analytics.EnergySeries
 			HistoryEngine:                     &historyEngineStub{},
 			DelegationPublicKey:               signer.Public(),
 			DelegationIssuerSPIFFE:            testPresenter,
+			WorkloadGrantPublicKey:            iamSigner.Public(),
+			WorkloadGrantIssuerSPIFFE:         testIAM,
 			AllowedPresenterSPIFFE:            testPresenter,
-			AdditionalAllowedPresenterSPIFFEs: []string{testOperationsPresenter},
+			AdditionalAllowedPresenterSPIFFEs: []string{testOperationsPresenter, testReportWorkload},
 			Audience:                          testAudience,
 			Now:                               func() time.Time { return now },
 		}),
-		signer: signer,
-		now:    now,
+		signer:    signer,
+		iamSigner: iamSigner,
+		now:       now,
 	}
 }
 
@@ -323,4 +334,94 @@ func validEnergyQuery() analyticsmodel.EnergySeriesQuery {
 		To:            time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 	}
+}
+
+// workloadGrant is what IAM signs for a Workload Principal reading for itself (ADR 0017).
+func (harness serverHarness) workloadGrant(t *testing.T, query analyticsmodel.EnergySeriesQuery, signer crypto.Signer, mutate func(*identitycontext.DelegationClaims)) string {
+	t.Helper()
+	scope, err := query.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: testIAM, Subject: testReportWorkload, SubjectIssuer: "spiffe://hvac.local", PrincipalID: testReportPrincipalID,
+		ExecutingService: testReportWorkload, Audience: testAudience, TenantID: testTenantID,
+		Actions: []string{analyticsmodel.EnergySeriesAction}, Scopes: []string{scope}, PolicyRevision: "analytics-policy:1",
+		IssuedAt: harness.now.Add(-time.Second).Unix(), ExpiresAt: harness.now.Add(30 * time.Second).Unix(), TokenID: "token-workload",
+	}
+	if mutate != nil {
+		mutate(&claims)
+	}
+	grant, err := identitycontext.SignDelegation(signer, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return grant
+}
+
+func (harness serverHarness) serveGrant(t *testing.T, query analyticsmodel.EnergySeriesQuery, grant, presenterSPIFFE string) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, EnergySeriesPath, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Delegation-Grant", grant)
+	spiffe, err := url.Parse(presenterSPIFFE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+	response := httptest.NewRecorder()
+	harness.handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestHandlerServesAWorkloadReadingWithItsOwnIAMGrant(t *testing.T) {
+	now := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	query := validEnergyQuery()
+	engine := &engineStub{response: analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Metadata: analyticsmodel.EnergySeriesMetadata{
+		RequestedGranularity: query.Granularity, ActualGranularity: query.Granularity, DatasetRevision: "energy-daily:v1",
+	}}}
+	harness := newServerHarness(t, now, engine)
+	response := harness.serveGrant(t, query, harness.workloadGrant(t, query, harness.iamSigner, nil), testReportWorkload)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	if engine.calls != 1 || engine.caller.PrincipalID != testReportPrincipalID {
+		t.Fatalf("engine calls=%d caller=%#v", engine.calls, engine.caller)
+	}
+}
+
+func TestHandlerRefusesWorkloadGrantsThatAreNotTheWorkloadsOwn(t *testing.T) {
+	now := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	query := validEnergyQuery()
+	engine := &engineStub{}
+	harness := newServerHarness(t, now, engine)
+	cases := map[string]struct {
+		grant     string
+		presenter string
+	}{
+		"presented by another workload": {harness.workloadGrant(t, query, harness.iamSigner, nil), testOperationsPresenter},
+		"subject is not the presenter":  {harness.workloadGrant(t, query, harness.iamSigner, func(c *identitycontext.DelegationClaims) { c.Subject = "user-1" }), testReportWorkload},
+		"a Session stands behind it":    {harness.workloadGrant(t, query, harness.iamSigner, func(c *identitycontext.DelegationClaims) { c.SessionID = "session-1" }), testReportWorkload},
+		"signed with the Gateway's key": {harness.workloadGrant(t, query, harness.signer, nil), testReportWorkload},
+		"bound to another query":        {harness.workloadGrant(t, validEnergyQueryForSite("018f1e00-1000-7000-8000-000000000099"), harness.iamSigner, nil), testReportWorkload},
+	}
+	for name, testCase := range cases {
+		response := harness.serveGrant(t, query, testCase.grant, testCase.presenter)
+		if response.Code != http.StatusForbidden && response.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d; body=%s", name, response.Code, response.Body.String())
+		}
+	}
+	if engine.calls != 0 {
+		t.Fatalf("engine ran %d times for refused grants", engine.calls)
+	}
+}
+
+func validEnergyQueryForSite(siteID string) analyticsmodel.EnergySeriesQuery {
+	query := validEnergyQuery()
+	query.SiteID = siteID
+	return query
 }
