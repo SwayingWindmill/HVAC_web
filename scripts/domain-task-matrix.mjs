@@ -16,6 +16,7 @@ export const gateCommandMatrix = Object.freeze({
   contracts: Object.freeze({
     core: Object.freeze([
       npmRun('contracts:check'),
+      npmRun('operations-agent:contracts:check'),
       npmRun('ownership:check'),
       npmRun('events:check'),
       npmRun('deployment:phase1:check'),
