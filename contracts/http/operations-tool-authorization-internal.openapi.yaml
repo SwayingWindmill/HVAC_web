@@ -136,7 +136,7 @@ components:
           properties:
             tenantId: { type: string, format: uuid }
             siteId: { type: string, format: uuid }
-            energyType: { const: electricity }
+            energyType: { enum: [electricity, cooling] }
             granularity: { enum: [hour, day, month] }
             timezone: { type: string, minLength: 1 }
             from: { type: string, format: date-time }

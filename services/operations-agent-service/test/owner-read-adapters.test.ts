@@ -316,6 +316,23 @@ test('Energy reader calls only the fixed Energy Series product contract and pres
   assert.equal('sql' in JSON.parse(captured.init.body), false);
 });
 
+test('Energy reader reads cooling energy through the same product contract', async () => {
+  let body;
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return jsonResponse(energyResponse);
+    },
+  });
+  const request = { ...energyRequest, input: { ...energyRequest.input, energyType: 'cooling' } };
+
+  const result = await reader.read({ request, context: energyContext });
+
+  assert.equal(body.energyType, 'cooling');
+  assert.deepEqual(result.payload.points, energyResponse.points);
+});
+
 test('Energy reader asks for the device breakdown and keeps each device series', async () => {
   let captured;
   const breakdownResponse = {

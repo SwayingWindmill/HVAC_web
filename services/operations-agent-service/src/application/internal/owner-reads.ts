@@ -61,7 +61,7 @@ export interface EnergyAnalyticsReadRequest {
   readonly input: {
     readonly tenantId: string;
     readonly siteId: string;
-    readonly energyType: 'electricity';
+    readonly energyType: 'electricity' | 'cooling';
     readonly granularity: EnergyGranularity;
     readonly timezone: string;
     readonly from: string;

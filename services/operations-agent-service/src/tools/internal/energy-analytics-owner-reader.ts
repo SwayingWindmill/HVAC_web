@@ -86,7 +86,7 @@ const assertEnergyRequest = (
     || query.siteId !== scope.siteId
     || scope.assetId !== null
     || scope.deviceId !== null
-    || query.energyType !== 'electricity'
+    || (query.energyType !== 'electricity' && query.energyType !== 'cooling')
     || !validGranularities.has(query.granularity)
     || !isNonEmptyString(query.timezone)
     || !isTimezone(query.timezone)

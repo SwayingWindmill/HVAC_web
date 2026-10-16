@@ -96,7 +96,13 @@ const telemetryInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
-const energyQueryInputSchema = Object.freeze({
+const energyTypeSchema = Object.freeze({
+  type: 'string',
+  enum: Object.freeze(['electricity', 'cooling']),
+  description: 'electricity (default) is power drawn; cooling is cooling delivered, also in kWh. Divide cooling by electricity for COP.',
+});
+
+const energyWindowInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
     from: Object.freeze({ type: 'string', format: 'date-time' }),
@@ -108,6 +114,11 @@ const energyQueryInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
+const energyQueryInputSchema = Object.freeze({
+  ...energyWindowInputSchema,
+  properties: Object.freeze({ ...energyWindowInputSchema.properties, energyType: energyTypeSchema }),
+});
+
 const energyCompareInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
@@ -117,6 +128,7 @@ const energyCompareInputSchema = Object.freeze({
     currentTo: Object.freeze({ type: 'string', format: 'date-time' }),
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
     qualityPolicy: Object.freeze({ type: 'string', enum: Object.freeze(['VALID_ONLY', 'VALID_AND_SUSPECT']) }),
+    energyType: energyTypeSchema,
   }),
   required: Object.freeze(['baselineFrom', 'baselineTo', 'currentFrom', 'currentTo']),
   additionalProperties: false,
@@ -206,18 +218,25 @@ const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
 };
 
 interface EnergyArguments {
+  readonly energyType: 'electricity' | 'cooling';
   readonly from: string;
   readonly to: string;
   readonly granularity: 'hour' | 'day' | 'month';
   readonly qualityPolicy: 'VALID_ONLY' | 'VALID_AND_SUSPECT';
 }
 
+const ALL_ENERGY_TYPES: readonly EnergyArguments['energyType'][] = ['electricity', 'cooling'];
+
 const parseEnergyWindow = (
   value: unknown,
   limits: HvacReadToolLimits,
+  energyTypes: readonly EnergyArguments['energyType'][] = ['electricity'],
 ): EnergyArguments => {
   const record = requireRecord(value, 'Energy query arguments are invalid.');
-  if (!hasOnlyKeys(record, ['from', 'to', 'granularity', 'qualityPolicy'])
+  if (!hasOnlyKeys(record, energyTypes.length > 1
+    ? ['from', 'to', 'granularity', 'qualityPolicy', 'energyType']
+    : ['from', 'to', 'granularity', 'qualityPolicy'])
+    || (record.energyType !== undefined && !energyTypes.includes(record.energyType as EnergyArguments['energyType']))
     || (record.granularity !== undefined && !['hour', 'day', 'month'].includes(String(record.granularity)))
     || (record.qualityPolicy !== undefined
       && !['VALID_ONLY', 'VALID_AND_SUSPECT'].includes(String(record.qualityPolicy)))) {
@@ -231,6 +250,7 @@ const parseEnergyWindow = (
     fail('TOOL_ARGUMENTS_INVALID', 'Energy query range is invalid or exceeds the Tool limit.');
   }
   return Object.freeze({
+    energyType: (record.energyType ?? 'electricity') as EnergyArguments['energyType'],
     from: fromValue,
     to: toValue,
     granularity: (record.granularity ?? 'hour') as EnergyArguments['granularity'],
@@ -255,6 +275,7 @@ const parseEnergyComparison = (
     'currentTo',
     'granularity',
     'qualityPolicy',
+    'energyType',
   ])) {
     fail('TOOL_ARGUMENTS_INVALID', 'Energy comparison arguments are invalid.');
   }
@@ -265,10 +286,11 @@ const parseEnergyComparison = (
   const shared = {
     ...(record.granularity === undefined ? {} : { granularity: record.granularity }),
     ...(record.qualityPolicy === undefined ? {} : { qualityPolicy: record.qualityPolicy }),
+    ...(record.energyType === undefined ? {} : { energyType: record.energyType }),
   };
   return Object.freeze({
-    baseline: parseEnergyWindow({ from: baselineFrom, to: baselineTo, ...shared }, limits),
-    current: parseEnergyWindow({ from: currentFrom, to: currentTo, ...shared }, limits),
+    baseline: parseEnergyWindow({ from: baselineFrom, to: baselineTo, ...shared }, limits, ALL_ENERGY_TYPES),
+    current: parseEnergyWindow({ from: currentFrom, to: currentTo, ...shared }, limits, ALL_ENERGY_TYPES),
   });
 };
 
@@ -574,7 +596,7 @@ const readEnergy = async (
     input: {
       tenantId: context.tenantId,
       siteId: context.siteId,
-      energyType: 'electricity' as const,
+      energyType: query.energyType,
       granularity: query.granularity,
       timezone,
       from: query.from,
@@ -599,6 +621,7 @@ const readEnergy = async (
   return {
     siteId: context.siteId,
     query: {
+      energyType: query.energyType,
       from: query.from,
       to: query.to,
       granularity: query.granularity,
@@ -881,12 +904,12 @@ export const createHvacReadTools = ({
   const energyQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_query_series',
-      'Query a bounded electricity energy series for the current Site using its authoritative timezone.',
+      'Query a bounded electricity or cooling energy series for the current Site using its authoritative timezone.',
       energyQueryInputSchema,
       ENERGY_CAPABILITIES,
     ),
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
-      const query = parseEnergyWindow(argumentsValue, limits);
+      const query = parseEnergyWindow(argumentsValue, limits, ALL_ENERGY_TYPES);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
@@ -908,7 +931,7 @@ export const createHvacReadTools = ({
   const energyCompareTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_compare_periods',
-      'Compare two bounded electricity periods for the current Site without exposing raw infrastructure.',
+      'Compare two bounded electricity or cooling periods for the current Site without exposing raw infrastructure.',
       energyCompareInputSchema,
       ENERGY_CAPABILITIES,
     ),
@@ -954,7 +977,7 @@ export const createHvacReadTools = ({
     definition: toolDefinition(
       'energy_by_equipment',
       'Split the current Site\'s electricity in a period by sub-metered device (machines with their own meter), largest first, with each device\'s series at the chosen granularity.',
-      energyQueryInputSchema,
+      energyWindowInputSchema,
       EQUIPMENT_ENERGY_CAPABILITIES,
     ),
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {

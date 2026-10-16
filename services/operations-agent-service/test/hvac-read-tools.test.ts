@@ -454,3 +454,29 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
   assert.equal(result.completeness, 'COMPLETE');
   assert.equal(result.source.revision, 'energy-breakdown-1');
 });
+
+test('energy tools read cooling energy when asked and say which energy they read', async () => {
+  const harness = createHarness({
+    energyFor: async (input) => {
+      const payload = energyPayload({ from: input.request.input.from, to: input.request.input.to, energyKWh: 7217 });
+      return ownerResult(input.request, 'telemetry-query-service', 'cooling-1', 'GOOD', 'telemetry-query-service:energy-series/v1', payload);
+    },
+  });
+  const from = '2026-10-15T16:00:00.000Z';
+  const to = '2026-10-16T16:00:00.000Z';
+
+  const series = await execute(byName(harness.tools, 'energy_query_series'), { from, to, energyType: 'cooling' });
+  const comparison = await execute(byName(harness.tools, 'energy_compare_periods'), {
+    baselineFrom: '2026-10-08T16:00:00.000Z',
+    baselineTo: '2026-10-09T16:00:00.000Z',
+    currentFrom: from,
+    currentTo: to,
+    energyType: 'cooling',
+  });
+  const electricity = await execute(byName(harness.tools, 'energy_query_series'), { from, to });
+
+  assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType), ['cooling', 'cooling', 'cooling', 'electricity']);
+  assert.equal(series.query.energyType, 'cooling');
+  assert.equal(comparison.current.query.energyType, 'cooling');
+  assert.equal(electricity.query.energyType, 'electricity');
+});
