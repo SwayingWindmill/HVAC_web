@@ -4,8 +4,10 @@ go 1.25.12
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
 	github.com/quanlaihe/hvac-web/libs/tariffmodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 )
 
 require (
@@ -19,3 +21,7 @@ require (
 replace github.com/quanlaihe/hvac-web/libs/schedulerjob => ../../libs/schedulerjob
 
 replace github.com/quanlaihe/hvac-web/libs/tariffmodel => ../../libs/tariffmodel
+
+replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel
+
+replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls

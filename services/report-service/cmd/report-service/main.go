@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/report-service/internal/report"
 )
 
@@ -24,9 +26,24 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	hours, err := report.NewClickHouseHours(
-		requiredEnv("REPORT_CLICKHOUSE_HTTP_URL"), requiredEnv("REPORT_CLICKHOUSE_READER_USERNAME"), os.Getenv("REPORT_CLICKHOUSE_READER_PASSWORD"), nil,
-	)
+	// The Site's energy comes from the Telemetry Query Service; report-service presents its own
+	// workload identity to IAM and to the query service (ADR 0017, ADR 0023).
+	certificate := &workloadtls.CertificateFiles{CertificatePath: requiredEnv("REPORT_TLS_CERT"), PrivateKeyPath: requiredEnv("REPORT_TLS_KEY")}
+	client := func(origin string) *http.Client {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Hostname() == "" {
+			log.Fatalf("invalid service URL %q", origin)
+		}
+		httpClient, err := workloadtls.NewHTTPClient(workloadtls.ClientConfig{
+			CertificateFiles: certificate, ServerCAPath: requiredEnv("REPORT_TLS_CA"), ServerName: parsed.Hostname(), Timeout: 30 * time.Second,
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		return httpClient
+	}
+	iamURL, queryURL := requiredEnv("REPORT_IAM_URL"), requiredEnv("REPORT_QUERY_URL")
+	hours, err := report.NewQueryHours(report.QueryHoursConfig{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)})
 	if err != nil {
 		log.Fatal(err)
 	}
