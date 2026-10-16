@@ -35,6 +35,12 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   await expect(panel.getByTestId('assistant-finding')).toHaveCount(2);
   const asked = gateway.writes.find((write) => write.path.endsWith(':run'));
   expect(asked?.body).toEqual({ expectedRevision: 2, message: '2 号机组为什么开机？' });
+
+  // With the panel already open, 解释 on a detail row hands over that hour's question.
+  const details = page.getByRole('region', { name: '能耗明细' });
+  await details.getByRole('tab', { name: '分时段明细' }).click();
+  await details.getByRole('button', { name: '解释 10:00' }).click();
+  await expect(composer).toHaveValue('2026年10月10日 10:00–11:00 的空调用电 178 kWh，用电正常吗？');
 });
 
 test('without an Operations Agent the panel says the assistant is not connected', async ({ page, gateway }) => {

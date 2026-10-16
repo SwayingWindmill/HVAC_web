@@ -5,23 +5,19 @@ import { create } from 'zustand';
 
 interface AssistantPanelState {
   readonly open: boolean;
-  /** Prefilled by a page's 解释; the composer takes it once and clears it. */
+  /** Prefilled by a page's 解释; the composer puts it in its input and clears it. */
   readonly draft: string | null;
   readonly toggle: () => void;
   readonly close: () => void;
   readonly explain: (question: string) => void;
-  readonly takeDraft: () => string | null;
+  readonly clearDraft: () => void;
 }
 
-export const useAssistantPanel = create<AssistantPanelState>((set, get) => ({
+export const useAssistantPanel = create<AssistantPanelState>((set) => ({
   open: false,
   draft: null,
   toggle: () => set((state) => ({ open: !state.open })),
   close: () => set({ open: false }),
   explain: (question) => set({ open: true, draft: question }),
-  takeDraft: () => {
-    const { draft } = get();
-    if (draft !== null) set({ draft: null });
-    return draft;
-  },
+  clearDraft: () => set({ draft: null }),
 }));

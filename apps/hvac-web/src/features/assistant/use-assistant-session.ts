@@ -9,7 +9,7 @@ import {
   createAssistantSession,
   followAssistantSession,
   listAssistantSessions,
-} from './session-client';
+} from '@/api/agent-sessions';
 import { assistantThreadFrom, type AssistantThread } from './thread-model';
 
 const sessionsKey = (siteId: string) => ['assistant', 'sessions', siteId] as const;
@@ -34,12 +34,11 @@ export interface AssistantSession {
  * The Site's current conversation: the latest Session, or a new one once the operator starts
  * one. A Session with a running Run is followed live until its terminal snapshot.
  */
-export function useAssistantSession(siteId: string, csrfToken: string, enabled: boolean): AssistantSession {
+export function useAssistantSession(siteId: string, csrfToken: string): AssistantSession {
   const queryClient = useQueryClient();
   const sessions = useQuery({
     queryKey: sessionsKey(siteId),
     queryFn: () => listAssistantSessions(siteId),
-    enabled,
     retry: false,
   });
   // undefined follows the latest Session; null is a new conversation not yet sent.
@@ -137,7 +136,7 @@ export function useAssistantSession(siteId: string, csrfToken: string, enabled: 
 
   return {
     thread,
-    loading: sessions.isPending && enabled,
+    loading: sessions.isPending,
     error: error ?? (sessions.error === null ? null : assistantErrorText(sessions.error)),
     ask,
     answer,

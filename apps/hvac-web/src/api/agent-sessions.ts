@@ -35,16 +35,8 @@ export const assistantErrorText = (error: unknown): string => {
   }
 };
 
-const request = async (path: string, csrfToken: string | null, body?: unknown): Promise<unknown> => {
-  const response = await fetch(path, {
-    method: body === undefined ? 'GET' : 'POST',
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json, application/problem+json',
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken ?? '' }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+const send = async (path: string, init: RequestInit): Promise<unknown> => {
+  const response = await fetch(path, { credentials: 'same-origin', ...init });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const code = typeof payload === 'object' && payload !== null && 'code' in payload && typeof payload.code === 'string'
@@ -55,12 +47,20 @@ const request = async (path: string, csrfToken: string | null, body?: unknown): 
   return payload;
 };
 
+const read = (path: string) => send(path, { headers: { Accept: 'application/json, application/problem+json' } });
+
+const post = (path: string, csrfToken: string, body: unknown) => send(path, {
+  method: 'POST',
+  headers: { Accept: 'application/json, application/problem+json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+  body: JSON.stringify(body),
+});
+
 export const listAssistantSessions = async (siteId: string): Promise<readonly AgentSessionSnapshot[]> => (
-  agentSessionListSchema.parse(await request(agentSessionPaths.collection(siteId), null))
+  agentSessionListSchema.parse(await read(agentSessionPaths.collection(siteId)))
 );
 
 export const createAssistantSession = async (siteId: string, csrfToken: string, message: string): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await request(agentSessionPaths.collection(siteId), csrfToken, { message }))
+  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.collection(siteId), csrfToken, { message }))
 );
 
 export const askInAssistantSession = async (
@@ -70,7 +70,7 @@ export const askInAssistantSession = async (
   expectedRevision: number,
   message: string,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await request(agentSessionPaths.run(siteId, sessionId), csrfToken, { expectedRevision, message }))
+  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.run(siteId, sessionId), csrfToken, { expectedRevision, message }))
 );
 
 export const cancelAssistantRun = async (
@@ -79,7 +79,7 @@ export const cancelAssistantRun = async (
   sessionId: string,
   expectedRevision: number,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await request(agentSessionPaths.cancel(siteId, sessionId), csrfToken, { expectedRevision }))
+  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.cancel(siteId, sessionId), csrfToken, { expectedRevision }))
 );
 
 export const answerAssistantQuestion = async (
@@ -90,7 +90,7 @@ export const answerAssistantQuestion = async (
   requestArtifactId: string,
   value: string,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await request(
+  agentSessionSnapshotSchema.parse(await post(
     agentSessionPaths.submitInput(siteId, sessionId),
     csrfToken,
     { expectedRevision, requestArtifactId, value },

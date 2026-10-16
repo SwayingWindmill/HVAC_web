@@ -18,8 +18,7 @@ const textOf = (message: AppendMessage): string => message.content
 /** The right-hand assistant panel for the current Site; it pushes the page over rather than covering it. */
 export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteId: string; readonly siteName: string; readonly csrfToken: string }) {
   const close = useAssistantPanel((state) => state.close);
-  const takeDraft = useAssistantPanel((state) => state.takeDraft);
-  const { thread, loading, error, ask, answer, cancel, startNew } = useAssistantSession(siteId, csrfToken, true);
+  const { thread, loading, error, ask, answer, cancel, startNew } = useAssistantSession(siteId, csrfToken);
   const pending = thread.pendingInput;
 
   const runtime = useExternalStoreRuntime<AssistantMessage>({
@@ -74,7 +73,6 @@ export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteI
             siteName={siteName}
             answering={pending !== null}
             onAnswer={(value) => { void answer(value); }}
-            takeDraft={takeDraft}
           />
         </AssistantRuntimeProvider>
       )}

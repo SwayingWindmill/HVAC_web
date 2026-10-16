@@ -12,6 +12,7 @@ import { ArrowDown, ArrowUp, Square } from 'lucide-react';
 import { MarkdownText } from '@/components/assistant-ui/elements/markdown-text';
 import { TooltipIconButton } from '@/components/assistant-ui/elements/tooltip-icon-button';
 import { Button } from '@/components/ui/button';
+import { useAssistantPanel } from '../assistant-panel-store';
 import { FindingCard } from './FindingCard';
 import { InputRequestCard } from './InputRequestCard';
 import { QueryStep, QuerySteps } from './QuerySteps';
@@ -25,7 +26,6 @@ interface ThreadSurface {
   readonly siteName: string;
   readonly answering: boolean;
   readonly onAnswer: (value: string) => void;
-  readonly takeDraft: () => string | null;
 }
 
 const ThreadSurfaceContext = createContext<ThreadSurface | null>(null);
@@ -140,13 +140,16 @@ const FollowUps: FC = () => (
 );
 
 const Composer: FC = () => {
-  const { siteName, answering, takeDraft } = useThreadSurface();
+  const { siteName, answering } = useThreadSurface();
   const aui = useAui();
-  // A page's 解释 hands over its question once; the operator can edit it before sending.
+  const draft = useAssistantPanel((state) => state.draft);
+  const clearDraft = useAssistantPanel((state) => state.clearDraft);
+  // A page's 解释 hands over its question, also while the panel is open; the operator can edit it before sending.
   useEffect(() => {
-    const draft = takeDraft();
-    if (draft !== null) aui.thread.composer().setText(draft);
-  });
+    if (draft === null) return;
+    aui.thread.composer().setText(draft);
+    clearDraft();
+  }, [aui, clearDraft, draft]);
 
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 rounded-[10px] border bg-card px-3 pt-2.5 pb-2 focus-within:border-input-hover">

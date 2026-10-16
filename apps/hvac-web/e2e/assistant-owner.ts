@@ -60,7 +60,7 @@ export class AssistantOwner {
       if (body?.expectedRevision !== session.revision) {
         return { status: 409, body: { type: 'about:blank', title: 'Agent Session conflict', status: 409, detail: 'revision', instance: path, code: 'SESSION_REVISION_CONFLICT', traceId: '0'.repeat(32), retryable: false } };
       }
-      return { status: 202, body: this.startRun(session, body.message, Date.now()) };
+      return { status: 202, body: this.startRun(session, body!.message, Date.now()) };
     }
     return undefined;
   }

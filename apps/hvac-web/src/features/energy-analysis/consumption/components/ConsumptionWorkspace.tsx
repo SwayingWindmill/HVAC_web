@@ -212,10 +212,11 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   const { current, previous, buckets } = comparison;
   const granularity = current.granularity;
   const explain = useAssistantPanel((state) => state.explain);
-  // The bucket 解释 asks about: the one clicked, else the period's highest.
+  // The bucket 解释 asks about: the one clicked, else the period's highest. A running bucket holds partial energy, so it is not offered.
   const [picked, setPicked] = useState<string | null>(null);
-  const explained = buckets.find((bucket) => bucket.label === picked && bucket.electricityKWh !== null)
-    ?? buckets.find((bucket) => bucket.label === current.peak?.label);
+  const explainable = (bucket: BucketComparison) => bucket.complete && bucket.electricityKWh !== null;
+  const explained = buckets.find((bucket) => bucket.label === picked && explainable(bucket))
+    ?? buckets.find((bucket) => bucket.label === current.peak?.label && explainable(bucket));
   // One unit for both energies, so electricity and cooling read side by side.
   const scale = Math.max(current.electricityKWh ?? 0, current.coolingKWh ?? 0);
   const electricity = energy(current.electricityKWh, scale);
@@ -374,7 +375,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                   <span className="flex items-center gap-2">
                     <span className="font-medium">{row.label}</span>
                     {!row.complete ? <span className="rounded-md bg-primary-soft px-1.5 text-[11px] leading-[18px] font-medium text-primary">进行中</span> : null}
-                    {row.electricityKWh !== null ? (
+                    {row.complete && row.electricityKWh !== null ? (
                       <Button
                         variant="ghost"
                         size="sm"
