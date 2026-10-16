@@ -9,8 +9,8 @@ import { createScriptedPiAgentEngine } from '../dist/runtime-pi/testing.js';
 
 const validEnvironment = Object.freeze({
   AGENT_MODEL_PROVIDER: 'deepseek',
-  AGENT_MODEL_ID: 'deepseek-v4-flash',
-  AGENT_MODEL_ALLOWLIST: 'deepseek-v4-flash',
+  AGENT_MODEL_ID: 'deepseek-flash',
+  AGENT_MODEL_ALLOWLIST: 'deepseek-flash',
   AGENT_MODEL_THINKING_LEVEL: 'high',
   AGENT_MODEL_TIMEOUT_MS: '12000',
   AGENT_MODEL_MAX_OUTPUT_TOKENS: '1024',
@@ -29,9 +29,9 @@ test('production Pi composition validates one exact DeepSeek model and exposes o
     environment: validEnvironment,
   });
 
-  assert.deepEqual(runtime.modelRef, { provider: 'deepseek', model: 'deepseek-v4-flash' });
+  assert.deepEqual(runtime.modelRef, { provider: 'deepseek', model: 'deepseek-flash' });
   assert.deepEqual(runtime.policy, {
-    modelRef: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    modelRef: { provider: 'deepseek', model: 'deepseek-flash' },
     thinkingLevel: 'high',
     timeoutMs: 12000,
     maxOutputTokens: 1024,

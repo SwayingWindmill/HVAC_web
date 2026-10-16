@@ -189,3 +189,14 @@ Start with one production provider, not a broad provider matrix. The first imple
 ## Result
 
 Pi is adopted as the current Agent execution engine, not as the HVAC business architecture. The project will lean on Pi for the parts it does well — provider-neutral model execution, Agent loop, tool execution and events — while keeping industrial scope, authorization, business truth, approval, audit and public contracts outside the Pi dependency boundary.
+
+## Upgrade to v1.3.0 (2026-10-16)
+
+Reviewed the v0.85.0–v1.3.0 release notes against the APIs this service uses (`Agent`, `AgentTool`, `createModels`, `streamSimple`, the DeepSeek and faux providers).
+
+- ADAPT: `shouldStopAfterTurn` was removed in v0.87.0; the Run's terminal-Artifact and budget stop moved to `finishTurn`, which returns `{ action: 'end' }` or nothing to keep pi's scheduling.
+- ADOPT: since v0.86.0 providers read the system prompt from the transcript (`TranscriptContext`); the policy is still set once through `initialState.systemPrompt` and arrives as the first message.
+- ADOPT: tool-call arguments are JSON values only (v0.86.0); the faux test harness types them as `JsonObject`.
+- ADAPT: the DeepSeek catalog now lists `deepseek-flash` (V4.1 Flash) and `deepseek-v4-pro`; the Compose default and allowlist follow it.
+- REJECT for now: codemode, MCP, virtual models and the coding-agent session manager (v0.99–v1.x) are coding-agent features with no consumer here.
+

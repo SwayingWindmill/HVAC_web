@@ -34,11 +34,11 @@ Pi `v0.84.4` is selected because the stable `Agent` API provides a small statefu
 The first production Agent runtime uses exact-pinned:
 
 ```text
-@earendil-works/pi-agent-core 0.84.4
-@earendil-works/pi-ai         0.84.4
+@earendil-works/pi-agent-core 1.3.0
+@earendil-works/pi-ai         1.3.0
 ```
 
-Both packages come from upstream gitHead `b79e4cc834970cca69daebffab7df1da7d1e52c4` and are upgraded together.
+Both packages come from upstream tag `v1.3.0` (commit `71023aec1546d6d677a65669c5665c0927ce0dd0`) and are upgraded together. The first pin was `0.84.4`; the 2026-10-16 upgrade to 1.3.0 changed three things for this service: the removed `shouldStopAfterTurn` option became `finishTurn` returning `{ action: 'end' }`, the system policy now reaches the provider as the first transcript message, and pi's DeepSeek catalog renamed `deepseek-v4-flash` to `deepseek-flash`.
 
 The product does not expose Pi types in persistence, HTTP, Gateway, Web or business contracts.
 
