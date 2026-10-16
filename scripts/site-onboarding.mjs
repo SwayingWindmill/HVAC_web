@@ -245,7 +245,73 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.tariff_assignments (id, tenant_id, site_id, boundary_id, tariff_id, effective_from, status, revision, created_at, updated_at)
 VALUES (${id('7800', 4)}, ${t}, ${st}, ${id('7800', 1)}, ${id('7800', 3)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
+${buildLoadForecastSql(profile, total, points, version)}
 COMMIT;`;
+}
+
+// The Site load forecast, the same chain the simulator seed gives the demo Sites: the total meter's
+// active power averaged per quarter-hour as a Site Metric of its own, and a day-ahead baseline model
+// (each time of day averaged over the past week) deployed on it and run every hour. The Forecast
+// owner needs at least four quarter-hours of that Metric, so after onboarding a Site with history,
+// backfill a week of it with scripts/site-metric-recalc.mjs.
+function buildLoadForecastSql(profile, total, points, topologyVersion) {
+  const { site } = profile;
+  const t = sqlLiteral(profile.tenantId);
+  const st = sqlLiteral(site.id);
+  const rawId = (index) => rowId(site.id, '7a00', index);
+  const power = points.filter((point) => point.device === total && point.pointType === 'TELEMETRY' && point.unit === 'kW');
+  if (power.length !== 1) throw new Error(`${total.sourceKey} needs exactly one kW telemetry point for the load forecast`);
+  const code = site.code.replaceAll('-', '_');
+  const [metric, metricVersion, dependency, binding, loadSchedule, featureSet, featureSetVersion, dataset, model, trainingRun, modelVersion, deployment, forecastSchedule] =
+    Array.from({ length: 13 }, (_, index) => sqlLiteral(rawId(index + 1)));
+  return `INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at)
+VALUES (${metric}, ${t}, ${sqlLiteral(`site_load_15min_${code}`)}, ${sqlLiteral(`${site.name}空调用电负荷（15 分钟）`)}, 'LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at)
+VALUES (${metricVersion}, ${t}, ${metric}, 1, 'kW', 'NUMBER', 'SITE', '15MIN', 'AVG', 'IDENTITY', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
+SELECT ${dependency}::uuid, ${t}::uuid, ${metricVersion}::uuid, 'POINT', 'site_load', NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
+WHERE EXISTS (SELECT 1 FROM core_registry.metric_versions WHERE id = ${metricVersion} AND status = 'DRAFT')
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${metricVersion} AND status = 'DRAFT';
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+VALUES (${binding}, ${t}, ${st}, ${metricVersion}, ${metric}, 1, 1, 'SITE', ${st}, '15MIN', ${sqlJson({ points: { site_load: power[0].id } })}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_feature_sets (id, tenant_id, feature_set_code, target, status, revision, created_at, updated_at)
+VALUES (${featureSet}, ${t}, ${sqlLiteral(`site_load_${code}`)}, 'SITE_LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_feature_set_versions (id, tenant_id, feature_set_id, version, feature_schema, fallback_schema, status, revision, created_at, updated_at)
+VALUES (${featureSetVersion}, ${t}, ${featureSet}, 1, ${sqlJson({ targetMetricVersionId: rawId(2), features: ['load_history'] })}, NULL, 'RELEASED', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_dataset_snapshots (id, tenant_id, site_id, target, subject_type, subject_id, train_from, train_to, feature_set_version_id, topology_version_id, metric_version_refs, weather_source, data_quality_summary, manifest_uri, manifest_checksum, created_at)
+VALUES (${dataset}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, '2026-01-01T00:00:00Z', '2026-10-01T00:00:00Z', ${featureSetVersion}, ${topologyVersion}, ${sqlJson([rawId(2)])}, NULL, '{}', ${sqlLiteral(`site://${site.code}/site-load/manifest.json`)}, repeat('0', 64), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_models (id, tenant_id, model_code, target, subject_type, horizon_minutes, granularity, status, revision, created_at, updated_at)
+VALUES (${model}, ${t}, ${sqlLiteral(`site_load_day_ahead_${code}`)}, 'SITE_LOAD', 'SITE', 2880, '15MIN', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.forecast_training_runs (id, tenant_id, site_id, model_id, dataset_snapshot_id, feature_set_version_id, topology_version_id, algorithm, hyperparameters, code_version, evaluation, status, started_at, finished_at, revision, created_at, updated_at)
+VALUES (${trainingRun}, ${t}, ${st}, ${model}, ${dataset}, ${featureSetVersion}, ${topologyVersion}, 'BASELINE', '{"method":"TIME_OF_DAY_PROFILE"}', 'site-onboarding', NULL, 'PENDING', NULL, NULL, 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.forecast_training_runs SET status = 'RUNNING', started_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
+WHERE id = ${trainingRun} AND status = 'PENDING';
+UPDATE core_registry.forecast_training_runs SET status = 'SUCCEEDED', evaluation = '{"baseline":true}', finished_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp() + interval '1 second'
+WHERE id = ${trainingRun} AND status = 'RUNNING';
+INSERT INTO core_registry.forecast_model_versions (id, tenant_id, site_id, model_id, model_version, training_run_id, dataset_snapshot_id, feature_set_version_id, topology_version_id, artifact_uri, artifact_checksum, evaluation, compatibility, status, revision, created_at, updated_at)
+VALUES (${modelVersion}, ${t}, ${st}, ${model}, 1, ${trainingRun}, ${dataset}, ${featureSetVersion}, ${topologyVersion}, ${sqlLiteral(`site://${site.code}/site-load/model.bin`)}, repeat('0', 64), '{"baseline":true}', '{"runtime":"go"}', 'CANDIDATE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+UPDATE core_registry.forecast_model_versions SET status = 'VALIDATED', revision = revision + 1, updated_at = clock_timestamp() + interval '1 second'
+WHERE id = ${modelVersion} AND status = 'CANDIDATE';
+INSERT INTO core_registry.forecast_deployments (id, tenant_id, site_id, target, subject_type, subject_id, model_version_id, model_id, feature_set_version_id, topology_version_id, status, effective_from, revision, created_at, updated_at)
+VALUES (${deployment}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, ${modelVersion}, ${model}, ${featureSetVersion}, ${topologyVersion}, 'ACTIVE', '2026-01-01T00:00:00Z', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
+  (${loadSchedule}, ${sqlLiteral(`site-load-15min-${site.code}`)}, '空调用电负荷（每 15 分钟）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '*/15 * * * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rawId(4) })},
+    date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes'),
+  (${forecastSchedule}, ${sqlLiteral(`site-load-forecast-${site.code}`)}, '空调用电负荷日前预测（每小时）', ${t}, ${st}, 'FORECAST_RUN', 'CRON', '7 * * * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 120,
+    ${sqlJson({ target: 'SITE_LOAD', subjectType: 'SITE', subjectId: site.id })}, clock_timestamp())
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

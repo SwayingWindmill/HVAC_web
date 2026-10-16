@@ -1,4 +1,4 @@
-// Recalculates a Site's hourly and daily Metrics over a window, after history arrived late (an import
+// Recalculates a Site's quarter-hour, hourly and daily Metrics over a window, after history arrived late (an import
 // or a replay): first the Metrics read from points, then those computed from other Metrics, so a
 // daily cost never prices hours that are still being recalculated.
 //
@@ -27,15 +27,15 @@ function queue(pass) {
   const dependsOnMetrics = `EXISTS (SELECT 1 FROM core_registry.metric_dependencies dependency
       WHERE dependency.metric_version_id = binding.metric_version_id AND dependency.dependency_type = 'METRIC')`;
   psql(`WITH bindings AS (
-  SELECT binding.id, CASE binding.time_granularity WHEN 'HOUR' THEN interval '1 hour' ELSE interval '1 day' END AS step,
-         CASE binding.time_granularity WHEN 'HOUR' THEN date_trunc('hour', ${sqlLiteral(from.toISOString())}::timestamptz)
+  SELECT binding.id, CASE binding.time_granularity WHEN '15MIN' THEN interval '15 minutes' WHEN 'HOUR' THEN interval '1 hour' ELSE interval '1 day' END AS step,
+         CASE WHEN binding.time_granularity IN ('15MIN', 'HOUR') THEN date_trunc('hour', ${sqlLiteral(from.toISOString())}::timestamptz)
               ELSE date_trunc('day', ${sqlLiteral(from.toISOString())}::timestamptz AT TIME ZONE ${zone}) AT TIME ZONE ${zone} END AS first_start
   FROM core_registry.metric_bindings binding
-  WHERE binding.site_id = ${sqlLiteral(site.id)} AND binding.status = 'RELEASED' AND binding.time_granularity IN ('HOUR', 'DAY')
+  WHERE binding.site_id = ${sqlLiteral(site.id)} AND binding.status = 'RELEASED' AND binding.time_granularity IN ('15MIN', 'HOUR', 'DAY')
     AND ${pass === 'dependent' ? '' : 'NOT '}${dependsOnMetrics}
 ), periods AS (
   SELECT bindings.id AS binding_id, period_start, period_start + bindings.step AS period_end,
-         'site-recalc-${runStamp}-${pass}-' || bindings.id || '-' || to_char(period_start AT TIME ZONE 'UTC', 'YYYYMMDDHH24') AS dedup
+         'site-recalc-${runStamp}-${pass}-' || bindings.id || '-' || to_char(period_start AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI') AS dedup
   FROM bindings CROSS JOIN LATERAL generate_series(bindings.first_start, ${sqlLiteral(to.toISOString())}::timestamptz - bindings.step, bindings.step) AS period_start
 )
 INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, priority, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
