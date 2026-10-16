@@ -73,8 +73,8 @@ interface Working {
   runs: Map<string, Run>;
   tools: Map<string, ToolExecution>;
   artifacts: Map<string, AgentArtifact>;
-  /** Streamed text per Run, kept until the Run's ASSISTANT message is committed. */
-  streamed: Map<string, string>;
+  /** The latest turn's streamed text per Run, kept until the Run's ASSISTANT messages are committed. */
+  streamed: Map<string, { readonly messageId: string; readonly text: string }>;
 }
 
 const workingFrom = (snapshot: Snapshot): Working => ({
@@ -96,7 +96,10 @@ const apply = (working: Working, event: AgentSessionEvent): Working => {
       return working;
     case 'assistant.delta':
       if (event.runId !== null) {
-        working.streamed.set(event.runId, (working.streamed.get(event.runId) ?? '') + event.payload.delta);
+        // A Run speaks once per model turn; only its latest turn is the answer so far.
+        const current = working.streamed.get(event.runId);
+        const text = current?.messageId === event.payload.messageId ? current.text + event.payload.delta : event.payload.delta;
+        working.streamed.set(event.runId, { messageId: event.payload.messageId, text });
       }
       return working;
     case 'tool.started':
@@ -181,8 +184,9 @@ export const assistantThreadFrom = (
     }
   }
   for (const run of runs) {
-    const committed = working.snapshot.messages.find((message) => message.role === 'ASSISTANT' && message.runId === run.id);
-    const text = committed?.content ?? working.streamed.get(run.id);
+    // Text before a Tool call narrates the search; the Run's last turn is its answer.
+    const committed = working.snapshot.messages.filter((message) => message.role === 'ASSISTANT' && message.runId === run.id).at(-1);
+    const text = committed?.content ?? working.streamed.get(run.id)?.text;
     const content: AssistantPart[] = [
       ...tools.filter((execution) => execution.runId === run.id).map(toolPart),
       ...(text === undefined ? [] : [{ type: 'text' as const, text }]),

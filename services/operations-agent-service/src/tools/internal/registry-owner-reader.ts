@@ -28,6 +28,10 @@ export interface RegistrySiteDto {
   readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Building floor area; null until recorded. */
+  readonly floorAreaM2: number | null;
+  /** GB 50176 thermal design zone; null until recorded. */
+  readonly climateZone: string | null;
 }
 
 export interface RegistryAssetDto {
@@ -93,6 +97,8 @@ const siteKeys = [
   'revision',
   'createdAt',
   'updatedAt',
+  'floorAreaM2',
+  'climateZone',
 ] as const;
 
 const assetKeys = [
@@ -143,7 +149,9 @@ const decodeSite = (value: unknown): RegistrySiteDto => {
     || !isRevision(value.revision)
     || !isInstant(value.createdAt)
     || !isInstant(value.updatedAt)
-    || Date.parse(value.createdAt) > Date.parse(value.updatedAt)) {
+    || Date.parse(value.createdAt) > Date.parse(value.updatedAt)
+    || (value.floorAreaM2 !== null && (typeof value.floorAreaM2 !== 'number' || !(value.floorAreaM2 > 0)))
+    || (value.climateZone !== null && !isNonEmptyString(value.climateZone))) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Registry Owner returned an invalid Site representation.',

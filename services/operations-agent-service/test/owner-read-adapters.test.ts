@@ -79,6 +79,8 @@ const siteDto = Object.freeze({
   revision: 17,
   createdAt: '2026-07-01T00:00:00.000Z',
   updatedAt: '2026-07-30T00:00:00.000Z',
+  floorAreaM2: 4200,
+  climateZone: null,
 });
 
 const assetDto = Object.freeze({

@@ -29,12 +29,13 @@ const event = (type, sequence, payload, runId = 'run-1') => ({
   version: 'hvac.agent.event/v1', type, sessionId: 'session-1', runId, sequence, at: 2_000 + sequence, payload,
 });
 
-test('a finished run reads as the question, the steps it took, its answer and the finding, with follow-ups offered', () => {
+test('a finished run reads as the question, the steps it took, its final answer and the finding, with follow-ups offered', () => {
   const snapshot = {
     session: session('COMPLETED', null, 4),
     runs: [run('run-1', 'COMPLETED', 1_100)],
     messages: [
       message('m-1', 'OPERATOR', '10/15 为什么比上周同日多用电？', 1_050),
+      message('m-0', 'ASSISTANT', '先读站点信息。', 1_150, 'run-1'),
       message('m-2', 'ASSISTANT', '10/15 多用电 762 kWh。', 9_000, 'run-1'),
     ],
     toolExecutions: [tool('tool-1', 'run-1', 'energy_compare_periods', 'COMPLETED', 1_200), tool('tool-2', 'run-1', 'energy_by_equipment', 'FAILED', 1_300), tool('tool-3', 'run-1', 'investigation_complete', 'COMPLETED', 8_900)],
@@ -64,7 +65,7 @@ test('a finished run reads as the question, the steps it took, its answer and th
   assert.equal(thread.pendingInput, null);
 });
 
-test('a live run streams its text and shows the step in progress until the run completes', () => {
+test('a live run streams the text of its latest turn and shows the step in progress until the run completes', () => {
   const snapshot = {
     session: session('ACTIVE', 'run-1', 2),
     runs: [run('run-1', 'RUNNING', 1_100)],
@@ -75,6 +76,7 @@ test('a live run streams its text and shows the step in progress until the run c
   const live = [
     event('session.snapshot', 0, { snapshot }),
     event('tool.started', 1, { toolExecutionId: 'tool-1', toolName: 'energy_query_series' }),
+    event('assistant.delta', 2, { messageId: 'm-1', delta: '先查一下。' }),
     event('assistant.delta', 2, { messageId: 'm-2', delta: '昨天用电' }),
     event('assistant.delta', 3, { messageId: 'm-2', delta: '偏高。' }),
   ];
