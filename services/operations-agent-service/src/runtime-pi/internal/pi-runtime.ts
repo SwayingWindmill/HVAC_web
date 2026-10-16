@@ -269,8 +269,10 @@ export const createPiAgentEngine = ({
     sessionId: input.session.id,
     toolExecution: 'parallel',
     // After each turn: a terminal Tool produced the Run's Artifact, or the budget is spent.
-    // Otherwise pi schedules the next request as usual.
-    finishTurn: () => {
+    // Otherwise pi schedules the next request as usual. Error and aborted responses end the
+    // Run anyway; skipping them keeps a provider failure from being recorded as a budget one.
+    finishTurn: ({ message }) => {
+      if (message.stopReason === 'error' || message.stopReason === 'aborted') return undefined;
       const end = { action: 'end' } as const;
       if (artifacts.length > 0) return end;
       if (budgetFailureCode !== null) return end;
