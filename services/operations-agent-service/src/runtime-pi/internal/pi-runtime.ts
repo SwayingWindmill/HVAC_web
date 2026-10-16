@@ -33,7 +33,7 @@ type PiStreamFn = ConstructorParameters<typeof Agent>[0]['streamFn'];
 export interface PiAgentEngineDependencies {
   readonly model: Model<any>;
   readonly streamFn: PiStreamFn;
-  readonly systemPrompt: string;
+  readonly systemPromptFor: (runStartedAt: number) => string;
   readonly thinkingLevel: ModelThinkingLevel;
   readonly telemetry?: AgentRuntimeTelemetrySink;
 }
@@ -154,7 +154,7 @@ const terminalRun = (
 export const createPiAgentEngine = ({
   model,
   streamFn,
-  systemPrompt,
+  systemPromptFor,
   thinkingLevel,
   telemetry = NOOP_AGENT_RUNTIME_TELEMETRY,
 }: PiAgentEngineDependencies): AgentEngine => async (input) => {
@@ -259,7 +259,7 @@ export const createPiAgentEngine = ({
 
   const agent = new Agent({
     initialState: {
-      systemPrompt,
+      systemPrompt: systemPromptFor(input.run.startedAt),
       model,
       thinkingLevel,
       tools: piTools,
