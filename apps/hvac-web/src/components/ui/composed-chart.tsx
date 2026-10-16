@@ -77,6 +77,8 @@ export interface ComposedChartProps
   animationDuration?: number
   /** "zero" starts the y-axis at 0; "auto" fits it to the data. */
   yDomain?: "zero" | "auto" | [number, number]
+  /** Called with the row index under the pointer when the plot is clicked. */
+  onPointClick?: (index: number) => void
 }
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)"
@@ -123,6 +125,7 @@ function ComposedChart({
   animate = true,
   animationDuration = 500,
   yDomain = "zero",
+  onPointClick,
   className,
   ...props
 }: ComposedChartProps) {
@@ -164,6 +167,11 @@ function ComposedChart({
       <RechartsComposedChart
         data={data}
         margin={{ top: 8, right: hasRightAxis ? 0 : 8, bottom: 0, left: showYAxis ? 0 : 8 }}
+        className={onPointClick ? "cursor-pointer" : undefined}
+        onClick={onPointClick ? (state) => {
+          const index = Number(state.activeTooltipIndex)
+          if (Number.isInteger(index)) onPointClick(index)
+        } : undefined}
       >
         <defs>
           {series.map((s) => (

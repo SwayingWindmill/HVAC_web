@@ -43,7 +43,8 @@ test('energy consumption compares the period with the same span before it, per S
   await details.getByRole('tab', { name: '分时段明细' }).click();
   const rows = details.getByRole('table', { name: '分时段明细' }).getByRole('row');
   await expect(rows).toHaveCount(5);
-  await expect(rows.last().getByRole('cell')).toHaveText(['10:00', '177.5', '177.5', '0.0%', '178', '—', '—', '607.1', '3.42']);
+  // The first cell carries the row's 解释 action.
+  await expect(rows.last().getByRole('cell')).toHaveText(['10:00解释', '177.5', '177.5', '0.0%', '178', '—', '—', '607.1', '3.42']);
 
   // Today and the same hours yesterday, each as electricity and cooling, and both hourly again to price them
   // (the machines' split is read on its own, see below).

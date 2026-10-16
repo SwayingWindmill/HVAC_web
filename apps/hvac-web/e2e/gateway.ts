@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { Page, Request, Route } from '@playwright/test';
+import { AssistantOwner } from './assistant-owner';
 
 // A Platform Gateway stand-in for browser tests. Responses are recorded from the local
 // stack (see fixtures/); writes are applied to in-memory alarms and work orders the way
@@ -171,6 +172,8 @@ export class Gateway {
       assignments: [{ bindingId: '018f3e00-2200-7000-8000-000000000002', roleKey: 'operator', siteId: SITE_ID }],
     },
   ];
+  /** The Operations Agent's Agent Sessions for the Site. */
+  readonly assistant = new AssistantOwner();
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -184,7 +187,9 @@ export class Gateway {
     const path = url.pathname;
     const method = request.method();
     if (method !== 'GET') this.writes.push({ method, path, body: bodyOf(request), csrfToken: request.headers()['x-csrf-token'] });
-    const reply = this.respond(method, path, url.searchParams, bodyOf(request));
+    const agent = this.assistant.respond(SITE_ID, method, path, bodyOf(request));
+    if (agent?.stream !== undefined) return route.fulfill({ status: 200, contentType: 'text/event-stream; charset=utf-8', body: agent.stream });
+    const reply = agent ?? this.respond(method, path, url.searchParams, bodyOf(request));
     if (!reply) {
       this.unexpected.push(`${method} ${path}`);
       return route.fulfill({ status: 404, contentType: 'application/problem+json', body: JSON.stringify({ status: 404, code: 'ROUTE_NOT_FOUND', title: 'Not found' }) });

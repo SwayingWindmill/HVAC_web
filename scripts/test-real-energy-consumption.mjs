@@ -104,6 +104,23 @@ test('buckets line up by their place in the period, and the bucket still running
   assert.equal(relativeChange(450, 0), null);
 });
 
+test('解释 asks about one bucket with its own date, its energy and the bucket it is compared with', async () => {
+  const { comparePeriods, explainQuestion } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const days = (points) => summarizeEnergy(series(points), series([]), 'day', 'Asia/Shanghai');
+  const week = comparePeriods(days([['2026-10-14T16:00:00Z', 1634.2], ['2026-10-15T16:00:00Z', 900]]), days([['2026-10-07T16:00:00Z', 872]]), {
+    from: new Date('2026-10-14T16:00:00Z'), previousFrom: new Date('2026-10-07T16:00:00Z'), now: new Date('2026-10-16T10:00:00Z'), timeZone: 'Asia/Shanghai',
+  });
+  assert.equal(explainQuestion(week[0], 'day', 'Asia/Shanghai'), '为什么 2026年10月15日（周四）的空调用电比 10月8日 多？当天 1,634 kWh，10月8日 872 kWh。');
+  assert.equal(explainQuestion(week[1], 'day', 'Asia/Shanghai'), '2026年10月16日（周五）的空调用电 900 kWh，用电正常吗？');
+
+  const hours = comparePeriods(
+    summarizeEnergy(series([['2026-10-16T10:00:00Z', 80]]), series([]), 'hour', 'Asia/Shanghai'),
+    summarizeEnergy(series([['2026-10-15T10:00:00Z', 120]]), series([]), 'hour', 'Asia/Shanghai'),
+    { from: new Date('2026-10-15T16:00:00Z'), previousFrom: new Date('2026-10-14T16:00:00Z'), now: new Date('2026-10-16T12:00:00Z'), timeZone: 'Asia/Shanghai' },
+  );
+  assert.equal(explainQuestion(hours[0], 'hour', 'Asia/Shanghai'), '为什么 2026年10月16日 18:00–19:00 的空调用电比 10月15日同一时段 少？这一小时 80 kWh，10月15日同一时段 120 kWh。');
+});
+
 test('hourly energy becomes a Site-local day by hour grid with unread hours left empty', async () => {
   const { hourlyHeatmap, siteDays } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
   const days = siteDays(now, 'Asia/Shanghai', 2);

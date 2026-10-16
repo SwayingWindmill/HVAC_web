@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, Search } from 'lucide-react';
+import { Bell, Search, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { CommandSearch } from './CommandSearch';
@@ -15,6 +15,8 @@ interface AppHeaderProps {
   readonly csrfToken: string;
   readonly onNavigate: (target: string) => void;
   readonly onLogout: () => void;
+  /** Present on Site pages, where the assistant has a Site to answer about. */
+  readonly assistant?: { readonly open: boolean; readonly onToggle: () => void };
 }
 
 /** The top bar across the whole window: product mark and Site on the left, search, notifications and the user on the right. */
@@ -25,6 +27,7 @@ export function AppHeader({
   csrfToken,
   onNavigate,
   onLogout,
+  assistant,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const { count: unreadNotifications } = useShellNotifications(true, principalSubject);
@@ -67,6 +70,17 @@ export function AppHeader({
             <span className="flex-1 text-left">搜索页面与设备</span>
             <Kbd>Ctrl K</Kbd>
           </Button>
+          {assistant !== undefined ? (
+            <Button
+              variant={assistant.open ? 'secondary' : 'outline'}
+              className="gap-1.5"
+              aria-pressed={assistant.open}
+              onClick={assistant.onToggle}
+            >
+              <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+              AI 助手
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="icon"
