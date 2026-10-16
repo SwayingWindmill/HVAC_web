@@ -205,3 +205,21 @@ func TestAgentSessionEventStreamOutlivesTheServerWriteTimeout(t *testing.T) {
 		t.Fatalf("expected both events after the write timeout, got %d", got)
 	}
 }
+
+func TestValidateAgentSessionEventAcceptsFindingKeyFiguresAndRejectsExtraFields(t *testing.T) {
+	finding := func(figure map[string]any) []byte {
+		return agentSessionEventFixture("artifact.created", map[string]any{"artifact": map[string]any{
+			"id": "artifact-1", "sessionId": "session-1", "runId": "run-1", "kind": "FINDING", "createdAt": 1000,
+			"finding": map[string]any{
+				"outcome": "UNABLE_TO_CONCLUDE", "summary": "数据不足。", "evidenceRefs": []any{},
+				"keyFigures": []any{figure}, "limitations": []any{}, "recommendedNext": []any{},
+			},
+		}}, "run-1")
+	}
+	if _, err := validateAgentSessionEvent("artifact.created", finding(map[string]any{"label": "多用电", "value": "+762", "unit": "kWh"})); err != nil {
+		t.Fatalf("finding with key figures rejected: %v", err)
+	}
+	if _, err := validateAgentSessionEvent("artifact.created", finding(map[string]any{"label": "多用电", "value": "+762", "pointId": "x"})); err == nil {
+		t.Fatal("key figure with a non-public field was accepted")
+	}
+}

@@ -352,9 +352,16 @@ func validateAgentArtifactValue(value any) error {
 			return errors.New("invalid finding Artifact shape")
 		}
 		finding, ok := artifact["finding"].(map[string]any)
-		if !ok || !operationsExactKeys(finding, "outcome", "summary", "evidenceRefs", "limitations", "recommendedNext") ||
+		findingKeys := []string{"outcome", "summary", "evidenceRefs", "limitations", "recommendedNext"}
+		if _, present := finding["keyFigures"]; present {
+			findingKeys = append(findingKeys, "keyFigures")
+		}
+		if !ok || !operationsExactKeys(finding, findingKeys...) ||
 			!operationsAllowedString(finding["outcome"], "SUPPORTED_FINDING", "UNABLE_TO_CONCLUDE") {
 			return errors.New("invalid finding Artifact")
+		}
+		if err := validateAgentSessionKeyFigures(finding["keyFigures"]); err != nil {
+			return err
 		}
 		if _, ok := operationsBoundedString(finding["summary"], 2000); !ok {
 			return errors.New("invalid finding summary")
@@ -579,6 +586,36 @@ func sanitizeAgentSessionProblem(raw []byte, expectedStatus int) ([]byte, error)
 		return nil, errors.New("invalid Agent Session problem detail")
 	}
 	return json.Marshal(problem)
+}
+
+// Key figures are optional; each is a short label, a value and an optional unit.
+func validateAgentSessionKeyFigures(value any) error {
+	if value == nil {
+		return nil
+	}
+	figures, ok := value.([]any)
+	if !ok || len(figures) > 4 {
+		return errors.New("invalid finding key figures")
+	}
+	for _, item := range figures {
+		figure, ok := item.(map[string]any)
+		if !ok {
+			return errors.New("invalid finding key figure")
+		}
+		keys := []string{"label", "value"}
+		if _, present := figure["unit"]; present {
+			keys = append(keys, "unit")
+			if _, ok := operationsBoundedString(figure["unit"], 16); !ok {
+				return errors.New("invalid finding key figure unit")
+			}
+		}
+		_, labelOK := operationsBoundedString(figure["label"], 32)
+		_, valueOK := operationsBoundedString(figure["value"], 24)
+		if !operationsExactKeys(figure, keys...) || !labelOK || !valueOK {
+			return errors.New("invalid finding key figure")
+		}
+	}
+	return nil
 }
 
 func validateAgentSessionEvent(name string, raw []byte) ([]byte, error) {

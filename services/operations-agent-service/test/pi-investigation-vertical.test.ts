@@ -636,6 +636,7 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
             { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'power', toolExecutionId: 'power-compare' },
             { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'cooling', toolExecutionId: 'cooling-compare' },
           ],
+          keyFigures: [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }],
           limitations: ['没有室外温度数据，无法判断负荷增加是否来自天气。'],
           recommendedNext: [],
         },
@@ -651,6 +652,7 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
   assert.match(system.text, /site_get_context/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
 

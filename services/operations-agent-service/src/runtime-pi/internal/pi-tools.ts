@@ -101,6 +101,11 @@ const investigationCompleteParameters = Type.Object({
     revision: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     toolExecutionId: Type.String({ minLength: 1, maxLength: 256 }),
   }, { additionalProperties: false }), { maxItems: 32 }),
+  keyFigures: Type.Optional(Type.Array(Type.Object({
+    label: Type.String({ minLength: 1, maxLength: 32 }),
+    value: Type.String({ minLength: 1, maxLength: 24 }),
+    unit: Type.Optional(Type.String({ minLength: 1, maxLength: 16 })),
+  }, { additionalProperties: false }), { maxItems: 4 })),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
   recommendedNext: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
 }, { additionalProperties: false });
