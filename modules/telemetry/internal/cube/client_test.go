@@ -22,7 +22,7 @@ func (fixedTokenFactory) Token(context.Context, analytics.CallerContext, analyti
 	return "cube-token", nil
 }
 
-func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
+func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	var captured []loadRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/cubejs-api/v1/load" || request.Method != http.MethodPost {
@@ -40,14 +40,14 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 		}
 		captured = append(captured, decoded)
 		writer.Header().Set("Content-Type", "application/json")
-		if len(decoded.Query.Measures) == 2 && decoded.Query.Measures[0] == "energy_usage.max_data_watermark" {
-			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-08-01T00:00:00.000Z","energy_usage.max_dataset_revision":"1722470400000"}]}`))
+		if len(decoded.Query.Measures) == 2 && decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1722470400000"}]}`))
 			return
 		}
 		_, _ = writer.Write([]byte(`{
 			"data":[
-				{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"2","energy_usage.invalid_count":"1"},
-				{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"1","energy_usage.invalid_count":"0"}
+				{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"123.5","site_energy.valid_count":"10","site_energy.suspect_count":"2","site_energy.invalid_count":"1"},
+				{"site_energy.period_end.day":"2026-07-02T00:00:00.000","site_energy.energy_valid_kwh":"98.25","site_energy.valid_count":"8","site_energy.suspect_count":"1","site_energy.invalid_count":"0"}
 			]
 		}`))
 	}))
@@ -73,30 +73,34 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	}
 	seriesQuery := captured[0].Query
 	metadataQuery := captured[1].Query
-	if len(seriesQuery.Measures) != 4 || seriesQuery.Measures[0] != "energy_usage.energy_valid_kwh" {
+	if len(seriesQuery.Measures) != 4 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" {
 		t.Fatalf("series measures = %#v", seriesQuery.Measures)
 	}
-	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "energy_usage.period_end" {
+	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "site_energy.period_end" {
 		t.Fatalf("time dimensions = %#v", seriesQuery.TimeDimensions)
 	}
 	if dateRange := seriesQuery.TimeDimensions[0].DateRange; len(dateRange) != 2 ||
 		dateRange[0] != "2026-07-01T00:00:00.000" || dateRange[1] != "2026-07-02T23:59:59.999" {
 		t.Fatalf("date range = %#v, want Asia/Shanghai wall time", dateRange)
 	}
-	if !hasCubeFilter(seriesQuery.Filters, "energy_usage.tenant_id", testCubeTenantID) ||
-		!hasCubeFilter(seriesQuery.Filters, "energy_usage.site_id", testCubeSiteID) ||
-		!hasCubeFilter(seriesQuery.Filters, "energy_usage.accounting_scope", "SITE") ||
-		!hasCubeFilter(metadataQuery.Filters, "energy_usage.accounting_scope", "SITE") {
+	// The Tenant is the token's: Cube's row policy applies it and the views do not expose it.
+	for _, filter := range seriesQuery.Filters {
+		if strings.HasSuffix(filter.Member, ".tenant_id") {
+			t.Fatalf("filters name the Tenant: %#v", seriesQuery.Filters)
+		}
+	}
+	if !hasCubeFilter(seriesQuery.Filters, "site_energy.site_id", testCubeSiteID) ||
+		!hasCubeFilter(metadataQuery.Filters, "site_energy.site_id", testCubeSiteID) {
 		t.Fatalf("filters = %#v", seriesQuery.Filters)
 	}
 	if response.Devices != nil {
 		t.Fatalf("devices = %#v, want none unless a breakdown is asked for", response.Devices)
 	}
-	if len(metadataQuery.Measures) != 2 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "energy_usage.max_data_watermark" {
+	if len(metadataQuery.Measures) != 2 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "site_energy.max_data_watermark" {
 		t.Fatalf("metadata query = %#v", metadataQuery)
 	}
 	// The watermark only needs facts from the window's start on; an unbounded query reads the Site's whole history.
-	if !hasCubeFilterOperator(metadataQuery.Filters, "energy_usage.period_end", "afterOrOnDate", "2026-07-01T00:00:00.000") {
+	if !hasCubeFilterOperator(metadataQuery.Filters, "site_energy.period_end", "afterOrOnDate", "2026-07-01T00:00:00.000") {
 		t.Fatalf("metadata filters = %#v, want period_end from the window's start in Asia/Shanghai wall time", metadataQuery.Filters)
 	}
 	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
@@ -130,19 +134,19 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
-		case decoded.Query.Measures[0] == "energy_usage.max_data_watermark":
-			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-08-01T00:00:00.000Z","energy_usage.max_dataset_revision":"1"}]}`))
+		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1"}]}`))
 		case len(decoded.Query.Dimensions) == 1:
 			breakdownQuery = &decoded.Query
 			_, _ = writer.Write([]byte(`{"data":[
-				{"energy_usage.load_device_id":"` + pump + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"20"},
-				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"70"},
-				{"energy_usage.load_device_id":"` + chiller + `","energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"80"}
+				{"equipment_energy.equipment_id":"` + pump + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"20"},
+				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-02T00:00:00.000","equipment_energy.energy_valid_kwh":"70"},
+				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"80"}
 			]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
-				{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"},
-				{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"}
+				{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"123.5","site_energy.valid_count":"10","site_energy.suspect_count":"0","site_energy.invalid_count":"0"},
+				{"site_energy.period_end.day":"2026-07-02T00:00:00.000","site_energy.energy_valid_kwh":"98.25","site_energy.valid_count":"8","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
 			]}`))
 		}
 	}))
@@ -157,9 +161,9 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if breakdownQuery == nil || breakdownQuery.Dimensions[0] != "energy_usage.load_device_id" ||
-		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.accounting_scope", "BRANCH") ||
-		!hasCubeFilter(breakdownQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
+	// Sub-meters come from the equipment view, whose cube holds BRANCH facts only.
+	if breakdownQuery == nil || breakdownQuery.Dimensions[0] != "equipment_energy.equipment_id" ||
+		!hasCubeFilter(breakdownQuery.Filters, "equipment_energy.site_id", testCubeSiteID) {
 		t.Fatalf("breakdown query = %#v", breakdownQuery)
 	}
 	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
@@ -183,7 +187,7 @@ func TestClientMarksCoveredRangePartialWhenSeriesRowsAreMissing(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		if len(decoded.Query.TimeDimensions) == 0 {
-			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-08-02T00:00:00.000Z","energy_usage.max_dataset_revision":"1722556800000"}]}`))
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-02T00:00:00.000Z","site_energy.max_dataset_revision":"1722556800000"}]}`))
 			return
 		}
 		_, _ = writer.Write([]byte(`{"data":[]}`))
@@ -224,16 +228,16 @@ func TestRequestedBucketCoverageRejectsGap(t *testing.T) {
 func TestCubeQuerySelectsQualitySpecificEnergyMeasure(t *testing.T) {
 	productQuery := validCubeEnergyQuery()
 	validOnly := buildSeriesQuery(productQuery, time.UTC)
-	if validOnly.Measures[0] != "energy_usage.energy_valid_kwh" {
+	if validOnly.Measures[0] != "site_energy.energy_valid_kwh" {
 		t.Fatalf("valid-only measure = %q", validOnly.Measures[0])
 	}
 	productQuery.QualityPolicy = analyticsmodel.QualityPolicyValidAndSuspect
 	withSuspect := buildSeriesQuery(productQuery, time.UTC)
-	if withSuspect.Measures[0] != "energy_usage.energy_valid_and_suspect_kwh" {
+	if withSuspect.Measures[0] != "site_energy.energy_valid_and_suspect_kwh" {
 		t.Fatalf("valid-and-suspect measure = %q", withSuspect.Measures[0])
 	}
 	for _, filter := range withSuspect.Filters {
-		if filter.Member == "energy_usage.quality" {
+		if filter.Member == "site_energy.quality" {
 			t.Fatal("query-level quality filter would hide excluded quality counts")
 		}
 	}
@@ -349,12 +353,12 @@ func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		if len(decoded.Query.TimeDimensions) == 0 {
-			_, _ = writer.Write([]byte(`{"data":[{"energy_usage.max_data_watermark":"2026-07-03T00:00:00.000Z","energy_usage.max_dataset_revision":"1"}]}`))
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-07-03T00:00:00.000Z","site_energy.max_dataset_revision":"1"}]}`))
 			return
 		}
 		_, _ = writer.Write([]byte(`{"data":[
-			{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"120.5","energy_usage.valid_count":"96","energy_usage.suspect_count":"0","energy_usage.invalid_count":"0"},
-			{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":null,"energy_usage.valid_count":"0","energy_usage.suspect_count":"0","energy_usage.invalid_count":"4"}
+			{"site_energy.period_end.day":"2026-07-01T00:00:00.000","site_energy.energy_valid_kwh":"120.5","site_energy.valid_count":"96","site_energy.suspect_count":"0","site_energy.invalid_count":"0"},
+			{"site_energy.period_end.day":"2026-07-02T00:00:00.000","site_energy.energy_valid_kwh":null,"site_energy.valid_count":"0","site_energy.suspect_count":"0","site_energy.invalid_count":"4"}
 		]}`))
 	}))
 	defer server.Close()

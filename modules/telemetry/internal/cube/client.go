@@ -180,18 +180,30 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 // so an RFC 3339 instant would shift the range by the zone's UTC offset.
 const cubeWallTime = "2006-01-02T15:04:05.000"
 
+// The Query Service reads Cube's public views only (ADR 0023): site_energy holds the Site's
+// total, equipment_energy its equipment sub-meters, each already scoped by its cube.
+const (
+	siteView      = "site_energy"
+	equipmentView = "equipment_energy"
+)
+
+func member(view, name string) string { return view + "." + name }
+
+func periodMember(view string, granularity analyticsmodel.Granularity) string {
+	return member(view, "period_end") + "." + string(granularity)
+}
+
 func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
-	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
 	return cubeQuery{
 		Measures: []string{
-			energyMeasure(productQuery.QualityPolicy),
-			"energy_usage.valid_count",
-			"energy_usage.suspect_count",
-			"energy_usage.invalid_count",
+			energyMeasure(siteView, productQuery.QualityPolicy),
+			member(siteView, "valid_count"),
+			member(siteView, "suspect_count"),
+			member(siteView, "invalid_count"),
 		},
-		Filters:        energyFilters(productQuery, accountingScopeSite),
-		TimeDimensions: periodDimension(productQuery, location),
-		Order:          map[string]string{periodMember: "asc"},
+		Filters:        energyFilters(siteView, productQuery),
+		TimeDimensions: periodDimension(siteView, productQuery, location),
+		Order:          map[string]string{periodMember(siteView, productQuery.Granularity): "asc"},
 		Timezone:       productQuery.Timezone,
 		Limit:          10000,
 	}
@@ -199,18 +211,18 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *t
 
 func buildDeviceBreakdownQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	return cubeQuery{
-		Measures:       []string{energyMeasure(productQuery.QualityPolicy)},
-		Filters:        energyFilters(productQuery, accountingScopeBranch),
-		Dimensions:     []string{"energy_usage.load_device_id"},
-		TimeDimensions: periodDimension(productQuery, location),
+		Measures:       []string{energyMeasure(equipmentView, productQuery.QualityPolicy)},
+		Filters:        energyFilters(equipmentView, productQuery),
+		Dimensions:     []string{member(equipmentView, "equipment_id")},
+		TimeDimensions: periodDimension(equipmentView, productQuery, location),
 		Timezone:       productQuery.Timezone,
 		Limit:          50000,
 	}
 }
 
-func periodDimension(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) []cubeTimeDimension {
+func periodDimension(view string, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) []cubeTimeDimension {
 	return []cubeTimeDimension{{
-		Dimension:   "energy_usage.period_end",
+		Dimension:   member(view, "period_end"),
 		DateRange:   []string{productQuery.From.In(location).Format(cubeWallTime), productQuery.To.In(location).Add(-time.Millisecond).Format(cubeWallTime)},
 		Granularity: string(productQuery.Granularity),
 	}}
@@ -222,41 +234,34 @@ func periodDimension(productQuery analyticsmodel.EnergySeriesQuery, location *ti
 func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	return cubeQuery{
 		Measures: []string{
-			"energy_usage.max_data_watermark",
-			"energy_usage.max_dataset_revision",
+			member(siteView, "max_data_watermark"),
+			member(siteView, "max_dataset_revision"),
 		},
-		Filters: append(energyFilters(productQuery, accountingScopeSite), cubeFilter{
-			Member: "energy_usage.period_end", Operator: "afterOrOnDate", Values: []string{productQuery.From.In(location).Format(cubeWallTime)},
+		Filters: append(energyFilters(siteView, productQuery), cubeFilter{
+			Member: member(siteView, "period_end"), Operator: "afterOrOnDate", Values: []string{productQuery.From.In(location).Format(cubeWallTime)},
 		}),
 		Timezone: productQuery.Timezone,
 		Limit:    1,
 	}
 }
 
-// A Site's total is its SITE facts; BRANCH facts are equipment sub-meters already inside it.
-const (
-	accountingScopeSite   = "SITE"
-	accountingScopeBranch = "BRANCH"
-)
-
-func energyFilters(productQuery analyticsmodel.EnergySeriesQuery, accountingScope string) []cubeFilter {
+// The Tenant comes from the token: Cube's row policy applies it, and the views do not expose it.
+func energyFilters(view string, productQuery analyticsmodel.EnergySeriesQuery) []cubeFilter {
 	return []cubeFilter{
-		{Member: "energy_usage.tenant_id", Operator: "equals", Values: []string{productQuery.TenantID}},
-		{Member: "energy_usage.site_id", Operator: "equals", Values: []string{productQuery.SiteID}},
-		{Member: "energy_usage.energy_type", Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
-		{Member: "energy_usage.accounting_scope", Operator: "equals", Values: []string{accountingScope}},
+		{Member: member(view, "site_id"), Operator: "equals", Values: []string{productQuery.SiteID}},
+		{Member: member(view, "energy_type"), Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
 	}
 }
 
 func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) ([]analyticsmodel.EnergyDeviceSeries, error) {
-	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
+	period := periodMember(equipmentView, productQuery.Granularity)
 	byDevice := map[string][]analyticsmodel.EnergySeriesPoint{}
 	for _, row := range decoded.Data {
-		deviceID, err := scalarString(row["energy_usage.load_device_id"])
+		deviceID, err := scalarString(row[member(equipmentView, "equipment_id")])
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown device: %w", err)
 		}
-		periodValue, err := scalarString(row[periodMember])
+		periodValue, err := scalarString(row[period])
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown period: %w", err)
 		}
@@ -264,7 +269,7 @@ func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.Energy
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown period: %w", err)
 		}
-		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(productQuery.QualityPolicy)])
+		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(equipmentView, productQuery.QualityPolicy)])
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
 		}
@@ -290,19 +295,19 @@ func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.Energy
 	return devices, nil
 }
 
-func energyMeasure(policy analyticsmodel.QualityPolicy) string {
+func energyMeasure(view string, policy analyticsmodel.QualityPolicy) string {
 	if policy == analyticsmodel.QualityPolicyValidAndSuspect {
-		return "energy_usage.energy_valid_and_suspect_kwh"
+		return member(view, "energy_valid_and_suspect_kwh")
 	}
-	return "energy_usage.energy_valid_kwh"
+	return member(view, "energy_valid_kwh")
 }
 
 func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
-	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
+	period := periodMember(siteView, productQuery.Granularity)
 	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(series.Data))
 	quality := analyticsmodel.QualitySummary{}
 	for _, row := range series.Data {
-		periodValue, err := scalarString(row[periodMember])
+		periodValue, err := scalarString(row[period])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube period: %w", err)
 		}
@@ -310,15 +315,15 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube period: %w", err)
 		}
-		valid, err := scalarInt(row["energy_usage.valid_count"])
+		valid, err := scalarInt(row[member(siteView, "valid_count")])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube valid count: %w", err)
 		}
-		suspect, err := scalarInt(row["energy_usage.suspect_count"])
+		suspect, err := scalarInt(row[member(siteView, "suspect_count")])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube suspect count: %w", err)
 		}
-		invalid, err := scalarInt(row["energy_usage.invalid_count"])
+		invalid, err := scalarInt(row[member(siteView, "invalid_count")])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube invalid count: %w", err)
 		}
@@ -327,7 +332,7 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		quality.Invalid += invalid
 		// Cube answers null when the policy excludes every interval in the bucket: it has no
 		// energy, so it is left out and its intervals still count in the quality summary.
-		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(productQuery.QualityPolicy)])
+		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(siteView, productQuery.QualityPolicy)])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
 		}
@@ -413,11 +418,11 @@ func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
 		return time.Time{}, 0, nil
 	}
 	row := decoded.Data[0]
-	watermarkValue, hasWatermark, err := optionalScalarString(row["energy_usage.max_data_watermark"])
+	watermarkValue, hasWatermark, err := optionalScalarString(row[member(siteView, "max_data_watermark")])
 	if err != nil {
 		return time.Time{}, 0, fmt.Errorf("decode Cube data watermark: %w", err)
 	}
-	revisionValue, hasRevision, err := optionalScalarString(row["energy_usage.max_dataset_revision"])
+	revisionValue, hasRevision, err := optionalScalarString(row[member(siteView, "max_dataset_revision")])
 	if err != nil {
 		return time.Time{}, 0, fmt.Errorf("decode Cube dataset revision: %w", err)
 	}

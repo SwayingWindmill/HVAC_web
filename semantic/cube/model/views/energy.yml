@@ -1,0 +1,52 @@
+# The public energy surface (ADR 0023). telemetry-query-service queries these views only, and
+# the Operations Agent's semantic query Tool will choose among their members. The cubes' row
+# policy keeps each view to the caller's Tenant and Site; the views grant the members.
+
+views:
+  - name: site_energy
+    title: 站点能耗
+    description: 站点总表的用电量、供冷量和综合能效，可按小时、日、月汇总。用来回答「用了多少电、供了多少冷、能效怎么样」。
+    cubes:
+      - join_path: site_energy_facts
+        includes:
+          - energy_valid_kwh
+          - energy_valid_and_suspect_kwh
+          - electricity_valid_kwh
+          - cooling_valid_kwh
+          - cop
+          - valid_count
+          - suspect_count
+          - invalid_count
+          - max_data_watermark
+          - max_dataset_revision
+          - site_id
+          - energy_type
+          - quality
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+
+  - name: equipment_energy
+    title: 设备分项能耗
+    description: 各设备分表的用电量，按设备和时段汇总。用来回答「电用在哪台设备上」；分项能耗已经包含在站点总表里，不能与总表相加。
+    cubes:
+      - join_path: equipment_energy_facts
+        includes:
+          - energy_valid_kwh
+          - energy_valid_and_suspect_kwh
+          - valid_count
+          - suspect_count
+          - invalid_count
+          - max_data_watermark
+          - max_dataset_revision
+          - site_id
+          - equipment_id
+          - energy_type
+          - quality
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
