@@ -2,9 +2,11 @@
 // Input: a device function's message { <device>: [{ ts, values }] }.
 // Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per device
 // message, or nothing for devices the platform has no source key for (the Gateway's own status). A meter
-// message also yields the plant total, a temperature message the calculated cooling, and both the
-// equipment readings (COPIES), below. Each goes on to「Outbox·形成事件」, which stores it in the
-// durable outbox until the broker acknowledges it:
+// message also carries the plant total, a temperature message the calculated cooling, and both the
+// equipment readings (COPIES), below, as further devices in the same envelope. One envelope per sample
+// matters: the durable outbox republishes every unacknowledged record on each enqueue, so several
+// envelopes in a row went out up to eight times each (2026-10-16, platform-side duplicates). It goes on
+// to「Outbox·形成事件」, which stores it in the durable outbox until the broker acknowledges it:
 //   msg.outboxCommand = "enqueue";
 //   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
 // Registered devices and points: deploy/sites/songyaxuan.site.json.
@@ -91,7 +93,7 @@ function uuidv7(ms) {
 
 // The platform drops any message whose sequence does not exceed the last one it saw, so the
 // sequence follows the clock and survives a restart: milliseconds × 1000 plus a counter.
-function envelope(deviceId, deviceTimestamp, devicePoints) {
+function envelope(devices) {
   const now = Date.now();
   const sequence = Math.max(now * 1000, (context.get("lastSequence") || 0) + 1);
   context.set("lastSequence", sequence);
@@ -106,12 +108,13 @@ function envelope(deviceId, deviceTimestamp, devicePoints) {
       timestamp: now,
       sequence,
       replay: false,
-      payload: { devices: [{ deviceId, deviceTimestamp, points: devicePoints }] },
+      payload: { devices },
     },
   };
 }
 
-const out = [envelope(device, sample.ts, points)];
+const entry = (deviceId, deviceTimestamp, devicePoints) => ({ deviceId, deviceTimestamp, points: devicePoints });
+const entries = [entry(device, sample.ts, points)];
 
 const copies = {};
 for (const [field, targets] of Object.entries(COPIES[device] || {})) {
@@ -123,7 +126,7 @@ for (const [field, targets] of Object.entries(COPIES[device] || {})) {
   }
 }
 if (copies["chwp-main"]) copies["chwp-main"].push({ code: "run_state", value: runState(sample.values.flowMeter > 10), quality: 0 });
-for (const [target, targetPoints] of Object.entries(copies)) out.push(envelope(target, sample.ts, targetPoints));
+for (const [target, targetPoints] of Object.entries(copies)) entries.push(entry(target, sample.ts, targetPoints));
 
 // The plant room has no total meter: the four machines' meters added up stand for it
 // (「空调总电表（四台机组合计）」), once each has reported since the flow started.
@@ -134,7 +137,7 @@ if (METERS.includes(device)) {
   const readings = METERS.map((meter) => latest[meter]);
   if (readings.every((reading) => reading && Number.isFinite(reading.power) && Number.isFinite(reading.energy))) {
     const sum = (field) => Math.round(readings.reduce((total, reading) => total + reading[field], 0) * 1000) / 1000;
-    out.push(envelope("ammeter-total", sample.ts, [
+    entries.push(entry("ammeter-total", sample.ts, [
       { code: "power_total", value: sum("power"), quality: 0, unit: "kW" },
       { code: "active_energy_total", value: sum("energy"), quality: 0, unit: "kWh" },
     ]));
@@ -166,7 +169,7 @@ if (device === "temperature") {
     }
     cooling.previous = { ts: sample.ts, capacity };
     context.set("cooling", cooling);
-    out.push(envelope("btu-calc", sample.ts, [
+    entries.push(entry("btu-calc", sample.ts, [
       { code: "supply_water_temperature", value: supply, quality: 0, unit: "Cel" },
       { code: "return_water_temperature", value: returnTemperature, quality: 0, unit: "Cel" },
       { code: "temperature_difference", value: Math.round(difference * 100) / 100, quality: 0, unit: "K" },
@@ -176,4 +179,4 @@ if (device === "temperature") {
     ]));
   }
 }
-return [out];
+return envelope(entries);
