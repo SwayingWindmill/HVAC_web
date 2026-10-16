@@ -28,7 +28,7 @@ test('load is the plant meter\'s quarter-hour average power: now, today\'s and t
   await expect(details.getByRole('table', { name: '明天逐时预测' }).getByRole('row')).toHaveCount(24);
   await expect(details.getByRole('table', { name: '今天剩余 2 小时逐时预测' }).getByRole('row')).toHaveCount(3);
   await expect(details.getByRole('columnheader', { name: '距本月最高' })).toHaveCount(2);
-  await expect(details).toContainText('预测覆盖到明天 22:34');
+  await expect(details).toContainText('预测覆盖到明天 22:30');
 
   await details.getByRole('tab', { name: '本月每日最高' }).click();
   await expect(page).toHaveURL(/view=days/);

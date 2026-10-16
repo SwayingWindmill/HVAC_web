@@ -19,7 +19,7 @@ import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { demandSummary, type DemandPeak, type QuarterHour } from '../demand-model';
 import { forecastBetween, forecastPeak, hourlyForecast, type LoadForecastPoint } from '../forecast-model';
-import { expensiveSpans, forecastEnergy, loadCurveRows, loadDays, meteredHour, type LoadDays } from '../load-model';
+import { expensiveSpans, forecastEnergy, loadCurveRows, loadDays, meteredHour, nearestQuarter, type LoadDays } from '../load-model';
 import { plantDemandQuery, plantPowerPoint, siteLoadForecastQuery } from '../query';
 import { DailyPeaks, type DailyPeakBar } from './DailyPeaks';
 import { DemandCharge } from './DemandCharge';
@@ -92,9 +92,10 @@ function forecastHours(
   timeZone: string,
 ): ForecastHour[] {
   const dayLength = days.today - days.yesterday;
-  const hours = hourlyForecast(points, timeZone);
-  const highest = Math.max(...hours.map((hour) => hour.loadKW));
-  return hours.map((hour) => {
+  // The hour holding the day's highest quarter-hour, the figure a demand charge and the overview use.
+  const highest = forecastPeak(points);
+  const peakHour = highest ? Math.floor(Date.parse(highest.at) / HOUR_MS) : null;
+  return hourlyForecast(points, timeZone).map((hour) => {
     const start = new Date(hour.start);
     const period = tariff ? periodAt(tariff, start, timeZone) : null;
     const billed = period !== null && period.demandRatePerKW > 0;
@@ -103,7 +104,7 @@ function forecastHours(
       period: period?.periodCode ?? null,
       previousKW: meteredHour(quarters, Math.floor(start.getTime() / HOUR_MS) * HOUR_MS - dayLength),
       headroomKW: billed && monthPeak ? monthPeak.demandKW - (hour.upperKW ?? hour.loadKW) : null,
-      peak: hour.loadKW === highest,
+      peak: Math.floor(start.getTime() / HOUR_MS) === peakHour,
     };
   });
 }
@@ -127,7 +128,11 @@ export function LoadWorkspace() {
   const days = useMemo(() => loadDays(new Date(now), timeZone), [now, timeZone]);
   const quarters = useMemo(() => demand.data ?? [], [demand.data]);
   const summary = useMemo(() => (demand.data ? demandSummary(demand.data, new Date(now), timeZone) : null), [demand.data, now, timeZone]);
-  const ahead = useMemo(() => (forecast.data ? forecastBetween(forecast.data, days.today, days.end) : []), [forecast.data, days]);
+  // Forecast points start at the forecast origin, off the quarter-hour; the page reads each at the nearest one.
+  const ahead = useMemo(
+    () => (forecast.data ? forecastBetween(forecast.data, days.today, days.end).map((point) => ({ ...point, at: new Date(nearestQuarter(point.at)).toISOString() })) : []),
+    [forecast.data, days],
+  );
   const tomorrow = useMemo(() => ahead.filter((point) => Date.parse(point.at) >= days.tomorrow), [ahead, days]);
   const tomorrowPeak = useMemo(() => forecastPeak(tomorrow), [tomorrow]);
   const rows = useMemo(() => loadCurveRows(quarters, ahead, days), [quarters, ahead, days]);

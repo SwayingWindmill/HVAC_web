@@ -25,6 +25,11 @@ export function loadDays(now: Date, timeZone: string): LoadDays {
   return { yesterday: midnight(-1), today: midnight(0), tomorrow: midnight(1), end: midnight(2) };
 }
 
+/** The quarter-hour nearest an instant; forecast points start at the forecast origin, which is not on one. */
+export function nearestQuarter(at: string): number {
+  return Math.round(Date.parse(at) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS;
+}
+
 export interface LoadCurveRow {
   readonly at: number;
   /** Metered load; the quarter-hour still running shows what it has averaged so far. */
@@ -36,13 +41,10 @@ export interface LoadCurveRow {
   readonly band: readonly [number, number] | null;
 }
 
-/**
- * Every quarter-hour of today and tomorrow. Forecast points run from the forecast origin, which is
- * not on a quarter-hour; each is drawn at the nearest one so the lines share a single time grid.
- */
+/** Every quarter-hour of today and tomorrow, with the forecast points on the same grid. */
 export function loadCurveRows(quarters: readonly QuarterHour[], forecast: readonly LoadForecastPoint[], days: LoadDays): LoadCurveRow[] {
   const actual = new Map(quarters.map((quarter) => [Date.parse(quarter.start), quarter.demandKW]));
-  const ahead = new Map(forecast.map((point) => [Math.round(Date.parse(point.at) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS, point]));
+  const ahead = new Map(forecast.map((point) => [Date.parse(point.at), point]));
   const dayLength = days.today - days.yesterday;
   const rows: LoadCurveRow[] = [];
   for (let at = days.today; at < days.end; at += QUARTER_HOUR_MS) {
