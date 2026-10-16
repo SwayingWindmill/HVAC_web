@@ -65,9 +65,9 @@ components:
     ToolAuthorizationRequest:
       type: object
       additionalProperties: false
-      required: [investigationId, runId, request]
+      required: [sessionId, runId, request]
       properties:
-        investigationId:
+        sessionId:
           type: string
           minLength: 1
           maxLength: 256

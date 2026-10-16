@@ -2,12 +2,12 @@ import {
   OwnerReadError,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
-  type NightEnergyGranularity,
-  type NightEnergyQualityPolicy,
-  type NightEnergyQualitySummary,
-  type NightEnergySeries,
-  type NightEnergySeriesMetadata,
-  type NightEnergySeriesPoint,
+  type EnergyGranularity as OwnerEnergyGranularity,
+  type EnergyQualityPolicy as OwnerEnergyQualityPolicy,
+  type EnergyQualitySummary,
+  type EnergySeries,
+  type EnergySeriesMetadata,
+  type EnergySeriesPoint,
   type OwnerReadInput,
   type OwnerReadResult,
 } from '../../application/index.js';
@@ -22,12 +22,12 @@ import {
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
-export type EnergyGranularity = NightEnergyGranularity;
-export type EnergyQualityPolicy = NightEnergyQualityPolicy;
-export type EnergySeriesPointDto = NightEnergySeriesPoint;
-export type EnergyQualitySummaryDto = NightEnergyQualitySummary;
-export type EnergySeriesMetadataDto = NightEnergySeriesMetadata;
-export type EnergySeriesResponseDto = NightEnergySeries;
+export type EnergyGranularity = OwnerEnergyGranularity;
+export type EnergyQualityPolicy = OwnerEnergyQualityPolicy;
+export type EnergySeriesPointDto = EnergySeriesPoint;
+export type EnergyQualitySummaryDto = EnergyQualitySummary;
+export type EnergySeriesMetadataDto = EnergySeriesMetadata;
+export type EnergySeriesResponseDto = EnergySeries;
 
 export type EnergyAnalyticsOwnerReaderConfig = OwnerReaderHttpConfig;
 

@@ -101,7 +101,7 @@ async function waitForPostgres() {
           || '|'
           || current_database()`,
       );
-      if (state === '4|hvac_operations_agent') return;
+      if (state === '2|hvac_operations_agent') return;
     } catch {}
     await pause(250);
   }
@@ -111,13 +111,10 @@ async function waitForPostgres() {
 }
 
 const operationsUrl = `postgres://operations_agent_operations_runtime:operations-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_operations_agent?sslmode=disable`;
-const checkpointsUrl = `postgres://operations_agent_checkpoints_runtime:checkpoints-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_operations_agent?sslmode=disable`;
 
 const report = {
   schemaVersion: 1,
   component: 'operations-agent-service',
-  ticket: 210,
-  coveredTickets: [144, 151, 154, 207, 209, 210],
   status: 'failed',
   startedAt: new Date().toISOString(),
   postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
@@ -132,42 +129,7 @@ try {
   applyMigration(
     'operations_agent_operations_migrator',
     'operations-migrator-local-only',
-    '/migrations/operations/001_agent_operations.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/002_typed_business_records.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/003_operator_input_interrupt.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/004_run_resource_budgets.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/005_operations_audit_outbox.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/006_pi_agent_sessions.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/007_agent_input_response.sql',
-  );
-  applyMigration(
-    'operations_agent_checkpoints_migrator',
-    'checkpoints-migrator-local-only',
-    '/migrations/checkpoints/001_agent_checkpoints.sql',
+    '/migrations/operations/001_agent_sessions.sql',
   );
 
   const roleState = adminPsql(`
@@ -181,7 +143,7 @@ try {
     WHERE rolname LIKE 'operations_agent_%'
     ORDER BY rolname
   `).split('\n');
-  if (roleState.length !== 4 || roleState.some((value) => !value.endsWith(':true:false:false:false:false'))) {
+  if (roleState.length !== 2 || roleState.some((value) => !value.endsWith(':true:false:false:false:false'))) {
     throw new Error(`Unexpected Operations Agent role privileges: ${roleState.join(', ')}`);
   }
   report.assertions.roleState = roleState;
@@ -189,46 +151,22 @@ try {
   const ownership = adminPsql(`
     SELECT nspname || ':' || pg_get_userbyid(nspowner)
     FROM pg_namespace
-    WHERE nspname IN ('agent_operations', 'agent_checkpoints')
+    WHERE nspname LIKE 'agent_%'
     ORDER BY nspname
   `).split('\n');
-  const expectedOwnership = [
-    'agent_checkpoints:operations_agent_checkpoints_migrator',
-    'agent_operations:operations_agent_operations_migrator',
-  ];
+  const expectedOwnership = ['agent_operations:operations_agent_operations_migrator'];
   if (JSON.stringify(ownership) !== JSON.stringify(expectedOwnership)) {
     throw new Error(`Unexpected Operations Agent Schema ownership: ${ownership.join(', ')}`);
   }
   report.assertions.schemaOwnership = ownership;
 
   const migrationState = adminPsql(`
-    SELECT
-      (to_regclass('agent_operations.investigations') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.investigation_effects') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.investigation_business_records') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.run_resource_budgets') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.run_resource_budget_operations') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.audit_records') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.agent_sessions') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.agent_runs') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.agent_messages') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.agent_tool_executions') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_operations.agent_artifacts') IS NOT NULL)::text
-      || '|'
-      || (to_regclass('agent_checkpoints.runtime_checkpoints') IS NOT NULL)::text
+    SELECT string_agg(tablename, ',' ORDER BY tablename)
+    FROM pg_tables
+    WHERE schemaname = 'agent_operations'
   `);
-  if (migrationState !== 'true|true|true|true|true|true|true|true|true|true|true|true') {
-    throw new Error(`Operations Agent migrations are incomplete: ${migrationState}`);
+  if (migrationState !== 'agent_artifacts,agent_messages,agent_runs,agent_sessions,agent_tool_executions') {
+    throw new Error(`Operations Agent tables are not the Session schema: ${migrationState}`);
   }
   report.assertions.migrations = migrationState;
 
@@ -246,30 +184,15 @@ try {
     '--experimental-strip-types',
     '--test',
     '--test-concurrency=1',
-    'services/operations-agent-service/test/postgres-persistence.test.ts',
-    'services/operations-agent-service/test/postgres-run-resource-budget.test.ts',
-    'services/operations-agent-service/test/postgres-operations-audit.test.ts',
-    'services/operations-agent-service/test/postgres-langgraph-runtime.test.ts',
-    'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.ts',
     'services/operations-agent-service/test/postgres-pi-agent-sessions.test.ts',
   ], {
     env: {
       ...process.env,
       OPERATIONS_AGENT_OPERATIONS_DATABASE_URL: operationsUrl,
-      OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL: checkpointsUrl,
     },
     stdio: 'inherit',
   });
   report.assertions.integrationTests = true;
-  report.assertions.runtimeCheckpointRecovery = true;
-  report.assertions.typedBusinessRecordPersistence = true;
-  report.assertions.atomicRollback = true;
-  report.assertions.checkpointIndependence = true;
-  report.assertions.runResourceBudgetPersistence = true;
-  report.assertions.auditOutboxExactDelivery = true;
-  report.assertions.concurrentMutationSerialization = true;
-  report.assertions.operatorInputExactRetry = true;
-  report.assertions.map55SafetyCertification = true;
 
   report.status = 'passed';
   report.completedAt = new Date().toISOString();

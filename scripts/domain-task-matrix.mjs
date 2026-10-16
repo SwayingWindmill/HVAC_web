@@ -81,8 +81,6 @@ export const gateCommandMatrix = Object.freeze({
       npmCi('services/operations-agent-service'),
       npmRun('operations-agent-service:check'),
       nodeRun('scripts/check-operations-agent-service-boundaries.mjs'),
-      npmRun('operations-agent:benchmark:test'),
-      npmRun('operations-agent:gateway:check'),
       npmRun('test:gateway'),
     ]),
     pocs: Object.freeze([npmRun('pocs:components:check')]),

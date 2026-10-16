@@ -1,5 +1,5 @@
 import {
-  type Pool,
+  Pool,
   type PoolClient,
   type QueryResult,
   type QueryResultRow,
@@ -398,3 +398,29 @@ export const createPostgresAgentSessionStateStore = (
     });
   },
 });
+
+export interface PostgresAgentSessionPersistenceOptions {
+  readonly connectionString: string;
+  readonly maxPoolSize?: number;
+}
+
+export interface PostgresAgentSessionPersistence {
+  readonly agentSessionStateStore: AgentSessionStateStore;
+  close(): Promise<void>;
+}
+
+/** The Agent Session store on its own pool, connected as the Operations runtime role. */
+export const createPostgresAgentSessionPersistence = (
+  options: PostgresAgentSessionPersistenceOptions,
+): PostgresAgentSessionPersistence => {
+  if (options.connectionString.trim().length === 0) {
+    throw new Error('Operations database connection string is required.');
+  }
+  const max = options.maxPoolSize ?? 4;
+  if (!Number.isSafeInteger(max) || max <= 0) throw new Error('maxPoolSize must be a positive safe integer.');
+  const pool = new Pool({ connectionString: options.connectionString, application_name: 'operations-agent-operations', max });
+  return Object.freeze({
+    agentSessionStateStore: createPostgresAgentSessionStateStore(pool),
+    close: () => pool.end(),
+  });
+};

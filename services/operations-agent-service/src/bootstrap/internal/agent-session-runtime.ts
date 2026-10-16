@@ -7,9 +7,9 @@ import {
   type AgentSessionService,
 } from '../../application/index.js';
 import {
-  createPostgresOperationsAgentPersistence,
-  type PostgresOperationsAgentPersistence,
-  type PostgresOperationsAgentPersistenceOptions,
+  createPostgresAgentSessionPersistence,
+  type PostgresAgentSessionPersistence,
+  type PostgresAgentSessionPersistenceOptions,
 } from '../../persistence/index.js';
 import {
   createProductionPiAgentRuntimeFromEnvironment,
@@ -34,6 +34,8 @@ import {
   type AgentSessionHttpHandler,
 } from '../../transport-http/index.js';
 
+export type { AgentSessionHttpAuthorizationInput, AgentSessionHttpAuthorizer } from '../../transport-http/index.js';
+
 export interface ProductionAgentSessionOwnerConfig {
   readonly registry: RegistryOwnerReaderConfig;
   readonly deviceTelemetry: DeviceTelemetryOwnerReaderConfig;
@@ -43,7 +45,7 @@ export interface ProductionAgentSessionOwnerConfig {
 
 export interface ProductionAgentSessionRuntimeOptions {
   readonly environment: PiModelEnvironment;
-  readonly persistence: PostgresOperationsAgentPersistenceOptions;
+  readonly persistence: PostgresAgentSessionPersistenceOptions;
   readonly owners: ProductionAgentSessionOwnerConfig;
   readonly authorizer: AgentSessionHttpAuthorizer;
   readonly budget: AgentRunBudget;
@@ -55,7 +57,7 @@ export interface ProductionAgentSessionRuntime {
   readonly service: AgentSessionService;
   readonly handler: AgentSessionHttpHandler;
   readonly modelPolicy: PiAgentModelPolicy;
-  readonly persistence: PostgresOperationsAgentPersistence;
+  readonly persistence: PostgresAgentSessionPersistence;
   close(): Promise<void>;
 }
 
@@ -74,7 +76,7 @@ export const createProductionAgentSessionRuntime = async (
   const modelRuntime = await createProductionPiAgentRuntimeFromEnvironment({
     environment: options.environment,
   });
-  const persistence = createPostgresOperationsAgentPersistence(options.persistence);
+  const persistence = createPostgresAgentSessionPersistence(options.persistence);
   try {
     const registryReader = createRegistryOwnerReader(options.owners.registry);
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);

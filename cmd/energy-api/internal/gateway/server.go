@@ -243,10 +243,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
 			return
 		}
-		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
-			dispatchOperationsRoute(h, writer, request, operationsRoute)
-			return
-		}
 		if savingsRoute, matches := matchPublicSavingsRoute(request.Method, request.URL.Path); matches {
 			dispatchSavingsRoute(h, writer, request, savingsRoute)
 			return
@@ -290,10 +286,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 
 	if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
 		dispatchAgentSessionRoute(h, writer, request, agentSessionRoute)
-		return
-	}
-	if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
-		dispatchOperationsRoute(h, writer, request, operationsRoute)
 		return
 	}
 	if telemetryRoute, deviceID, matches := matchPublicTelemetryRoute(request.URL.Path); matches {
@@ -775,9 +767,6 @@ func safeLogPath(path string) string {
 		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(path); matches {
 			return agentSessionRoute.template
-		}
-		if operationsRoute, matches := matchPublicOperationsRoute(path); matches {
-			return operationsRoute.template
 		}
 		if telemetryRoute, _, matches := matchPublicTelemetryRoute(path); matches {
 			return telemetryRoute.template

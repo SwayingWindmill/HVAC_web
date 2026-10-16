@@ -8,36 +8,30 @@ export const OPERATIONS_AGENT_SERVICE_PACKAGE_NAME = '@hvac/operations-agent-ser
 
 export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
   'agent',
-  'domain',
   'application',
-  'runtime-langgraph',
   'runtime-pi',
-  'model',
   'tools',
   'persistence',
   'transport-http',
   'transport-events',
-  'scheduling',
-  'observability',
   'bootstrap',
 ]);
 
 const adapterModules = OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => (
-  !['agent', 'domain', 'application', 'bootstrap'].includes(name)
+  !['agent', 'application', 'bootstrap'].includes(name)
 ));
 
 const allowedInternalDependencies = Object.freeze({
   root: ['agent', 'application', 'bootstrap'],
   agent: [],
-  domain: [],
-  application: ['agent', 'domain'],
+  application: ['agent'],
   bootstrap: OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => name !== 'bootstrap'),
-  ...Object.fromEntries(adapterModules.map((name) => [name, ['application', 'domain']])),
-  tools: ['agent', 'application', 'domain'],
+  ...Object.fromEntries(adapterModules.map((name) => [name, ['application']])),
+  tools: ['agent', 'application'],
   'runtime-pi': ['agent'],
 });
 
-const externalImportForbiddenModules = new Set(['agent', 'domain', 'application']);
+const externalImportForbiddenModules = new Set(['agent', 'application']);
 const forbiddenToolBypassPatterns = Object.freeze([
   { name: 'ClickHouse', pattern: /clickhouse/iu },
   { name: 'Cube', pattern: /\bcube(?:js)?\b/iu },

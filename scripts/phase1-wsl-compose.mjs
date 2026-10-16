@@ -137,7 +137,6 @@ const env = {
     MV_DATABASE_URL: databaseUrl('mv_runtime', 'hvac_s1'),
     REPORT_DATABASE_URL: databaseUrl('report_runtime', 'hvac_s1'),
     OPERATIONS_AGENT_DATABASE_URL: databaseUrl('operations_agent_operations_runtime', 'hvac_operations_agent'),
-    OPERATIONS_AGENT_CHECKPOINTS_DATABASE_URL: databaseUrl('operations_agent_checkpoints_runtime', 'hvac_operations_agent'),
   } : {}),
 };
 

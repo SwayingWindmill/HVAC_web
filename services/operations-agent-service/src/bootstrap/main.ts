@@ -26,7 +26,6 @@ const required = (name: string): string => {
   return value;
 };
 
-const AGENT_SPIFFE_ID = process.env.AGENT_SPIFFE_ID ?? 'spiffe://hvac.local/operations-agent-service';
 const GATEWAY_SPIFFE_ID = process.env.AGENT_GATEWAY_SPIFFE_ID ?? 'spiffe://hvac.local/platform-gateway';
 const AUDIENCE = 'operations-agent-service';
 const ACTION = 'operations:investigate';
@@ -107,13 +106,7 @@ const createGrantAuthorizer = (publicKey: KeyObject): AgentSessionHttpAuthorizer
       delegationGrant: input.gatewayDelegationGrant,
       policyRevision: claims.policyRevision,
       capabilities: READ_TOOL_CAPABILITIES,
-      auditActor: {
-        actorType: 'OPERATOR',
-        actorId: claims.subject,
-        actorIssuer: claims.subjectIssuer,
-        executingService: 'operations-agent-service',
-        executingSpiffeId: AGENT_SPIFFE_ID,
-      },
+      operator: { id: claims.subject, issuer: claims.subjectIssuer },
     };
   },
 });
@@ -161,11 +154,7 @@ const main = async () => {
 
   const runtime = await createProductionAgentSessionRuntime({
     environment: process.env,
-    persistence: {
-      operationsConnectionString: required('OPERATIONS_DATABASE_URL'),
-      checkpointsConnectionString: required('CHECKPOINTS_DATABASE_URL'),
-      checkpointRetentionMs: 7 * 86_400_000,
-    },
+    persistence: { connectionString: required('OPERATIONS_DATABASE_URL') },
     owners: {
       registry: owner('REGISTRY_URL'),
       deviceTelemetry: owner('TELEMETRY_RUNTIME_URL'),

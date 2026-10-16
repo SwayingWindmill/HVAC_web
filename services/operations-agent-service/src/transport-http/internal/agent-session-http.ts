@@ -216,9 +216,7 @@ const contextFromAuthorization = (
   tenantId: string,
   authorization: AuthorizationDecision,
 ): AgentSessionAccessContext | null => {
-  const principalId = authorization.auditActor?.actorType === 'OPERATOR'
-    ? authorization.auditActor.actorId
-    : null;
+  const principalId = authorization.operator?.id ?? null;
   if (principalId === null) return null;
   return Object.freeze({
     tenantId,

@@ -1,76 +1,29 @@
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+// Applies the Operations Agent's Session schema with the migrator role.
 const root = resolve(process.cwd(), process.cwd().endsWith('operations-agent-service') ? '../..' : '.');
-const target = process.argv[2];
-const targets = Object.freeze({
-  operations: {
-    environmentName: 'OPERATIONS_AGENT_OPERATIONS_MIGRATOR_DATABASE_URL',
-    migrationPaths: [
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/001_agent_operations.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/002_typed_business_records.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/004_run_resource_budgets.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/005_operations_audit_outbox.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/006_pi_agent_sessions.sql',
-      ),
-      resolve(
-        root,
-        'services/operations-agent-service/migrations/operations/007_agent_input_response.sql',
-      ),
-    ],
-  },
-  checkpoints: {
-    environmentName: 'OPERATIONS_AGENT_CHECKPOINTS_MIGRATOR_DATABASE_URL',
-    migrationPaths: [resolve(
-      root,
-      'services/operations-agent-service/migrations/checkpoints/001_agent_checkpoints.sql',
-    )],
-  },
-});
+const directory = resolve(root, 'services/operations-agent-service/migrations/operations');
+const environmentName = 'OPERATIONS_AGENT_OPERATIONS_MIGRATOR_DATABASE_URL';
 
-if (target !== 'operations' && target !== 'checkpoints') {
-  throw new Error('Migration target must be operations or checkpoints.');
+if (process.argv[2] !== 'operations') {
+  throw new Error('Migration target must be operations.');
 }
-
-const configuration = targets[target];
-const databaseUrl = process.env[configuration.environmentName];
+const databaseUrl = process.env[environmentName];
 if (!databaseUrl) {
-  throw new Error(`${configuration.environmentName} is required.`);
+  throw new Error(`${environmentName} is required.`);
 }
 
-for (const migrationPath of configuration.migrationPaths) {
-  const result = spawnSync('psql', [
-    databaseUrl,
-    '-v',
-    'ON_ERROR_STOP=1',
-    '-f',
-    migrationPath,
-  ], {
+for (const name of readdirSync(directory).filter((file) => file.endsWith('.sql')).sort()) {
+  const migrationPath = resolve(directory, name);
+  const result = spawnSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-f', migrationPath], {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,
     stdio: 'inherit',
   });
-
   if (result.error || result.status !== 0) {
-    throw new Error(`Operations Agent ${target} migration failed at ${migrationPath}.`);
+    throw new Error(`Operations Agent migration failed at ${migrationPath}.`);
   }
 }
