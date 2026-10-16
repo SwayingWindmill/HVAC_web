@@ -76,6 +76,8 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
    - **Operations Agent (AI 运维助手).** Pi (`@earendil-works/pi-agent-core` 1.3.0) is the only runtime since 2026-10-16: the LangGraph investigation path, its checkpoint database and the investigation routes were deleted (ADR 0014, migration rule). The service has five read-only Tools (Site, assets, current readings, energy series, period comparison), runs on DeepSeek and is not deployed on the server (needs `DEEPSEEK_API_KEY`); the Web has no assistant UI yet. Next: the energy-anomaly explanation scenario, its UI (to be agreed with the user) and the Tools it needs. Session audit and a Pi benchmark do not exist yet.
 
+   - **Cube is the semantic layer for energy reads (ADR 0023, 2026-10-16, parent #574).** Today Cube serves only the Energy Series; report-service still sums the facts itself and cost/COP are computed in the browser. Tickets: #571 public views with Chinese descriptions and COP, #572 report-service through the query service, #575 one definition of estimated cost, #573 the Agent's semantic query Tool (after the first assistant release).
+
 Roadmap issues, in order:
 
 1. **#484 — measured savings (M&V).** Live and accepted end to end (spec `docs/specs/savings-verification.md`, ADR 0021).

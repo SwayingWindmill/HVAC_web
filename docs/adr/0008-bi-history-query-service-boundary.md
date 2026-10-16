@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted and implemented for the first electricity Energy Series vertical slice.
+Accepted and implemented for the first electricity Energy Series vertical slice. ADR 0023 (2026-10-16) makes Cube the place every energy read goes through.
 
 ## Context
 
