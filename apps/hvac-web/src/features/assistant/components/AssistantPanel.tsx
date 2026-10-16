@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
 import { SquarePen, Sparkles, X } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { useSidebar } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
 import { useAssistantPanel } from '../assistant-panel-store';
 import type { AssistantMessage } from '../thread-model';
@@ -15,10 +17,28 @@ const textOf = (message: AppendMessage): string => message.content
   .join('\n')
   .trim();
 
+/**
+ * While the panel is open the navigation folds to icons, so at 1440px the page keeps about
+ * 960px for its tables; closing the panel unfolds it if it was open before.
+ */
+function useFoldedNavigation() {
+  const { open, setOpen } = useSidebar();
+  const latest = useRef({ open, setOpen });
+  latest.current = { open, setOpen };
+  useEffect(() => {
+    const wasOpen = latest.current.open;
+    latest.current.setOpen(false);
+    return () => {
+      if (wasOpen) latest.current.setOpen(true);
+    };
+  }, []);
+}
+
 /** The right-hand assistant panel for the current Site; it pushes the page over rather than covering it. */
 export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteId: string; readonly siteName: string; readonly csrfToken: string }) {
   const close = useAssistantPanel((state) => state.close);
   const { thread, loading, error, ask, answer, cancel, startNew } = useAssistantSession(siteId, csrfToken);
+  useFoldedNavigation();
   const pending = thread.pendingInput;
 
   const runtime = useExternalStoreRuntime<AssistantMessage>({

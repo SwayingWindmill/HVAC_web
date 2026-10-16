@@ -49,3 +49,17 @@ test('without an Operations Agent the panel says the assistant is not connected'
   await page.getByRole('button', { name: 'AI 助手' }).click();
   await expect(page.getByTestId('assistant-error')).toHaveText('这个环境还没有接入 AI 助手。');
 });
+
+test('opening the assistant folds the navigation to icons so the page keeps its width, and closing it unfolds it again', async ({ page }) => {
+  await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
+  const navigation = page.locator('[data-slot="sidebar"][data-state]');
+  await expect(navigation).toHaveAttribute('data-state', 'expanded');
+
+  await page.getByRole('button', { name: 'AI 助手' }).click();
+  await expect(navigation).toHaveAttribute('data-state', 'collapsed');
+  // 1440 less the folded navigation and the 420px panel.
+  expect(await page.locator('#content').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(940);
+
+  await page.getByRole('complementary', { name: 'AI 助手' }).getByRole('button', { name: '收起助手' }).click();
+  await expect(navigation).toHaveAttribute('data-state', 'expanded');
+});
