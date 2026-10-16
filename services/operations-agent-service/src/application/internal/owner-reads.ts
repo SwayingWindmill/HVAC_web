@@ -67,6 +67,8 @@ export interface EnergyAnalyticsReadRequest {
     readonly from: string;
     readonly to: string;
     readonly qualityPolicy: EnergyQualityPolicy;
+    /** `device` adds each sub-metered device's series beside the Site total. */
+    readonly breakdown?: 'device';
   };
 }
 
@@ -98,6 +100,8 @@ export interface EnergySeriesMetadata {
 export interface EnergySeries {
   readonly schemaVersion: 1;
   readonly points: readonly EnergySeriesPoint[];
+  /** Present when the request asked for the device breakdown. */
+  readonly devices?: readonly { readonly deviceId: string; readonly points: readonly EnergySeriesPoint[] }[];
   readonly metadata: EnergySeriesMetadata;
 }
 

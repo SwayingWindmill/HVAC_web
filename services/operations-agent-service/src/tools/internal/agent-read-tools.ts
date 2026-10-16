@@ -33,6 +33,7 @@ export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'telemetry_get_current',
   'energy_query_series',
   'energy_compare_periods',
+  'energy_by_equipment',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -68,6 +69,7 @@ const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
 const EQUIPMENT_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read']);
 const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
+const EQUIPMENT_ENERGY_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read', 'analytics.energy-series.read']);
 
 const emptyInputSchema = Object.freeze({
   type: 'object',
@@ -621,6 +623,81 @@ const readEnergy = async (
   };
 };
 
+const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
+  Number(points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6))
+);
+
+/** The Site total split by sub-metered device, largest first, each named from the asset model. */
+const readEquipmentEnergy = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  energy: EnergyAnalyticsReader,
+  registry: RegistryReader,
+  timezone: string,
+  query: EnergyArguments,
+  limits: HvacReadToolLimits,
+) => {
+  const draft = {
+    tool: 'analytics.getEnergySeries' as const,
+    input: {
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      energyType: 'electricity' as const,
+      granularity: query.granularity,
+      timezone,
+      from: query.from,
+      to: query.to,
+      qualityPolicy: query.qualityPolicy,
+      breakdown: 'device' as const,
+    },
+  };
+  const request: EnergyAnalyticsReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_by_equipment', draft) };
+  const [{ model }, result] = await Promise.all([
+    readAssetModel(context, authorization, authorizer, registry),
+    authorizeOwnerRead(context, authorization, authorizer, request).then((ownerContext) => energy.read({ request, context: ownerContext })),
+  ]);
+  const payload = energyPayloadFrom(result);
+  const deviceSeries = payload.devices ?? [];
+  if (deviceSeries.reduce((count, device) => count + device.points.length, payload.points.length) > limits.maxEnergyPoints) {
+    fail('TOOL_RESULT_TOO_LARGE', 'Energy breakdown exceeds the Tool point limit.');
+  }
+  const equipment = new Map(describeEquipment(model).map((device) => [device.deviceId, device]));
+  const siteTotalKWh = payload.points.length === 0 ? null : sumKWh(payload.points);
+  const devices = deviceSeries
+    .map((device) => {
+      const totalKWh = sumKWh(device.points);
+      const known = equipment.get(device.deviceId);
+      return {
+        deviceId: device.deviceId,
+        name: known?.name ?? null,
+        machine: known?.machine ?? null,
+        totalKWh,
+        shareOfSite: siteTotalKWh === null || siteTotalKWh === 0 ? null : Number((totalKWh / siteTotalKWh).toFixed(3)),
+        points: device.points,
+      };
+    })
+    .sort((left, right) => right.totalKWh - left.totalKWh);
+  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
+  return {
+    siteId: context.siteId,
+    query: { from: query.from, to: query.to, granularity: query.granularity, timezone, qualityPolicy: query.qualityPolicy },
+    siteTotalKWh,
+    devices,
+    completeness,
+    quality: result.quality,
+    qualitySummary: payload.metadata.qualitySummary,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
+    },
+  };
+};
+
 const summarizeEnergy = (value: Awaited<ReturnType<typeof readEnergy>>) => ({
   siteId: value.siteId,
   query: value.query,
@@ -873,6 +950,32 @@ export const createHvacReadTools = ({
     },
   });
 
+  const equipmentEnergyTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'energy_by_equipment',
+      'Split the current Site\'s electricity in a period by sub-metered device (machines with their own meter), largest first, with each device\'s series at the chosen granularity.',
+      energyQueryInputSchema,
+      EQUIPMENT_ENERGY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseEnergyWindow(argumentsValue, limits);
+      assertExecutionCapability(context, EQUIPMENT_ENERGY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(await readEquipmentEnergy(
+          context,
+          authorization,
+          toolAuthorizationReader,
+          energyAnalyticsReader,
+          registryReader,
+          sitePayload.site.timezone,
+          query,
+          limits,
+        ), limits);
+      });
+    },
+  });
+
   return Object.freeze([
     siteTool,
     assetsTool,
@@ -880,5 +983,6 @@ export const createHvacReadTools = ({
     telemetryTool,
     energyQueryTool,
     energyCompareTool,
+    equipmentEnergyTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));
 };

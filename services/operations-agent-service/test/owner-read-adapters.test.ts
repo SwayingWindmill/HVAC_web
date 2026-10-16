@@ -316,6 +316,33 @@ test('Energy reader calls only the fixed Energy Series product contract and pres
   assert.equal('sql' in JSON.parse(captured.init.body), false);
 });
 
+test('Energy reader asks for the device breakdown and keeps each device series', async () => {
+  let captured;
+  const breakdownResponse = {
+    ...energyResponse,
+    devices: [{ deviceId, points: energyResponse.points }],
+  };
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(breakdownResponse);
+    },
+  });
+  const request = { ...energyRequest, input: { ...energyRequest.input, breakdown: 'device' } };
+
+  const result = await reader.read({ request, context: energyContext });
+
+  assert.equal(JSON.parse(captured.init.body).breakdown, 'device');
+  assert.deepEqual(result.payload.devices, [{ deviceId, points: energyResponse.points }]);
+
+  const malformed = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse({ ...breakdownResponse, devices: [{ deviceId, points: [{ periodStart: 'x' }] }] }),
+  });
+  await expectOwnerError(() => malformed.read({ request, context: energyContext }), 'OWNER_RESPONSE_INVALID');
+});
+
 test('Device Telemetry reader uses exact snapshot owner path and preserves stale and missing states', async () => {
   let captured;
   const reader = createDeviceTelemetryOwnerReader({

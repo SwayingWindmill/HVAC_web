@@ -32,6 +32,8 @@ export type EnergySeriesResponseDto = EnergySeries;
 export type EnergyAnalyticsOwnerReaderConfig = OwnerReaderHttpConfig;
 
 const responseKeys = ['schemaVersion', 'points', 'metadata'] as const;
+const breakdownResponseKeys = ['schemaVersion', 'points', 'devices', 'metadata'] as const;
+const deviceSeriesKeys = ['deviceId', 'points'] as const;
 const pointKeys = ['periodStart', 'periodEnd', 'energyKWh'] as const;
 const qualityKeys = ['valid', 'suspect', 'invalid'] as const;
 const metadataRequiredKeys = [
@@ -94,7 +96,8 @@ const assertEnergyRequest = (
     || !Number.isFinite(to)
     || to - from < 1
     || to - from > maximumRangeMs
-    || !validQualityPolicies.has(query.qualityPolicy)) {
+    || !validQualityPolicies.has(query.qualityPolicy)
+    || (query.breakdown !== undefined && query.breakdown !== 'device')) {
     throw new OwnerReadError(
       'OWNER_REQUEST_INVALID',
       'The Energy Series READ request is outside the fixed product contract.',
@@ -203,27 +206,57 @@ const decodeMetadata = (
   };
 };
 
+const decodePoints = (
+  values: readonly unknown[],
+  query: EnergyAnalyticsReadRequest['input'],
+): EnergySeriesPointDto[] => {
+  const points: EnergySeriesPointDto[] = [];
+  let previousEnd: number | null = null;
+  for (const valuePoint of values) {
+    const decoded = decodePoint(valuePoint, query, previousEnd);
+    points.push(decoded.point);
+    previousEnd = decoded.end;
+  }
+  return points;
+};
+
+const decodeDeviceSeries = (
+  value: unknown,
+  query: EnergyAnalyticsReadRequest['input'],
+): NonNullable<EnergySeriesResponseDto['devices']>[number] => {
+  if (!isRecord(value)
+    || !hasExactKeys(value, deviceSeriesKeys)
+    || !isNonEmptyString(value.deviceId)
+    || !Array.isArray(value.points)
+    || value.points.length > maximumPoints) {
+    throw new OwnerReadError(
+      'OWNER_RESPONSE_INVALID',
+      'The Energy Series Owner returned an invalid device series.',
+    );
+  }
+  return { deviceId: value.deviceId, points: decodePoints(value.points, query) };
+};
+
 const decodeEnergySeries = (
   value: unknown,
   query: EnergyAnalyticsReadRequest['input'],
 ): EnergySeriesResponseDto => {
+  const breakdown = query.breakdown === 'device';
   if (!isRecord(value)
-    || !hasExactKeys(value, responseKeys)
+    || !hasExactKeys(value, breakdown ? breakdownResponseKeys : responseKeys)
     || value.schemaVersion !== 1
     || !Array.isArray(value.points)
-    || value.points.length > maximumPoints) {
+    || value.points.length > maximumPoints
+    || (breakdown && (!Array.isArray(value.devices) || value.devices.length > maximumPoints))) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Energy Series Owner returned an invalid response.',
     );
   }
-  const points: EnergySeriesPointDto[] = [];
-  let previousEnd: number | null = null;
-  for (const valuePoint of value.points) {
-    const decoded = decodePoint(valuePoint, query, previousEnd);
-    points.push(decoded.point);
-    previousEnd = decoded.end;
-  }
+  const points = decodePoints(value.points, query);
+  const devices = breakdown
+    ? (value.devices as unknown[]).map((device) => decodeDeviceSeries(device, query))
+    : undefined;
   const metadata = decodeMetadata(value.metadata, query);
   if (points.length === 0 && metadata.partial === false) {
     throw new OwnerReadError(
@@ -234,6 +267,7 @@ const decodeEnergySeries = (
   return {
     schemaVersion: 1,
     points,
+    ...(devices === undefined ? {} : { devices }),
     metadata,
   };
 };

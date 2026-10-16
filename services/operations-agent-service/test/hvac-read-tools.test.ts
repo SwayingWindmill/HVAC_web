@@ -191,7 +191,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -419,4 +419,38 @@ test('equipment_list names each device, its machine and its active points so oth
   ]);
   assert.equal(result.completeness, 'COMPLETE');
   assert.equal(result.source.revision, 'registry-asset-model:11');
+});
+
+test('energy_by_equipment splits the Site total by sub-metered device, named from the asset model', async () => {
+  const from = '2026-10-15T16:00:00.000Z';
+  const to = '2026-10-16T16:00:00.000Z';
+  const harness = createHarness({
+    energyFor: async (input) => {
+      const payload = {
+        ...energyPayload({ from, to, energyKWh: 1634 }),
+        devices: [{
+          deviceId: meterDeviceId,
+          points: [
+            { periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', energyKWh: 300 },
+            { periodStart: '2026-10-16T11:00:00.000Z', periodEnd: '2026-10-16T12:00:00.000Z', energyKWh: 579 },
+          ],
+        }],
+      };
+      return ownerResult(input.request, 'telemetry-query-service', 'energy-breakdown-1', 'GOOD', 'telemetry-query-service:energy-series/v1', payload);
+    },
+  });
+
+  const result = await execute(byName(harness.tools, 'energy_by_equipment'), { from, to, granularity: 'hour' });
+
+  const energyRequest = harness.energyInputs[0].request;
+  assert.equal(energyRequest.input.breakdown, 'device');
+  assert.equal(energyRequest.input.siteId, siteId);
+  assert.equal(energyRequest.input.timezone, 'America/Phoenix');
+  assert.equal(result.siteTotalKWh, 1634);
+  assert.deepEqual(result.devices.map(({ points: _points, ...device }) => device), [
+    { deviceId: meterDeviceId, name: 'C 机组电表', machine: { name: 'Chiller 1', type: 'CHILLER' }, totalKWh: 879, shareOfSite: 0.538 },
+  ]);
+  assert.equal(result.devices[0].points.length, 2);
+  assert.equal(result.completeness, 'COMPLETE');
+  assert.equal(result.source.revision, 'energy-breakdown-1');
 });

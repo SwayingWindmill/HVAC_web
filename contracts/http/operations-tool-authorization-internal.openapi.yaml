@@ -142,6 +142,7 @@ components:
             from: { type: string, format: date-time }
             to: { type: string, format: date-time }
             qualityPolicy: { enum: [VALID_ONLY, VALID_AND_SUSPECT] }
+            breakdown: { type: string, enum: [device] }
     ToolAuthorizationResponse:
       type: object
       additionalProperties: false
