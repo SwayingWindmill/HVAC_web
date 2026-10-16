@@ -19,6 +19,7 @@ import {
 import {
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
+  createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
   createRegistryOwnerReader,
@@ -81,6 +82,8 @@ export const createProductionAgentSessionRuntime = async (
     const registryReader = createRegistryOwnerReader(options.owners.registry);
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.energyAnalytics);
+    // Device history and Energy Series are both served by the Telemetry Query Service.
+    const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.energyAnalytics);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
@@ -98,6 +101,7 @@ export const createProductionAgentSessionRuntime = async (
         toolAuthorizationReader,
         registryReader,
         deviceTelemetryReader,
+        telemetryHistoryReader,
         energyAnalyticsReader,
       }),
     });

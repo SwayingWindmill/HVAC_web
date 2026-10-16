@@ -7,6 +7,7 @@ import {
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
   createRegistryOwnerReader,
+  createTelemetryHistoryOwnerReader,
 } from '../dist/tools/index.js';
 
 const tenantId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
@@ -314,6 +315,83 @@ test('Energy reader calls only the fixed Energy Series product contract and pres
   assert.equal('measures' in JSON.parse(captured.init.body), false);
   assert.equal('dimensions' in JSON.parse(captured.init.body), false);
   assert.equal('sql' in JSON.parse(captured.init.body), false);
+});
+
+const historyRequest = Object.freeze({
+  requestId: 'history-request-001',
+  tool: 'telemetry.history.aggregateDeviceHistory',
+  input: {
+    tenantId,
+    siteId,
+    deviceId,
+    keys: ['chw_supply_temp', 'active_energy_total'],
+    from: '2026-10-15T16:00:00.000Z',
+    to: '2026-10-16T16:00:00.000Z',
+    granularity: 'HOUR',
+    timezone: 'Asia/Shanghai',
+    qualityPolicy: 'VALID_ONLY',
+  },
+});
+
+const historyContext = Object.freeze({
+  ...telemetryContext,
+  authorization: {
+    ...telemetryContext.authorization,
+    toolDelegationGrants: { 'telemetry.history.aggregateDeviceHistory': 'history-delegation-grant-value' },
+  },
+});
+
+const historyQuality = Object.freeze({ good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 });
+const historyResponse = Object.freeze({
+  schemaVersion: 1,
+  tenantId,
+  siteId,
+  deviceId,
+  buckets: [
+    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', quality: historyQuality, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
+    { telemetryKey: 'active_energy_total', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708212', pointRevision: 1, pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', quality: historyQuality, completeness: 1, counter: { deltaSum: 88.5, deltaCount: 59, resetCount: 0, rolloverCount: 0, excludedTransitionCount: 0 } },
+  ],
+  metadata: { requestedFrom: '2026-10-15T16:00:00Z', requestedTo: '2026-10-16T16:00:00Z', granularity: 'HOUR', timezone: 'Asia/Shanghai', qualityPolicy: 'VALID_ONLY', projectionWatermark: '2026-10-16T09:30:00Z', returnedBuckets: 2 },
+});
+
+test('History reader aggregates through the fixed device-history contract and keeps one result per bucket', async () => {
+  let captured;
+  const reader = createTelemetryHistoryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(historyResponse);
+    },
+  });
+
+  const result = await reader.read({ request: historyRequest, context: historyContext });
+
+  assert.equal(captured.url, 'https://telemetry-query.internal/internal/v1/telemetry/device-history:aggregate');
+  assert.equal(captured.init.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.init.body), historyRequest.input);
+  assert.equal(captured.init.headers['X-Delegation-Grant'], 'history-delegation-grant-value');
+  assert.equal(result.owner, 'telemetry-query-service');
+  assert.equal(result.provenance, 'telemetry-query-service:device-history-aggregate/v1');
+  assert.equal(result.quality, 'UNCERTAIN');
+  assert.deepEqual(result.payload, {
+    schemaVersion: 1,
+    deviceId,
+    projectionWatermark: '2026-10-16T09:30:00Z',
+    buckets: [
+      { telemetryKey: 'chw_supply_temp', pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6 } },
+      { telemetryKey: 'active_energy_total', pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', completeness: 1, counter: { deltaSum: 88.5 } },
+    ],
+  });
+
+  const foreign = createTelemetryHistoryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse({
+      ...historyResponse,
+      buckets: [{ ...historyResponse.buckets[0], telemetryKey: 'not_requested' }],
+      metadata: { ...historyResponse.metadata, returnedBuckets: 1 },
+    }),
+  });
+  await expectOwnerError(() => foreign.read({ request: historyRequest, context: historyContext }), 'OWNER_RESPONSE_INVALID');
 });
 
 test('Energy reader reads cooling energy through the same product contract', async () => {

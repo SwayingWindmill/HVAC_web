@@ -12,7 +12,7 @@ const context = Object.freeze({
   tenantId,
   siteId,
   principalId: 'principal-1',
-  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'analytics.energy-series.read']),
+  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'telemetry.history.read', 'analytics.energy-series.read']),
   sessionId: 'session-1',
   runId: 'run-1',
   correlationId: 'correlation-1',
@@ -90,10 +90,23 @@ const energyPayload = ({ from, to, partial = false, energyKWh = 12, qualitySumma
   },
 });
 
+const historyPayload = (query) => ({
+  schemaVersion: 1,
+  tenantId,
+  siteId,
+  deviceId: query.deviceId,
+  buckets: [
+    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
+    { telemetryKey: 'active_energy_total', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708212', pointRevision: 1, pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 0.5, counter: { deltaSum: 88.5, deltaCount: 59, resetCount: 0, rolloverCount: 0, excludedTransitionCount: 0 } },
+  ],
+  metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
+});
+
 const createHarness = ({ energyFor, registryFailure } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
+  const historyInputs = [];
   const energyInputs = [];
   let activeEnergyReads = 0;
   let maxActiveEnergyReads = 0;
@@ -149,6 +162,12 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
       };
     },
   };
+  const telemetryHistoryReader = {
+    read: async (input) => {
+      historyInputs.push(input);
+      return ownerResult(input.request, 'telemetry-query-service', 'history:2026-10-16T16:00:00.000Z', 'GOOD', 'telemetry-query-service:device-history-aggregate/v1', historyPayload(input.request.input));
+    },
+  };
   const energyAnalyticsReader = {
     read: async (input) => {
       energyInputs.push(input);
@@ -170,11 +189,12 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
     toolAuthorizationReader,
     registryReader,
     deviceTelemetryReader,
+    telemetryHistoryReader,
     energyAnalyticsReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
   });
 
-  return { tools, authorizationInputs, registryInputs, telemetryInputs, energyInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
+  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
 
 const byName = (tools, name) => {
@@ -191,7 +211,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -199,6 +219,7 @@ test('HVAC catalog contains the capability-filtered READ Tools', () => {
     toolAuthorizationReader: { authorize: async () => ({ delegationGrant: 'grant' }) },
     registryReader: { read: async () => { throw new Error('not called'); } },
     deviceTelemetryReader: { read: async () => { throw new Error('not called'); } },
+    telemetryHistoryReader: { read: async () => { throw new Error('not called'); } },
     energyAnalyticsReader: { read: async () => { throw new Error('not called'); } },
   });
   assert.deepEqual(limited.map((tool) => tool.definition.name), ['site_get_context']);
@@ -479,4 +500,35 @@ test('energy tools read cooling energy when asked and say which energy they read
   assert.equal(series.query.energyType, 'cooling');
   assert.equal(comparison.current.query.energyType, 'cooling');
   assert.equal(electricity.query.energyType, 'electricity');
+});
+
+test('telemetry_query_history aggregates one device readings over time in the Site calendar', async () => {
+  const harness = createHarness();
+  const from = '2026-10-15T16:00:00.000Z';
+  const to = '2026-10-16T16:00:00.000Z';
+
+  const result = await execute(byName(harness.tools, 'telemetry_query_history'), {
+    deviceId: chillerDeviceId,
+    pointKeys: ['chw_supply_temp', 'active_energy_total'],
+    from,
+    to,
+  });
+
+  assert.deepEqual(harness.historyInputs[0].request.input, {
+    tenantId,
+    siteId,
+    deviceId: chillerDeviceId,
+    keys: ['chw_supply_temp', 'active_energy_total'],
+    from,
+    to,
+    granularity: 'HOUR',
+    timezone: 'America/Phoenix',
+    qualityPolicy: 'VALID_ONLY',
+  });
+  assert.deepEqual(result.series, [
+    { key: 'chw_supply_temp', unit: '°C', kind: 'reading', points: [{ periodStart: '2026-10-16T10:00:00.000Z', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
+    { key: 'active_energy_total', unit: 'kWh', kind: 'counter', points: [{ periodStart: '2026-10-16T10:00:00.000Z', increase: 88.5, coverage: 0.5 }] },
+  ]);
+  assert.equal(result.completeness, 'PARTIAL');
+  assert.equal(result.source.revision, 'history:2026-10-16T16:00:00.000Z');
 });

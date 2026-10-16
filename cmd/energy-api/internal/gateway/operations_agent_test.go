@@ -19,6 +19,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
 
 type fakeOperationsRateLimiter struct {
@@ -176,7 +177,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				t.Fatalf("unexpected Telemetry parent claims: %+v", parent)
 			}
 			var input telemetryauth.DecisionRequest
-			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != telemetryauth.ActionSnapshotRead || input.GrantPresenter != "spiffe://hvac.local/operations-agent-service" {
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || (input.Action != telemetryauth.ActionSnapshotRead && input.Action != telemetryauth.ActionHistoryRead) || input.GrantPresenter != "spiffe://hvac.local/operations-agent-service" {
 				t.Fatal("invalid Telemetry authorization request")
 			}
 			canonical, err := telemetryauth.CanonicalTargets(input.Targets)
@@ -494,5 +495,57 @@ func TestOperationsToolAuthorizationGrantsTheSiteAssetModelOnlyForTheOperatorsSi
 	denied := fixture.authorizeTool(t, strings.Replace(body, "registry-asset-model-001", "registry-asset-model-002", 2), serviceGrant, "spiffe://hvac.local/operations-agent-service")
 	if denied.Code != http.StatusNotFound {
 		t.Fatalf("a Site the operator cannot see must be not found, got %d", denied.Code)
+	}
+}
+
+func TestOperationsToolAuthorizationGrantsDeviceHistoryAggregatesToTheAgentForTheOperatorsDevice(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID,
+		Keys: []string{"chw_supply_temp"},
+		From: time.Date(2026, 7, 30, 15, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 31, 15, 0, 0, 0, time.UTC),
+		Granularity: telemetryhistorymodel.AggregateGranularityHour, Timezone: "Asia/Shanghai",
+		QualityPolicy: telemetryhistorymodel.AggregateQualityValidOnly,
+	}
+	body := func(requestID string) string {
+		raw, err := json.Marshal(map[string]any{
+			"sessionId": "session-001",
+			"runId":     "run-001",
+			"request":   map[string]any{"requestId": requestID, "tool": "telemetry.history.aggregateDeviceHistory", "input": query},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	response := fixture.authorizeTool(t, body("history-001"), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected a Device History grant, got %d: %s", response.Code, response.Body.String())
+	}
+	var issued operationsToolAuthorizationResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, issued.DelegationGrant)
+	if err != nil {
+		t.Fatalf("invalid Device History delegation: %v", err)
+	}
+	digest, err := query.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" ||
+		claims.Audience != "telemetry-query-service" || claims.TenantID != fixture.tenantID ||
+		len(claims.Actions) != 1 || claims.Actions[0] != telemetryhistorymodel.DeviceHistoryAggregateAction ||
+		len(claims.Scopes) != 1 || claims.Scopes[0] != digest || issued.PolicyRevision != claims.PolicyRevision {
+		t.Fatalf("Device History grant is not exact: %+v digest=%s", claims, digest)
+	}
+
+	fixture.denySite.Store(true)
+	denied := fixture.authorizeTool(t, body("history-002"), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if denied.Code != http.StatusNotFound {
+		t.Fatalf("a device the operator cannot see must be not found, got %d", denied.Code)
 	}
 }

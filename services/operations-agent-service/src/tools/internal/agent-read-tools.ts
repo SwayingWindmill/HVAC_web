@@ -18,6 +18,9 @@ import {
   type OwnerReadErrorCode,
   type OwnerReadResult,
   type RegistryReadRequest,
+  type TelemetryHistoryAggregate,
+  type TelemetryHistoryReadRequest,
+  type TelemetryHistoryReader,
   type ToolAuthorizableReadRequest,
   type RegistryReader,
   type ToolAuthorizationReader,
@@ -31,6 +34,7 @@ export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'assets_list',
   'equipment_list',
   'telemetry_get_current',
+  'telemetry_query_history',
   'energy_query_series',
   'energy_compare_periods',
   'energy_by_equipment',
@@ -52,6 +56,7 @@ export interface CreateHvacReadToolsInput {
   readonly toolAuthorizationReader: ToolAuthorizationReader;
   readonly registryReader: RegistryReader;
   readonly deviceTelemetryReader: DeviceTelemetryReader;
+  readonly telemetryHistoryReader: TelemetryHistoryReader;
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly limits?: Partial<HvacReadToolLimits>;
 }
@@ -68,6 +73,7 @@ const SITE_CAPABILITIES = Object.freeze(['site.read']);
 const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
 const EQUIPMENT_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read']);
 const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
+const HISTORY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.history.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
 const EQUIPMENT_ENERGY_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read', 'analytics.energy-series.read']);
 
@@ -93,6 +99,19 @@ const telemetryInputSchema = Object.freeze({
     }),
   }),
   required: Object.freeze(['deviceId', 'pointKeys']),
+  additionalProperties: false,
+});
+
+const historyInputSchema = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    deviceId: Object.freeze({ type: 'string', minLength: 36, maxLength: 36 }),
+    pointKeys: Object.freeze({ type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: Object.freeze({ type: 'string', minLength: 1, maxLength: 128 }) }),
+    from: Object.freeze({ type: 'string', format: 'date-time' }),
+    to: Object.freeze({ type: 'string', format: 'date-time' }),
+    granularity: Object.freeze({ type: 'string', enum: Object.freeze(['quarter_hour', 'hour', 'day']) }),
+  }),
+  required: Object.freeze(['deviceId', 'pointKeys', 'from', 'to']),
   additionalProperties: false,
 });
 
@@ -215,6 +234,40 @@ const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
     fail('TOOL_ARGUMENTS_INVALID', 'Telemetry query arguments are invalid.');
   }
   return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
+};
+
+interface HistoryArguments {
+  readonly deviceId: string;
+  readonly pointKeys: readonly string[];
+  readonly from: string;
+  readonly to: string;
+  readonly granularity: TelemetryHistoryReadRequest['input']['granularity'];
+}
+
+const HISTORY_GRANULARITIES = Object.freeze({ quarter_hour: 'QUARTER_HOUR', hour: 'HOUR', day: 'DAY' } as const);
+
+const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): HistoryArguments => {
+  const record = requireRecord(value, 'History query arguments are invalid.');
+  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys', 'from', 'to', 'granularity'])
+    || (record.granularity !== undefined && !Object.hasOwn(HISTORY_GRANULARITIES, String(record.granularity)))) {
+    fail('TOOL_ARGUMENTS_INVALID', 'History query arguments are invalid.');
+  }
+  const { deviceId, pointKeys } = parseTelemetryArguments({ deviceId: record.deviceId, pointKeys: record.pointKeys });
+  if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', 'History query reads at most 8 points.');
+  const from = requireString(record.from, 'History query arguments are invalid.');
+  const to = requireString(record.to, 'History query arguments are invalid.');
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || toMs - fromMs > limits.maxEnergyRangeMs) {
+    fail('TOOL_ARGUMENTS_INVALID', 'History query range is invalid or exceeds the Tool limit.');
+  }
+  return Object.freeze({
+    deviceId,
+    pointKeys,
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    granularity: HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES],
+  });
 };
 
 interface EnergyArguments {
@@ -386,7 +439,7 @@ const authorizeOwnerRead = async (
   request: ToolAuthorizableReadRequest,
 ): Promise<OwnerReadContext> => {
   const base = baseOwnerContext(context, authorization);
-  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot'
+  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot' || request.tool === 'telemetry.history.aggregateDeviceHistory'
     ? {
       ...base,
       scope: { ...base.scope, deviceId: request.input.deviceId },
@@ -453,6 +506,83 @@ const energyPayloadFrom = (result: OwnerReadResult): EnergySeriesResponseDto => 
     fail('TOOL_OWNER_RESPONSE_INVALID');
   }
   return payload;
+};
+
+const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate => {
+  const payload = result.payload as TelemetryHistoryAggregate;
+  if (payload.schemaVersion !== 1 || !Array.isArray(payload.buckets)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload;
+};
+
+/** One series per point, in the order asked: averages for readings, increases for counters. */
+const readHistory = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  history: TelemetryHistoryReader,
+  timezone: string,
+  query: HistoryArguments,
+  limits: HvacReadToolLimits,
+) => {
+  const draft = {
+    tool: 'telemetry.history.aggregateDeviceHistory' as const,
+    input: {
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      deviceId: query.deviceId,
+      keys: query.pointKeys,
+      from: query.from,
+      to: query.to,
+      granularity: query.granularity,
+      timezone,
+      qualityPolicy: 'VALID_ONLY' as const,
+    },
+  };
+  const request: TelemetryHistoryReadRequest = { ...draft, requestId: requestIdFor(context, 'telemetry_query_history', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await history.read({ request, context: ownerContext });
+  const payload = historyPayloadFrom(result);
+  if (payload.buckets.length > limits.maxEnergyPoints) {
+    fail('TOOL_RESULT_TOO_LARGE', 'History exceeds the Tool point limit.');
+  }
+  const series = query.pointKeys.flatMap((key) => {
+    const buckets = payload.buckets.filter((bucket) => bucket.telemetryKey === key);
+    const first = buckets[0];
+    if (first === undefined) return [];
+    const kind = first.pointType === 'COUNTER' ? 'counter' as const : first.pointType === 'STATE' ? 'state' as const : 'reading' as const;
+    return [{
+      key,
+      unit: first.unit,
+      kind,
+      points: buckets.map((bucket) => ({
+        periodStart: bucket.periodStart,
+        ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
+        ...(bucket.counter === undefined ? {} : { increase: bucket.counter.deltaSum }),
+        ...(bucket.state === undefined ? {} : { lastValue: bucket.state.lastValue }),
+        coverage: bucket.completeness,
+      })),
+    }];
+  });
+  const projected = payload.projectionWatermark !== null && Date.parse(payload.projectionWatermark) >= Date.parse(query.to);
+  const completeness = projected && payload.buckets.every((bucket) => bucket.completeness === 1)
+    ? 'COMPLETE' as const
+    : 'PARTIAL' as const;
+  return {
+    deviceId: query.deviceId,
+    query: { from: query.from, to: query.to, granularity: query.granularity, timezone },
+    series,
+    missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
+    completeness,
+    quality: result.quality,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      ...(payload.projectionWatermark === null ? {} : { projectionWatermark: payload.projectionWatermark }),
+    },
+  };
 };
 
 const readSite = async (
@@ -774,6 +904,7 @@ export const createHvacReadTools = ({
   toolAuthorizationReader,
   registryReader,
   deviceTelemetryReader,
+  telemetryHistoryReader,
   energyAnalyticsReader,
   limits: inputLimits,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
@@ -901,6 +1032,31 @@ export const createHvacReadTools = ({
     },
   });
 
+  const historyTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'telemetry_query_history',
+      'Read how up to 8 points of one Device in the current Site changed over a period, bucketed by quarter hour, hour (default) or day in the Site calendar. Readings give average, minimum and maximum per bucket; counters give the increase. Use equipment_list for device ids and point keys.',
+      historyInputSchema,
+      HISTORY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseHistoryArguments(argumentsValue, limits);
+      assertExecutionCapability(context, HISTORY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(await readHistory(
+          context,
+          authorization,
+          toolAuthorizationReader,
+          telemetryHistoryReader,
+          sitePayload.site.timezone,
+          query,
+          limits,
+        ), limits);
+      });
+    },
+  });
+
   const energyQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_query_series',
@@ -1004,6 +1160,7 @@ export const createHvacReadTools = ({
     assetsTool,
     equipmentTool,
     telemetryTool,
+    historyTool,
     energyQueryTool,
     energyCompareTool,
     equipmentEnergyTool,

@@ -51,6 +51,7 @@ const READ_TOOL_CAPABILITIES = Object.freeze([
   'asset.list',
   'asset-model.read',
   'telemetry.snapshot.read',
+  'telemetry.history.read',
   'analytics.energy-series.read',
 ]);
 

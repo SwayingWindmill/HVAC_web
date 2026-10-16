@@ -28,6 +28,10 @@ export {
   type GatewayToolAuthorizationReaderConfig,
 } from './internal/gateway-tool-authorization-reader.js';
 export {
+  createTelemetryHistoryOwnerReader,
+  type TelemetryHistoryOwnerReaderConfig,
+} from './internal/telemetry-history-owner-reader.js';
+export {
   createRegistryOwnerReader,
   type RegistryAssetDto,
   type RegistryOwnerPayload,
