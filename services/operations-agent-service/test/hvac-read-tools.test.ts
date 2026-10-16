@@ -165,7 +165,7 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
   const telemetryHistoryReader = {
     read: async (input) => {
       historyInputs.push(input);
-      return ownerResult(input.request, 'telemetry-query-service', 'history:2026-10-16T16:00:00.000Z', 'GOOD', 'telemetry-query-service:device-history-aggregate/v1', historyPayload(input.request.input));
+      return ownerResult(input.request, 'telemetry-query-service', 'history:2026-10-16T16:00:00.000Z', 'UNCERTAIN', 'telemetry-query-service:device-history-aggregate/v1', historyPayload(input.request.input));
     },
   };
   const energyAnalyticsReader = {
@@ -531,4 +531,19 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   ]);
   assert.equal(result.completeness, 'PARTIAL');
   assert.equal(result.source.revision, 'history:2026-10-16T16:00:00.000Z');
+});
+
+test('telemetry_query_history refuses a range that would return more buckets than one result holds, before reading', async () => {
+  const harness = createHarness();
+  await assert.rejects(
+    execute(byName(harness.tools, 'telemetry_query_history'), {
+      deviceId: chillerDeviceId,
+      pointKeys: ['chw_supply_temp'],
+      from: '2026-10-14T16:00:00.000Z',
+      to: '2026-10-16T16:00:00.000Z',
+      granularity: 'quarter_hour',
+    }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /粒度|granularity/u.test(error.message),
+  );
+  assert.equal(harness.historyInputs.length, 0);
 });

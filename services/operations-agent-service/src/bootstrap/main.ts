@@ -160,7 +160,7 @@ const main = async () => {
     owners: {
       registry: owner('REGISTRY_URL'),
       deviceTelemetry: owner('TELEMETRY_RUNTIME_URL'),
-      energyAnalytics: owner('TELEMETRY_QUERY_URL'),
+      telemetryQuery: owner('TELEMETRY_QUERY_URL'),
       gatewayToolAuthorization: owner('GATEWAY_INTERNAL_URL'),
     },
     // The Gateway signs delegations with its workload key.

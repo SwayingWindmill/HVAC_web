@@ -245,6 +245,7 @@ interface HistoryArguments {
 }
 
 const HISTORY_GRANULARITIES = Object.freeze({ quarter_hour: 'QUARTER_HOUR', hour: 'HOUR', day: 'DAY' } as const);
+const HISTORY_BUCKET_MS = Object.freeze({ QUARTER_HOUR: 15 * 60_000, HOUR: 3_600_000, DAY: 86_400_000 } as const);
 
 const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): HistoryArguments => {
   const record = requireRecord(value, 'History query arguments are invalid.');
@@ -261,12 +262,17 @@ const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): Hist
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || toMs - fromMs > limits.maxEnergyRangeMs) {
     fail('TOOL_ARGUMENTS_INVALID', 'History query range is invalid or exceeds the Tool limit.');
   }
+  const granularity = HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES];
+  // One bucket per point per period; past the result's bound the model should narrow the range or coarsen.
+  if (Math.ceil((toMs - fromMs) / HISTORY_BUCKET_MS[granularity]) * pointKeys.length > limits.maxEnergyPoints) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Too many history buckets: shorten the range, read fewer points or use a coarser granularity.');
+  }
   return Object.freeze({
     deviceId,
     pointKeys,
     from: new Date(fromMs).toISOString(),
     to: new Date(toMs).toISOString(),
-    granularity: HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES],
+    granularity,
   });
 };
 
@@ -522,7 +528,6 @@ const readHistory = async (
   history: TelemetryHistoryReader,
   timezone: string,
   query: HistoryArguments,
-  limits: HvacReadToolLimits,
 ) => {
   const draft = {
     tool: 'telemetry.history.aggregateDeviceHistory' as const,
@@ -542,9 +547,6 @@ const readHistory = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await history.read({ request, context: ownerContext });
   const payload = historyPayloadFrom(result);
-  if (payload.buckets.length > limits.maxEnergyPoints) {
-    fail('TOOL_RESULT_TOO_LARGE', 'History exceeds the Tool point limit.');
-  }
   const series = query.pointKeys.flatMap((key) => {
     const buckets = payload.buckets.filter((bucket) => bucket.telemetryKey === key);
     const first = buckets[0];
@@ -563,10 +565,8 @@ const readHistory = async (
       })),
     }];
   });
-  const projected = payload.projectionWatermark !== null && Date.parse(payload.projectionWatermark) >= Date.parse(query.to);
-  const completeness = projected && payload.buckets.every((bucket) => bucket.completeness === 1)
-    ? 'COMPLETE' as const
-    : 'PARTIAL' as const;
+  // The history owner reader rates a result GOOD only when it is projected past the range and every bucket is whole.
+  const completeness = result.quality === 'GOOD' ? 'COMPLETE' as const : 'PARTIAL' as const;
   return {
     deviceId: query.deviceId,
     query: { from: query.from, to: query.to, granularity: query.granularity, timezone },
@@ -1051,7 +1051,6 @@ export const createHvacReadTools = ({
           telemetryHistoryReader,
           sitePayload.site.timezone,
           query,
-          limits,
         ), limits);
       });
     },
