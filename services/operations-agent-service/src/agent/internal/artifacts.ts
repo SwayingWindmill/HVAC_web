@@ -35,6 +35,7 @@ const MAX_FINDING_EVIDENCE_REFS = 32;
 const MAX_FINDING_LIST_ITEMS = 16;
 const MAX_FINDING_LIST_ITEM_LENGTH = 512;
 const MAX_EVIDENCE_REF_FIELD_LENGTH = 256;
+const MAX_KEY_FIGURES = 4;
 
 export type AgentTerminalToolName =
   | typeof INVESTIGATION_COMPLETE_TOOL_NAME
@@ -42,9 +43,17 @@ export type AgentTerminalToolName =
 
 export type InvestigationOutcome = 'SUPPORTED_FINDING' | 'UNABLE_TO_CONCLUDE';
 
+/** A number the finding rests on, shown beside the summary: 多用电 +762 kWh. */
+export interface InvestigationKeyFigure {
+  readonly label: string;
+  readonly value: string;
+  readonly unit?: string;
+}
+
 export interface InvestigationComplete {
   readonly outcome: InvestigationOutcome;
   readonly summary: string;
+  readonly keyFigures?: readonly InvestigationKeyFigure[];
   readonly evidenceRefs: readonly AgentEvidenceRef[];
   readonly limitations: readonly string[];
   readonly recommendedNext: readonly string[];
@@ -219,9 +228,23 @@ const parseEvidenceRef = (value: unknown): AgentEvidenceRef => {
   });
 };
 
+const parseKeyFigure = (value: unknown, index: number): InvestigationKeyFigure => {
+  const record = asRecord(value, `keyFigures[${index}]`);
+  assertExactKeys(record, ['label', 'value'], ['unit']);
+  const figure = {
+    label: boundedString(record.label, `keyFigures[${index}].label`, 32),
+    value: boundedString(record.value, `keyFigures[${index}].value`, 24),
+  };
+  if (!('unit' in record)) return Object.freeze(figure);
+  return Object.freeze({ ...figure, unit: boundedString(record.unit, `keyFigures[${index}].unit`, 16) });
+};
+
 export const parseInvestigationComplete = (value: unknown): InvestigationComplete => {
   const record = asRecord(value, 'investigation_complete input');
-  assertExactKeys(record, ['outcome', 'summary', 'evidenceRefs', 'limitations', 'recommendedNext']);
+  assertExactKeys(record, ['outcome', 'summary', 'evidenceRefs', 'limitations', 'recommendedNext'], ['keyFigures']);
+  if ('keyFigures' in record && (!Array.isArray(record.keyFigures) || record.keyFigures.length > MAX_KEY_FIGURES)) {
+    return invalidTerminalArtifact('investigation_complete keyFigures must be a bounded array.');
+  }
 
   if (record.outcome !== 'SUPPORTED_FINDING' && record.outcome !== 'UNABLE_TO_CONCLUDE') {
     return invalidTerminalArtifact('investigation_complete outcome is invalid.');
@@ -258,6 +281,7 @@ export const parseInvestigationComplete = (value: unknown): InvestigationComplet
   return Object.freeze({
     outcome: record.outcome,
     summary,
+    ...(Array.isArray(record.keyFigures) ? { keyFigures: Object.freeze(record.keyFigures.map(parseKeyFigure)) } : {}),
     evidenceRefs,
     limitations,
     recommendedNext,

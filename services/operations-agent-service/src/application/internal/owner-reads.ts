@@ -35,6 +35,11 @@ export type RegistryReadRequest =
     readonly requestId: string;
     readonly tool: 'registry.listSiteAssets';
     readonly input: { readonly siteId: string };
+  }
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.getSiteAssetModel';
+    readonly input: { readonly siteId: string };
   };
 
 export interface DeviceTelemetryReadRequest {
@@ -47,6 +52,43 @@ export interface DeviceTelemetryReadRequest {
   };
 }
 
+/** Readings of one device aggregated into Site-calendar buckets by the history owner. */
+export interface TelemetryHistoryReadRequest {
+  readonly requestId: string;
+  readonly tool: 'telemetry.history.aggregateDeviceHistory';
+  readonly input: {
+    readonly tenantId: string;
+    readonly siteId: string;
+    readonly deviceId: string;
+    readonly keys: readonly string[];
+    readonly from: string;
+    readonly to: string;
+    readonly granularity: 'QUARTER_HOUR' | 'HOUR' | 'DAY';
+    readonly timezone: string;
+    readonly qualityPolicy: 'VALID_ONLY';
+  };
+}
+
+export interface TelemetryHistoryBucket {
+  readonly telemetryKey: string;
+  readonly pointType: 'TELEMETRY' | 'COUNTER' | 'STATE';
+  readonly unit: string | null;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly completeness: number;
+  readonly gauge?: { readonly average: number; readonly minimum: number; readonly maximum: number };
+  readonly counter?: { readonly deltaSum: number };
+  readonly state?: { readonly lastValue: unknown };
+}
+
+export interface TelemetryHistoryAggregate {
+  readonly schemaVersion: 1;
+  readonly deviceId: string;
+  readonly buckets: readonly TelemetryHistoryBucket[];
+  /** Readings are projected up to here; null when nothing has been projected yet. */
+  readonly projectionWatermark: string | null;
+}
+
 export type EnergyGranularity = 'hour' | 'day' | 'month';
 export type EnergyQualityPolicy = 'VALID_ONLY' | 'VALID_AND_SUSPECT';
 
@@ -56,16 +98,22 @@ export interface EnergyAnalyticsReadRequest {
   readonly input: {
     readonly tenantId: string;
     readonly siteId: string;
-    readonly energyType: 'electricity';
+    readonly energyType: 'electricity' | 'cooling';
     readonly granularity: EnergyGranularity;
     readonly timezone: string;
     readonly from: string;
     readonly to: string;
     readonly qualityPolicy: EnergyQualityPolicy;
+    /** `device` adds each sub-metered device's series beside the Site total. */
+    readonly breakdown?: 'device';
   };
 }
 
-export type ToolAuthorizableReadRequest = RegistryReadRequest | DeviceTelemetryReadRequest | EnergyAnalyticsReadRequest;
+export type ToolAuthorizableReadRequest =
+  | RegistryReadRequest
+  | DeviceTelemetryReadRequest
+  | TelemetryHistoryReadRequest
+  | EnergyAnalyticsReadRequest;
 
 /** The Energy analytics owner's series: points plus the provenance that says how complete they are. */
 export interface EnergySeriesPoint {
@@ -93,6 +141,8 @@ export interface EnergySeriesMetadata {
 export interface EnergySeries {
   readonly schemaVersion: 1;
   readonly points: readonly EnergySeriesPoint[];
+  /** Present when the request asked for the device breakdown. */
+  readonly devices?: readonly { readonly deviceId: string; readonly points: readonly EnergySeriesPoint[] }[];
   readonly metadata: EnergySeriesMetadata;
 }
 
@@ -152,6 +202,10 @@ export interface RegistryReader {
 
 export interface DeviceTelemetryReader {
   read(input: OwnerReadInput<DeviceTelemetryReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface TelemetryHistoryReader {
+  read(input: OwnerReadInput<TelemetryHistoryReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface EnergyAnalyticsReader {

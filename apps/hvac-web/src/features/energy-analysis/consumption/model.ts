@@ -164,6 +164,9 @@ export function alignedLabel(periodStart: string, start: Date, from: Date, granu
 
 export interface BucketComparison {
   readonly label: string;
+  /** Where the bucket and the one it is compared with start. */
+  readonly start: string;
+  readonly previousStart: string;
   readonly electricityKWh: number | null;
   readonly coolingKWh: number | null;
   readonly cop: number | null;
@@ -191,8 +194,11 @@ export function comparePeriods(
   return [...new Set([...currentRows.keys(), ...previousRows.keys()])].sort((left, right) => left - right).map((ordinal) => {
     const row = currentRows.get(ordinal);
     const before = previousRows.get(ordinal);
+    const start = bucketAt(from, granularity, ordinal, timeZone).toISOString();
     return {
-      label: bucketLabel(bucketAt(from, granularity, ordinal, timeZone).toISOString(), granularity, timeZone),
+      label: bucketLabel(start, granularity, timeZone),
+      start,
+      previousStart: bucketAt(previousFrom, granularity, ordinal, timeZone).toISOString(),
       electricityKWh: row?.electricityKWh ?? null,
       coolingKWh: row?.coolingKWh ?? null,
       cop: row?.cop ?? null,
@@ -202,6 +208,40 @@ export function comparePeriods(
       complete: bucketAt(from, granularity, ordinal + 1, timeZone) <= now,
     };
   });
+}
+
+const KWH = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
+/** How a bucket is named in a question to the assistant: its full Site-local date, and its hour for hourly buckets. */
+function bucketPhrase(start: string, granularity: Granularity, timeZone: string, withYear: boolean): string {
+  const local = wallTime(new Date(start), timeZone);
+  const year = withYear ? `${local.year}年` : '';
+  if (granularity === 'month') return `${year}${local.month}月`;
+  const date = `${year}${local.month}月${local.day}日`;
+  if (granularity === 'hour') {
+    const hour = String(local.hour).padStart(2, '0');
+    return `${date} ${hour}:00–${String((local.hour + 1) % 24).padStart(2, '0')}:00`;
+  }
+  if (!withYear) return date;
+  return `${date}（${WEEKDAYS[new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay()]}）`;
+}
+
+/** The question 解释 hands the assistant for one bucket: its date, its energy and what it is compared with. */
+export function explainQuestion(bucket: BucketComparison, granularity: Granularity, timeZone: string): string {
+  const phrase = bucketPhrase(bucket.start, granularity, timeZone, true);
+  // A space only after a trailing time, as in 18:00–19:00 的.
+  const subject = /\d$/u.test(phrase) ? `${phrase} ` : phrase;
+  const own = granularity === 'hour' ? '这一小时' : granularity === 'day' ? '当天' : '当月';
+  if (bucket.electricityKWh === null) return `${subject}的空调用电情况怎么样？`;
+  if (bucket.previousElectricityKWh === null || bucket.previousElectricityKWh === bucket.electricityKWh) {
+    return `${subject}的空调用电 ${KWH.format(bucket.electricityKWh)} kWh，用电正常吗？`;
+  }
+  const sameYear = wallTime(new Date(bucket.previousStart), timeZone).year === wallTime(new Date(bucket.start), timeZone).year;
+  const before = granularity === 'hour'
+    ? `${bucketPhrase(bucket.previousStart, 'day', timeZone, false)}同一时段`
+    : bucketPhrase(bucket.previousStart, granularity, timeZone, !sameYear);
+  const direction = bucket.electricityKWh > bucket.previousElectricityKWh ? '多' : '少';
+  return `为什么 ${subject}的空调用电比 ${before} ${direction}？${own} ${KWH.format(bucket.electricityKWh)} kWh，${before} ${KWH.format(bucket.previousElectricityKWh)} kWh。`;
 }
 
 /** Buckets for a chart: a bucket still running holds partial energy that would read as a drop, so its current values are left out. */

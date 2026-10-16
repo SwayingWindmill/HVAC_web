@@ -8,6 +8,8 @@ import { Toaster } from '@/components/ui/sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { AssistantPanel } from '@/features/assistant/components/AssistantPanel';
+import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime-status';
 import { useAppTheme } from './ThemeGate';
 import { useShellRuntime, useShellSnapshot } from './ShellRuntimeContext';
@@ -63,6 +65,8 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? '暂无活动站点' : '平台范围');
   const principalRole = primaryRoleLabel(principal.principal.roles);
   const defaultSidebarOpen = useMemo(sidebarDefaultOpen, []);
+  const assistantOpen = useAssistantPanel((state) => state.open);
+  const toggleAssistant = useAssistantPanel((state) => state.toggle);
 
   const router = useRouter();
   // Through the router, so a page's unsaved-draft blocker sees it; the _app blocker hands leaving the Site scope to the runtime.
@@ -83,6 +87,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         csrfToken={principal.session.csrfToken}
         onNavigate={navigate}
         onLogout={() => { void runtime.logout(); }}
+        assistant={activeSite === undefined ? undefined : { open: assistantOpen, onToggle: toggleAssistant }}
       />
       <div className="flex flex-1">
       <AppSidebar
@@ -122,6 +127,9 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {transition?.status === 'failed' ? <TransitionSurface state="failed" detail={transition.failure?.detail} retryHref={retryHref} /> : null}
         {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
       </SidebarInset>
+      {assistantOpen && activeSite !== undefined && !transitionBlocksContent ? (
+        <AssistantPanel key={activeSite.id} siteId={activeSite.id} siteName={activeSite.displayName} csrfToken={principal.session.csrfToken} />
+      ) : null}
       </div>
       <Toaster theme={themeMode} position="bottom-right" richColors closeButton />
     </SidebarProvider>

@@ -145,36 +145,30 @@ test('project Tool call budget fails excess calls with a stable project failure 
   assert.equal(failures.length, 1);
 });
 
-test('project Tool concurrency budget rejects excess parallel execution without serializing the batch', async () => {
-  let releaseFirst;
-  let firstStarted;
-  const firstStartedPromise = new Promise((resolve) => { firstStarted = resolve; });
-  const releasePromise = new Promise((resolve) => { releaseFirst = resolve; });
-  const first = projectTool({
-    name: 'site.first',
+test('project Tool concurrency budget queues a wider batch instead of failing the Run', async () => {
+  // A real model sent six reads at once against a limit of four; the excess waits for a slot.
+  let active = 0;
+  let widest = 0;
+  const read = (name) => projectTool({
+    name,
     execute: async () => {
-      firstStarted();
-      await releasePromise;
+      active += 1;
+      widest = Math.max(widest, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
       return { ok: true };
     },
   });
-  const second = projectTool({
-    name: 'site.second',
-    execute: async () => {
-      await firstStartedPromise;
-      return { ok: true };
-    },
-  });
-  setTimeout(() => releaseFirst(), 20);
 
   const { result } = await run({
-    tools: [first, second],
-    runBudget: { ...budget, maxToolCalls: 2, maxParallelToolCalls: 1 },
+    tools: [read('site.first'), read('site.second'), read('site.third')],
+    runBudget: { ...budget, maxToolCalls: 3, maxParallelToolCalls: 2 },
     responses: [
       {
         parts: [
           { type: 'tool-call', name: 'site.first', arguments: {} },
           { type: 'tool-call', name: 'site.second', arguments: {} },
+          { type: 'tool-call', name: 'site.third', arguments: {} },
         ],
         stopReason: 'toolUse',
       },
@@ -182,8 +176,9 @@ test('project Tool concurrency budget rejects excess parallel execution without 
     ],
   });
 
-  const failures = result.toolExecutions.filter(({ failureCode }) => failureCode === 'TOOL_CONCURRENCY_LIMIT');
-  assert.equal(failures.length, 1);
+  assert.equal(widest, 2);
+  assert.deepEqual(result.toolExecutions.filter(({ toolName }) => toolName.startsWith('site.')).map(({ status }) => status), ['COMPLETED', 'COMPLETED', 'COMPLETED']);
+  assert.equal(result.runStatus, 'COMPLETED');
 });
 
 test('AgentToolError code is preserved while sensitive Tool error text is never projected', async () => {

@@ -14,7 +14,7 @@ import type {
   AgentRuntimeTelemetrySink,
 } from '../../agent/index.js';
 import { createPiAgentEngine } from './pi-runtime.js';
-import { OPERATIONS_INVESTIGATION_SYSTEM_POLICY } from './system-policy.js';
+import { operationsInvestigationSystemPolicy } from './system-policy.js';
 
 export const AGENT_MODEL_PROVIDER_ENV = 'AGENT_MODEL_PROVIDER' as const;
 export const AGENT_MODEL_ID_ENV = 'AGENT_MODEL_ID' as const;
@@ -247,7 +247,7 @@ export const composePiAgentRuntime = ({
     engine: createPiAgentEngine({
       model,
       streamFn: createPolicyStreamFn(models, policy),
-      systemPrompt: OPERATIONS_INVESTIGATION_SYSTEM_POLICY,
+      systemPromptFor: operationsInvestigationSystemPolicy,
       thinkingLevel,
       ...(telemetry === undefined ? {} : { telemetry }),
     }),

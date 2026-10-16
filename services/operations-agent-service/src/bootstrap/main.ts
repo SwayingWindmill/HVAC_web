@@ -32,8 +32,9 @@ const ACTION = 'operations:investigate';
 
 // What one question may cost. Tools read at most a month of history.
 const BUDGET: AgentRunBudget = Object.freeze({
-  maxModelCalls: 8,
-  maxToolCalls: 16,
+  // Explaining a day takes about eight turns; four more leave room to correct a rejected finding.
+  maxModelCalls: 12,
+  maxToolCalls: 24,
   maxWallClockMs: 120_000,
   maxParallelToolCalls: 4,
   maxQueryRangeMs: 31 * 86_400_000,
@@ -49,7 +50,9 @@ const BUDGET: AgentRunBudget = Object.freeze({
 const READ_TOOL_CAPABILITIES = Object.freeze([
   'site.read',
   'asset.list',
+  'asset-model.read',
   'telemetry.snapshot.read',
+  'telemetry.history.read',
   'analytics.energy-series.read',
 ]);
 
@@ -158,7 +161,7 @@ const main = async () => {
     owners: {
       registry: owner('REGISTRY_URL'),
       deviceTelemetry: owner('TELEMETRY_RUNTIME_URL'),
-      energyAnalytics: owner('TELEMETRY_QUERY_URL'),
+      telemetryQuery: owner('TELEMETRY_QUERY_URL'),
       gatewayToolAuthorization: owner('GATEWAY_INTERNAL_URL'),
     },
     // The Gateway signs delegations with its workload key.

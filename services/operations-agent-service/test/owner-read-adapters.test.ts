@@ -7,6 +7,7 @@ import {
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
   createRegistryOwnerReader,
+  createTelemetryHistoryOwnerReader,
 } from '../dist/tools/index.js';
 
 const tenantId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
@@ -33,6 +34,7 @@ const context = Object.freeze({
     toolDelegationGrants: {
       'registry.getSite': 'registry-site-grant-value',
       'registry.listSiteAssets': 'registry-asset-grant-value',
+      'registry.getSiteAssetModel': 'registry-asset-model-grant-value',
     },
     policyRevision: 'registry-policy-42',
     traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
@@ -77,6 +79,8 @@ const siteDto = Object.freeze({
   revision: 17,
   createdAt: '2026-07-01T00:00:00.000Z',
   updatedAt: '2026-07-30T00:00:00.000Z',
+  floorAreaM2: 4200,
+  climateZone: null,
 });
 
 const assetDto = Object.freeze({
@@ -238,6 +242,54 @@ test('Registry reader exposes only Site and Site Asset reads with authoritative 
   }
 });
 
+const assetModelDto = Object.freeze({
+  schemaVersion: 2,
+  tenantId,
+  siteId,
+  spaces: [],
+  assets: [assetDto],
+  devices: [{ id: deviceId, tenantId, siteId, code: 'meter-c', displayName: 'C 机组电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE', revision: 4, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }],
+  sensors: [],
+  telemetryPoints: [{ id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708201', tenantId, siteId, reportingDeviceId: deviceId, sensorId: null, pointCode: 'power_total', sourceKey: 'hvac_meter.active_power', displayName: '有功功率', pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'kW', writable: false, sampleIntervalMs: 60000, publishIntervalMs: 60000, staleAfterMs: 300000, counterDecreaseMode: null, counterRolloverModulus: null, sourceMetadata: {}, status: 'ACTIVE', revision: 2, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' }],
+  relationships: [],
+  counts: { spaces: 0, assets: 1, deviceEndpoints: 1, physicalSensors: 0, points: 1 },
+});
+
+test('Registry reader reads the Site asset model from its owner route with its own grant', async () => {
+  const calls = [];
+  const reader = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return jsonResponse(assetModelDto);
+    },
+  });
+
+  const result = await reader.read({
+    request: { requestId: 'read-asset-model-001', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `https://platform-core.internal/internal/v1/registry/sites/${siteId}/asset-model`);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'registry-asset-model-grant-value');
+  assert.equal(result.owner, 'registry');
+  assert.match(result.revision, /^registry-asset-model:sha256:[0-9a-f]{64}$/);
+  assert.equal(result.provenance, 'platform-core-service:registry-asset-model/v2');
+  assert.equal(result.payload.kind, 'SITE_ASSET_MODEL');
+  assert.deepEqual(result.payload.model.devices.map((device) => device.displayName), ['C 机组电表']);
+
+  const otherSite = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async () => jsonResponse({ ...assetModelDto, siteId: deviceId }),
+  });
+  await expectOwnerError(() => otherSite.read({
+    request: { requestId: 'read-asset-model-002', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  }), 'OWNER_RESPONSE_INVALID');
+});
+
 test('Energy reader calls only the fixed Energy Series product contract and preserves readiness metadata', async () => {
   let captured;
   const reader = createEnergyAnalyticsOwnerReader({
@@ -265,6 +317,127 @@ test('Energy reader calls only the fixed Energy Series product contract and pres
   assert.equal('measures' in JSON.parse(captured.init.body), false);
   assert.equal('dimensions' in JSON.parse(captured.init.body), false);
   assert.equal('sql' in JSON.parse(captured.init.body), false);
+});
+
+const historyRequest = Object.freeze({
+  requestId: 'history-request-001',
+  tool: 'telemetry.history.aggregateDeviceHistory',
+  input: {
+    tenantId,
+    siteId,
+    deviceId,
+    keys: ['chw_supply_temp', 'active_energy_total'],
+    from: '2026-10-15T16:00:00.000Z',
+    to: '2026-10-16T16:00:00.000Z',
+    granularity: 'HOUR',
+    timezone: 'Asia/Shanghai',
+    qualityPolicy: 'VALID_ONLY',
+  },
+});
+
+const historyContext = Object.freeze({
+  ...telemetryContext,
+  authorization: {
+    ...telemetryContext.authorization,
+    toolDelegationGrants: { 'telemetry.history.aggregateDeviceHistory': 'history-delegation-grant-value' },
+  },
+});
+
+const historyQuality = Object.freeze({ good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 });
+const historyResponse = Object.freeze({
+  schemaVersion: 1,
+  tenantId,
+  siteId,
+  deviceId,
+  buckets: [
+    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', quality: historyQuality, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
+    { telemetryKey: 'active_energy_total', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708212', pointRevision: 1, pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', quality: historyQuality, completeness: 1, counter: { deltaSum: 88.5, deltaCount: 59, resetCount: 0, rolloverCount: 0, excludedTransitionCount: 0 } },
+  ],
+  metadata: { requestedFrom: '2026-10-15T16:00:00Z', requestedTo: '2026-10-16T16:00:00Z', granularity: 'HOUR', timezone: 'Asia/Shanghai', qualityPolicy: 'VALID_ONLY', projectionWatermark: '2026-10-16T09:30:00Z', returnedBuckets: 2 },
+});
+
+test('History reader aggregates through the fixed device-history contract and keeps one result per bucket', async () => {
+  let captured;
+  const reader = createTelemetryHistoryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(historyResponse);
+    },
+  });
+
+  const result = await reader.read({ request: historyRequest, context: historyContext });
+
+  assert.equal(captured.url, 'https://telemetry-query.internal/internal/v1/telemetry/device-history:aggregate');
+  assert.equal(captured.init.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.init.body), historyRequest.input);
+  assert.equal(captured.init.headers['X-Delegation-Grant'], 'history-delegation-grant-value');
+  assert.equal(result.owner, 'telemetry-query-service');
+  assert.equal(result.provenance, 'telemetry-query-service:device-history-aggregate/v1');
+  assert.equal(result.quality, 'UNCERTAIN');
+  assert.deepEqual(result.payload, {
+    schemaVersion: 1,
+    deviceId,
+    projectionWatermark: '2026-10-16T09:30:00Z',
+    buckets: [
+      { telemetryKey: 'chw_supply_temp', pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6 } },
+      { telemetryKey: 'active_energy_total', pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T02:00:00Z', periodEnd: '2026-10-16T03:00:00Z', completeness: 1, counter: { deltaSum: 88.5 } },
+    ],
+  });
+
+  const foreign = createTelemetryHistoryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse({
+      ...historyResponse,
+      buckets: [{ ...historyResponse.buckets[0], telemetryKey: 'not_requested' }],
+      metadata: { ...historyResponse.metadata, returnedBuckets: 1 },
+    }),
+  });
+  await expectOwnerError(() => foreign.read({ request: historyRequest, context: historyContext }), 'OWNER_RESPONSE_INVALID');
+});
+
+test('Energy reader reads cooling energy through the same product contract', async () => {
+  let body;
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return jsonResponse(energyResponse);
+    },
+  });
+  const request = { ...energyRequest, input: { ...energyRequest.input, energyType: 'cooling' } };
+
+  const result = await reader.read({ request, context: energyContext });
+
+  assert.equal(body.energyType, 'cooling');
+  assert.deepEqual(result.payload.points, energyResponse.points);
+});
+
+test('Energy reader asks for the device breakdown and keeps each device series', async () => {
+  let captured;
+  const breakdownResponse = {
+    ...energyResponse,
+    devices: [{ deviceId, points: energyResponse.points }],
+  };
+  const reader = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(breakdownResponse);
+    },
+  });
+  const request = { ...energyRequest, input: { ...energyRequest.input, breakdown: 'device' } };
+
+  const result = await reader.read({ request, context: energyContext });
+
+  assert.equal(JSON.parse(captured.init.body).breakdown, 'device');
+  assert.deepEqual(result.payload.devices, [{ deviceId, points: energyResponse.points }]);
+
+  const malformed = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: async () => jsonResponse({ ...breakdownResponse, devices: [{ deviceId, points: [{ periodStart: 'x' }] }] }),
+  });
+  await expectOwnerError(() => malformed.read({ request, context: energyContext }), 'OWNER_RESPONSE_INVALID');
 });
 
 test('Device Telemetry reader uses exact snapshot owner path and preserves stale and missing states', async () => {

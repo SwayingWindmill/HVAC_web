@@ -49,6 +49,8 @@ interface ProjectToolBudgetState {
   terminalToolCallId: string | null;
   calls: number;
   active: number;
+  /** Calls waiting for a free slot, released in order as running calls finish. */
+  readonly waiting: (() => void)[];
 }
 
 const safeToolFailure = (error: unknown): Error => {
@@ -101,6 +103,11 @@ const investigationCompleteParameters = Type.Object({
     revision: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     toolExecutionId: Type.String({ minLength: 1, maxLength: 256 }),
   }, { additionalProperties: false }), { maxItems: 32 }),
+  keyFigures: Type.Optional(Type.Array(Type.Object({
+    label: Type.String({ minLength: 1, maxLength: 32 }),
+    value: Type.String({ minLength: 1, maxLength: 24 }),
+    unit: Type.Optional(Type.String({ minLength: 1, maxLength: 16 })),
+  }, { additionalProperties: false }), { maxItems: 4 })),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
   recommendedNext: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
 }, { additionalProperties: false });
@@ -139,9 +146,9 @@ const adaptProjectTool = (
       state.onBudgetExhausted('TOOL_CALL_LIMIT');
       throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
     }
+    // A batch wider than the limit waits for slots rather than failing the Run.
     if (state.active >= state.budget.maxParallelToolCalls) {
-      state.onBudgetExhausted('TOOL_CONCURRENCY_LIMIT');
-      throw safeToolFailure(new AgentToolError('TOOL_CONCURRENCY_LIMIT'));
+      await new Promise<void>((resolve) => state.waiting.push(resolve));
     }
     state.active += 1;
     try {
@@ -156,14 +163,16 @@ const adaptProjectTool = (
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
       state.completedToolIds.add(toolCallId);
+      // The model cites a read in investigation_complete by this id.
       return {
-        content: [{ type: 'text', text: serialized }],
+        content: [{ type: 'text', text: JSON.stringify({ evidenceId: toolCallId, result }) }],
         details: { kind: 'project-tool', result },
       };
     } catch (error) {
       throw safeToolFailure(error);
     } finally {
       state.active -= 1;
+      state.waiting.shift()?.();
     }
   },
 });
@@ -239,6 +248,7 @@ export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
     terminalToolCallId: null,
     calls: 0,
     active: 0,
+    waiting: [],
   };
   return [
     ...input.tools.map((tool) => adaptProjectTool(tool, input.context, input.runSignal, state)),

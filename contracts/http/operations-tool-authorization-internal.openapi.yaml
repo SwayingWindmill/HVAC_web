@@ -79,7 +79,31 @@ components:
           oneOf:
             - $ref: '#/components/schemas/RegistrySiteRequest'
             - $ref: '#/components/schemas/RegistryAssetRequest'
+            - $ref: '#/components/schemas/RegistryAssetModelRequest'
             - $ref: '#/components/schemas/EnergySeriesRequest'
+            - $ref: '#/components/schemas/DeviceHistoryAggregateRequest'
+    DeviceHistoryAggregateRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      description: Gateway-signed grant for the Telemetry Query Service, presented by the Operations Agent and bound to the exact aggregate query digest.
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: telemetry.history.aggregateDeviceHistory }
+        input:
+          type: object
+          additionalProperties: false
+          required: [tenantId, siteId, deviceId, keys, from, to, granularity, timezone, qualityPolicy]
+          properties:
+            tenantId: { type: string, format: uuid }
+            siteId: { type: string, format: uuid }
+            deviceId: { type: string, format: uuid }
+            keys: { type: array, minItems: 1, maxItems: 8, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 128 } }
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+            granularity: { enum: [QUARTER_HOUR, HOUR, DAY] }
+            timezone: { type: string, minLength: 1 }
+            qualityPolicy: { const: VALID_ONLY }
     RegistrySiteRequest:
       type: object
       additionalProperties: false
@@ -96,6 +120,15 @@ components:
       properties:
         requestId: { type: string, minLength: 1, maxLength: 256 }
         tool: { const: registry.listSiteAssets }
+        input:
+          $ref: '#/components/schemas/SiteInput'
+    RegistryAssetModelRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: registry.getSiteAssetModel }
         input:
           $ref: '#/components/schemas/SiteInput'
     SiteInput:
@@ -126,12 +159,13 @@ components:
           properties:
             tenantId: { type: string, format: uuid }
             siteId: { type: string, format: uuid }
-            energyType: { const: electricity }
+            energyType: { enum: [electricity, cooling] }
             granularity: { enum: [hour, day, month] }
             timezone: { type: string, minLength: 1 }
             from: { type: string, format: date-time }
             to: { type: string, format: date-time }
             qualityPolicy: { enum: [VALID_ONLY, VALID_AND_SUSPECT] }
+            breakdown: { type: string, enum: [device] }
     ToolAuthorizationResponse:
       type: object
       additionalProperties: false

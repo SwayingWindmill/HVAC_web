@@ -250,7 +250,8 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
 };
 
 const runScript = async (responses, tools = [], runBudget = budget, runtimeOptions = {}, runContext = context) => {
-  const runtime = createScriptedPiAgentEngine({ responses, ...runtimeOptions });
+  const { startedAt = Date.now(), ...engineOptions } = runtimeOptions;
+  const runtime = createScriptedPiAgentEngine({ responses, ...engineOptions });
   const events = [];
   const result = await runtime.engine({
     session,
@@ -259,7 +260,7 @@ const runScript = async (responses, tools = [], runBudget = budget, runtimeOptio
       sessionId: session.id,
       modelRef: runtime.modelRef,
       status: 'RUNNING',
-      startedAt: Date.now(),
+      startedAt,
       finishedAt: null,
       usage: Object.freeze({ inputTokens: 0, outputTokens: 0, modelCalls: 0, toolCalls: 0 }),
       failureCode: null,
@@ -271,7 +272,7 @@ const runScript = async (responses, tools = [], runBudget = budget, runtimeOptio
     signal: new AbortController().signal,
     emit: (event) => events.push(event),
   });
-  return { events, result };
+  return { events, result, requests: runtime.requests };
 };
 
 test('investigation_request_input creates one typed input request and cleanly waits for operator input', async () => {
@@ -611,6 +612,52 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
   );
   assert.ok(harness.registryInputs.every(({ context: ownerContext }) => ownerContext.scope.siteId === context.siteId));
   assert.equal(harness.energyInputs.length, 2);
+});
+
+test('energy anomaly run: the model gets the run time and Site-calendar rules in Chinese, compares power and cooling, then concludes', async () => {
+  const harness = createHvacToolHarness();
+  const period = { baselineFrom: '2026-08-01T00:00:00.000Z', baselineTo: '2026-08-01T01:00:00.000Z', currentFrom: '2026-08-02T00:00:00.000Z', currentTo: '2026-08-02T01:00:00.000Z' };
+  const { result, requests } = await runScript([
+    {
+      parts: [
+        { type: 'tool-call', id: 'power-compare', name: 'energy_compare_periods', arguments: period },
+        { type: 'tool-call', id: 'cooling-compare', name: 'energy_compare_periods', arguments: { ...period, energyType: 'cooling' } },
+      ],
+      stopReason: 'toolUse',
+    },
+    {
+      parts: [{
+        type: 'tool-call',
+        name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'SUPPORTED_FINDING',
+          summary: '8月2日这一小时比8月1日多用电 25 kWh（+25%），供冷量同步增加，能效基本不变。',
+          evidenceRefs: [
+            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'power', toolExecutionId: 'power-compare' },
+            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'cooling', toolExecutionId: 'cooling-compare' },
+          ],
+          keyFigures: [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }],
+          limitations: ['没有室外温度数据，无法判断负荷增加是否来自天气。'],
+          recommendedNext: [],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], harness.tools, budget, { startedAt: Date.parse('2026-10-16T02:30:00.000Z') });
+
+  const system = requests[0][0];
+  assert.equal(system.role, 'system');
+  assert.match(system.text, /2026-10-16T02:30:00\.000Z/u);
+  assert.match(system.text, /时区/u);
+  assert.match(system.text, /site_get_context/u);
+  assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
+  assert.equal(result.runStatus, 'COMPLETED');
+  // Each read tells the model the id its evidence cites.
+  const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
+  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
+  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, 'COMPARABLE');
+  assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
+  assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
 
 test('incomplete Energy evidence produces unable-to-conclude instead of a confirmatory finding', async () => {

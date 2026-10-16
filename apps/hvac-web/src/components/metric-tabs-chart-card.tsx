@@ -76,6 +76,8 @@ export interface MetricTabsChartCardProps extends Omit<React.ComponentProps<type
   chartTitle?: React.ReactNode
   /** Area against a dashed line (default), or bars beside the previous period's bars. */
   chartType?: "area" | "bar"
+  /** Called with the row index of a clicked bucket. */
+  onPointClick?: ComposedChartProps["onPointClick"]
 }
 
 function aggregate(
@@ -115,6 +117,7 @@ function MetricTabsChartCard({
   action,
   chartTitle,
   chartType = "area",
+  onPointClick,
   className,
   ...props
 }: MetricTabsChartCardProps) {
@@ -272,6 +275,7 @@ function MetricTabsChartCard({
           yDomain={yDomain}
           xFormatter={xFormatter}
           yFormatter={yFormatter}
+          onPointClick={onPointClick}
           className={cn("h-40", chartClassName)}
         />
         )}

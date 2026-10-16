@@ -16,6 +16,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 )
 
 // The Operations Agent behind the Gateway: its Agent Session routes (operations_agent_sessions.go)
@@ -158,6 +159,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 	var registryAction registryauth.Action
 	var energyQuery analyticsmodel.EnergySeriesQuery
 	var telemetryTarget telemetryauth.Target
+	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
 	switch input.Request.Tool {
 	case "registry.getSite":
 		var registryInput struct {
@@ -177,6 +179,15 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetList
+	case "registry.getSiteAssetModel":
+		var registryInput struct {
+			SiteID string `json:"siteId"`
+		}
+		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry asset model request is invalid.", false, nil)
+			return
+		}
+		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetModelRead
 	case "analytics.getEnergySeries":
 		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil || energyQuery.Validate() != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
@@ -199,6 +210,13 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID = telemetryInput.SiteID
+	case "telemetry.history.aggregateDeviceHistory":
+		if decodeStrictOperationsJSON(input.Request.Input, &historyQuery) != nil || historyQuery.Validate() != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Device History request is invalid.", false, nil)
+			return
+		}
+		telemetryTarget = telemetryauth.Target{DeviceID: historyQuery.DeviceID, Keys: historyQuery.Keys}
+		siteID = historyQuery.SiteID
 	default:
 		writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_UNSUPPORTED", "Tool unsupported", "The requested Tool is not enabled for the Operations Agent.", false, nil)
 		return
@@ -223,15 +241,19 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	session := bffSession{Session: stored}
-	if input.Request.Tool == "telemetry.current.getDeviceObservationSnapshot" {
+	if input.Request.Tool == "telemetry.current.getDeviceObservationSnapshot" || input.Request.Tool == "telemetry.history.aggregateDeviceHistory" {
 		caller := telemetryCaller{
 			principal: session.Principal,
 			tenantID:  session.TenantID,
 			contextID: session.ID,
 			expiresAt: session.ExpiresAt,
 		}
+		action := telemetryauth.ActionSnapshotRead
+		if input.Request.Tool == "telemetry.history.aggregateDeviceHistory" {
+			action = telemetryauth.ActionHistoryRead
+		}
 		authorization, failure := h.authorizeTelemetryForPresenter(
-			request.Context(), request, caller, telemetryauth.ActionSnapshotRead,
+			request.Context(), request, caller, action,
 			[]telemetryauth.Target{telemetryTarget}, h.operations.workloadSPIFFEID,
 		)
 		if failure != nil {
@@ -246,7 +268,22 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
 			return
 		}
-		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: authorization.grant, PolicyRevision: authorization.policyRevision})
+		grant := authorization.grant
+		if action == telemetryauth.ActionHistoryRead {
+			// History is answered by the Telemetry Query Service, which accepts a Gateway-signed
+			// grant bound to the exact aggregate query and presented by the Agent.
+			if historyQuery.TenantID != claims.TenantID {
+				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
+				return
+			}
+			signed, failure := h.signHistoryQueryGrant(caller, authorization, claims.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, historyQuery.ScopeDigest, h.operations.workloadSPIFFEID)
+			if failure != nil {
+				writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+				return
+			}
+			grant = signed
+		}
+		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision})
 		return
 	}
 	if input.Request.Tool == "analytics.getEnergySeries" {

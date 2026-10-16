@@ -18,6 +18,9 @@ import {
   type OwnerReadErrorCode,
   type OwnerReadResult,
   type RegistryReadRequest,
+  type TelemetryHistoryAggregate,
+  type TelemetryHistoryReadRequest,
+  type TelemetryHistoryReader,
   type ToolAuthorizableReadRequest,
   type RegistryReader,
   type ToolAuthorizationReader,
@@ -29,9 +32,12 @@ import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'site_get_context',
   'assets_list',
+  'equipment_list',
   'telemetry_get_current',
+  'telemetry_query_history',
   'energy_query_series',
   'energy_compare_periods',
+  'energy_by_equipment',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -50,6 +56,7 @@ export interface CreateHvacReadToolsInput {
   readonly toolAuthorizationReader: ToolAuthorizationReader;
   readonly registryReader: RegistryReader;
   readonly deviceTelemetryReader: DeviceTelemetryReader;
+  readonly telemetryHistoryReader: TelemetryHistoryReader;
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly limits?: Partial<HvacReadToolLimits>;
 }
@@ -64,8 +71,11 @@ const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
 
 const SITE_CAPABILITIES = Object.freeze(['site.read']);
 const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
+const EQUIPMENT_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read']);
 const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
+const HISTORY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.history.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
+const EQUIPMENT_ENERGY_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read', 'analytics.energy-series.read']);
 
 const emptyInputSchema = Object.freeze({
   type: 'object',
@@ -92,7 +102,26 @@ const telemetryInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
-const energyQueryInputSchema = Object.freeze({
+const historyInputSchema = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    deviceId: Object.freeze({ type: 'string', minLength: 36, maxLength: 36 }),
+    pointKeys: Object.freeze({ type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: Object.freeze({ type: 'string', minLength: 1, maxLength: 128 }) }),
+    from: Object.freeze({ type: 'string', format: 'date-time' }),
+    to: Object.freeze({ type: 'string', format: 'date-time' }),
+    granularity: Object.freeze({ type: 'string', enum: Object.freeze(['quarter_hour', 'hour', 'day']) }),
+  }),
+  required: Object.freeze(['deviceId', 'pointKeys', 'from', 'to']),
+  additionalProperties: false,
+});
+
+const energyTypeSchema = Object.freeze({
+  type: 'string',
+  enum: Object.freeze(['electricity', 'cooling']),
+  description: 'electricity (default) is power drawn; cooling is cooling delivered, also in kWh. Divide cooling by electricity for COP.',
+});
+
+const energyWindowInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
     from: Object.freeze({ type: 'string', format: 'date-time' }),
@@ -104,6 +133,11 @@ const energyQueryInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
+const energyQueryInputSchema = Object.freeze({
+  ...energyWindowInputSchema,
+  properties: Object.freeze({ ...energyWindowInputSchema.properties, energyType: energyTypeSchema }),
+});
+
 const energyCompareInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
@@ -113,6 +147,7 @@ const energyCompareInputSchema = Object.freeze({
     currentTo: Object.freeze({ type: 'string', format: 'date-time' }),
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
     qualityPolicy: Object.freeze({ type: 'string', enum: Object.freeze(['VALID_ONLY', 'VALID_AND_SUSPECT']) }),
+    energyType: energyTypeSchema,
   }),
   required: Object.freeze(['baselineFrom', 'baselineTo', 'currentFrom', 'currentTo']),
   additionalProperties: false,
@@ -201,19 +236,66 @@ const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
   return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
 };
 
+interface HistoryArguments {
+  readonly deviceId: string;
+  readonly pointKeys: readonly string[];
+  readonly from: string;
+  readonly to: string;
+  readonly granularity: TelemetryHistoryReadRequest['input']['granularity'];
+}
+
+const HISTORY_GRANULARITIES = Object.freeze({ quarter_hour: 'QUARTER_HOUR', hour: 'HOUR', day: 'DAY' } as const);
+const HISTORY_BUCKET_MS = Object.freeze({ QUARTER_HOUR: 15 * 60_000, HOUR: 3_600_000, DAY: 86_400_000 } as const);
+
+const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): HistoryArguments => {
+  const record = requireRecord(value, 'History query arguments are invalid.');
+  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys', 'from', 'to', 'granularity'])
+    || (record.granularity !== undefined && !Object.hasOwn(HISTORY_GRANULARITIES, String(record.granularity)))) {
+    fail('TOOL_ARGUMENTS_INVALID', 'History query arguments are invalid.');
+  }
+  const { deviceId, pointKeys } = parseTelemetryArguments({ deviceId: record.deviceId, pointKeys: record.pointKeys });
+  if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', 'History query reads at most 8 points.');
+  const from = requireString(record.from, 'History query arguments are invalid.');
+  const to = requireString(record.to, 'History query arguments are invalid.');
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || toMs - fromMs > limits.maxEnergyRangeMs) {
+    fail('TOOL_ARGUMENTS_INVALID', 'History query range is invalid or exceeds the Tool limit.');
+  }
+  const granularity = HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES];
+  // One bucket per point per period; past the result's bound the model should narrow the range or coarsen.
+  if (Math.ceil((toMs - fromMs) / HISTORY_BUCKET_MS[granularity]) * pointKeys.length > limits.maxEnergyPoints) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Too many history buckets: shorten the range, read fewer points or use a coarser granularity.');
+  }
+  return Object.freeze({
+    deviceId,
+    pointKeys,
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    granularity,
+  });
+};
+
 interface EnergyArguments {
+  readonly energyType: 'electricity' | 'cooling';
   readonly from: string;
   readonly to: string;
   readonly granularity: 'hour' | 'day' | 'month';
   readonly qualityPolicy: 'VALID_ONLY' | 'VALID_AND_SUSPECT';
 }
 
+const ALL_ENERGY_TYPES: readonly EnergyArguments['energyType'][] = ['electricity', 'cooling'];
+
 const parseEnergyWindow = (
   value: unknown,
   limits: HvacReadToolLimits,
+  energyTypes: readonly EnergyArguments['energyType'][] = ['electricity'],
 ): EnergyArguments => {
   const record = requireRecord(value, 'Energy query arguments are invalid.');
-  if (!hasOnlyKeys(record, ['from', 'to', 'granularity', 'qualityPolicy'])
+  if (!hasOnlyKeys(record, energyTypes.length > 1
+    ? ['from', 'to', 'granularity', 'qualityPolicy', 'energyType']
+    : ['from', 'to', 'granularity', 'qualityPolicy'])
+    || (record.energyType !== undefined && !energyTypes.includes(record.energyType as EnergyArguments['energyType']))
     || (record.granularity !== undefined && !['hour', 'day', 'month'].includes(String(record.granularity)))
     || (record.qualityPolicy !== undefined
       && !['VALID_ONLY', 'VALID_AND_SUSPECT'].includes(String(record.qualityPolicy)))) {
@@ -227,6 +309,7 @@ const parseEnergyWindow = (
     fail('TOOL_ARGUMENTS_INVALID', 'Energy query range is invalid or exceeds the Tool limit.');
   }
   return Object.freeze({
+    energyType: (record.energyType ?? 'electricity') as EnergyArguments['energyType'],
     from: fromValue,
     to: toValue,
     granularity: (record.granularity ?? 'hour') as EnergyArguments['granularity'],
@@ -251,6 +334,7 @@ const parseEnergyComparison = (
     'currentTo',
     'granularity',
     'qualityPolicy',
+    'energyType',
   ])) {
     fail('TOOL_ARGUMENTS_INVALID', 'Energy comparison arguments are invalid.');
   }
@@ -261,10 +345,11 @@ const parseEnergyComparison = (
   const shared = {
     ...(record.granularity === undefined ? {} : { granularity: record.granularity }),
     ...(record.qualityPolicy === undefined ? {} : { qualityPolicy: record.qualityPolicy }),
+    ...(record.energyType === undefined ? {} : { energyType: record.energyType }),
   };
   return Object.freeze({
-    baseline: parseEnergyWindow({ from: baselineFrom, to: baselineTo, ...shared }, limits),
-    current: parseEnergyWindow({ from: currentFrom, to: currentTo, ...shared }, limits),
+    baseline: parseEnergyWindow({ from: baselineFrom, to: baselineTo, ...shared }, limits, ALL_ENERGY_TYPES),
+    current: parseEnergyWindow({ from: currentFrom, to: currentTo, ...shared }, limits, ALL_ENERGY_TYPES),
   });
 };
 
@@ -360,7 +445,7 @@ const authorizeOwnerRead = async (
   request: ToolAuthorizableReadRequest,
 ): Promise<OwnerReadContext> => {
   const base = baseOwnerContext(context, authorization);
-  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot'
+  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot' || request.tool === 'telemetry.history.aggregateDeviceHistory'
     ? {
       ...base,
       scope: { ...base.scope, deviceId: request.input.deviceId },
@@ -405,6 +490,14 @@ const assetsPayloadFrom = (
   return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSETS' }>;
 };
 
+const assetModelPayloadFrom = (
+  result: OwnerReadResult,
+): Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }> => {
+  const payload = result.payload as RegistryOwnerPayload;
+  if (payload.kind !== 'SITE_ASSET_MODEL') fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>;
+};
+
 const telemetryPayloadFrom = (result: OwnerReadResult): DeviceObservationSnapshotDto => {
   const payload = result.payload as DeviceObservationSnapshotDto;
   if (payload.schemaVersion !== 1 || !Array.isArray(payload.values)) {
@@ -419,6 +512,89 @@ const energyPayloadFrom = (result: OwnerReadResult): EnergySeriesResponseDto => 
     fail('TOOL_OWNER_RESPONSE_INVALID');
   }
   return payload;
+};
+
+/** An instant as the Site reads it, "2026-10-15 18:00", so the model never mistakes UTC hours for local ones. */
+const siteTime = (instant: string, timezone: string): string => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+};
+
+const sitePoints = (points: readonly { readonly periodStart: string; readonly energyKWh: number }[], timezone: string) => (
+  points.map((point) => ({ siteTime: siteTime(point.periodStart, timezone), energyKWh: point.energyKWh }))
+);
+
+const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate => {
+  const payload = result.payload as TelemetryHistoryAggregate;
+  if (payload.schemaVersion !== 1 || !Array.isArray(payload.buckets)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload;
+};
+
+/** One series per point, in the order asked: averages for readings, increases for counters. */
+const readHistory = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  history: TelemetryHistoryReader,
+  timezone: string,
+  query: HistoryArguments,
+) => {
+  const draft = {
+    tool: 'telemetry.history.aggregateDeviceHistory' as const,
+    input: {
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      deviceId: query.deviceId,
+      keys: query.pointKeys,
+      from: query.from,
+      to: query.to,
+      granularity: query.granularity,
+      timezone,
+      qualityPolicy: 'VALID_ONLY' as const,
+    },
+  };
+  const request: TelemetryHistoryReadRequest = { ...draft, requestId: requestIdFor(context, 'telemetry_query_history', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await history.read({ request, context: ownerContext });
+  const payload = historyPayloadFrom(result);
+  const series = query.pointKeys.flatMap((key) => {
+    const buckets = payload.buckets.filter((bucket) => bucket.telemetryKey === key);
+    const first = buckets[0];
+    if (first === undefined) return [];
+    const kind = first.pointType === 'COUNTER' ? 'counter' as const : first.pointType === 'STATE' ? 'state' as const : 'reading' as const;
+    return [{
+      key,
+      unit: first.unit,
+      kind,
+      points: buckets.map((bucket) => ({
+        siteTime: siteTime(bucket.periodStart, timezone),
+        ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
+        ...(bucket.counter === undefined ? {} : { increase: bucket.counter.deltaSum }),
+        ...(bucket.state === undefined ? {} : { lastValue: bucket.state.lastValue }),
+        coverage: bucket.completeness,
+      })),
+    }];
+  });
+  // The history owner reader rates a result GOOD only when it is projected past the range and every bucket is whole.
+  const completeness = result.quality === 'GOOD' ? 'COMPLETE' as const : 'PARTIAL' as const;
+  return {
+    deviceId: query.deviceId,
+    query: { from: query.from, to: query.to, granularity: query.granularity, timezone },
+    series,
+    missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
+    completeness,
+    quality: result.quality,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      ...(payload.projectionWatermark === null ? {} : { projectionWatermark: payload.projectionWatermark }),
+    },
+  };
 };
 
 const readSite = async (
@@ -457,6 +633,44 @@ const readAssets = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
   return { result, payload: assetsPayloadFrom(result) };
+};
+
+const readAssetModel = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  registry: RegistryReader,
+): Promise<{ readonly result: OwnerReadResult; readonly model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model'] }> => {
+  const draft = {
+    tool: 'registry.getSiteAssetModel' as const,
+    input: { siteId: context.siteId },
+  };
+  const request: RegistryReadRequest = {
+    ...draft,
+    requestId: requestIdFor(context, 'equipment_list', draft),
+  };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await registry.read({ request, context: ownerContext });
+  return { result, model: assetModelPayloadFrom(result).model };
+};
+
+/** Each device with the machine it belongs to and its active points, the keys other Tools read by. */
+const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model']) => {
+  const assetsById = new Map(model.assets.map((asset) => [asset.id, asset]));
+  return model.devices.map((device) => {
+    const link = model.relationships.find((relationship) => relationship.status === 'ACTIVE'
+      && relationship.fromType === 'DEVICE' && relationship.fromId === device.id && relationship.toType === 'ASSET');
+    const asset = link === undefined ? undefined : assetsById.get(link.toId);
+    return {
+      deviceId: device.id,
+      name: device.displayName,
+      type: device.deviceType,
+      machine: asset === undefined ? null : { name: asset.displayName, type: asset.assetType },
+      points: model.telemetryPoints
+        .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: point.pointType })),
+    };
+  });
 };
 
 const readTelemetry = async (
@@ -524,7 +738,7 @@ const readEnergy = async (
     input: {
       tenantId: context.tenantId,
       siteId: context.siteId,
-      energyType: 'electricity' as const,
+      energyType: query.energyType,
       granularity: query.granularity,
       timezone,
       from: query.from,
@@ -549,13 +763,14 @@ const readEnergy = async (
   return {
     siteId: context.siteId,
     query: {
+      energyType: query.energyType,
       from: query.from,
       to: query.to,
       granularity: query.granularity,
       timezone,
       qualityPolicy: query.qualityPolicy,
     },
-    points: payload.points,
+    points: sitePoints(payload.points, timezone),
     pointCount: payload.points.length,
     totalKWh,
     completeness,
@@ -569,6 +784,81 @@ const readEnergy = async (
       provenance: result.provenance,
       ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
       ...(payload.metadata.aggregateWatermark === undefined ? {} : { aggregateWatermark: payload.metadata.aggregateWatermark }),
+    },
+  };
+};
+
+const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
+  Number(points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6))
+);
+
+/** The Site total split by sub-metered device, largest first, each named from the asset model. */
+const readEquipmentEnergy = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  energy: EnergyAnalyticsReader,
+  registry: RegistryReader,
+  timezone: string,
+  query: EnergyArguments,
+  limits: HvacReadToolLimits,
+) => {
+  const draft = {
+    tool: 'analytics.getEnergySeries' as const,
+    input: {
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      energyType: 'electricity' as const,
+      granularity: query.granularity,
+      timezone,
+      from: query.from,
+      to: query.to,
+      qualityPolicy: query.qualityPolicy,
+      breakdown: 'device' as const,
+    },
+  };
+  const request: EnergyAnalyticsReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_by_equipment', draft) };
+  const [{ model }, result] = await Promise.all([
+    readAssetModel(context, authorization, authorizer, registry),
+    authorizeOwnerRead(context, authorization, authorizer, request).then((ownerContext) => energy.read({ request, context: ownerContext })),
+  ]);
+  const payload = energyPayloadFrom(result);
+  const deviceSeries = payload.devices ?? [];
+  if (deviceSeries.reduce((count, device) => count + device.points.length, payload.points.length) > limits.maxEnergyPoints) {
+    fail('TOOL_RESULT_TOO_LARGE', 'Energy breakdown exceeds the Tool point limit.');
+  }
+  const equipment = new Map(describeEquipment(model).map((device) => [device.deviceId, device]));
+  const siteTotalKWh = payload.points.length === 0 ? null : sumKWh(payload.points);
+  const devices = deviceSeries
+    .map((device) => {
+      const totalKWh = sumKWh(device.points);
+      const known = equipment.get(device.deviceId);
+      return {
+        deviceId: device.deviceId,
+        name: known?.name ?? null,
+        machine: known?.machine ?? null,
+        totalKWh,
+        shareOfSite: siteTotalKWh === null || siteTotalKWh === 0 ? null : Number((totalKWh / siteTotalKWh).toFixed(3)),
+        points: sitePoints(device.points, timezone),
+      };
+    })
+    .sort((left, right) => right.totalKWh - left.totalKWh);
+  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
+  return {
+    siteId: context.siteId,
+    query: { from: query.from, to: query.to, granularity: query.granularity, timezone, qualityPolicy: query.qualityPolicy },
+    siteTotalKWh,
+    devices,
+    completeness,
+    quality: result.quality,
+    qualitySummary: payload.metadata.qualitySummary,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
     },
   };
 };
@@ -626,6 +916,7 @@ export const createHvacReadTools = ({
   toolAuthorizationReader,
   registryReader,
   deviceTelemetryReader,
+  telemetryHistoryReader,
   energyAnalyticsReader,
   limits: inputLimits,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
@@ -702,6 +993,38 @@ export const createHvacReadTools = ({
     },
   });
 
+  const equipmentTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'equipment_list',
+      'List the current Site\'s devices with their names, the machine each belongs to and their point keys. Use the device IDs and point keys with the other Tools.',
+      emptyInputSchema,
+      EQUIPMENT_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      exactEmptyArguments(argumentsValue);
+      assertExecutionCapability(context, EQUIPMENT_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { result, model } = await readAssetModel(context, authorization, toolAuthorizationReader, registryReader);
+        const devices = describeEquipment(model);
+        const bounded = devices.slice(0, limits.maxAssets);
+        const completeness = devices.length > bounded.length ? 'PARTIAL' as const : 'COMPLETE' as const;
+        return assertResultBytes({
+          siteId: context.siteId,
+          devices: bounded,
+          totalCount: devices.length,
+          completeness,
+          source: {
+            owner: result.owner,
+            revision: result.revision,
+            quality: result.quality,
+            completeness,
+            provenance: result.provenance,
+          },
+        }, limits);
+      });
+    },
+  });
+
   const telemetryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'telemetry_get_current',
@@ -721,15 +1044,39 @@ export const createHvacReadTools = ({
     },
   });
 
+  const historyTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'telemetry_query_history',
+      'Read how up to 8 points of one Device in the current Site changed over a period, bucketed by quarter hour, hour (default) or day in the Site calendar. Readings give average, minimum and maximum per bucket; counters give the increase. Use equipment_list for device ids and point keys.',
+      historyInputSchema,
+      HISTORY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseHistoryArguments(argumentsValue, limits);
+      assertExecutionCapability(context, HISTORY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(await readHistory(
+          context,
+          authorization,
+          toolAuthorizationReader,
+          telemetryHistoryReader,
+          sitePayload.site.timezone,
+          query,
+        ), limits);
+      });
+    },
+  });
+
   const energyQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_query_series',
-      'Query a bounded electricity energy series for the current Site using its authoritative timezone.',
+      'Query a bounded electricity or cooling energy series for the current Site using its authoritative timezone.',
       energyQueryInputSchema,
       ENERGY_CAPABILITIES,
     ),
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
-      const query = parseEnergyWindow(argumentsValue, limits);
+      const query = parseEnergyWindow(argumentsValue, limits, ALL_ENERGY_TYPES);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
@@ -751,7 +1098,7 @@ export const createHvacReadTools = ({
   const energyCompareTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_compare_periods',
-      'Compare two bounded electricity periods for the current Site without exposing raw infrastructure.',
+      'Compare two bounded electricity or cooling periods for the current Site without exposing raw infrastructure.',
       energyCompareInputSchema,
       ENERGY_CAPABILITIES,
     ),
@@ -793,11 +1140,40 @@ export const createHvacReadTools = ({
     },
   });
 
+  const equipmentEnergyTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'energy_by_equipment',
+      'Split the current Site\'s electricity in a period by sub-metered device (machines with their own meter), largest first, with each device\'s series at the chosen granularity.',
+      energyWindowInputSchema,
+      EQUIPMENT_ENERGY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseEnergyWindow(argumentsValue, limits);
+      assertExecutionCapability(context, EQUIPMENT_ENERGY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(await readEquipmentEnergy(
+          context,
+          authorization,
+          toolAuthorizationReader,
+          energyAnalyticsReader,
+          registryReader,
+          sitePayload.site.timezone,
+          query,
+          limits,
+        ), limits);
+      });
+    },
+  });
+
   return Object.freeze([
     siteTool,
     assetsTool,
+    equipmentTool,
     telemetryTool,
+    historyTool,
     energyQueryTool,
     energyCompareTool,
+    equipmentEnergyTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));
 };

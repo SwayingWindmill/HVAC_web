@@ -19,6 +19,7 @@ import {
 import {
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
+  createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
   createRegistryOwnerReader,
@@ -39,7 +40,8 @@ export type { AgentSessionHttpAuthorizationInput, AgentSessionHttpAuthorizer } f
 export interface ProductionAgentSessionOwnerConfig {
   readonly registry: RegistryOwnerReaderConfig;
   readonly deviceTelemetry: DeviceTelemetryOwnerReaderConfig;
-  readonly energyAnalytics: EnergyAnalyticsOwnerReaderConfig;
+  /** Energy Series and device history, both served by the Telemetry Query Service. */
+  readonly telemetryQuery: EnergyAnalyticsOwnerReaderConfig;
   readonly gatewayToolAuthorization: GatewayToolAuthorizationReaderConfig;
 }
 
@@ -80,7 +82,8 @@ export const createProductionAgentSessionRuntime = async (
   try {
     const registryReader = createRegistryOwnerReader(options.owners.registry);
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
-    const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.energyAnalytics);
+    const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.telemetryQuery);
+    const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.telemetryQuery);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
@@ -98,6 +101,7 @@ export const createProductionAgentSessionRuntime = async (
         toolAuthorizationReader,
         registryReader,
         deviceTelemetryReader,
+        telemetryHistoryReader,
         energyAnalyticsReader,
       }),
     });

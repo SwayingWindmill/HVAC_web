@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getRouteApi, useNavigate, useSearch } from "@tanstack/react-router";
-import { Download, ReceiptText, RefreshCw, TriangleAlert } from "lucide-react";
-import { useMemo } from "react";
+import { Download, ReceiptText, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { SiteTariff } from "@/api/generated/platformGateway.gen";
 import { PageHeader } from "@/blocks/page-header";
 import { Panel } from "@/blocks/panel";
@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CategoryTrend, destinationCsv, EnergyDestination } from "@/features/breakdown/components/EnergyDestination";
+import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
 import { useEnergyBreakdown } from "@/features/breakdown/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
@@ -25,6 +26,7 @@ import {
   alignedLabel,
   BUCKET_NOUN,
   ENERGY_PERIODS,
+  explainQuestion,
   periodWindow,
   relativeChange,
   wallTime,
@@ -158,7 +160,7 @@ export function ConsumptionWorkspace() {
         </Panel>
       ) : (
         <>
-          <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} />
+          <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} timeZone={site.timezone} />
           <EnergyDestination result={destination} previousLabel={previousLabel} />
           <Panel aria-label="能耗明细">
             <Tabs value={view} onValueChange={(value) => setSearch({ view: value as ConsumptionView })} className="gap-0">
@@ -181,7 +183,7 @@ export function ConsumptionWorkspace() {
                 <TouSection tariff={tariff} pricing={pricing} hourlyFailed={hourly.isError} pending={tariff.isPending || (Boolean(tariff.data) && hourly.isPending)} timeZone={site.timezone} />
               </TabsContent>
               <TabsContent value="detail">
-                <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} />
+                <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} timeZone={site.timezone} />
               </TabsContent>
             </Tabs>
           </Panel>
@@ -199,15 +201,22 @@ interface Pricing {
   readonly codes: readonly PeriodCode[];
 }
 
-function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChange }: {
+function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChange, timeZone }: {
   readonly comparison: NonNullable<ReturnType<typeof useEnergyComparison>["data"]>;
   readonly pricing: Pricing | null;
   readonly previousLabel: string;
   readonly metric: ConsumptionMetric;
   readonly onMetricChange: (metric: ConsumptionMetric) => void;
+  readonly timeZone: string;
 }) {
   const { current, previous, buckets } = comparison;
   const granularity = current.granularity;
+  const explain = useAssistantPanel((state) => state.explain);
+  // The bucket 解释 asks about: the one clicked, else the period's highest. A running bucket holds partial energy, so it is not offered.
+  const [picked, setPicked] = useState<string | null>(null);
+  const explainable = (bucket: BucketComparison) => bucket.complete && bucket.electricityKWh !== null;
+  const explained = buckets.find((bucket) => bucket.label === picked && explainable(bucket))
+    ?? buckets.find((bucket) => bucket.label === current.peak?.label && explainable(bucket));
   // One unit for both energies, so electricity and cooling read side by side.
   const scale = Math.max(current.electricityKWh ?? 0, current.coolingKWh ?? 0);
   const electricity = energy(current.electricityKWh, scale);
@@ -272,6 +281,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       compareColor="var(--chart-5)"
       compareLabel={previousLabel}
       chartType="bar"
+      onPointClick={(index) => setPicked(buckets[index]?.label ?? null)}
       showYAxis
       showLegend
       yDomain="zero"
@@ -291,6 +301,12 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
                 {current.excludedIntervals} 段数据未计入
                 <InfoTip>电表读数可疑或无效的区间不计入合计</InfoTip>
               </span>
+            ) : null}
+            {explained ? (
+              <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => explain(explainQuestion(explained, granularity, timeZone))}>
+                <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
+                解释 {explained.label}
+              </Button>
             ) : null}
           </span>
         </>
@@ -322,12 +338,14 @@ function TouSection({ tariff, pricing, hourlyFailed, pending, timeZone }: {
   return <TouCostDetail tariff={tariff.data} cost={pricing.current} timeZone={timeZone} />;
 }
 
-function DetailTable({ comparison, pricing, previousLabel }: {
+function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
   readonly comparison: NonNullable<ReturnType<typeof useEnergyComparison>["data"]>;
   readonly pricing: Pricing | null;
   readonly previousLabel: string;
+  readonly timeZone: string;
 }) {
   const granularity = comparison.current.granularity;
+  const explain = useAssistantPanel((state) => state.explain);
   const title = `分${BUCKET_NOUN[granularity]}明细`;
   const codes = pricing?.codes ?? [];
   // Newest first: the bucket still running leads.
@@ -352,11 +370,23 @@ function DetailTable({ comparison, pricing, previousLabel }: {
             const change = relativeChange(row.electricityKWh, row.previousElectricityKWh);
             const cost = pricing?.byLabel.get(row.label);
             return (
-              <TableRow key={row.label}>
+              <TableRow key={row.label} className="group">
                 <TableCell className="pl-5">
                   <span className="flex items-center gap-2">
                     <span className="font-medium">{row.label}</span>
                     {!row.complete ? <span className="rounded-md bg-primary-soft px-1.5 text-[11px] leading-[18px] font-medium text-primary">进行中</span> : null}
+                    {row.complete && row.electricityKWh !== null ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 gap-1 px-1.5 text-xs text-primary opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label={`解释 ${row.label}`}
+                        onClick={() => explain(explainQuestion(row, granularity, timeZone))}
+                      >
+                        <Sparkles className="size-3" aria-hidden="true" />
+                        解释
+                      </Button>
+                    ) : null}
                   </span>
                 </TableCell>
                 <TableCell className="text-right font-medium">{number(row.electricityKWh)}</TableCell>
