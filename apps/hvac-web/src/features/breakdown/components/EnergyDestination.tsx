@@ -177,7 +177,7 @@ function MachineCell({ name, note, color }: { readonly name: string; readonly no
 function ShareBar({ share, color }: { readonly share: number; readonly color: string }) {
   return (
     <span className="flex items-center gap-2">
-      <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+      <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted" aria-hidden="true">
         <span className="block h-full rounded-full" style={{ width: `${Math.min(100, share * 100)}%`, background: color }} />
       </span>
       <span className="text-xs tabular-nums">{percent(share)}</span>
@@ -223,55 +223,53 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
           ? `各设备电表合计比总电表多 ${kWh(-breakdown.unallocatedKWh)}`
           : `空调总用电 ${breakdown.totalKWh === null ? '—' : kWh(breakdown.totalKWh)} · 设备电表合计 ${kWh(breakdown.subMeteredKWh)}`}
       />
-      <div className="grid grid-cols-[minmax(0,5fr)_minmax(0,6fr)] divide-x divide-divider">
-        <div className="px-4 pt-3" role="region" aria-label="能流">
-          <EnergyFlow breakdown={breakdown} />
-        </div>
-        <Table aria-label="设备用电" className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-5">设备</TableHead>
-              <TableHead className="text-right">用电（kWh）</TableHead>
-              <TableHead>占比</TableHead>
-              <TableHead className="text-right">{previousLabel}</TableHead>
-              <TableHead className="pr-5 text-right">变化</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {breakdown.items.map((item) => {
-              const prior = before.get(item.deviceId) ?? null;
-              const change = relativeChange(item.energyKWh, prior);
-              return (
-                <TableRow key={item.deviceId}>
-                  <TableCell className="pl-5"><MachineCell name={item.name} note={CATEGORY_LABEL[item.category]} color={CATEGORY_COLOR[item.category]} /></TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{formatDecimal(item.energyKWh, 0)}</TableCell>
-                  <TableCell><ShareBar share={item.share} color={CATEGORY_COLOR[item.category]} /></TableCell>
-                  <TableCell className="text-right text-muted-foreground tabular-nums">{prior === null ? '—' : formatDecimal(prior, 0)}</TableCell>
-                  <TableCell className="pr-5 text-right">{change === null ? dash : <DeltaBadge delta={change} invert variant="text" showIcon={false} />}</TableCell>
-                </TableRow>
-              );
-            })}
-            {breakdown.unmetered.map((machine) => (
-              <TableRow key={machine.deviceId}>
-                <TableCell className="pl-5"><MachineCell name={machine.name} note={`${CATEGORY_LABEL[machine.category]} · 没有电表，用电计入未单独计量`} color="var(--muted)" /></TableCell>
-                <TableCell className="text-right">{dash}</TableCell>
-                <TableCell>{dash}</TableCell>
-                <TableCell className="text-right">{dash}</TableCell>
-                <TableCell className="pr-5 text-right">{dash}</TableCell>
-              </TableRow>
-            ))}
-            {breakdown.unallocatedKWh !== null ? (
-              <TableRow>
-                <TableCell className="pl-5"><MachineCell name={UNALLOCATED} note="总电表减各设备电表" color={CATEGORY_COLOR.UNALLOCATED} /></TableCell>
-                <TableCell className="text-right font-medium tabular-nums">{wholeKWh(breakdown.unallocatedKWh)}</TableCell>
-                <TableCell>{whole > 0 && breakdown.unallocatedKWh >= 0 ? <ShareBar share={breakdown.unallocatedKWh / whole} color={CATEGORY_COLOR.UNALLOCATED} /> : dash}</TableCell>
-                <TableCell className="text-right text-muted-foreground tabular-nums">{previous.data?.unallocatedKWh == null ? '—' : wholeKWh(previous.data.unallocatedKWh)}</TableCell>
-                <TableCell className="pr-5 text-right">{dash}</TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+      <div className="px-5 pt-3" role="region" aria-label="能流">
+        <EnergyFlow breakdown={breakdown} />
       </div>
+      <Table aria-label="设备用电" className="[&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="pl-5">设备</TableHead>
+            <TableHead className="text-right">用电（kWh）</TableHead>
+            <TableHead>占比</TableHead>
+            <TableHead className="text-right">{previousLabel}</TableHead>
+            <TableHead className="pr-5 text-right">变化</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {breakdown.items.map((item) => {
+            const prior = before.get(item.deviceId) ?? null;
+            const change = relativeChange(item.energyKWh, prior);
+            return (
+              <TableRow key={item.deviceId}>
+                <TableCell className="pl-5"><MachineCell name={item.name} note={CATEGORY_LABEL[item.category]} color={CATEGORY_COLOR[item.category]} /></TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatDecimal(item.energyKWh, 0)}</TableCell>
+                <TableCell><ShareBar share={item.share} color={CATEGORY_COLOR[item.category]} /></TableCell>
+                <TableCell className="text-right text-muted-foreground tabular-nums">{prior === null ? '—' : formatDecimal(prior, 0)}</TableCell>
+                <TableCell className="pr-5 text-right">{change === null ? dash : <DeltaBadge delta={change} invert variant="text" showIcon={false} />}</TableCell>
+              </TableRow>
+            );
+          })}
+          {breakdown.unmetered.map((machine) => (
+            <TableRow key={machine.deviceId}>
+              <TableCell className="pl-5"><MachineCell name={machine.name} note={`${CATEGORY_LABEL[machine.category]} · 没有电表，用电计入未单独计量`} color="var(--muted)" /></TableCell>
+              <TableCell className="text-right">{dash}</TableCell>
+              <TableCell>{dash}</TableCell>
+              <TableCell className="text-right">{dash}</TableCell>
+              <TableCell className="pr-5 text-right">{dash}</TableCell>
+            </TableRow>
+          ))}
+          {breakdown.unallocatedKWh !== null ? (
+            <TableRow>
+              <TableCell className="pl-5"><MachineCell name={UNALLOCATED} note="总电表减各设备电表" color={CATEGORY_COLOR.UNALLOCATED} /></TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{wholeKWh(breakdown.unallocatedKWh)}</TableCell>
+              <TableCell>{whole > 0 && breakdown.unallocatedKWh >= 0 ? <ShareBar share={breakdown.unallocatedKWh / whole} color={CATEGORY_COLOR.UNALLOCATED} /> : dash}</TableCell>
+              <TableCell className="text-right text-muted-foreground tabular-nums">{previous.data?.unallocatedKWh == null ? '—' : wholeKWh(previous.data.unallocatedKWh)}</TableCell>
+              <TableCell className="pr-5 text-right">{dash}</TableCell>
+            </TableRow>
+          ) : null}
+        </TableBody>
+      </Table>
     </Panel>
   );
 }

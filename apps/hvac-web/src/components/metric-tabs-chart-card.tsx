@@ -247,9 +247,10 @@ function MetricTabsChartCard({
             ...(active.compareKey
               ? [{ key: active.compareKey, label: compareLabel, type: "bar" as const, color: compareColor }]
               : []),
-            { key: active.key, label: active.label, type: "bar" as const, color, stackId: "current" },
+            // A bucket is either complete or running, so the two share a slot and both keep the rounded top.
+            { key: active.key, label: active.label, type: "bar" as const, color, stackId: "current", rounded: true },
             ...(active.partialKey
-              ? [{ key: active.partialKey, label: "进行中", type: "bar" as const, color, stackId: "current", pattern: "hatched" as const }]
+              ? [{ key: active.partialKey, label: "进行中", type: "bar" as const, color, stackId: "current", rounded: true, pattern: "hatched" as const }]
               : []),
           ] : [
             ...(active.compareKey

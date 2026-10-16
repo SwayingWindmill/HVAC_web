@@ -23,8 +23,14 @@ test('energy consumption compares the period with the same span before it, per S
   await expect(estimate).toContainText('¥865');
   await expect(estimate).toContainText('均价 0.942 元/kWh · 用电 919 kWh');
   const details = page.getByRole('region', { name: '能耗明细' });
+  // Switching a tab further down the page keeps the reader's place instead of jumping to the top.
+  await details.scrollIntoViewIfNeeded();
+  const scrolled = await page.evaluate(() => window.scrollY);
+  expect(scrolled).toBeGreaterThan(0);
   await details.getByRole('tab', { name: '分时电费' }).click();
   await expect(page).toHaveURL(/view=tou/);
+  // The tab's content may differ in height by a pixel or two; a jump to the top would read 0.
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(scrolled - 40);
   await expect(details).toContainText('两部制分时电价');
   const cost = details.getByRole('region', { name: '分时电费' });
   const periods = cost.getByRole('table', { name: '分时段电费' }).getByRole('row');

@@ -32,6 +32,8 @@ export interface ComposedSeries {
   axis?: "left" | "right"
   /** Series with the same stackId stack on top of each other. */
   stackId?: string
+  /** Rounds a stacked bar's top too, for a stack whose series never share a bucket. */
+  rounded?: boolean
   /** Bars only: fill with a diagonal hatch instead of a solid color. */
   pattern?: "solid" | "hatched"
   /** Lines and areas only. */
@@ -263,7 +265,7 @@ function ComposedChart({
                 fill={s.pattern === "hatched" ? `url(#${id}-hatch-${s.key})` : color}
                 stroke={s.pattern === "hatched" ? color : undefined}
                 strokeWidth={s.pattern === "hatched" ? 1 : 0}
-                radius={s.stackId ? 0 : barRadius}
+                radius={s.stackId && !s.rounded ? 0 : barRadius}
               />
             )
           }
