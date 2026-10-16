@@ -133,6 +133,8 @@ export class Gateway {
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
+  /** When the forecast is replayed as published; tests that pin the page clock set it to that instant. */
+  forecastOrigin: string | null = null;
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
@@ -388,7 +390,7 @@ export class Gateway {
       this.optimization = this.nextRecommendation;
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), now) };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) };
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };

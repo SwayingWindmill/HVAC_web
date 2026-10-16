@@ -83,29 +83,3 @@ export function demandSummary(hours: readonly QuarterHour[], now: Date, timeZone
     dailyPeaks: [...byDay.entries()].map(([day, dayHours]) => ({ day, peak: peakOf(dayHours) })),
   };
 }
-
-export interface DemandChartRow {
-  /** Minutes after Site-local midnight. */
-  readonly minute: number;
-  readonly today: number | null;
-  readonly yesterday: number | null;
-}
-
-/** Today's and yesterday's quarter-hours side by side on the Site's clock. */
-export function demandChartRows(hours: readonly QuarterHour[], now: Date, timeZone: string): DemandChartRow[] {
-  const today = periodWindow('today', now, timeZone).from.getTime();
-  const yesterday = previousWindow('today', now, timeZone).from.getTime();
-  const slot = (start: number, from: number) => Math.round((start - from) / QUARTER_HOUR_MS);
-  const rows = Array.from({ length: 96 }, (_, index) => ({ minute: index * 15, today: null as number | null, yesterday: null as number | null }));
-  for (const hour of hours) {
-    const start = Date.parse(hour.start);
-    if (start >= today) {
-      const index = slot(start, today);
-      if (index < 96) rows[index].today = hour.demandKW;
-    } else if (start >= yesterday) {
-      const index = slot(start, yesterday);
-      if (index < 96) rows[index].yesterday = hour.demandKW;
-    }
-  }
-  return rows;
-}

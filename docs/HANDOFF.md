@@ -14,9 +14,9 @@ These pages run on real owner data in the local stack (`hvac-local`, https://loc
 | --- | --- | --- |
 | 总览 | `/overview` | energy series, realtime plant, alarms, FDD, work orders, optimization, tariff |
 | 监测 | 实时运行, 设备 | telemetry snapshots/push, Registry asset model, device history |
-| 能源 | 能耗分析, 需量分析 | analytics energy series, device-series hourly/quarter-hour aggregates, Site tariff |
+| 能源 | 能耗分析, 用电负荷 | analytics energy series, device-series hourly/quarter-hour aggregates, Site tariff; 用电负荷 also reads the Site load forecast |
 | 能源 | 分项能耗 | analytics energy series with `breakdown: "device"`: the total meter (SITE) and each machine's sub-meter (BRANCH) |
-| 能源 | 负荷预测, 优化建议 | forecast service (hourly at :07), optimization service (hourly at :20, and on demand; spec `docs/specs/scheduled-optimization.md`) |
+| 能源 | 优化建议 | forecast service (hourly at :07, read by 用电负荷 and the optimizer), optimization service (hourly at :20, and on demand; spec `docs/specs/scheduled-optimization.md`) |
 | 能源 | 节能项目 (`/energy-analysis/savings`) | mv-service: measures, frozen baselines, verified days (ADR 0021) |
 | 能源 | 能源报告 (`/reports`) | closed months from report-service snapshots (`REPORT_GENERATE`, 03:00 on the 1st); the running month and unarchived months assembled on demand; yearly view; printable to A4 |
 | 能源 | 站点对标 (platform route `/benchmark`) | each authorized site's energy series; sites without analytics access are listed but not compared |
@@ -38,7 +38,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 > 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done (#529).
 > 2. 总览 — done (#529). 3. 告警, 工单, 设备 — done; 资产与点位 moves to phase 7 with the rest of 系统管理.
 > 4. 实时运行, 故障诊断, 控制指令, 通知中心 — done (the plant system diagram is gone; a 3D view is planned instead).
-> 5. 能耗分析, 分项能耗, 需量分析, 负荷预测, 站点对标 — done. 6. 优化建议, 节能项目, 报告 — done.
+> 5. 能耗分析, 分项能耗, 用电负荷 (需量分析 and 负荷预测 merged on 2026-10-16), 站点对标 — done. 6. 优化建议, 节能项目, 报告 — done.
 > Type scale: `text-sm` is body 13/20 and `text-xs` caption 12/18 (DS §2.2, set in `global.css` `@theme`); use `text-title` (14/20) for panel titles and `text-micro` (11/16) for units and badges.
 > 7. 集成管理, 系统管理, shared states, 404 — done. 数据接入 lives in 集成管理 (the data chain); the 设计系统 tab is gone, its token list (`features/system/design-system/design-tokens.ts`) stays for `scripts/test-real-design-tokens.mjs`.
 > The 用户与角色 tab is being taken over by the IAM rework (another session, `features/system/users/`); keep `lib/capability-labels.ts` and `lib/role-labels.ts` in step with the IAM catalog.
