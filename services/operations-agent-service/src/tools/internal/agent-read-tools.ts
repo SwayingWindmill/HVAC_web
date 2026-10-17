@@ -213,10 +213,12 @@ const hasOnlyKeys = (value: Record<string, unknown>, allowed: readonly string[])
   Object.keys(value).every((key) => allowed.includes(key))
 );
 
-// An argument refusal is the Tool's own wording, so the model is told what to change.
+// A refused argument or a result too large to hand over is the Tool's own wording, so the model is
+// told what to change; every other failure reaches it as a bare code.
 const fail = (code: AgentToolErrorCode, message: string = code): never => {
-  throw new AgentToolError(code, message, code === 'TOOL_ARGUMENTS_INVALID' ? message : undefined);
+  throw new AgentToolError(code, message, code === 'TOOL_ARGUMENTS_INVALID' || code === 'TOOL_RESULT_TOO_LARGE' ? message : undefined);
 };
+const RESULT_TOO_LARGE = '结果太大：缩短日期范围或改用更粗的粒度。';
 
 const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
   if (!isRecord(value)) fail('TOOL_ARGUMENTS_INVALID', message);
@@ -230,9 +232,7 @@ const requireString = (value: unknown, message: string): string => (
 const normalizeLimits = (input: Partial<HvacReadToolLimits> | undefined): HvacReadToolLimits => {
   const limits = { ...DEFAULT_LIMITS, ...input };
   for (const [name, value] of Object.entries(limits)) {
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      fail('TOOL_ARGUMENTS_INVALID', `Invalid Tool runtime limit: ${name}.`);
-    }
+    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`Invalid Tool runtime limit: ${name}.`);
   }
   return Object.freeze(limits);
 };
@@ -261,50 +261,59 @@ interface SiteDays {
   readonly startDate: string;
   readonly endDate: string;
   readonly days: number;
+  /** The first day as a UTC calendar day, for counting forward. */
+  readonly firstDay: number;
 }
+
+const DATE_REFUSAL = '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。';
 
 const DAY_MS = 86_400_000;
 
-const calendarDay = (value: unknown, message: string): number => {
-  const text = requireString(value, message);
+const calendarDay = (value: unknown): number => {
+  const text = requireString(value, DATE_REFUSAL);
   const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(text);
   const day = match === null ? Number.NaN : Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (!Number.isFinite(day) || new Date(day).toISOString().slice(0, 10) !== text) fail('TOOL_ARGUMENTS_INVALID', message);
+  if (!Number.isFinite(day) || new Date(day).toISOString().slice(0, 10) !== text) fail('TOOL_ARGUMENTS_INVALID', DATE_REFUSAL);
   return day;
 };
 
-const parseSiteDays = (start: unknown, end: unknown, limits: HvacReadToolLimits, message: string): SiteDays => {
-  const first = calendarDay(start, message);
-  const last = calendarDay(end, message);
-  const days = (last - first) / DAY_MS + 1;
-  if (days < 1) fail('TOOL_ARGUMENTS_INVALID', `${message}最后一天早于第一天。`);
+const parseSiteDays = (start: unknown, end: unknown, limits: HvacReadToolLimits): SiteDays => {
+  const firstDay = calendarDay(start);
+  const days = (calendarDay(end) - firstDay) / DAY_MS + 1;
+  if (days < 1) fail('TOOL_ARGUMENTS_INVALID', `${DATE_REFUSAL}最后一天早于第一天。`);
   if (days * DAY_MS > limits.maxEnergyRangeMs) {
-    fail('TOOL_ARGUMENTS_INVALID', `${message}每次最多读 ${limits.maxEnergyRangeMs / DAY_MS} 天。`);
+    fail('TOOL_ARGUMENTS_INVALID', `${DATE_REFUSAL}每次最多读 ${limits.maxEnergyRangeMs / DAY_MS} 天。`);
   }
-  return Object.freeze({ startDate: String(start), endDate: String(end), days });
+  return Object.freeze({ startDate: String(start), endDate: String(end), days, firstDay });
 };
 
-// How far a zone is ahead of UTC at an instant.
-const zoneOffsetMs = (instant: number, timezone: string): number => {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
-  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second)) - instant;
+/** An instant's date and clock in the Site's zone. */
+const siteParts = (instant: number, timezone: string): Record<string, string> => Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+  timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+}).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+
+const MINUTE_MS = 60_000;
+
+// The first minute of a Site-local day: midnight, or the first minute after it on a day the clocks
+// skip midnight. Every zone's midnight lies within 15 hours of UTC midnight.
+const startOfSiteDay = (day: number, timezone: string): number => {
+  const date = new Date(day).toISOString().slice(0, 10);
+  let before = day - 15 * 60 * MINUTE_MS;
+  let atOrAfter = day + 15 * 60 * MINUTE_MS;
+  while (atOrAfter - before > MINUTE_MS) {
+    const middle = before + Math.floor((atOrAfter - before) / 2 / MINUTE_MS) * MINUTE_MS;
+    const parts = siteParts(middle, timezone);
+    if (`${parts.year}-${parts.month}-${parts.day}` >= date) atOrAfter = middle;
+    else before = middle;
+  }
+  return atOrAfter;
 };
 
-const localMidnight = (day: number, timezone: string): number => {
-  const guess = day - zoneOffsetMs(day, timezone);
-  return day - zoneOffsetMs(guess, timezone);
-};
-
-/** The Site's whole days as the owner's UTC range: from the first midnight to the one after the last day. */
-const siteRange = (days: SiteDays, timezone: string): { readonly from: string; readonly to: string } => {
-  const first = Date.parse(`${days.startDate}T00:00:00.000Z`);
-  return {
-    from: new Date(localMidnight(first, timezone)).toISOString(),
-    to: new Date(localMidnight(first + days.days * DAY_MS, timezone)).toISOString(),
-  };
-};
+/** The Site's whole days as the owner's UTC range: from the first day's start to the start of the day after the last. */
+const siteRange = (days: SiteDays, timezone: string): { readonly from: string; readonly to: string } => ({
+  from: new Date(startOfSiteDay(days.firstDay, timezone)).toISOString(),
+  to: new Date(startOfSiteDay(days.firstDay + days.days * DAY_MS, timezone)).toISOString(),
+});
 
 interface TelemetryArguments {
   readonly deviceId: string;
@@ -322,19 +331,19 @@ const validTelemetryKey = (value: string): boolean => (
   && /^[A-Za-z][A-Za-z0-9_.:-]*/u.exec(value)?.[0] === value
 );
 
+const DEVICE_REFUSAL = '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。';
+
 const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
-  const record = requireRecord(value, '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
-  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys'])) {
-    fail('TOOL_ARGUMENTS_INVALID', '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
-  }
-  const deviceId = requireString(record.deviceId, '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
+  const record = requireRecord(value, DEVICE_REFUSAL);
+  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys'])) fail('TOOL_ARGUMENTS_INVALID', DEVICE_REFUSAL);
+  const deviceId = requireString(record.deviceId, DEVICE_REFUSAL);
   if (!validUuidV7(deviceId)
     || !Array.isArray(record.pointKeys)
     || record.pointKeys.length < 1
     || record.pointKeys.length > 16
     || record.pointKeys.some((key) => typeof key !== 'string' || !validTelemetryKey(key))
     || new Set(record.pointKeys).size !== record.pointKeys.length) {
-    fail('TOOL_ARGUMENTS_INVALID', '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
+    fail('TOOL_ARGUMENTS_INVALID', DEVICE_REFUSAL);
   }
   return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
 };
@@ -356,7 +365,7 @@ const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): Hist
   }
   const { deviceId, pointKeys } = parseTelemetryArguments({ deviceId: record.deviceId, pointKeys: record.pointKeys });
   if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', '一次最多读 8 个点位。');
-  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
+  const days = parseSiteDays(record.startDate, record.endDate, limits);
   const granularity = HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES];
   // One bucket per point per period; past the result's bound the model should narrow the range or coarsen.
   if (days.days * HISTORY_BUCKETS_PER_DAY[granularity] * pointKeys.length > limits.maxEnergyPoints) {
@@ -388,7 +397,7 @@ const parseEnergyWindow = (
       && !['VALID_ONLY', 'VALID_AND_SUSPECT'].includes(String(record.qualityPolicy)))) {
     fail('TOOL_ARGUMENTS_INVALID', '能耗参数有误：日期用 startDate 和 endDate，粒度只能是 hour、day 或 month。');
   }
-  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
+  const days = parseSiteDays(record.startDate, record.endDate, limits);
   return Object.freeze({
     energyType: (record.energyType ?? 'electricity') as EnergyArguments['energyType'],
     ...days,
@@ -436,7 +445,7 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
     fail('TOOL_ARGUMENTS_INVALID', '有指标或分组不在这个视图的清单里，只能用工具说明里列出的写法。');
   }
   const granularity = record.granularity as SemanticQueryArguments['granularity'];
-  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
+  const days = parseSiteDays(record.startDate, record.endDate, limits);
   if (semanticBuckets(days.days, granularity) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
     fail('TOOL_ARGUMENTS_INVALID', '时间段太多：缩短日期范围或改用更粗的粒度。');
   }
@@ -593,7 +602,7 @@ const authorizeOwnerRead = async (
 
 const assertResultBytes = <T>(result: T, limits: HvacReadToolLimits): T => {
   if (Buffer.byteLength(JSON.stringify(result), 'utf8') > limits.maxResultBytes) {
-    fail('TOOL_RESULT_TOO_LARGE', 'Tool result exceeds the model-context byte limit.');
+    fail('TOOL_RESULT_TOO_LARGE', '结果太大：缩短日期范围、改用更粗的粒度或少读几项。');
   }
   return result;
 };
@@ -638,23 +647,29 @@ const energyPayloadFrom = (result: OwnerReadResult): EnergySeriesResponseDto => 
 
 /** An instant as the Site reads it, "2026-10-15 18:00", so the model never mistakes UTC hours for local ones. */
 const siteTime = (instant: string, timezone: string): string => {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  const parts = siteParts(Date.parse(instant), timezone);
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 };
 
 // What the model reads is what an operator would read: Chinese values, Site-local times, no owner
 // names, revisions, quality counts or internal enums (#590).
-const ENERGY_WORDS = Object.freeze({ electricity: '用电', cooling: '供冷' } as const);
-const GRANULARITY_WORDS = Object.freeze({ hour: '按小时', day: '按日', month: '按月', QUARTER_HOUR: '按15分钟', HOUR: '按小时', DAY: '按日' } as const);
+// Grouping values as the pages show them: energy type, data quality and Tariff period in words.
+const DIMENSION_WORDS = Object.freeze({
+  energy_type: Object.freeze({ electricity: '用电', cooling: '供冷' }),
+  quality: Object.freeze({ VALID: '有效', SUSPECT: '可疑', INVALID: '无效' }),
+  tariff_period: Object.freeze({ SUPER_PEAK: '尖峰', PEAK: '峰', FLAT: '平', VALLEY: '谷' }),
+}) as Readonly<Record<string, Readonly<Record<string, string>>>>;
+const ENERGY_WORDS = Object.freeze({ electricity: '用电', cooling: '供冷' } as const) satisfies typeof DIMENSION_WORDS[string];
+const ENERGY_GRANULARITY_WORDS = Object.freeze({ hour: '按小时', day: '按日', month: '按月' } as const);
+const HISTORY_GRANULARITY_WORDS = Object.freeze({ QUARTER_HOUR: '按15分钟', HOUR: '按小时', DAY: '按日' } as const);
 const QUALITY_POLICY_WORDS = Object.freeze({ VALID_ONLY: '只算有效读数', VALID_AND_SUSPECT: '含可疑读数' } as const);
 const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({ TELEMETRY: '读数', COUNTER: '累计量', STATE: '状态' });
+const pointKind = (pointType: string): string => POINT_KIND_WORDS[pointType] ?? '读数';
 
-/** 「完整」, or what is missing and how far the data reaches. */
+/** 「完整」, or that it is not and how far the data reaches. */
 const dataStatus = (partial: boolean, watermark: string | null | undefined, timezone: string): string => {
   if (!partial) return '完整';
-  return watermark == null ? '不完整' : `不完整：数据只到 ${siteTime(watermark, timezone)}`;
+  return watermark == null ? '不完整' : `不完整：数据截至 ${siteTime(watermark, timezone)}`;
 };
 
 type SitePointInput = { readonly periodStart: string; readonly energyKWh: number; readonly cost?: EnergyCost };
@@ -717,7 +732,7 @@ const readHistory = async (
     return [{
       key,
       unit: first.unit,
-      kind: POINT_KIND_WORDS[first.pointType] ?? '读数',
+      kind: pointKind(first.pointType),
       points: buckets.map((bucket) => ({
         siteTime: siteTime(bucket.periodStart, timezone),
         ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
@@ -729,8 +744,7 @@ const readHistory = async (
   });
   // The history owner reader rates a result GOOD only when it is projected past the range and every bucket is whole.
   return {
-    deviceId: query.deviceId,
-    query: { startDate: query.startDate, endDate: query.endDate, granularity: GRANULARITY_WORDS[query.granularity] },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: HISTORY_GRANULARITY_WORDS[query.granularity] },
     series,
     missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
     dataStatus: dataStatus(result.quality !== 'GOOD', payload.projectionWatermark, timezone),
@@ -807,7 +821,7 @@ const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_AS
       machine: asset === undefined ? null : asset.displayName,
       points: model.telemetryPoints
         .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
-        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: POINT_KIND_WORDS[point.pointType] ?? '读数' })),
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: pointKind(point.pointType) })),
     };
   });
 };
@@ -850,7 +864,6 @@ const readTelemetry = async (
     && payload.telemetryReadiness === 'CURRENT'
     && payload.values.every((value) => value.state === 'PRESENT');
   return {
-    deviceId: payload.deviceId,
     readAt: siteTime(payload.evaluatedAt, timezone),
     deviceState: payload.displayState === null ? '状态不明' : DEVICE_STATE_WORDS[payload.displayState] ?? '状态不明',
     values: payload.values.map((value) => (value.state === 'MISSING'
@@ -889,9 +902,7 @@ const readEnergy = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await energy.read({ request, context: ownerContext });
   const payload = energyPayloadFrom(result);
-  if (payload.points.length > limits.maxEnergyPoints) {
-    fail('TOOL_RESULT_TOO_LARGE', 'Energy series exceeds the Tool point limit.');
-  }
+  if (payload.points.length > limits.maxEnergyPoints) fail('TOOL_RESULT_TOO_LARGE', RESULT_TOO_LARGE);
   const totalKWh = payload.points.length === 0
     ? null
     : Number(payload.points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6));
@@ -900,7 +911,7 @@ const readEnergy = async (
       energy: ENERGY_WORDS[query.energyType],
       startDate: query.startDate,
       endDate: query.endDate,
-      granularity: GRANULARITY_WORDS[query.granularity],
+      granularity: ENERGY_GRANULARITY_WORDS[query.granularity],
       readings: QUALITY_POLICY_WORDS[query.qualityPolicy],
     },
     points: sitePoints(payload.points, timezone),
@@ -909,8 +920,8 @@ const readEnergy = async (
     ...seriesCost(payload.points),
     dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
     ...readingNote(payload.metadata.qualitySummary, query.qualityPolicy),
-    // For the comparison only; summarizeEnergy leaves it out of what the model reads.
-    comparable: !payload.metadata.partial && result.quality === 'GOOD',
+    // Why a comparison cannot use this period, if it cannot; summarizeEnergy leaves it out of what the model reads.
+    blocked: payload.metadata.partial ? '数据不完整，不能比较' : result.quality === 'GOOD' ? null : '有读数可疑，不能比较',
   };
 };
 
@@ -937,7 +948,7 @@ const readSemantic = async (
   timezone: string,
   query: SemanticQueryArguments,
   limits: HvacReadToolLimits,
-  machines: ReadonlyMap<string, string>,
+  devices: ReadonlyMap<string, string>,
 ) => {
   const draft = {
     tool: 'analytics.semanticQuery' as const,
@@ -952,20 +963,22 @@ const readSemantic = async (
       ...siteRange(query, timezone),
     },
   };
+  // A day the clocks go back has 25 hours; the owner counts real buckets.
+  if (query.granularity === 'hour' && (Date.parse(draft.input.to) - Date.parse(draft.input.from)) / 3_600_000 > SEMANTIC_BUCKET_LIMIT) {
+    fail('TOOL_ARGUMENTS_INVALID', '时间段太多：缩短日期范围或改用更粗的粒度。');
+  }
   const request: SemanticQueryReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_semantic_query', draft) };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await reader.read({ request, context: ownerContext });
   const payload = semanticPayloadFrom(result);
-  if (payload.rows.length > limits.maxResultRecords) {
-    fail('TOOL_RESULT_TOO_LARGE', "Semantic query rows exceed the Run's record limit.");
-  }
+  if (payload.rows.length > limits.maxResultRecords) fail('TOOL_RESULT_TOO_LARGE', '结果行数太多：缩短日期范围、改用更粗的粒度或少分一组。');
   return {
     view: query.view.title,
-    query: { granularity: GRANULARITY_WORDS[query.granularity], startDate: query.startDate, endDate: query.endDate },
+    query: { granularity: ENERGY_GRANULARITY_WORDS[query.granularity], startDate: query.startDate, endDate: query.endDate },
     columns: payload.columns.map(({ title }) => title),
     rows: payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
       column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)]
-        : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, machines)]
+        : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, devices)]
           : [column.title, row[index]]
     )))),
     rowCount: payload.rows.length,
@@ -973,18 +986,12 @@ const readSemantic = async (
   };
 };
 
-// A grouping value as the pages show it: energy type, data quality and Tariff period in words,
-// equipment by its machine's name.
-const DIMENSION_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
-  energy_type: { electricity: '用电', cooling: '供冷' },
-  quality: { VALID: '有效', SUSPECT: '可疑', INVALID: '无效' },
-  tariff_period: { SHARP: '尖', PEAK: '峰', FLAT: '平', VALLEY: '谷', DEEP_VALLEY: '深谷' },
-});
-
-const dimensionWords = (name: string, value: string | number | null, machines: ReadonlyMap<string, string>): string | null => {
+// A grouping value as the pages show it; equipment by its device's name.
+const dimensionWords = (name: string, value: string | number | null, devices: ReadonlyMap<string, string>): string | null => {
+  if (name === 'tariff_period' && (value === null || value === '')) return '未计价';
   if (value === null) return null;
   const text = String(value);
-  if (name === 'equipment_id') return machines.get(text) ?? '未登记的设备';
+  if (name === 'equipment_id') return devices.get(text) ?? '未登记的设备';
   return DIMENSION_WORDS[name]?.[text] ?? text;
 };
 
@@ -1024,7 +1031,7 @@ const readEquipmentEnergy = async (
   const payload = energyPayloadFrom(result);
   const deviceSeries = payload.devices ?? [];
   if (deviceSeries.reduce((count, device) => count + device.points.length, payload.points.length) > limits.maxEnergyPoints) {
-    fail('TOOL_RESULT_TOO_LARGE', 'Energy breakdown exceeds the Tool point limit.');
+    fail('TOOL_RESULT_TOO_LARGE', RESULT_TOO_LARGE);
   }
   const equipment = new Map(describeEquipment(model).map((device) => [device.deviceId, device]));
   const siteTotalKWh = payload.points.length === 0 ? null : sumKWh(payload.points);
@@ -1042,7 +1049,7 @@ const readEquipmentEnergy = async (
     })
     .sort((left, right) => right.totalKWh - left.totalKWh);
   return {
-    query: { startDate: query.startDate, endDate: query.endDate, granularity: GRANULARITY_WORDS[query.granularity], readings: QUALITY_POLICY_WORDS[query.qualityPolicy] },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: ENERGY_GRANULARITY_WORDS[query.granularity], readings: QUALITY_POLICY_WORDS[query.qualityPolicy] },
     siteTotalKWh,
     devices,
     dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
@@ -1050,23 +1057,25 @@ const readEquipmentEnergy = async (
   };
 };
 
-const summarizeEnergy = ({ points: _points, comparable: _comparable, ...visible }: Awaited<ReturnType<typeof readEnergy>>) => visible;
+const summarizeEnergy = ({ points: _points, blocked: _blocked, ...visible }: Awaited<ReturnType<typeof readEnergy>>) => visible;
 
 const compareEnergy = (
   baseline: Awaited<ReturnType<typeof readEnergy>>,
   current: Awaited<ReturnType<typeof readEnergy>>,
 ) => {
-  if (baseline.totalKWh === null || current.totalKWh === null || !baseline.comparable || !current.comparable) {
-    return { status: '数据不完整或读数有问题，不能比较', absoluteChangeKWh: null, percentChange: null };
-  }
-  const absoluteChangeKWh = Number((current.totalKWh - baseline.totalKWh).toFixed(6));
-  if (baseline.totalKWh === 0) {
+  const before = baseline.totalKWh;
+  const after = current.totalKWh;
+  if (before === null || after === null) return { status: '没有数据，不能比较', absoluteChangeKWh: null, percentChange: null };
+  const blocked = baseline.blocked ?? current.blocked;
+  if (blocked !== null) return { status: blocked, absoluteChangeKWh: null, percentChange: null };
+  const absoluteChangeKWh = Number((after - before).toFixed(6));
+  if (before === 0) {
     return { status: '对比期为 0，算不出百分比', absoluteChangeKWh, percentChange: null };
   }
   return {
     status: '可以比较',
     absoluteChangeKWh,
-    percentChange: Number(((absoluteChangeKWh / baseline.totalKWh) * 100).toFixed(6)),
+    percentChange: Number(((absoluteChangeKWh / before) * 100).toFixed(6)),
   };
 };
 
@@ -1316,12 +1325,16 @@ export const createHvacReadTools = ({
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
       const query = parseSemanticQuery(argumentsValue, limits);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
+      const byDevice = query.dimensions.includes('equipment_id');
+      if (byDevice && !hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)) {
+        fail('TOOL_ARGUMENTS_INVALID', '按设备分组需要查看设备清单的权限，这次只能不按设备分组。');
+      }
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-        // Equipment is grouped by device id; the model reads each machine's name instead.
-        const machines = new Map<string, string>(query.dimensions.includes('equipment_id')
+        // Equipment is grouped by device id; the model reads each device's name instead.
+        const devices = new Map<string, string>(byDevice
           ? describeEquipment((await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model)
-            .map((device) => [device.deviceId, device.machine ?? device.name])
+            .map((device) => [device.deviceId, device.name])
           : []);
         return assertResultBytes(await readSemantic(
           context,
@@ -1331,7 +1344,7 @@ export const createHvacReadTools = ({
           sitePayload.site.timezone,
           query,
           limits,
-          machines,
+          devices,
         ), limits);
       });
     },

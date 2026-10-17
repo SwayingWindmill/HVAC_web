@@ -1,6 +1,7 @@
 package analyticsmodel
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -80,13 +81,16 @@ func TestSemanticQueryKeepsWithinTheBucketLimit(t *testing.T) {
 	}
 }
 
-// The catalog is what the AI 助手 reads: measures an operator asks for, described in their words
-// (#590). Counts of measuring intervals and words such as 区间 stay out.
+// The catalog is what the AI 助手 reads: figures an operator asks for, described in their words and
+// with the values the Tool hands back (#590): no 区间/口径, no English codes.
 func TestSemanticCatalogSpeaksTheOperatorsWords(t *testing.T) {
+	english := regexp.MustCompile(`\b[A-Z][A-Z_]{2,}\b|electricity|cooling`)
 	for _, view := range Catalog().Views {
 		for _, member := range append(append([]SemanticMember{}, view.Measures...), view.Dimensions...) {
-			if strings.HasSuffix(member.Name, "_count") {
-				t.Errorf("%s.%s is an interval count", view.Name, member.Name)
+			for _, code := range english.FindAllString(member.Description, -1) {
+				if code != "COP" {
+					t.Errorf("%s.%s describes English value %s: %s", view.Name, member.Name, code, member.Description)
+				}
 			}
 			for _, word := range []string{"区间", "口径"} {
 				if strings.Contains(member.Title+member.Description, word) {

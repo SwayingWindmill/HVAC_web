@@ -102,7 +102,7 @@ const historyPayload = (query) => ({
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
 });
 
-const createHarness = ({ energyFor, registryFailure, semanticFor } = {}) => {
+const createHarness = ({ energyFor, registryFailure, semanticFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
@@ -123,7 +123,7 @@ const createHarness = ({ energyFor, registryFailure, semanticFor } = {}) => {
       registryInputs.push(input);
       if (registryFailure) throw registryFailure;
       if (input.request.tool === 'registry.getSite') {
-        return ownerResult(input.request, 'registry', 'registry-site:7', 'GOOD', 'registry:site/v1', { kind: 'SITE', site });
+        return ownerResult(input.request, 'registry', 'registry-site:7', 'GOOD', 'registry:site/v1', { kind: 'SITE', site: { ...site, timezone } });
       }
       if (input.request.tool === 'registry.getSiteAssetModel') {
         return ownerResult(input.request, 'registry', 'registry-asset-model:11', 'GOOD', 'registry:asset-model/v2', { kind: 'SITE_ASSET_MODEL', model: assetModel });
@@ -192,7 +192,7 @@ const createHarness = ({ energyFor, registryFailure, semanticFor } = {}) => {
   };
 
   const tools = createHvacReadTools({
-    capabilities: context.capabilities,
+    capabilities,
     authorization,
     toolAuthorizationReader,
     registryReader,
@@ -326,7 +326,7 @@ test('telemetry_get_current injects trusted Site scope and preserves stale and m
 
   assert.equal(harness.telemetryInputs.length, 1);
   assert.equal(harness.telemetryInputs[0].context.authorization.delegationGrant, 'grant:telemetry.current.getDeviceObservationSnapshot');
-  assert.equal(result.deviceId, deviceId);
+  assert.equal('deviceId' in result, false);
   assert.equal(result.deviceState, '读数过期');
   assert.equal(result.dataStatus, '不完整：有读数过期或缺失');
   assert.deepEqual(result.values, [
@@ -638,7 +638,7 @@ test('every read Tool answers in the operator\'s words, without internal codes, 
   assert.equal(results.series.dataStatus, '完整');
   assert.equal(results.series.query.energy, '供冷');
   // 01:30Z is 18:30 the day before at the Site (UTC−7).
-  assert.equal(results.partialSeries.dataStatus, '不完整：数据只到 2026-10-15 18:30');
+  assert.equal(results.partialSeries.dataStatus, '不完整：数据截至 2026-10-15 18:30');
   assert.equal(results.partialSeries.readingNote, '部分读数可疑或无效，没有计入');
   assert.equal(results.compare.comparison.status, '可以比较');
   assert.deepEqual(results.current.values.map(({ key, state }) => [key, state]), [['condenserPressureKPa', '读数过期'], ['leavingWaterTempC', '没有读数']]);
@@ -673,8 +673,71 @@ test('a semantic query names machines and grouping values the way the pages do',
     endDate: '2026-10-15',
   });
   assert.deepEqual(result.rows, [
-    { siteTime: '2026-10-15 00:00', 设备: 'Chiller 1', 能源类型: '用电', 能耗: 879 },
+    { siteTime: '2026-10-15 00:00', 设备: 'C 机组电表', 能源类型: '用电', 能耗: 879 },
     { siteTime: '2026-10-15 00:00', 设备: '未登记的设备', 能源类型: '用电', 能耗: 2 },
   ]);
   assert.equal(result.dataStatus, '完整');
+});
+
+test('Tariff periods read as the pages show them, energy no Tariff covers as unpriced', async () => {
+  const harness = createHarness({
+    semanticFor: () => ({
+      schemaVersion: 1,
+      columns: [
+        { name: 'period_end', title: '时段', kind: 'time' },
+        { name: 'tariff_period', title: '电价时段', kind: 'dimension' },
+        { name: 'cost_valid_cny', title: '电费', kind: 'measure' },
+      ],
+      rows: [['2026-10-15T07:00:00Z', 'SUPER_PEAK', 12], ['2026-10-15T07:00:00Z', 'VALLEY', 3], ['2026-10-15T07:00:00Z', '', null]],
+      metadata: { datasetRevision: 'semantic:1', partial: false },
+    }),
+  });
+  const result = await execute(byName(harness.tools, 'energy_semantic_query'), {
+    measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
+  });
+  assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
+});
+
+test('grouping a semantic query by device needs the right to read the devices, and says so before reading', async () => {
+  const capabilities = ['site.read', 'analytics.energy-series.read'];
+  const harness = createHarness({ capabilities, semanticFor: () => { throw new Error('not read'); } });
+  await assert.rejects(
+    () => execute(byName(harness.tools, 'energy_semantic_query'), {
+      measures: ['equipment_energy.energy_valid_kwh'], dimensions: ['equipment_energy.equipment_id'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
+    }, { ...context, capabilities }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /设备/u.test(error.hint),
+  );
+  assert.equal(harness.semanticInputs.length, 0);
+});
+
+test('a Site whose clocks skip midnight still reads its whole local day', async () => {
+  // America/Santiago moves from 00:00 to 01:00 on 2026-09-06: that day starts at 01:00 (UTC−3).
+  const harness = createHarness({ timezone: 'America/Santiago' });
+  await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-09-06', endDate: '2026-09-06', granularity: 'day' });
+  assert.deepEqual([harness.energyInputs[0].request.input.from, harness.energyInputs[0].request.input.to], ['2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z']);
+});
+
+test('a comparison says whether the data was incomplete or its readings were doubtful', async () => {
+  const incomplete = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'e', 'UNCERTAIN', 'p', energyPayload({ from: input.request.input.from, to: input.request.input.to, partial: true })),
+  });
+  const doubtful = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'e', 'UNCERTAIN', 'p', energyPayload({ from: input.request.input.from, to: input.request.input.to, qualitySummary: { valid: 2, suspect: 1, invalid: 0 } })),
+  });
+  const args = { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' };
+  assert.equal((await execute(byName(incomplete.tools, 'energy_compare_periods'), args)).comparison.status, '数据不完整，不能比较');
+  assert.equal((await execute(byName(doubtful.tools, 'energy_compare_periods'), args)).comparison.status, '有读数可疑，不能比较');
+});
+
+test('a result too large for one answer tells the model how to narrow it', async () => {
+  const harness = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'e', 'GOOD', 'p', {
+      ...energyPayload({ from: input.request.input.from, to: input.request.input.to }),
+      points: Array.from({ length: 49 }, (_, index) => ({ periodStart: new Date(Date.parse(input.request.input.from) + index * 3_600_000).toISOString(), periodEnd: input.request.input.to, energyKWh: 1 })),
+    }),
+  });
+  await assert.rejects(
+    () => execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-14', endDate: '2026-10-15', granularity: 'hour' }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_RESULT_TOO_LARGE' && /缩短|粒度/u.test(error.hint),
+  );
 });

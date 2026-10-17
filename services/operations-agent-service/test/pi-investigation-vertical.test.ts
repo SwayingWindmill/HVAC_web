@@ -663,7 +663,9 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
 
   const system = requests[0][0];
   assert.equal(system.role, 'system');
-  assert.match(system.text, /2026-10-16T02:30:00\.000Z/u);
+  // Dates come from the Site's own clock (site_get_context), not a UTC start time.
+  assert.doesNotMatch(system.text, /2026-10-16T02:30/u);
+  assert.match(system.text, /localNow/u);
   assert.match(system.text, /站点本地日期/u);
   assert.match(system.text, /site_get_context/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);

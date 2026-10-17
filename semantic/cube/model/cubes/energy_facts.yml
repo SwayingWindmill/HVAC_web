@@ -74,13 +74,13 @@ cubes:
 
       - name: energy_type
         title: 能源类型
-        description: electricity 是用电量，cooling 是供冷量，都以 kWh 计。
+        description: 用电量或供冷量，都以 kWh 计。
         sql: energy_type
         type: string
 
       - name: quality
         title: 数据质量
-        description: VALID 有效、SUSPECT 可疑、INVALID 无效。
+        description: 有效、可疑或无效。
         sql: quality
         type: string
 
@@ -153,7 +153,7 @@ cubes:
     dimensions:
       - name: equipment_id
         title: 设备
-        description: 分表所计量的设备编号，与资产模型里的设备一致。
+        description: 分表所计量的设备，结果里显示设备名称。
         sql: load_device_id
         type: string
 
@@ -248,7 +248,7 @@ cubes:
 
       - name: tariff_period
         title: 电价时段
-        description: SUPER_PEAK 尖峰、PEAK 峰、FLAT 平、VALLEY 谷；为空表示这部分电量没有电价。
+        description: 尖峰、峰、平或谷；没有电价的电量显示为未计价。
         sql: tariff_period
         type: string
 

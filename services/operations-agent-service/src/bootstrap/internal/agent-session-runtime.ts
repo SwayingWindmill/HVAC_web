@@ -108,6 +108,7 @@ export const createProductionAgentSessionRuntime = async (
         energyAnalyticsReader,
         semanticQueryReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
+        now: options.now ?? Date.now,
       }),
     });
     const handler = createAgentSessionHttpHandler({
