@@ -23,7 +23,7 @@ Every read that aggregates energy for a person or for the Operations Agent goes 
 - report-service reads the Site's hourly electricity and cooling through `telemetry-query-service` as its own Workload Principal (ADR 0017), not through ClickHouse.
 - The Operations Agent gets a governed semantic query Tool over the views (members whitelisted, Site forced by the Gateway grant) once the first assistant release ships; fixed Tools stay for questions that need more than one query.
 - Readings history (raw device series) stays on the query service's history engine over `telemetry_history.observations`: high-cardinality raw series are not semantic measures.
-- Owners that compute rather than present (metric worker, savings verification, settlement, forecast, fault diagnosis) keep reading their own inputs; they own those calculations.
+- Owners that compute rather than present (metric worker, savings verification, settlement, forecast, fault diagnosis) keep reading their own inputs; they own those calculations. Estimated energy cost is the exception (#575): the optimization service and savings verification take it from the query service as their own Workload Principals instead of pricing energy themselves.
 
 ## Considered Options
 
@@ -32,6 +32,6 @@ Every read that aggregates energy for a person or for the Operations Agent goes 
 
 ## Consequences
 
-- Estimated energy cost is a Cube measure too (#575, `docs/specs/estimated-energy-cost.md`). The Tariff lives in PostgreSQL and ClickHouse cannot read a per-row timezone, so the Energy Processing projector lays each Site's import Tariff out as UTC price windows in ClickHouse, and the `site_energy_cost` view prices every electricity fact at the window its period ends in. Settlement stays the authority on the bill; demand charges are not in the estimate.
+- Estimated energy cost is a Cube measure too (#575, `docs/specs/estimated-energy-cost.md`). The Tariff lives in PostgreSQL and ClickHouse cannot read a per-row timezone, so the Energy Processing projector lays each Site's import Tariff out as UTC price windows in ClickHouse, and the `site_energy_cost` view prices every electricity fact at the window its period ends in. Pages, report snapshots, the Operations Agent, the optimization baseline and M&V's avoided cost all read it; the `energy_cost` Metric is retired. Settlement stays the authority on the bill; demand charges are not in the estimate.
 - Cube still runs with the in-memory cache and without pre-aggregations or Cube Store. At one Site ClickHouse answers directly within the request budget; add Cube Store and pre-aggregations when the query service's p95 for Energy Series exceeds its budget or more Sites make the facts large.
 - A new energy measure is added to the Cube model and a view, then read through the query service; a service that writes its own SQL over the energy facts is a defect.
