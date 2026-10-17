@@ -5,7 +5,7 @@
 // the Session contract before it answers, so the runner reads them as the Agent's own type.
 
 import type { AgentSessionSnapshot } from '../src/agent/index.ts';
-import { gradeTrial, seriesKey, type CheckName, type SeriesByKey, type TrialGrade } from './grade.ts';
+import { gradeTrial, seriesFigures, seriesKey, type CheckName, type SeriesByKey, type TrialGrade } from './grade.ts';
 import { questions as suite, SONGYAXUAN_SITE_ID, type EvalQuestion } from './questions.ts';
 
 export interface TrialResult extends TrialGrade {
@@ -43,16 +43,25 @@ export interface RunOptions {
   readonly onProgress?: (line: string) => void;
 }
 
-const POLL_MS = 2_000;
+// The Gateway allows 30 Agent Session requests a minute per signed-in session, polls included.
+const POLL_MS = 5_000;
+const RATE_WINDOW_MS = 60_000;
+const RATE_LIMITED_RETRIES = 3;
 const RUN_TIMEOUT_MS = 180_000;
 
-const request = async (path: string, init: RequestInit = {}): Promise<unknown> => {
-  const response = await fetch(path, { credentials: 'include', ...init, headers: { Accept: 'application/json', ...init.headers } });
-  if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${path} answered ${response.status}`);
-  return response.json();
-};
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const request = async (path: string, init: RequestInit = {}): Promise<unknown> => {
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(path, { credentials: 'include', ...init, headers: { Accept: 'application/json', ...init.headers } });
+    if (response.status === 429 && attempt < RATE_LIMITED_RETRIES) {
+      await sleep(RATE_WINDOW_MS);
+      continue;
+    }
+    if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${path} answered ${response.status}`);
+    return response.json();
+  }
+};
 const mean = (values: readonly number[]) => (values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length);
 
 export const runSuite = async (options: RunOptions = {}): Promise<SuiteReport> => {
@@ -72,14 +81,18 @@ export const runSuite = async (options: RunOptions = {}): Promise<SuiteReport> =
 
   // The reference figures, read once per period from the same Energy Series the pages use.
   const series: Record<string, SeriesByKey[string]> = {};
-  for (const figure of chosen.flatMap((question) => question.figures)) {
+  for (const figure of chosen.flatMap((question) => question.figures.flatMap(seriesFigures))) {
     const key = seriesKey(figure);
     if (series[key] !== undefined) continue;
-    const read = async (energyType: 'electricity' | 'cooling') => (await post('/api/v1/analytics/energy-series', {
+    const read = async (energyType: 'electricity' | 'cooling', breakdown?: 'device') => await post('/api/v1/analytics/energy-series', {
       tenantId: site.tenantId, siteId, energyType, granularity: figure.granularity, timezone: site.timezone,
-      from: figure.from, to: figure.to, qualityPolicy: 'VALID_ONLY',
-    }) as { points: SeriesByKey[string]['electricity'] }).points;
-    series[key] = { timezone: site.timezone, electricity: await read('electricity'), cooling: await read('cooling') };
+      from: figure.from, to: figure.to, qualityPolicy: 'VALID_ONLY', ...(breakdown === undefined ? {} : { breakdown }),
+    }) as Pick<SeriesByKey[string], 'devices'> & { points: SeriesByKey[string]['electricity'] };
+    const electricity = await read('electricity', figure.measure === 'machine' ? 'device' : undefined);
+    series[key] = {
+      timezone: site.timezone, electricity: electricity.points, cooling: (await read('cooling')).points,
+      ...(electricity.devices === undefined ? {} : { devices: electricity.devices }),
+    };
   }
 
   const sessions = `/api/v1/sites/${siteId}/operations/agent-sessions`;
