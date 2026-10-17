@@ -10,8 +10,8 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(energy.getByRole('tab', { name: /今日空调用电/ })).toHaveAttribute('aria-selected', 'true');
   await expect(energy.getByRole('tab', { name: /今日空调用电/ })).toContainText('918.9kWh');
   await expect(energy.getByRole('tab', { name: /今日综合能效/ })).toContainText('3.48COP');
-  // Peak hours at 1.20 and flat hours at 0.72 元/kWh.
-  await expect(energy.getByRole('tab', { name: /今日电费（估算）/ })).toContainText('865元');
+  // The owner's price: peak hours at 1.20 and flat hours at 0.72 元/kWh, 100 kWh of 13:00 unpriced.
+  await expect(energy.getByRole('tab', { name: /今日电费（估算）/ })).toContainText('745元');
   await energy.getByRole('tab', { name: /今日综合能效/ }).click();
   await expect(page).toHaveURL(/metric=cop/);
   await expect(energy.getByRole('tab', { name: /今日综合能效/ })).toHaveAttribute('aria-selected', 'true');

@@ -45,12 +45,23 @@ function replayEnergy(series: Json, query: Json, recordedDay = RECORDED_DAY): Js
   return { ...series, points: replay(series.points), ...(devices ? { devices } : {}) };
 }
 
-// The recorded day's energy, once for each day of the window.
+// The recorded day's energy, and its cost for electricity, once for each day of the window.
 function replayEnergyDays(series: Json, query: Json): Json {
   const total = series.points.reduce((sum: number, point: Json) => sum + point.energyKWh, 0);
+  const priced = series.points.filter((point: Json) => point.cost);
+  const periods = new Map<string, { energyKWh: number; amountCNY: number }>();
+  for (const period of priced.flatMap((point: Json) => point.cost.periods)) {
+    const entry = periods.get(period.periodCode) ?? { energyKWh: 0, amountCNY: 0 };
+    periods.set(period.periodCode, { energyKWh: entry.energyKWh + period.energyKWh, amountCNY: entry.amountCNY + period.amountCNY });
+  }
+  const cost = priced.length === 0 ? undefined : {
+    amountCNY: priced.reduce((sum: number, point: Json) => sum + point.cost.amountCNY, 0),
+    unpricedKWh: priced.reduce((sum: number, point: Json) => sum + point.cost.unpricedKWh, 0),
+    periods: [...periods.entries()].map(([periodCode, entry]) => ({ periodCode, ...entry })),
+  };
   const points: Json[] = [];
   for (let day = Date.parse(query.from); day < Date.parse(query.to); day += DAY_MS) {
-    points.push({ periodStart: new Date(day).toISOString(), periodEnd: new Date(day + DAY_MS).toISOString(), energyKWh: total });
+    points.push({ periodStart: new Date(day).toISOString(), periodEnd: new Date(day + DAY_MS).toISOString(), energyKWh: total, ...(cost ? { cost } : {}) });
   }
   return { ...series, points };
 }

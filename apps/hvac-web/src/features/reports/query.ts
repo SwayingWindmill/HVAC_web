@@ -5,11 +5,11 @@ import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { listAlarms, type Alarm } from '@/features/alarms/alarm-api';
 import { quarterHours } from '@/features/load/demand-model';
 import { plantPowerPoint } from '@/features/load/query';
-import { siteDayKey, siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
+import { siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { siteTariffQuery } from '@/features/tariff/query';
-import { touEnergyCost } from '@/features/tariff/tariff-model';
+import { sumCosts } from '@/features/tariff/tariff-model';
 import { listView } from '@/features/work-orders/work-order-queries';
 import type { LiveMonth, ReportWindow, StoredReport } from './report-model';
 
@@ -62,19 +62,18 @@ export function yearSnapshotsQuery(siteId: string, year: number) {
   });
 }
 
-/** The month's electricity and cooling by day against the month before, with its hourly electricity. */
+/** The month's electricity, its cost and cooling by day, against the month before. */
 export function useMonthEnergy(month: string, span: ReportWindow, enabled = true) {
-  const { site, read, summary } = useEnergyReader();
+  const { site, summary } = useEnergyReader();
   return useQuery({
     queryKey: ['monthly-report', site.id, month, span.to.getTime(), 'energy'],
     enabled,
     queryFn: async ({ signal }) => {
-      const [current, previous, hourly] = await Promise.all([
+      const [current, previous] = await Promise.all([
         summary('day', span.from, span.to, signal),
         summary('day', span.previousFrom, span.previousTo, signal),
-        read('electricity', 'hour', span.from, span.to, signal),
       ]);
-      return { current, previous, hourly: hourly.points };
+      return { current, previous };
     },
     retry: false,
   });
@@ -124,11 +123,11 @@ export function useSiteTariff() {
 }
 
 /**
- * The year's months on the live series: electricity and cooling by month, and each month's hourly
- * electricity priced at the Site's Tariff. Months with a snapshot read from it instead.
+ * The year's months on the live series: electricity, its cost and cooling by month. Months with a
+ * snapshot read from it instead.
  */
 export function useYearLive(year: number, now: Date) {
-  const { site, read, summary } = useEnergyReader();
+  const { site, summary } = useEnergyReader();
   const tariff = useSiteTariff();
   const from = siteMidnight(year, 1, 1, site.timezone);
   const end = siteMidnight(year + 1, 1, 1, site.timezone);
@@ -137,21 +136,15 @@ export function useYearLive(year: number, now: Date) {
     queryKey: ['yearly-report', site.id, year, to.getTime(), tariff.data?.version ?? null],
     enabled: !tariff.isPending && from.getTime() < to.getTime(),
     queryFn: async ({ signal }): Promise<Map<string, LiveMonth>> => {
-      const [months, hourly] = await Promise.all([summary('month', from, to, signal), read('electricity', 'hour', from, to, signal)]);
-      const hoursByMonth = new Map<string, { periodStart: string; energyKWh: number }[]>();
-      for (const point of hourly.points) {
-        const month = siteDayKey(new Date(point.periodStart), site.timezone).slice(0, 7);
-        hoursByMonth.set(month, [...(hoursByMonth.get(month) ?? []), point]);
-      }
+      const months = await summary('month', from, to, signal);
       const live = new Map<string, LiveMonth>();
       for (const row of months.rows) {
         const local = wallTime(new Date(row.periodStart), site.timezone);
         const month = `${local.year}-${String(local.month).padStart(2, '0')}`;
-        const hours = hoursByMonth.get(month) ?? [];
         live.set(month, {
           electricityKWh: row.electricityKWh,
           coolingKWh: row.coolingKWh,
-          energyCost: tariff.data && hours.length > 0 ? touEnergyCost(hours, tariff.data, site.timezone).total : null,
+          energyCost: tariff.data && row.electricityKWh !== null ? sumCosts([row]).total : null,
         });
       }
       return live;

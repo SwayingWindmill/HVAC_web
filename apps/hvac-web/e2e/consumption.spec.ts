@@ -18,10 +18,11 @@ test('energy consumption compares the period with the same span before it, per S
   await expect(energy).toContainText('用电最高时段 11:00');
   await expect(page.getByTestId('energy-freshness')).toHaveText(' · 数据截至 10/10 15:06');
 
-  // 10:00 and 13:00 fall in peak periods, 11:00 and 12:00 in a flat one.
+  // The owner prices each hour: 10:00 and 13:00 in peak periods, 11:00 and 12:00 in a flat one,
+  // and 100 kWh of 13:00 that no Tariff period covers stays unpriced rather than free.
   const estimate = energy.getByRole('tab', { name: /估算电费/ });
-  await expect(estimate).toContainText('¥865');
-  await expect(estimate).toContainText('均价 0.942 元/kWh · 用电 919 kWh');
+  await expect(estimate).toContainText('¥745');
+  await expect(estimate).toContainText('均价 0.910 元/kWh · 用电 919 kWh');
   const details = page.getByRole('region', { name: '能耗明细' });
   // Switching a tab further down the page keeps the reader's place instead of jumping to the top.
   await details.scrollIntoViewIfNeeded();
@@ -34,10 +35,11 @@ test('energy consumption compares the period with the same span before it, per S
   await expect(details).toContainText('两部制分时电价');
   const cost = details.getByRole('region', { name: '分时电费' });
   const periods = cost.getByRole('table', { name: '分时段电费' }).getByRole('row');
-  await expect(periods.filter({ hasText: '峰' }).first()).toContainText('425kWh');
-  await expect(periods.filter({ hasText: '峰' }).first()).toContainText('¥510');
+  await expect(periods.filter({ hasText: '峰' }).first()).toContainText('325kWh');
+  await expect(periods.filter({ hasText: '峰' }).first()).toContainText('¥390');
   await expect(periods.filter({ hasText: '平' }).first()).toContainText('494kWh');
   await expect(periods.filter({ hasText: '平' }).first()).toContainText('¥356');
+  await expect(cost).toContainText('有 100 kWh 落在电价未覆盖的时段，未计入电费');
 
   // Newest first; each hour's energy also lands in its tariff period's column.
   await details.getByRole('tab', { name: '分时段明细' }).click();
@@ -46,10 +48,10 @@ test('energy consumption compares the period with the same span before it, per S
   // The first cell carries the row's 解释 action.
   await expect(rows.last().getByRole('cell')).toHaveText(['10:00解释', '177.5', '177.5', '0.0%', '178', '—', '—', '607.1', '3.42']);
 
-  // Today and the same hours yesterday, each as electricity and cooling, and both hourly again to price them
+  // Today and the same hours yesterday, each as electricity (already priced) and cooling
   // (the machines' split is read on its own, see below).
   const queries = gateway.writes.filter((write) => write.path === '/api/v1/analytics/energy-series' && !write.body?.breakdown);
-  expect(queries.map((write) => write.body?.energyType).sort()).toEqual(['cooling', 'cooling', 'electricity', 'electricity', 'electricity', 'electricity']);
+  expect(queries.map((write) => write.body?.energyType).sort()).toEqual(['cooling', 'cooling', 'electricity', 'electricity']);
   for (const write of queries) {
     expect(write.body).toMatchObject({ siteId: SITE_ID, granularity: 'hour', timezone: 'Asia/Shanghai', qualityPolicy: 'VALID_ONLY' });
     // Both periods start at Site-local midnight (UTC+8), whatever the browser timezone.

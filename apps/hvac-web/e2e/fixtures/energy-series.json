@@ -55,13 +55,13 @@
         "periodEnd": "2026-10-10T06:00:00Z",
         "energyKWh": 247.065425,
         "cost": {
-          "amountCNY": 296.47850999999997,
-          "unpricedKWh": 0,
+          "amountCNY": 176.47851,
+          "unpricedKWh": 100,
           "periods": [
             {
               "periodCode": "PEAK",
-              "energyKWh": 247.065425,
-              "amountCNY": 296.47850999999997
+              "energyKWh": 147.065425,
+              "amountCNY": 176.47851
             }
           ]
         }

@@ -3,6 +3,8 @@ import type { EnergySeriesQuery, EnergySeriesResponse } from '../../../api/gener
 export const ENERGY_PERIODS = { today: '今日', '7d': '近 7 天', month: '本月', year: '本年' } as const;
 export type EnergyPeriod = keyof typeof ENERGY_PERIODS;
 export type Granularity = EnergySeriesQuery['granularity'];
+/** A bucket's electricity as the Energy analytics owner priced it at the Site's Tariff (#575). */
+export type EnergyCost = NonNullable<EnergySeriesResponse['points'][number]['cost']>;
 export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '日', month: '月' };
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
@@ -44,6 +46,8 @@ export interface EnergyRow {
   readonly coolingKWh: number | null;
   /** Cooling delivered per unit of HVAC electricity in the bucket; null without both energies. */
   readonly cop: number | null;
+  /** The electricity's estimated energy charge; null without electricity. */
+  readonly cost: EnergyCost | null;
 }
 
 export interface EnergySummary {
@@ -86,14 +90,18 @@ export function summarizeEnergy(
   granularity: Granularity,
   timeZone: string,
 ): EnergySummary {
-  const byStart = new Map<string, { electricity: number | null; cooling: number | null }>();
+  const byStart = new Map<string, { electricity: number | null; cooling: number | null; cost: EnergyCost | null }>();
   const at = (periodStart: string) => {
     const key = new Date(periodStart).toISOString();
-    const entry = byStart.get(key) ?? { electricity: null, cooling: null };
+    const entry = byStart.get(key) ?? { electricity: null, cooling: null, cost: null };
     byStart.set(key, entry);
     return entry;
   };
-  for (const point of electricity.points) at(point.periodStart).electricity = point.energyKWh;
+  for (const point of electricity.points) {
+    const entry = at(point.periodStart);
+    entry.electricity = point.energyKWh;
+    entry.cost = point.cost ?? null;
+  }
   for (const point of cooling.points) at(point.periodStart).cooling = point.energyKWh;
   const rows = [...byStart.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -103,6 +111,7 @@ export function summarizeEnergy(
       electricityKWh: energy.electricity,
       coolingKWh: energy.cooling,
       cop: ratio(energy.cooling, energy.electricity),
+      cost: energy.cost,
     }));
   const complete = rows.filter((row) => row.cop !== null);
   const sum = (values: readonly (number | null)[]) => values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
@@ -154,14 +163,6 @@ function bucketAt(from: Date, granularity: Granularity, ordinal: number, timeZon
   return new Date(siteMidnight(start.year, start.month, start.day, timeZone).getTime() + ordinal * HOUR_MS);
 }
 
-/**
- * The label of the current period's bucket that an instant of a period starting at `start` lines
- * up with: hours of a day, days of a window or months of a year, matched by their place.
- */
-export function alignedLabel(periodStart: string, start: Date, from: Date, granularity: Granularity, timeZone: string): string {
-  return bucketLabel(bucketAt(from, granularity, bucketOrdinal(periodStart, start, granularity, timeZone), timeZone).toISOString(), granularity, timeZone);
-}
-
 export interface BucketComparison {
   readonly label: string;
   /** Where the bucket and the one it is compared with start. */
@@ -173,6 +174,8 @@ export interface BucketComparison {
   readonly previousElectricityKWh: number | null;
   readonly previousCoolingKWh: number | null;
   readonly previousCop: number | null;
+  readonly cost: EnergyCost | null;
+  readonly previousCost: EnergyCost | null;
   /** The current bucket has ended; the one still running holds partial energy. */
   readonly complete: boolean;
 }
@@ -205,6 +208,8 @@ export function comparePeriods(
       previousElectricityKWh: before?.electricityKWh ?? null,
       previousCoolingKWh: before?.coolingKWh ?? null,
       previousCop: before?.cop ?? null,
+      cost: row?.cost ?? null,
+      previousCost: before?.cost ?? null,
       complete: bucketAt(from, granularity, ordinal + 1, timeZone) <= now,
     };
   });

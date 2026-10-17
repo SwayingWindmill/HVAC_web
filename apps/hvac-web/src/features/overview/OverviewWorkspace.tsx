@@ -16,7 +16,7 @@ import { completeOnly, relativeChange } from "@/features/energy-analysis/consump
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
 import { formatClock, LiveIndicator } from "@/features/operations/realtime/device-presentation";
 import { siteTariffQuery } from "@/features/tariff/query";
-import { costByLabel } from "@/features/tariff/tariff-model";
+import { costsByLabel } from "@/features/tariff/tariff-model";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
 import { sortWorkOrdersForOperators } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
@@ -74,7 +74,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
   const { today, yesterday, wholeYesterday, hours } = comparison.data;
   // Without a Tariff the day is not priced, and the cost tab is left out.
   const priced = tariff.data
-    ? { today: costByLabel(today.rows, tariff.data, site.timezone), yesterday: costByLabel(wholeYesterday.rows, tariff.data, site.timezone), sameHours: costByLabel(yesterday.rows, tariff.data, site.timezone) }
+    ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows), sameHours: costsByLabel(yesterday.rows) }
     : null;
   const sum = (costs: Map<string, number>) => (costs.size === 0 ? null : [...costs.values()].reduce((total, cost) => total + cost, 0));
   return (

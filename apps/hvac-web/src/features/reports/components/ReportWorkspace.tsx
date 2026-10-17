@@ -12,7 +12,7 @@ import { siteFindingsQuery } from '@/features/diagnostics/query';
 import { relativeChange, wallTime } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
 import { monthToDate, STATUS_LABEL } from '@/features/savings/savings-model';
-import { demandCharges, touEnergyCost } from '@/features/tariff/tariff-model';
+import { demandCharges, sumCosts } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
 import { monthlySnapshotQuery, useMonthDemand, useMonthEnergy, useMonthOperations, useSiteTariff } from '../query';
 import {
@@ -225,7 +225,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
   const tariff = useSiteTariff();
 
   const cost = useMemo(
-    () => (tariff.data && energy.data ? touEnergyCost(energy.data.hourly, tariff.data, timeZone) : null),
+    () => (tariff.data && energy.data ? sumCosts(energy.data.current.rows) : null),
     [tariff.data, energy.data, timeZone],
   );
   const charges = useMemo(
