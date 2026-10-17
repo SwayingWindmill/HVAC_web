@@ -68,6 +68,8 @@ export interface CreateHvacReadToolsInput {
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly semanticQueryReader: SemanticQueryReader;
   readonly limits?: Partial<HvacReadToolLimits>;
+  /** The clock site_get_context reads the Site's local date and time from. */
+  readonly now?: () => number;
 }
 
 const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
@@ -112,16 +114,22 @@ const telemetryInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
+// Site-local calendar dates, both ends included: 「10月13日到16日」 is 2026-10-13 to 2026-10-16.
+// The Tool turns them into the Site's whole days, so the model never converts to UTC.
+const siteDateSchema = (description: string) => Object.freeze({ type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description });
+const START_DATE = siteDateSchema('First day, Site-local, YYYY-MM-DD.');
+const END_DATE = siteDateSchema('Last day, Site-local, YYYY-MM-DD, included.');
+
 const historyInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
     deviceId: Object.freeze({ type: 'string', minLength: 36, maxLength: 36 }),
     pointKeys: Object.freeze({ type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: Object.freeze({ type: 'string', minLength: 1, maxLength: 128 }) }),
-    from: Object.freeze({ type: 'string', format: 'date-time' }),
-    to: Object.freeze({ type: 'string', format: 'date-time' }),
+    startDate: START_DATE,
+    endDate: END_DATE,
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['quarter_hour', 'hour', 'day']) }),
   }),
-  required: Object.freeze(['deviceId', 'pointKeys', 'from', 'to']),
+  required: Object.freeze(['deviceId', 'pointKeys', 'startDate', 'endDate']),
   additionalProperties: false,
 });
 
@@ -134,12 +142,12 @@ const energyTypeSchema = Object.freeze({
 const energyWindowInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
-    from: Object.freeze({ type: 'string', format: 'date-time' }),
-    to: Object.freeze({ type: 'string', format: 'date-time' }),
+    startDate: START_DATE,
+    endDate: END_DATE,
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
     qualityPolicy: Object.freeze({ type: 'string', enum: Object.freeze(['VALID_ONLY', 'VALID_AND_SUSPECT']) }),
   }),
-  required: Object.freeze(['from', 'to']),
+  required: Object.freeze(['startDate', 'endDate']),
   additionalProperties: false,
 });
 
@@ -151,15 +159,15 @@ const energyQueryInputSchema = Object.freeze({
 const energyCompareInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
-    baselineFrom: Object.freeze({ type: 'string', format: 'date-time' }),
-    baselineTo: Object.freeze({ type: 'string', format: 'date-time' }),
-    currentFrom: Object.freeze({ type: 'string', format: 'date-time' }),
-    currentTo: Object.freeze({ type: 'string', format: 'date-time' }),
+    baselineStartDate: START_DATE,
+    baselineEndDate: END_DATE,
+    currentStartDate: START_DATE,
+    currentEndDate: END_DATE,
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
     qualityPolicy: Object.freeze({ type: 'string', enum: Object.freeze(['VALID_ONLY', 'VALID_AND_SUSPECT']) }),
     energyType: energyTypeSchema,
   }),
-  required: Object.freeze(['baselineFrom', 'baselineTo', 'currentFrom', 'currentTo']),
+  required: Object.freeze(['baselineStartDate', 'baselineEndDate', 'currentStartDate', 'currentEndDate']),
   additionalProperties: false,
 });
 
@@ -190,10 +198,10 @@ const semanticQueryInputSchema = Object.freeze({
       description: 'Up to two groupings from the same view as the measures; each adds a row per value.',
     }),
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
-    from: Object.freeze({ type: 'string', format: 'date-time' }),
-    to: Object.freeze({ type: 'string', format: 'date-time' }),
+    startDate: START_DATE,
+    endDate: END_DATE,
   }),
-  required: Object.freeze(['measures', 'granularity', 'from', 'to']),
+  required: Object.freeze(['measures', 'granularity', 'startDate', 'endDate']),
   additionalProperties: false,
 });
 
@@ -247,6 +255,56 @@ const exactEmptyArguments = (value: unknown): void => {
   }
 };
 
+/** Site-local days, both ends included, already checked against the Run's range budget. */
+interface SiteDays {
+  readonly startDate: string;
+  readonly endDate: string;
+  readonly days: number;
+}
+
+const DAY_MS = 86_400_000;
+
+const calendarDay = (value: unknown, message: string): number => {
+  const text = requireString(value, message);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(text);
+  const day = match === null ? Number.NaN : Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (!Number.isFinite(day) || new Date(day).toISOString().slice(0, 10) !== text) fail('TOOL_ARGUMENTS_INVALID', message);
+  return day;
+};
+
+const parseSiteDays = (start: unknown, end: unknown, limits: HvacReadToolLimits, message: string): SiteDays => {
+  const first = calendarDay(start, message);
+  const last = calendarDay(end, message);
+  const days = (last - first) / DAY_MS + 1;
+  if (days < 1) fail('TOOL_ARGUMENTS_INVALID', `${message} The last day is before the first.`);
+  if (days * DAY_MS > limits.maxEnergyRangeMs) {
+    fail('TOOL_ARGUMENTS_INVALID', `${message} At most ${limits.maxEnergyRangeMs / DAY_MS} days per read.`);
+  }
+  return Object.freeze({ startDate: String(start), endDate: String(end), days });
+};
+
+// How far a zone is ahead of UTC at an instant.
+const zoneOffsetMs = (instant: number, timezone: string): number => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second)) - instant;
+};
+
+const localMidnight = (day: number, timezone: string): number => {
+  const guess = day - zoneOffsetMs(day, timezone);
+  return day - zoneOffsetMs(guess, timezone);
+};
+
+/** The Site's whole days as the owner's UTC range: from the first midnight to the one after the last day. */
+const siteRange = (days: SiteDays, timezone: string): { readonly from: string; readonly to: string } => {
+  const first = Date.parse(`${days.startDate}T00:00:00.000Z`);
+  return {
+    from: new Date(localMidnight(first, timezone)).toISOString(),
+    to: new Date(localMidnight(first + days.days * DAY_MS, timezone)).toISOString(),
+  };
+};
+
 interface TelemetryArguments {
   readonly deviceId: string;
   readonly pointKeys: readonly string[];
@@ -280,50 +338,34 @@ const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
   return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
 };
 
-interface HistoryArguments {
+interface HistoryArguments extends SiteDays {
   readonly deviceId: string;
   readonly pointKeys: readonly string[];
-  readonly from: string;
-  readonly to: string;
   readonly granularity: TelemetryHistoryReadRequest['input']['granularity'];
 }
 
 const HISTORY_GRANULARITIES = Object.freeze({ quarter_hour: 'QUARTER_HOUR', hour: 'HOUR', day: 'DAY' } as const);
-const HISTORY_BUCKET_MS = Object.freeze({ QUARTER_HOUR: 15 * 60_000, HOUR: 3_600_000, DAY: 86_400_000 } as const);
+const HISTORY_BUCKETS_PER_DAY = Object.freeze({ QUARTER_HOUR: 96, HOUR: 24, DAY: 1 } as const);
 
 const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): HistoryArguments => {
   const record = requireRecord(value, 'History query arguments are invalid.');
-  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys', 'from', 'to', 'granularity'])
+  if (!hasOnlyKeys(record, ['deviceId', 'pointKeys', 'startDate', 'endDate', 'granularity'])
     || (record.granularity !== undefined && !Object.hasOwn(HISTORY_GRANULARITIES, String(record.granularity)))) {
     fail('TOOL_ARGUMENTS_INVALID', 'History query arguments are invalid.');
   }
   const { deviceId, pointKeys } = parseTelemetryArguments({ deviceId: record.deviceId, pointKeys: record.pointKeys });
   if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', 'History query reads at most 8 points.');
-  const from = requireString(record.from, 'History query arguments are invalid.');
-  const to = requireString(record.to, 'History query arguments are invalid.');
-  const fromMs = Date.parse(from);
-  const toMs = Date.parse(to);
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || toMs - fromMs > limits.maxEnergyRangeMs) {
-    fail('TOOL_ARGUMENTS_INVALID', 'History query range is invalid or exceeds the Tool limit.');
-  }
+  const days = parseSiteDays(record.startDate, record.endDate, limits, 'History query dates are invalid.');
   const granularity = HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES];
   // One bucket per point per period; past the result's bound the model should narrow the range or coarsen.
-  if (Math.ceil((toMs - fromMs) / HISTORY_BUCKET_MS[granularity]) * pointKeys.length > limits.maxEnergyPoints) {
+  if (days.days * HISTORY_BUCKETS_PER_DAY[granularity] * pointKeys.length > limits.maxEnergyPoints) {
     fail('TOOL_ARGUMENTS_INVALID', 'Too many history buckets: shorten the range, read fewer points or use a coarser granularity.');
   }
-  return Object.freeze({
-    deviceId,
-    pointKeys,
-    from: new Date(fromMs).toISOString(),
-    to: new Date(toMs).toISOString(),
-    granularity,
-  });
+  return Object.freeze({ deviceId, pointKeys, ...days, granularity });
 };
 
-interface EnergyArguments {
+interface EnergyArguments extends SiteDays {
   readonly energyType: 'electricity' | 'cooling';
-  readonly from: string;
-  readonly to: string;
   readonly granularity: 'hour' | 'day' | 'month';
   readonly qualityPolicy: 'VALID_ONLY' | 'VALID_AND_SUSPECT';
 }
@@ -337,40 +379,33 @@ const parseEnergyWindow = (
 ): EnergyArguments => {
   const record = requireRecord(value, 'Energy query arguments are invalid.');
   if (!hasOnlyKeys(record, energyTypes.length > 1
-    ? ['from', 'to', 'granularity', 'qualityPolicy', 'energyType']
-    : ['from', 'to', 'granularity', 'qualityPolicy'])
+    ? ['startDate', 'endDate', 'granularity', 'qualityPolicy', 'energyType']
+    : ['startDate', 'endDate', 'granularity', 'qualityPolicy'])
     || (record.energyType !== undefined && !energyTypes.includes(record.energyType as EnergyArguments['energyType']))
     || (record.granularity !== undefined && !['hour', 'day', 'month'].includes(String(record.granularity)))
     || (record.qualityPolicy !== undefined
       && !['VALID_ONLY', 'VALID_AND_SUSPECT'].includes(String(record.qualityPolicy)))) {
     fail('TOOL_ARGUMENTS_INVALID', 'Energy query arguments are invalid.');
   }
-  const fromValue = requireString(record.from, 'Energy query arguments are invalid.');
-  const toValue = requireString(record.to, 'Energy query arguments are invalid.');
-  const from = Date.parse(fromValue);
-  const to = Date.parse(toValue);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || to - from > limits.maxEnergyRangeMs) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Energy query range is invalid or exceeds the Tool limit.');
-  }
+  const days = parseSiteDays(record.startDate, record.endDate, limits, 'Energy query dates are invalid.');
   return Object.freeze({
     energyType: (record.energyType ?? 'electricity') as EnergyArguments['energyType'],
-    from: fromValue,
-    to: toValue,
+    ...days,
     granularity: (record.granularity ?? 'hour') as EnergyArguments['granularity'],
     qualityPolicy: (record.qualityPolicy ?? 'VALID_ONLY') as EnergyArguments['qualityPolicy'],
   });
 };
 
-interface SemanticQueryArguments {
+interface SemanticQueryArguments extends SiteDays {
   readonly view: typeof semanticCatalog.views[number];
   readonly measures: readonly string[];
   readonly dimensions: readonly string[];
   readonly granularity: 'hour' | 'day' | 'month';
-  readonly from: string;
-  readonly to: string;
 }
 
-const SEMANTIC_BUCKET_MS = Object.freeze({ hour: 3_600_000, day: 86_400_000, month: 28 * 86_400_000 });
+const semanticBuckets = (days: number, granularity: SemanticQueryArguments['granularity']): number => (
+  granularity === 'hour' ? days * 24 : granularity === 'day' ? days : Math.ceil(days / 28) + 1
+);
 
 // Refuses, before any read, members outside one catalog view and ranges beyond the Run's budget.
 // The owner checks the catalog again and forces the Site.
@@ -381,7 +416,7 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
     if (!Array.isArray(list) || list.length > max) fail('TOOL_ARGUMENTS_INVALID', invalid);
     return (list as unknown[]).map((member) => requireString(member, invalid).split('.'));
   };
-  if (!hasOnlyKeys(record, ['measures', 'dimensions', 'granularity', 'from', 'to'])
+  if (!hasOnlyKeys(record, ['measures', 'dimensions', 'granularity', 'startDate', 'endDate'])
     || !['hour', 'day', 'month'].includes(String(record.granularity))) {
     fail('TOOL_ARGUMENTS_INVALID', invalid);
   }
@@ -400,15 +435,11 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
     fail('TOOL_ARGUMENTS_INVALID', "Semantic query members are not in that view's catalog.");
   }
   const granularity = record.granularity as SemanticQueryArguments['granularity'];
-  const fromValue = requireString(record.from, invalid);
-  const toValue = requireString(record.to, invalid);
-  const from = Date.parse(fromValue);
-  const to = Date.parse(toValue);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || to - from > limits.maxEnergyRangeMs
-    || Math.ceil((to - from) / SEMANTIC_BUCKET_MS[granularity]) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Semantic query range is invalid or exceeds the Tool limit.');
+  const days = parseSiteDays(record.startDate, record.endDate, limits, 'Semantic query dates are invalid.');
+  if (semanticBuckets(days.days, granularity) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Semantic query has too many time buckets: shorten the range or use a coarser granularity.');
   }
-  return Object.freeze({ view, measures, dimensions, granularity, from: fromValue, to: toValue });
+  return Object.freeze({ view, measures, dimensions, granularity, ...days });
 };
 
 interface EnergyComparisonArguments {
@@ -422,28 +453,24 @@ const parseEnergyComparison = (
 ): EnergyComparisonArguments => {
   const record = requireRecord(value, 'Energy comparison arguments are invalid.');
   if (!hasOnlyKeys(record, [
-    'baselineFrom',
-    'baselineTo',
-    'currentFrom',
-    'currentTo',
+    'baselineStartDate',
+    'baselineEndDate',
+    'currentStartDate',
+    'currentEndDate',
     'granularity',
     'qualityPolicy',
     'energyType',
   ])) {
     fail('TOOL_ARGUMENTS_INVALID', 'Energy comparison arguments are invalid.');
   }
-  const baselineFrom = requireString(record.baselineFrom, 'Energy comparison arguments are invalid.');
-  const baselineTo = requireString(record.baselineTo, 'Energy comparison arguments are invalid.');
-  const currentFrom = requireString(record.currentFrom, 'Energy comparison arguments are invalid.');
-  const currentTo = requireString(record.currentTo, 'Energy comparison arguments are invalid.');
   const shared = {
     ...(record.granularity === undefined ? {} : { granularity: record.granularity }),
     ...(record.qualityPolicy === undefined ? {} : { qualityPolicy: record.qualityPolicy }),
     ...(record.energyType === undefined ? {} : { energyType: record.energyType }),
   };
   return Object.freeze({
-    baseline: parseEnergyWindow({ from: baselineFrom, to: baselineTo, ...shared }, limits, ALL_ENERGY_TYPES),
-    current: parseEnergyWindow({ from: currentFrom, to: currentTo, ...shared }, limits, ALL_ENERGY_TYPES),
+    baseline: parseEnergyWindow({ startDate: record.baselineStartDate, endDate: record.baselineEndDate, ...shared }, limits, ALL_ENERGY_TYPES),
+    current: parseEnergyWindow({ startDate: record.currentStartDate, endDate: record.currentEndDate, ...shared }, limits, ALL_ENERGY_TYPES),
   });
 };
 
@@ -659,8 +686,7 @@ const readHistory = async (
       siteId: context.siteId,
       deviceId: query.deviceId,
       keys: query.pointKeys,
-      from: query.from,
-      to: query.to,
+      ...siteRange(query, timezone),
       granularity: query.granularity,
       timezone,
       qualityPolicy: 'VALID_ONLY' as const,
@@ -692,7 +718,7 @@ const readHistory = async (
   const completeness = result.quality === 'GOOD' ? 'COMPLETE' as const : 'PARTIAL' as const;
   return {
     deviceId: query.deviceId,
-    query: { from: query.from, to: query.to, granularity: query.granularity, timezone },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: query.granularity },
     series,
     missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
     completeness,
@@ -852,8 +878,7 @@ const readEnergy = async (
       energyType: query.energyType,
       granularity: query.granularity,
       timezone,
-      from: query.from,
-      to: query.to,
+      ...siteRange(query, timezone),
       qualityPolicy: query.qualityPolicy,
     },
   };
@@ -875,10 +900,9 @@ const readEnergy = async (
     siteId: context.siteId,
     query: {
       energyType: query.energyType,
-      from: query.from,
-      to: query.to,
+      startDate: query.startDate,
+      endDate: query.endDate,
       granularity: query.granularity,
-      timezone,
       qualityPolicy: query.qualityPolicy,
     },
     points: sitePoints(payload.points, timezone),
@@ -928,8 +952,7 @@ const readSemantic = async (
       ...(query.dimensions.length === 0 ? {} : { dimensions: query.dimensions }),
       granularity: query.granularity,
       timezone,
-      from: query.from,
-      to: query.to,
+      ...siteRange(query, timezone),
     },
   };
   const request: SemanticQueryReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_semantic_query', draft) };
@@ -942,7 +965,7 @@ const readSemantic = async (
   const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
     view: query.view.title,
-    query: { granularity: query.granularity, from: query.from, to: query.to, timezone },
+    query: { granularity: query.granularity, startDate: query.startDate, endDate: query.endDate },
     columns: payload.columns.map(({ title }) => title),
     rows: payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
       column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)] : [column.title, row[index]]
@@ -984,8 +1007,7 @@ const readEquipmentEnergy = async (
       energyType: 'electricity' as const,
       granularity: query.granularity,
       timezone,
-      from: query.from,
-      to: query.to,
+      ...siteRange(query, timezone),
       qualityPolicy: query.qualityPolicy,
       breakdown: 'device' as const,
     },
@@ -1019,7 +1041,7 @@ const readEquipmentEnergy = async (
   const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
     siteId: context.siteId,
-    query: { from: query.from, to: query.to, granularity: query.granularity, timezone, qualityPolicy: query.qualityPolicy },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: query.granularity, qualityPolicy: query.qualityPolicy },
     siteTotalKWh,
     devices,
     completeness,
@@ -1094,6 +1116,7 @@ export const createHvacReadTools = ({
   energyAnalyticsReader,
   semanticQueryReader,
   limits: inputLimits,
+  now = Date.now,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
   const limits = normalizeLimits(inputLimits);
 
@@ -1114,7 +1137,8 @@ export const createHvacReadTools = ({
             id: payload.site.id,
             code: payload.site.code,
             displayName: payload.site.displayName,
-            timezone: payload.site.timezone,
+            // The Site's own date and time, to resolve 「昨天」「上周同日」 into dates.
+            localNow: siteTime(new Date(now()).toISOString(), payload.site.timezone),
             status: payload.site.status,
           },
           source: {

@@ -192,6 +192,7 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
     telemetryHistoryReader,
     energyAnalyticsReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
+    now: () => Date.parse('2026-10-17T13:30:00.000Z'),
   });
 
   return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
@@ -251,8 +252,8 @@ test('model arguments cannot select trusted identity or infrastructure and direc
   );
   await assert.rejects(
     () => execute(byName(harness.tools, 'energy_query_series'), {
-      from: '2026-08-01T00:00:00.000Z',
-      to: '2026-08-01T01:00:00.000Z',
+      startDate: '2026-08-01',
+      endDate: '2026-08-01',
       tenantId: 'other-tenant',
     }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
@@ -348,7 +349,7 @@ test('energy_query_series injects authoritative timezone and keeps partial data 
     },
   });
 
-  const result = await execute(byName(harness.tools, 'energy_query_series'), { from, to, granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
   assert.equal(harness.energyInputs[0].request.input.tenantId, tenantId);
   assert.equal(harness.energyInputs[0].request.input.siteId, siteId);
   assert.equal(harness.energyInputs[0].request.input.timezone, 'America/Phoenix');
@@ -364,16 +365,14 @@ test('energy_query_series injects authoritative timezone and keeps partial data 
       return ownerResult(input.request, 'telemetry-query-service', 'energy-zero-1', 'GOOD', 'telemetry-query-service:energy-series/v1', payload);
     },
   });
-  const zero = await execute(byName(zeroHarness.tools, 'energy_query_series'), { from, to });
+  const zero = await execute(byName(zeroHarness.tools, 'energy_query_series'), { startDate: '2026-08-01', endDate: '2026-08-01' });
   assert.equal(zero.totalKWh, 0);
   assert.equal(zero.completeness, 'COMPLETE');
 });
 
 test('energy_compare_periods executes independent Energy reads in parallel and returns bounded summaries', async () => {
-  const baselineFrom = '2026-08-01T00:00:00.000Z';
-  const baselineTo = '2026-08-01T01:00:00.000Z';
-  const currentFrom = '2026-08-02T00:00:00.000Z';
-  const currentTo = '2026-08-02T01:00:00.000Z';
+  // 2026-08-01 and 08-02 in America/Phoenix (UTC−7).
+  const baselineFrom = '2026-08-01T07:00:00.000Z';
   let release;
   let waiting = 0;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -393,10 +392,10 @@ test('energy_compare_periods executes independent Energy reads in parallel and r
   });
 
   const result = await execute(byName(harness.tools, 'energy_compare_periods'), {
-    baselineFrom,
-    baselineTo,
-    currentFrom,
-    currentTo,
+    baselineStartDate: '2026-08-01',
+    baselineEndDate: '2026-08-01',
+    currentStartDate: '2026-08-02',
+    currentEndDate: '2026-08-02',
   });
 
   assert.equal(harness.maxActiveEnergyReads(), 2);
@@ -462,7 +461,7 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
     },
   });
 
-  const result = await execute(byName(harness.tools, 'energy_by_equipment'), { from, to, granularity: 'hour' });
+  const result = await execute(byName(harness.tools, 'energy_by_equipment'), { startDate: '2026-10-15', endDate: '2026-10-15', granularity: 'hour' });
 
   const energyRequest = harness.energyInputs[0].request;
   assert.equal(energyRequest.input.breakdown, 'device');
@@ -485,18 +484,15 @@ test('energy tools read cooling energy when asked and say which energy they read
       return ownerResult(input.request, 'telemetry-query-service', 'cooling-1', 'GOOD', 'telemetry-query-service:energy-series/v1', payload);
     },
   });
-  const from = '2026-10-15T16:00:00.000Z';
-  const to = '2026-10-16T16:00:00.000Z';
-
-  const series = await execute(byName(harness.tools, 'energy_query_series'), { from, to, energyType: 'cooling' });
+  const series = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15', energyType: 'cooling' });
   const comparison = await execute(byName(harness.tools, 'energy_compare_periods'), {
-    baselineFrom: '2026-10-08T16:00:00.000Z',
-    baselineTo: '2026-10-09T16:00:00.000Z',
-    currentFrom: from,
-    currentTo: to,
+    baselineStartDate: '2026-10-08',
+    baselineEndDate: '2026-10-08',
+    currentStartDate: '2026-10-15',
+    currentEndDate: '2026-10-15',
     energyType: 'cooling',
   });
-  const electricity = await execute(byName(harness.tools, 'energy_query_series'), { from, to });
+  const electricity = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
 
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType), ['cooling', 'cooling', 'cooling', 'electricity']);
   assert.equal(series.query.energyType, 'cooling');
@@ -506,14 +502,15 @@ test('energy tools read cooling energy when asked and say which energy they read
 
 test('telemetry_query_history aggregates one device readings over time in the Site calendar', async () => {
   const harness = createHarness();
-  const from = '2026-10-15T16:00:00.000Z';
-  const to = '2026-10-16T16:00:00.000Z';
+  // 10-16 in America/Phoenix (UTC−7).
+  const from = '2026-10-16T07:00:00.000Z';
+  const to = '2026-10-17T07:00:00.000Z';
 
   const result = await execute(byName(harness.tools, 'telemetry_query_history'), {
     deviceId: chillerDeviceId,
     pointKeys: ['chw_supply_temp', 'active_energy_total'],
-    from,
-    to,
+    startDate: '2026-10-16',
+    endDate: '2026-10-16',
   });
 
   assert.deepEqual(harness.historyInputs[0].request.input, {
@@ -541,8 +538,8 @@ test('telemetry_query_history refuses a range that would return more buckets tha
     execute(byName(harness.tools, 'telemetry_query_history'), {
       deviceId: chillerDeviceId,
       pointKeys: ['chw_supply_temp'],
-      from: '2026-10-14T16:00:00.000Z',
-      to: '2026-10-16T16:00:00.000Z',
+      startDate: '2026-10-15',
+      endDate: '2026-10-16',
       granularity: 'quarter_hour',
     }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /粒度|granularity/u.test(error.message),
@@ -552,8 +549,9 @@ test('telemetry_query_history refuses a range that would return more buckets tha
 
 test('energy_query_series points carry Site-local times', async () => {
   const harness = createHarness();
-  const result = await execute(byName(harness.tools, 'energy_query_series'), { from: '2026-10-16T01:00:00.000Z', to: '2026-10-16T02:00:00.000Z' });
-  assert.deepEqual(result.points, [{ siteTime: '2026-10-15 18:00', energyKWh: 12 }]);
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
+  // The owner's first bucket starts at the requested instant, 10-15 00:00 at the Site.
+  assert.deepEqual(result.points, [{ siteTime: '2026-10-15 00:00', energyKWh: 12 }]);
 });
 
 test('energy_query_series hands the model the owner\'s estimated cost and the energy it could not price', async () => {
@@ -569,7 +567,7 @@ test('energy_query_series hands the model the owner\'s estimated cost and the en
     }),
   });
 
-  const result = await execute(byName(harness.tools, 'energy_query_series'), { from, to });
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
 
   assert.deepEqual(result.points, [
     { siteTime: '2026-10-15 18:00', energyKWh: 100, estimatedCostCNY: 103, unpricedKWh: 0 },
@@ -577,4 +575,45 @@ test('energy_query_series hands the model the owner\'s estimated cost and the en
   ]);
   assert.equal(result.estimatedCostCNY, 121.6);
   assert.equal(result.unpricedKWh, 20);
+});
+
+test('energy and history Tools take Site-local dates with both ends included and read those whole days', async () => {
+  const harness = createHarness();
+  await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-13', endDate: '2026-10-16', granularity: 'day' });
+  await execute(byName(harness.tools, 'energy_by_equipment'), { startDate: '2026-10-15', endDate: '2026-10-15', granularity: 'day' });
+  await execute(byName(harness.tools, 'energy_compare_periods'), {
+    baselineStartDate: '2026-10-06', baselineEndDate: '2026-10-09', currentStartDate: '2026-10-13', currentEndDate: '2026-10-16', granularity: 'day',
+  });
+  await execute(byName(harness.tools, 'telemetry_query_history'), { deviceId: chillerDeviceId, pointKeys: ['chw_supply_temp'], startDate: '2026-10-16', endDate: '2026-10-16' });
+
+  // America/Phoenix is UTC−7: 「10月13日到16日」 is 10-13 07:00Z up to 10-17 07:00Z, all four days.
+  assert.deepEqual(harness.energyInputs.map(({ request }) => [request.input.from, request.input.to]), [
+    ['2026-10-13T07:00:00.000Z', '2026-10-17T07:00:00.000Z'],
+    ['2026-10-15T07:00:00.000Z', '2026-10-16T07:00:00.000Z'],
+    ['2026-10-06T07:00:00.000Z', '2026-10-10T07:00:00.000Z'],
+    ['2026-10-13T07:00:00.000Z', '2026-10-17T07:00:00.000Z'],
+  ]);
+  assert.deepEqual([harness.historyInputs[0].request.input.from, harness.historyInputs[0].request.input.to], ['2026-10-16T07:00:00.000Z', '2026-10-17T07:00:00.000Z']);
+});
+
+test('dates out of order, longer than the budget or given as instants are refused before any read', async () => {
+  const harness = createHarness();
+  const series = byName(harness.tools, 'energy_query_series');
+  for (const args of [
+    { startDate: '2026-10-16', endDate: '2026-10-13' },
+    { startDate: '2026-09-01', endDate: '2026-10-16' },
+    { startDate: '2026-10-32', endDate: '2026-10-33' },
+    { from: '2026-10-13T16:00:00.000Z', to: '2026-10-16T16:00:00.000Z' },
+  ]) {
+    await assert.rejects(() => execute(series, args), (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID', JSON.stringify(args));
+  }
+  assert.equal(harness.energyInputs.length, 0);
+  assert.equal(harness.registryInputs.length, 0);
+});
+
+test('site_get_context tells the model the Site\'s local date and time instead of a time zone', async () => {
+  const result = await execute(byName(createHarness().tools, 'site_get_context'), {});
+  // 13:30Z is 06:30 in America/Phoenix.
+  assert.equal(result.site.localNow, '2026-10-17 06:30');
+  assert.equal(JSON.stringify(result).includes('America/Phoenix'), false);
 });
