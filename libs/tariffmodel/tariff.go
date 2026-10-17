@@ -1,7 +1,10 @@
 // Package tariffmodel prices energy by a Tariff Version's time-of-use periods.
 package tariffmodel
 
-import "time"
+import (
+	"time"
+	_ "time/tzdata" // Tariff clocks load IANA zones in distroless images too.
+)
 
 // Period is the part of a Tariff Version that prices energy by local time of day.
 type Period struct {
