@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/energyseries"
 )
 
 // A fake IAM that signs a grant per query and a fake query service that serves it, as the report reads them.
@@ -54,7 +55,7 @@ func queryHoursFixture(t *testing.T, siteBound bool) (*QueryHours, *[]analyticsm
 		_ = json.NewEncoder(writer).Encode(analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points})
 	}))
 	t.Cleanup(query.Close)
-	return NewQueryHours(QueryHoursConfig{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()}), &asked
+	return NewQueryHours(energyseries.New(energyseries.Config{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()})), &asked
 }
 
 // The query service's price for the first hour's electricity, carried into the report as it is.
@@ -105,7 +106,7 @@ func TestQueryHoursSaysSoWhenTheWorkloadIsNotBoundToTheSite(t *testing.T) {
 	reader, _ := queryHoursFixture(t, false)
 	location, _ := time.LoadLocation("Asia/Shanghai")
 	_, err := reader.Hours(context.Background(), testTenant, testSite, location, time.Date(2026, 9, 1, 0, 0, 0, 0, location), time.Date(2026, 10, 1, 0, 0, 0, 0, location))
-	if !errors.Is(err, ErrSiteNotBound) {
+	if !errors.Is(err, energyseries.ErrSiteNotBound) {
 		t.Fatalf("err = %v, want ErrSiteNotBound", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/report-service/internal/report"
@@ -43,7 +44,7 @@ func main() {
 		return httpClient
 	}
 	iamURL, queryURL := requiredEnv("REPORT_IAM_URL"), requiredEnv("REPORT_QUERY_URL")
-	hours := report.NewQueryHours(report.QueryHoursConfig{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)})
+	hours := report.NewQueryHours(energyseries.New(energyseries.Config{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)}))
 	service, err := report.NewService(store, hours, time.Now, schedulerjob.UUIDv7)
 	if err != nil {
 		log.Fatal(err)
