@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 var shanghai = mustLocation("Asia/Shanghai")
@@ -18,32 +18,34 @@ func mustLocation(name string) *time.Location {
 	return location
 }
 
-// 2026-09-14 is a Monday: 00:00–08:00 valley at 0.32, 08:00–24:00 peak at 1.2, every day.
-func valleyPeak(from time.Time) Tariff {
-	periods := []tariffmodel.Period{}
-	for _, dayType := range []string{"WEEKDAY", "WEEKEND"} {
-		periods = append(periods,
-			tariffmodel.Period{Code: "VALLEY", DayType: dayType, StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 0.32},
-			tariffmodel.Period{Code: "PEAK", DayType: dayType, StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 1.2},
-		)
-	}
-	return Tariff{VersionID: "tou-v1", EffectiveFrom: from, Location: shanghai, Periods: periods}
-}
-
-func day(date time.Time, electricity, cooling float64) []Hour {
+// The query service's price for a day's hours: 00:00–08:00 valley at 0.32, 08:00–24:00 peak at 1.2.
+// Hours before pricedFrom are unpriced, as when no Tariff period covers them.
+func day(date time.Time, electricity, cooling float64, pricedFrom time.Time) []Hour {
 	hours := make([]Hour, 0, 24)
 	for hour := 0; hour < 24; hour++ {
-		hours = append(hours, Hour{Start: date.Add(time.Duration(hour) * time.Hour), ElectricityKWh: electricity, CoolingKWh: cooling, HasElectricity: true})
+		start := date.Add(time.Duration(hour) * time.Hour)
+		cost := &analyticsmodel.EnergyCost{UnpricedKWh: electricity, Periods: []analyticsmodel.PeriodCost{}}
+		if !start.Before(pricedFrom) {
+			code, rate := "PEAK", 1.2
+			if start.In(shanghai).Hour() < 8 {
+				code, rate = "VALLEY", 0.32
+			}
+			cost = &analyticsmodel.EnergyCost{AmountCNY: electricity * rate, Periods: []analyticsmodel.PeriodCost{{PeriodCode: code, EnergyKWh: electricity, AmountCNY: electricity * rate}}}
+		}
+		hours = append(hours, Hour{Start: start, ElectricityKWh: electricity, CoolingKWh: cooling, HasElectricity: true, Cost: cost})
 	}
 	return hours
 }
+
+var always = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+var never = time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func near(left, right float64) bool { return math.Abs(left-right) < 1e-9 }
 
 func TestAMonthIsTotalledByDayAndTariffPeriod(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
-	hours := append(day(first, 10, 40), day(first.AddDate(0, 0, 1), 5, 20)...)
-	snapshot, err := Build("2026-09", shanghai, hours, []Tariff{valleyPeak(first.AddDate(0, -1, 0))}, nil, nil)
+	hours := append(day(first, 10, 40, always), day(first.AddDate(0, 0, 1), 5, 20, always)...)
+	snapshot, err := Build("2026-09", shanghai, hours, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +69,10 @@ func TestAMonthIsTotalledByDayAndTariffPeriod(t *testing.T) {
 	}
 }
 
+// No Tariff priced any of the month's electricity.
 func TestAMonthWithoutATariffHasNoCost(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
-	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40), nil, nil, nil)
+	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40, never), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +84,7 @@ func TestAMonthWithoutATariffHasNoCost(t *testing.T) {
 func TestADayWithCoolingReadingsOnlyHasNoMetering(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
 	coolingOnly := Hour{Start: first.AddDate(0, 0, 1), CoolingKWh: 40}
-	snapshot, err := Build("2026-09", shanghai, append(day(first, 10, 40), coolingOnly), []Tariff{valleyPeak(first.AddDate(0, -1, 0))}, nil, nil)
+	snapshot, err := Build("2026-09", shanghai, append(day(first, 10, 40, always), coolingOnly), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +96,7 @@ func TestADayWithCoolingReadingsOnlyHasNoMetering(t *testing.T) {
 func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
 	// The Tariff takes effect at noon on the first day, so the morning is not priced.
-	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40), []Tariff{valleyPeak(first.Add(12 * time.Hour))}, nil, nil)
+	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40, first.Add(12*time.Hour)), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 }
 
 func TestAMonthCarriesItsVerifiedSavingsAndFindings(t *testing.T) {
-	snapshot, err := Build("2026-09", shanghai, nil, nil,
+	snapshot, err := Build("2026-09", shanghai, nil,
 		// Two measures on different devices verified the 14th; the plant's electricity counts once.
 		[]SavingsDay{
 			{Day: "2026-09-14", AdjustedBaselineKWh: 500, AvoidedKWh: 60, AvoidedCost: 50, PlantKWh: 3000},
@@ -127,7 +130,7 @@ func TestAMonthCarriesItsVerifiedSavingsAndFindings(t *testing.T) {
 }
 
 func TestAnHourOutsideTheMonthIsRefused(t *testing.T) {
-	if _, err := Build("2026-09", shanghai, day(time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai), 10, 40), nil, nil, nil); err == nil {
+	if _, err := Build("2026-09", shanghai, day(time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai), 10, 40, always), nil, nil); err == nil {
 		t.Fatal("an October hour was put in the September report")
 	}
 }

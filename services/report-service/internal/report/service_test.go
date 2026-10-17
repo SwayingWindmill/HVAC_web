@@ -15,7 +15,6 @@ import (
 
 type fakeStore struct {
 	location *time.Location
-	tariffs  []Tariff
 	savings  []SavingsDay
 	findings []FindingCount
 	stored   []StoredSnapshot
@@ -24,10 +23,6 @@ type fakeStore struct {
 
 func (store *fakeStore) SiteLocation(context.Context, string, string) (*time.Location, error) {
 	return store.location, nil
-}
-
-func (store *fakeStore) Tariffs(context.Context, string, string, time.Time, time.Time) ([]Tariff, error) {
-	return store.tariffs, nil
 }
 
 func (store *fakeStore) SavingsDays(_ context.Context, _, _ string, from, to string) ([]SavingsDay, error) {
@@ -81,7 +76,7 @@ const (
 func testService(t *testing.T, now time.Time) (*Service, *fakeStore, *fakeHours) {
 	t.Helper()
 	store := &fakeStore{location: shanghai}
-	hours := &fakeHours{hours: day(time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai), 10, 40)}
+	hours := &fakeHours{hours: day(time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai), 10, 40, always)}
 	service, err := NewService(store, hours, func() time.Time { return now }, schedulerjob.UUIDv7)
 	if err != nil {
 		t.Fatal(err)
