@@ -223,3 +223,34 @@ func TestValidateAgentSessionEventAcceptsFindingKeyFiguresAndRejectsExtraFields(
 		t.Fatal("key figure with a non-public field was accepted")
 	}
 }
+
+// The contract bounds strings in characters, as the Agent and the Web count them: a 14-character
+// Chinese key figure label is 33 UTF-8 bytes and must not make the whole Session unreadable.
+func TestValidateAgentSessionSnapshotBoundsChineseTextInCharacters(t *testing.T) {
+	snapshot := func(label string) []byte {
+		raw, err := json.Marshal(map[string]any{
+			"session": map[string]any{
+				"id": "session-1", "tenantId": "tenant-1", "siteId": "site-1", "agentDefinitionId": "operations-investigation.v1",
+				"createdBy": "principal-1", "revision": 1, "createdAt": 1000, "updatedAt": 2000, "status": "COMPLETED", "activeRunId": nil,
+			},
+			"runs": []any{}, "messages": []any{}, "toolExecutions": []any{},
+			"artifacts": []any{map[string]any{
+				"id": "artifact-1", "sessionId": "session-1", "runId": "run-1", "kind": "FINDING", "createdAt": 2000,
+				"finding": map[string]any{
+					"outcome": "SUPPORTED_FINDING", "summary": "10月13日用电和供冷都最高。", "evidenceRefs": []any{},
+					"keyFigures": []any{map[string]any{"unit": "kWh", "label": label, "value": "1768"}}, "limitations": []any{}, "recommendedNext": []any{},
+				},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if err := validateAgentSessionSnapshot(snapshot("10/13 用电量（七日最高）")); err != nil {
+		t.Fatalf("a 14-character label was rejected: %v", err)
+	}
+	if err := validateAgentSessionSnapshot(snapshot(strings.Repeat("用", 33))); err == nil {
+		t.Fatal("a 33-character label was accepted")
+	}
+}
