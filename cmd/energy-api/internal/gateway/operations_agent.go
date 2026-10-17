@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -394,9 +395,11 @@ func operationsExactKeys(value map[string]any, expected ...string) bool {
 	return true
 }
 
+// operationsBoundedString bounds text in characters, as the contracts' maxLength and the Agent
+// count it; a byte bound would reject Chinese text a third of the length.
 func operationsBoundedString(value any, maximum int) (string, bool) {
 	text, ok := value.(string)
-	return text, ok && strings.TrimSpace(text) != "" && len(text) <= maximum
+	return text, ok && strings.TrimSpace(text) != "" && utf8.RuneCountInString(text) <= maximum
 }
 
 func operationsAllowedString(value any, allowed ...string) bool {
