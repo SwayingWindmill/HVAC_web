@@ -129,6 +129,9 @@ func flatRate(rate float64) hourlyRates {
 	return func(time.Time) (float64, bool) { return rate, true }
 }
 
+// unpriced is a rate source that prices no hour, as for a Site without an import Tariff.
+var unpriced = hourlyRates(func(time.Time) (float64, bool) { return 0, false })
+
 func newTestService(t *testing.T, store Store, history HourlySource) *Service {
 	t.Helper()
 	ids := 0
@@ -425,10 +428,9 @@ func TestATrustedBaselineCannotBeRefitted(t *testing.T) {
 	}
 }
 
-func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
+func TestHoursWithoutAPriceAreVerifiedUnpriced(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
-	unpriced := hourlyRates(func(time.Time) (float64, bool) { return 0, false })
 	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, shanghaiClock{}, unpriced, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
 		return "01990000-7000-7000-8000-000000000001", nil
 	})

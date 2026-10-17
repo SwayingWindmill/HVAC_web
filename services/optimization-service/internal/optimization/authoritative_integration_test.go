@@ -111,10 +111,9 @@ type pricedDayStub struct {
 }
 
 func (stub pricedDayStub) Series(_ context.Context, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
-	end := query.To
-	watermark := end
+	watermark := query.To
 	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: []analyticsmodel.EnergySeriesPoint{{
-		PeriodStart: end.AddDate(0, 0, -1), PeriodEnd: end, EnergyKWh: stub.energyKWh,
+		PeriodStart: query.To.AddDate(0, 0, -1), PeriodEnd: query.To, EnergyKWh: stub.energyKWh,
 		Cost: &analyticsmodel.EnergyCost{AmountCNY: stub.costCNY, Periods: []analyticsmodel.PeriodCost{}},
 	}}, Metadata: analyticsmodel.EnergySeriesMetadata{DatasetRevision: "integration", DataWatermark: &watermark}}, nil
 }

@@ -33,7 +33,6 @@ func TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce(t *testing.T) 
 	t.Cleanup(store.Close)
 	implemented := time.Date(2026, 8, 20, 9, 0, 0, 0, shanghai)
 	until := time.Date(2026, 8, 24, 2, 0, 0, 0, shanghai)
-	unpriced := hourlyRates(func(time.Time) (float64, bool) { return 0, false })
 	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, store, unpriced, func() time.Time { return until }, schedulerjob.UUIDv7)
 	if err != nil {
 		t.Fatal(err)

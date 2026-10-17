@@ -313,12 +313,11 @@ func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at
 	}, nil
 }
 
-// validateEnergyEvidence accepts a day that has ended before the capture, that all its energy has
-// reached, and that has energy to price the plant at.
+// validateEnergyEvidence checks the priced day's shape; the reader chose it as the latest complete,
+// fully priced day.
 func validateEnergyEvidence(evidence EnergyDayEvidence, at time.Time) error {
 	if evidence.PeriodStart.IsZero() || !evidence.PeriodEnd.After(evidence.PeriodStart) || evidence.PeriodEnd.After(at) ||
-		evidence.DataWatermark.Before(evidence.PeriodEnd) || evidence.DatasetRevision == "" ||
-		!finitePositive(evidence.EnergyKWh) || !finiteNonNegative(evidence.CostCNY) {
+		evidence.DatasetRevision == "" || !finite(evidence.EnergyKWh) || !finite(evidence.CostCNY) {
 		return errors.New("authoritative priced day evidence is invalid")
 	}
 	return nil

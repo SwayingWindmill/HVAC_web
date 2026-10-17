@@ -28,7 +28,6 @@ CREATE USER IF NOT EXISTS optimization_service_reader IDENTIFIED WITH no_passwor
 CREATE USER IF NOT EXISTS optimization_service_writer IDENTIFIED WITH no_password;
 
 GRANT SELECT ON telemetry_history.observations TO optimization_service_reader;
-GRANT SELECT ON analytics.metric_result_facts TO optimization_service_reader;
 GRANT SELECT ON analytics.optimization_evaluations TO optimization_service_reader;
 GRANT INSERT ON analytics.optimization_evaluations TO optimization_service_writer;
 GRANT SELECT ON analytics.optimization_evaluations TO cube_analytics_reader;

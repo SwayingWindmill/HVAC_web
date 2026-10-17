@@ -144,28 +144,6 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 	}
 }
 
-// A day priced before all its energy arrived would price the plant at part of a day's mix of peak
-// and valley hours.
-func TestOptimizationPreparationRefusesADayItsEnergyHasNotReached(t *testing.T) {
-	at := time.Date(2026, 8, 28, 15, 0, 0, 0, time.UTC)
-	state := testAuthoritativeState(at)
-	state.PricedDay.DataWatermark = state.PricedDay.PeriodEnd.Add(-time.Hour)
-	store := &preparationStoreStub{definition: testPreparationDefinition()}
-	preparer, err := NewPreparer(store, &authoritativeInputStub{state: state}, func() time.Time { return at })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := preparer.Prepare(t.Context(), PreparationRequest{
-		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
-		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
-	}); err == nil {
-		t.Fatal("prepared an optimization on a day whose energy had not all arrived")
-	}
-	if len(store.created) != 0 {
-		t.Fatal("preparation must not persist a snapshot on an incomplete day")
-	}
-}
-
 // Postgres keeps timestamps to the microsecond. A run prepared on a nanosecond wall clock once
 // failed every time with "frozen Optimization input checksum does not match persisted
 // provenance", because the reloaded capture time no longer matched the one checksummed.

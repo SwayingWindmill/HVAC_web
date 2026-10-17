@@ -57,6 +57,7 @@ services:
       - ./postgres/init/025-fdd-rule-revisions.sql:/docker-entrypoint-initdb.d/410.sql:ro
       - ./postgres/init/026-iam-role-assignments.sql:/docker-entrypoint-initdb.d/420.sql:ro
       - ./postgres/init/027-optimization-site-clock.sql:/docker-entrypoint-initdb.d/430.sql:ro
+      - ./postgres/init/028-retire-own-tariff-pricing.sql:/docker-entrypoint-initdb.d/440.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

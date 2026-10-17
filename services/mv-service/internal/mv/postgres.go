@@ -13,7 +13,7 @@ import (
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
-// Tenant and Site row security; it also reads the Site's clock and import Tariff.
+// Tenant and Site row security; it also reads the Site's clock.
 type PostgresStore struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {

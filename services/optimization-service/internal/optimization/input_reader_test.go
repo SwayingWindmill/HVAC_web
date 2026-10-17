@@ -13,7 +13,8 @@ import (
 )
 
 // The baseline's price is the latest Site-local day that has ended, whose energy has all arrived
-// and every kWh of which was priced; a day with energy no Tariff period covers would understate it.
+// and every kWh of which was priced: a day with energy no Tariff period covers would understate it,
+// and a day priced before all its energy arrived would price only part of its mix of hours.
 func TestOptimizationInputReaderPricesTheLatestFullyPricedDay(t *testing.T) {
 	shanghai, _ := time.LoadLocation("Asia/Shanghai")
 	at := time.Date(2026, 10, 17, 15, 0, 0, 0, shanghai)
@@ -24,11 +25,13 @@ func TestOptimizationInputReaderPricesTheLatestFullyPricedDay(t *testing.T) {
 	priced := func(amount float64) *analyticsmodel.EnergyCost {
 		return &analyticsmodel.EnergyCost{AmountCNY: amount, Periods: []analyticsmodel.PeriodCost{}}
 	}
-	watermark := time.Date(2026, 10, 17, 14, 58, 0, 0, shanghai).UTC()
+	// The data reaches 10-16 18:00, so 10-16 is not complete; 10-14 has energy no period covers.
+	watermark := time.Date(2026, 10, 16, 18, 0, 0, 0, shanghai).UTC()
 	series := &energySeriesStub{response: analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: []analyticsmodel.EnergySeriesPoint{
-		day(14, 2600, priced(1980)),
+		day(13, 2600, priced(1980)),
+		day(14, 2500, &analyticsmodel.EnergyCost{AmountCNY: 1700, UnpricedKWh: 120, Periods: []analyticsmodel.PeriodCost{}}),
 		day(15, 2400, priced(1820.5)),
-		day(16, 2500, &analyticsmodel.EnergyCost{AmountCNY: 1700, UnpricedKWh: 120, Periods: []analyticsmodel.PeriodCost{}}),
+		day(16, 1800, priced(1300)),
 	}, Metadata: analyticsmodel.EnergySeriesMetadata{DatasetRevision: "local-development-v1:42", DataWatermark: &watermark}}}
 	reader := &ClickHouseInputReader{energy: series}
 
