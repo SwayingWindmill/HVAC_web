@@ -21,12 +21,15 @@ type TelemetryGrantStore interface {
 }
 
 type telemetryGrantConsumeRequest struct {
-	DelegationGrant string                 `json:"delegationGrant"`
-	PrincipalID     string                 `json:"principalId"`
-	SessionID       string                 `json:"sessionId"`
-	TenantID        string                 `json:"tenantId"`
-	Action          telemetryauth.Action   `json:"action"`
-	Targets         []telemetryauth.Target `json:"targets"`
+	DelegationGrant string `json:"delegationGrant"`
+	// Presenter is the workload the Telemetry Runtime verified over mTLS: the Gateway or an
+	// allowed delegated presenter such as the Operations Agent.
+	Presenter   string                 `json:"presenter"`
+	PrincipalID string                 `json:"principalId"`
+	SessionID   string                 `json:"sessionId"`
+	TenantID    string                 `json:"tenantId"`
+	Action      telemetryauth.Action   `json:"action"`
+	Targets     []telemetryauth.Target `json:"targets"`
 }
 
 type telemetryGrantAcceptance struct {
@@ -81,7 +84,7 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 	var input telemetryGrantConsumeRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || strings.TrimSpace(input.DelegationGrant) == "" || strings.TrimSpace(input.PrincipalID) == "" || strings.TrimSpace(input.SessionID) == "" {
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || strings.TrimSpace(input.DelegationGrant) == "" || strings.TrimSpace(input.Presenter) == "" || strings.TrimSpace(input.PrincipalID) == "" || strings.TrimSpace(input.SessionID) == "" {
 		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_GRANT_REQUEST_INVALID", "The Telemetry grant request is invalid.")
 		return http.StatusBadRequest
 	}
@@ -99,7 +102,7 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 	claims, err := telemetryauth.VerifyGrant(h.telemetryGrantSigner.Public(), input.DelegationGrant)
 	if err == nil {
 		err = telemetryauth.ValidateGrant(claims, telemetryauth.GrantValidation{
-			Now: now, Issuer: h.telemetryGrantIssuer, Presenter: h.allowedWorkloadSPIFFE, Audience: h.telemetryGrantAudience,
+			Now: now, Issuer: h.telemetryGrantIssuer, Presenter: input.Presenter, Audience: h.telemetryGrantAudience,
 			PrincipalID: input.PrincipalID, SessionID: input.SessionID, Action: input.Action,
 			TenantID: input.TenantID, Targets: input.Targets,
 			UseChecker: func(claims telemetryauth.GrantClaims) (telemetryauth.GrantUseStatus, error) {

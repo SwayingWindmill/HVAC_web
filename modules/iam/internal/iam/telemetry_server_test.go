@@ -92,12 +92,14 @@ func TestIAMTelemetryDecisionIssuesExactNonTransitiveGrant(t *testing.T) {
 	}
 }
 
-func TestIAMTelemetryDecisionIssuesGrantForAllowedDelegatedPresenter(t *testing.T) {
+func TestIAMTelemetryGrantForAnAllowedDelegatedPresenterIsIssuedAndConsumedForThatPresenter(t *testing.T) {
 	const operationsPresenter = "spiffe://hvac.local/operations-agent-service"
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: telemetryHTTPFacts(harnessTime())}
 		config.AllowedTelemetryGrantPresenters = []string{operationsPresenter}
 		config.NewTelemetryGrantID = func() string { return "telemetry-operations-presenter-1" }
+		config.TelemetryRuntimeSPIFFE = "spiffe://hvac.local/platform-gateway"
+		config.TelemetryGrantStore = &memoryTelemetryGrantStore{}
 	})
 	requestFor := func(presenter string) *httptest.ResponseRecorder {
 		payload, err := json.Marshal(telemetryauth.DecisionRequest{
@@ -135,6 +137,31 @@ func TestIAMTelemetryDecisionIssuesGrantForAllowedDelegatedPresenter(t *testing.
 	rejected := requestFor("spiffe://hvac.local/untrusted-service")
 	if rejected.Code != http.StatusForbidden || !strings.Contains(rejected.Body.String(), "IAM_TELEMETRY_GRANT_PRESENTER_REJECTED") {
 		t.Fatalf("untrusted presenter status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+
+	// The Telemetry Runtime consumes the grant for the presenter it verified over mTLS (#601: the
+	// Agent's current readings were all rejected because only the Gateway was accepted here).
+	consume := func(presenter string) *httptest.ResponseRecorder {
+		payload, err := json.Marshal(map[string]any{
+			"delegationGrant": response.DelegationGrant, "presenter": presenter,
+			"principalId": claims.PrincipalID, "sessionId": claims.SessionID, "tenantId": claims.TenantID, "action": claims.Action,
+			"targets": []telemetryauth.Target{{DeviceID: telemetryDeviceID, Keys: []string{"zone.temperature"}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, iam.TelemetryGrantConsumePath, strings.NewReader(string(payload)))
+		request.Header.Set("Content-Type", "application/json")
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{harness.gatewayCert}, VerifiedChains: [][]*x509.Certificate{{harness.gatewayCert}}}
+		recorder := httptest.NewRecorder()
+		harness.handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+	if recorder := consume(harness.gatewaySPIFFEID); recorder.Code != http.StatusForbidden {
+		t.Fatalf("grant consumed for a presenter it was not issued to: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := consume(operationsPresenter); recorder.Code != http.StatusOK {
+		t.Fatalf("Agent-presented grant status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -193,6 +220,7 @@ func TestTelemetryRuntimeConsumesGrantOnceAndPollsRevocations(t *testing.T) {
 	}
 	consumePayload, err := json.Marshal(map[string]any{
 		"delegationGrant": decision.DelegationGrant,
+		"presenter":       harness.gatewaySPIFFEID,
 		"principalId":     claims.PrincipalID,
 		"sessionId":       claims.SessionID,
 		"tenantId":        claims.TenantID,

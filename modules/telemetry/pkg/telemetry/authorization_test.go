@@ -23,6 +23,7 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 	targets := []telemetryauth.Target{{DeviceID: deviceA, Keys: []string{"zone.temperature"}}}
 	grant, claims := signedGrant(t, privateKey, now, telemetryauth.ActionSnapshotRead, targets)
 	var calls atomic.Int64
+	var presented atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		calls.Add(1)
 		if request.URL.Path != "/internal/v1/telemetry/grants:consume" || request.Method != http.MethodPost {
@@ -37,7 +38,9 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if input.DelegationGrant != grant || input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.TenantID != claims.TenantID || input.Action != claims.Action {
+		// IAM validates the grant against the presenter this runtime verified over mTLS.
+		presented.Store(input.Presenter)
+		if input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.TenantID != claims.TenantID || input.Action != claims.Action {
 			t.Errorf("consume request drifted: %#v", input)
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -61,8 +64,13 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 	if access.TokenID != claims.TokenID || access.PrincipalID != claims.PrincipalID || access.SessionID != claims.SessionID || access.TenantID != claims.TenantID || access.PolicyRevision != claims.PolicyRevision {
 		t.Fatalf("access=%#v", access)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("IAM calls=%d", calls.Load())
+	if calls.Load() != 1 || presented.Load() != gatewaySPIFFE {
+		t.Fatalf("IAM calls=%d presenter=%v", calls.Load(), presented.Load())
+	}
+	// A grant the Operations Agent presents is consumed for the Agent (#601).
+	agentGrant, _ := signedGrantFor(t, privateKey, now, telemetryauth.ActionSnapshotRead, targets, operationsSPIFFE)
+	if _, err := authorizer.Authorize(t.Context(), operationsSPIFFE, agentGrant, telemetryauth.ActionSnapshotRead, targets); err != nil || presented.Load() != operationsSPIFFE {
+		t.Fatalf("Agent grant err=%v presenter=%v", err, presented.Load())
 	}
 
 	if _, err := authorizer.Authorize(t.Context(), "spiffe://hvac.local/other", grant, telemetryauth.ActionSnapshotRead, targets); !errors.Is(err, ErrGrantRejected) {
@@ -72,7 +80,7 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 	if _, err := authorizer.Authorize(t.Context(), gatewaySPIFFE, grant, telemetryauth.ActionSnapshotRead, altered); !errors.Is(err, ErrGrantRejected) {
 		t.Fatalf("altered scope err=%v", err)
 	}
-	if calls.Load() != 1 {
+	if calls.Load() != 2 {
 		t.Fatalf("invalid preflight reached IAM: calls=%d", calls.Load())
 	}
 }
@@ -134,6 +142,11 @@ func TestHTTPGrantAuthorizerFailsClosedWhenIAMOrAcceptanceIsInvalid(t *testing.T
 
 func signedGrant(t *testing.T, privateKey *rsa.PrivateKey, now time.Time, action telemetryauth.Action, targets []telemetryauth.Target) (string, telemetryauth.GrantClaims) {
 	t.Helper()
+	return signedGrantFor(t, privateKey, now, action, targets, gatewaySPIFFE)
+}
+
+func signedGrantFor(t *testing.T, privateKey *rsa.PrivateKey, now time.Time, action telemetryauth.Action, targets []telemetryauth.Target, presenter string) (string, telemetryauth.GrantClaims) {
+	t.Helper()
 	digest, err := telemetryauth.ScopeDigest(action, orgA, targets)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +160,7 @@ func signedGrant(t *testing.T, privateKey *rsa.PrivateKey, now time.Time, action
 		keyCount += len(target.Keys)
 	}
 	claims := telemetryauth.GrantClaims{
-		Issuer: "spiffe://hvac.local/iam-service", Presenter: gatewaySPIFFE, Audience: "telemetry-runtime-service",
+		Issuer: "spiffe://hvac.local/iam-service", Presenter: presenter, Audience: "telemetry-runtime-service",
 		PrincipalID: "018f2e00-2000-7000-8000-000000000001", SubjectIssuer: "https://identity.example", Subject: "subject-a",
 		TenantID: orgA, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: gatewaySPIFFE}},
 		Action: action, ScopeDigest: digest, TargetCount: len(canonical), KeyCount: keyCount,

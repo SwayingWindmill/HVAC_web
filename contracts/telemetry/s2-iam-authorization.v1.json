@@ -87,6 +87,7 @@
     "consume": {
       "path": "/internal/v1/telemetry/grants:consume",
       "callerSpiffeId": "spiffe://hvac.local/telemetry-runtime-service",
+      "presenter": "the grant presenter the runtime verified over mTLS: Platform Gateway or an allowed delegated presenter such as the Operations Agent",
       "atomic": true
     },
     "revocations": {

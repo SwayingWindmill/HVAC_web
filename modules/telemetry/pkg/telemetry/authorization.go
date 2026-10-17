@@ -46,6 +46,7 @@ type HTTPGrantAuthorizer struct {
 
 type grantConsumeRequest struct {
 	DelegationGrant string                 `json:"delegationGrant"`
+	Presenter       string                 `json:"presenter"`
 	PrincipalID     string                 `json:"principalId"`
 	SessionID       string                 `json:"sessionId"`
 	TenantID        string                 `json:"tenantId"`
@@ -87,7 +88,7 @@ func (authorizer *HTTPGrantAuthorizer) Authorize(ctx context.Context, peerSPIFFE
 		return AccessContext{}, ErrGrantRejected
 	}
 	payload, err := json.Marshal(grantConsumeRequest{
-		DelegationGrant: grant, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
+		DelegationGrant: grant, Presenter: peerSPIFFE, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
 		TenantID: claims.TenantID, Action: action, Targets: targets,
 	})
 	if err != nil {
