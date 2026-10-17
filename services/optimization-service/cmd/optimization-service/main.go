@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
 )
@@ -35,10 +36,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// The priced day comes from the Telemetry Query Service; the optimization service presents its
+	// own workload identity to IAM and to the query service (ADR 0017, ADR 0023).
+	energy, err := energyseries.NewWorkload(energyseries.WorkloadConfig{
+		CertificatePath: requiredEnv("OPTIMIZATION_TLS_CERT"), PrivateKeyPath: requiredEnv("OPTIMIZATION_TLS_KEY"), CAPath: requiredEnv("OPTIMIZATION_TLS_CA"),
+		IAMURL: requiredEnv("OPTIMIZATION_IAM_URL"), QueryURL: requiredEnv("OPTIMIZATION_QUERY_URL"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	inputs, err := optimization.NewClickHouseInputReader(optimization.InputReaderConfig{
 		BaseURL:  requiredEnv("OPTIMIZATION_CLICKHOUSE_HTTP_URL"),
 		Username: envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
 		Password: os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
+		Energy:   energy,
 	})
 	if err != nil {
 		log.Fatal(err)

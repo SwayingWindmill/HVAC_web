@@ -28,4 +28,6 @@ export function ensureWorkloadIdentity(pki, name, spiffeId) {
 // Workloads that call internal owners themselves and so need their own identity.
 export const workloadIdentities = Object.freeze([
   { name: 'report', spiffeId: 'spiffe://hvac.local/report-service' },
+  { name: 'optimization', spiffeId: 'spiffe://hvac.local/optimization-service' },
+  { name: 'mv', spiffeId: 'spiffe://hvac.local/mv-service' },
 ]);

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/services/mv-service/internal/mv"
 )
@@ -30,7 +31,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	service, err := mv.NewService(store, hours, store, time.Now, schedulerjob.UUIDv7)
+	// Each verified hour is priced from the Telemetry Query Service; M&V presents its own workload
+	// identity to IAM and to the query service (ADR 0017, ADR 0023).
+	energy, err := energyseries.NewWorkload(energyseries.WorkloadConfig{
+		CertificatePath: requiredEnv("MV_TLS_CERT"), PrivateKeyPath: requiredEnv("MV_TLS_KEY"), CAPath: requiredEnv("MV_TLS_CA"),
+		IAMURL: requiredEnv("MV_IAM_URL"), QueryURL: requiredEnv("MV_QUERY_URL"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	service, err := mv.NewService(store, hours, store, mv.NewQueryRates(energy), time.Now, schedulerjob.UUIDv7)
 	if err != nil {
 		log.Fatal(err)
 	}

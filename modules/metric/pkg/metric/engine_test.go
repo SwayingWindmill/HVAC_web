@@ -15,16 +15,6 @@ type fakeRegistry struct {
 	runResultIDs     map[string]string
 	beginFailures    int
 	publicationCalls []Result
-	hourly           []HourlyResult
-	tariffs          []ImportTariff
-}
-
-func (f *fakeRegistry) LoadHourlyMetricResults(context.Context, Binding, Dependency, time.Time, time.Time) ([]HourlyResult, error) {
-	return f.hourly, nil
-}
-
-func (f *fakeRegistry) LoadImportTariffs(context.Context, string, string, time.Time, time.Time) ([]ImportTariff, error) {
-	return f.tariffs, nil
 }
 
 func (f *fakeRegistry) LoadBinding(context.Context, string, string, string, time.Time) (Binding, error) {

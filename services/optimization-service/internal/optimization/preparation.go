@@ -55,6 +55,7 @@ type PreparationDefinition struct {
 	HorizonMinutes         int
 	Granularity            string
 	PolicyConstraints      json.RawMessage
+	SiteTimezone           string
 }
 
 type InputMapping struct {
@@ -98,17 +99,15 @@ type policyContract struct {
 	ResponseModel          HVACResponseModel      `json:"responseModel"`
 }
 
-type MetricEvidence struct {
-	ResultID        string    `json:"resultId"`
-	MetricVersionID string    `json:"metricVersionId"`
-	MetricCode      string    `json:"metricCode"`
+// EnergyDayEvidence is the Site-local day the baseline is priced at: its electricity and the cost
+// the query service priced it at (#575), with the data revision and how far the data reached.
+type EnergyDayEvidence struct {
 	PeriodStart     time.Time `json:"periodStart"`
 	PeriodEnd       time.Time `json:"periodEnd"`
-	CalculatedAt    time.Time `json:"calculatedAt"`
-	Value           float64   `json:"value"`
-	Unit            string    `json:"unit"`
-	Quality         string    `json:"quality"`
-	Revision        uint64    `json:"revision"`
+	EnergyKWh       float64   `json:"energyKWh"`
+	CostCNY         float64   `json:"costCNY"`
+	DatasetRevision string    `json:"datasetRevision"`
+	DataWatermark   time.Time `json:"dataWatermark"`
 }
 
 type TelemetryEvidence struct {
@@ -128,8 +127,7 @@ type TelemetryEvidence struct {
 }
 
 type AuthoritativeState struct {
-	DailyEnergy       MetricEvidence
-	DailyCost         MetricEvidence
+	PricedDay         EnergyDayEvidence
 	SupplyTemperature TelemetryEvidence
 	ZoneTemperature   TelemetryEvidence
 }
@@ -141,13 +139,15 @@ type OptimizationStateQuery struct {
 	SubjectID            string
 	SupplyTemperatureKey string
 	ZoneTemperatureKey   string
-	At                   time.Time
+	// Timezone is the Site's clock, which days are priced on.
+	Timezone string
+	At       time.Time
 }
 
 type FrozenCurrentState struct {
 	SchemaVersion     int                 `json:"schemaVersion"`
 	Baseline          HVACBaseline        `json:"baseline"`
-	MetricEvidence    []MetricEvidence    `json:"metricEvidence"`
+	EnergyEvidence    EnergyDayEvidence   `json:"energyEvidence"`
 	TelemetryEvidence []TelemetryEvidence `json:"telemetryEvidence"`
 }
 
@@ -229,7 +229,8 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	}
 	state, err := preparer.inputs.ReadOptimizationState(ctx, OptimizationStateQuery{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
-		SupplyTemperatureKey: policy.InputMapping.SupplyTemperatureKey, ZoneTemperatureKey: policy.InputMapping.ZoneTemperatureKey, At: capturedAt,
+		SupplyTemperatureKey: policy.InputMapping.SupplyTemperatureKey, ZoneTemperatureKey: policy.InputMapping.ZoneTemperatureKey,
+		Timezone: definition.SiteTimezone, At: capturedAt,
 	})
 	if err != nil {
 		return PreparedOptimization{}, fmt.Errorf("%w: read authoritative Optimization state: %v", ErrPreparationUnavailable, err)
@@ -290,39 +291,34 @@ func decodePolicyContract(raw json.RawMessage) (policyContract, error) {
 }
 
 func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at time.Time) (FrozenCurrentState, error) {
-	for expectedCode, evidence := range map[string]MetricEvidence{"daily_energy": state.DailyEnergy, "energy_cost": state.DailyCost} {
-		if err := validateMetricEvidence(evidence, expectedCode, at); err != nil {
-			return FrozenCurrentState{}, err
-		}
-	}
-	// The cost prices that day's energy at its own mix of tariff periods, so both must be the same day.
-	if !state.DailyCost.PeriodStart.Equal(state.DailyEnergy.PeriodStart) || !state.DailyCost.PeriodEnd.Equal(state.DailyEnergy.PeriodEnd) {
-		return FrozenCurrentState{}, errors.New("authoritative daily cost and energy are for different periods")
+	if err := validateEnergyEvidence(state.PricedDay, at); err != nil {
+		return FrozenCurrentState{}, err
 	}
 	for expectedKey, evidence := range map[string]TelemetryEvidence{mapping.SupplyTemperatureKey: state.SupplyTemperature, mapping.ZoneTemperatureKey: state.ZoneTemperature} {
 		if err := validateTelemetryEvidence(evidence, expectedKey, at); err != nil {
 			return FrozenCurrentState{}, err
 		}
 	}
-	if state.DailyEnergy.Unit != "kWh" || state.SupplyTemperature.Unit != "Cel" || state.ZoneTemperature.Unit != "Cel" {
+	if state.SupplyTemperature.Unit != "Cel" || state.ZoneTemperature.Unit != "Cel" {
 		return FrozenCurrentState{}, errors.New("authoritative Optimization inputs use unsupported units")
 	}
 	return FrozenCurrentState{
 		SchemaVersion: 1,
 		Baseline: HVACBaseline{
-			DailyEnergyKWh: state.DailyEnergy.Value, DailyCost: state.DailyCost.Value,
+			DailyEnergyKWh: state.PricedDay.EnergyKWh, DailyCost: state.PricedDay.CostCNY,
 			SupplyTempC: state.SupplyTemperature.Value, ZoneTempC: state.ZoneTemperature.Value,
 		},
-		MetricEvidence:    []MetricEvidence{canonicalMetricEvidence(state.DailyEnergy), canonicalMetricEvidence(state.DailyCost)},
+		EnergyEvidence:    canonicalEnergyEvidence(state.PricedDay),
 		TelemetryEvidence: []TelemetryEvidence{canonicalTelemetryEvidence(state.SupplyTemperature), canonicalTelemetryEvidence(state.ZoneTemperature)},
 	}, nil
 }
 
-func validateMetricEvidence(evidence MetricEvidence, expectedCode string, at time.Time) error {
-	if !uuidPattern.MatchString(evidence.ResultID) || !uuidPattern.MatchString(evidence.MetricVersionID) || evidence.MetricCode != expectedCode ||
-		evidence.Quality != "GOOD" || evidence.Unit == "" || evidence.PeriodStart.IsZero() || !evidence.PeriodEnd.After(evidence.PeriodStart) ||
-		evidence.PeriodEnd.After(at) || evidence.CalculatedAt.IsZero() || evidence.CalculatedAt.After(at) || !finite(evidence.Value) || evidence.Revision == 0 {
-		return fmt.Errorf("authoritative metric %s evidence is invalid", expectedCode)
+// validateEnergyEvidence checks the priced day's shape; the reader chose it as the latest complete,
+// fully priced day.
+func validateEnergyEvidence(evidence EnergyDayEvidence, at time.Time) error {
+	if evidence.PeriodStart.IsZero() || !evidence.PeriodEnd.After(evidence.PeriodStart) || evidence.PeriodEnd.After(at) ||
+		evidence.DatasetRevision == "" || !finite(evidence.EnergyKWh) || !finite(evidence.CostCNY) {
+		return errors.New("authoritative priced day evidence is invalid")
 	}
 	return nil
 }
@@ -337,10 +333,10 @@ func validateTelemetryEvidence(evidence TelemetryEvidence, expectedKey string, a
 	return nil
 }
 
-func canonicalMetricEvidence(evidence MetricEvidence) MetricEvidence {
+func canonicalEnergyEvidence(evidence EnergyDayEvidence) EnergyDayEvidence {
 	evidence.PeriodStart = evidence.PeriodStart.UTC()
 	evidence.PeriodEnd = evidence.PeriodEnd.UTC()
-	evidence.CalculatedAt = evidence.CalculatedAt.UTC()
+	evidence.DataWatermark = evidence.DataWatermark.UTC()
 	return evidence
 }
 

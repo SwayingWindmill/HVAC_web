@@ -33,7 +33,7 @@ func TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce(t *testing.T) 
 	t.Cleanup(store.Close)
 	implemented := time.Date(2026, 8, 20, 9, 0, 0, 0, shanghai)
 	until := time.Date(2026, 8, 24, 2, 0, 0, 0, shanghai)
-	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, store, func() time.Time { return until }, schedulerjob.UUIDv7)
+	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, store, unpriced, func() time.Time { return until }, schedulerjob.UUIDv7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,9 +142,8 @@ func TestClickHouseHoursReadTheLatestRevisionOfCompleteHours(t *testing.T) {
 	}
 }
 
-// The runner's second Site has no import Tariff: its days still split on its own clock, and its
-// hours go unpriced rather than leaving the Site unverifiable.
-func TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone(t *testing.T) {
+// Days split on the Site's own clock, read from the Registry.
+func TestPostgresSiteClockReadsTheSiteTimezone(t *testing.T) {
 	env := integrationEnv(t, "MV_POSTGRES_INTEGRATION_DSN", "MV_POSTGRES_INTEGRATION_TENANT_ID", "MV_POSTGRES_INTEGRATION_UNPRICED_SITE_ID")
 	store, err := OpenPostgres(t.Context(), env[0])
 	if err != nil {
@@ -155,7 +154,7 @@ func TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clock.Location.String() != "Asia/Singapore" || clock.Tariff != nil {
-		t.Fatalf("clock = %v with tariff %+v", clock.Location, clock.Tariff)
+	if clock.Location.String() != "Asia/Singapore" {
+		t.Fatalf("clock = %v", clock.Location)
 	}
 }

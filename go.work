@@ -10,6 +10,7 @@ use (
 	./libs/alarmauth
 	./libs/workorderauth
 	./libs/analyticsmodel
+	./libs/energyseries
 	./libs/alarmmodel
 	./libs/workordermodel
 	./libs/commandauth
