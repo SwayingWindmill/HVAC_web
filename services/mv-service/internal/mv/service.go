@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 // DefaultBaselineDays is how far before implementation the baseline period reaches by default.
@@ -101,44 +99,34 @@ type HourlySource interface {
 	HasDeviceEnergy(ctx context.Context, tenantID, siteID, deviceID string) (bool, error)
 }
 
-// SiteClock is the Site's timezone, which days are verified on, and the import Tariff in effect,
-// which prices hours on its own timezone as Settlement does; Tariff is nil when none is assigned and
-// every hour then goes unpriced.
+// SiteClock is the Site's timezone, which days are verified on.
 type SiteClock struct {
 	Location *time.Location
-	Tariff   *ImportTariff
-}
-
-// ImportTariff is the energy rate periods of the Tariff Version in effect, on the version's clock.
-type ImportTariff struct {
-	Location *time.Location
-	Periods  []tariffmodel.Period
-}
-
-func (clock SiteClock) rates() func(time.Time) (float64, bool) {
-	if clock.Tariff == nil {
-		return func(time.Time) (float64, bool) { return 0, false }
-	}
-	return tariffmodel.Rates(clock.Tariff.Periods, clock.Tariff.Location)
 }
 
 type ClockSource interface {
 	SiteClock(ctx context.Context, tenantID, siteID string) (SiteClock, error)
 }
 
+// RateSource prices each hour of a window; an hour it cannot price is unpriced, never free.
+type RateSource interface {
+	HourlyRates(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) (func(time.Time) (float64, bool), error)
+}
+
 type Service struct {
 	store   Store
 	history HourlySource
 	clocks  ClockSource
+	rates   RateSource
 	now     func() time.Time
 	newID   func(time.Time) (string, error)
 }
 
-func NewService(store Store, history HourlySource, clocks ClockSource, now func() time.Time, newID func(time.Time) (string, error)) (*Service, error) {
-	if store == nil || history == nil || clocks == nil || now == nil || newID == nil {
-		return nil, errors.New("savings verification needs a store, an hourly source, a Site clock source, a time source and an id source")
+func NewService(store Store, history HourlySource, clocks ClockSource, rates RateSource, now func() time.Time, newID func(time.Time) (string, error)) (*Service, error) {
+	if store == nil || history == nil || clocks == nil || rates == nil || now == nil || newID == nil {
+		return nil, errors.New("savings verification needs a store, an hourly source, a Site clock source, a rate source, a time source and an id source")
 	}
-	return &Service{store: store, history: history, clocks: clocks, now: now, newID: newID}, nil
+	return &Service{store: store, history: history, clocks: clocks, rates: rates, now: now, newID: newID}, nil
 }
 
 type MeasureInput struct {
@@ -336,7 +324,11 @@ func (service *Service) verifyDay(ctx context.Context, measure Measure, clock Si
 	if err != nil {
 		return fmt.Errorf("read reporting hours: %w", err)
 	}
-	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), clock.rates())
+	rates, err := service.rates.HourlyRates(ctx, measure.TenantID, measure.SiteID, clock.Location, local, dayEnd)
+	if err != nil {
+		return err
+	}
+	result := VerifyDay(*measure.Baseline, samples, local, dayEnd, measure.ImplementedAt.Add(StabilizationPeriod), rates)
 	return service.store.InsertDailyResult(ctx, DailyResult{
 		MeasureID: measure.ID, TenantID: measure.TenantID, SiteID: measure.SiteID,
 		Day: local.Format(time.DateOnly), DayResult: result, VerifiedAt: service.now().UTC(),

@@ -699,7 +699,7 @@ try {
     mvHour(5, 'hourly_cooling', '2026-08-27 01:00:00', 1, 700),
     mvHour(6, 'hourly_energy', '2026-08-27 02:00:00', 1, 200),
   ].join(',\n')}`);
-  const mvTests = ['TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours', 'TestPostgresSiteClockWithoutATariffKeepsTheSiteTimezone'];
+  const mvTests = ['TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours', 'TestPostgresSiteClockReadsTheSiteTimezone'];
   report.assertions.mvSavingsVerification = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/mv-service',
