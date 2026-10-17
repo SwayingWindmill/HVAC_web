@@ -172,19 +172,3 @@ func TestTheInternalAPIServesTheLatestVersionAndTheYear(t *testing.T) {
 		t.Fatalf("invalid = %d", invalid.Code)
 	}
 }
-
-func TestReportHoursDecodeFromClickHouse(t *testing.T) {
-	hours, err := decodeHours([]byte(`{"hour":"2026-09-14T00:00:00Z","electricity_kwh":10.5,"cooling_kwh":42,"has_electricity":1}` + "\n"))
-	if err != nil || len(hours) != 1 || hours[0].ElectricityKWh != 10.5 || !hours[0].HasElectricity || !hours[0].Start.Equal(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("hours = %#v err=%v", hours, err)
-	}
-	if _, err := decodeHours([]byte(`{"hour":"not a time"}`)); err == nil {
-		t.Fatal("bad hour decoded")
-	}
-	if !strings.Contains(hoursSQL(testTenant, testSite, "Asia/Shanghai", time.Now(), time.Now()), "accounting_scope='SITE' AND quality='VALID'") {
-		t.Fatal("report hours must count only the Site's valid total")
-	}
-	if _, err := (&ClickHouseHours{}).Hours(context.Background(), "bad", testSite, shanghai, time.Now(), time.Now().Add(time.Hour)); err == nil || errors.Is(err, context.Canceled) {
-		t.Fatalf("invalid tenant accepted: %v", err)
-	}
-}

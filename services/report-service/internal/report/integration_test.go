@@ -10,13 +10,22 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
-// report-service works a REPORT_GENERATE job as report_runtime: it reads the month's valid Site
-// energy as report_service_reader and keeps the snapshot as the month's first version.
+// The Site's hours as the Telemetry Query Service answers them for the integration month.
+type integrationHours struct{}
+
+func (integrationHours) Hours(context.Context, string, string, *time.Location, time.Time, time.Time) ([]Hour, error) {
+	return []Hour{
+		{Start: time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC), ElectricityKWh: 12, CoolingKWh: 40, HasElectricity: true},
+		{Start: time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC), ElectricityKWh: 30, HasElectricity: true},
+	}, nil
+}
+
+// report-service works a REPORT_GENERATE job as report_runtime and keeps the snapshot as the
+// month's first version.
 func TestReportRuntimeSnapshotsTheMonthItsJobNames(t *testing.T) {
 	dsn := os.Getenv("REPORT_POSTGRES_INTEGRATION_DSN")
-	clickHouseURL := os.Getenv("REPORT_CLICKHOUSE_INTEGRATION_URL")
-	if dsn == "" || clickHouseURL == "" {
-		t.Skip("REPORT_POSTGRES_INTEGRATION_DSN and REPORT_CLICKHOUSE_INTEGRATION_URL are not configured")
+	if dsn == "" {
+		t.Skip("REPORT_POSTGRES_INTEGRATION_DSN is not configured")
 	}
 	tenantID, siteID := os.Getenv("REPORT_INTEGRATION_TENANT_ID"), os.Getenv("REPORT_INTEGRATION_SITE_ID")
 	ctx := context.Background()
@@ -25,11 +34,7 @@ func TestReportRuntimeSnapshotsTheMonthItsJobNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	hours, err := NewClickHouseHours(clickHouseURL, "report_service_reader", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service, err := NewService(store, hours, time.Now, schedulerjob.UUIDv7)
+	service, err := NewService(store, integrationHours{}, time.Now, schedulerjob.UUIDv7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +50,7 @@ func TestReportRuntimeSnapshotsTheMonthItsJobNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The runner wrote 12 and 30 kWh of valid electricity and 40 of cooling on 2026-07-10, and an
-	// invalid interval and a sub-meter's interval that the report leaves out.
+	// 12 and 30 kWh of electricity and 40 of cooling on 2026-07-10.
 	report := stored.Report
 	if stored.Version != 1 || stored.SchedulerJobID == nil || *stored.SchedulerJobID != os.Getenv("REPORT_INTEGRATION_JOB_ID") {
 		t.Fatalf("stored = %#v", stored)

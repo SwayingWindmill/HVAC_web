@@ -202,6 +202,30 @@ func ValidateDelegationFromIssuerAnyScope(
 	action string,
 	acceptableScopes []string,
 ) error {
+	if claims.SessionID == "" {
+		return errors.New("delegation identity fields are incomplete")
+	}
+	return validateDelegation(claims, now, issuer, executingService, audience, action, acceptableScopes)
+}
+
+// ValidateWorkloadDelegation checks a grant a Workload Principal holds for itself (ADR 0017):
+// its subject is the workload presenting it, and no user Session stands behind it.
+func ValidateWorkloadDelegation(claims DelegationClaims, now time.Time, issuer, workload, audience, action, scope string) error {
+	if claims.Subject != workload || claims.SessionID != "" {
+		return errors.New("workload delegation must name the presenting workload and no Session")
+	}
+	return validateDelegation(claims, now, issuer, workload, audience, action, []string{scope})
+}
+
+func validateDelegation(
+	claims DelegationClaims,
+	now time.Time,
+	issuer,
+	executingService,
+	audience,
+	action string,
+	acceptableScopes []string,
+) error {
 	if claims.Issuer != issuer {
 		return errors.New("delegation issuer is invalid")
 	}
@@ -217,7 +241,7 @@ func ValidateDelegationFromIssuerAnyScope(
 	if claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt > 60 {
 		return errors.New("delegation is expired or too long-lived")
 	}
-	if claims.Subject == "" || claims.SubjectIssuer == "" || claims.TenantID == "" || claims.SessionID == "" || claims.TokenID == "" || claims.PolicyRevision == "" {
+	if claims.Subject == "" || claims.SubjectIssuer == "" || claims.TenantID == "" || claims.TokenID == "" || claims.PolicyRevision == "" {
 		return errors.New("delegation identity fields are incomplete")
 	}
 	if !containsExact(claims.Actions, action) || len(claims.Actions) != 1 {

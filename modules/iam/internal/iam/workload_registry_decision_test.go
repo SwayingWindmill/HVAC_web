@@ -103,6 +103,11 @@ func (h iamHarness) workloadDecision(t *testing.T, workload, body string) *httpt
 
 func (h iamHarness) workloadRequest(t *testing.T, workload, body string) *http.Request {
 	t.Helper()
+	return h.workloadRequestTo(t, iam.RegistryWorkloadDecisionPath, workload, body)
+}
+
+func (h iamHarness) workloadRequestTo(t *testing.T, path, workload, body string) *http.Request {
+	t.Helper()
 	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", workload, h.now)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +120,7 @@ func (h iamHarness) workloadRequest(t *testing.T, workload, body string) *http.R
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, iam.RegistryWorkloadDecisionPath, strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{certificate},

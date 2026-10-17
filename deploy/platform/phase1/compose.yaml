@@ -648,9 +648,14 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       REPORT_HTTP_ADDR: :19097
       REPORT_DATABASE_URL: ${REPORT_DATABASE_URL:-}
-      REPORT_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
-      REPORT_CLICKHOUSE_READER_USERNAME: report_service_reader
-      REPORT_CLICKHOUSE_READER_PASSWORD: ${REPORT_CLICKHOUSE_READER_PASSWORD:-}
+      # Energy comes from the Telemetry Query Service, read as report-service's own Workload Principal.
+      REPORT_IAM_URL: https://iam-service:8444
+      REPORT_QUERY_URL: https://telemetry-query-service:18447
+      REPORT_TLS_CERT: /run/hvac/pki/report/tls.crt
+      REPORT_TLS_KEY: /run/hvac/pki/report/tls.key
+      REPORT_TLS_CA: /run/hvac/pki/ca.crt
+    volumes:
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully

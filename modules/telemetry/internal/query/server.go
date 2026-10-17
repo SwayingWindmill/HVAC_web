@@ -26,10 +26,14 @@ const (
 )
 
 type ServerConfig struct {
-	Engine                            analytics.EnergySeriesEngine
-	HistoryEngine                     history.Engine
-	DelegationPublicKey               crypto.PublicKey
-	DelegationIssuerSPIFFE            string
+	Engine                 analytics.EnergySeriesEngine
+	HistoryEngine          history.Engine
+	DelegationPublicKey    crypto.PublicKey
+	DelegationIssuerSPIFFE string
+	// WorkloadGrantPublicKey and WorkloadGrantIssuerSPIFFE accept IAM's Energy Series grants for a
+	// Workload Principal reading for itself (ADR 0017); without them only Gateway grants are accepted.
+	WorkloadGrantPublicKey            crypto.PublicKey
+	WorkloadGrantIssuerSPIFFE         string
 	AllowedPresenterSPIFFE            string
 	AdditionalAllowedPresenterSPIFFEs []string
 	Audience                          string
@@ -43,6 +47,8 @@ type handler struct {
 	historyEngine           history.Engine
 	delegationPublicKey     crypto.PublicKey
 	delegationIssuerSPIFFE  string
+	workloadGrantPublicKey  crypto.PublicKey
+	workloadGrantIssuer     string
 	allowedPresenterSPIFFEs map[string]struct{}
 	audience                string
 	logger                  *slog.Logger
@@ -84,6 +90,8 @@ func NewHandler(config ServerConfig) http.Handler {
 		historyEngine:           config.HistoryEngine,
 		delegationPublicKey:     config.DelegationPublicKey,
 		delegationIssuerSPIFFE:  delegationIssuer,
+		workloadGrantPublicKey:  config.WorkloadGrantPublicKey,
+		workloadGrantIssuer:     strings.TrimSpace(config.WorkloadGrantIssuerSPIFFE),
 		allowedPresenterSPIFFEs: allowedPresenters,
 		audience:                config.Audience,
 		logger:                  logger,
@@ -178,20 +186,12 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusBadRequest, "ANALYTICS_QUERY_INVALID", "The energy series query exceeds the supported product boundary.", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, request.Header.Get("X-Delegation-Grant"))
-	if err != nil {
+	claims, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), peerSPIFFE, query.TenantID, scope)
+	if !valid {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
 	}
-	if claims.PrincipalID == "" || claims.TenantID != query.TenantID || identitycontext.ValidateDelegationFromIssuer(
-		claims,
-		server.now(),
-		server.delegationIssuerSPIFFE,
-		peerSPIFFE,
-		server.audience,
-		analyticsmodel.EnergySeriesAction,
-		scope,
-	) != nil {
+	if !authorized {
 		writeProblem(writer, http.StatusForbidden, "ANALYTICS_DELEGATION_REJECTED", "The analytics delegation grant is not authorized for this query.", false)
 		return
 	}
@@ -204,6 +204,28 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+// energyGrant checks an Energy Series grant: a Gateway grant delegated from a user Session, or
+// IAM's grant for a Workload Principal that presents it for itself. valid is false when neither
+// key signed it; authorized is false when it does not fit this presenter, Tenant and query.
+func (server *handler) energyGrant(raw, presenter, tenantID, scope string) (identitycontext.DelegationClaims, bool, bool) {
+	now := server.now()
+	if claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, raw); err == nil {
+		return claims, true, claims.PrincipalID != "" && claims.TenantID == tenantID && identitycontext.ValidateDelegationFromIssuer(
+			claims, now, server.delegationIssuerSPIFFE, presenter, server.audience, analyticsmodel.EnergySeriesAction, scope,
+		) == nil
+	}
+	if server.workloadGrantPublicKey == nil {
+		return identitycontext.DelegationClaims{}, false, false
+	}
+	claims, err := identitycontext.VerifyDelegation(server.workloadGrantPublicKey, raw)
+	if err != nil {
+		return identitycontext.DelegationClaims{}, false, false
+	}
+	return claims, true, claims.PrincipalID != "" && claims.TenantID == tenantID && identitycontext.ValidateWorkloadDelegation(
+		claims, now, server.workloadGrantIssuer, presenter, server.audience, analyticsmodel.EnergySeriesAction, scope,
+	) == nil
 }
 
 func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *http.Request, peerSPIFFE string) {

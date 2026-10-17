@@ -379,6 +379,9 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		AllowedRegistryGrantPresenters: []string{
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		},
+		// report-service reads the Site's energy as its own Workload Principal (ADR 0017, ADR 0023).
+		AnalyticsGrantAudience:      envOr("QUERY_AUDIENCE", "telemetry-query-service"),
+		AllowedAnalyticsWorkloads:   []string{envOr("IAM_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service")},
 		RegistryGrantStatus:         store,
 		TelemetryAuthorizationStore: store,
 		AlarmAuthorizationStore:     store,
@@ -707,6 +710,11 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 	if err != nil {
 		return nil, nil, err
 	}
+	// IAM's grant certificate, the one Registry verifies: Workload Principals' Energy Series grants carry it.
+	workloadGrantPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("CORE_IAM_GRANT_CERT"))
+	if err != nil {
+		return nil, nil, err
+	}
 	accessFactory, err := queryservice.NewCubeAccessFactory([]byte(energyRequiredEnv("QUERY_CUBE_API_SECRET")), time.Now)
 	if err != nil {
 		return nil, nil, err
@@ -741,11 +749,14 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 		Addr: envOr("QUERY_SERVICE_ADDR", "127.0.0.1:18447"),
 		Handler: queryservice.NewHandler(queryservice.ServerConfig{
 			Engine: cubeClient, HistoryEngine: historyClient, DelegationPublicKey: delegationPublicKey,
-			DelegationIssuerSPIFFE: envOr("QUERY_DELEGATION_ISSUER_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			AllowedPresenterSPIFFE: envOr("QUERY_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			DelegationIssuerSPIFFE:    envOr("QUERY_DELEGATION_ISSUER_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			WorkloadGrantPublicKey:    workloadGrantPublicKey,
+			WorkloadGrantIssuerSPIFFE: envOr("CORE_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
+			AllowedPresenterSPIFFE:    envOr("QUERY_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AdditionalAllowedPresenterSPIFFEs: []string{
 				envOr("QUERY_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 				envOr("QUERY_FDD_SERVICE_SPIFFE", "spiffe://hvac.local/fdd-service"),
+				envOr("QUERY_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service"),
 			},
 			Audience: envOr("QUERY_AUDIENCE", "telemetry-query-service"), Logger: logger, Observability: telemetry,
 		}),

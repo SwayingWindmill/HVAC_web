@@ -95,6 +95,7 @@ function up() {
     compose('run','--rm','--no-deps','--build','-v',`${runtimePath('gateway-ca')}:/run/hvac/provisioning:rw`, '-e', 'GATEWAY_CA_DIR=/run/hvac/provisioning','connectivity','--initialize-gateway-ca');
   }
   ensureAdministrator();
+  script('issue-workload-identities.mjs');
   script('phase1-bootstrap-local-foundation.mjs');
   // One-shot tools are built from the checkout too, so a changed input contract never meets a stale image.
   run([launcher, 'run', '--rm', '--build', '-T', 'identity-reconciler'], { input: readFileSync(runtimePath('identity-reconcile.json'), 'utf8') });

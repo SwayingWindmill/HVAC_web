@@ -43,22 +43,26 @@ const (
 )
 
 type Config struct {
-	AllowedWorkloadSPIFFE           string
-	CoreWorkloadSPIFFE              string
-	CredentialWorkloadSPIFFE        string
-	Audience                        string
-	Logger                          *slog.Logger
-	Observability                   *observability.Runtime
-	Now                             func() time.Time
-	AuthorizationStore              AuthorizationStore
-	PrincipalCapabilityResolver     PrincipalCapabilityResolver
-	TenantContextResolver           TenantContextResolver
-	AdminStore                      AdminStore
-	RegistryGrantSigner             crypto.Signer
-	RegistryGrantIssuer             string
-	RegistryGrantAudience           string
-	RegistryGrantLifetime           time.Duration
-	AllowedRegistryGrantPresenters  []string
+	AllowedWorkloadSPIFFE          string
+	CoreWorkloadSPIFFE             string
+	CredentialWorkloadSPIFFE       string
+	Audience                       string
+	Logger                         *slog.Logger
+	Observability                  *observability.Runtime
+	Now                            func() time.Time
+	AuthorizationStore             AuthorizationStore
+	PrincipalCapabilityResolver    PrincipalCapabilityResolver
+	TenantContextResolver          TenantContextResolver
+	AdminStore                     AdminStore
+	RegistryGrantSigner            crypto.Signer
+	RegistryGrantIssuer            string
+	RegistryGrantAudience          string
+	RegistryGrantLifetime          time.Duration
+	AllowedRegistryGrantPresenters []string
+	// AnalyticsGrantAudience and AllowedAnalyticsWorkloads enable Energy Series grants for
+	// Workload Principals, signed with the Registry grant key and issuer.
+	AnalyticsGrantAudience          string
+	AllowedAnalyticsWorkloads       []string
 	NewRegistryGrantID              func() string
 	RegistryAuditSink               RegistryDecisionAuditSink
 	RegistryGrantStatus             RegistryGrantStatusStore
@@ -98,6 +102,8 @@ type handler struct {
 	adminStore                      AdminStore
 	registryGrantSigner             crypto.Signer
 	registryGrantIssuer             string
+	analyticsGrantAudience          string
+	allowedAnalyticsWorkloads       []string
 	registryGrantAudience           string
 	registryGrantLifetime           time.Duration
 	allowedRegistryGrantPresenters  map[string]struct{}
@@ -276,6 +282,8 @@ func NewHandler(config Config) http.Handler {
 		tenantContextResolver:           tenantContextResolver,
 		adminStore:                      config.AdminStore,
 		registryGrantSigner:             config.RegistryGrantSigner,
+		analyticsGrantAudience:          strings.TrimSpace(config.AnalyticsGrantAudience),
+		allowedAnalyticsWorkloads:       append([]string(nil), config.AllowedAnalyticsWorkloads...),
 		registryGrantIssuer:             grantIssuer,
 		registryGrantAudience:           grantAudience,
 		registryGrantLifetime:           grantLifetime,
@@ -345,6 +353,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == RegistryWorkloadDecisionPath {
 		status = h.handleRegistryWorkloadDecision(writer, request)
+		return
+	}
+	if request.URL.Path == AnalyticsWorkloadDecisionPath {
+		status = h.handleAnalyticsWorkloadDecision(writer, request)
 		return
 	}
 
