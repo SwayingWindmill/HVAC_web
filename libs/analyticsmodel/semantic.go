@@ -20,6 +20,10 @@ const (
 	semanticDimensionLimit = 2
 )
 
+// ErrSemanticRowLimit is a query whose rows would exceed SemanticRowLimit: a narrower query is the
+// answer, not a retry.
+var ErrSemanticRowLimit = fmt.Errorf("the semantic query returns more than %d rows", SemanticRowLimit)
+
 //go:embed semantic_catalog.json
 var semanticCatalogJSON []byte
 
@@ -135,6 +139,12 @@ func (query SemanticQuery) Validate() error {
 	return nil
 }
 
+// Buckets is how many time buckets of its granularity a valid query's range holds at least.
+func (query SemanticQuery) Buckets() int {
+	location, _ := time.LoadLocation(query.Timezone)
+	return countBuckets(query.From.In(location), query.To.In(location), query.Granularity)
+}
+
 // ScopeDigest binds a grant to exactly this query.
 func (query SemanticQuery) ScopeDigest() (string, error) {
 	if err := query.Validate(); err != nil {
@@ -195,15 +205,17 @@ func countBuckets(from, to time.Time, granularity Granularity) int {
 
 // SemanticColumn is one column of a semantic query's rows: its time bucket, a dimension or a measure.
 type SemanticColumn struct {
-	Name  string `json:"name"`
-	Title string `json:"title"`
-	Kind  string `json:"kind"`
+	Name  string             `json:"name"`
+	Title string             `json:"title"`
+	Kind  SemanticColumnKind `json:"kind"`
 }
 
+type SemanticColumnKind string
+
 const (
-	SemanticColumnTime      = "time"
-	SemanticColumnDimension = "dimension"
-	SemanticColumnMeasure   = "measure"
+	SemanticColumnTime      SemanticColumnKind = "time"
+	SemanticColumnDimension SemanticColumnKind = "dimension"
+	SemanticColumnMeasure   SemanticColumnKind = "measure"
 )
 
 // SemanticQueryResponse is the rows of a semantic query: the bucket start (RFC 3339), the dimensions
@@ -218,6 +230,6 @@ type SemanticQueryResponse struct {
 type SemanticMetadata struct {
 	DataWatermark   *time.Time `json:"dataWatermark,omitempty"`
 	DatasetRevision string     `json:"datasetRevision"`
-	// Partial says the data does not yet reach the end of the range.
+	// Partial says the data does not yet reach the end of the range or a time bucket has no rows.
 	Partial bool `json:"partial"`
 }

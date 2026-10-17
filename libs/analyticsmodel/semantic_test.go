@@ -78,7 +78,4 @@ func TestSemanticQueryKeepsWithinTheBucketLimit(t *testing.T) {
 	if err := query.Validate(); err == nil || !strings.Contains(err.Error(), "bucket") {
 		t.Fatalf("32 days by hour: %v", err)
 	}
-	if SemanticRowLimit != 2000 {
-		t.Fatalf("row limit = %d", SemanticRowLimit)
-	}
 }

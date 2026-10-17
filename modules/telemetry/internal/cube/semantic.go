@@ -13,7 +13,7 @@ import (
 
 // QuerySemantic answers the Operations Agent's semantic query (#573): the catalog's members of one
 // view by time bucket, always cut to the query's Site, with the Site's data watermark. More rows than
-// the limit is an error rather than a silently shortened answer.
+// the limit is ErrSemanticRowLimit rather than a silently shortened answer.
 func (client *Client) QuerySemantic(ctx context.Context, caller analytics.CallerContext, query analyticsmodel.SemanticQuery) (analyticsmodel.SemanticQueryResponse, error) {
 	if err := query.Validate(); err != nil {
 		return analyticsmodel.SemanticQueryResponse{}, err
@@ -57,20 +57,24 @@ func (client *Client) QuerySemantic(ctx context.Context, caller analytics.Caller
 		return analyticsmodel.SemanticQueryResponse{}, fmt.Errorf("query Cube semantic view: %w", err)
 	}
 	if len(decoded.Data) > analyticsmodel.SemanticRowLimit {
-		return analyticsmodel.SemanticQueryResponse{}, fmt.Errorf("the semantic query returns more than %d rows", analyticsmodel.SemanticRowLimit)
+		return analyticsmodel.SemanticQueryResponse{}, analyticsmodel.ErrSemanticRowLimit
 	}
 	rows := make([][]any, 0, len(decoded.Data))
+	buckets := map[any]bool{}
 	for _, row := range decoded.Data {
 		mapped, err := mapSemanticRow(row, period, query, location)
 		if err != nil {
 			return analyticsmodel.SemanticQueryResponse{}, err
 		}
 		rows = append(rows, mapped)
+		buckets[mapped[0]] = true
 	}
 	metadata, err := client.semanticMetadata(queryContext, token, query, location)
 	if err != nil {
 		return analyticsmodel.SemanticQueryResponse{}, err
 	}
+	// Cube leaves out a bucket nothing was metered in; such a gap leaves the answer incomplete too.
+	metadata.Partial = metadata.Partial || len(buckets) < query.Buckets()
 	return analyticsmodel.SemanticQueryResponse{SchemaVersion: 1, Columns: columns, Rows: rows, Metadata: metadata}, nil
 }
 

@@ -237,6 +237,10 @@ func (server *handler) serveSemanticQuery(writer http.ResponseWriter, request *h
 		return
 	}
 	response, err := server.engine.QuerySemantic(request.Context(), analytics.CallerContext{PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision}, query)
+	if errors.Is(err, analyticsmodel.ErrSemanticRowLimit) {
+		writeProblem(writer, http.StatusUnprocessableEntity, "ANALYTICS_RESULT_TOO_LARGE", "The semantic query returns more rows than allowed; ask for fewer dimensions or a shorter range.", false)
+		return
+	}
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
 		return

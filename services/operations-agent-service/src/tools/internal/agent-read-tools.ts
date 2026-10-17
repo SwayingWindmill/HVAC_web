@@ -52,6 +52,8 @@ export interface HvacReadToolLimits {
   readonly maxAssets: number;
   readonly maxEnergyPoints: number;
   readonly maxEnergyRangeMs: number;
+  /** Rows one semantic query may return (the Run's maxToolResultRecords). */
+  readonly maxResultRecords: number;
   readonly maxResultBytes: number;
   readonly timeoutMs: number;
 }
@@ -72,6 +74,7 @@ const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
   maxAssets: 200,
   maxEnergyPoints: 1_000,
   maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1_000,
+  maxResultRecords: 2_000,
   maxResultBytes: 64 * 1_024,
   timeoutMs: 8_000,
 });
@@ -160,6 +163,12 @@ const energyCompareInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
+// The query service's own ceilings (analyticsmodel), which it checks again: members per query and
+// time buckets; the Run's budget may be lower.
+const SEMANTIC_MEASURE_LIMIT = 4;
+const SEMANTIC_DIMENSION_LIMIT = 2;
+const SEMANTIC_BUCKET_LIMIT = 744;
+
 // Every catalog member as `view.member`, with the view's and the member's Chinese meaning, so the
 // model can only name what the semantic views publish (#573).
 const semanticMemberSchema = (kind: 'measures' | 'dimensions') => Object.freeze({
@@ -173,11 +182,11 @@ const semanticQueryInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
     measures: Object.freeze({
-      type: 'array', items: semanticMemberSchema('measures'), minItems: 1, maxItems: 4,
+      type: 'array', items: semanticMemberSchema('measures'), minItems: 1, maxItems: SEMANTIC_MEASURE_LIMIT,
       description: 'One to four figures, all from the same view.',
     }),
     dimensions: Object.freeze({
-      type: 'array', items: semanticMemberSchema('dimensions'), maxItems: 2,
+      type: 'array', items: semanticMemberSchema('dimensions'), maxItems: SEMANTIC_DIMENSION_LIMIT,
       description: 'Up to two groupings from the same view as the measures; each adds a row per value.',
     }),
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
@@ -361,8 +370,6 @@ interface SemanticQueryArguments {
   readonly to: string;
 }
 
-// The owner's own ceiling on time buckets; the Run's point budget may be lower.
-const SEMANTIC_BUCKET_LIMIT = 744;
 const SEMANTIC_BUCKET_MS = Object.freeze({ hour: 3_600_000, day: 86_400_000, month: 28 * 86_400_000 });
 
 // Refuses, before any read, members outside one catalog view and ranges beyond the Run's budget.
@@ -378,8 +385,8 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
     || !['hour', 'day', 'month'].includes(String(record.granularity))) {
     fail('TOOL_ARGUMENTS_INVALID', invalid);
   }
-  const measureParts = named(record.measures, 4);
-  const dimensionParts = record.dimensions === undefined ? [] : named(record.dimensions, 2);
+  const measureParts = named(record.measures, SEMANTIC_MEASURE_LIMIT);
+  const dimensionParts = record.dimensions === undefined ? [] : named(record.dimensions, SEMANTIC_DIMENSION_LIMIT);
   const all = [...measureParts, ...dimensionParts];
   const view = semanticCatalog.views.find(({ name }) => name === measureParts[0]?.[0]);
   if (view === undefined || all.some((parts) => parts.length !== 2 || parts[0] !== view.name)
@@ -909,6 +916,7 @@ const readSemantic = async (
   reader: SemanticQueryReader,
   timezone: string,
   query: SemanticQueryArguments,
+  limits: HvacReadToolLimits,
 ) => {
   const draft = {
     tool: 'analytics.semanticQuery' as const,
@@ -928,6 +936,9 @@ const readSemantic = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await reader.read({ request, context: ownerContext });
   const payload = semanticPayloadFrom(result);
+  if (payload.rows.length > limits.maxResultRecords) {
+    fail('TOOL_RESULT_TOO_LARGE', "Semantic query rows exceed the Run's record limit.");
+  }
   const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
     view: query.view.title,
@@ -1351,6 +1362,7 @@ export const createHvacReadTools = ({
           semanticQueryReader,
           sitePayload.site.timezone,
           query,
+          limits,
         ), limits);
       });
     },

@@ -89,12 +89,13 @@ export const createProductionAgentSessionRuntime = async (
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
+    const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
     const service = createAgentSessionService({
       lifecycle,
       engine: modelRuntime.engine,
       modelRef: modelRuntime.modelRef,
-      budget: requireBudget(options.budget),
+      budget,
       now: options.now ?? Date.now,
       nextId: options.nextId ?? (() => randomUUID()),
       createTools: (context) => createHvacReadTools({
@@ -106,6 +107,7 @@ export const createProductionAgentSessionRuntime = async (
         telemetryHistoryReader,
         energyAnalyticsReader,
         semanticQueryReader,
+        limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
       }),
     });
     const handler = createAgentSessionHttpHandler({

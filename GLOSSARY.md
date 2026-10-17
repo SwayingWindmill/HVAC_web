@@ -188,6 +188,14 @@ One bounded attempt at answering within an Agent Session: the model and Tool loo
 
 A server-defined, read-only capability the model may call within a Run, such as reading the Site's energy series. Each call is authorized again by the Gateway for the signed-in operator before the owner answers; there is no Tool that changes equipment or submits commands.
 
+## Semantic Query
+
+An Agent Tool's request for up to four measures of one Cube view, optionally grouped by up to two of its dimensions, per hour, day or month. Only members in the Semantic Catalog can be named; the Site is never a parameter but comes from the Session's grant, and the query service checks the catalog again before it reads.
+
+## Semantic Catalog
+
+The list of view members a Semantic Query may name, with their Chinese titles and descriptions, generated from the Cube model (`npm run semantic:catalog:generate`). It leaves out the Site, the time dimension and freshness measures; a member the catalog does not list cannot be asked for.
+
 ## Agent Artifact
 
 A typed, inspectable result of a Run: an Evidence Reference to an owner fact a Tool returned, a Finding, a Proposal, an Input Request to the operator, the operator's Input Response, or a Limitation. An Artifact cites platform facts but never becomes their owner; a Proposal is not an approval, Command Intent or proof that anything changed.

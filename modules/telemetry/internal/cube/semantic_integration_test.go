@@ -14,7 +14,8 @@ import (
 
 // One question, several measures of a view: run-analytics-cube-tests.mjs has projected the Site's
 // electricity (2 kWh in each of the 12:00 and 13:00 buckets) and cooling at four times it, so each
-// hour reads 2 kWh, 8 kWh and a COP of 4. The Site is the query's, whatever the token allows.
+// hour reads 2 kWh, 8 kWh and a COP of 4. Another Site's query reads none of it. The answer is
+// incomplete while the data (to 13:05) falls short of the range or a bucket has no rows.
 func TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite(t *testing.T) {
 	cubeURL := strings.TrimSpace(os.Getenv("ANALYTICS_CUBE_TEST_URL"))
 	if cubeURL == "" {
@@ -55,8 +56,23 @@ func TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite(t *testing.T) {
 	if !reflect.DeepEqual(response.Columns, wantColumns) || !reflect.DeepEqual(response.Rows, wantRows) {
 		t.Fatalf("columns = %+v\nrows = %+v", response.Columns, response.Rows)
 	}
-	if response.Metadata.DataWatermark == nil || response.Metadata.DatasetRevision == "" {
+	if response.Metadata.DataWatermark == nil || response.Metadata.DatasetRevision == "" || !response.Metadata.Partial {
 		t.Fatalf("metadata = %+v", response.Metadata)
+	}
+
+	for _, window := range []struct {
+		from, to int
+		partial  bool
+	}{{12, 13, false}, {11, 13, true}} {
+		within := query
+		within.From, within.To = time.Date(2026, 7, 29, window.from, 0, 0, 0, time.UTC), time.Date(2026, 7, 29, window.to, 0, 0, 0, time.UTC)
+		answer, err := client.QuerySemantic(context.Background(), caller, within)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if answer.Metadata.Partial != window.partial {
+			t.Fatalf("%d:00-%d:00 partial = %v, rows %+v", window.from, window.to, answer.Metadata.Partial, answer.Rows)
+		}
 	}
 
 	other := query
