@@ -76,9 +76,7 @@ FORMAT JSONEachRow`, reader.analyticsDatabase), url.Values{"param_tenant": {site
 	if err != nil {
 		return energy.PriceWindowSync{}, false, fmt.Errorf("decode price window coverage: %w", err)
 	}
-	return energy.PriceWindowSync{
-		TenantID: site.TenantID, SiteID: site.SiteID, Generation: generation, TimelineDigest: row.TimelineDigest, CoveredTo: coveredTo,
-	}, true, nil
+	return energy.PriceWindowSync{PricedSite: site, Generation: generation, TimelineDigest: row.TimelineDigest, CoveredTo: coveredTo}, true, nil
 }
 
 func (writer *Writer) WritePriceWindows(ctx context.Context, sync energy.PriceWindowSync, windows []tariffmodel.Window) error {

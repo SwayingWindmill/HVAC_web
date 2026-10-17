@@ -398,7 +398,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 			DisableCompression: true,
 		},
 	}
-	registryConfig := analyticsprojector.BindingResolverConfig{
+	registryConfig := analyticsprojector.RegistryClientConfig{
 		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
 	}
 	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)

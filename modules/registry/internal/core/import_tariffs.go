@@ -83,22 +83,7 @@ ORDER BY boundary.boundary_code, 3
 			return err
 		}
 		for index := range timeline.Versions {
-			version := &timeline.Versions[index]
-			version.Periods = []TariffPeriod{}
-			if err := queryAssetRows(ctx, transaction, `
-SELECT period_code, day_type, local_start_minute, local_end_minute,
-       (pricing_rule->>'energyRatePerKWh')::float8, COALESCE((pricing_rule->>'demandRatePerKW')::float8, 0)
-FROM core_registry.tariff_periods
-WHERE tariff_version_id = $1::uuid
-ORDER BY day_type, local_start_minute
-`, version.VersionID, func(row rowScanner) error {
-				var period TariffPeriod
-				err := row.Scan(&period.PeriodCode, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh, &period.DemandRatePerKW)
-				if err == nil {
-					version.Periods = append(version.Periods, period)
-				}
-				return err
-			}); err != nil {
+			if timeline.Versions[index].Periods, err = queryTariffPeriods(ctx, transaction, timeline.Versions[index].VersionID); err != nil {
 				return err
 			}
 		}

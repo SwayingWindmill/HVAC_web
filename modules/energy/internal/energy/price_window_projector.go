@@ -28,8 +28,7 @@ type PricedSite struct {
 // PriceWindowSync is how far a Site's current generation of price windows reaches and which
 // Tariff timeline it was laid out from.
 type PriceWindowSync struct {
-	TenantID       string
-	SiteID         string
+	PricedSite
 	Generation     uint64
 	TimelineDigest string
 	CoveredTo      time.Time
@@ -90,14 +89,14 @@ func (projector *PriceWindowProjector) SyncOnce(ctx context.Context) error {
 	horizon := now.Truncate(24*time.Hour).AddDate(0, 0, priceWindowHorizonDays)
 	var failures []error
 	for _, site := range sites {
-		if err := projector.syncSite(ctx, site, horizon); err != nil {
+		if err := projector.syncSite(ctx, site, now, horizon); err != nil {
 			failures = append(failures, fmt.Errorf("price windows of Site %s: %w", site.SiteID, err))
 		}
 	}
 	return errors.Join(failures...)
 }
 
-func (projector *PriceWindowProjector) syncSite(ctx context.Context, site PricedSite, horizon time.Time) error {
+func (projector *PriceWindowProjector) syncSite(ctx context.Context, site PricedSite, now, horizon time.Time) error {
 	versions, err := projector.tariffs.ImportTariffs(ctx, site.TenantID, site.SiteID, horizon)
 	if err != nil {
 		return err
@@ -121,7 +120,9 @@ func (projector *PriceWindowProjector) syncSite(ctx context.Context, site Priced
 		}
 		return projector.writer.RecordPriceWindowSync(ctx, extended)
 	}
-	next := PriceWindowSync{TenantID: site.TenantID, SiteID: site.SiteID, Generation: previous.Generation + 1, TimelineDigest: digest, CoveredTo: horizon}
+	// Each attempt writes under its own generation, so windows of an attempt whose sync row failed
+	// never mix with the next timeline's; they stay invisible until a later sync drops them.
+	next := PriceWindowSync{PricedSite: site, Generation: max(previous.Generation+1, uint64(now.UnixMilli())), TimelineDigest: digest, CoveredTo: horizon}
 	if len(versions) > 0 {
 		if err := projector.writer.WritePriceWindows(ctx, next, tariffmodel.Windows(versions, versions[0].EffectiveFrom, horizon)); err != nil {
 			return err

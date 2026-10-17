@@ -40,8 +40,7 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 		}
 		captured = append(captured, decoded)
 		writer.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
-			_, _ = writer.Write([]byte(`{"data":[]}`))
+		if answeredCostQuery(writer, decoded) {
 			return
 		}
 		if len(decoded.Query.Measures) == 2 && decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
@@ -137,8 +136,7 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
-			_, _ = writer.Write([]byte(`{"data":[]}`))
+		if answeredCostQuery(writer, decoded) {
 			return
 		}
 		switch {
@@ -194,8 +192,7 @@ func TestClientMarksCoveredRangePartialWhenSeriesRowsAreMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
-			_, _ = writer.Write([]byte(`{"data":[]}`))
+		if answeredCostQuery(writer, decoded) {
 			return
 		}
 		if len(decoded.Query.TimeDimensions) == 0 {
@@ -364,8 +361,7 @@ func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
-			_, _ = writer.Write([]byte(`{"data":[]}`))
+		if answeredCostQuery(writer, decoded) {
 			return
 		}
 		if len(decoded.Query.TimeDimensions) == 0 {
@@ -391,4 +387,13 @@ func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
 	if len(response.Points) != 1 || response.Points[0].EnergyKWh != 120.5 || response.Metadata.QualitySummary.Invalid != 4 || !response.Metadata.Partial {
 		t.Fatalf("response = %#v", response)
 	}
+}
+
+// answeredCostQuery answers the electricity cost query with no rows, for tests about energy.
+func answeredCostQuery(writer http.ResponseWriter, decoded loadRequest) bool {
+	if !strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
+		return false
+	}
+	_, _ = writer.Write([]byte(`{"data":[]}`))
+	return true
 }
