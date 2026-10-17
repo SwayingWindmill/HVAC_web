@@ -159,7 +159,8 @@ cubes:
 
   # The Site's electricity priced at its import Tariff (#575). Each fact takes the rate of the
   # price window its period ends in, the instant that also decides its bucket; a fact outside
-  # every window has no rate and counts as unpriced. Both sides are cut to the queried Site first.
+  # every window has no rate and counts as unpriced. Both sides are cut to the queried Site first,
+  # and the facts to the queried time; the windows are not, since a fact needs the one before it.
   - name: site_energy_cost_facts
     public: false
     title: 站点电费估算
@@ -174,6 +175,7 @@ cubes:
         FROM analytics.energy_interval_facts_visible
         WHERE accounting_scope = 'SITE' AND energy_type = 'electricity'
           AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('period_end')}
       ) AS fact
       ASOF LEFT JOIN (
         SELECT tenant_id, site_id, window_start, window_end, period_code, energy_rate_per_kwh
