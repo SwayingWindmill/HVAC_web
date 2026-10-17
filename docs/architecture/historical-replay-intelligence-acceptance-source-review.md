@@ -50,6 +50,8 @@ A deliberately late Replay observation is admitted after newer offsets. Downstre
 
 ## Verification contract
 
+Removed 2026-10-17: no gate ran this acceptance, and since #575 its Optimization step read a stubbed priced day, so the runner and its five tracers were deleted. What follows is the original contract.
+
 `npm run historical-replay:intelligence:acceptance` starts isolated Telemetry PostgreSQL, Registry PostgreSQL, and ClickHouse instances and runs the controlled Plant/Scenario proof plus five focused real-store tracers in sequence:
 
 1. Canonical Plant/Scenario runner produces a deterministic replay request sequence for the same dataset identity.
