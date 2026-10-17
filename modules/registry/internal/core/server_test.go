@@ -116,6 +116,11 @@ func (store *fakeRegistryStore) GetSiteTariff(_ context.Context, claims registry
 	return store.tariff, store.err
 }
 
+func (store *fakeRegistryStore) ListImportTariffs(_ context.Context, claims registryauth.GrantClaims, id string, _ time.Time) (ImportTariffs, error) {
+	store.lastClaims, store.lastID = claims, id
+	return ImportTariffs{}, store.err
+}
+
 func TestServerReadsTheSitesTariffInEffect(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{tariff: SiteTariff{

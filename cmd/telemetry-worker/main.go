@@ -100,7 +100,7 @@ func main() {
 		go runHistoryProjection(historyContext, historyRelay, logger)
 	}
 
-	analyticsProjector, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
+	analyticsProjector, priceWindows, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
 	if err != nil {
 		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -108,6 +108,7 @@ func main() {
 	if analyticsCancel != nil {
 		defer analyticsCancel()
 		go runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
+		go runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
 	}
 
 	iamClient := &http.Client{
@@ -352,13 +353,13 @@ func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, lo
 	})
 }
 
-func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, context.Context, context.CancelFunc, error) {
+func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.Projector, *analyticsprojector.PriceWindowProjector, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
-		return nil, context.Background(), nil, nil
+		return nil, nil, context.Background(), nil, nil
 	}
 	httpClient, err := newAnalyticsHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	baseURL := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
 	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
@@ -371,7 +372,7 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient:        httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
 		BaseURL:    baseURL,
@@ -382,11 +383,11 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 		HTTPClient: httpClient,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	internalRoots, err := loadCertPool(requiredEnv("ANALYTICS_INTERNAL_CA"))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	internalClient := &http.Client{
 		Timeout:       10 * time.Second,
@@ -397,20 +398,29 @@ func loadAnalyticsProjection(certificate tls.Certificate) (*analyticsprojector.P
 			DisableCompression: true,
 		},
 	}
-	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
+	registryConfig := analyticsprojector.BindingResolverConfig{
 		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
-	})
+	}
+	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
 		CounterSource: reader, BindingResolver: bindingResolver, FactSink: writer, RebuildEvents: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	tariffs, err := analyticsprojector.NewTariffSource(registryConfig)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	priceWindows, err := analyticsprojector.NewPriceWindowProjector(analyticsprojector.PriceWindowProjectorConfig{Reader: reader, Writer: writer, Tariffs: tariffs})
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
 	projectionContext, projectionCancel := context.WithCancel(context.Background())
-	return projector, projectionContext, projectionCancel, nil
+	return projector, priceWindows, projectionContext, projectionCancel, nil
 }
 
 func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, logger *slog.Logger) {
@@ -449,6 +459,28 @@ func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.P
 				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"model": "energy_interval_facts"}, float64(projected))
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
+		}
+	}
+}
+
+// runPriceWindowProjection keeps every priced Site's Tariff laid out as price windows for Cube
+// (#575). Tariffs change rarely, so it runs at start and then every few minutes.
+func runPriceWindowProjection(ctx context.Context, projector *analyticsprojector.PriceWindowProjector, runtime *observability.Runtime, logger *slog.Logger) {
+	interval := durationEnv("ANALYTICS_PRICE_WINDOW_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		syncContext, cancel := context.WithTimeout(ctx, time.Minute)
+		err := projector.SyncOnce(syncContext)
+		cancel()
+		if err != nil {
+			_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "tariff_price_windows"}, 1)
+			logger.Warn("analytics_price_window_projection_failed", "error_code", "ANALYTICS_PRICE_WINDOW_PROJECTION_FAILED", "error", err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

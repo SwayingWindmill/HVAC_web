@@ -30,3 +30,17 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 func NewBindingResolver(config BindingResolverConfig) (BindingResolver, error) {
 	return coreclient.NewResolver(config)
 }
+
+type PriceWindowProjectorConfig = energy.PriceWindowProjectorConfig
+type PriceWindowProjector = energy.PriceWindowProjector
+type TariffSource = energy.TariffSource
+
+func NewPriceWindowProjector(config PriceWindowProjectorConfig) (*PriceWindowProjector, error) {
+	return energy.NewPriceWindowProjector(config)
+}
+
+// NewTariffSource reads import Tariffs from Core Registry with its own grants, so it can run
+// beside the binding resolver.
+func NewTariffSource(config BindingResolverConfig) (TariffSource, error) {
+	return coreclient.NewResolver(config)
+}
