@@ -79,3 +79,23 @@ func TestSemanticQueryKeepsWithinTheBucketLimit(t *testing.T) {
 		t.Fatalf("32 days by hour: %v", err)
 	}
 }
+
+// The catalog is what the AI 助手 reads: measures an operator asks for, described in their words
+// (#590). Counts of measuring intervals and words such as 区间 stay out.
+func TestSemanticCatalogSpeaksTheOperatorsWords(t *testing.T) {
+	for _, view := range Catalog().Views {
+		for _, member := range append(append([]SemanticMember{}, view.Measures...), view.Dimensions...) {
+			if strings.HasSuffix(member.Name, "_count") {
+				t.Errorf("%s.%s is an interval count", view.Name, member.Name)
+			}
+			for _, word := range []string{"区间", "口径"} {
+				if strings.Contains(member.Title+member.Description, word) {
+					t.Errorf("%s.%s says %s: %s %s", view.Name, member.Name, word, member.Title, member.Description)
+				}
+			}
+		}
+		if strings.Contains(view.Description, "区间") {
+			t.Errorf("view %s says 区间", view.Name)
+		}
+	}
+}

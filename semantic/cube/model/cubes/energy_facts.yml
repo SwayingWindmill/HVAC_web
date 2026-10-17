@@ -12,7 +12,7 @@ cubes:
     measures:
       - name: energy_valid_kwh
         title: 能耗（有效数据）
-        description: 只累计质量为「有效」的区间，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
+        description: 只算质量判定为「有效」的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
         sql: energy_kwh
         type: sum
         filters:
@@ -20,7 +20,7 @@ cubes:
 
       - name: energy_valid_and_suspect_kwh
         title: 能耗（含可疑数据）
-        description: 累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。同样必须按能源类型筛选。
+        description: 包括质量为「有效」和「可疑」的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。
         sql: energy_kwh
         type: sum
         filters:
