@@ -558,6 +558,13 @@ services:
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
       OPTIMIZATION_CLICKHOUSE_READER_USERNAME: optimization_service_reader
       OPTIMIZATION_CLICKHOUSE_READER_PASSWORD: ${OPTIMIZATION_CLICKHOUSE_READER_PASSWORD:-}
+      OPTIMIZATION_IAM_URL: https://iam-service:8444
+      OPTIMIZATION_QUERY_URL: https://telemetry-query-service:18447
+      OPTIMIZATION_TLS_CERT: /run/hvac/pki/optimization/tls.crt
+      OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
+      OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt
+    volumes:
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -621,6 +628,13 @@ services:
       MV_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       MV_CLICKHOUSE_READER_USERNAME: mv_service_reader
       MV_CLICKHOUSE_READER_PASSWORD: ${MV_CLICKHOUSE_READER_PASSWORD:-}
+      MV_IAM_URL: https://iam-service:8444
+      MV_QUERY_URL: https://telemetry-query-service:18447
+      MV_TLS_CERT: /run/hvac/pki/mv/tls.crt
+      MV_TLS_KEY: /run/hvac/pki/mv/tls.key
+      MV_TLS_CA: /run/hvac/pki/ca.crt
+    volumes:
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
