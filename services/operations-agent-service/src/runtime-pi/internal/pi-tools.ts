@@ -77,6 +77,8 @@ const toolFailureText = (result: unknown): string | null => {
 
 export const projectToolFailureCodeFromPiResult = (result: unknown): AgentToolErrorCode | null => {
   const text = toolFailureText(result);
+  // Pi checks the arguments against the Tool's schema before executing it; a refusal there is an argument failure.
+  if (text?.startsWith('Validation failed for tool ')) return 'TOOL_ARGUMENTS_INVALID';
   if (text === null || !text.startsWith(toolFailurePrefix)) return null;
   const code = text.slice(toolFailurePrefix.length) as AgentToolErrorCode;
   return toolFailureCodes.has(code) ? code : null;

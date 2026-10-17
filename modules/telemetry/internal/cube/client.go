@@ -26,7 +26,7 @@ const (
 )
 
 type TokenFactory interface {
-	Token(context.Context, analytics.CallerContext, analyticsmodel.EnergySeriesQuery) (string, error)
+	Token(ctx context.Context, caller analytics.CallerContext, tenantID, siteID string) (string, error)
 }
 
 type Config struct {
@@ -107,7 +107,7 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	}
 	queryContext, cancel := context.WithTimeout(ctx, maximumCubeQueryDuration)
 	defer cancel()
-	token, err := client.tokenFactory.Token(queryContext, caller, productQuery)
+	token, err := client.tokenFactory.Token(queryContext, caller, productQuery.TenantID, productQuery.SiteID)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("create Cube token: %w", err)
 	}

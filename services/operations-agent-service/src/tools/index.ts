@@ -24,6 +24,10 @@ export {
   type EnergySeriesResponseDto,
 } from './internal/energy-analytics-owner-reader.js';
 export {
+  createSemanticQueryOwnerReader,
+  type SemanticQueryOwnerReaderConfig,
+} from './internal/semantic-query-owner-reader.js';
+export {
   createGatewayToolAuthorizationReader,
   type GatewayToolAuthorizationReaderConfig,
 } from './internal/gateway-tool-authorization-reader.js';

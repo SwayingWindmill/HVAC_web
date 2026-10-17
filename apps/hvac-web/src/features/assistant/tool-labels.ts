@@ -18,6 +18,7 @@ const tools: Record<string, ToolPresentation> = {
   energy_query_series: { label: '读取用电曲线', page: ENERGY_PAGE },
   energy_compare_periods: { label: '对比两个时段', page: ENERGY_PAGE },
   energy_by_equipment: { label: '读取各设备用电', page: ENERGY_PAGE },
+  energy_semantic_query: { label: '查询能耗指标', page: ENERGY_PAGE },
 };
 
 export const toolPresentation = (toolName: string): ToolPresentation => (

@@ -157,7 +157,8 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 	}
 	var siteID string
 	var registryAction registryauth.Action
-	var energyQuery analyticsmodel.EnergySeriesQuery
+	// analytics is the Energy grant's scope for an Energy Series or a semantic query; nil otherwise.
+	var analytics *analyticsScope
 	var telemetryTarget telemetryauth.Target
 	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
 	switch input.Request.Tool {
@@ -189,11 +190,29 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetModelRead
 	case "analytics.getEnergySeries":
-		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil || energyQuery.Validate() != nil {
+		var energyQuery analyticsmodel.EnergySeriesQuery
+		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
 			return
 		}
-		siteID = energyQuery.SiteID
+		scope, err := energySeriesScope(energyQuery)
+		if err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
+			return
+		}
+		siteID, analytics = scope.SiteID, &scope
+	case "analytics.semanticQuery":
+		var semanticQuery analyticsmodel.SemanticQuery
+		if decodeStrictOperationsJSON(input.Request.Input, &semanticQuery) != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The semantic query asks for members or a range outside the catalog.", false, nil)
+			return
+		}
+		scope, err := semanticQueryScope(semanticQuery)
+		if err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The semantic query asks for members or a range outside the catalog.", false, nil)
+			return
+		}
+		siteID, analytics = scope.SiteID, &scope
 	case "telemetry.current.getDeviceObservationSnapshot":
 		var telemetryInput struct {
 			SiteID    string   `json:"siteId"`
@@ -286,16 +305,12 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision})
 		return
 	}
-	if input.Request.Tool == "analytics.getEnergySeries" {
-		if energyQuery.SiteID != siteID {
-			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-			return
-		}
+	if analytics != nil {
 		grant, failure := h.authorizeAnalyticsForPresenter(
 			request.Context(),
 			request,
 			session,
-			energyQuery,
+			*analytics,
 			h.operations.workloadSPIFFEID,
 		)
 		if failure != nil {

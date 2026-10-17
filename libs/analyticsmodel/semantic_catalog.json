@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "timeDimension": "period_end",
+  "views": [
+    {
+      "name": "equipment_energy",
+      "title": "设备分项能耗",
+      "description": "各设备分表的用电量，按设备和时段汇总。用来回答「电用在哪台设备上」；分项能耗已经包含在站点总表里，不能与总表相加。",
+      "measures": [
+        {
+          "name": "energy_valid_kwh",
+          "title": "能耗（有效数据）",
+          "description": "只累计质量为「有效」的区间，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
+        },
+        {
+          "name": "energy_valid_and_suspect_kwh",
+          "title": "能耗（含可疑数据）",
+          "description": "累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。同样必须按能源类型筛选。"
+        },
+        {
+          "name": "valid_count",
+          "title": "有效区间数",
+          "description": "质量为「有效」的计量区间个数。"
+        },
+        {
+          "name": "suspect_count",
+          "title": "可疑区间数",
+          "description": "质量为「可疑」的计量区间个数，例如读数跳变或计数器回绕附近。"
+        },
+        {
+          "name": "invalid_count",
+          "title": "无效区间数",
+          "description": "质量为「无效」的计量区间个数，这些区间不计入任何能耗。"
+        }
+      ],
+      "dimensions": [
+        {
+          "name": "equipment_id",
+          "title": "设备",
+          "description": "分表所计量的设备编号，与资产模型里的设备一致。"
+        },
+        {
+          "name": "energy_type",
+          "title": "能源类型",
+          "description": "electricity 是用电量，cooling 是供冷量，都以 kWh 计。"
+        },
+        {
+          "name": "quality",
+          "title": "数据质量",
+          "description": "VALID 有效、SUSPECT 可疑、INVALID 无效。"
+        }
+      ]
+    },
+    {
+      "name": "site_energy",
+      "title": "站点能耗",
+      "description": "站点总表的用电量、供冷量和综合能效，可按小时、日、月汇总。用来回答「用了多少电、供了多少冷、能效怎么样」。",
+      "measures": [
+        {
+          "name": "energy_valid_kwh",
+          "title": "能耗（有效数据）",
+          "description": "只累计质量为「有效」的区间，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
+        },
+        {
+          "name": "energy_valid_and_suspect_kwh",
+          "title": "能耗（含可疑数据）",
+          "description": "累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。同样必须按能源类型筛选。"
+        },
+        {
+          "name": "electricity_valid_kwh",
+          "title": "用电量",
+          "description": "站点总表的用电量（有效数据），单位 kWh。"
+        },
+        {
+          "name": "cooling_valid_kwh",
+          "title": "供冷量",
+          "description": "站点的供冷量（有效数据），单位 kWh。"
+        },
+        {
+          "name": "cop",
+          "title": "综合能效",
+          "description": "同一时段的供冷量 ÷ 用电量（COP），两者都只算有效数据；没有用电量的时段为空。不要再按能源类型筛选，否则分子或分母为空。"
+        },
+        {
+          "name": "valid_count",
+          "title": "有效区间数",
+          "description": "质量为「有效」的计量区间个数。"
+        },
+        {
+          "name": "suspect_count",
+          "title": "可疑区间数",
+          "description": "质量为「可疑」的计量区间个数，例如读数跳变或计数器回绕附近。"
+        },
+        {
+          "name": "invalid_count",
+          "title": "无效区间数",
+          "description": "质量为「无效」的计量区间个数，这些区间不计入任何能耗。"
+        }
+      ],
+      "dimensions": [
+        {
+          "name": "energy_type",
+          "title": "能源类型",
+          "description": "electricity 是用电量，cooling 是供冷量，都以 kWh 计。"
+        },
+        {
+          "name": "quality",
+          "title": "数据质量",
+          "description": "VALID 有效、SUSPECT 可疑、INVALID 无效。"
+        }
+      ]
+    },
+    {
+      "name": "site_energy_cost",
+      "title": "站点电费估算",
+      "description": "站点用电按购电电价分时段计价的估算电度电费，可按小时、日、月和电价时段汇总。用来回答「电费大概多少、花在峰谷哪个时段」；不含需量电费，实际账单以结算为准。",
+      "measures": [
+        {
+          "name": "cost_valid_cny",
+          "title": "电度电费（有效数据）",
+          "description": "有效用电量按电价时段计价的估算电度电费，单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。"
+        },
+        {
+          "name": "cost_valid_and_suspect_cny",
+          "title": "电度电费（含可疑数据）",
+          "description": "有效和可疑用电量的估算电度电费，单位元；可疑数据较多时用来估算上限。"
+        },
+        {
+          "name": "priced_valid_kwh",
+          "title": "已计价电量（有效数据）",
+          "description": "有电价覆盖的有效用电量，单位 kWh；按电价时段拆分时就是各时段的用电量。"
+        },
+        {
+          "name": "priced_valid_and_suspect_kwh",
+          "title": "已计价电量（含可疑数据）",
+          "description": "有电价覆盖的有效和可疑用电量，单位 kWh。"
+        },
+        {
+          "name": "unpriced_valid_kwh",
+          "title": "未计价电量（有效数据）",
+          "description": "没有任何电价时段覆盖的有效用电量，单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。"
+        },
+        {
+          "name": "unpriced_valid_and_suspect_kwh",
+          "title": "未计价电量（含可疑数据）",
+          "description": "没有电价覆盖的有效和可疑用电量，单位 kWh。"
+        }
+      ],
+      "dimensions": [
+        {
+          "name": "tariff_period",
+          "title": "电价时段",
+          "description": "SUPER_PEAK 尖峰、PEAK 峰、FLAT 平、VALLEY 谷；为空表示这部分电量没有电价。"
+        }
+      ]
+    }
+  ]
+}

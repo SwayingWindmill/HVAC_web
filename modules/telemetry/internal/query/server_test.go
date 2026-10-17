@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,11 @@ type engineStub struct {
 	caller   analytics.CallerContext
 	query    analyticsmodel.EnergySeriesQuery
 	calls    int
+}
+
+func (stub *engineStub) QuerySemantic(context.Context, analytics.CallerContext, analyticsmodel.SemanticQuery) (analyticsmodel.SemanticQueryResponse, error) {
+	stub.calls++
+	return analyticsmodel.SemanticQueryResponse{}, stub.err
 }
 
 func (stub *engineStub) QueryEnergySeries(_ context.Context, caller analytics.CallerContext, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
@@ -424,4 +430,52 @@ func validEnergyQueryForSite(siteID string) analyticsmodel.EnergySeriesQuery {
 	query := validEnergyQuery()
 	query.SiteID = siteID
 	return query
+}
+
+// A semantic query whose answer would exceed the row limit is the caller's to narrow: 422, not
+// retryable, rather than a 503 the Agent would retry.
+func TestHandlerRefusesASemanticQueryTooLargeToAnswer(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	harness := newServerHarness(t, now, &engineStub{err: fmt.Errorf("query Cube: %w", analyticsmodel.ErrSemanticRowLimit)})
+	query := analyticsmodel.SemanticQuery{
+		TenantID: testTenantID, SiteID: testSiteID, View: "equipment_energy",
+		Measures: []string{"energy_valid_kwh"}, Dimensions: []string{"equipment_id", "quality"},
+		Granularity: analyticsmodel.GranularityHour, Timezone: "Asia/Shanghai",
+		From: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC),
+	}
+	payload, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := query.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := identitycontext.SignDelegation(harness.signer, identitycontext.DelegationClaims{
+		Issuer: testPresenter, Subject: "user-1", SubjectIssuer: "issuer-test", PrincipalID: testPrincipalID,
+		ExecutingService: testOperationsPresenter, Audience: testAudience, TenantID: testTenantID,
+		Actions: []string{analyticsmodel.EnergySeriesAction}, Scopes: []string{scope}, PolicyRevision: "analytics-policy:1",
+		SessionID: "session-test", IssuedAt: now.Add(-time.Second).Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-semantic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, SemanticQueryPath, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Delegation-Grant", grant)
+	spiffe, _ := url.Parse(testOperationsPresenter)
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
+	response := httptest.NewRecorder()
+	harness.handler.ServeHTTP(response, request)
+
+	var problem struct {
+		Code      string `json:"code"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusUnprocessableEntity || problem.Code != "ANALYTICS_RESULT_TOO_LARGE" || problem.Retryable {
+		t.Fatalf("status = %d, problem = %+v", response.Code, problem)
+	}
 }

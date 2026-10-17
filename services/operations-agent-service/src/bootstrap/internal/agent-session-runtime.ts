@@ -19,6 +19,7 @@ import {
 import {
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
+  createSemanticQueryOwnerReader,
   createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
@@ -83,16 +84,18 @@ export const createProductionAgentSessionRuntime = async (
     const registryReader = createRegistryOwnerReader(options.owners.registry);
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.telemetryQuery);
+    const semanticQueryReader = createSemanticQueryOwnerReader(options.owners.telemetryQuery);
     const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.telemetryQuery);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
+    const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
     const service = createAgentSessionService({
       lifecycle,
       engine: modelRuntime.engine,
       modelRef: modelRuntime.modelRef,
-      budget: requireBudget(options.budget),
+      budget,
       now: options.now ?? Date.now,
       nextId: options.nextId ?? (() => randomUUID()),
       createTools: (context) => createHvacReadTools({
@@ -103,6 +106,8 @@ export const createProductionAgentSessionRuntime = async (
         deviceTelemetryReader,
         telemetryHistoryReader,
         energyAnalyticsReader,
+        semanticQueryReader,
+        limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
       }),
     });
     const handler = createAgentSessionHttpHandler({
