@@ -643,6 +643,19 @@ const siteTime = (instant: string, timezone: string): string => {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 };
 
+// What the model reads is what an operator would read: Chinese values, Site-local times, no owner
+// names, revisions, quality counts or internal enums (#590).
+const ENERGY_WORDS = Object.freeze({ electricity: '用电', cooling: '供冷' } as const);
+const GRANULARITY_WORDS = Object.freeze({ hour: '按小时', day: '按日', month: '按月', QUARTER_HOUR: '按15分钟', HOUR: '按小时', DAY: '按日' } as const);
+const QUALITY_POLICY_WORDS = Object.freeze({ VALID_ONLY: '只算有效读数', VALID_AND_SUSPECT: '含可疑读数' } as const);
+const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({ TELEMETRY: '读数', COUNTER: '累计量', STATE: '状态' });
+
+/** 「完整」, or what is missing and how far the data reaches. */
+const dataStatus = (partial: boolean, watermark: string | null | undefined, timezone: string): string => {
+  if (!partial) return '完整';
+  return watermark == null ? '不完整' : `不完整：数据只到 ${siteTime(watermark, timezone)}`;
+};
+
 type SitePointInput = { readonly periodStart: string; readonly energyKWh: number; readonly cost?: EnergyCost };
 
 /** Each point at Site-local time; electricity also carries the owner's estimated cost and the energy it could not price. */
@@ -700,11 +713,10 @@ const readHistory = async (
     const buckets = payload.buckets.filter((bucket) => bucket.telemetryKey === key);
     const first = buckets[0];
     if (first === undefined) return [];
-    const kind = first.pointType === 'COUNTER' ? 'counter' as const : first.pointType === 'STATE' ? 'state' as const : 'reading' as const;
     return [{
       key,
       unit: first.unit,
-      kind,
+      kind: POINT_KIND_WORDS[first.pointType] ?? '读数',
       points: buckets.map((bucket) => ({
         siteTime: siteTime(bucket.periodStart, timezone),
         ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
@@ -715,22 +727,12 @@ const readHistory = async (
     }];
   });
   // The history owner reader rates a result GOOD only when it is projected past the range and every bucket is whole.
-  const completeness = result.quality === 'GOOD' ? 'COMPLETE' as const : 'PARTIAL' as const;
   return {
     deviceId: query.deviceId,
-    query: { startDate: query.startDate, endDate: query.endDate, granularity: query.granularity },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: GRANULARITY_WORDS[query.granularity] },
     series,
     missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
-    completeness,
-    quality: result.quality,
-    source: {
-      owner: result.owner,
-      revision: result.revision,
-      quality: result.quality,
-      completeness,
-      provenance: result.provenance,
-      ...(payload.projectionWatermark === null ? {} : { projectionWatermark: payload.projectionWatermark }),
-    },
+    dataStatus: dataStatus(result.quality !== 'GOOD', payload.projectionWatermark, timezone),
   };
 };
 
@@ -801,13 +803,23 @@ const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_AS
     return {
       deviceId: device.id,
       name: device.displayName,
-      type: device.deviceType,
-      machine: asset === undefined ? null : { name: asset.displayName, type: asset.assetType },
+      machine: asset === undefined ? null : asset.displayName,
       points: model.telemetryPoints
         .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
-        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: point.pointType })),
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: POINT_KIND_WORDS[point.pointType] ?? '读数' })),
     };
   });
+};
+
+const DEVICE_STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({
+  ONLINE: '在线', OFFLINE: '离线', STALE: '读数过期', UNKNOWN: '状态不明', UNAVAILABLE: '暂时读不到',
+});
+
+const valueState = (value: DeviceObservationSnapshotDto['values'][number]): string => {
+  if (value.state === 'MISSING') return '没有读数';
+  if (value.freshness === 'STALE' || value.quality === 'STALE') return '读数过期';
+  if (value.quality === 'INVALID') return '读数无效';
+  return value.quality === 'GOOD' ? '正常' : '读数可疑';
 };
 
 const readTelemetry = async (
@@ -815,6 +827,7 @@ const readTelemetry = async (
   authorization: AuthorizationDecision,
   authorizer: ToolAuthorizationReader,
   telemetry: DeviceTelemetryReader,
+  timezone: string,
   query: TelemetryArguments,
 ) => {
   const draft = {
@@ -832,31 +845,17 @@ const readTelemetry = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await telemetry.read({ request, context: ownerContext });
   const payload = telemetryPayloadFrom(result);
-  const completeness = payload.evaluationAvailability === 'AVAILABLE'
+  const complete = payload.evaluationAvailability === 'AVAILABLE'
     && payload.telemetryReadiness === 'CURRENT'
-    && payload.values.every((value) => value.state === 'PRESENT')
-    ? 'COMPLETE' as const
-    : 'PARTIAL' as const;
+    && payload.values.every((value) => value.state === 'PRESENT');
   return {
     deviceId: payload.deviceId,
-    evaluatedAt: payload.evaluatedAt,
-    evaluationAvailability: payload.evaluationAvailability,
-    availabilityReasons: payload.availabilityReasons,
-    presence: payload.presence,
-    telemetryReadiness: payload.telemetryReadiness,
-    displayState: payload.displayState,
-    values: payload.values,
-    completeness,
-    quality: result.quality,
-    source: {
-      owner: result.owner,
-      revision: result.revision,
-      quality: result.quality,
-      completeness,
-      provenance: result.provenance,
-      businessRevision: payload.businessRevision,
-      evaluatedAt: payload.evaluatedAt,
-    },
+    readAt: siteTime(payload.evaluatedAt, timezone),
+    deviceState: payload.displayState === null ? '状态不明' : DEVICE_STATE_WORDS[payload.displayState] ?? '状态不明',
+    values: payload.values.map((value) => (value.state === 'MISSING'
+      ? { key: value.key, state: valueState(value) }
+      : { key: value.key, value: value.value, unit: value.unit, siteTime: siteTime(value.sampledAt, timezone), state: valueState(value) })),
+    dataStatus: complete ? '完整' : '不完整：有读数过期或缺失',
   };
 };
 
@@ -895,34 +894,30 @@ const readEnergy = async (
   const totalKWh = payload.points.length === 0
     ? null
     : Number(payload.points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6));
-  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
-    siteId: context.siteId,
     query: {
-      energyType: query.energyType,
+      energy: ENERGY_WORDS[query.energyType],
       startDate: query.startDate,
       endDate: query.endDate,
-      granularity: query.granularity,
-      qualityPolicy: query.qualityPolicy,
+      granularity: GRANULARITY_WORDS[query.granularity],
+      readings: QUALITY_POLICY_WORDS[query.qualityPolicy],
     },
     points: sitePoints(payload.points, timezone),
     pointCount: payload.points.length,
     totalKWh,
     ...seriesCost(payload.points),
-    completeness,
-    quality: result.quality,
-    qualitySummary: payload.metadata.qualitySummary,
-    source: {
-      owner: result.owner,
-      revision: result.revision,
-      quality: result.quality,
-      completeness,
-      provenance: result.provenance,
-      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
-      ...(payload.metadata.aggregateWatermark === undefined ? {} : { aggregateWatermark: payload.metadata.aggregateWatermark }),
-    },
+    dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
+    ...readingNote(payload.metadata.qualitySummary, query.qualityPolicy),
+    // For the comparison only; summarizeEnergy leaves it out of what the model reads.
+    comparable: !payload.metadata.partial && result.quality === 'GOOD',
   };
 };
+
+/** Says so when readings were left out for quality; counts of measuring intervals mean nothing to an operator. */
+const readingNote = (summary: EnergySeriesResponseDto['metadata']['qualitySummary'], policy: EnergyArguments['qualityPolicy']) => (
+  summary.suspect + summary.invalid === 0 ? {}
+    : { readingNote: policy === 'VALID_ONLY' ? '部分读数可疑或无效，没有计入' : '包含部分可疑读数，无效读数没有计入' }
+);
 
 const semanticPayloadFrom = (result: OwnerReadResult): SemanticQueryResult => {
   const payload = result.payload as SemanticQueryResult;
@@ -941,6 +936,7 @@ const readSemantic = async (
   timezone: string,
   query: SemanticQueryArguments,
   limits: HvacReadToolLimits,
+  machines: ReadonlyMap<string, string>,
 ) => {
   const draft = {
     tool: 'analytics.semanticQuery' as const,
@@ -962,26 +958,33 @@ const readSemantic = async (
   if (payload.rows.length > limits.maxResultRecords) {
     fail('TOOL_RESULT_TOO_LARGE', "Semantic query rows exceed the Run's record limit.");
   }
-  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
     view: query.view.title,
-    query: { granularity: query.granularity, startDate: query.startDate, endDate: query.endDate },
+    query: { granularity: GRANULARITY_WORDS[query.granularity], startDate: query.startDate, endDate: query.endDate },
     columns: payload.columns.map(({ title }) => title),
     rows: payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
-      column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)] : [column.title, row[index]]
+      column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)]
+        : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, machines)]
+          : [column.title, row[index]]
     )))),
     rowCount: payload.rows.length,
-    completeness,
-    quality: result.quality,
-    source: {
-      owner: result.owner,
-      revision: result.revision,
-      quality: result.quality,
-      completeness,
-      provenance: result.provenance,
-      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
-    },
+    dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
   };
+};
+
+// A grouping value as the pages show it: energy type, data quality and Tariff period in words,
+// equipment by its machine's name.
+const DIMENSION_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  energy_type: { electricity: '用电', cooling: '供冷' },
+  quality: { VALID: '有效', SUSPECT: '可疑', INVALID: '无效' },
+  tariff_period: { SHARP: '尖', PEAK: '峰', FLAT: '平', VALLEY: '谷', DEEP_VALLEY: '深谷' },
+});
+
+const dimensionWords = (name: string, value: string | number | null, machines: ReadonlyMap<string, string>): string | null => {
+  if (value === null) return null;
+  const text = String(value);
+  if (name === 'equipment_id') return machines.get(text) ?? '未登记的设备';
+  return DIMENSION_WORDS[name]?.[text] ?? text;
 };
 
 const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
@@ -1029,8 +1032,7 @@ const readEquipmentEnergy = async (
       const totalKWh = sumKWh(device.points);
       const known = equipment.get(device.deviceId);
       return {
-        deviceId: device.deviceId,
-        name: known?.name ?? null,
+        name: known?.name ?? '未登记的设备',
         machine: known?.machine ?? null,
         totalKWh,
         shareOfSite: siteTotalKWh === null || siteTotalKWh === 0 ? null : Number((totalKWh / siteTotalKWh).toFixed(3)),
@@ -1038,55 +1040,30 @@ const readEquipmentEnergy = async (
       };
     })
     .sort((left, right) => right.totalKWh - left.totalKWh);
-  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
   return {
-    siteId: context.siteId,
-    query: { startDate: query.startDate, endDate: query.endDate, granularity: query.granularity, qualityPolicy: query.qualityPolicy },
+    query: { startDate: query.startDate, endDate: query.endDate, granularity: GRANULARITY_WORDS[query.granularity], readings: QUALITY_POLICY_WORDS[query.qualityPolicy] },
     siteTotalKWh,
     devices,
-    completeness,
-    quality: result.quality,
-    qualitySummary: payload.metadata.qualitySummary,
-    source: {
-      owner: result.owner,
-      revision: result.revision,
-      quality: result.quality,
-      completeness,
-      provenance: result.provenance,
-      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
-    },
+    dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
+    ...readingNote(payload.metadata.qualitySummary, query.qualityPolicy),
   };
 };
 
-const summarizeEnergy = (value: Awaited<ReturnType<typeof readEnergy>>) => ({
-  siteId: value.siteId,
-  query: value.query,
-  pointCount: value.pointCount,
-  totalKWh: value.totalKWh,
-  ...(value.estimatedCostCNY === undefined ? {} : { estimatedCostCNY: value.estimatedCostCNY, unpricedKWh: value.unpricedKWh }),
-  completeness: value.completeness,
-  quality: value.quality,
-  qualitySummary: value.qualitySummary,
-  source: value.source,
-});
+const summarizeEnergy = ({ points: _points, comparable: _comparable, ...visible }: Awaited<ReturnType<typeof readEnergy>>) => visible;
 
 const compareEnergy = (
-  baseline: ReturnType<typeof summarizeEnergy>,
-  current: ReturnType<typeof summarizeEnergy>,
+  baseline: Awaited<ReturnType<typeof readEnergy>>,
+  current: Awaited<ReturnType<typeof readEnergy>>,
 ) => {
-  if (baseline.totalKWh === null || current.totalKWh === null
-    || baseline.completeness !== 'COMPLETE' || current.completeness !== 'COMPLETE') {
-    return { status: 'INCOMPLETE' as const, absoluteChangeKWh: null, percentChange: null };
-  }
-  if (baseline.quality !== 'GOOD' || current.quality !== 'GOOD') {
-    return { status: 'QUALITY_LIMITED' as const, absoluteChangeKWh: null, percentChange: null };
+  if (baseline.totalKWh === null || current.totalKWh === null || !baseline.comparable || !current.comparable) {
+    return { status: '数据不完整或读数有问题，不能比较', absoluteChangeKWh: null, percentChange: null };
   }
   const absoluteChangeKWh = Number((current.totalKWh - baseline.totalKWh).toFixed(6));
   if (baseline.totalKWh === 0) {
-    return { status: 'BASELINE_ZERO' as const, absoluteChangeKWh, percentChange: null };
+    return { status: '对比期为 0，算不出百分比', absoluteChangeKWh, percentChange: null };
   }
   return {
-    status: 'COMPARABLE' as const,
+    status: '可以比较',
     absoluteChangeKWh,
     percentChange: Number(((absoluteChangeKWh / baseline.totalKWh) * 100).toFixed(6)),
   };
@@ -1131,22 +1108,12 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, SITE_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { result, payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const { payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
         return assertResultBytes({
           site: {
-            id: payload.site.id,
-            code: payload.site.code,
-            displayName: payload.site.displayName,
+            name: payload.site.displayName,
             // The Site's own date and time, to resolve 「昨天」「上周同日」 into dates.
             localNow: siteTime(new Date(now()).toISOString(), payload.site.timezone),
-            status: payload.site.status,
-          },
-          source: {
-            owner: result.owner,
-            revision: result.revision,
-            quality: result.quality,
-            completeness: 'COMPLETE',
-            provenance: result.provenance,
           },
         }, limits);
       });
@@ -1164,29 +1131,11 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, ASSET_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { result, payload } = await readAssets(context, authorization, toolAuthorizationReader, registryReader);
-        const boundedAssets = payload.assets.slice(0, limits.maxAssets).map((asset) => ({
-          id: asset.id,
-          code: asset.code,
-          displayName: asset.displayName,
-          assetType: asset.assetType,
-          status: asset.status,
-          revision: asset.revision,
-        }));
-        const completeness = payload.assets.length > boundedAssets.length ? 'PARTIAL' as const : 'COMPLETE' as const;
+        const { payload } = await readAssets(context, authorization, toolAuthorizationReader, registryReader);
+        const boundedAssets = payload.assets.slice(0, limits.maxAssets).map((asset) => ({ name: asset.displayName, code: asset.code }));
         return assertResultBytes({
-          siteId: context.siteId,
           assets: boundedAssets,
-          totalCount: payload.assets.length,
-          returnedCount: boundedAssets.length,
-          completeness,
-          source: {
-            owner: result.owner,
-            revision: result.revision,
-            quality: result.quality,
-            completeness,
-            provenance: result.provenance,
-          },
+          ...(payload.assets.length > boundedAssets.length ? { note: `只列出前 ${boundedAssets.length} 个，共 ${payload.assets.length} 个` } : {}),
         }, limits);
       });
     },
@@ -1203,22 +1152,12 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, EQUIPMENT_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { result, model } = await readAssetModel(context, authorization, toolAuthorizationReader, registryReader);
+        const { model } = await readAssetModel(context, authorization, toolAuthorizationReader, registryReader);
         const devices = describeEquipment(model);
         const bounded = devices.slice(0, limits.maxAssets);
-        const completeness = devices.length > bounded.length ? 'PARTIAL' as const : 'COMPLETE' as const;
         return assertResultBytes({
-          siteId: context.siteId,
           devices: bounded,
-          totalCount: devices.length,
-          completeness,
-          source: {
-            owner: result.owner,
-            revision: result.revision,
-            quality: result.quality,
-            completeness,
-            provenance: result.provenance,
-          },
+          ...(devices.length > bounded.length ? { note: `只列出前 ${bounded.length} 个，共 ${devices.length} 个` } : {}),
         }, limits);
       });
     },
@@ -1234,12 +1173,13 @@ export const createHvacReadTools = ({
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
       const query = parseTelemetryArguments(argumentsValue);
       assertExecutionCapability(context, TELEMETRY_CAPABILITIES);
-      return runBounded(signal, limits.timeoutMs, async () => (
-        assertResultBytes(
-          await readTelemetry(context, authorization, toolAuthorizationReader, deviceTelemetryReader, query),
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(
+          await readTelemetry(context, authorization, toolAuthorizationReader, deviceTelemetryReader, sitePayload.site.timezone, query),
           limits,
-        )
-      ));
+        );
+      });
     },
   });
 
@@ -1328,12 +1268,10 @@ export const createHvacReadTools = ({
             limits,
           ),
         ]);
-        const baseline = summarizeEnergy(baselineSeries);
-        const current = summarizeEnergy(currentSeries);
         return assertResultBytes({
-          baseline,
-          current,
-          comparison: compareEnergy(baseline, current),
+          baseline: summarizeEnergy(baselineSeries),
+          current: summarizeEnergy(currentSeries),
+          comparison: compareEnergy(baselineSeries, currentSeries),
         }, limits);
       });
     },
@@ -1379,6 +1317,11 @@ export const createHvacReadTools = ({
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        // Equipment is grouped by device id; the model reads each machine's name instead.
+        const machines = new Map<string, string>(query.dimensions.includes('equipment_id')
+          ? describeEquipment((await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model)
+            .map((device) => [device.deviceId, device.machine ?? device.name])
+          : []);
         return assertResultBytes(await readSemantic(
           context,
           authorization,
@@ -1387,6 +1330,7 @@ export const createHvacReadTools = ({
           sitePayload.site.timezone,
           query,
           limits,
+          machines,
         ), limits);
       });
     },

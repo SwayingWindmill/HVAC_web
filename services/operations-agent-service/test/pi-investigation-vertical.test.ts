@@ -671,7 +671,7 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
   // Each read tells the model the id its evidence cites.
   const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
   assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
-  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, 'COMPARABLE');
+  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, '可以比较');
   assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
@@ -860,7 +860,7 @@ test('a multi-measure question is answered from one semantic query over the Site
     { siteTime: '2026-10-14 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
     { siteTime: '2026-10-15 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
   ]);
-  assert.equal(answer.result.completeness, 'COMPLETE');
+  assert.equal(answer.result.dataStatus, '完整');
 });
 
 test('a semantic query naming a cube member, an unlisted member, two views, a Site or too long a range is refused before any read', async () => {

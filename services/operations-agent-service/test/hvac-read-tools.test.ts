@@ -102,12 +102,13 @@ const historyPayload = (query) => ({
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
 });
 
-const createHarness = ({ energyFor, registryFailure } = {}) => {
+const createHarness = ({ energyFor, registryFailure, semanticFor } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
   const historyInputs = [];
   const energyInputs = [];
+  const semanticInputs = [];
   let activeEnergyReads = 0;
   let maxActiveEnergyReads = 0;
 
@@ -183,6 +184,13 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
     },
   };
 
+  const semanticQueryReader = {
+    read: async (input) => {
+      semanticInputs.push(input);
+      return ownerResult(input.request, 'telemetry-query-service', 'semantic:1', 'GOOD', 'telemetry-query-service:semantic-query/v1', semanticFor(input));
+    },
+  };
+
   const tools = createHvacReadTools({
     capabilities: context.capabilities,
     authorization,
@@ -191,11 +199,12 @@ const createHarness = ({ energyFor, registryFailure } = {}) => {
     deviceTelemetryReader,
     telemetryHistoryReader,
     energyAnalyticsReader,
+    semanticQueryReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
     now: () => Date.parse('2026-10-17T13:30:00.000Z'),
   });
 
-  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
+  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
 
 const byName = (tools, name) => {
@@ -295,12 +304,10 @@ test('site and asset Tools reauthorize then call Registry with trusted scope and
   assert.equal(harness.registryInputs[0].request.input.siteId, siteId);
   assert.equal(harness.registryInputs[0].context.scope.tenantId, tenantId);
   assert.equal(harness.registryInputs[0].context.authorization.delegationGrant, 'grant:registry.getSite');
-  assert.deepEqual(siteResult.source, { owner: 'registry', revision: 'registry-site:7', quality: 'GOOD', completeness: 'COMPLETE', provenance: 'registry:site/v1' });
+  assert.equal(siteResult.site.name, 'Phoenix Plant');
 
-  assert.equal(assetsResult.totalCount, 3);
-  assert.equal(assetsResult.returnedCount, 2);
-  assert.equal(assetsResult.completeness, 'PARTIAL');
-  assert.deepEqual(assetsResult.assets.map(({ id }) => id), ['asset-1', 'asset-2']);
+  assert.deepEqual(assetsResult.assets.map(({ name }) => name), ['Chiller 1', 'Chiller 2']);
+  assert.equal(assetsResult.note, '只列出前 2 个，共 3 个');
 });
 
 test('telemetry_get_current injects trusted Site scope and preserves stale and missing telemetry semantics', async () => {
@@ -310,33 +317,22 @@ test('telemetry_get_current injects trusted Site scope and preserves stale and m
     pointKeys: ['condenserPressureKPa', 'leavingWaterTempC'],
   });
 
-  assert.equal(harness.authorizationInputs.length, 1);
-  assert.equal(harness.authorizationInputs[0].request.tool, 'telemetry.current.getDeviceObservationSnapshot');
-  assert.equal(harness.authorizationInputs[0].request.input.siteId, siteId);
-  assert.equal(harness.authorizationInputs[0].request.input.deviceId, deviceId);
-  assert.deepEqual(harness.authorizationInputs[0].request.input.pointKeys, ['condenserPressureKPa', 'leavingWaterTempC']);
-  assert.deepEqual(harness.authorizationInputs[0].context.scope, { tenantId, siteId, assetId: null, deviceId });
+  // The Site is read first for its clock, then the device under its own grant.
+  const telemetryAuthorization = harness.authorizationInputs.find(({ request }) => request.tool === 'telemetry.current.getDeviceObservationSnapshot');
+  assert.equal(telemetryAuthorization.request.input.siteId, siteId);
+  assert.equal(telemetryAuthorization.request.input.deviceId, deviceId);
+  assert.deepEqual(telemetryAuthorization.request.input.pointKeys, ['condenserPressureKPa', 'leavingWaterTempC']);
+  assert.deepEqual(telemetryAuthorization.context.scope, { tenantId, siteId, assetId: null, deviceId });
 
   assert.equal(harness.telemetryInputs.length, 1);
   assert.equal(harness.telemetryInputs[0].context.authorization.delegationGrant, 'grant:telemetry.current.getDeviceObservationSnapshot');
   assert.equal(result.deviceId, deviceId);
-  assert.equal(result.displayState, 'STALE');
-  assert.equal(result.telemetryReadiness, 'DEGRADED');
-  assert.equal(result.completeness, 'PARTIAL');
-  assert.equal(result.quality, 'STALE');
-  assert.equal(result.values[0].state, 'PRESENT');
-  assert.equal(result.values[0].freshness, 'STALE');
-  assert.equal(result.values[1].state, 'MISSING');
-  assert.equal(result.values[1].missingReason, 'NEVER_OBSERVED');
-  assert.deepEqual(result.source, {
-    owner: 'telemetry-runtime-service',
-    revision: 'telemetry-device:73',
-    quality: 'STALE',
-    completeness: 'PARTIAL',
-    provenance: 'telemetry-runtime-service:device-observation-snapshot/v1',
-    businessRevision: 73,
-    evaluatedAt: '2026-07-30T06:55:00.000Z',
-  });
+  assert.equal(result.deviceState, '读数过期');
+  assert.equal(result.dataStatus, '不完整：有读数过期或缺失');
+  assert.deepEqual(result.values, [
+    { key: 'condenserPressureKPa', value: 1280, unit: 'kPa', siteTime: '2026-07-29 23:20', state: '读数过期' },
+    { key: 'leavingWaterTempC', state: '没有读数' },
+  ]);
 });
 
 test('energy_query_series injects authoritative timezone and keeps partial data distinct from zero', async () => {
@@ -354,10 +350,8 @@ test('energy_query_series injects authoritative timezone and keeps partial data 
   assert.equal(harness.energyInputs[0].request.input.siteId, siteId);
   assert.equal(harness.energyInputs[0].request.input.timezone, 'America/Phoenix');
   assert.equal(result.totalKWh, null);
-  assert.equal(result.completeness, 'PARTIAL');
-  assert.equal(result.quality, 'UNCERTAIN');
-  assert.deepEqual(result.qualitySummary, { valid: 0, suspect: 1, invalid: 0 });
-  assert.equal(result.source.revision, 'energy-partial-1');
+  assert.equal(result.dataStatus, '不完整');
+  assert.equal(result.readingNote, '部分读数可疑或无效，没有计入');
 
   const zeroHarness = createHarness({
     energyFor: async (input) => {
@@ -367,7 +361,7 @@ test('energy_query_series injects authoritative timezone and keeps partial data 
   });
   const zero = await execute(byName(zeroHarness.tools, 'energy_query_series'), { startDate: '2026-08-01', endDate: '2026-08-01' });
   assert.equal(zero.totalKWh, 0);
-  assert.equal(zero.completeness, 'COMPLETE');
+  assert.equal(zero.dataStatus, '完整');
 });
 
 test('energy_compare_periods executes independent Energy reads in parallel and returns bounded summaries', async () => {
@@ -401,7 +395,7 @@ test('energy_compare_periods executes independent Energy reads in parallel and r
   assert.equal(harness.maxActiveEnergyReads(), 2);
   assert.equal(result.baseline.totalKWh, 10);
   assert.equal(result.current.totalKWh, 15);
-  assert.deepEqual(result.comparison, { status: 'COMPARABLE', absoluteChangeKWh: 5, percentChange: 50 });
+  assert.deepEqual(result.comparison, { status: '可以比较', absoluteChangeKWh: 5, percentChange: 50 });
   assert.equal('points' in result.baseline, false);
   assert.equal('points' in result.current, false);
 });
@@ -426,20 +420,17 @@ test('equipment_list names each device, its machine and its active points so oth
   assert.equal(harness.authorizationInputs.at(-1).request.tool, 'registry.getSiteAssetModel');
 
   assert.deepEqual(result.devices, [
-    { deviceId: chillerDeviceId, name: 'C 机组控制器', type: 'CHILLER', machine: null, points: [] },
+    { deviceId: chillerDeviceId, name: 'C 机组控制器', machine: null, points: [] },
     {
       deviceId: meterDeviceId,
       name: 'C 机组电表',
-      type: 'HVAC_POWER_METER',
-      machine: { name: 'Chiller 1', type: 'CHILLER' },
+      machine: 'Chiller 1',
       points: [
-        { key: 'power_total', name: '有功功率', unit: 'kW', kind: 'TELEMETRY' },
-        { key: 'active_energy_total', name: '累计电量', unit: 'kWh', kind: 'COUNTER' },
+        { key: 'power_total', name: '有功功率', unit: 'kW', kind: '读数' },
+        { key: 'active_energy_total', name: '累计电量', unit: 'kWh', kind: '累计量' },
       ],
     },
   ]);
-  assert.equal(result.completeness, 'COMPLETE');
-  assert.equal(result.source.revision, 'registry-asset-model:11');
 });
 
 test('energy_by_equipment splits the Site total by sub-metered device, named from the asset model', async () => {
@@ -469,12 +460,11 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
   assert.equal(energyRequest.input.timezone, 'America/Phoenix');
   assert.equal(result.siteTotalKWh, 1634);
   assert.deepEqual(result.devices.map(({ points: _points, ...device }) => device), [
-    { deviceId: meterDeviceId, name: 'C 机组电表', machine: { name: 'Chiller 1', type: 'CHILLER' }, totalKWh: 879, shareOfSite: 0.538 },
+    { name: 'C 机组电表', machine: 'Chiller 1', totalKWh: 879, shareOfSite: 0.538 },
   ]);
   // Points read in the Site's own calendar (America/Phoenix is UTC−7), so hours are not mistaken for UTC.
   assert.deepEqual(result.devices[0].points[0], { siteTime: '2026-10-16 03:00', energyKWh: 300 });
-  assert.equal(result.completeness, 'COMPLETE');
-  assert.equal(result.source.revision, 'energy-breakdown-1');
+  assert.equal(result.dataStatus, '完整');
 });
 
 test('energy tools read cooling energy when asked and say which energy they read', async () => {
@@ -495,9 +485,9 @@ test('energy tools read cooling energy when asked and say which energy they read
   const electricity = await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
 
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType), ['cooling', 'cooling', 'cooling', 'electricity']);
-  assert.equal(series.query.energyType, 'cooling');
-  assert.equal(comparison.current.query.energyType, 'cooling');
-  assert.equal(electricity.query.energyType, 'electricity');
+  assert.equal(series.query.energy, '供冷');
+  assert.equal(comparison.current.query.energy, '供冷');
+  assert.equal(electricity.query.energy, '用电');
 });
 
 test('telemetry_query_history aggregates one device readings over time in the Site calendar', async () => {
@@ -525,11 +515,11 @@ test('telemetry_query_history aggregates one device readings over time in the Si
     qualityPolicy: 'VALID_ONLY',
   });
   assert.deepEqual(result.series, [
-    { key: 'chw_supply_temp', unit: '°C', kind: 'reading', points: [{ siteTime: '2026-10-16 03:00', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
-    { key: 'active_energy_total', unit: 'kWh', kind: 'counter', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
+    { key: 'chw_supply_temp', unit: '°C', kind: '读数', points: [{ siteTime: '2026-10-16 03:00', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
+    { key: 'active_energy_total', unit: 'kWh', kind: '累计量', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
   ]);
-  assert.equal(result.completeness, 'PARTIAL');
-  assert.equal(result.source.revision, 'history:2026-10-16T16:00:00.000Z');
+  // The history owner rated it UNCERTAIN: one bucket is only half covered.
+  assert.equal(result.dataStatus, '不完整');
 });
 
 test('telemetry_query_history refuses a range that would return more buckets than one result holds, before reading', async () => {
@@ -616,4 +606,71 @@ test('site_get_context tells the model the Site\'s local date and time instead o
   // 13:30Z is 06:30 in America/Phoenix.
   assert.equal(result.site.localNow, '2026-10-17 06:30');
   assert.equal(JSON.stringify(result).includes('America/Phoenix'), false);
+});
+
+test('every read Tool answers in the operator\'s words, without internal codes, owners or revisions', async () => {
+  const partial = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'energy-partial-1', 'UNCERTAIN', 'telemetry-query-service:energy-series/v1', {
+      ...energyPayload({ from: input.request.input.from, to: input.request.input.to, energyKWh: 40, qualitySummary: { valid: 3, suspect: 1, invalid: 0 } }),
+      metadata: { ...energyPayload({ from: input.request.input.from, to: input.request.input.to }).metadata, partial: true, dataWatermark: '2026-10-16T01:30:00.000Z', qualitySummary: { valid: 3, suspect: 1, invalid: 0 } },
+    }),
+  });
+  const harness = createHarness();
+  const run = (tools, name, args) => execute(byName(tools, name), args);
+  const results = {
+    site: await run(harness.tools, 'site_get_context', {}),
+    assets: await run(harness.tools, 'assets_list', {}),
+    equipment: await run(harness.tools, 'equipment_list', {}),
+    current: await run(harness.tools, 'telemetry_get_current', { deviceId, pointKeys: ['condenserPressureKPa', 'leavingWaterTempC'] }),
+    history: await run(harness.tools, 'telemetry_query_history', { deviceId: chillerDeviceId, pointKeys: ['chw_supply_temp', 'active_energy_total'], startDate: '2026-10-16', endDate: '2026-10-16' }),
+    series: await run(harness.tools, 'energy_query_series', { startDate: '2026-10-15', endDate: '2026-10-15', energyType: 'cooling' }),
+    partialSeries: await run(partial.tools, 'energy_query_series', { startDate: '2026-10-15', endDate: '2026-10-15' }),
+    compare: await run(harness.tools, 'energy_compare_periods', { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' }),
+    machines: await run(harness.tools, 'energy_by_equipment', { startDate: '2026-10-15', endDate: '2026-10-15' }),
+  };
+  const internal = /\b(?:COMPLETE|PARTIAL|GOOD|UNCERTAIN|STALE|AVAILABLE|CURRENT|DEGRADED|ONLINE|PRESENT|MISSING|FRESH|NEVER_OBSERVED|TELEMETRY|COUNTER|CHILLER|HVAC_POWER_METER|COOLING_TOWER|ACTIVE|VALID_ONLY|COMPARABLE|electricity|cooling|hour|day)\b|provenance|revision|qualitySummary|telemetry-(?:query|runtime)-service|registry|America\/Phoenix/u;
+  for (const [name, result] of Object.entries(results)) assert.doesNotMatch(JSON.stringify(result), internal, name);
+
+  assert.equal(results.series.dataStatus, '完整');
+  assert.equal(results.series.query.energy, '供冷');
+  // 01:30Z is 18:30 the day before at the Site (UTC−7).
+  assert.equal(results.partialSeries.dataStatus, '不完整：数据只到 2026-10-15 18:30');
+  assert.equal(results.partialSeries.readingNote, '部分读数可疑或无效，没有计入');
+  assert.equal(results.compare.comparison.status, '可以比较');
+  assert.deepEqual(results.current.values.map(({ key, state }) => [key, state]), [['condenserPressureKPa', '读数过期'], ['leavingWaterTempC', '没有读数']]);
+  assert.equal(results.current.values[0].siteTime, '2026-07-29 23:20');
+  assert.deepEqual(results.history.series.map(({ kind }) => kind), ['读数', '累计量']);
+  assert.deepEqual(results.equipment.devices[1].points.map(({ kind }) => kind), ['读数', '累计量']);
+  assert.equal(results.assets.note, '只列出前 2 个，共 3 个');
+});
+
+test('a semantic query names machines and grouping values the way the pages do', async () => {
+  const harness = createHarness({
+    semanticFor: () => ({
+      schemaVersion: 1,
+      columns: [
+        { name: 'period_end', title: '时段', kind: 'time' },
+        { name: 'equipment_id', title: '设备', kind: 'dimension' },
+        { name: 'energy_type', title: '能源类型', kind: 'dimension' },
+        { name: 'energy_valid_kwh', title: '能耗', kind: 'measure' },
+      ],
+      rows: [
+        ['2026-10-15T07:00:00Z', meterDeviceId, 'electricity', 879],
+        ['2026-10-15T07:00:00Z', '0198a36e-4c9d-7b5a-8f2d-4c5e6f7081ff', 'electricity', 2],
+      ],
+      metadata: { datasetRevision: 'semantic:1', partial: false },
+    }),
+  });
+  const result = await execute(byName(harness.tools, 'energy_semantic_query'), {
+    measures: ['equipment_energy.energy_valid_kwh'],
+    dimensions: ['equipment_energy.equipment_id', 'equipment_energy.energy_type'],
+    granularity: 'day',
+    startDate: '2026-10-15',
+    endDate: '2026-10-15',
+  });
+  assert.deepEqual(result.rows, [
+    { siteTime: '2026-10-15 00:00', 设备: 'Chiller 1', 能源类型: '用电', 能耗: 879 },
+    { siteTime: '2026-10-15 00:00', 设备: '未登记的设备', 能源类型: '用电', 能耗: 2 },
+  ]);
+  assert.equal(result.dataStatus, '完整');
 });
