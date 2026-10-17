@@ -3178,7 +3178,29 @@
         "properties": {
           "periodStart": { "type": "string", "format": "date-time" },
           "periodEnd": { "type": "string", "format": "date-time" },
-          "energyKWh": { "type": "number", "minimum": 0 }
+          "energyKWh": { "type": "number", "minimum": 0 },
+          "cost": { "$ref": "#/components/schemas/EnergyCost" }
+        }
+      },
+      "EnergyCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Electricity priced at the Site's import Tariff; an estimate of the energy charge without demand charges. Energy no Tariff period covers is unpriced, not free.",
+        "required": ["amountCNY", "unpricedKWh", "periods"],
+        "properties": {
+          "amountCNY": { "type": "number", "minimum": 0 },
+          "unpricedKWh": { "type": "number", "minimum": 0 },
+          "periods": { "type": "array", "items": { "$ref": "#/components/schemas/PeriodCost" } }
+        }
+      },
+      "PeriodCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["periodCode", "energyKWh", "amountCNY"],
+        "properties": {
+          "periodCode": { "type": "string", "enum": ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"] },
+          "energyKWh": { "type": "number", "minimum": 0 },
+          "amountCNY": { "type": "number", "minimum": 0 }
         }
       },
       "EnergySeriesResponse": {
