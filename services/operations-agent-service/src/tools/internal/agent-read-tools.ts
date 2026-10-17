@@ -213,8 +213,9 @@ const hasOnlyKeys = (value: Record<string, unknown>, allowed: readonly string[])
   Object.keys(value).every((key) => allowed.includes(key))
 );
 
+// An argument refusal is the Tool's own wording, so the model is told what to change.
 const fail = (code: AgentToolErrorCode, message: string = code): never => {
-  throw new AgentToolError(code, message);
+  throw new AgentToolError(code, message, code === 'TOOL_ARGUMENTS_INVALID' ? message : undefined);
 };
 
 const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
@@ -251,7 +252,7 @@ const assertExecutionCapability = (
 
 const exactEmptyArguments = (value: unknown): void => {
   if (!isRecord(value) || Object.keys(value).length !== 0) {
-    fail('TOOL_ARGUMENTS_INVALID', 'This Tool does not accept model-selected scope arguments.');
+    fail('TOOL_ARGUMENTS_INVALID', '这个工具不接受参数，站点由服务端确定。');
   }
 };
 
@@ -276,9 +277,9 @@ const parseSiteDays = (start: unknown, end: unknown, limits: HvacReadToolLimits,
   const first = calendarDay(start, message);
   const last = calendarDay(end, message);
   const days = (last - first) / DAY_MS + 1;
-  if (days < 1) fail('TOOL_ARGUMENTS_INVALID', `${message} The last day is before the first.`);
+  if (days < 1) fail('TOOL_ARGUMENTS_INVALID', `${message}最后一天早于第一天。`);
   if (days * DAY_MS > limits.maxEnergyRangeMs) {
-    fail('TOOL_ARGUMENTS_INVALID', `${message} At most ${limits.maxEnergyRangeMs / DAY_MS} days per read.`);
+    fail('TOOL_ARGUMENTS_INVALID', `${message}每次最多读 ${limits.maxEnergyRangeMs / DAY_MS} 天。`);
   }
   return Object.freeze({ startDate: String(start), endDate: String(end), days });
 };
@@ -322,18 +323,18 @@ const validTelemetryKey = (value: string): boolean => (
 );
 
 const parseTelemetryArguments = (value: unknown): TelemetryArguments => {
-  const record = requireRecord(value, 'Telemetry query arguments are invalid.');
+  const record = requireRecord(value, '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
   if (!hasOnlyKeys(record, ['deviceId', 'pointKeys'])) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Telemetry query arguments are invalid.');
+    fail('TOOL_ARGUMENTS_INVALID', '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
   }
-  const deviceId = requireString(record.deviceId, 'Telemetry query arguments are invalid.');
+  const deviceId = requireString(record.deviceId, '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
   if (!validUuidV7(deviceId)
     || !Array.isArray(record.pointKeys)
     || record.pointKeys.length < 1
     || record.pointKeys.length > 16
     || record.pointKeys.some((key) => typeof key !== 'string' || !validTelemetryKey(key))
     || new Set(record.pointKeys).size !== record.pointKeys.length) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Telemetry query arguments are invalid.');
+    fail('TOOL_ARGUMENTS_INVALID', '设备 ID 或点位名有误：先用 equipment_list 查到设备 ID 和点位 key。');
   }
   return Object.freeze({ deviceId, pointKeys: Object.freeze((record.pointKeys as string[]).slice()) });
 };
@@ -348,18 +349,18 @@ const HISTORY_GRANULARITIES = Object.freeze({ quarter_hour: 'QUARTER_HOUR', hour
 const HISTORY_BUCKETS_PER_DAY = Object.freeze({ QUARTER_HOUR: 96, HOUR: 24, DAY: 1 } as const);
 
 const parseHistoryArguments = (value: unknown, limits: HvacReadToolLimits): HistoryArguments => {
-  const record = requireRecord(value, 'History query arguments are invalid.');
+  const record = requireRecord(value, '历史读数参数有误：需要 deviceId、pointKeys、startDate、endDate，粒度只能是 quarter_hour、hour 或 day。');
   if (!hasOnlyKeys(record, ['deviceId', 'pointKeys', 'startDate', 'endDate', 'granularity'])
     || (record.granularity !== undefined && !Object.hasOwn(HISTORY_GRANULARITIES, String(record.granularity)))) {
-    fail('TOOL_ARGUMENTS_INVALID', 'History query arguments are invalid.');
+    fail('TOOL_ARGUMENTS_INVALID', '历史读数参数有误：需要 deviceId、pointKeys、startDate、endDate，粒度只能是 quarter_hour、hour 或 day。');
   }
   const { deviceId, pointKeys } = parseTelemetryArguments({ deviceId: record.deviceId, pointKeys: record.pointKeys });
-  if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', 'History query reads at most 8 points.');
-  const days = parseSiteDays(record.startDate, record.endDate, limits, 'History query dates are invalid.');
+  if (pointKeys.length > 8) fail('TOOL_ARGUMENTS_INVALID', '一次最多读 8 个点位。');
+  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
   const granularity = HISTORY_GRANULARITIES[(record.granularity ?? 'hour') as keyof typeof HISTORY_GRANULARITIES];
   // One bucket per point per period; past the result's bound the model should narrow the range or coarsen.
   if (days.days * HISTORY_BUCKETS_PER_DAY[granularity] * pointKeys.length > limits.maxEnergyPoints) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Too many history buckets: shorten the range, read fewer points or use a coarser granularity.');
+    fail('TOOL_ARGUMENTS_INVALID', '时间段太多：缩短日期范围、少读几个点位，或改用更粗的粒度。');
   }
   return Object.freeze({ deviceId, pointKeys, ...days, granularity });
 };
@@ -377,7 +378,7 @@ const parseEnergyWindow = (
   limits: HvacReadToolLimits,
   energyTypes: readonly EnergyArguments['energyType'][] = ['electricity'],
 ): EnergyArguments => {
-  const record = requireRecord(value, 'Energy query arguments are invalid.');
+  const record = requireRecord(value, '能耗参数有误：日期用 startDate 和 endDate，粒度只能是 hour、day 或 month。');
   if (!hasOnlyKeys(record, energyTypes.length > 1
     ? ['startDate', 'endDate', 'granularity', 'qualityPolicy', 'energyType']
     : ['startDate', 'endDate', 'granularity', 'qualityPolicy'])
@@ -385,9 +386,9 @@ const parseEnergyWindow = (
     || (record.granularity !== undefined && !['hour', 'day', 'month'].includes(String(record.granularity)))
     || (record.qualityPolicy !== undefined
       && !['VALID_ONLY', 'VALID_AND_SUSPECT'].includes(String(record.qualityPolicy)))) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Energy query arguments are invalid.');
+    fail('TOOL_ARGUMENTS_INVALID', '能耗参数有误：日期用 startDate 和 endDate，粒度只能是 hour、day 或 month。');
   }
-  const days = parseSiteDays(record.startDate, record.endDate, limits, 'Energy query dates are invalid.');
+  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
   return Object.freeze({
     energyType: (record.energyType ?? 'electricity') as EnergyArguments['energyType'],
     ...days,
@@ -410,7 +411,7 @@ const semanticBuckets = (days: number, granularity: SemanticQueryArguments['gran
 // Refuses, before any read, members outside one catalog view and ranges beyond the Run's budget.
 // The owner checks the catalog again and forces the Site.
 const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): SemanticQueryArguments => {
-  const invalid = 'Semantic query arguments are invalid.';
+  const invalid = '语义查询参数有误：需要 measures、granularity、startDate、endDate，dimensions 可选。';
   const record = requireRecord(value, invalid);
   const named = (list: unknown, max: number): string[][] => {
     if (!Array.isArray(list) || list.length > max) fail('TOOL_ARGUMENTS_INVALID', invalid);
@@ -426,18 +427,18 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
   const view = semanticCatalog.views.find(({ name }) => name === measureParts[0]?.[0]);
   if (view === undefined || all.some((parts) => parts.length !== 2 || parts[0] !== view.name)
     || new Set(all.map((parts) => parts[1])).size !== all.length) {
-    return fail('TOOL_ARGUMENTS_INVALID', 'Semantic query members must come from one listed view, each once.');
+    return fail('TOOL_ARGUMENTS_INVALID', '指标和分组必须来自同一个视图，每个只写一次。');
   }
   const measures = measureParts.map((parts) => parts[1] ?? '');
   const dimensions = dimensionParts.map((parts) => parts[1] ?? '');
   if (!measures.every((name) => view.measures.some((member) => member.name === name))
     || !dimensions.every((name) => view.dimensions.some((member) => member.name === name))) {
-    fail('TOOL_ARGUMENTS_INVALID', "Semantic query members are not in that view's catalog.");
+    fail('TOOL_ARGUMENTS_INVALID', '有指标或分组不在这个视图的清单里，只能用工具说明里列出的写法。');
   }
   const granularity = record.granularity as SemanticQueryArguments['granularity'];
-  const days = parseSiteDays(record.startDate, record.endDate, limits, 'Semantic query dates are invalid.');
+  const days = parseSiteDays(record.startDate, record.endDate, limits, '日期参数有误：startDate 和 endDate 用站点本地日期 YYYY-MM-DD，首尾都包含。');
   if (semanticBuckets(days.days, granularity) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Semantic query has too many time buckets: shorten the range or use a coarser granularity.');
+    fail('TOOL_ARGUMENTS_INVALID', '时间段太多：缩短日期范围或改用更粗的粒度。');
   }
   return Object.freeze({ view, measures, dimensions, granularity, ...days });
 };
@@ -451,7 +452,7 @@ const parseEnergyComparison = (
   value: unknown,
   limits: HvacReadToolLimits,
 ): EnergyComparisonArguments => {
-  const record = requireRecord(value, 'Energy comparison arguments are invalid.');
+  const record = requireRecord(value, '对比参数有误：两段时间分别用 baselineStartDate、baselineEndDate 和 currentStartDate、currentEndDate。');
   if (!hasOnlyKeys(record, [
     'baselineStartDate',
     'baselineEndDate',
@@ -461,7 +462,7 @@ const parseEnergyComparison = (
     'qualityPolicy',
     'energyType',
   ])) {
-    fail('TOOL_ARGUMENTS_INVALID', 'Energy comparison arguments are invalid.');
+    fail('TOOL_ARGUMENTS_INVALID', '对比参数有误：两段时间分别用 baselineStartDate、baselineEndDate 和 currentStartDate、currentEndDate。');
   }
   const shared = {
     ...(record.granularity === undefined ? {} : { granularity: record.granularity }),

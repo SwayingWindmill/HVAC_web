@@ -29,10 +29,13 @@ export type AgentToolErrorCode =
 
 export class AgentToolError extends Error {
   readonly code: AgentToolErrorCode;
+  /** What the model should change, written by the Tool itself; never an owner's or runtime's text. */
+  readonly hint: string | undefined;
 
-  constructor(code: AgentToolErrorCode, message: string = code) {
+  constructor(code: AgentToolErrorCode, message: string = code, hint?: string) {
     super(message);
     this.name = 'AgentToolError';
     this.code = code;
+    this.hint = hint;
   }
 }

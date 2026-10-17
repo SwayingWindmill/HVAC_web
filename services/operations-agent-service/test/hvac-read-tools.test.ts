@@ -599,6 +599,10 @@ test('dates out of order, longer than the budget or given as instants are refuse
   }
   assert.equal(harness.energyInputs.length, 0);
   assert.equal(harness.registryInputs.length, 0);
+  // The refusal tells the model what to change.
+  await assert.rejects(() => execute(series, { startDate: '2026-10-16', endDate: '2026-10-13' }), (error) => /最后一天早于第一天/u.test(error.hint));
+  await assert.rejects(() => execute(series, { startDate: '2026-09-01', endDate: '2026-10-16' }), (error) => /每次最多读 31 天/u.test(error.hint));
+  await assert.rejects(() => execute(series, { from: '2026-10-13T16:00:00.000Z', to: '2026-10-16T16:00:00.000Z' }), (error) => /startDate 和 endDate/u.test(error.hint));
 });
 
 test('site_get_context tells the model the Site\'s local date and time instead of a time zone', async () => {
