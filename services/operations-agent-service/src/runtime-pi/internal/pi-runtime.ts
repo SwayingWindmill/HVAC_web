@@ -46,7 +46,7 @@ interface PendingToolExecution {
 }
 
 // What the runtime says to a model that answered without finishing; never stored as an operator message.
-const TERMINAL_REMINDER = '这次回答还没有收尾。不要重复已经写过的回答，直接调用 investigation_complete；不能回答或拒绝的问题，outcome 用 UNABLE_TO_CONCLUDE，并在 limitations 里写明原因。';
+const TERMINAL_REMINDER = '这次回答还没有收尾。不要重复已经写过的回答，直接调用 investigation_complete；不能回答或拒绝的问题，outcome 用 UNABLE_TO_CONCLUDE。回答里已经说过的原因不要写进 limitations，没有补充就留空。';
 
 const digestArguments = (argumentsValue: unknown): string => createHash('sha256')
   .update(JSON.stringify(argumentsValue))

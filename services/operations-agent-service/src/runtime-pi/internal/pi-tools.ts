@@ -187,7 +187,7 @@ const createInvestigationCompleteTool = ({
 }: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
-  description: 'Complete the investigation with a typed evidence-backed outcome.',
+  description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
   parameters: investigationCompleteParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
@@ -220,7 +220,7 @@ const createInvestigationRequestInputTool = ({
 }: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   label: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
-  description: 'Request one bounded operator input and end the current investigation run.',
+  description: '缺少关键信息、没法继续时，向值班人员提一个问题，并结束这次回答。',
   parameters: investigationRequestInputParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
