@@ -11,22 +11,34 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 const maximumOptimizationInputResponseBytes = int64(1 << 20)
+
+// EnergySeries reads the query service's Energy Series as the optimization service's own Workload
+// Principal (libs/energyseries).
+type EnergySeries interface {
+	Series(context.Context, analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error)
+}
 
 type InputReaderConfig struct {
 	BaseURL    string
 	Username   string
 	Password   string
 	HTTPClient *http.Client
+	Energy     EnergySeries
 }
 
+// ClickHouseInputReader reads the plant's latest temperatures from Telemetry History and the
+// priced day from the query service.
 type ClickHouseInputReader struct {
 	baseURL  *url.URL
 	username string
 	password string
 	client   *http.Client
+	energy   EnergySeries
 }
 
 func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader, error) {
@@ -38,7 +50,10 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &ClickHouseInputReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client}, nil
+	if config.Energy == nil {
+		return nil, errors.New("optimization input reader requires the Energy Series reader")
+	}
+	return &ClickHouseInputReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client, energy: config.Energy}, nil
 }
 
 func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, query OptimizationStateQuery) (AuthoritativeState, error) {
@@ -53,13 +68,7 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	if query.SubjectType != "SITE" || query.SubjectID != query.SiteID || query.At.IsZero() || query.SupplyTemperatureKey == "" || query.ZoneTemperatureKey == "" {
 		return AuthoritativeState{}, errors.New("optimization state query is invalid")
 	}
-	// The cost prices one day's energy at that day's mix of tariff periods; a day with an hour
-	// missing has no cost, so the energy is read for the latest priced day.
-	dailyCost, err := reader.readMetric(ctx, query, "energy_cost", time.Time{})
-	if err != nil {
-		return AuthoritativeState{}, err
-	}
-	dailyEnergy, err := reader.readMetric(ctx, query, "daily_energy", dailyCost.PeriodEnd)
+	pricedDay, err := reader.readPricedDay(ctx, query)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
@@ -72,75 +81,44 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 		return AuthoritativeState{}, err
 	}
 	return AuthoritativeState{
-		DailyEnergy: dailyEnergy, DailyCost: dailyCost,
+		PricedDay:         pricedDay,
 		SupplyTemperature: supplyTemperature, ZoneTemperature: zoneTemperature,
 	}, nil
 }
 
-// readMetric is the latest result of a Site Metric, or of the period ending at periodEnding when set.
-func (reader *ClickHouseInputReader) readMetric(ctx context.Context, query OptimizationStateQuery, metricCode string, periodEnding time.Time) (MetricEvidence, error) {
-	day := ""
-	if !periodEnding.IsZero() {
-		day = fmt.Sprintf("\n  AND fact.period_end = parseDateTime64BestEffort('%s',3,'UTC')", formatOptimizationTime(periodEnding))
-	}
-	sql := fmt.Sprintf(`SELECT
- toString(fact.result_id) AS result_id,
- toString(fact.metric_version_id) AS metric_version_id,
- fact.metric_code,
- formatDateTime(fact.period_start,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS period_start,
- formatDateTime(fact.period_end,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS period_end,
- formatDateTime(fact.calculated_at,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS calculated_at,
- assumeNotNull(fact.value_number) AS value,
- fact.unit,fact.quality,fact.revision
-FROM analytics.metric_result_facts AS fact
-WHERE fact.tenant_id=toUUID('%s')
-  AND fact.site_id=toUUID('%s')
-  AND fact.subject_type='SITE'
-  AND fact.subject_id=toUUID('%s')
-  AND fact.metric_code='%s'
-  AND fact.period_end <= parseDateTime64BestEffort('%s',3,'UTC')%s
-  AND fact.calculated_at <= parseDateTime64BestEffort('%s',3,'UTC')
-  AND fact.value_type='NUMBER'
-  AND fact.value_number IS NOT NULL
-ORDER BY fact.period_end DESC,fact.revision DESC,fact.calculated_at DESC,toString(fact.result_id) ASC
-LIMIT 1
-FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectID, clickHouseString(metricCode), formatOptimizationTime(query.At), day, formatOptimizationTime(query.At))
-	payload, err := reader.query(ctx, sql)
+// pricedDays is how far back a fully priced day is looked for.
+const pricedDays = 7
+
+// readPricedDay is the latest Site-local day before the capture that has ended, that all its energy
+// has reached and every kWh of which the query service priced. It prices that day's energy at its
+// own mix of Tariff periods, which the baseline's cost per kWh comes from.
+func (reader *ClickHouseInputReader) readPricedDay(ctx context.Context, query OptimizationStateQuery) (EnergyDayEvidence, error) {
+	location, err := time.LoadLocation(query.Timezone)
 	if err != nil {
-		return MetricEvidence{}, fmt.Errorf("query authoritative Optimization metric %s: %w", metricCode, err)
+		return EnergyDayEvidence{}, fmt.Errorf("Site timezone: %w", err)
 	}
-	var row struct {
-		ResultID        string  `json:"result_id"`
-		MetricVersionID string  `json:"metric_version_id"`
-		MetricCode      string  `json:"metric_code"`
-		PeriodStart     string  `json:"period_start"`
-		PeriodEnd       string  `json:"period_end"`
-		CalculatedAt    string  `json:"calculated_at"`
-		Value           float64 `json:"value"`
-		Unit            string  `json:"unit"`
-		Quality         string  `json:"quality"`
-		Revision        uint64  `json:"revision"`
-	}
-	if err = decodeSingleJSONEachRow(payload, &row); err != nil {
-		return MetricEvidence{}, fmt.Errorf("decode authoritative Optimization metric %s: %w", metricCode, err)
-	}
-	periodStart, err := time.Parse(time.RFC3339Nano, row.PeriodStart)
+	local := query.At.In(location)
+	to := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
+	series, err := reader.energy.Series(ctx, analyticsmodel.EnergySeriesQuery{
+		TenantID: query.TenantID, SiteID: query.SiteID, EnergyType: analyticsmodel.EnergyTypeElectricity,
+		Granularity: analyticsmodel.GranularityDay, Timezone: query.Timezone, From: to.AddDate(0, 0, -pricedDays), To: to,
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	})
 	if err != nil {
-		return MetricEvidence{}, err
+		return EnergyDayEvidence{}, fmt.Errorf("read the Site's priced days: %w", err)
 	}
-	periodEnd, err := time.Parse(time.RFC3339Nano, row.PeriodEnd)
-	if err != nil {
-		return MetricEvidence{}, err
+	watermark := series.Metadata.DataWatermark
+	for index := len(series.Points) - 1; index >= 0; index-- {
+		point := series.Points[index]
+		if point.Cost == nil || point.Cost.UnpricedKWh > 0 || point.EnergyKWh <= 0 || watermark == nil || point.PeriodEnd.After(*watermark) {
+			continue
+		}
+		return EnergyDayEvidence{
+			PeriodStart: point.PeriodStart.UTC(), PeriodEnd: point.PeriodEnd.UTC(), EnergyKWh: point.EnergyKWh, CostCNY: point.Cost.AmountCNY,
+			DatasetRevision: series.Metadata.DatasetRevision, DataWatermark: watermark.UTC(),
+		}, nil
 	}
-	calculatedAt, err := time.Parse(time.RFC3339Nano, row.CalculatedAt)
-	if err != nil {
-		return MetricEvidence{}, err
-	}
-	return MetricEvidence{
-		ResultID: row.ResultID, MetricVersionID: row.MetricVersionID, MetricCode: row.MetricCode,
-		PeriodStart: periodStart.UTC(), PeriodEnd: periodEnd.UTC(), CalculatedAt: calculatedAt.UTC(),
-		Value: row.Value, Unit: row.Unit, Quality: row.Quality, Revision: row.Revision,
-	}, nil
+	return EnergyDayEvidence{}, fmt.Errorf("the Site has no fully priced complete day in the last %d days", pricedDays)
 }
 
 func (reader *ClickHouseInputReader) readTelemetry(ctx context.Context, query OptimizationStateQuery, telemetryKey string) (TelemetryEvidence, error) {
@@ -256,21 +234,6 @@ func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]b
 		return nil, fmt.Errorf("ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
 	}
 	return payload, nil
-}
-
-func decodeSingleJSONEachRow(payload []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	if err := decoder.Decode(target); err != nil {
-		if errors.Is(err, io.EOF) {
-			return errors.New("authoritative input is missing")
-		}
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("authoritative input returned multiple rows")
-	}
-	return nil
 }
 
 func clickHouseString(value string) string {

@@ -399,22 +399,6 @@ function seedOptimizationPreparationFixture() {
     );
   `);
 
-  clickHouse(`INSERT INTO analytics.metric_result_facts (
-    result_id, tenant_id, site_id, subject_type, subject_id,
-    metric_id, metric_version_id, metric_code, metric_version,
-    metric_binding_id, binding_version, period_start, period_end, calculated_at,
-    granularity, value_type, value_json, value_number, value_string, value_boolean,
-    unit, quality, completeness, calculation_run_id, revision, provenance
-  ) VALUES
-    (toUUID('01990000-2840-7000-8000-000000000001'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
-     toUUID('01990000-2800-7000-8000-000000000001'), toUUID('01990000-2810-7000-8000-000000000001'), 'daily_energy', 1,
-     toUUID('01990000-2820-7000-8000-000000000001'), 1, toDateTime64('2026-08-27 12:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:10', 3, 'UTC'),
-     'DAY', 'NUMBER', '2400', 2400, NULL, NULL, 'kWh', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-000000000001'), 2, '{"source":"metric-owner"}'),
-    (toUUID('01990000-2840-7000-8000-000000000002'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
-     toUUID('01990000-2800-7000-8000-000000000002'), toUUID('01990000-2810-7000-8000-000000000002'), 'energy_cost', 1,
-     toUUID('01990000-2820-7000-8000-000000000002'), 1, toDateTime64('2026-08-27 12:00:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:00', 3, 'UTC'), toDateTime64('2026-08-28 11:59:20', 3, 'UTC'),
-     'DAY', 'NUMBER', '360', 360, NULL, NULL, 'CNY', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-000000000002'), 1, '{"source":"metric-owner"}')`);
-
   clickHouse(`INSERT INTO telemetry_history.observations (
     observation_id, tenant_id, site_id, device_id, point_id,
     source_id, source_event_id, source_partition, source_offset, source_path,

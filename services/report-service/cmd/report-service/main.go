@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
-	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/report-service/internal/report"
 )
 
@@ -29,22 +27,14 @@ func main() {
 	defer store.Close()
 	// The Site's energy comes from the Telemetry Query Service; report-service presents its own
 	// workload identity to IAM and to the query service (ADR 0017, ADR 0023).
-	certificate := &workloadtls.CertificateFiles{CertificatePath: requiredEnv("REPORT_TLS_CERT"), PrivateKeyPath: requiredEnv("REPORT_TLS_KEY")}
-	client := func(origin string) *http.Client {
-		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Hostname() == "" {
-			log.Fatalf("invalid service URL %q", origin)
-		}
-		httpClient, err := workloadtls.NewHTTPClient(workloadtls.ClientConfig{
-			CertificateFiles: certificate, ServerCAPath: requiredEnv("REPORT_TLS_CA"), ServerName: parsed.Hostname(), Timeout: 30 * time.Second,
-		})
-		if err != nil {
-			log.Fatal(err)
-		}
-		return httpClient
+	series, err := energyseries.NewWorkload(energyseries.WorkloadConfig{
+		CertificatePath: requiredEnv("REPORT_TLS_CERT"), PrivateKeyPath: requiredEnv("REPORT_TLS_KEY"), CAPath: requiredEnv("REPORT_TLS_CA"),
+		IAMURL: requiredEnv("REPORT_IAM_URL"), QueryURL: requiredEnv("REPORT_QUERY_URL"),
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
-	iamURL, queryURL := requiredEnv("REPORT_IAM_URL"), requiredEnv("REPORT_QUERY_URL")
-	hours := report.NewQueryHours(energyseries.New(energyseries.Config{IAMURL: iamURL, QueryURL: queryURL, IAMClient: client(iamURL), QueryClient: client(queryURL)}))
+	hours := report.NewQueryHours(series)
 	service, err := report.NewService(store, hours, time.Now, schedulerjob.UUIDv7)
 	if err != nil {
 		log.Fatal(err)

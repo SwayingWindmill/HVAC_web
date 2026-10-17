@@ -63,15 +63,9 @@ func testPreparationDefinition() PreparationDefinition {
 
 func testAuthoritativeState(at time.Time) AuthoritativeState {
 	return AuthoritativeState{
-		DailyEnergy: MetricEvidence{
-			ResultID: "01990000-2100-7000-8000-000000000001", MetricVersionID: "01990000-1510-7000-8000-000000000001",
-			MetricCode: "daily_energy", PeriodStart: at.Add(-24 * time.Hour), PeriodEnd: at.Add(-time.Minute), CalculatedAt: at.Add(-30 * time.Second),
-			Value: 2400, Unit: "kWh", Quality: "GOOD", Revision: 2,
-		},
-		DailyCost: MetricEvidence{
-			ResultID: "01990000-2100-7000-8000-000000000002", MetricVersionID: "01990000-1510-7000-8000-000000000002",
-			MetricCode: "energy_cost", PeriodStart: at.Add(-24 * time.Hour), PeriodEnd: at.Add(-time.Minute), CalculatedAt: at.Add(-20 * time.Second),
-			Value: 360, Unit: "CNY", Quality: "GOOD", Revision: 1,
+		PricedDay: EnergyDayEvidence{
+			PeriodStart: at.Add(-24 * time.Hour), PeriodEnd: at.Add(-time.Minute), EnergyKWh: 2400, CostCNY: 360,
+			DatasetRevision: "local-development-v1:1792218568383000", DataWatermark: at.Add(-30 * time.Second),
 		},
 		SupplyTemperature: TelemetryEvidence{
 			ObservationID: "01990000-2200-7000-8000-000000000001", DeviceID: "01990000-2300-7000-8000-000000000001", PointID: "01990000-2400-7000-8000-000000000001",
@@ -150,13 +144,12 @@ func TestOptimizationPreparationFailsClosedWhenAuthoritativeStateIsUnavailable(t
 	}
 }
 
-// The daily cost prices the day's energy; a cost from another day would price this day's energy at
-// that day's mix of peak and valley hours. The cost is missing for a day with an hour missing.
-func TestOptimizationPreparationRefusesACostFromAnotherDay(t *testing.T) {
+// A day priced before all its energy arrived would price the plant at part of a day's mix of peak
+// and valley hours.
+func TestOptimizationPreparationRefusesADayItsEnergyHasNotReached(t *testing.T) {
 	at := time.Date(2026, 8, 28, 15, 0, 0, 0, time.UTC)
 	state := testAuthoritativeState(at)
-	state.DailyCost.PeriodStart = state.DailyCost.PeriodStart.AddDate(0, 0, -7)
-	state.DailyCost.PeriodEnd = state.DailyCost.PeriodEnd.AddDate(0, 0, -7)
+	state.PricedDay.DataWatermark = state.PricedDay.PeriodEnd.Add(-time.Hour)
 	store := &preparationStoreStub{definition: testPreparationDefinition()}
 	preparer, err := NewPreparer(store, &authoritativeInputStub{state: state}, func() time.Time { return at })
 	if err != nil {
@@ -166,10 +159,10 @@ func TestOptimizationPreparationRefusesACostFromAnotherDay(t *testing.T) {
 		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
 		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerManual,
 	}); err == nil {
-		t.Fatal("prepared an optimization with a daily cost from another day")
+		t.Fatal("prepared an optimization on a day whose energy had not all arrived")
 	}
 	if len(store.created) != 0 {
-		t.Fatal("preparation must not persist a snapshot with mismatched daily cost and energy")
+		t.Fatal("preparation must not persist a snapshot on an incomplete day")
 	}
 }
 

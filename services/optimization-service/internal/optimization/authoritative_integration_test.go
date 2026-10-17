@@ -1,11 +1,13 @@
 package optimization
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t *testing.T) {
@@ -24,7 +26,7 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: baseURL, Username: "optimization_service_reader"})
+	inputs, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: baseURL, Username: "optimization_service_reader", Energy: pricedDayStub{energyKWh: 2400, costCNY: 360}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,4 +102,19 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if published.RunID != prepared.OptimizationRunID || published.Trigger != TriggerManual || published.Recommendation.InputSnapshotID != prepared.InputSnapshotID || published.Recommendation.CommandIntentID != "" {
 		t.Fatalf("published=%#v", published)
 	}
+}
+
+// pricedDayStub stands in for the query service, which these environments do not run: the latest
+// fully priced day before the capture, at the energy and cost the run is expected to freeze.
+type pricedDayStub struct {
+	energyKWh, costCNY float64
+}
+
+func (stub pricedDayStub) Series(_ context.Context, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
+	end := query.To
+	watermark := end
+	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: []analyticsmodel.EnergySeriesPoint{{
+		PeriodStart: end.AddDate(0, 0, -1), PeriodEnd: end, EnergyKWh: stub.energyKWh,
+		Cost: &analyticsmodel.EnergyCost{AmountCNY: stub.costCNY, Periods: []analyticsmodel.PeriodCost{}},
+	}}, Metadata: analyticsmodel.EnergySeriesMetadata{DatasetRevision: "integration", DataWatermark: &watermark}}, nil
 }

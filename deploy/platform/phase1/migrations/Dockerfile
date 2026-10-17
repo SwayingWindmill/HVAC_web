@@ -72,6 +72,7 @@ COPY infra/registry/postgres/init/023-savings-device-boundary.sql /opt/hvac/repo
 COPY infra/registry/postgres/init/024-site-profile.sql /opt/hvac/repo/infra/registry/postgres/init/024-site-profile.sql
 COPY infra/registry/postgres/init/025-fdd-rule-revisions.sql /opt/hvac/repo/infra/registry/postgres/init/025-fdd-rule-revisions.sql
 COPY infra/registry/postgres/init/026-iam-role-assignments.sql /opt/hvac/repo/infra/registry/postgres/init/026-iam-role-assignments.sql
+COPY infra/registry/postgres/init/027-optimization-site-clock.sql /opt/hvac/repo/infra/registry/postgres/init/027-optimization-site-clock.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
