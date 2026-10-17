@@ -536,11 +536,11 @@ const sitePoints = (points: readonly SitePointInput[], timezone: string) => (
 
 /** The series' estimated energy charge and unpriced energy; cooling has neither. */
 const seriesCost = (points: readonly SitePointInput[]) => {
-  const priced = points.filter((point) => point.cost);
-  if (priced.length === 0) return {};
+  const costs = points.flatMap((point) => (point.cost ? [point.cost] : []));
+  if (costs.length === 0) return {};
   return {
-    estimatedCostCNY: Number(priced.reduce((sum, point) => sum + point.cost!.amountCNY, 0).toFixed(2)),
-    unpricedKWh: Number(priced.reduce((sum, point) => sum + point.cost!.unpricedKWh, 0).toFixed(6)),
+    estimatedCostCNY: Number(costs.reduce((sum, cost) => sum + cost.amountCNY, 0).toFixed(2)),
+    unpricedKWh: Number(costs.reduce((sum, cost) => sum + cost.unpricedKWh, 0).toFixed(6)),
   };
 };
 

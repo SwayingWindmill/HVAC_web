@@ -83,12 +83,13 @@ export function ConsumptionWorkspace() {
   // Each bucket as the owner priced it, the previous period's lined up with the current one's.
   const pricing = useMemo(() => {
     if (!tariff.data || !comparison) return null;
-    const priced = (electricityKWh: number | null, cost: BucketComparison["cost"]) => (electricityKWh === null ? [] : [sumCosts([{ electricityKWh, cost }])]);
+    const byLabel = (pick: (bucket: BucketComparison) => { electricityKWh: number | null; cost: BucketComparison["cost"] }) =>
+      new Map(comparison.buckets.filter((bucket) => pick(bucket).electricityKWh !== null).map((bucket) => [bucket.label, sumCosts([pick(bucket)])]));
     return {
       current: sumCosts(comparison.current.rows),
       previous: sumCosts(comparison.previous.rows),
-      byLabel: new Map(comparison.buckets.flatMap((bucket) => priced(bucket.electricityKWh, bucket.cost).map((cost) => [bucket.label, cost] as const))),
-      previousByLabel: new Map(comparison.buckets.flatMap((bucket) => priced(bucket.previousElectricityKWh, bucket.previousCost).map((cost) => [bucket.label, cost] as const))),
+      byLabel: byLabel((bucket) => ({ electricityKWh: bucket.electricityKWh, cost: bucket.cost })),
+      previousByLabel: byLabel((bucket) => ({ electricityKWh: bucket.previousElectricityKWh, cost: bucket.previousCost })),
       codes: tariffCodes(tariff.data),
     };
   }, [tariff.data, comparison]);

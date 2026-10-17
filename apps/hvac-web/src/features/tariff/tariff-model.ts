@@ -86,9 +86,12 @@ export function periodRanges(tariff: SiteTariff, instant: Date, timeZone: string
   return new Map([...ranges.entries()].map(([code, list]) => [code, list.join('、')]));
 }
 
-/** Each bucket's energy charge by its label, for the buckets with electricity. */
+/** Each bucket's energy charge by its label; a bucket none of whose electricity was priced has none. */
 export function costsByLabel(rows: readonly { readonly label: string; readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[]): Map<string, number> {
-  return new Map(rows.flatMap((row) => (row.electricityKWh === null ? [] : [[row.label, sumCosts([row]).total] as const])));
+  return new Map(rows.flatMap((row) => {
+    const cost = sumCosts([row]);
+    return cost.energyKWh > cost.unpricedKWh ? [[row.label, cost.total] as const] : [];
+  }));
 }
 
 export interface DemandCharge {

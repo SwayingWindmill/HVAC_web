@@ -12,6 +12,7 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(energy.getByRole('tab', { name: /今日综合能效/ })).toContainText('3.48COP');
   // The owner's price: peak hours at 1.20 and flat hours at 0.72 元/kWh, 100 kWh of 13:00 unpriced.
   await expect(energy.getByRole('tab', { name: /今日电费（估算）/ })).toContainText('745元');
+  await expect(energy.getByRole('tab', { name: /今日电费（估算）/ })).toContainText('另有 100 kWh 没有电价，未计入');
   await energy.getByRole('tab', { name: /今日综合能效/ }).click();
   await expect(page).toHaveURL(/metric=cop/);
   await expect(energy.getByRole('tab', { name: /今日综合能效/ })).toHaveAttribute('aria-selected', 'true');

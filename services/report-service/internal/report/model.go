@@ -197,8 +197,8 @@ func Build(month string, location *time.Location, hours []Hour, savings []Saving
 			snapshot.TariffPeriods = append(snapshot.TariffPeriods, *total)
 		}
 		// Dearest period first: super peak, peak, flat, valley.
-		sort.Slice(snapshot.TariffPeriods, func(left, right int) bool {
-			return periodOrder[snapshot.TariffPeriods[left].Code] < periodOrder[snapshot.TariffPeriods[right].Code]
+		sort.SliceStable(snapshot.TariffPeriods, func(left, right int) bool {
+			return periodRank(snapshot.TariffPeriods[left].Code) < periodRank(snapshot.TariffPeriods[right].Code)
 		})
 	}
 
@@ -224,7 +224,12 @@ func Build(month string, location *time.Location, hours []Hour, savings []Saving
 	return snapshot, nil
 }
 
-var periodOrder = map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}
+func periodRank(code string) int {
+	if rank, ok := map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}[code]; ok {
+		return rank
+	}
+	return 4
+}
 
 func ratio(numerator, denominator float64) *float64 {
 	if denominator <= 0 {

@@ -19,7 +19,6 @@ require (
 
 replace github.com/quanlaihe/hvac-web/libs/schedulerjob => ../../libs/schedulerjob
 
-
 replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel
 
 replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls

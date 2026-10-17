@@ -57,7 +57,7 @@ function replayEnergyDays(series: Json, query: Json): Json {
   const cost = priced.length === 0 ? undefined : {
     amountCNY: priced.reduce((sum: number, point: Json) => sum + point.cost.amountCNY, 0),
     unpricedKWh: priced.reduce((sum: number, point: Json) => sum + point.cost.unpricedKWh, 0),
-    periods: [...periods.entries()].map(([periodCode, entry]) => ({ periodCode, ...entry })),
+    periods: Array.from(periods.entries()).map(([periodCode, entry]) => ({ periodCode, ...entry })),
   };
   const points: Json[] = [];
   for (let day = Date.parse(query.from); day < Date.parse(query.to); day += DAY_MS) {

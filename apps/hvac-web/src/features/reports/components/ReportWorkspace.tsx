@@ -150,14 +150,14 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
       period={text}
       archived
       status={`生成于 ${generated} · 第 ${stored.version} 版 · 覆盖 ${report.daysWithData} / ${report.daysInMonth} 天`}
-      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断发现取自月结后存档的快照，之后记录再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按当时生效的分时电价逐时计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
+      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断发现取自月结后存档的快照，之后记录再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按每个计量区间所在时段当时生效的分时电价计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description="与上月全月对比">
         <FigureGrid>
           <Figure label="空调用电" value={formatDecimal(report.electricityKWh, 0)} unit="kWh" delta={before ? relativeChange(report.electricityKWh, before.electricityKWh) : null} invert note={beforeNote(before?.electricityKWh ?? null)} />
           <Figure label="供冷量" value={formatDecimal(report.coolingKWh, 0)} unit="kWh" delta={before ? relativeChange(report.coolingKWh, before.coolingKWh) : null} note={beforeNote(before?.coolingKWh ?? null)} />
           <Figure label="综合能效" value={report.cop === null ? null : formatDecimal(report.cop, 2)} unit="COP" delta={before ? relativeChange(report.cop, before.cop) : null} note={beforeNote(before?.cop ?? null, 2)} />
-          <Figure label="电度电费" value={report.energyCostCNY === null ? null : `¥${formatDecimal(report.energyCostCNY, 0)}`} note={report.energyCostCNY === null ? `${costMissing}，未计` : '按分时电价逐时计算，不含需量电费'} />
+          <Figure label="电度电费" value={report.energyCostCNY === null ? null : `¥${formatDecimal(report.energyCostCNY, 0)}`} note={report.energyCostCNY === null ? `${costMissing}，未计` : '按分时电价计算，不含需量电费'} />
           <Figure label="日均用电" value={report.daysWithData ? formatDecimal(report.electricityKWh / report.daysWithData, 0) : null} unit="kWh" note={`${report.daysWithData} / ${report.daysInMonth} 天有计量`} />
           <Figure label="用电最多的一天" value={peak ? formatDecimal(peak.electricityKWh, 0) : null} unit="kWh" note={peak?.label ?? '—'} />
           <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? `${range.format(new Date(peakDemand.at))} · ${NOT_ARCHIVED}` : meter ? NOT_ARCHIVED : '没有总电表'} />
@@ -224,10 +224,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
   const findings = useQuery(siteFindingsQuery(site.id));
   const tariff = useSiteTariff();
 
-  const cost = useMemo(
-    () => (tariff.data && energy.data ? sumCosts(energy.data.current.rows) : null),
-    [tariff.data, energy.data, timeZone],
-  );
+  const cost = useMemo(() => (energy.data ? sumCosts(energy.data.current.rows) : null), [energy.data]);
   const charges = useMemo(
     () => (tariff.data && demand.data ? demandCharges(demand.data, tariff.data, timeZone, span.from) : null),
     [tariff.data, demand.data, timeZone, span.from],
@@ -245,7 +242,10 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
 
   const { current, previous } = energy.data;
   const demandCost = charges?.reduce((sum, charge) => sum + (charge.charge ?? 0), 0) ?? 0;
-  const totalCost = cost ? cost.total + demandCost : null;
+  // As the archive does: a month with electricity no Tariff period covers has no energy cost.
+  const priced = cost !== null && cost.unpricedKWh === 0;
+  const costMissing = cost !== null && cost.energyKWh > 0 && cost.unpricedKWh >= cost.energyKWh ? '站点没有购电电价' : '月内有时段没有电价';
+  const totalCost = priced ? cost.total + demandCost : null;
   const days = current.rows.filter((row) => row.electricityKWh !== null);
   // Every day of the month on the axis, so days without metering show as gaps.
   const byLabel = new Map(current.rows.map((row) => [row.label.split(' ')[0], row]));
@@ -256,8 +256,8 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
     return { label, electricityKWh: row?.electricityKWh == null ? null : Math.round(row.electricityKWh), cop: row?.cop == null ? null : Number(row.cop.toFixed(2)) };
   });
   const { range, text } = periodRange(span, timeZone);
-  const periods = cost && tariff.data
-    ? cost.byPeriod.map((usage) => ({ code: usage.code, energyKWh: usage.energyKWh, cost: usage.cost, rate: tariff.data!.periods.find((period) => period.periodCode === usage.code)?.energyRatePerKWh ?? 0 }))
+  const periods = priced
+    ? cost.byPeriod.map((usage) => ({ code: usage.code, energyKWh: usage.energyKWh, cost: usage.cost, rate: usage.energyKWh > 0 ? usage.cost / usage.energyKWh : 0 }))
     : [];
 
   return (
@@ -268,14 +268,14 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
       period={text}
       archived={false}
       status={span.complete ? (archiveUnavailable ? '报告存档暂时读不到，按当前记录现算' : '这个月还没有存档，按当前记录现算') : '本月结束后的 1 日 03:00 存档'}
-      footnote={<>说明：空调用电、供冷量取自空调总电表与冷量表的有效计量区间；电费按站点当前生效的分时电价估算，需量按 15 分钟平均功率计，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
+      footnote={<>说明：空调用电、供冷量取自空调总电表与冷量表的有效计量区间；电度电费按每个计量区间所在时段当时生效的分时电价估算，需量按 15 分钟平均功率计，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description={span.complete ? '与上月全月对比' : '与上月同期对比'}>
         <FigureGrid>
           <Figure label="空调用电" value={current.electricityKWh === null ? null : formatDecimal(current.electricityKWh, 0)} unit="kWh" delta={relativeChange(current.electricityKWh, previous.electricityKWh)} invert note={`上月 ${energyText(previous.electricityKWh)}`} />
           <Figure label="供冷量" value={current.coolingKWh === null ? null : formatDecimal(current.coolingKWh, 0)} unit="kWh" delta={relativeChange(current.coolingKWh, previous.coolingKWh)} note={`上月 ${energyText(previous.coolingKWh)}`} />
           <Figure label="综合能效" value={current.cop === null ? null : formatDecimal(current.cop, 2)} unit="COP" delta={relativeChange(current.cop, previous.cop)} note={previous.cop === null ? '上月没有数据' : `上月 ${formatDecimal(previous.cop, 2)}`} />
-          <Figure label="估算电费" value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`} note={tariff.data === null ? '站点还没有配置电价' : '按分时电价估算，以结算为准'} />
+          <Figure label="估算电费" value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`} note={totalCost === null ? `${costMissing}，未计` : '按分时电价估算，以结算为准'} />
           <Figure label="日均用电" value={days.length ? formatDecimal((current.electricityKWh ?? 0) / days.length, 0) : null} unit="kWh" note={`${days.length} / ${span.days} 天有计量`} />
           <Figure label="用电最多的一天" value={current.peak ? formatDecimal(current.peak.electricityKWh!, 0) : null} unit="kWh" note={current.peak?.label ?? '—'} />
           <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? range.format(new Date(peakDemand.at)) : meter ? '本月还没有完整的 15 分钟' : '没有总电表'} />
@@ -288,10 +288,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
       </Section>
 
       <Section index={3} title="电费构成" description={tariff.data ? `${tariff.data.displayName} · 按分时电价估算，正式电费以结算为准` : '站点还没有配置电价'}>
-        {cost && tariff.data ? (
+        {priced ? (
           <CostTable periods={periods} charges={charges} energyKWh={cost.energyKWh} />
-        ) : (
+        ) : tariff.data === null ? (
           <p className="text-sm text-muted-foreground">为站点的电网进线发布电价后，报告按峰平谷单价与需量电价估算电费。</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">{costMissing}：有 {formatDecimal(cost?.unpricedKWh ?? 0, 0)} kWh 没有电价，电度电费未计。</p>
         )}
       </Section>
 

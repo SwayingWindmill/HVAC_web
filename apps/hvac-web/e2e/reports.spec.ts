@@ -7,8 +7,9 @@ test('a month\'s report sums energy, priced cost and operations from their owner
 
   const report = page.getByRole('article', { name: /能源报告/ });
   await expect(report).toContainText('空调用电919kWh');
-  await expect(report).toContainText('估算电费¥745');
-  await expect(report).toContainText('峰时段电度电费');
+  // 100 kWh of the month has no Tariff period, so like an archived month it carries no energy cost.
+  await expect(report).toContainText('月内有时段没有电价，未计');
+  await expect(report).toContainText('有 100 kWh 没有电价，电度电费未计');
   await expect(report).toContainText('两部制分时电价');
   await expect(report.getByRole('heading', { name: '运行与维护' })).toBeVisible();
   await expect(report.getByRole('heading', { name: '节能成效' })).toBeVisible();

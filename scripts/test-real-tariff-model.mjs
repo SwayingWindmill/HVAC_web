@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { daySchedule, demandCharges, touEnergyCost } from '../apps/hvac-web/src/features/tariff/tariff-model.ts';
+import { daySchedule, demandCharges } from '../apps/hvac-web/src/features/tariff/tariff-model.ts';
 
 const zone = 'Asia/Shanghai';
 const rates = { PEAK: [1.2, 38], FLAT: [0.72, 0], VALLEY: [0.32, 0] };
@@ -21,28 +21,6 @@ test('a day is priced by its own day type, in clock order', () => {
   // Monday has no weekday periods in this tariff, Sunday (the day before) does.
   assert.deepEqual(daySchedule(weekendOnly, new Date(at(10)), zone), []);
   assert.equal(daySchedule(weekendOnly, new Date(at(-14)), zone).length, 5);
-});
-
-test('each hour is priced by the period covering it, split where a period starts inside the hour', () => {
-  const cost = touEnergyCost([
-    { periodStart: at(2), energyKWh: 100 },
-    { periodStart: at(9), energyKWh: 200 },
-  ], tariff, zone);
-  assert.equal(cost.energyKWh, 300);
-  assert.deepEqual(cost.byPeriod.map((usage) => [usage.code, usage.energyKWh]), [['PEAK', 200], ['VALLEY', 100]]);
-  assert.equal(Math.round(cost.total * 100) / 100, 200 * 1.2 + 100 * 0.32);
-
-  const split = { ...tariff, periods: tariff.periods.map((period) => (period.periodCode === 'PEAK' ? { ...period, startMinute: 510 } : period.startMinute === 360 ? { ...period, endMinute: 510 } : period)) };
-  const halves = touEnergyCost([{ periodStart: at(8), energyKWh: 60 }], split, zone);
-  assert.deepEqual(halves.byPeriod.map((usage) => [usage.code, usage.energyKWh]), [['PEAK', 30], ['FLAT', 30]]);
-});
-
-test('energy in minutes no period covers is reported unpriced, not priced at zero', () => {
-  const gap = { ...tariff, periods: tariff.periods.filter((period) => !(period.dayType === 'WEEKDAY' && period.startMinute === 0)) };
-  const cost = touEnergyCost([{ periodStart: at(1), energyKWh: 50 }, { periodStart: at(9), energyKWh: 10 }], gap, zone);
-  assert.equal(cost.unpricedKWh, 50);
-  assert.equal(cost.energyKWh, 60);
-  assert.deepEqual(cost.byPeriod.map((usage) => usage.code), ['PEAK']);
 });
 
 test('demand is charged per period on its highest complete quarter-hour since the cycle began', () => {

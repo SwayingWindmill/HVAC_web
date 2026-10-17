@@ -128,23 +128,24 @@ export function useSiteTariff() {
  */
 export function useYearLive(year: number, now: Date) {
   const { site, summary } = useEnergyReader();
-  const tariff = useSiteTariff();
   const from = siteMidnight(year, 1, 1, site.timezone);
   const end = siteMidnight(year + 1, 1, 1, site.timezone);
   const to = end.getTime() < now.getTime() ? end : now;
   return useQuery({
-    queryKey: ['yearly-report', site.id, year, to.getTime(), tariff.data?.version ?? null],
-    enabled: !tariff.isPending && from.getTime() < to.getTime(),
+    queryKey: ['yearly-report', site.id, year, to.getTime()],
+    enabled: from.getTime() < to.getTime(),
     queryFn: async ({ signal }): Promise<Map<string, LiveMonth>> => {
       const months = await summary('month', from, to, signal);
       const live = new Map<string, LiveMonth>();
       for (const row of months.rows) {
         const local = wallTime(new Date(row.periodStart), site.timezone);
         const month = `${local.year}-${String(local.month).padStart(2, '0')}`;
+        // As an archived month: electricity no Tariff period covers leaves the month without a cost.
+        const cost = sumCosts([row]);
         live.set(month, {
           electricityKWh: row.electricityKWh,
           coolingKWh: row.coolingKWh,
-          energyCost: tariff.data && row.electricityKWh !== null ? sumCosts([row]).total : null,
+          energyCost: row.electricityKWh === null || cost.unpricedKWh > 0 ? null : cost.total,
         });
       }
       return live;
