@@ -211,7 +211,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -221,6 +221,7 @@ test('HVAC catalog contains the capability-filtered READ Tools', () => {
     deviceTelemetryReader: { read: async () => { throw new Error('not called'); } },
     telemetryHistoryReader: { read: async () => { throw new Error('not called'); } },
     energyAnalyticsReader: { read: async () => { throw new Error('not called'); } },
+    semanticQueryReader: { read: async () => { throw new Error('not called'); } },
   });
   assert.deepEqual(limited.map((tool) => tool.definition.name), ['site_get_context']);
   assert.equal(limited.every((tool) => tool.definition.executionMode === 'parallel' && tool.definition.replayPolicy === 'safe'), true);

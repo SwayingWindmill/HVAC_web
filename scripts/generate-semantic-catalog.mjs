@@ -12,6 +12,8 @@ const jsonPath = resolve(root, 'libs/analyticsmodel/semantic_catalog.json');
 const tsPath = resolve(root, 'services/operations-agent-service/src/tools/internal/semantic-catalog.gen.ts');
 // The Site comes from the Session's grant and time from the granularity and range, never from the model.
 const forced = new Set(['site_id', 'period_end']);
+// Freshness is not a figure to ask for: every answer's metadata already carries the watermark and revision.
+const freshness = new Set(['max_data_watermark', 'max_dataset_revision']);
 const timeDimension = 'period_end';
 
 const load = (dir, key) => readdirSync(resolve(modelDir, dir)).filter((file) => file.endsWith('.yml')).sort()
@@ -37,7 +39,7 @@ const views = load('views', 'views').map((view) => {
     name: view.name,
     title: view.title,
     description: view.description.trim(),
-    measures: members.filter((each) => each.kind === 'measure').map(describe),
+    measures: members.filter((each) => each.kind === 'measure' && !freshness.has(each.name)).map(describe),
     dimensions: members.filter((each) => each.kind === 'dimension' && !forced.has(each.name)).map(describe),
   };
 }).sort((left, right) => left.name.localeCompare(right.name));

@@ -76,6 +76,7 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
   const registryInputs = [];
   const telemetryInputs = [];
   const energyInputs = [];
+  const semanticInputs = [];
   const site = Object.freeze({
     id: toolContext.siteId,
     tenantId: toolContext.tenantId,
@@ -238,6 +239,25 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
         );
       },
     },
+    // The query service's answer: each day of the range with the measures asked, in the order asked.
+    semanticQueryReader: {
+      read: async (input) => {
+        semanticInputs.push(input);
+        const { measures, from } = input.request.input;
+        const values = { electricity_valid_kwh: 3200, cooling_valid_kwh: 14080, cop: 4.4 };
+        const day = (offset) => new Date(Date.parse(from) + offset * 86_400_000).toISOString().replace('.000Z', 'Z');
+        const payload = {
+          schemaVersion: 1,
+          columns: [
+            { name: 'period_end', title: '时段', kind: 'time' },
+            ...measures.map((name) => ({ name, title: { electricity_valid_kwh: '用电量', cooling_valid_kwh: '供冷量', cop: '综合能效' }[name], kind: 'measure' })),
+          ],
+          rows: [0, 1].map((offset) => [day(offset), ...measures.map((name) => values[name])]),
+          metadata: { dataWatermark: '2026-10-16T00:00:00Z', datasetRevision: 'semantic:1', partial: false },
+        };
+        return ownerResult(input.request, 'telemetry-query-service', 'semantic:1', 'GOOD', 'telemetry-query-service:semantic-query/v1', payload);
+      },
+    },
     limits: {
       maxAssets: 20,
       maxEnergyPoints: 48,
@@ -246,7 +266,7 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
       timeoutMs: 2_000,
     },
   });
-  return { tools, toolContext, registryInputs, telemetryInputs, energyInputs };
+  return { tools, toolContext, registryInputs, telemetryInputs, energyInputs, semanticInputs };
 };
 
 const runScript = async (responses, tools = [], runBudget = budget, runtimeOptions = {}, runContext = context) => {
@@ -798,4 +818,85 @@ test('malicious Owner text cannot grant a forbidden Tool or widen the trusted Si
   assert.equal(result.artifacts[0].finding.outcome, 'UNABLE_TO_CONCLUDE');
   assert.ok(harness.registryInputs.every(({ context: ownerContext }) => ownerContext.scope.siteId === context.siteId));
   assert.equal(harness.registryInputs.some(({ context: ownerContext }) => ownerContext.scope.siteId === 'site-other'), false);
+});
+
+test('a multi-measure question is answered from one semantic query over the Site energy view', async () => {
+  const harness = createHvacToolHarness();
+  const question = {
+    measures: ['site_energy.electricity_valid_kwh', 'site_energy.cooling_valid_kwh', 'site_energy.cop'],
+    granularity: 'day',
+    from: '2026-10-13T16:00:00.000Z',
+    to: '2026-10-15T16:00:00.000Z',
+  };
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'two-days', name: 'energy_semantic_query', arguments: question }], stopReason: 'toolUse' },
+    {
+      parts: [{
+        type: 'tool-call',
+        name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'SUPPORTED_FINDING',
+          summary: '10月14日和15日每天用电 3200 kWh、供冷 14080 kWh，能效 4.4，两天持平。',
+          evidenceRefs: [{ owner: 'ENERGY', resourceType: 'semantic-query', resourceId: 'site_energy', toolExecutionId: 'two-days' }],
+          keyFigures: [{ label: '用电', value: '3200', unit: 'kWh' }, { label: '能效', value: '4.4' }],
+          limitations: [],
+          recommendedNext: [],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], harness.tools);
+
+  // The Site and its clock come from the server, the members from the catalog, in the view's own names.
+  assert.equal(harness.semanticInputs.length, 1);
+  const asked = harness.semanticInputs[0].request;
+  assert.equal(asked.tool, 'analytics.semanticQuery');
+  assert.deepEqual(asked.input, {
+    tenantId: harness.toolContext.tenantId, siteId: harness.toolContext.siteId, view: 'site_energy',
+    measures: ['electricity_valid_kwh', 'cooling_valid_kwh', 'cop'], granularity: 'day', timezone: 'Asia/Shanghai',
+    from: question.from, to: question.to,
+  });
+  assert.equal(result.runStatus, 'COMPLETED');
+  const answer = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text))[0];
+  assert.equal(answer.evidenceId, 'two-days');
+  assert.deepEqual(answer.result.columns, ['时段', '用电量', '供冷量', '综合能效']);
+  assert.deepEqual(answer.result.rows, [
+    { siteTime: '2026-10-14 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
+    { siteTime: '2026-10-15 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
+  ]);
+  assert.equal(answer.result.completeness, 'COMPLETE');
+});
+
+test('a semantic query naming a cube member, an unlisted member, two views, a Site or too long a range is refused before any read', async () => {
+  const harness = createHvacToolHarness();
+  const range = { granularity: 'day', from: '2026-10-13T16:00:00.000Z', to: '2026-10-15T16:00:00.000Z' };
+  const refused = {
+    'cube-member': { ...range, measures: ['site_energy_facts.electricity_valid_kwh'] },
+    unlisted: { ...range, measures: ['site_energy.electricity_kwh'] },
+    'two-views': { ...range, measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'] },
+    'another-site': { ...range, measures: ['site_energy.cop'], siteId: '0198a36e-0000-7000-8000-0000000000ff' },
+    'too-long': { measures: ['site_energy.cop'], granularity: 'hour', from: '2026-09-01T00:00:00.000Z', to: '2026-10-15T00:00:00.000Z' },
+  };
+  const { result } = await runScript([
+    {
+      parts: Object.entries(refused).map(([id, argumentsValue]) => ({ type: 'tool-call', id, name: 'energy_semantic_query', arguments: argumentsValue })),
+      stopReason: 'toolUse',
+    },
+    {
+      parts: [{
+        type: 'tool-call',
+        name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: { outcome: 'UNABLE_TO_CONCLUDE', summary: '查询参数不在允许范围内，没有读到数据。', evidenceRefs: [], keyFigures: [], limitations: ['查询被拒绝。'], recommendedNext: [] },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], harness.tools);
+
+  assert.equal(harness.semanticInputs.length, 0);
+  const executions = result.toolExecutions.filter(({ toolName }) => toolName === 'energy_semantic_query');
+  assert.equal(executions.length, 5);
+  for (const execution of executions) {
+    assert.equal(execution.status, 'FAILED');
+    assert.equal(execution.failureCode, 'TOOL_ARGUMENTS_INVALID');
+  }
 });

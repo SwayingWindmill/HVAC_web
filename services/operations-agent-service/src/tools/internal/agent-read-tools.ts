@@ -19,6 +19,9 @@ import {
   type OwnerReadErrorCode,
   type OwnerReadResult,
   type RegistryReadRequest,
+  type SemanticQueryReadRequest,
+  type SemanticQueryReader,
+  type SemanticQueryResult,
   type TelemetryHistoryAggregate,
   type TelemetryHistoryReadRequest,
   type TelemetryHistoryReader,
@@ -29,6 +32,7 @@ import {
 import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
+import { semanticCatalog } from './semantic-catalog.gen.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'site_get_context',
@@ -39,6 +43,7 @@ export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'energy_query_series',
   'energy_compare_periods',
   'energy_by_equipment',
+  'energy_semantic_query',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -59,6 +64,7 @@ export interface CreateHvacReadToolsInput {
   readonly deviceTelemetryReader: DeviceTelemetryReader;
   readonly telemetryHistoryReader: TelemetryHistoryReader;
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
+  readonly semanticQueryReader: SemanticQueryReader;
   readonly limits?: Partial<HvacReadToolLimits>;
 }
 
@@ -151,6 +157,34 @@ const energyCompareInputSchema = Object.freeze({
     energyType: energyTypeSchema,
   }),
   required: Object.freeze(['baselineFrom', 'baselineTo', 'currentFrom', 'currentTo']),
+  additionalProperties: false,
+});
+
+// Every catalog member as `view.member`, with the view's and the member's Chinese meaning, so the
+// model can only name what the semantic views publish (#573).
+const semanticMemberSchema = (kind: 'measures' | 'dimensions') => Object.freeze({
+  anyOf: Object.freeze(semanticCatalog.views.flatMap((view) => view[kind].map((member) => Object.freeze({
+    const: `${view.name}.${member.name}`,
+    description: `${view.title} · ${member.title}：${member.description}`,
+  })))),
+});
+
+const semanticQueryInputSchema = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    measures: Object.freeze({
+      type: 'array', items: semanticMemberSchema('measures'), minItems: 1, maxItems: 4,
+      description: 'One to four figures, all from the same view.',
+    }),
+    dimensions: Object.freeze({
+      type: 'array', items: semanticMemberSchema('dimensions'), maxItems: 2,
+      description: 'Up to two groupings from the same view as the measures; each adds a row per value.',
+    }),
+    granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
+    from: Object.freeze({ type: 'string', format: 'date-time' }),
+    to: Object.freeze({ type: 'string', format: 'date-time' }),
+  }),
+  required: Object.freeze(['measures', 'granularity', 'from', 'to']),
   additionalProperties: false,
 });
 
@@ -316,6 +350,58 @@ const parseEnergyWindow = (
     granularity: (record.granularity ?? 'hour') as EnergyArguments['granularity'],
     qualityPolicy: (record.qualityPolicy ?? 'VALID_ONLY') as EnergyArguments['qualityPolicy'],
   });
+};
+
+interface SemanticQueryArguments {
+  readonly view: typeof semanticCatalog.views[number];
+  readonly measures: readonly string[];
+  readonly dimensions: readonly string[];
+  readonly granularity: 'hour' | 'day' | 'month';
+  readonly from: string;
+  readonly to: string;
+}
+
+// The owner's own ceiling on time buckets; the Run's point budget may be lower.
+const SEMANTIC_BUCKET_LIMIT = 744;
+const SEMANTIC_BUCKET_MS = Object.freeze({ hour: 3_600_000, day: 86_400_000, month: 28 * 86_400_000 });
+
+// Refuses, before any read, members outside one catalog view and ranges beyond the Run's budget.
+// The owner checks the catalog again and forces the Site.
+const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): SemanticQueryArguments => {
+  const invalid = 'Semantic query arguments are invalid.';
+  const record = requireRecord(value, invalid);
+  const named = (list: unknown, max: number): string[][] => {
+    if (!Array.isArray(list) || list.length > max) fail('TOOL_ARGUMENTS_INVALID', invalid);
+    return (list as unknown[]).map((member) => requireString(member, invalid).split('.'));
+  };
+  if (!hasOnlyKeys(record, ['measures', 'dimensions', 'granularity', 'from', 'to'])
+    || !['hour', 'day', 'month'].includes(String(record.granularity))) {
+    fail('TOOL_ARGUMENTS_INVALID', invalid);
+  }
+  const measureParts = named(record.measures, 4);
+  const dimensionParts = record.dimensions === undefined ? [] : named(record.dimensions, 2);
+  const all = [...measureParts, ...dimensionParts];
+  const view = semanticCatalog.views.find(({ name }) => name === measureParts[0]?.[0]);
+  if (view === undefined || all.some((parts) => parts.length !== 2 || parts[0] !== view.name)
+    || new Set(all.map((parts) => parts[1])).size !== all.length) {
+    return fail('TOOL_ARGUMENTS_INVALID', 'Semantic query members must come from one listed view, each once.');
+  }
+  const measures = measureParts.map((parts) => parts[1] ?? '');
+  const dimensions = dimensionParts.map((parts) => parts[1] ?? '');
+  if (!measures.every((name) => view.measures.some((member) => member.name === name))
+    || !dimensions.every((name) => view.dimensions.some((member) => member.name === name))) {
+    fail('TOOL_ARGUMENTS_INVALID', "Semantic query members are not in that view's catalog.");
+  }
+  const granularity = record.granularity as SemanticQueryArguments['granularity'];
+  const fromValue = requireString(record.from, invalid);
+  const toValue = requireString(record.to, invalid);
+  const from = Date.parse(fromValue);
+  const to = Date.parse(toValue);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || to - from > limits.maxEnergyRangeMs
+    || Math.ceil((to - from) / SEMANTIC_BUCKET_MS[granularity]) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
+    fail('TOOL_ARGUMENTS_INVALID', 'Semantic query range is invalid or exceeds the Tool limit.');
+  }
+  return Object.freeze({ view, measures, dimensions, granularity, from: fromValue, to: toValue });
 };
 
 interface EnergyComparisonArguments {
@@ -807,6 +893,63 @@ const readEnergy = async (
   };
 };
 
+const semanticPayloadFrom = (result: OwnerReadResult): SemanticQueryResult => {
+  const payload = result.payload as SemanticQueryResult;
+  if (payload.schemaVersion !== 1 || !Array.isArray(payload.columns) || !Array.isArray(payload.rows) || !isRecord(payload.metadata)) {
+    fail('TOOL_OWNER_RESPONSE_INVALID');
+  }
+  return payload;
+};
+
+// One semantic query; each row comes back keyed by the column's Chinese title, its period at Site time.
+const readSemantic = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  reader: SemanticQueryReader,
+  timezone: string,
+  query: SemanticQueryArguments,
+) => {
+  const draft = {
+    tool: 'analytics.semanticQuery' as const,
+    input: {
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      view: query.view.name,
+      measures: query.measures,
+      ...(query.dimensions.length === 0 ? {} : { dimensions: query.dimensions }),
+      granularity: query.granularity,
+      timezone,
+      from: query.from,
+      to: query.to,
+    },
+  };
+  const request: SemanticQueryReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_semantic_query', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const result = await reader.read({ request, context: ownerContext });
+  const payload = semanticPayloadFrom(result);
+  const completeness = payload.metadata.partial ? 'PARTIAL' as const : 'COMPLETE' as const;
+  return {
+    view: query.view.title,
+    query: { granularity: query.granularity, from: query.from, to: query.to, timezone },
+    columns: payload.columns.map(({ title }) => title),
+    rows: payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
+      column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)] : [column.title, row[index]]
+    )))),
+    rowCount: payload.rows.length,
+    completeness,
+    quality: result.quality,
+    source: {
+      owner: result.owner,
+      revision: result.revision,
+      quality: result.quality,
+      completeness,
+      provenance: result.provenance,
+      ...(payload.metadata.dataWatermark === undefined ? {} : { dataWatermark: payload.metadata.dataWatermark }),
+    },
+  };
+};
+
 const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
   Number(points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6))
 );
@@ -938,6 +1081,7 @@ export const createHvacReadTools = ({
   deviceTelemetryReader,
   telemetryHistoryReader,
   energyAnalyticsReader,
+  semanticQueryReader,
   limits: inputLimits,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
   const limits = normalizeLimits(inputLimits);
@@ -1186,6 +1330,32 @@ export const createHvacReadTools = ({
     },
   });
 
+  const semanticQueryTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'energy_semantic_query',
+      'Ask several figures of the current Site at once from one semantic view (Site energy, equipment energy or the electricity cost estimate), '
+        + 'per hour, day or month, optionally grouped by up to two dimensions. Use it when a question needs more than one figure side by side. '
+        + 'Energy totals mix electricity and cooling unless grouped by energy type; the Site is set by the server.',
+      semanticQueryInputSchema,
+      ENERGY_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const query = parseSemanticQuery(argumentsValue, limits);
+      assertExecutionCapability(context, ENERGY_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        return assertResultBytes(await readSemantic(
+          context,
+          authorization,
+          toolAuthorizationReader,
+          semanticQueryReader,
+          sitePayload.site.timezone,
+          query,
+        ), limits);
+      });
+    },
+  });
+
   return Object.freeze([
     siteTool,
     assetsTool,
@@ -1195,5 +1365,6 @@ export const createHvacReadTools = ({
     energyQueryTool,
     energyCompareTool,
     equipmentEnergyTool,
+    semanticQueryTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));
 };

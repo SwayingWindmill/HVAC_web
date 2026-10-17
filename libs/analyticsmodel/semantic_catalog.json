@@ -31,16 +31,6 @@
           "name": "invalid_count",
           "title": "无效区间数",
           "description": "质量为「无效」的计量区间个数，这些区间不计入任何能耗。"
-        },
-        {
-          "name": "max_data_watermark",
-          "title": "数据截至",
-          "description": "参与计算的读数里最新的采样时间（UTC），之后的能耗还没有到。"
-        },
-        {
-          "name": "max_dataset_revision",
-          "title": "数据版本",
-          "description": "参与计算的区间里最大的数据版本号，数据重算后会变大。"
         }
       ],
       "dimensions": [
@@ -105,16 +95,6 @@
           "name": "invalid_count",
           "title": "无效区间数",
           "description": "质量为「无效」的计量区间个数，这些区间不计入任何能耗。"
-        },
-        {
-          "name": "max_data_watermark",
-          "title": "数据截至",
-          "description": "参与计算的读数里最新的采样时间（UTC），之后的能耗还没有到。"
-        },
-        {
-          "name": "max_dataset_revision",
-          "title": "数据版本",
-          "description": "参与计算的区间里最大的数据版本号，数据重算后会变大。"
         }
       ],
       "dimensions": [

@@ -109,11 +109,45 @@ export interface EnergyAnalyticsReadRequest {
   };
 }
 
+/** A query over one semantic view's catalog members (#573); the Site is the server's, never the model's. */
+export interface SemanticQueryReadRequest {
+  readonly requestId: string;
+  readonly tool: 'analytics.semanticQuery';
+  readonly input: {
+    readonly tenantId: string;
+    readonly siteId: string;
+    readonly view: string;
+    readonly measures: readonly string[];
+    readonly dimensions?: readonly string[];
+    readonly granularity: EnergyGranularity;
+    readonly timezone: string;
+    readonly from: string;
+    readonly to: string;
+  };
+}
+
 export type ToolAuthorizableReadRequest =
   | RegistryReadRequest
   | DeviceTelemetryReadRequest
   | TelemetryHistoryReadRequest
-  | EnergyAnalyticsReadRequest;
+  | EnergyAnalyticsReadRequest
+  | SemanticQueryReadRequest;
+
+/** The semantic query's answer: titled columns and rows in column order, nulls kept as unknown. */
+export interface SemanticQueryResult {
+  readonly schemaVersion: 1;
+  readonly columns: readonly {
+    readonly name: string;
+    readonly title: string;
+    readonly kind: 'time' | 'dimension' | 'measure';
+  }[];
+  readonly rows: readonly (readonly (string | number | null)[])[];
+  readonly metadata: {
+    readonly dataWatermark?: string;
+    readonly datasetRevision: string;
+    readonly partial: boolean;
+  };
+}
 
 /** The Energy analytics owner's series: points plus the provenance that says how complete they are. */
 export interface EnergySeriesPoint {
@@ -219,4 +253,8 @@ export interface TelemetryHistoryReader {
 
 export interface EnergyAnalyticsReader {
   read(input: OwnerReadInput<EnergyAnalyticsReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface SemanticQueryReader {
+  read(input: OwnerReadInput<SemanticQueryReadRequest>): Promise<OwnerReadResult>;
 }

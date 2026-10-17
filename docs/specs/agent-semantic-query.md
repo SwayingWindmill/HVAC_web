@@ -9,7 +9,7 @@
 | 决策 | 结论 |
 | --- | --- |
 | 白名单 | `scripts/generate-semantic-catalog.mjs` 读 `semantic/cube/model` 的视图和 cube 定义，生成成员清单：每个视图的度量、可分组维度和中文标题、说明。Go 侧嵌入 `libs/analyticsmodel/semantic_catalog.json`，助手侧生成 `semantic-catalog.gen.ts`。门禁 `npm run semantic:catalog:check` 保证清单与模型一致 |
-| 不在清单里的 | `site_id`（站点由会话授权决定）、时间维度 `period_end`（由粒度和时间范围表达）、内部 cube 及其成员 |
+| 不在清单里的 | `site_id`（站点由会话授权决定）、时间维度 `period_end`（由粒度和时间范围表达）、新鲜度度量 `max_data_watermark` / `max_dataset_revision`（每个结果的元数据里已有）、内部 cube 及其成员 |
 | 授权 | 沿用 `analytics.energy-series.read`：网关照旧向 IAM 判定站点权限，签一张只对这次查询摘要有效、由助手出示的授权；查询服务校验摘要 |
 | 查询形状 | 一个视图；1–4 个度量；0–2 个维度；粒度 hour / day / month；站点时区；时间范围按站点本地时间。时间桶数不超过 744（31 天逐时），结果行数不超过 2000 |
 | 结果 | 列（名称、中文标题、类别）与行；附查询服务的数据截至时间、数据版本、是否不完整（数据截至时间早于范围结束或缺桶） |
@@ -17,7 +17,7 @@
 ## 行为
 
 1. 助手工具 `energy_semantic_query` 的参数：`measures`、`dimensions` 用「视图.成员」的形式，每个可选值带中文说明；`granularity`、`from`、`to`。没有站点参数，站点和时区由服务端注入。
-2. 读取之前就拒绝：未列出的成员、内部 cube 成员（如 `site_energy_facts.*`）、跨视图混选、多余参数（包括任何站点参数）、超出本轮预算的范围或桶数。
+2. 读取之前就拒绝：未列出的成员、内部 cube 成员（如 `site_energy_facts.*`）、跨视图混选、多余参数（包括任何站点参数）、超出本轮预算的范围或桶数。不符合工具 schema 的调用由 Pi 在执行前拦下，与工具自己的校验一样记为参数错误（`TOOL_ARGUMENTS_INVALID`）。
 3. 网关只为合法查询签授权，查询里的站点必须是会话授权的站点。
 4. 查询服务按同一份清单再校验一次（它是数据所有者，不信任调用方），强制按站点过滤，结果超过行数上限时报错而不是截断。
 5. 工具结果的时间列用站点本地时间（`siteTime`），带 `evidenceId`，度量值保留查询服务的空值（没有数据不是 0）。

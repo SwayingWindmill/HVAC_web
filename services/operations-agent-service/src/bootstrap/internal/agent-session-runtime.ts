@@ -19,6 +19,7 @@ import {
 import {
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
+  createSemanticQueryOwnerReader,
   createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
@@ -83,6 +84,7 @@ export const createProductionAgentSessionRuntime = async (
     const registryReader = createRegistryOwnerReader(options.owners.registry);
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.telemetryQuery);
+    const semanticQueryReader = createSemanticQueryOwnerReader(options.owners.telemetryQuery);
     const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.telemetryQuery);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
@@ -103,6 +105,7 @@ export const createProductionAgentSessionRuntime = async (
         deviceTelemetryReader,
         telemetryHistoryReader,
         energyAnalyticsReader,
+        semanticQueryReader,
       }),
     });
     const handler = createAgentSessionHttpHandler({
