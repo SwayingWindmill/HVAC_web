@@ -883,3 +883,56 @@ test('a semantic query naming a cube member, an unlisted member, two views, a Si
     assert.equal(execution.failureCode, 'TOOL_ARGUMENTS_INVALID');
   }
 });
+
+// A model that answers in text and stops without investigation_complete (most often on a refusal)
+// gets one reminder; the operator keeps the answer it wrote and gets its card (#591).
+test('an answer that stops without investigation_complete is reminded once and completes', async () => {
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'text', text: '我只能读取数据，不能关停机组。' }], stopReason: 'stop' },
+    {
+      parts: [{
+        type: 'tool-call',
+        name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: ['助手只能读取数据，不能操作设备。'], recommendedNext: ['2 号机组现在的负荷是多少？'] },
+      }],
+      stopReason: 'toolUse',
+    },
+  ]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.equal(requests.length, 2);
+  const reminder = requests[1].at(-1);
+  assert.equal(reminder.role, 'user');
+  assert.match(reminder.text, /investigation_complete/u);
+  // The reminder is the runtime's, not the operator's: only the answer is kept.
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), ['我只能读取数据，不能关停机组。']);
+});
+
+test('a Run reminded once that still does not finish fails without a second reminder', async () => {
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'text', text: '我只能读取数据。' }], stopReason: 'stop' },
+    { parts: [{ type: 'text', text: '我不能操作设备。' }], stopReason: 'stop' },
+  ]);
+
+  assert.equal(result.runStatus, 'FAILED');
+  assert.equal(result.failureCode, 'TERMINAL_ARTIFACT_REQUIRED');
+  assert.equal(requests.length, 2);
+});
+
+// #591: the prompt describes the role, the data rules and one answer shape with example answers;
+// it leaves the choice of Tools to their descriptions.
+test('the system prompt gives the role, the data rules and one answer shape with example answers, not a Tool order', async () => {
+  const { requests } = await runScript([
+    {
+      parts: [{ type: 'tool-call', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: ['没有读数据。'], recommendedNext: [] } }],
+      stopReason: 'toolUse',
+    },
+  ]);
+  const system = requests[0][0].text;
+  for (const section of ['## 角色', '## 数据规则', '## 回答', '## 示例']) assert.ok(system.includes(section), section);
+  assert.doesNotMatch(system, /先用 energy_compare_periods/u);
+  // The card has no conclusion sentence, so the prompt must not ask for one.
+  assert.doesNotMatch(system, /summary/u);
+  // Incomplete data or a refusal ends as unable to conclude, still through investigation_complete.
+  assert.match(system, /UNABLE_TO_CONCLUDE/u);
+});
