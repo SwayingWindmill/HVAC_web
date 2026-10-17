@@ -45,6 +45,9 @@ interface PendingToolExecution {
   readonly startedAt: number;
 }
 
+// What the runtime says to a model that answered without finishing; never stored as an operator message.
+const TERMINAL_REMINDER = '这次回答还没有收尾。不要重复已经写过的回答，直接调用 investigation_complete；不能回答或拒绝的问题，outcome 用 UNABLE_TO_CONCLUDE，并在 limitations 里写明原因。';
+
 const digestArguments = (argumentsValue: unknown): string => createHash('sha256')
   .update(JSON.stringify(argumentsValue))
   .digest('hex');
@@ -257,6 +260,9 @@ export const createPiAgentEngine = ({
     onBudgetExhausted: (code) => markBudgetFailure(code),
   });
 
+  // A turn that ends in text without a terminal Tool (most often a refusal) gets one reminder, so
+  // the operator keeps the answer and gets its card instead of a failed Run. Not repeated.
+  let reminded = false;
   const agent = new Agent({
     initialState: {
       systemPrompt: systemPromptFor(input.run.startedAt),
@@ -287,6 +293,10 @@ export const createPiAgentEngine = ({
       if (modelCalls >= input.budget.maxModelCalls) {
         markBudgetFailure('MODEL_CALL_LIMIT');
         return end;
+      }
+      if (!reminded && !message.content.some((part) => part.type === 'toolCall')) {
+        reminded = true;
+        agent.followUp({ role: 'user', content: TERMINAL_REMINDER, timestamp: Date.now() });
       }
       return undefined;
     },
