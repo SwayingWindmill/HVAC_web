@@ -35,6 +35,10 @@ const responseKeys = ['schemaVersion', 'points', 'metadata'] as const;
 const breakdownResponseKeys = ['schemaVersion', 'points', 'devices', 'metadata'] as const;
 const deviceSeriesKeys = ['deviceId', 'points'] as const;
 const pointKeys = ['periodStart', 'periodEnd', 'energyKWh'] as const;
+const pricedPointKeys = [...pointKeys, 'cost'] as const;
+const costKeys = ['amountCNY', 'unpricedKWh', 'periods'] as const;
+const periodCostKeys = ['periodCode', 'energyKWh', 'amountCNY'] as const;
+const periodCodes = new Set(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']);
 const qualityKeys = ['valid', 'suspect', 'invalid'] as const;
 const metadataRequiredKeys = [
   'requestedGranularity',
@@ -105,13 +109,31 @@ const assertEnergyRequest = (
   }
 };
 
+const isAmount = (value: unknown): value is number => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+);
+
+const isCost = (value: unknown): boolean => (
+  isRecord(value)
+  && hasExactKeys(value, costKeys)
+  && isAmount(value.amountCNY)
+  && isAmount(value.unpricedKWh)
+  && Array.isArray(value.periods)
+  && value.periods.every((period) => isRecord(period)
+    && hasExactKeys(period, periodCostKeys)
+    && typeof period.periodCode === 'string'
+    && periodCodes.has(period.periodCode)
+    && isAmount(period.energyKWh)
+    && isAmount(period.amountCNY))
+);
+
 const decodePoint = (
   value: unknown,
   query: EnergyAnalyticsReadRequest['input'],
   previousEnd: number | null,
 ): { readonly point: EnergySeriesPointDto; readonly end: number } => {
   if (!isRecord(value)
-    || !hasExactKeys(value, pointKeys)
+    || !(hasExactKeys(value, pointKeys) || (hasExactKeys(value, pricedPointKeys) && isCost(value.cost)))
     || !isInstant(value.periodStart)
     || !isInstant(value.periodEnd)
     || typeof value.energyKWh !== 'number'
