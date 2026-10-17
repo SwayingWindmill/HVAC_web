@@ -14,6 +14,7 @@ import {
   type DeviceTelemetryReader,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
+  type EnergyCost,
   type OwnerReadContext,
   type OwnerReadErrorCode,
   type OwnerReadResult,
@@ -522,9 +523,26 @@ const siteTime = (instant: string, timezone: string): string => {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 };
 
-const sitePoints = (points: readonly { readonly periodStart: string; readonly energyKWh: number }[], timezone: string) => (
-  points.map((point) => ({ siteTime: siteTime(point.periodStart, timezone), energyKWh: point.energyKWh }))
+type SitePointInput = { readonly periodStart: string; readonly energyKWh: number; readonly cost?: EnergyCost };
+
+/** Each point at Site-local time; electricity also carries the owner's estimated cost and the energy it could not price. */
+const sitePoints = (points: readonly SitePointInput[], timezone: string) => (
+  points.map((point) => ({
+    siteTime: siteTime(point.periodStart, timezone),
+    energyKWh: point.energyKWh,
+    ...(point.cost ? { estimatedCostCNY: point.cost.amountCNY, unpricedKWh: point.cost.unpricedKWh } : {}),
+  }))
 );
+
+/** The series' estimated energy charge and unpriced energy; cooling has neither. */
+const seriesCost = (points: readonly SitePointInput[]) => {
+  const costs = points.flatMap((point) => (point.cost ? [point.cost] : []));
+  if (costs.length === 0) return {};
+  return {
+    estimatedCostCNY: Number(costs.reduce((sum, cost) => sum + cost.amountCNY, 0).toFixed(2)),
+    unpricedKWh: Number(costs.reduce((sum, cost) => sum + cost.unpricedKWh, 0).toFixed(6)),
+  };
+};
 
 const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate => {
   const payload = result.payload as TelemetryHistoryAggregate;
@@ -773,6 +791,7 @@ const readEnergy = async (
     points: sitePoints(payload.points, timezone),
     pointCount: payload.points.length,
     totalKWh,
+    ...seriesCost(payload.points),
     completeness,
     quality: result.quality,
     qualitySummary: payload.metadata.qualitySummary,
@@ -868,6 +887,7 @@ const summarizeEnergy = (value: Awaited<ReturnType<typeof readEnergy>>) => ({
   query: value.query,
   pointCount: value.pointCount,
   totalKWh: value.totalKWh,
+  ...(value.estimatedCostCNY === undefined ? {} : { estimatedCostCNY: value.estimatedCostCNY, unpricedKWh: value.unpricedKWh }),
   completeness: value.completeness,
   quality: value.quality,
   qualitySummary: value.qualitySummary,

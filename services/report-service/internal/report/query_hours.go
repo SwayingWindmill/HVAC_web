@@ -70,7 +70,7 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		for _, point := range series.Points {
 			hour := at(point.PeriodStart)
 			if energyType == analyticsmodel.EnergyTypeElectricity {
-				hour.ElectricityKWh, hour.HasElectricity = point.EnergyKWh, true
+				hour.ElectricityKWh, hour.HasElectricity, hour.Cost = point.EnergyKWh, true, point.Cost
 			} else {
 				hour.CoolingKWh = point.EnergyKWh
 			}

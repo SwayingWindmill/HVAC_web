@@ -10,12 +10,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 // PostgresStore keeps report snapshots in core_registry as report_runtime, scoped by Tenant and
-// Site row security, and reads what a report draws from the Registry: the Site's clock and import
-// Tariff, its verified savings and its FDD findings.
+// Site row security, and reads what a report draws from the Registry: the Site's clock, its verified
+// savings and its FDD findings.
 type PostgresStore struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
@@ -72,82 +71,6 @@ func (store *PostgresStore) SiteLocation(ctx context.Context, tenantID, siteID s
 		return nil, fmt.Errorf("read Site timezone: %w", err)
 	}
 	return time.LoadLocation(timezone)
-}
-
-// Tariffs is each import Tariff Version priced on the Site's grid connection during the window,
-// over the part of it where both the version and its assignment are in effect; a Site with several
-// import connections is priced on the first by boundary code, as M&V and the Metric engine price it.
-func (store *PostgresStore) Tariffs(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]Tariff, error) {
-	var tariffs []Tariff
-	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-SELECT boundary.boundary_code,
-       version.id::text,
-       GREATEST(version.effective_from, assignment.effective_from),
-       LEAST(version.effective_to, assignment.effective_to),
-       version.timezone
-FROM core_registry.tariff_assignments AS assignment
-JOIN core_registry.settlement_boundaries AS boundary
-  ON boundary.tenant_id = assignment.tenant_id AND boundary.site_id = assignment.site_id AND boundary.id = assignment.boundary_id
-JOIN core_registry.tariff_versions AS version
-  ON version.tenant_id = assignment.tenant_id AND version.site_id = assignment.site_id AND version.tariff_id = assignment.tariff_id
-WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
-  AND assignment.status = 'RELEASED' AND assignment.effective_from < $4 AND (assignment.effective_to IS NULL OR assignment.effective_to > $3)
-  AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
-  AND version.status = 'RELEASED' AND version.effective_from < $4 AND (version.effective_to IS NULL OR version.effective_to > $3)
-ORDER BY 1, 3`, tenantID, siteID, from.UTC(), to.UTC())
-		if err != nil {
-			return err
-		}
-		firstBoundary := ""
-		for rows.Next() {
-			var tariff Tariff
-			var boundaryCode, timezone string
-			if err := rows.Scan(&boundaryCode, &tariff.VersionID, &tariff.EffectiveFrom, &tariff.EffectiveTo, &timezone); err != nil {
-				rows.Close()
-				return err
-			}
-			if firstBoundary == "" {
-				firstBoundary = boundaryCode
-			}
-			if boundaryCode != firstBoundary {
-				continue
-			}
-			if tariff.Location, err = time.LoadLocation(timezone); err != nil {
-				rows.Close()
-				return err
-			}
-			tariffs = append(tariffs, tariff)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for index := range tariffs {
-			periods, err := tx.Query(ctx, `SELECT period_code, day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
-FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, tariffs[index].VersionID)
-			if err != nil {
-				return err
-			}
-			for periods.Next() {
-				var period tariffmodel.Period
-				if err := periods.Scan(&period.Code, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
-					periods.Close()
-					return err
-				}
-				tariffs[index].Periods = append(tariffs[index].Periods, period)
-			}
-			periods.Close()
-			if err := periods.Err(); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read import Tariffs: %w", err)
-	}
-	return tariffs, nil
 }
 
 // SavingsDays is every verified day of the month, from Site-local date from to date to (exclusive).

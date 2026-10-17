@@ -15,8 +15,7 @@ import { sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
 import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
 import { formatClock, LiveIndicator } from "@/features/operations/realtime/device-presentation";
-import { siteTariffQuery } from "@/features/tariff/query";
-import { costByLabel } from "@/features/tariff/tariff-model";
+import { costsByLabel, sumCosts } from "@/features/tariff/tariff-model";
 import { useRealtimePlant } from "@/features/operations/realtime/use-realtime-plant";
 import { sortWorkOrdersForOperators } from "@/features/work-orders/work-order-presentation";
 import { openWorkOrdersQuery } from "@/features/work-orders/work-order-queries";
@@ -57,7 +56,6 @@ function offsetLabel(timeZone: string): string {
 function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: OverviewMetric; readonly onMetricChange: (metric: OverviewMetric) => void }) {
   const { site } = siteRoute.useRouteContext();
   const comparison = useTodayAgainstYesterday();
-  const tariff = useQuery(siteTariffQuery(site.id));
   if (comparison.isPending || comparison.isError) {
     return (
       <Panel role="region" aria-label="今日用能">
@@ -72,9 +70,10 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
     );
   }
   const { today, yesterday, wholeYesterday, hours } = comparison.data;
-  // Without a Tariff the day is not priced, and the cost tab is left out.
-  const priced = tariff.data
-    ? { today: costByLabel(today.rows, tariff.data, site.timezone), yesterday: costByLabel(wholeYesterday.rows, tariff.data, site.timezone), sameHours: costByLabel(yesterday.rows, tariff.data, site.timezone) }
+  // A day none of whose electricity was priced (no Tariff) has no cost tab; a partly priced one says so.
+  const todayCost = sumCosts(today.rows);
+  const priced = todayCost.energyKWh > todayCost.unpricedKWh
+    ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows), sameHours: costsByLabel(yesterday.rows) }
     : null;
   const sum = (costs: Map<string, number>) => (costs.size === 0 ? null : [...costs.values()].reduce((total, cost) => total + cost, 0));
   return (
@@ -141,6 +140,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           unit: "元",
           fractionDigits: 0,
           invertDelta: true,
+          ...(todayCost.unpricedKWh > 0.5 ? { caption: `另有 ${formatDecimal(todayCost.unpricedKWh, 0)} kWh 没有电价，未计入` } : {}),
         }] : []),
       ]}
     />

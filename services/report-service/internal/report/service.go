@@ -28,7 +28,6 @@ type StoredSnapshot struct {
 // Store is what a snapshot is read from and kept in.
 type Store interface {
 	SiteLocation(ctx context.Context, tenantID, siteID string) (*time.Location, error)
-	Tariffs(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]Tariff, error)
 	SavingsDays(ctx context.Context, tenantID, siteID string, from, to string) ([]SavingsDay, error)
 	FindingCounts(ctx context.Context, tenantID, siteID string, from, to time.Time) ([]FindingCount, error)
 	InsertSnapshot(ctx context.Context, tenantID, siteID string, stored StoredSnapshot) (StoredSnapshot, error)
@@ -83,10 +82,6 @@ func (service *Service) Generate(ctx context.Context, tenantID, siteID, month st
 	if err != nil {
 		return StoredSnapshot{}, err
 	}
-	tariffs, err := service.store.Tariffs(ctx, tenantID, siteID, from, to)
-	if err != nil {
-		return StoredSnapshot{}, err
-	}
 	savings, err := service.store.SavingsDays(ctx, tenantID, siteID, from.Format("2006-01-02"), to.Format("2006-01-02"))
 	if err != nil {
 		return StoredSnapshot{}, err
@@ -95,7 +90,7 @@ func (service *Service) Generate(ctx context.Context, tenantID, siteID, month st
 	if err != nil {
 		return StoredSnapshot{}, err
 	}
-	snapshot, err := Build(month, location, hours, tariffs, savings, findings)
+	snapshot, err := Build(month, location, hours, savings, findings)
 	if err != nil {
 		return StoredSnapshot{}, err
 	}

@@ -19,11 +19,10 @@ import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
 import { useEnergyBreakdown } from "@/features/breakdown/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
-import { PERIOD_LABEL, touCostByLabel, touEnergyCost, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
+import { PERIOD_LABEL, sumCosts, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { cn } from "@/lib/utils";
 import {
-  alignedLabel,
   BUCKET_NOUN,
   ENERGY_PERIODS,
   explainQuestion,
@@ -34,7 +33,7 @@ import {
   type EnergyPeriod,
   type Granularity,
 } from "../model";
-import { useEnergyComparison, useHourlyElectricity } from "../query";
+import { useEnergyComparison } from "../query";
 
 const siteRoute = getRouteApi("/_app/_site");
 
@@ -78,22 +77,22 @@ export function ConsumptionWorkspace() {
   const previousLabel = PREVIOUS_LABEL[period];
   const query = useEnergyComparison(period);
   const tariff = useQuery(siteTariffQuery(site.id));
-  const hourly = useHourlyElectricity(period);
   const destination = useEnergyBreakdown(period);
   const comparison = query.data;
 
-  // Each bucket priced by time of use, the previous period's lined up with the current one's.
+  // Each bucket as the owner priced it, the previous period's lined up with the current one's.
   const pricing = useMemo(() => {
-    if (!tariff.data || !hourly.data) return null;
-    const { granularity, from, previousFrom } = hourly.data;
+    if (!tariff.data || !comparison) return null;
+    const byLabel = (pick: (bucket: BucketComparison) => { electricityKWh: number | null; cost: BucketComparison["cost"] }) =>
+      new Map(comparison.buckets.filter((bucket) => pick(bucket).electricityKWh !== null).map((bucket) => [bucket.label, sumCosts([pick(bucket)])]));
     return {
-      current: touEnergyCost(hourly.data.current, tariff.data, site.timezone),
-      previous: touEnergyCost(hourly.data.previous, tariff.data, site.timezone),
-      byLabel: touCostByLabel(hourly.data.current, tariff.data, site.timezone, (start) => alignedLabel(start, from, from, granularity, site.timezone)),
-      previousByLabel: touCostByLabel(hourly.data.previous, tariff.data, site.timezone, (start) => alignedLabel(start, previousFrom, from, granularity, site.timezone)),
+      current: sumCosts(comparison.current.rows),
+      previous: sumCosts(comparison.previous.rows),
+      byLabel: byLabel((bucket) => ({ electricityKWh: bucket.electricityKWh, cost: bucket.cost })),
+      previousByLabel: byLabel((bucket) => ({ electricityKWh: bucket.previousElectricityKWh, cost: bucket.previousCost })),
       codes: tariffCodes(tariff.data),
     };
-  }, [tariff.data, hourly.data, site.timezone]);
+  }, [tariff.data, comparison]);
 
   const setSearch = (patch: { period?: EnergyPeriod; metric?: ConsumptionMetric; view?: ConsumptionView }) =>
     void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
@@ -138,7 +137,7 @@ export function ConsumptionWorkspace() {
               ) : null}
             </span>
             <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value as EnergyPeriod })} />
-            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void hourly.refetch(); void destination.query.refetch(); void destination.previous.refetch(); }}>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); }}>
               <RefreshCw />
             </Button>
             <Button variant="outline" disabled={!comparison?.buckets.length} onClick={exportCsv}>
@@ -180,7 +179,7 @@ export function ConsumptionWorkspace() {
                 <CategoryTrend result={destination} granularity={comparison.current.granularity} timeZone={site.timezone} />
               </TabsContent>
               <TabsContent value="tou">
-                <TouSection tariff={tariff} pricing={pricing} hourlyFailed={hourly.isError} pending={tariff.isPending || (Boolean(tariff.data) && hourly.isPending)} timeZone={site.timezone} />
+                <TouSection tariff={tariff} pricing={pricing} pending={tariff.isPending} timeZone={site.timezone} />
               </TabsContent>
               <TabsContent value="detail">
                 <DetailTable comparison={comparison} pricing={pricing} previousLabel={previousLabel} timeZone={site.timezone} />
@@ -315,10 +314,9 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   );
 }
 
-function TouSection({ tariff, pricing, hourlyFailed, pending, timeZone }: {
+function TouSection({ tariff, pricing, pending, timeZone }: {
   readonly tariff: { readonly data?: SiteTariff | null; readonly isError: boolean };
   readonly pricing: Pricing | null;
-  readonly hourlyFailed: boolean;
   readonly pending: boolean;
   readonly timeZone: string;
 }) {
@@ -332,8 +330,8 @@ function TouSection({ tariff, pricing, hourlyFailed, pending, timeZone }: {
       </div>
     );
   }
-  if (tariff.isError || hourlyFailed || !tariff.data || !pricing) {
-    return <p role="region" aria-label="分时电费" className="px-5 py-8 text-center text-sm text-muted-foreground">电价或逐时用电暂时读不到</p>;
+  if (tariff.isError || !tariff.data || !pricing) {
+    return <p role="region" aria-label="分时电费" className="px-5 py-8 text-center text-sm text-muted-foreground">电价暂时读不到</p>;
   }
   return <TouCostDetail tariff={tariff.data} cost={pricing.current} timeZone={timeZone} />;
 }

@@ -88,29 +88,6 @@ export function useTodayAgainstYesterday() {
   });
 }
 
-/**
- * HVAC electricity hour by hour over a period so far and over the same span before it, for
- * pricing each bucket by time of use.
- */
-export function useHourlyElectricity(period: EnergyPeriod) {
-  const { site, read } = useEnergyReader();
-  return useQuery({
-    queryKey: ['energy-series', site.id, 'hourly-electricity', period],
-    queryFn: async ({ signal }) => {
-      const now = new Date();
-      const current = periodWindow(period, now, site.timezone);
-      const before = previousWindow(period, now, site.timezone);
-      const [currentSeries, previousSeries] = await Promise.all([
-        read('electricity', 'hour', current.from, current.to, signal),
-        read('electricity', 'hour', before.from, before.to, signal),
-      ]);
-      return { granularity: current.granularity, from: current.from, previousFrom: before.from, current: currentSeries.points, previous: previousSeries.points };
-    },
-    refetchInterval: 5 * 60_000,
-    retry: false,
-  });
-}
-
 /** Hourly HVAC electricity over the last `days` Site-local days, as a day-by-hour grid. */
 export function useHourlyHeatmap(days: number) {
   const { site, read } = useEnergyReader();

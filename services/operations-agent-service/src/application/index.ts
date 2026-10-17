@@ -34,6 +34,7 @@ export {
   type DeviceTelemetryReader,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
+  type EnergyCost,
   type EnergyGranularity,
   type EnergyQualityPolicy,
   type EnergyQualitySummary,

@@ -554,3 +554,26 @@ test('energy_query_series points carry Site-local times', async () => {
   const result = await execute(byName(harness.tools, 'energy_query_series'), { from: '2026-10-16T01:00:00.000Z', to: '2026-10-16T02:00:00.000Z' });
   assert.deepEqual(result.points, [{ siteTime: '2026-10-15 18:00', energyKWh: 12 }]);
 });
+
+test('energy_query_series hands the model the owner\'s estimated cost and the energy it could not price', async () => {
+  const from = '2026-10-16T01:00:00.000Z';
+  const to = '2026-10-16T03:00:00.000Z';
+  const harness = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'priced-r1', 'GOOD', 'telemetry-query-service:energy-series/v1', {
+      ...energyPayload({ from, to }),
+      points: [
+        { periodStart: from, periodEnd: '2026-10-16T02:00:00.000Z', energyKWh: 100, cost: { amountCNY: 103, unpricedKWh: 0, periods: [{ periodCode: 'PEAK', energyKWh: 100, amountCNY: 103 }] } },
+        { periodStart: '2026-10-16T02:00:00.000Z', periodEnd: to, energyKWh: 50, cost: { amountCNY: 18.6, unpricedKWh: 20, periods: [{ periodCode: 'FLAT', energyKWh: 30, amountCNY: 18.6 }] } },
+      ],
+    }),
+  });
+
+  const result = await execute(byName(harness.tools, 'energy_query_series'), { from, to });
+
+  assert.deepEqual(result.points, [
+    { siteTime: '2026-10-15 18:00', energyKWh: 100, estimatedCostCNY: 103, unpricedKWh: 0 },
+    { siteTime: '2026-10-15 19:00', energyKWh: 50, estimatedCostCNY: 18.6, unpricedKWh: 20 },
+  ]);
+  assert.equal(result.estimatedCostCNY, 121.6);
+  assert.equal(result.unpricedKWh, 20);
+});

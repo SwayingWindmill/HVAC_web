@@ -7,37 +7,30 @@ import (
 	"sort"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 )
 
 // SchemaVersion is the shape of a stored snapshot's payload.
 const SchemaVersion = 1
 
-// Hour is one Site-local hour of the Site's valid energy, starting at Start. HasElectricity is
-// false for an hour with cooling readings only.
+// Hour is one Site-local hour of the Site's valid energy, starting at Start, with its electricity
+// as the query service priced it (#575). HasElectricity is false for an hour with cooling readings
+// only, which has no Cost.
 type Hour struct {
 	Start          time.Time
 	ElectricityKWh float64
 	CoolingKWh     float64
 	HasElectricity bool
+	Cost           *analyticsmodel.EnergyCost
 }
 
-// Why a snapshot has or lacks an energy cost.
+// Why a snapshot has or lacks an energy cost: every kWh priced, none of it priced (no Tariff in
+// effect), or some of it outside every Tariff period.
 const (
 	CostPriced        = "PRICED"
 	CostNoTariff      = "NO_TARIFF"
 	CostUnpricedHours = "UNPRICED_HOURS"
 )
-
-// Tariff is a Site's import Tariff Version over the time it is in effect. EffectiveTo is nil while
-// it has no successor.
-type Tariff struct {
-	VersionID     string
-	EffectiveFrom time.Time
-	EffectiveTo   *time.Time
-	Location      *time.Location
-	Periods       []tariffmodel.Period
-}
 
 // SavingsDay is one verified day of a measure in the month, with the plant's electricity over
 // the hours it verified.
@@ -97,8 +90,8 @@ type Snapshot struct {
 	CoolingKWh     float64 `json:"coolingKWh"`
 	// COP is cooling over electricity; nil without electricity.
 	COP *float64 `json:"cop"`
-	// EnergyCostCNY is each hour's electricity at its time-of-use energy rate; nil when the Site has no
-	// import Tariff or an hour of the month is not priced. Demand charges are not in it.
+	// EnergyCostCNY is the month's electricity as the query service priced it at the time-of-use
+	// energy rates; nil unless every kWh was priced. Demand charges are not in it.
 	EnergyCostCNY    *float64      `json:"energyCostCNY"`
 	EnergyCostStatus string        `json:"energyCostStatus"`
 	TariffPeriods    []PeriodTotal `json:"tariffPeriods"`
@@ -118,8 +111,9 @@ func MonthBounds(month string, location *time.Location) (time.Time, time.Time, i
 	return parsed, end, end.AddDate(0, 0, -1).Day(), nil
 }
 
-// Build totals a month's hours by day and by Tariff period, with its verified savings and findings.
-func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff, savings []SavingsDay, findings []FindingCount) (Snapshot, error) {
+// Build totals a month's hours and their costs by day and by Tariff period, with its verified
+// savings and findings.
+func Build(month string, location *time.Location, hours []Hour, savings []SavingsDay, findings []FindingCount) (Snapshot, error) {
 	from, to, daysInMonth, err := MonthBounds(month, location)
 	if err != nil {
 		return Snapshot{}, err
@@ -128,16 +122,10 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		SchemaVersion: SchemaVersion, Month: month, Timezone: location.String(), DaysInMonth: daysInMonth,
 		TariffPeriods: []PeriodTotal{}, Days: []Day{}, Findings: Findings{ByType: []FindingCount{}},
 	}
-	priced := len(tariffs) > 0
-	snapshot.EnergyCostStatus = CostNoTariff
-	if priced {
-		snapshot.EnergyCostStatus = CostPriced
-	}
 	byDay := map[string]*Day{}
 	dayCost := map[string]float64{}
 	periods := map[string]*PeriodTotal{}
-	periodRates := map[string]float64{}
-	var cost float64
+	var cost, pricedKWh, unpricedKWh float64
 	for _, hour := range hours {
 		if hour.Start.Before(from) || !hour.Start.Before(to) {
 			return Snapshot{}, fmt.Errorf("hour %s is outside %s", hour.Start.Format(time.RFC3339), month)
@@ -156,29 +144,35 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 			entry.ElectricityKWh += hour.ElectricityKWh
 			entry.CoolingKWh += hour.CoolingKWh
 		}
-		if !priced {
-			continue
-		}
 		if !hour.HasElectricity {
 			continue
 		}
-		period, ok := coveringPeriod(tariffs, hour.Start)
-		if !ok {
-			priced = false
-			snapshot.EnergyCostStatus = CostUnpricedHours
+		if hour.Cost == nil {
+			unpricedKWh += hour.ElectricityKWh
 			continue
 		}
-		hourCost := hour.ElectricityKWh * period.EnergyRatePerKWh
-		cost += hourCost
-		dayCost[date] += hourCost
-		total := periods[period.Code]
-		if total == nil {
-			total = &PeriodTotal{Code: period.Code}
-			periods[period.Code] = total
-			periodRates[period.Code] = period.EnergyRatePerKWh
+		cost += hour.Cost.AmountCNY
+		dayCost[date] += hour.Cost.AmountCNY
+		unpricedKWh += hour.Cost.UnpricedKWh
+		for _, period := range hour.Cost.Periods {
+			total := periods[period.PeriodCode]
+			if total == nil {
+				total = &PeriodTotal{Code: period.PeriodCode}
+				periods[period.PeriodCode] = total
+			}
+			total.ElectricityKWh += period.EnergyKWh
+			total.CostCNY += period.AmountCNY
+			pricedKWh += period.EnergyKWh
 		}
-		total.ElectricityKWh += hour.ElectricityKWh
-		total.CostCNY += hourCost
+	}
+	priced := unpricedKWh == 0
+	switch {
+	case priced:
+		snapshot.EnergyCostStatus = CostPriced
+	case pricedKWh == 0:
+		snapshot.EnergyCostStatus = CostNoTariff
+	default:
+		snapshot.EnergyCostStatus = CostUnpricedHours
 	}
 
 	dates := make([]string, 0, len(byDay))
@@ -202,13 +196,9 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 		for _, total := range periods {
 			snapshot.TariffPeriods = append(snapshot.TariffPeriods, *total)
 		}
-		// Dearest period first: peak, flat, valley on a time-of-use Tariff.
-		sort.Slice(snapshot.TariffPeriods, func(left, right int) bool {
-			leftRate, rightRate := periodRates[snapshot.TariffPeriods[left].Code], periodRates[snapshot.TariffPeriods[right].Code]
-			if leftRate != rightRate {
-				return leftRate > rightRate
-			}
-			return snapshot.TariffPeriods[left].Code < snapshot.TariffPeriods[right].Code
+		// Dearest period first: super peak, peak, flat, valley.
+		sort.SliceStable(snapshot.TariffPeriods, func(left, right int) bool {
+			return periodRank(snapshot.TariffPeriods[left].Code) < periodRank(snapshot.TariffPeriods[right].Code)
 		})
 	}
 
@@ -234,14 +224,11 @@ func Build(month string, location *time.Location, hours []Hour, tariffs []Tariff
 	return snapshot, nil
 }
 
-func coveringPeriod(tariffs []Tariff, at time.Time) (tariffmodel.Period, bool) {
-	for _, tariff := range tariffs {
-		if at.Before(tariff.EffectiveFrom) || (tariff.EffectiveTo != nil && !at.Before(*tariff.EffectiveTo)) {
-			continue
-		}
-		return tariffmodel.Covering(tariff.Periods, tariff.Location, at)
+func periodRank(code string) int {
+	if rank, ok := map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}[code]; ok {
+		return rank
 	}
-	return tariffmodel.Period{}, false
+	return 4
 }
 
 func ratio(numerator, denominator float64) *float64 {

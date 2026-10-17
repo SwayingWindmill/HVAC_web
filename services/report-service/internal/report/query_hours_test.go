@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -46,6 +47,7 @@ func queryHoursFixture(t *testing.T, siteBound bool) (*QueryHours, *[]analyticsm
 			t.Errorf("query request = %s with grant %q for %s", request.URL.Path, request.Header.Get("X-Delegation-Grant"), body.EnergyType)
 		}
 		points := []analyticsmodel.EnergySeriesPoint{hour("2026-09-01T02:00:00Z", 40), hour("2026-09-01T03:00:00Z", 55.5)}
+		points[0].Cost = &fortyKWhCost
 		if body.EnergyType == analyticsmodel.EnergyTypeCooling {
 			points = []analyticsmodel.EnergySeriesPoint{hour("2026-09-01T02:00:00Z", 180), hour("2026-09-01T04:00:00Z", 12)}
 		}
@@ -54,6 +56,9 @@ func queryHoursFixture(t *testing.T, siteBound bool) (*QueryHours, *[]analyticsm
 	t.Cleanup(query.Close)
 	return NewQueryHours(QueryHoursConfig{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()}), &asked
 }
+
+// The query service's price for the first hour's electricity, carried into the report as it is.
+var fortyKWhCost = analyticsmodel.EnergyCost{AmountCNY: 41.2, UnpricedKWh: 0, Periods: []analyticsmodel.PeriodCost{{PeriodCode: "PEAK", EnergyKWh: 40, AmountCNY: 41.2}}}
 
 func TestQueryHoursReadsElectricityAndCoolingAsTheReportsOwnWorkload(t *testing.T) {
 	reader, asked := queryHoursFixture(t, true)
@@ -84,6 +89,9 @@ func TestQueryHoursReadsElectricityAndCoolingAsTheReportsOwnWorkload(t *testing.
 	}
 	if len(hours) != len(want) {
 		t.Fatalf("hours = %#v", hours)
+	}
+	if hours[0].Cost == nil || !reflect.DeepEqual(*hours[0].Cost, fortyKWhCost) || hours[2].Cost != nil {
+		t.Fatalf("hour costs = %+v, %+v", hours[0].Cost, hours[2].Cost)
 	}
 	for index := range want {
 		if !hours[index].Start.Equal(want[index].Start) || hours[index].ElectricityKWh != want[index].ElectricityKWh ||

@@ -48,7 +48,7 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
       period={lastMonth === 0 ? '本年尚未开始' : `统计期间 1 月至 ${lastMonth} 月${running ? '（本月进行中）' : ''}`}
       archived={liveMonths === 0 && archived.length > 0}
       status={`${archived.length} 个月已存档 · ${liveMonths} 个月按当前记录现算`}
-      footnote="说明：已存档的月份取自月结后保存的快照，其余月份按当前记录现算；电度电费按分时电价逐时计算，不含需量电费，正式电费以结算为准。节能与诊断只合计已存档月份。"
+      footnote="说明：已存档的月份取自月结后保存的快照，其余月份按当前记录现算；电度电费按每个计量区间所在时段的分时电价计算，不含需量电费，正式电费以结算为准。节能与诊断只合计已存档月份。"
     >
       <Section index={1} title="全年概要" description={`${monthsWithData} 个月有计量数据`}>
         <FigureGrid>
