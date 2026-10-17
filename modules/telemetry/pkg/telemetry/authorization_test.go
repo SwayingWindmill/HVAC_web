@@ -37,7 +37,8 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if input.DelegationGrant != grant || input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.TenantID != claims.TenantID || input.Action != claims.Action {
+		// IAM validates the grant against the presenter this runtime verified over mTLS.
+		if input.DelegationGrant != grant || input.Presenter != gatewaySPIFFE || input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.TenantID != claims.TenantID || input.Action != claims.Action {
 			t.Errorf("consume request drifted: %#v", input)
 		}
 		writer.Header().Set("Content-Type", "application/json")
