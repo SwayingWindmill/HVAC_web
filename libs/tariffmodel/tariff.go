@@ -1,7 +1,10 @@
 // Package tariffmodel prices energy by a Tariff Version's time-of-use periods.
 package tariffmodel
 
-import "time"
+import (
+	"time"
+	_ "time/tzdata" // Tariff clocks load IANA zones in distroless images too.
+)
 
 // Period is the part of a Tariff Version that prices energy by local time of day.
 type Period struct {
@@ -25,15 +28,21 @@ func Rates(periods []Period, location *time.Location) func(time.Time) (float64, 
 // their weekday until Tariffs carry a calendar, as Settlement does.
 func Covering(periods []Period, location *time.Location, at time.Time) (Period, bool) {
 	local := at.In(location)
-	dayType := "WEEKDAY"
-	if weekday := local.Weekday(); weekday == time.Saturday || weekday == time.Sunday {
-		dayType = "WEEKEND"
-	}
+	kind := dayType(local)
 	minute := local.Hour()*60 + local.Minute()
 	for _, period := range periods {
-		if period.DayType == dayType && period.StartMinute <= minute && minute < period.EndMinute {
+		if period.DayType == kind && period.StartMinute <= minute && minute < period.EndMinute {
 			return period, true
 		}
 	}
 	return Period{}, false
+}
+
+// dayType is the day type a local day prices as. Holidays price as their weekday until Tariffs
+// carry a calendar, as Settlement does.
+func dayType(local time.Time) string {
+	if weekday := local.Weekday(); weekday == time.Saturday || weekday == time.Sunday {
+		return "WEEKEND"
+	}
+	return "WEEKDAY"
 }

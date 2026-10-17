@@ -155,8 +155,15 @@ export const energySeriesQuerySchema = z.object({
   qualityPolicy: z.enum(['VALID_ONLY', 'VALID_AND_SUSPECT']),
   breakdown: z.enum(['device']).optional(),
 }).strict();
+const energyCostSchema = z.object({
+  amountCNY: z.number().min(0), unpricedKWh: z.number().min(0),
+  periods: z.array(z.object({
+    periodCode: z.enum(['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY']), energyKWh: z.number().min(0), amountCNY: z.number().min(0),
+  }).strict()),
+}).strict();
 const energySeriesPointSchema = z.object({
   periodStart: z.string().datetime({ offset: true }), periodEnd: z.string().datetime({ offset: true }), energyKWh: z.number().min(0),
+  cost: energyCostSchema.optional(),
 }).strict();
 export const energySeriesResponseSchema = z.object({
   schemaVersion: z.literal(1),

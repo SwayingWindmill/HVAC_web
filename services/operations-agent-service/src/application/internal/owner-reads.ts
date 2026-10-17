@@ -120,6 +120,15 @@ export interface EnergySeriesPoint {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly energyKWh: number;
+  /** Electricity's estimated energy charge at the Site's import Tariff; cooling has none. */
+  readonly cost?: EnergyCost;
+}
+
+/** Electricity priced at the import Tariff, without demand charges; unpriced energy is unknown, not free. */
+export interface EnergyCost {
+  readonly amountCNY: number;
+  readonly unpricedKWh: number;
+  readonly periods: readonly { readonly periodCode: string; readonly energyKWh: number; readonly amountCNY: number }[];
 }
 
 export interface EnergyQualitySummary {

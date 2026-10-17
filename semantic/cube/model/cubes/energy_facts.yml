@@ -156,3 +156,118 @@ cubes:
         description: 分表所计量的设备编号，与资产模型里的设备一致。
         sql: load_device_id
         type: string
+
+  # The Site's electricity priced at its import Tariff (#575). Each fact takes the rate of the
+  # price window its period ends in, the instant that also decides its bucket; a fact outside
+  # every window has no rate and counts as unpriced. Both sides are cut to the queried Site first,
+  # and the facts to the queried time; the windows are not, since a fact needs the one before it.
+  - name: site_energy_cost_facts
+    public: false
+    title: 站点电费估算
+    description: 站点总表的用电区间，按区间结束时刻所在的电价时段计价。
+    sql: >
+      SELECT fact.tenant_id AS tenant_id, fact.site_id AS site_id, fact.period_end AS period_end,
+             fact.quality AS quality, fact.energy_kwh AS energy_kwh,
+             if(fact.period_end < price.window_end, price.period_code, '') AS tariff_period,
+             if(fact.period_end < price.window_end, price.energy_rate_per_kwh, NULL) AS energy_rate_per_kwh
+      FROM (
+        SELECT tenant_id, site_id, period_end, quality, energy_kwh
+        FROM analytics.energy_interval_facts_visible
+        WHERE accounting_scope = 'SITE' AND energy_type = 'electricity'
+          AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('period_end')}
+      ) AS fact
+      ASOF LEFT JOIN (
+        SELECT tenant_id, site_id, window_start, window_end, period_code, energy_rate_per_kwh
+        FROM analytics.tariff_price_windows_visible
+        WHERE {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
+      ) AS price
+        ON fact.tenant_id = price.tenant_id AND fact.site_id = price.site_id AND fact.period_end >= price.window_start
+
+    measures:
+      - name: cost_valid_cny
+        title: 电度电费（有效数据）
+        description: 有效用电量按电价时段计价的估算电度电费，单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。
+        sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: cost_valid_and_suspect_cny
+        title: 电度电费（含可疑数据）
+        description: 有效和可疑用电量的估算电度电费，单位元；可疑数据较多时用来估算上限。
+        sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: priced_valid_kwh
+        title: 已计价电量（有效数据）
+        description: 有电价覆盖的有效用电量，单位 kWh；按电价时段拆分时就是各时段的用电量。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+
+      - name: priced_valid_and_suspect_kwh
+        title: 已计价电量（含可疑数据）
+        description: 有电价覆盖的有效和可疑用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+
+      - name: unpriced_valid_kwh
+        title: 未计价电量（有效数据）
+        description: 没有任何电价时段覆盖的有效用电量，单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NULL"
+
+      - name: unpriced_valid_and_suspect_kwh
+        title: 未计价电量（含可疑数据）
+        description: 没有电价覆盖的有效和可疑用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NULL"
+
+    dimensions:
+      - name: tenant_id
+        title: 租户
+        description: 数据所属租户的编号，用于访问控制。
+        sql: tenant_id
+        type: string
+
+      - name: site_id
+        title: 站点
+        description: 站点编号；每个查询只能看到被授权的站点。
+        sql: site_id
+        type: string
+
+      - name: tariff_period
+        title: 电价时段
+        description: SUPER_PEAK 尖峰、PEAK 峰、FLAT 平、VALLEY 谷；为空表示这部分电量没有电价。
+        sql: tariff_period
+        type: string
+
+      - name: period_end
+        title: 区间结束
+        description: 计量区间的结束时间；按小时、日、月汇总时，整个区间算在它结束的那个时段里，电价也按这个时刻取。
+        sql: period_end
+        type: time
+
+    # The same row policy as energy_facts: only the caller's Tenant and Site.
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: tenant_id
+              operator: equals
+              values: ["{ securityContext.tenantId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]

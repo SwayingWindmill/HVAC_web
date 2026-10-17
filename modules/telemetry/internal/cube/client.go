@@ -120,8 +120,20 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
 	}
 	response, err := mapEnergySeries(series, metadata, productQuery, location, client.datasetRevision)
-	if err != nil || productQuery.Breakdown != analyticsmodel.EnergyBreakdownDevice {
-		return response, err
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, err
+	}
+	if productQuery.EnergyType == analyticsmodel.EnergyTypeElectricity {
+		costs, err := client.load(queryContext, token, buildCostQuery(productQuery, location))
+		if err != nil {
+			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy cost: %w", err)
+		}
+		if err := attachCosts(response.Points, costs, productQuery, location); err != nil {
+			return analyticsmodel.EnergySeriesResponse{}, err
+		}
+	}
+	if productQuery.Breakdown != analyticsmodel.EnergyBreakdownDevice {
+		return response, nil
 	}
 	devices, err := client.load(queryContext, token, buildDeviceBreakdownQuery(productQuery, location))
 	if err != nil {
@@ -185,6 +197,7 @@ const cubeWallTime = "2006-01-02T15:04:05.000"
 const (
 	siteView      = "site_energy"
 	equipmentView = "equipment_energy"
+	costView      = "site_energy_cost"
 )
 
 func member(view, name string) string { return view + "." + name }
@@ -207,6 +220,95 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *t
 		Timezone:       productQuery.Timezone,
 		Limit:          10000,
 	}
+}
+
+// buildCostQuery prices the window's electricity per bucket and Tariff period; the rows of a
+// bucket with energy no period covers carry an empty period.
+func buildCostQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
+	suffix := qualitySuffix(productQuery.QualityPolicy)
+	return cubeQuery{
+		Measures: []string{
+			member(costView, "cost_"+suffix+"_cny"),
+			member(costView, "priced_"+suffix+"_kwh"),
+			member(costView, "unpriced_"+suffix+"_kwh"),
+		},
+		Filters:        []cubeFilter{{Member: member(costView, "site_id"), Operator: "equals", Values: []string{productQuery.SiteID}}},
+		Dimensions:     []string{member(costView, "tariff_period")},
+		TimeDimensions: periodDimension(costView, productQuery, location),
+		Timezone:       productQuery.Timezone,
+		Limit:          50000,
+	}
+}
+
+func qualitySuffix(policy analyticsmodel.QualityPolicy) string {
+	if policy == analyticsmodel.QualityPolicyValidAndSuspect {
+		return "valid_and_suspect"
+	}
+	return "valid"
+}
+
+var tariffPeriodOrder = map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}
+
+// attachCosts gives every electricity point its cost, peak periods first. A point no cost row
+// reaches had no energy under the quality policy to price.
+func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) error {
+	suffix := qualitySuffix(productQuery.QualityPolicy)
+	period := periodMember(costView, productQuery.Granularity)
+	byStart := make(map[int64]*analyticsmodel.EnergyCost, len(points))
+	for index := range points {
+		points[index].Cost = &analyticsmodel.EnergyCost{Periods: []analyticsmodel.PeriodCost{}}
+		byStart[points[index].PeriodStart.UnixNano()] = points[index].Cost
+	}
+	for _, row := range decoded.Data {
+		periodValue, err := scalarString(row[period])
+		if err != nil {
+			return fmt.Errorf("decode Cube cost period: %w", err)
+		}
+		periodStart, err := parseCubeTime(periodValue, location)
+		if err != nil {
+			return fmt.Errorf("decode Cube cost period: %w", err)
+		}
+		cost, ok := byStart[periodStart.UTC().UnixNano()]
+		if !ok {
+			continue
+		}
+		code, err := scalarString(row[member(costView, "tariff_period")])
+		if err != nil {
+			return fmt.Errorf("decode Cube Tariff period: %w", err)
+		}
+		amount, err := optionalFloat(row[member(costView, "cost_"+suffix+"_cny")])
+		if err != nil {
+			return fmt.Errorf("decode Cube energy cost: %w", err)
+		}
+		priced, err := optionalFloat(row[member(costView, "priced_"+suffix+"_kwh")])
+		if err != nil {
+			return fmt.Errorf("decode Cube priced energy: %w", err)
+		}
+		unpriced, err := optionalFloat(row[member(costView, "unpriced_"+suffix+"_kwh")])
+		if err != nil {
+			return fmt.Errorf("decode Cube unpriced energy: %w", err)
+		}
+		cost.AmountCNY += amount
+		cost.UnpricedKWh += unpriced
+		if code != "" && priced > 0 {
+			cost.Periods = append(cost.Periods, analyticsmodel.PeriodCost{PeriodCode: code, EnergyKWh: priced, AmountCNY: amount})
+		}
+	}
+	for _, cost := range byStart {
+		sort.Slice(cost.Periods, func(left, right int) bool {
+			return tariffPeriodOrder[cost.Periods[left].PeriodCode] < tariffPeriodOrder[cost.Periods[right].PeriodCode]
+		})
+	}
+	return nil
+}
+
+// optionalFloat reads a Cube measure that is null when nothing in the row counts toward it.
+func optionalFloat(raw json.RawMessage) (float64, error) {
+	value, present, err := optionalScalarString(raw)
+	if err != nil || !present {
+		return 0, err
+	}
+	return strconv.ParseFloat(value, 64)
 }
 
 func buildDeviceBreakdownQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {

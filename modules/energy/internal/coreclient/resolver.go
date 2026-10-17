@@ -40,7 +40,13 @@ type Resolver struct {
 	httpClient  *http.Client
 	now         func() time.Time
 
-	grants map[string]workloadGrant
+	grants map[grantKey]workloadGrant
+}
+
+// grantKey is one IAM grant: a Tenant and the Registry action it authorizes.
+type grantKey struct {
+	tenantID string
+	action   registryauth.Action
 }
 
 type workloadGrant struct {
@@ -88,7 +94,7 @@ func NewResolver(config Config) (*Resolver, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Resolver{endpoint: endpoint, iamEndpoint: iamEndpoint, httpClient: config.HTTPClient, now: config.Now, grants: map[string]workloadGrant{}}, nil
+	return &Resolver{endpoint: endpoint, iamEndpoint: iamEndpoint, httpClient: config.HTTPClient, now: config.Now, grants: map[grantKey]workloadGrant{}}, nil
 }
 
 func parseOrigin(raw string) (*url.URL, error) {
@@ -100,7 +106,7 @@ func parseOrigin(raw string) (*url.URL, error) {
 }
 
 func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResolveInput) (energy.BindingResolution, error) {
-	grant, err := resolver.grantFor(ctx, input.TenantID)
+	grant, err := resolver.grantFor(ctx, input.TenantID, registryauth.ActionMeterBindingResolve)
 	if err != nil {
 		return energy.BindingResolution{}, err
 	}
@@ -137,11 +143,12 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 	}, nil
 }
 
-func (resolver *Resolver) grantFor(ctx context.Context, tenantID string) (string, error) {
-	if held, ok := resolver.grants[tenantID]; ok && resolver.now().Add(grantRefreshMargin).Before(held.expiresAt) {
+func (resolver *Resolver) grantFor(ctx context.Context, tenantID string, action registryauth.Action) (string, error) {
+	key := grantKey{tenantID: tenantID, action: action}
+	if held, ok := resolver.grants[key]; ok && resolver.now().Add(grantRefreshMargin).Before(held.expiresAt) {
 		return held.token, nil
 	}
-	body, err := json.Marshal(registryauth.DecisionRequest{TenantID: tenantID, Action: registryauth.ActionMeterBindingResolve})
+	body, err := json.Marshal(registryauth.DecisionRequest{TenantID: tenantID, Action: action})
 	if err != nil {
 		return "", fmt.Errorf("encode Registry workload decision request: %w", err)
 	}
@@ -161,13 +168,13 @@ func (resolver *Resolver) grantFor(ctx context.Context, tenantID string) (string
 		return "", fmt.Errorf("decode Registry workload decision: %w", err)
 	}
 	if !response.Decision.Allowed {
-		return "", fmt.Errorf("IAM denied Registry meter binding resolution for tenant %s: %s", tenantID, response.Decision.ReasonCode)
+		return "", fmt.Errorf("IAM denied Registry %s for tenant %s: %s", action, tenantID, response.Decision.ReasonCode)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, response.DelegationGrantExpiresAt)
 	if err != nil {
 		return "", fmt.Errorf("decode Registry workload grant expiry: %w", err)
 	}
-	resolver.grants[tenantID] = workloadGrant{token: response.DelegationGrant, expiresAt: expiresAt}
+	resolver.grants[key] = workloadGrant{token: response.DelegationGrant, expiresAt: expiresAt}
 	return response.DelegationGrant, nil
 }
 

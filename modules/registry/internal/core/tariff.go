@@ -65,23 +65,31 @@ LIMIT 1
 			return fmt.Errorf("query Site Tariff in effect: %w", err)
 		}
 		tariff.EffectiveFrom = formatInstant(effectiveFrom)
-		return queryAssetRows(ctx, transaction, `
+		tariff.Periods, err = queryTariffPeriods(ctx, transaction, versionID)
+		return err
+	})
+	if err != nil {
+		return SiteTariff{}, err
+	}
+	return tariff, nil
+}
+
+// queryTariffPeriods is a Tariff Version's time-of-use periods in clock order per day type.
+func queryTariffPeriods(ctx context.Context, transaction pgx.Tx, versionID string) ([]TariffPeriod, error) {
+	periods := []TariffPeriod{}
+	err := queryAssetRows(ctx, transaction, `
 SELECT period_code, day_type, local_start_minute, local_end_minute,
        (pricing_rule->>'energyRatePerKWh')::float8, COALESCE((pricing_rule->>'demandRatePerKW')::float8, 0)
 FROM core_registry.tariff_periods
 WHERE tariff_version_id = $1::uuid
 ORDER BY day_type, local_start_minute
 `, versionID, func(row rowScanner) error {
-			var period TariffPeriod
-			err := row.Scan(&period.PeriodCode, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh, &period.DemandRatePerKW)
-			if err == nil {
-				tariff.Periods = append(tariff.Periods, period)
-			}
-			return err
-		})
+		var period TariffPeriod
+		err := row.Scan(&period.PeriodCode, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh, &period.DemandRatePerKW)
+		if err == nil {
+			periods = append(periods, period)
+		}
+		return err
 	})
-	if err != nil {
-		return SiteTariff{}, err
-	}
-	return tariff, nil
+	return periods, err
 }

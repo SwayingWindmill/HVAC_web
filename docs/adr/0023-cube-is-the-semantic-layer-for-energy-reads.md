@@ -32,6 +32,6 @@ Every read that aggregates energy for a person or for the Operations Agent goes 
 
 ## Consequences
 
-- Cost needs the Tariff, which lives in PostgreSQL, so it cannot be a Cube measure over ClickHouse facts alone. Where cost is defined (browser, the `energy_cost` Metric or Settlement) is decided in its own ticket rather than here.
+- Estimated energy cost is a Cube measure too (#575, `docs/specs/estimated-energy-cost.md`). The Tariff lives in PostgreSQL and ClickHouse cannot read a per-row timezone, so the Energy Processing projector lays each Site's import Tariff out as UTC price windows in ClickHouse, and the `site_energy_cost` view prices every electricity fact at the window its period ends in. Settlement stays the authority on the bill; demand charges are not in the estimate.
 - Cube still runs with the in-memory cache and without pre-aggregations or Cube Store. At one Site ClickHouse answers directly within the request budget; add Cube Store and pre-aggregations when the query service's p95 for Energy Series exceeds its budget or more Sites make the facts large.
 - A new energy measure is added to the Cube model and a view, then read through the query service; a service that writes its own SQL over the energy facts is a defect.

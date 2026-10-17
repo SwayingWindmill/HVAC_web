@@ -68,7 +68,7 @@ func main() {
 		logger.Error("analytics_internal_client_invalid", "error_code", "ANALYTICS_INTERNAL_CLIENT_INVALID")
 		os.Exit(1)
 	}
-	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.BindingResolverConfig{
+	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.RegistryClientConfig{
 		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
 	})
 	if err != nil {

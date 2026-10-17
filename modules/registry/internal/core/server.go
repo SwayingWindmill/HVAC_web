@@ -226,6 +226,20 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, result)
 		return http.StatusOK
 	}
+	if route.resource == "import-tariffs" {
+		query := request.URL.Query()
+		before, err := time.Parse(time.RFC3339Nano, query.Get("before"))
+		if len(query) != 1 || len(query["before"]) != 1 || err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The import Tariff query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		timeline, err := server.store.ListImportTariffs(request.Context(), claims, route.parentID, before)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, timeline)
+		return http.StatusOK
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -544,6 +558,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/asset-model", resource: "asset-model", parentID: segments[1], action: registryauth.ActionAssetModelRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "tariff":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/tariff", resource: "tariff", parentID: segments[1], action: registryauth.ActionTariffRead}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "import-tariffs":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/import-tariffs", resource: "import-tariffs", parentID: segments[1], action: registryauth.ActionTariffRead}, true
 	case method == http.MethodGet && len(segments) == 2 && segments[0] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "devices" && segments[2] == "points":

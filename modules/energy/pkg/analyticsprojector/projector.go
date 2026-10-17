@@ -9,7 +9,7 @@ import (
 type ReaderConfig = clickhouseclient.ReaderConfig
 type WriterConfig = clickhouseclient.WriterConfig
 type ProjectorConfig = energy.ProjectorConfig
-type BindingResolverConfig = coreclient.Config
+type RegistryClientConfig = coreclient.Config
 type BindingResolver = energy.BindingResolver
 type Reader = clickhouseclient.Reader
 type Writer = clickhouseclient.Writer
@@ -27,6 +27,20 @@ func NewProjector(config ProjectorConfig) (*Projector, error) {
 	return energy.NewProjector(config)
 }
 
-func NewBindingResolver(config BindingResolverConfig) (BindingResolver, error) {
+func NewBindingResolver(config RegistryClientConfig) (BindingResolver, error) {
+	return coreclient.NewResolver(config)
+}
+
+type PriceWindowProjectorConfig = energy.PriceWindowProjectorConfig
+type PriceWindowProjector = energy.PriceWindowProjector
+type TariffSource = energy.TariffSource
+
+func NewPriceWindowProjector(config PriceWindowProjectorConfig) (*PriceWindowProjector, error) {
+	return energy.NewPriceWindowProjector(config)
+}
+
+// NewTariffSource reads import Tariffs from Core Registry with its own grants, so it can run
+// beside the binding resolver.
+func NewTariffSource(config RegistryClientConfig) (TariffSource, error) {
 	return coreclient.NewResolver(config)
 }

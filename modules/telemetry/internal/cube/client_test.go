@@ -40,6 +40,9 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 		}
 		captured = append(captured, decoded)
 		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
 		if len(decoded.Query.Measures) == 2 && decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1722470400000"}]}`))
 			return
@@ -68,7 +71,7 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) != 2 {
+	if len(captured) != 3 {
 		t.Fatalf("Cube request count = %d", len(captured))
 	}
 	seriesQuery := captured[0].Query
@@ -133,6 +136,9 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
 		switch {
 		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1"}]}`))
@@ -186,6 +192,9 @@ func TestClientMarksCoveredRangePartialWhenSeriesRowsAreMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
 		if len(decoded.Query.TimeDimensions) == 0 {
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-02T00:00:00.000Z","site_energy.max_dataset_revision":"1722556800000"}]}`))
 			return
@@ -352,6 +361,9 @@ func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		if answeredCostQuery(writer, decoded) {
+			return
+		}
 		if len(decoded.Query.TimeDimensions) == 0 {
 			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-07-03T00:00:00.000Z","site_energy.max_dataset_revision":"1"}]}`))
 			return
@@ -375,4 +387,13 @@ func TestClientLeavesOutBucketsWithNoEnergyUnderThePolicy(t *testing.T) {
 	if len(response.Points) != 1 || response.Points[0].EnergyKWh != 120.5 || response.Metadata.QualitySummary.Invalid != 4 || !response.Metadata.Partial {
 		t.Fatalf("response = %#v", response)
 	}
+}
+
+// answeredCostQuery answers the electricity cost query with no rows, for tests about energy.
+func answeredCostQuery(writer http.ResponseWriter, decoded loadRequest) bool {
+	if !strings.HasPrefix(decoded.Query.Measures[0], costView+".") {
+		return false
+	}
+	_, _ = writer.Write([]byte(`{"data":[]}`))
+	return true
 }

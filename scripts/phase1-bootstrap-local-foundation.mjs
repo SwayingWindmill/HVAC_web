@@ -13,12 +13,13 @@ const policyIDs = {
 };
 // Unattended workloads read owners as their own Workload Principal (ADR 0017), each with one
 // Tenant-wide role holding only what it reads. Phase 1 runs the energy projector inside the
-// Telemetry Runtime, so that identity resolves meter bindings; report-service reads the Sites'
+// Telemetry Runtime, so that identity resolves meter bindings and reads the import Tariffs it lays
+// out as price windows (#575); report-service reads the Sites'
 // energy through the Telemetry Query Service (ADR 0023).
 const workloads = [
   {
     subject: 'spiffe://hvac.local/telemetry-runtime-service', displayName: '能耗投影（遥测运行时）',
-    roleKey: 'energy-projection', roleName: '能耗投影', capabilities: ['meter-binding.resolve'], ids: 0x900000000101,
+    roleKey: 'energy-projection', roleName: '能耗投影', capabilities: ['meter-binding.resolve', 'tariff.read'], ids: 0x900000000101,
   },
   {
     subject: 'spiffe://hvac.local/report-service', displayName: '能源报告',
