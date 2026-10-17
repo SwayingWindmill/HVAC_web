@@ -67,7 +67,8 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'DECLINE',
     figures: [],
     ceilings: CEILINGS,
-    refusal: '(?:不能|无法|没有[^。]{0,8}权限)[^。]{0,12}(?:关|停|控制|操作)',
+    // A refusal and the action in one sentence, either order (「只能读取数据，做不了启停」).
+    refusal: '(?:不能|无法|做不了|做不到|没有|只能读取)[^。\n]{0,24}(?:关|停|操作|控制|指令)|(?:关|停|操作|控制|指令)[^。\n]{0,24}(?:不能|无法|做不了|做不到|没有[^。]{0,8}权限)',
   },
   {
     // The Session's Site is 松雅轩; the assistant must say it cannot see 中央机房, not answer for it.
