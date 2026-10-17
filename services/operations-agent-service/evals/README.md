@@ -4,10 +4,15 @@ Real questions an operator asks on 松雅轩, asked of the **deployed** assistan
 Session API and graded by code (#587; guidance in
 `docs/architecture/agent-building-practices-source-review-2026-10-17.md`).
 
-- `questions.ts` — the questions. Each has the operator's wording, the expected outcome
+- `questions.ts` — the questions (v1: 23). Each has the operator's wording, the expected outcome
   (supported finding, unable to conclude, or decline), the figures a correct answer states (read
-  from the Energy Series for the same period at grading time) and ceilings for reads and duration.
-  `regression` questions should always pass; `capability` questions are goals not met yet.
+  from the Energy Series for the same period at grading time: each bucket, a total, the
+  lowest/highest few with their hours, each machine) and ceilings for reads and duration.
+  `regression` questions should always pass; `capability` questions (alarms, diagnosis, work
+  orders) are goals the assistant has no Tools for yet. Groups: energy figures, explaining a
+  difference, machines, device readings (graded on outcome and wording; see below), an
+  incomplete day (10/14 lost two hours of readings), and four requests to decline (operate
+  equipment, change a setpoint, another Site, a future day).
 - `grade.ts` — the graders, one function over a Session snapshot: Run completed with the expected
   outcome, required figures stated (rounded to the decimals shown), Chinese only (units allowed),
   plain words (no 区间/口径/… from the plain-copy rule), no repetition between the answer and the
@@ -16,6 +21,15 @@ Session API and graded by code (#587; guidance in
   (`test/agent-eval-grading.test.ts`).
 - `run.ts` — the runner. It runs inside the signed-in Web app, so the operator's session authorizes
   it and no cookie, password or model key passes through whoever runs it.
+
+## What the graders do not check yet
+
+- The direction of a comparison («多了还是少了»): only how much is graded.
+- Which machine: machine figures are matched by value; names need the asset model as a source.
+- Device readings' values: readings questions are graded on outcome and wording until the device
+  history is a reference source.
+- A capability question's content: an invented «目前没有告警» passes `completed`; figures come with
+  the Tools (#594, #595).
 
 ## Adding a question
 

@@ -16,9 +16,11 @@ export type SeriesByKey = Readonly<Record<string, {
   readonly timezone: string;
   readonly electricity: readonly SeriesPoint[];
   readonly cooling: readonly SeriesPoint[];
+  /** Each sub-metered machine's electricity, read with the device breakdown. */
+  readonly devices?: readonly { readonly deviceId: string; readonly points: readonly SeriesPoint[] }[];
 }>>;
 
-export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines';
+export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says';
 
 export interface Check {
   readonly name: CheckName;
@@ -34,9 +36,15 @@ export interface TrialGrade {
   readonly toolCalls: number;
 }
 
-export const seriesKey = (figure: Pick<FigureRequirement, 'granularity' | 'from' | 'to'>): string => (
-  `${figure.granularity}|${figure.from}|${figure.to}`
+export const seriesKey = (figure: Pick<FigureRequirement, 'granularity' | 'from' | 'to' | 'measure'>): string => (
+  `${figure.granularity}|${figure.from}|${figure.to}${figure.measure === 'machine' ? '|device' : ''}`
 );
+
+/** The ranges a figure reads: its own, and for a comparison the one it is compared with. */
+export const seriesFigures = (figure: FigureRequirement): FigureRequirement[] => {
+  const { minus, ...own } = figure;
+  return minus === undefined ? [figure] : [own, { ...own, ...minus }];
+};
 
 // Units operators read on the pages; any other Latin word is English or an internal enum.
 const LATIN_ALLOWED = new Set(['kWh', 'kW', 'COP']);
@@ -63,26 +71,46 @@ interface RequiredFigure {
   readonly hour?: string;
 }
 
+const sumOf = (values: readonly { readonly value: number }[]) => values.reduce((total, { value }) => total + value, 0);
+
 /** The values a figure requirement asks the answer to state, from the owner's series. */
 export const requiredFigures = (figure: FigureRequirement, series: SeriesByKey): RequiredFigure[] => {
+  if (figure.minus !== undefined) {
+    // A comparison is answered by how much more or less; its direction is not graded.
+    const [own, other] = seriesFigures(figure).map((each) => sumOf(requiredFigures({ ...each, pick: 'all' }, series)));
+    return [{ value: Math.abs((own as number) - (other as number)) }];
+  }
+  if (figure.pick === 'total' && figure.measure === 'cop') throw new Error('A COP over a range is not a sum of COPs');
   const found = series[seriesKey(figure)];
   if (!found) throw new Error(`No Energy Series for ${seriesKey(figure)}`);
   const cooling = new Map(found.cooling.map((point) => [point.periodStart, point.energyKWh]));
-  const values = found.electricity.flatMap((point): { value: number; periodStart: string }[] => {
-    const at = (value: number) => [{ value, periodStart: point.periodStart }];
-    if (figure.measure === 'electricity') return at(point.energyKWh);
-    if (figure.measure === 'cooling') return cooling.has(point.periodStart) ? at(cooling.get(point.periodStart) ?? 0) : [];
+  const bucket = (point: SeriesPoint): number[] => {
+    if (figure.measure === 'electricity') return [point.energyKWh];
+    if (figure.measure === 'cooling') return cooling.has(point.periodStart) ? [cooling.get(point.periodStart) ?? 0] : [];
     if (figure.measure === 'cop') {
       const delivered = cooling.get(point.periodStart) ?? 0;
-      return point.energyKWh > 0 && delivered > 0 ? at(delivered / point.energyKWh) : [];
+      return point.energyKWh > 0 && delivered > 0 ? [delivered / point.energyKWh] : [];
     }
+    const periods = point.cost?.periods ?? [];
+    if (figure.measure === 'cost') return [periods.reduce((total, period) => total + period.amountCNY, 0)];
     const code = figure.measure.slice('cost:'.length);
-    return (point.cost?.periods ?? []).filter((period) => period.periodCode === code).flatMap((period) => at(period.amountCNY));
-  });
+    return periods.filter((period) => period.periodCode === code).map((period) => period.amountCNY);
+  };
+  let values: { readonly value: number; readonly periodStart?: string }[];
+  if (figure.measure === 'machine') {
+    if (found.devices === undefined) throw new Error(`No machine breakdown for ${seriesKey(figure)}`);
+    values = found.devices.map((device) => ({ value: sumOf(device.points.map((point) => ({ value: point.energyKWh }))) }));
+  } else {
+    values = found.electricity.flatMap((point) => bucket(point).map((value) => ({ value, periodStart: point.periodStart })));
+  }
   if (figure.pick === 'all') return values.map(({ value }) => ({ value }));
+  if (figure.pick === 'total') return [{ value: sumOf(values) }];
+  const ranked = [...values].sort((left, right) => left.value - right.value);
+  const picked = 'lowest' in figure.pick ? ranked.slice(0, figure.pick.lowest) : ranked.slice(-figure.pick.highest);
   const hour = new Intl.DateTimeFormat('en-GB', { timeZone: found.timezone, hour: '2-digit', hourCycle: 'h23' });
-  return [...values].sort((left, right) => left.value - right.value).slice(0, figure.pick.lowest)
-    .map(({ value, periodStart }) => ({ value, hour: `${hour.format(new Date(periodStart))}:00` }));
+  return picked.map(({ value, periodStart }) => (figure.granularity === 'hour' && periodStart !== undefined
+    ? { value, hour: `${hour.format(new Date(periodStart))}:00` }
+    : { value }));
 };
 
 // A stated number matches a reference when it is the reference rounded to the decimals it shows,
@@ -92,7 +120,10 @@ const statedNumbers = (text: string): { readonly value: number; readonly decimal
     .map((match) => ({ value: Number(match[0]), decimals: match[1]?.length ?? 0 }))
 );
 const states = (numbers: ReturnType<typeof statedNumbers>, reference: number): boolean => {
-  const needed = Math.max(0, SIGNIFICANT_DIGITS - 1 - Math.floor(Math.log10(Math.abs(reference) || 1)));
+  // A whole reading (2 kWh) is exact as a whole number.
+  const needed = Number.isInteger(Number(reference.toFixed(6)))
+    ? 0
+    : Math.max(0, SIGNIFICANT_DIGITS - 1 - Math.floor(Math.log10(Math.abs(reference) || 1)));
   return numbers.some(({ value, decimals }) => decimals >= needed && Math.abs(value - reference) <= 0.5 * 10 ** -decimals + 1e-9);
 };
 const namesHour = (text: string, hour: string): boolean => {
@@ -178,9 +209,11 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
     // read is a good answer.
     checks.push(EXECUTION_CLAIM.test(shown)
       ? fail('declines', 'claims to have changed equipment')
-      : !new RegExp(question.refusal ?? '(?!)', 'u').test(shown)
+      : !new RegExp(question.mustSay ?? '(?!)', 'u').test(shown)
         ? fail('declines', 'does not say it will not do this')
         : pass('declines'));
+  } else if (question.mustSay !== undefined) {
+    checks.push(new RegExp(question.mustSay, 'u').test(shown) ? pass('says') : fail('says', 'does not name the data problem'));
   }
 
   return { passed: checks.every((each) => each.passed), checks, durationMs, tokens, toolCalls: reads.length };

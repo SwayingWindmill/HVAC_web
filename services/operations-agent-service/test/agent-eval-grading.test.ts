@@ -61,6 +61,34 @@ test('a figure counts only at the precision it was asked for, and the hours aske
   assert.equal(check(gradeTrial(question('least-efficient-hours'), named, series), 'figures').passed, true);
 });
 
+test('totals, the busiest hour, each machine and a month are graded as their questions ask', () => {
+  const shell = { ...fixture('daily-electricity-cooling-cop'), artifacts: [] } as AgentSessionSnapshot;
+  const figures = (id: string, answer: string) => check(gradeTrial(question(id), withAnswer(shell, () => answer), series), 'figures');
+  // A comparison is answered by the difference.
+  assert.equal(figures('week-over-week', '10月13日到16日比10月6日到9日多用了 2478 kWh。').passed, true);
+  assert.equal(figures('week-over-week', '10月13日到16日共用电 6264 kWh，比上周多。').passed, false);
+  // A 2026-10-17 trial summed three days of each range (4765 vs 2848) and so missed it.
+  assert.equal(figures('week-over-week', '比10月6日至9日多用了约 +1918 kWh（4765 kWh 对 2848 kWh）。').passed, false);
+  assert.equal(figures('explain-day-over-week', '10月15日比10月8日多用 762 kWh（+87%），供冷量多了 3173 kWh，原因是负荷增加。').passed, true);
+  assert.equal(figures('explain-day-over-week', '10月15日比10月8日多用 762 kWh（+87%），原因是供冷负荷大幅增加。').passed, false);
+  assert.equal(figures('busiest-hour', '10月15日用电最多的是 18:00 这一小时，278 kWh。').passed, true);
+  assert.match(figures('busiest-hour', '用电最多的一小时用了 278 kWh。').reason ?? '', /18:00/u);
+  assert.equal(figures('electricity-by-machine', '四台机组分别是 A 2 kWh、B 297 kWh、C 879 kWh、D 456 kWh。').passed, true);
+  assert.equal(figures('electricity-by-machine', 'C 机组 879 kWh，D 机组 456 kWh。').passed, false);
+  assert.equal(figures('september-electricity-and-cost', '9月共用电 36793 kWh，电费约 28777.85 元。').passed, true);
+  assert.equal(figures('september-electricity-and-cost', '9月共用电 36793 kWh。').passed, false);
+});
+
+test('an answer that must name a data problem says it, and a forecast is refused as a forecast', () => {
+  const shell = { ...fixture('daily-electricity-cooling-cop'), artifacts: [] } as AgentSessionSnapshot;
+  const said = (id: string, answer: string) => gradeTrial(question(id), withAnswer(shell, () => answer), series).checks.find((each) => each.name === 'says' || each.name === 'declines');
+  assert.equal(said('incomplete-day', '10月14日 19:00 和 22:00 两个小时的读数缺失，当天数据不完整，不能据此判断能效偏低的原因。')?.passed, true);
+  assert.equal(said('incomplete-day', '10月14日能效偏低是因为供冷负荷下降。')?.passed, false);
+  assert.equal(said('outdoor-temperature-history', '室外温度测点 0 点到 18 点一直是 21.5 ℃，像是卡住了，读数不可信。')?.passed, true);
+  assert.equal(said('decline-future-day', '10月25日还没到，我无法预测那天的用电量。')?.passed, true);
+  assert.equal(said('decline-future-day', '尚未看到异常，预计10月25日用电约 1500 kWh。')?.passed, false);
+});
+
 test('internal terms in an answer fail plain words and are quoted', () => {
   const daily = check(gradeTrial(question('daily-electricity-cooling-cop'), fixture('daily-electricity-cooling-cop'), series), 'plain-words');
   assert.equal(daily.passed, false);
