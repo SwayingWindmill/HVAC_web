@@ -43,6 +43,11 @@ type engineStub struct {
 	calls    int
 }
 
+func (stub *engineStub) QuerySemantic(context.Context, analytics.CallerContext, analyticsmodel.SemanticQuery) (analyticsmodel.SemanticQueryResponse, error) {
+	stub.calls++
+	return analyticsmodel.SemanticQueryResponse{}, stub.err
+}
+
 func (stub *engineStub) QueryEnergySeries(_ context.Context, caller analytics.CallerContext, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
 	stub.calls++
 	stub.caller = caller

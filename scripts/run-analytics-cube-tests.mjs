@@ -326,6 +326,15 @@ try {
     throw new Error(`unexpected Cube COP ${JSON.stringify(cop)}`);
   }
 
+  // The Operations Agent's semantic query (#573): several measures of one view, cut to the queried Site.
+  report.assertions.semanticQuery = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=modules/telemetry',
+    'test', '-count=1', '-run', 'TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite', '-v', './internal/cube/...',
+  ], {
+    env: { ...process.env, ANALYTICS_CUBE_TEST_URL: cubeURL, ANALYTICS_CUBE_TEST_KEY: cubeKey },
+  });
+
   // Both views see only the caller's Tenant and Site, though neither exposes the Tenant.
   const otherSite = { siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] };
   const otherTenant = { tenantId: '018f4f00-0100-7000-8000-000000000099' };

@@ -20,6 +20,7 @@ import (
 
 const (
 	EnergySeriesPath           = "/internal/v1/analytics/energy-series"
+	SemanticQueryPath          = "/internal/v1/analytics/semantic-query"
 	DeviceHistoryPath          = "/internal/v1/telemetry/device-history"
 	DeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
 	maximumRequestBodySize     = int64(64 << 10)
@@ -104,7 +105,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	started := server.now()
 	routeName := "unmatched"
 	switch request.URL.Path {
-	case EnergySeriesPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
+	case EnergySeriesPath, SemanticQueryPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
 		routeName = request.URL.Path
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
@@ -141,7 +142,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		)
 	}()
 
-	if request.URL.Path != EnergySeriesPath && request.URL.Path != DeviceHistoryPath && request.URL.Path != DeviceHistoryAggregatePath {
+	if request.URL.Path != EnergySeriesPath && request.URL.Path != SemanticQueryPath && request.URL.Path != DeviceHistoryPath && request.URL.Path != DeviceHistoryAggregatePath {
 		writeProblem(writer, http.StatusNotFound, "ANALYTICS_ROUTE_NOT_FOUND", "The requested analytics route does not exist.", false)
 		return
 	}
@@ -167,6 +168,10 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	}
 	if request.URL.Path == DeviceHistoryAggregatePath {
 		server.serveDeviceHistoryAggregate(writer, request, peerSPIFFE)
+		return
+	}
+	if request.URL.Path == SemanticQueryPath {
+		server.serveSemanticQuery(writer, request, peerSPIFFE)
 		return
 	}
 
@@ -199,6 +204,39 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	response, err := server.engine.QueryEnergySeries(request.Context(), analytics.CallerContext{
 		PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision,
 	}, query)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+// serveSemanticQuery answers the Operations Agent's semantic query (#573). The catalog is checked
+// again here, the owner of the data, and the grant must be bound to exactly this query under the
+// Energy Series action.
+func (server *handler) serveSemanticQuery(writer http.ResponseWriter, request *http.Request, presenter string) {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maximumRequestBodySize))
+	decoder.DisallowUnknownFields()
+	var query analyticsmodel.SemanticQuery
+	if err := decoder.Decode(&query); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, http.StatusBadRequest, "ANALYTICS_REQUEST_INVALID", "The semantic query body is invalid.", false)
+		return
+	}
+	scope, err := query.ScopeDigest()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "ANALYTICS_QUERY_INVALID", "The semantic query asks for members or a range outside the catalog.", false)
+		return
+	}
+	claims, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), presenter, query.TenantID, scope)
+	if !valid {
+		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
+		return
+	}
+	if !authorized {
+		writeProblem(writer, http.StatusForbidden, "ANALYTICS_DELEGATION_REJECTED", "The analytics delegation grant is not authorized for this query.", false)
+		return
+	}
+	response, err := server.engine.QuerySemantic(request.Context(), analytics.CallerContext{PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision}, query)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
 		return

@@ -13,4 +13,6 @@ type CallerContext struct {
 
 type EnergySeriesEngine interface {
 	QueryEnergySeries(context.Context, CallerContext, analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error)
+	// QuerySemantic answers the Operations Agent's semantic query over the catalog's views (#573).
+	QuerySemantic(context.Context, CallerContext, analyticsmodel.SemanticQuery) (analyticsmodel.SemanticQueryResponse, error)
 }

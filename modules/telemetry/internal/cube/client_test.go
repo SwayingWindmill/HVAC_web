@@ -18,7 +18,7 @@ import (
 
 type fixedTokenFactory struct{}
 
-func (fixedTokenFactory) Token(context.Context, analytics.CallerContext, analyticsmodel.EnergySeriesQuery) (string, error) {
+func (fixedTokenFactory) Token(context.Context, analytics.CallerContext, string, string) (string, error) {
 	return "cube-token", nil
 }
 
@@ -284,7 +284,8 @@ func TestHMACTokenFactoryBindsSecurityContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := factory.Token(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, validCubeEnergyQuery())
+	query := validCubeEnergyQuery()
+	token, err := factory.Token(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query.TenantID, query.SiteID)
 	if err != nil {
 		t.Fatal(err)
 	}

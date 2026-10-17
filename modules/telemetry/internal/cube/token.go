@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/analytics"
 )
 
@@ -29,12 +28,12 @@ func NewHMACTokenFactory(secret []byte, now func() time.Time) (*HMACTokenFactory
 	return &HMACTokenFactory{secret: append([]byte(nil), secret...), now: now}, nil
 }
 
-func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.CallerContext, productQuery analyticsmodel.EnergySeriesQuery) (string, error) {
+func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.CallerContext, tenantID, siteID string) (string, error) {
 	if factory == nil || len(factory.secret) < 32 || factory.now == nil {
 		return "", errors.New("Cube token factory is closed")
 	}
-	if err := productQuery.Validate(); err != nil {
-		return "", err
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(siteID) == "" {
+		return "", errors.New("Cube token needs a Tenant and a Site")
 	}
 	if strings.TrimSpace(caller.PrincipalID) == "" || strings.TrimSpace(caller.PolicyRevision) == "" {
 		return "", errors.New("Cube caller context is incomplete")
@@ -58,9 +57,9 @@ func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.Calle
 		Subject:        caller.PrincipalID,
 		IssuedAt:       now.Unix(),
 		ExpiresAt:      now.Add(30 * time.Second).Unix(),
-		TenantID:       productQuery.TenantID,
-		SiteID:         productQuery.SiteID,
-		SiteIDs:        []string{productQuery.SiteID},
+		TenantID:       tenantID,
+		SiteID:         siteID,
+		SiteIDs:        []string{siteID},
 		Groups:         []string{"analytics_reader"},
 		PrincipalID:    caller.PrincipalID,
 		PolicyRevision: caller.PolicyRevision,
