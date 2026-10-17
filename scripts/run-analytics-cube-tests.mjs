@@ -269,7 +269,7 @@ try {
   // Only the views are public, and every member carries a Chinese title and description for operators and the Agent.
   const meta = await cubeMeta(cubeToken());
   const published = (meta.cubes ?? []).map((cube) => cube.name).sort();
-  if (published.join(',') !== 'equipment_energy,site_energy') throw new Error(`Cube publishes ${published.join(',')}`);
+  if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost') throw new Error(`Cube publishes ${published.join(',')}`);
   for (const view of meta.cubes) {
     for (const member of [...view.measures, ...view.dimensions]) {
       if (!/[\u4e00-\u9fff]/u.test(member.title ?? '') || !/[\u4e00-\u9fff]/u.test(member.description ?? '')) {
@@ -278,11 +278,25 @@ try {
       if (/tenant_id|point_id|sensor_id|accounting_scope|period_start/u.test(member.name)) throw new Error(`${member.name} is not a consumer member`);
     }
   }
-  for (const internal of ['site_energy_facts.energy_valid_kwh', 'equipment_energy_facts.energy_valid_kwh']) {
+  for (const internal of ['site_energy_facts.energy_valid_kwh', 'equipment_energy_facts.energy_valid_kwh', 'site_energy_cost_facts.cost_valid_cny']) {
     const refusal = await cubeRefusal(cubeToken(), { measures: [internal], limit: 1 });
     // Cube 1.6 reports a hidden member with this message (as a 500), so the message is what is checked.
     if (!refusal?.includes(`You requested hidden member: '${internal}'`)) throw new Error(`Cube did not refuse ${internal} as hidden: ${refusal}`);
   }
+
+  // The Query Service prices the Site's electricity through site_energy_cost (#575).
+  report.assertions.energyCost = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=modules/telemetry',
+    'test', '-count=1', '-run', 'TestCubePricesTheSiteElectricityAtItsPriceWindows', '-v', './internal/cube/...',
+  ], {
+    env: {
+      ...process.env,
+      ANALYTICS_CUBE_TEST_URL: cubeURL,
+      ANALYTICS_CUBE_TEST_KEY: cubeKey,
+      ANALYTICS_CLICKHOUSE_TEST_URL: clickHouseURL,
+    },
+  });
 
   // Sub-meters: copies of the Site meter's facts as one machine's BRANCH facts, read per equipment and with suspect data.
   const machine = '018f4f00-4000-7000-8000-000000000011';
@@ -319,6 +333,12 @@ try {
   for (const [view, context] of [['site_energy', otherSite], ['site_energy', otherTenant], ['equipment_energy', otherSite], ['equipment_energy', otherTenant]]) {
     const leaked = (await queryCube(cubeToken(context), { ...energyQuery({ view }), filters: [] })).data ?? [];
     if (leaked.length !== 0) throw new Error(`${view} leaked rows outside the caller's scope ${JSON.stringify(context)}`);
+  }
+  for (const context of [otherSite, otherTenant]) {
+    const leaked = (await queryCube(cubeToken(context), { measures: ['site_energy_cost.cost_valid_cny', 'site_energy_cost.unpriced_valid_kwh'], dimensions: ['site_energy_cost.tariff_period'], timezone: 'UTC', limit: 10 })).data ?? [];
+    if (leaked.some((row) => row['site_energy_cost.cost_valid_cny'] !== null || row['site_energy_cost.unpriced_valid_kwh'] !== null)) {
+      throw new Error(`site_energy_cost leaked rows outside the caller's scope ${JSON.stringify(context)}: ${JSON.stringify(leaked)}`);
+    }
   }
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   report.assertions.energyQuery = rows;

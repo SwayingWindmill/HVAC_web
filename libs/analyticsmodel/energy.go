@@ -144,6 +144,24 @@ type EnergySeriesPoint struct {
 	PeriodStart time.Time `json:"periodStart"`
 	PeriodEnd   time.Time `json:"periodEnd"`
 	EnergyKWh   float64   `json:"energyKWh"`
+	// Cost is the electricity's estimated energy charge; cooling has none.
+	Cost *EnergyCost `json:"cost,omitempty"`
+}
+
+// EnergyCost is a bucket's electricity priced at the Site's import Tariff (#575): an estimate of
+// the energy charge, without demand charges; Settlement stays the authority on the bill. Energy
+// no Tariff period covers is unpriced, never free.
+type EnergyCost struct {
+	AmountCNY   float64      `json:"amountCNY"`
+	UnpricedKWh float64      `json:"unpricedKWh"`
+	Periods     []PeriodCost `json:"periods"`
+}
+
+// PeriodCost is the priced energy and charge of one Tariff period in a bucket.
+type PeriodCost struct {
+	PeriodCode string  `json:"periodCode"`
+	EnergyKWh  float64 `json:"energyKWh"`
+	AmountCNY  float64 `json:"amountCNY"`
 }
 
 type QualitySummary struct {

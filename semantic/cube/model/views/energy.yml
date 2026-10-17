@@ -50,3 +50,23 @@ views:
       - group: analytics_reader
         member_level:
           includes: "*"
+
+  - name: site_energy_cost
+    title: 站点电费估算
+    description: 站点用电按购电电价分时段计价的估算电度电费，可按小时、日、月和电价时段汇总。用来回答「电费大概多少、花在峰谷哪个时段」；不含需量电费，实际账单以结算为准。
+    cubes:
+      - join_path: site_energy_cost_facts
+        includes:
+          - cost_valid_cny
+          - cost_valid_and_suspect_cny
+          - priced_valid_kwh
+          - priced_valid_and_suspect_kwh
+          - unpriced_valid_kwh
+          - unpriced_valid_and_suspect_kwh
+          - site_id
+          - tariff_period
+          - period_end
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
