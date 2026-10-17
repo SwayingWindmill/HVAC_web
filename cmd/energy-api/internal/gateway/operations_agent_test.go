@@ -549,3 +549,64 @@ func TestOperationsToolAuthorizationGrantsDeviceHistoryAggregatesToTheAgentForTh
 		t.Fatalf("a device the operator cannot see must be not found, got %d", denied.Code)
 	}
 }
+
+// The Agent's semantic query (#573) is granted like an Energy Series read, bound to that query, and
+// only for the operator's Site; a member the catalog does not list is refused before IAM.
+func TestOperationsToolAuthorizationGrantsASemanticQueryOnlyForTheOperatorsSite(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	query := analyticsmodel.SemanticQuery{
+		TenantID: fixture.tenantID, SiteID: fixture.siteID, View: "site_energy",
+		Measures: []string{"electricity_valid_kwh", "cooling_valid_kwh", "cop"}, Granularity: analyticsmodel.GranularityDay,
+		Timezone: "Asia/Tokyo", From: time.Date(2026, 7, 28, 15, 0, 0, 0, time.UTC), To: time.Date(2026, 7, 30, 15, 0, 0, 0, time.UTC),
+	}
+	body := func(requestID string, input any) string {
+		raw, err := json.Marshal(map[string]any{
+			"sessionId": "session-001", "runId": "run-001",
+			"request": map[string]any{"requestId": requestID, "tool": "analytics.semanticQuery", "input": input},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	response := fixture.authorizeTool(t, body("semantic-001", query), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected a semantic query grant, got %d: %s", response.Code, response.Body.String())
+	}
+	var issued operationsToolAuthorizationResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, issued.DelegationGrant)
+	if err != nil {
+		t.Fatalf("invalid semantic query delegation: %v", err)
+	}
+	digest, err := query.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" || claims.Audience != "telemetry-query-service" ||
+		claims.TenantID != fixture.tenantID || len(claims.Actions) != 1 || claims.Actions[0] != analyticsmodel.EnergySeriesAction ||
+		len(claims.Scopes) != 1 || claims.Scopes[0] != digest {
+		t.Fatalf("semantic query grant is not exact: %+v digest=%s", claims, digest)
+	}
+
+	elsewhere := query
+	elsewhere.SiteID = "018f1e00-1000-7000-8000-0000000000ff"
+	// The Agent's own delegation covers only the operator's Site, so another Site stops there.
+	if response := fixture.authorizeTool(t, body("semantic-002", elsewhere), serviceGrant, "spiffe://hvac.local/operations-agent-service"); response.Code != http.StatusForbidden || strings.Contains(response.Body.String(), "delegationGrant") {
+		t.Fatalf("another Site's semantic query got %d: %s", response.Code, response.Body.String())
+	}
+
+	decisions := fixture.iamCalls.Load()
+	internal := query
+	internal.View = "site_energy_facts"
+	if response := fixture.authorizeTool(t, body("semantic-003", internal), serviceGrant, "spiffe://hvac.local/operations-agent-service"); response.Code != http.StatusBadRequest {
+		t.Fatalf("an internal cube got %d: %s", response.Code, response.Body.String())
+	}
+	if fixture.iamCalls.Load() != decisions {
+		t.Fatal("a semantic query outside the catalog reached IAM")
+	}
+}
