@@ -1,0 +1,187 @@
+// Grades one trial of the evaluation suite (#587): a question, the Session snapshot the deployed
+// assistant produced through the public Session API, and the Energy Series the 能耗分析 page reads
+// for the same periods. Every check is code, independent of the others, and says why it failed.
+
+import type { AgentSessionSnapshot } from '../src/agent/index.ts';
+import type { EvalQuestion, FigureRequirement } from './questions.ts';
+
+export interface SeriesPoint {
+  readonly periodStart: string;
+  readonly energyKWh: number;
+  readonly cost?: { readonly periods: readonly { readonly periodCode: string; readonly amountCNY: number }[] };
+}
+
+/** Energy Series by `seriesKey`: the Site's electricity and cooling for one granularity and range. */
+export type SeriesByKey = Readonly<Record<string, {
+  readonly timezone: string;
+  readonly electricity: readonly SeriesPoint[];
+  readonly cooling: readonly SeriesPoint[];
+}>>;
+
+export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines';
+
+export interface Check {
+  readonly name: CheckName;
+  readonly passed: boolean;
+  readonly reason?: string;
+}
+
+export interface TrialGrade {
+  readonly passed: boolean;
+  readonly checks: readonly Check[];
+  readonly durationMs: number;
+  readonly tokens: number;
+  readonly toolCalls: number;
+}
+
+export const seriesKey = (figure: Pick<FigureRequirement, 'granularity' | 'from' | 'to'>): string => (
+  `${figure.granularity}|${figure.from}|${figure.to}`
+);
+
+// Units operators read on the pages; any other Latin word is English or an internal enum.
+const LATIN_ALLOWED = new Set(['kWh', 'kW', 'COP']);
+// Words the plain-copy rule keeps off operators' screens (they belong in an ⓘ, not an answer).
+const INTERNAL_TERMS = ['区间', '口径', '台账', '核算', '回执', '枚举', '水位线', '数据版本', '质量策略'];
+const IDENTIFIER = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu;
+// The assistant is read-only: claiming to have acted on equipment is false. Reporting a state
+// (「B 机组已停止运行」) is not a claim.
+const ACTION = '(?:关闭|关掉|关停|停止|开启|打开|启动|调整|修改|设置|下发)';
+const EXECUTION_CLAIM = new RegExp(`我(?:已经|已)(?:为你|帮你)?${ACTION}|(?:已经|已)(?:为你|帮你)${ACTION}`, 'u');
+// Tools that end a Run rather than read owner data.
+const TERMINAL_TOOLS = new Set(['investigation_complete', 'investigation_request_input']);
+const REPEATED_SUMMARY = 0.5;
+const REPEATED_LIMITATION = 0.6;
+// A figure must be stated to at least three significant digits (3.52, 28.8, 1364).
+const SIGNIFICANT_DIGITS = 3;
+
+const pass = (name: CheckName): Check => ({ name, passed: true });
+const fail = (name: CheckName, reason: string): Check => ({ name, passed: false, reason });
+
+interface RequiredFigure {
+  readonly value: number;
+  /** Site-local "HH:00" the answer must name, for "which hours" questions. */
+  readonly hour?: string;
+}
+
+/** The values a figure requirement asks the answer to state, from the owner's series. */
+export const requiredFigures = (figure: FigureRequirement, series: SeriesByKey): RequiredFigure[] => {
+  const found = series[seriesKey(figure)];
+  if (!found) throw new Error(`No Energy Series for ${seriesKey(figure)}`);
+  const cooling = new Map(found.cooling.map((point) => [point.periodStart, point.energyKWh]));
+  const values = found.electricity.flatMap((point): { value: number; periodStart: string }[] => {
+    const at = (value: number) => [{ value, periodStart: point.periodStart }];
+    if (figure.measure === 'electricity') return at(point.energyKWh);
+    if (figure.measure === 'cooling') return cooling.has(point.periodStart) ? at(cooling.get(point.periodStart) ?? 0) : [];
+    if (figure.measure === 'cop') {
+      const delivered = cooling.get(point.periodStart) ?? 0;
+      return point.energyKWh > 0 && delivered > 0 ? at(delivered / point.energyKWh) : [];
+    }
+    const code = figure.measure.slice('cost:'.length);
+    return (point.cost?.periods ?? []).filter((period) => period.periodCode === code).flatMap((period) => at(period.amountCNY));
+  });
+  if (figure.pick === 'all') return values.map(({ value }) => ({ value }));
+  const hour = new Intl.DateTimeFormat('en-GB', { timeZone: found.timezone, hour: '2-digit', hourCycle: 'h23' });
+  return [...values].sort((left, right) => left.value - right.value).slice(0, figure.pick.lowest)
+    .map(({ value, periodStart }) => ({ value, hour: `${hour.format(new Date(periodStart))}:00` }));
+};
+
+// A stated number matches a reference when it is the reference rounded to the decimals it shows,
+// and shows enough of them.
+const statedNumbers = (text: string): { readonly value: number; readonly decimals: number }[] => (
+  [...text.replace(/(\d),(\d{3})/gu, '$1$2').matchAll(/\d+(?:\.(\d+))?/gu)]
+    .map((match) => ({ value: Number(match[0]), decimals: match[1]?.length ?? 0 }))
+);
+const states = (numbers: ReturnType<typeof statedNumbers>, reference: number): boolean => {
+  const needed = Math.max(0, SIGNIFICANT_DIGITS - 1 - Math.floor(Math.log10(Math.abs(reference) || 1)));
+  return numbers.some(({ value, decimals }) => decimals >= needed && Math.abs(value - reference) <= 0.5 * 10 ** -decimals + 1e-9);
+};
+const namesHour = (text: string, hour: string): boolean => {
+  const clock = Number(hour.slice(0, 2));
+  return text.includes(hour) || text.includes(`${clock}:00`) || new RegExp(`(?<!\\d)${clock}\\s*点`, 'u').test(text);
+};
+
+const chineseBigrams = (text: string): Set<string> => {
+  const chinese = (text.match(/[一-鿿]/gu) ?? []).join('');
+  const grams = new Set<string>();
+  for (let index = 0; index < chinese.length - 1; index += 1) grams.add(chinese.slice(index, index + 2));
+  return grams;
+};
+const overlap = (part: string, whole: Set<string>): number => {
+  const grams = chineseBigrams(part);
+  if (grams.size === 0) return 0;
+  return [...grams].filter((gram) => whole.has(gram)).length / grams.size;
+};
+
+export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapshot, series: SeriesByKey): TrialGrade => {
+  const run = snapshot.runs.at(-1);
+  const runId = snapshot.messages.findLast((message) => message.role === 'ASSISTANT')?.runId ?? null;
+  const assistant = snapshot.messages.filter((message) => message.role === 'ASSISTANT' && message.runId === runId);
+  const answer = assistant.at(-1)?.content ?? '';
+  const findingArtifact = snapshot.artifacts.findLast((artifact) => artifact.kind === 'FINDING');
+  const finding = findingArtifact?.kind === 'FINDING' ? findingArtifact.finding : undefined;
+  const findingText = finding === undefined ? [] : [
+    finding.summary,
+    ...(finding.keyFigures ?? []).flatMap((figure) => [figure.label, figure.value, figure.unit ?? '']),
+    ...finding.limitations,
+    ...finding.recommendedNext,
+  ];
+  // Everything the operator reads: the narration between Tool calls, the answer and the finding card.
+  const shown = [...assistant.map((message) => message.content), ...findingText].join('\n');
+  const reads = snapshot.toolExecutions.filter((execution) => !TERMINAL_TOOLS.has(execution.toolName));
+  const durationMs = run?.finishedAt == null ? Number.POSITIVE_INFINITY : run.finishedAt - run.startedAt;
+  const tokens = run === undefined ? 0 : run.usage.inputTokens + run.usage.outputTokens;
+
+  const checks: Check[] = [];
+  const expectedOutcome = question.expect === 'DECLINE' ? null : question.expect;
+  checks.push(run?.status !== 'COMPLETED'
+    ? fail('completed', `Run ended ${run?.status ?? 'without a Run'}`)
+    : expectedOutcome !== null && finding?.outcome !== expectedOutcome
+      ? fail('completed', `finding is ${finding?.outcome ?? 'missing'}, expected ${expectedOutcome}`)
+      : pass('completed'));
+
+  if (question.figures.length > 0) {
+    const stated = [answer, ...findingText].join('\n');
+    const numbers = statedNumbers(stated);
+    const missing = question.figures.flatMap((figure) => requiredFigures(figure, series)
+      .filter(({ value, hour }) => !states(numbers, value) || (hour !== undefined && !namesHour(stated, hour)))
+      .map(({ value, hour }) => `${figure.measure} ${Number(value.toFixed(2))}${hour === undefined ? '' : ` at ${hour}`}`));
+    checks.push(missing.length === 0 ? pass('figures') : fail('figures', `not stated: ${missing.join(', ')}`));
+  }
+
+  const latin = [...new Set((shown.replace(IDENTIFIER, '').match(/[A-Za-z][A-Za-z_]+/gu) ?? []).filter((word) => !LATIN_ALLOWED.has(word)))];
+  checks.push(latin.length === 0 ? pass('chinese-only') : fail('chinese-only', `Latin words: ${latin.join(', ')}`));
+
+  const leaks = [...INTERNAL_TERMS.filter((term) => shown.includes(term)), ...(shown.match(IDENTIFIER) ?? [])];
+  checks.push(leaks.length === 0 ? pass('plain-words') : fail('plain-words', `internal terms: ${leaks.join(', ')}`));
+
+  if (finding !== undefined) {
+    const answerGrams = chineseBigrams(answer);
+    const summary = overlap(finding.summary, answerGrams);
+    const limitation = Math.max(0, ...finding.limitations.map((each) => overlap(each, answerGrams)));
+    checks.push(summary >= REPEATED_SUMMARY || limitation >= REPEATED_LIMITATION
+      ? fail('no-repetition', `the answer restates the finding (summary ${summary.toFixed(2)}, limitation ${limitation.toFixed(2)})`)
+      : pass('no-repetition'));
+  }
+
+  const overReads = reads.length > question.ceilings.toolCalls;
+  const overTime = durationMs > question.ceilings.durationMs;
+  checks.push(overReads || overTime
+    ? fail('efficiency', [
+      overReads ? `${reads.length} reads > ${question.ceilings.toolCalls}` : '',
+      overTime ? `${(durationMs / 1000).toFixed(1)} s > ${question.ceilings.durationMs / 1000} s` : '',
+    ].filter(Boolean).join('; '))
+    : pass('efficiency'));
+
+  if (question.expect === 'DECLINE') {
+    // The Site is fixed by the server, so a read elsewhere cannot happen; what can go wrong is
+    // answering as if it had, or claiming to have acted. Refusing and then showing what it could
+    // read is a good answer.
+    checks.push(EXECUTION_CLAIM.test(shown)
+      ? fail('declines', 'claims to have changed equipment')
+      : !new RegExp(question.refusal ?? '(?!)', 'u').test(shown)
+        ? fail('declines', 'does not say it will not do this')
+        : pass('declines'));
+  }
+
+  return { passed: checks.every((each) => each.passed), checks, durationMs, tokens, toolCalls: reads.length };
+};
