@@ -579,10 +579,6 @@ test('wall-clock budget actively aborts an in-flight provider turn with a stable
 
 test('complete Site/Energy Pi investigation produces a supported evidence-backed finding without LangGraph', async () => {
   const harness = createHvacToolHarness();
-  const baselineFrom = '2026-08-01T00:00:00.000Z';
-  const baselineTo = '2026-08-01T01:00:00.000Z';
-  const currentFrom = '2026-08-02T00:00:00.000Z';
-  const currentTo = '2026-08-02T01:00:00.000Z';
   const { result } = await runScript([
     {
       parts: [{ type: 'tool-call', id: 'site-context-vertical', name: 'site_get_context', arguments: {} }],
@@ -593,7 +589,7 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
         type: 'tool-call',
         id: 'energy-compare-vertical',
         name: 'energy_compare_periods',
-        arguments: { baselineFrom, baselineTo, currentFrom, currentTo, granularity: 'hour' },
+        arguments: { baselineStartDate: '2026-08-01', baselineEndDate: '2026-08-01', currentStartDate: '2026-08-02', currentEndDate: '2026-08-02', granularity: 'hour' },
       }],
       stopReason: 'toolUse',
     },
@@ -636,7 +632,7 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
 
 test('energy anomaly run: the model gets the run time and Site-calendar rules in Chinese, compares power and cooling, then concludes', async () => {
   const harness = createHvacToolHarness();
-  const period = { baselineFrom: '2026-08-01T00:00:00.000Z', baselineTo: '2026-08-01T01:00:00.000Z', currentFrom: '2026-08-02T00:00:00.000Z', currentTo: '2026-08-02T01:00:00.000Z' };
+  const period = { baselineStartDate: '2026-08-01', baselineEndDate: '2026-08-01', currentStartDate: '2026-08-02', currentEndDate: '2026-08-02' };
   const { result, requests } = await runScript([
     {
       parts: [
@@ -667,15 +663,17 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
 
   const system = requests[0][0];
   assert.equal(system.role, 'system');
-  assert.match(system.text, /2026-10-16T02:30:00\.000Z/u);
-  assert.match(system.text, /时区/u);
+  // Dates come from the Site's own clock (site_get_context), not a UTC start time.
+  assert.doesNotMatch(system.text, /2026-10-16T02:30/u);
+  assert.match(system.text, /localNow/u);
+  assert.match(system.text, /站点本地日期/u);
   assert.match(system.text, /site_get_context/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
   // Each read tells the model the id its evidence cites.
   const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
   assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
-  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, 'COMPARABLE');
+  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, '可以比较');
   assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
@@ -689,10 +687,10 @@ test('incomplete Energy evidence produces unable-to-conclude instead of a confir
         id: 'energy-incomplete-vertical',
         name: 'energy_compare_periods',
         arguments: {
-          baselineFrom: '2026-08-01T00:00:00.000Z',
-          baselineTo: '2026-08-01T01:00:00.000Z',
-          currentFrom: '2026-08-02T00:00:00.000Z',
-          currentTo: '2026-08-02T01:00:00.000Z',
+          baselineStartDate: '2026-08-01',
+          baselineEndDate: '2026-08-01',
+          currentStartDate: '2026-08-02',
+          currentEndDate: '2026-08-02',
           granularity: 'hour',
         },
       }],
@@ -825,8 +823,8 @@ test('a multi-measure question is answered from one semantic query over the Site
   const question = {
     measures: ['site_energy.electricity_valid_kwh', 'site_energy.cooling_valid_kwh', 'site_energy.cop'],
     granularity: 'day',
-    from: '2026-10-13T16:00:00.000Z',
-    to: '2026-10-15T16:00:00.000Z',
+    startDate: '2026-10-14',
+    endDate: '2026-10-15',
   };
   const { result, requests } = await runScript([
     { parts: [{ type: 'tool-call', id: 'two-days', name: 'energy_semantic_query', arguments: question }], stopReason: 'toolUse' },
@@ -854,7 +852,7 @@ test('a multi-measure question is answered from one semantic query over the Site
   assert.deepEqual(asked.input, {
     tenantId: harness.toolContext.tenantId, siteId: harness.toolContext.siteId, view: 'site_energy',
     measures: ['electricity_valid_kwh', 'cooling_valid_kwh', 'cop'], granularity: 'day', timezone: 'Asia/Shanghai',
-    from: question.from, to: question.to,
+    from: '2026-10-13T16:00:00.000Z', to: '2026-10-15T16:00:00.000Z',
   });
   assert.equal(result.runStatus, 'COMPLETED');
   const answer = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text))[0];
@@ -864,18 +862,18 @@ test('a multi-measure question is answered from one semantic query over the Site
     { siteTime: '2026-10-14 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
     { siteTime: '2026-10-15 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
   ]);
-  assert.equal(answer.result.completeness, 'COMPLETE');
+  assert.equal(answer.result.dataStatus, '完整');
 });
 
 test('a semantic query naming a cube member, an unlisted member, two views, a Site or too long a range is refused before any read', async () => {
   const harness = createHvacToolHarness();
-  const range = { granularity: 'day', from: '2026-10-13T16:00:00.000Z', to: '2026-10-15T16:00:00.000Z' };
+  const range = { granularity: 'day', startDate: '2026-10-14', endDate: '2026-10-15' };
   const refused = {
     'cube-member': { ...range, measures: ['site_energy_facts.electricity_valid_kwh'] },
     unlisted: { ...range, measures: ['site_energy.electricity_kwh'] },
     'two-views': { ...range, measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'] },
     'another-site': { ...range, measures: ['site_energy.cop'], siteId: '0198a36e-0000-7000-8000-0000000000ff' },
-    'too-long': { measures: ['site_energy.cop'], granularity: 'hour', from: '2026-09-01T00:00:00.000Z', to: '2026-10-15T00:00:00.000Z' },
+    'too-long': { measures: ['site_energy.cop'], granularity: 'hour', startDate: '2026-09-01', endDate: '2026-10-15' },
   };
   const { result } = await runScript([
     {

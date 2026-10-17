@@ -14,6 +14,8 @@ const tsPath = resolve(root, 'services/operations-agent-service/src/tools/intern
 const forced = new Set(['site_id', 'period_end']);
 // Freshness is not a figure to ask for: every answer's metadata already carries the watermark and revision.
 const freshness = new Set(['max_data_watermark', 'max_dataset_revision']);
+// Counts of measuring intervals mean nothing to an operator; answers say whether data is complete (#590).
+const operatorFigure = (member) => !freshness.has(member.name) && !member.name.endsWith('_count');
 const timeDimension = 'period_end';
 
 const load = (dir, key) => readdirSync(resolve(modelDir, dir)).filter((file) => file.endsWith('.yml')).sort()
@@ -39,7 +41,7 @@ const views = load('views', 'views').map((view) => {
     name: view.name,
     title: view.title,
     description: view.description.trim(),
-    measures: members.filter((each) => each.kind === 'measure' && !freshness.has(each.name)).map(describe),
+    measures: members.filter((each) => each.kind === 'measure' && operatorFigure(each)).map(describe),
     dimensions: members.filter((each) => each.kind === 'dimension' && !forced.has(each.name)).map(describe),
   };
 }).sort((left, right) => left.name.localeCompare(right.name));

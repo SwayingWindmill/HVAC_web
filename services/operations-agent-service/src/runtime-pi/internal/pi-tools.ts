@@ -53,9 +53,11 @@ interface ProjectToolBudgetState {
   readonly waiting: (() => void)[];
 }
 
+// Only the code, and the Tool's own hint when it wrote one, reach the model.
 const safeToolFailure = (error: unknown): Error => {
   const code = error instanceof AgentToolError ? error.code : 'TOOL_EXECUTION_FAILED';
-  return new Error(`${toolFailurePrefix}${code}`);
+  const hint = error instanceof AgentToolError ? error.hint : undefined;
+  return new Error(`${toolFailurePrefix}${code}${hint === undefined ? '' : `\n${hint}`}`);
 };
 
 const claimTerminalOperation = (state: ProjectToolBudgetState, toolCallId: string): void => {
@@ -80,7 +82,7 @@ export const projectToolFailureCodeFromPiResult = (result: unknown): AgentToolEr
   // Pi checks the arguments against the Tool's schema before executing it; a refusal there is an argument failure.
   if (text?.startsWith('Validation failed for tool ')) return 'TOOL_ARGUMENTS_INVALID';
   if (text === null || !text.startsWith(toolFailurePrefix)) return null;
-  const code = text.slice(toolFailurePrefix.length) as AgentToolErrorCode;
+  const code = text.slice(toolFailurePrefix.length).split('\n')[0] as AgentToolErrorCode;
   return toolFailureCodes.has(code) ? code : null;
 };
 

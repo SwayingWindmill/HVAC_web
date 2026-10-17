@@ -1,6 +1,7 @@
 package analyticsmodel
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +78,28 @@ func TestSemanticQueryKeepsWithinTheBucketLimit(t *testing.T) {
 	query.To = query.From.AddDate(0, 0, 32)
 	if err := query.Validate(); err == nil || !strings.Contains(err.Error(), "bucket") {
 		t.Fatalf("32 days by hour: %v", err)
+	}
+}
+
+// The catalog is what the AI 助手 reads: figures an operator asks for, described in their words and
+// with the values the Tool hands back (#590): no 区间/口径, no English codes.
+func TestSemanticCatalogSpeaksTheOperatorsWords(t *testing.T) {
+	english := regexp.MustCompile(`\b[A-Z][A-Z_]{2,}\b|electricity|cooling`)
+	for _, view := range Catalog().Views {
+		for _, member := range append(append([]SemanticMember{}, view.Measures...), view.Dimensions...) {
+			for _, code := range english.FindAllString(member.Description, -1) {
+				if code != "COP" {
+					t.Errorf("%s.%s describes English value %s: %s", view.Name, member.Name, code, member.Description)
+				}
+			}
+			for _, word := range []string{"区间", "口径"} {
+				if strings.Contains(member.Title+member.Description, word) {
+					t.Errorf("%s.%s says %s: %s %s", view.Name, member.Name, word, member.Title, member.Description)
+				}
+			}
+		}
+		if strings.Contains(view.Description, "区间") {
+			t.Errorf("view %s says 区间", view.Name)
+		}
 	}
 }

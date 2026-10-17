@@ -12,7 +12,7 @@ cubes:
     measures:
       - name: energy_valid_kwh
         title: 能耗（有效数据）
-        description: 只累计质量为「有效」的区间，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
+        description: 只算质量判定为「有效」的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
         sql: energy_kwh
         type: sum
         filters:
@@ -20,7 +20,7 @@ cubes:
 
       - name: energy_valid_and_suspect_kwh
         title: 能耗（含可疑数据）
-        description: 累计质量为「有效」和「可疑」的区间，单位 kWh；可疑数据较多时用来估算上限。同样必须按能源类型筛选。
+        description: 包括质量为「有效」和「可疑」的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。
         sql: energy_kwh
         type: sum
         filters:
@@ -74,13 +74,13 @@ cubes:
 
       - name: energy_type
         title: 能源类型
-        description: electricity 是用电量，cooling 是供冷量，都以 kWh 计。
+        description: 用电量或供冷量，都以 kWh 计。
         sql: energy_type
         type: string
 
       - name: quality
         title: 数据质量
-        description: VALID 有效、SUSPECT 可疑、INVALID 无效。
+        description: 有效、可疑或无效。
         sql: quality
         type: string
 
@@ -153,7 +153,7 @@ cubes:
     dimensions:
       - name: equipment_id
         title: 设备
-        description: 分表所计量的设备编号，与资产模型里的设备一致。
+        description: 分表所计量的设备，结果里显示设备名称。
         sql: load_device_id
         type: string
 
@@ -248,7 +248,7 @@ cubes:
 
       - name: tariff_period
         title: 电价时段
-        description: SUPER_PEAK 尖峰、PEAK 峰、FLAT 平、VALLEY 谷；为空表示这部分电量没有电价。
+        description: 尖峰、峰、平或谷；没有电价的电量显示为未计价。
         sql: tariff_period
         type: string
 

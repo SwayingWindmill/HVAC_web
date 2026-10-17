@@ -93,7 +93,7 @@ const run = async ({ responses, tools, runBudget = budget, runContext = context 
     signal: new AbortController().signal,
     emit: (event) => events.push(event),
   });
-  return { events, result };
+  return { events, result, requests: runtime.requests };
 };
 
 const finishResponse = Object.freeze({
@@ -199,4 +199,27 @@ test('AgentToolError code is preserved while sensitive Tool error text is never 
   const execution = result.toolExecutions.find(({ toolName }) => toolName === 'site_get_context');
   assert.equal(execution?.failureCode, 'TOOL_OWNER_UNAVAILABLE');
   assert.equal(JSON.stringify(events).includes('secret owner hostname'), false);
+});
+
+test('a Tool refusal reaches the model with what to change, never its internal message', async () => {
+  const refusing = projectTool({
+    name: 'site_get_context',
+    execute: async () => {
+      throw new AgentToolError('TOOL_ARGUMENTS_INVALID', 'internal parser detail', '日期用站点本地日期 YYYY-MM-DD，首尾都包含。');
+    },
+  });
+  const { events, result, requests } = await run({
+    tools: [refusing],
+    responses: [
+      { parts: [{ type: 'tool-call', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
+      finishResponse,
+    ],
+  });
+
+  const seen = requests[1].filter((entry) => entry.role === 'toolResult').map((entry) => entry.text).join(' ');
+  assert.match(seen, /TOOL_ARGUMENTS_INVALID/u);
+  assert.match(seen, /日期用站点本地日期 YYYY-MM-DD，首尾都包含。/u);
+  assert.equal(seen.includes('internal parser detail'), false);
+  assert.equal(JSON.stringify(events).includes('internal parser detail'), false);
+  assert.equal(result.toolExecutions.find(({ toolName }) => toolName === 'site_get_context')?.failureCode, 'TOOL_ARGUMENTS_INVALID');
 });
