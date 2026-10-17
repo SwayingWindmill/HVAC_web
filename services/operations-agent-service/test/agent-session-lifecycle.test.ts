@@ -83,7 +83,6 @@ const findingArtifact = (id, runId, createdAt) => Object.freeze({
   kind: 'FINDING',
   finding: Object.freeze({
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'The evidence remains incomplete.',
     evidenceRefs: Object.freeze([]),
     limitations: Object.freeze(['One Energy period is incomplete.']),
     recommendedNext: Object.freeze(['Retry after the dataset is complete.']),

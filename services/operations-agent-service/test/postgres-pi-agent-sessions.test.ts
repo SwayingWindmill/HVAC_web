@@ -73,7 +73,6 @@ const findingArtifact = (id, runId, createdAt) => Object.freeze({
   kind: 'FINDING',
   finding: Object.freeze({
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'The restarted Run was cancelled before another conclusion was committed.',
     evidenceRefs: Object.freeze([]),
     limitations: Object.freeze(['Cancellation ended the active Run.']),
     recommendedNext: Object.freeze([]),

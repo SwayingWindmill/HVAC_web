@@ -30,7 +30,6 @@ export interface AgentEvidenceRef {
 export const INVESTIGATION_COMPLETE_TOOL_NAME = 'investigation_complete' as const;
 export const INVESTIGATION_REQUEST_INPUT_TOOL_NAME = 'investigation_request_input' as const;
 
-const MAX_FINDING_SUMMARY_LENGTH = 2_000;
 const MAX_FINDING_EVIDENCE_REFS = 32;
 const MAX_FINDING_LIST_ITEMS = 16;
 const MAX_FINDING_LIST_ITEM_LENGTH = 512;
@@ -43,16 +42,19 @@ export type AgentTerminalToolName =
 
 export type InvestigationOutcome = 'SUPPORTED_FINDING' | 'UNABLE_TO_CONCLUDE';
 
-/** A number the finding rests on, shown beside the summary: 多用电 +762 kWh. */
+/** A number the answer rests on, shown on the finding card: 多用电 +762 kWh. */
 export interface InvestigationKeyFigure {
   readonly label: string;
   readonly value: string;
   readonly unit?: string;
 }
 
+/**
+ * What the finding card shows under the answer. The conclusion itself is the answer text, so the
+ * card carries only the figures, what the data could not tell and what to ask next.
+ */
 export interface InvestigationComplete {
   readonly outcome: InvestigationOutcome;
-  readonly summary: string;
   readonly keyFigures?: readonly InvestigationKeyFigure[];
   readonly evidenceRefs: readonly AgentEvidenceRef[];
   readonly limitations: readonly string[];
@@ -185,8 +187,8 @@ const stringList = (
 
 const physicalExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)\s+(?:(?:have|has)\s+)?(?:changed|set|started|stopped|turned|commanded|executed|applied|adjusted|overrode|reset)\b/iu;
 
-const assertNoPhysicalExecutionClaim = (summary: string): void => {
-  if (physicalExecutionClaim.test(summary)) {
+const assertNoPhysicalExecutionClaim = (narrative: string): void => {
+  if (physicalExecutionClaim.test(narrative)) {
     invalidTerminalArtifact('investigation_complete cannot claim physical execution by the Agent.');
   }
 };
@@ -241,7 +243,7 @@ const parseKeyFigure = (value: unknown, index: number): InvestigationKeyFigure =
 
 export const parseInvestigationComplete = (value: unknown): InvestigationComplete => {
   const record = asRecord(value, 'investigation_complete input');
-  assertExactKeys(record, ['outcome', 'summary', 'evidenceRefs', 'limitations', 'recommendedNext'], ['keyFigures']);
+  assertExactKeys(record, ['outcome', 'evidenceRefs', 'limitations', 'recommendedNext'], ['keyFigures']);
   if ('keyFigures' in record && (!Array.isArray(record.keyFigures) || record.keyFigures.length > MAX_KEY_FIGURES)) {
     return invalidTerminalArtifact('investigation_complete keyFigures must be a bounded array.');
   }
@@ -257,11 +259,6 @@ export const parseInvestigationComplete = (value: unknown): InvestigationComplet
   if (record.outcome === 'SUPPORTED_FINDING' && evidenceRefs.length === 0) {
     return invalidTerminalArtifact('SUPPORTED_FINDING requires at least one evidence reference.');
   }
-  const summary = boundedString(
-    record.summary,
-    'investigation_complete summary',
-    MAX_FINDING_SUMMARY_LENGTH,
-  );
   const limitations = stringList(
     record.limitations,
     'investigation_complete limitations',
@@ -274,13 +271,12 @@ export const parseInvestigationComplete = (value: unknown): InvestigationComplet
     MAX_FINDING_LIST_ITEMS,
     MAX_FINDING_LIST_ITEM_LENGTH,
   );
-  for (const narrative of [summary, ...limitations, ...recommendedNext]) {
+  for (const narrative of [...limitations, ...recommendedNext]) {
     assertNoPhysicalExecutionClaim(narrative);
   }
 
   return Object.freeze({
     outcome: record.outcome,
-    summary,
     ...(Array.isArray(record.keyFigures) ? { keyFigures: Object.freeze(record.keyFigures.map(parseKeyFigure)) } : {}),
     evidenceRefs,
     limitations,

@@ -352,7 +352,7 @@ func validateAgentArtifactValue(value any) error {
 			return errors.New("invalid finding Artifact shape")
 		}
 		finding, ok := artifact["finding"].(map[string]any)
-		findingKeys := []string{"outcome", "summary", "evidenceRefs", "limitations", "recommendedNext"}
+		findingKeys := []string{"outcome", "evidenceRefs", "limitations", "recommendedNext"}
 		if _, present := finding["keyFigures"]; present {
 			findingKeys = append(findingKeys, "keyFigures")
 		}
@@ -362,9 +362,6 @@ func validateAgentArtifactValue(value any) error {
 		}
 		if err := validateAgentSessionKeyFigures(finding["keyFigures"]); err != nil {
 			return err
-		}
-		if _, ok := operationsBoundedString(finding["summary"], 2000); !ok {
-			return errors.New("invalid finding summary")
 		}
 		refs, ok := finding["evidenceRefs"].([]any)
 		if !ok || len(refs) > 32 {

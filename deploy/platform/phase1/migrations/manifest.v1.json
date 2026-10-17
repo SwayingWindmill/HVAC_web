@@ -148,7 +148,8 @@
     {
       "name": "hvac_operations_agent",
       "migrations": [
-        "services/operations-agent-service/migrations/operations/001_agent_sessions.sql"
+        "services/operations-agent-service/migrations/operations/001_agent_sessions.sql",
+        "services/operations-agent-service/migrations/operations/002_finding_without_summary.sql"
       ]
     }
   ],

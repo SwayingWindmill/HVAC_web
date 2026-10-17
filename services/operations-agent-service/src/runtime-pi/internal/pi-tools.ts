@@ -91,7 +91,6 @@ const investigationCompleteParameters = Type.Object({
     Type.Literal('SUPPORTED_FINDING'),
     Type.Literal('UNABLE_TO_CONCLUDE'),
   ]),
-  summary: Type.String({ minLength: 1, maxLength: 2_000 }),
   evidenceRefs: Type.Array(Type.Object({
     owner: Type.Union([
       Type.Literal('REGISTRY'),

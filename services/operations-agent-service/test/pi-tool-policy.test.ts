@@ -53,7 +53,6 @@ const message = Object.freeze({
 
 const completeUnable = Object.freeze({
   outcome: 'UNABLE_TO_CONCLUDE',
-  summary: 'The available evidence was insufficient.',
   evidenceRefs: Object.freeze([]),
   limitations: Object.freeze(['One or more reads were unavailable.']),
   recommendedNext: Object.freeze(['Retry the investigation.']),

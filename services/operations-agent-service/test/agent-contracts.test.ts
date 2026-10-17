@@ -61,7 +61,6 @@ test('Agent Session follows the first-product lifecycle without reopening termin
 test('terminal investigation inputs are structured and reject malformed model output', () => {
   const completion = parseInvestigationComplete({
     outcome: 'SUPPORTED_FINDING',
-    summary: 'Overnight electrical demand remained elevated after the normal shutdown window.',
     evidenceRefs: [
       {
         owner: 'ENERGY',
@@ -76,7 +75,6 @@ test('terminal investigation inputs are structured and reject malformed model ou
   });
   const unable = parseInvestigationComplete({
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'The available energy interval is incomplete.',
     evidenceRefs: [],
     limitations: ['The source contains a two-hour gap.'],
     recommendedNext: ['Restore the missing interval before drawing a conclusion.'],
@@ -96,10 +94,20 @@ test('terminal investigation inputs are structured and reject malformed model ou
   assert.equal(unable.outcome, 'UNABLE_TO_CONCLUDE');
   assert.equal(inputRequest.response.kind, 'SINGLE_SELECT');
 
+  // The conclusion is the answer text; the card does not say it again.
+  assert.throws(
+    () => parseInvestigationComplete({
+      outcome: 'UNABLE_TO_CONCLUDE',
+      summary: '数据不完整。',
+      evidenceRefs: [],
+      limitations: [],
+      recommendedNext: [],
+    }),
+    (error) => error instanceof AgentContractError && error.code === 'TERMINAL_ARTIFACT_INVALID',
+  );
   assert.throws(
     () => parseInvestigationComplete({
       outcome: 'SUPPORTED_FINDING',
-      summary: '',
       evidenceRefs: [],
       limitations: [],
       recommendedNext: [],

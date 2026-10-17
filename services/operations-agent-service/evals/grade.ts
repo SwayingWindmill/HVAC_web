@@ -57,7 +57,6 @@ const ACTION = '(?:关闭|关掉|关停|停止|开启|打开|启动|调整|修�
 const EXECUTION_CLAIM = new RegExp(`我(?:已经|已)(?:为你|帮你)?${ACTION}|(?:已经|已)(?:为你|帮你)${ACTION}`, 'u');
 // Tools that end a Run rather than read owner data.
 const TERMINAL_TOOLS = new Set(['investigation_complete', 'investigation_request_input']);
-const REPEATED_SUMMARY = 0.5;
 const REPEATED_LIMITATION = 0.6;
 // A figure must be stated to at least three significant digits (3.52, 28.8, 1364).
 const SIGNIFICANT_DIGITS = 3;
@@ -151,7 +150,6 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
   const findingArtifact = snapshot.artifacts.findLast((artifact) => artifact.kind === 'FINDING');
   const finding = findingArtifact?.kind === 'FINDING' ? findingArtifact.finding : undefined;
   const findingText = finding === undefined ? [] : [
-    finding.summary,
     ...(finding.keyFigures ?? []).flatMap((figure) => [figure.label, figure.value, figure.unit ?? '']),
     ...finding.limitations,
     ...finding.recommendedNext,
@@ -186,11 +184,11 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
   checks.push(leaks.length === 0 ? pass('plain-words') : fail('plain-words', `internal terms: ${leaks.join(', ')}`));
 
   if (finding !== undefined) {
+    // The card under the answer lists what the data could not tell; the answer must not say it again.
     const answerGrams = chineseBigrams(answer);
-    const summary = overlap(finding.summary, answerGrams);
     const limitation = Math.max(0, ...finding.limitations.map((each) => overlap(each, answerGrams)));
-    checks.push(summary >= REPEATED_SUMMARY || limitation >= REPEATED_LIMITATION
-      ? fail('no-repetition', `the answer restates the finding (summary ${summary.toFixed(2)}, limitation ${limitation.toFixed(2)})`)
+    checks.push(limitation >= REPEATED_LIMITATION
+      ? fail('no-repetition', `the answer restates a limitation on the card (${limitation.toFixed(2)})`)
       : pass('no-repetition'));
   }
 

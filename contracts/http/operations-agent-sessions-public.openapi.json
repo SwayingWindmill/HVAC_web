@@ -136,9 +136,9 @@
         ]
       },
       "InvestigationComplete": {
-        "type": "object", "additionalProperties": false, "required": ["outcome", "summary", "evidenceRefs", "limitations", "recommendedNext"],
+        "type": "object", "additionalProperties": false, "required": ["outcome", "evidenceRefs", "limitations", "recommendedNext"],
         "properties": {
-          "outcome": { "type": "string", "enum": ["SUPPORTED_FINDING", "UNABLE_TO_CONCLUDE"] }, "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "outcome": { "type": "string", "enum": ["SUPPORTED_FINDING", "UNABLE_TO_CONCLUDE"] },
           "keyFigures": { "type": "array", "maxItems": 4, "items": { "type": "object", "additionalProperties": false, "required": ["label", "value"], "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 32 }, "value": { "type": "string", "minLength": 1, "maxLength": 24 }, "unit": { "type": "string", "minLength": 1, "maxLength": 16 } } } },
           "evidenceRefs": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/AgentEvidenceRef" } },
           "limitations": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 512 } },

@@ -211,7 +211,7 @@ func TestValidateAgentSessionEventAcceptsFindingKeyFiguresAndRejectsExtraFields(
 		return agentSessionEventFixture("artifact.created", map[string]any{"artifact": map[string]any{
 			"id": "artifact-1", "sessionId": "session-1", "runId": "run-1", "kind": "FINDING", "createdAt": 1000,
 			"finding": map[string]any{
-				"outcome": "UNABLE_TO_CONCLUDE", "summary": "数据不足。", "evidenceRefs": []any{},
+				"outcome": "UNABLE_TO_CONCLUDE", "evidenceRefs": []any{},
 				"keyFigures": []any{figure}, "limitations": []any{}, "recommendedNext": []any{},
 			},
 		}}, "run-1")
@@ -237,7 +237,7 @@ func TestValidateAgentSessionSnapshotBoundsChineseTextInCharacters(t *testing.T)
 			"artifacts": []any{map[string]any{
 				"id": "artifact-1", "sessionId": "session-1", "runId": "run-1", "kind": "FINDING", "createdAt": 2000,
 				"finding": map[string]any{
-					"outcome": "SUPPORTED_FINDING", "summary": "10月13日用电和供冷都最高。", "evidenceRefs": []any{},
+					"outcome": "SUPPORTED_FINDING", "evidenceRefs": []any{},
 					"keyFigures": []any{map[string]any{"unit": "kWh", "label": label, "value": "1768"}}, "limitations": []any{}, "recommendedNext": []any{},
 				},
 			}},

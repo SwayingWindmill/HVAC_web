@@ -111,13 +111,17 @@ test('English narration between Tool calls fails Chinese only; units do not', ()
   assert.equal(daily.passed, true, daily.reason ?? '');
 });
 
-test('an answer that restates the finding fails no repetition; the table alone passes', () => {
+// The answer says the conclusion; the card under it says what the data could not tell (#591).
+test('an answer that restates what the data could not tell fails no repetition; the conclusion and table alone pass', () => {
   for (const id of recorded) {
     const snapshot = fixture(id) as AgentSessionSnapshot;
-    assert.equal(check(gradeTrial(question(id), snapshot, series), 'no-repetition').passed, false, id);
     const tableOnly = withAnswer(snapshot, (content) => content.split(/\*\*(?:几点|依据)/u)[0] ?? content);
     const repetition = check(gradeTrial(question(id), tableOnly, series), 'no-repetition');
     assert.equal(repetition.passed, true, `${id}: ${repetition.reason}`);
+    const finding = snapshot.artifacts.find((artifact) => artifact.kind === 'FINDING');
+    assert.ok(finding?.kind === 'FINDING');
+    const restated = withAnswer(tableOnly, (content) => `${content} 需要说明：${finding.finding.limitations[0]}`);
+    assert.equal(check(gradeTrial(question(id), restated, series), 'no-repetition').passed, false, id);
   }
 });
 

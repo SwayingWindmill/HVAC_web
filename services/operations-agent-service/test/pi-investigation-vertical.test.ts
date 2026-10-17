@@ -343,7 +343,6 @@ test('a Run accepts exactly one terminal operation even when the model calls bot
           name: INVESTIGATION_COMPLETE_TOOL_NAME,
           arguments: {
             outcome: 'UNABLE_TO_CONCLUDE',
-            summary: 'A second terminal operation must not be accepted.',
             evidenceRefs: [],
             limitations: ['Operator input is required.'],
             recommendedNext: [],
@@ -364,13 +363,11 @@ test('a Run accepts exactly one terminal operation even when the model calls bot
 test('investigation_complete rejects unsupported physical-execution claims in terminal narrative fields', async () => {
   const base = {
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'The available evidence is incomplete.',
     evidenceRefs: [],
     limitations: ['No physical control authority was available.'],
     recommendedNext: ['Verify the schedule with an operator.'],
   };
   const cases = [
-    { ...base, summary: 'I changed the chilled-water setpoint to correct the overnight energy increase.' },
     { ...base, limitations: ['The system changed the chilled-water setpoint during this investigation.'] },
     { ...base, recommendedNext: ['The agent started the standby chiller and should verify the result.'] },
   ];
@@ -394,7 +391,7 @@ test('investigation_complete rejects unsupported physical-execution claims in te
   }
 });
 
-test('investigation_complete rejects unbounded summary, evidence, limitations, and recommended actions', async () => {
+test('investigation_complete rejects unbounded evidence, limitations, and recommended actions', async () => {
   const evidence = Object.freeze({
     owner: 'ENERGY',
     resourceType: 'period-comparison',
@@ -404,13 +401,11 @@ test('investigation_complete rejects unbounded summary, evidence, limitations, a
   });
   const base = {
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'Evidence remains incomplete.',
     evidenceRefs: [],
     limitations: [],
     recommendedNext: [],
   };
   const cases = [
-    { ...base, summary: 's'.repeat(2001) },
     { ...base, evidenceRefs: Array.from({ length: 33 }, () => evidence) },
     { ...base, limitations: Array.from({ length: 17 }, (_, index) => `limitation-${index}`) },
     { ...base, recommendedNext: Array.from({ length: 17 }, (_, index) => `next-${index}`) },
@@ -443,7 +438,6 @@ test('SUPPORTED_FINDING evidence must reference a successful Tool execution from
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'SUPPORTED_FINDING',
-          summary: 'Overnight energy increased by 25 percent against the selected baseline.',
           evidenceRefs: [{
             owner: 'ENERGY',
             resourceType: 'period-comparison',
@@ -477,7 +471,6 @@ test('model-call budget exhaustion stops the run before another model turn', asy
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'This second model turn must never execute.',
           evidenceRefs: [],
           limitations: ['Budget exhausted.'],
           recommendedNext: [],
@@ -510,7 +503,6 @@ test('Tool-call budget exhaustion stops the run before another model turn', asyn
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'This second model turn must never execute after Tool budget exhaustion.',
           evidenceRefs: [],
           limitations: ['Tool budget exhausted.'],
           recommendedNext: [],
@@ -542,7 +534,6 @@ test('output-token budget exhaustion stops the run before another model turn', a
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'This second model turn must never execute after output token exhaustion.',
           evidenceRefs: [],
           limitations: ['Output token budget exhausted.'],
           recommendedNext: [],
@@ -599,7 +590,6 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'SUPPORTED_FINDING',
-          summary: 'Current overnight electricity use is 25 percent above the selected baseline period.',
           evidenceRefs: [{
             owner: 'ENERGY',
             resourceType: 'period-comparison',
@@ -647,7 +637,6 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'SUPPORTED_FINDING',
-          summary: '8月2日这一小时比8月1日多用电 25 kWh（+25%），供冷量同步增加，能效基本不变。',
           evidenceRefs: [
             { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'power', toolExecutionId: 'power-compare' },
             { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'cooling', toolExecutionId: 'cooling-compare' },
@@ -702,7 +691,6 @@ test('incomplete Energy evidence produces unable-to-conclude instead of a confir
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'The current overnight period is incomplete, so a reliable increase cannot be confirmed.',
           evidenceRefs: [{
             owner: 'ENERGY',
             resourceType: 'period-comparison',
@@ -744,7 +732,6 @@ test('stale current Telemetry remains partial evidence and produces unable-to-co
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'The requested current telemetry is stale and incomplete, so a normal current operating state cannot be confirmed.',
           evidenceRefs: [{
             owner: 'TELEMETRY',
             resourceType: 'device-observation-snapshot',
@@ -794,7 +781,6 @@ test('malicious Owner text cannot grant a forbidden Tool or widen the trusted Si
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'The Asset text contained an untrusted instruction, and no control action was executed.',
           evidenceRefs: [{
             owner: 'REGISTRY',
             resourceType: 'site-assets',
@@ -834,7 +820,6 @@ test('a multi-measure question is answered from one semantic query over the Site
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'SUPPORTED_FINDING',
-          summary: '10月14日和15日每天用电 3200 kWh、供冷 14080 kWh，能效 4.4，两天持平。',
           evidenceRefs: [{ owner: 'ENERGY', resourceType: 'semantic-query', resourceId: 'site_energy', toolExecutionId: 'two-days' }],
           keyFigures: [{ label: '用电', value: '3200', unit: 'kWh' }, { label: '能效', value: '4.4' }],
           limitations: [],
@@ -884,7 +869,7 @@ test('a semantic query naming a cube member, an unlisted member, two views, a Si
       parts: [{
         type: 'tool-call',
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
-        arguments: { outcome: 'UNABLE_TO_CONCLUDE', summary: '查询参数不在允许范围内，没有读到数据。', evidenceRefs: [], keyFigures: [], limitations: ['查询被拒绝。'], recommendedNext: [] },
+        arguments: { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], keyFigures: [], limitations: ['查询被拒绝。'], recommendedNext: [] },
       }],
       stopReason: 'toolUse',
     },

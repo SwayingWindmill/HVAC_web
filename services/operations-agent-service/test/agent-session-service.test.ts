@@ -72,14 +72,13 @@ const createIds = () => {
   };
 };
 
-const findingFor = (input, summary = 'Investigation completed.') => Object.freeze({
+const findingFor = (input) => Object.freeze({
   id: `finding-${input.run.id}`,
   sessionId: input.session.id,
   runId: input.run.id,
   kind: 'FINDING',
   finding: Object.freeze({
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary,
     evidenceRefs: Object.freeze([]),
     limitations: Object.freeze([]),
     recommendedNext: Object.freeze([]),
