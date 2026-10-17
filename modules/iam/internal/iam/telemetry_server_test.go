@@ -92,7 +92,7 @@ func TestIAMTelemetryDecisionIssuesExactNonTransitiveGrant(t *testing.T) {
 	}
 }
 
-func TestIAMTelemetryDecisionIssuesGrantForAllowedDelegatedPresenter(t *testing.T) {
+func TestIAMTelemetryGrantForAnAllowedDelegatedPresenterIsIssuedAndConsumedForThatPresenter(t *testing.T) {
 	const operationsPresenter = "spiffe://hvac.local/operations-agent-service"
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: telemetryHTTPFacts(harnessTime())}

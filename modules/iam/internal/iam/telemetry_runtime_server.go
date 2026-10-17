@@ -3,7 +3,6 @@ package iam
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -101,9 +100,6 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 	now := h.now()
 	var useErr error
 	claims, err := telemetryauth.VerifyGrant(h.telemetryGrantSigner.Public(), input.DelegationGrant)
-	if _, allowed := h.allowedTelemetryGrantPresenters[input.Presenter]; err == nil && !allowed {
-		err = errors.New("telemetry grant presenter is not allowed")
-	}
 	if err == nil {
 		err = telemetryauth.ValidateGrant(claims, telemetryauth.GrantValidation{
 			Now: now, Issuer: h.telemetryGrantIssuer, Presenter: input.Presenter, Audience: h.telemetryGrantAudience,
