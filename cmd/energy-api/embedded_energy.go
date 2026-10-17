@@ -380,8 +380,12 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		},
 		// report-service reads the Site's energy as its own Workload Principal (ADR 0017, ADR 0023).
-		AnalyticsGrantAudience:      envOr("QUERY_AUDIENCE", "telemetry-query-service"),
-		AllowedAnalyticsWorkloads:   []string{envOr("IAM_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service")},
+		AnalyticsGrantAudience: envOr("QUERY_AUDIENCE", "telemetry-query-service"),
+		AllowedAnalyticsWorkloads: []string{
+			envOr("IAM_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service"),
+			envOr("IAM_OPTIMIZATION_SERVICE_SPIFFE", "spiffe://hvac.local/optimization-service"),
+			envOr("IAM_MV_SERVICE_SPIFFE", "spiffe://hvac.local/mv-service"),
+		},
 		RegistryGrantStatus:         store,
 		TelemetryAuthorizationStore: store,
 		AlarmAuthorizationStore:     store,
@@ -757,6 +761,8 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 				envOr("QUERY_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 				envOr("QUERY_FDD_SERVICE_SPIFFE", "spiffe://hvac.local/fdd-service"),
 				envOr("QUERY_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service"),
+				envOr("QUERY_OPTIMIZATION_SERVICE_SPIFFE", "spiffe://hvac.local/optimization-service"),
+				envOr("QUERY_MV_SERVICE_SPIFFE", "spiffe://hvac.local/mv-service"),
 			},
 			Audience: envOr("QUERY_AUDIENCE", "telemetry-query-service"), Logger: logger, Observability: telemetry,
 		}),

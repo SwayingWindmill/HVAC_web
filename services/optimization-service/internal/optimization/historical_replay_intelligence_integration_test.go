@@ -24,7 +24,7 @@ func TestHistoricalReplayForecastAndCurrentStatePrepareSealedOptimization(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: baseURL, Username: "optimization_service_reader"})
+	inputs, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: baseURL, Username: "optimization_service_reader", Energy: pricedDayStub{energyKWh: 60, costCNY: 90}})
 	if err != nil {
 		t.Fatal(err)
 	}

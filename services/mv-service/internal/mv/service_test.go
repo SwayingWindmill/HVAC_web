@@ -6,8 +6,6 @@ import (
 	"math"
 	"testing"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 const (
@@ -114,19 +112,30 @@ func (history plantHistory) HourlySamples(_ context.Context, _, _ string, bounda
 	return samples, nil
 }
 
-type flatTariff struct{ rate float64 }
+type shanghaiClock struct{}
 
-func (tariff flatTariff) SiteClock(_ context.Context, _, _ string) (SiteClock, error) {
-	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: shanghai, Periods: []tariffmodel.Period{
-		{DayType: "WEEKDAY", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
-		{DayType: "WEEKEND", StartMinute: 0, EndMinute: 1440, EnergyRatePerKWh: tariff.rate},
-	}}}, nil
+func (shanghaiClock) SiteClock(context.Context, string, string) (SiteClock, error) {
+	return SiteClock{Location: shanghai}, nil
 }
+
+// hourlyRates stands in for the query service's hourly price of the Site's electricity.
+type hourlyRates func(time.Time) (float64, bool)
+
+func (rates hourlyRates) HourlyRates(context.Context, string, string, *time.Location, time.Time, time.Time) (func(time.Time) (float64, bool), error) {
+	return rates, nil
+}
+
+func flatRate(rate float64) hourlyRates {
+	return func(time.Time) (float64, bool) { return rate, true }
+}
+
+// unpriced is a rate source that prices no hour, as for a Site without an import Tariff.
+var unpriced = hourlyRates(func(time.Time) (float64, bool) { return 0, false })
 
 func newTestService(t *testing.T, store Store, history HourlySource) *Service {
 	t.Helper()
 	ids := 0
-	service, err := NewService(store, history, flatTariff{rate: 0.8}, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
+	service, err := NewService(store, history, shanghaiClock{}, flatRate(0.8), func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
 		ids++
 		return []string{"", "01990000-7000-7000-8000-000000000001", "01990000-7000-7000-8000-000000000002", "01990000-7000-7000-8000-000000000003"}[ids], nil
 	})
@@ -419,16 +428,10 @@ func TestATrustedBaselineCannotBeRefitted(t *testing.T) {
 	}
 }
 
-type unpricedClock struct{}
-
-func (unpricedClock) SiteClock(context.Context, string, string) (SiteClock, error) {
-	return SiteClock{Location: shanghai}, nil
-}
-
-func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
+func TestHoursWithoutAPriceAreVerifiedUnpriced(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
-	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, unpricedClock{}, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
+	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, shanghaiClock{}, unpriced, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
 		return "01990000-7000-7000-8000-000000000001", nil
 	})
 	if err != nil {
@@ -450,22 +453,18 @@ func TestASiteWithoutATariffIsVerifiedWithItsHoursUnpriced(t *testing.T) {
 	}
 }
 
-// A Tariff written in UTC whose first eight hours cost 1/kWh; the Site keeps Shanghai's clock.
-type utcTariffClock struct{}
-
-func (utcTariffClock) SiteClock(context.Context, string, string) (SiteClock, error) {
-	periods := []tariffmodel.Period{}
-	for _, dayType := range []string{"WEEKDAY", "WEEKEND"} {
-		periods = append(periods, tariffmodel.Period{DayType: dayType, StartMinute: 0, EndMinute: 480, EnergyRatePerKWh: 1},
-			tariffmodel.Period{DayType: dayType, StartMinute: 480, EndMinute: 1440, EnergyRatePerKWh: 0})
-	}
-	return SiteClock{Location: shanghai, Tariff: &ImportTariff{Location: time.UTC, Periods: periods}}, nil
-}
-
-func TestHoursArePricedOnTheTariffClockAndDaysSplitOnTheSiteClock(t *testing.T) {
+// Each hour is priced at the rate the query service gives that instant, whatever the Site's clock:
+// here UTC 00:00–08:00 costs 1/kWh and every other hour nothing, while days split on Shanghai's.
+func TestHoursArePricedAtTheirOwnRateAndDaysSplitOnTheSiteClock(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
-	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, utcTariffClock{}, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
+	firstEightUTCHours := hourlyRates(func(at time.Time) (float64, bool) {
+		if at.UTC().Hour() < 8 {
+			return 1, true
+		}
+		return 0, true
+	})
+	service, err := NewService(store, plantHistory{changedAt: implemented, factor: 0.9}, shanghaiClock{}, firstEightUTCHours, func() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, shanghai) }, func(time.Time) (string, error) {
 		return "01990000-7000-7000-8000-000000000001", nil
 	})
 	if err != nil {

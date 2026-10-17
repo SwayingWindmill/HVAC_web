@@ -178,7 +178,6 @@ WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'R
   const bindings = [
     { code: 'hourly_energy', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', source: totalEnergy, cron: '5 * * * *', name: '空调逐时用电量（每小时）' },
     { code: 'daily_energy', subject: 'SITE', subjectId: site.id, granularity: 'DAY', source: totalEnergy, cron: '10 0 * * *', name: '空调日用电量（每日零点后）' },
-    { code: 'energy_cost', subject: 'SITE', subjectId: site.id, granularity: 'DAY', source: {}, cron: '20 0 * * *', name: '空调日电度电费（每日零点后）' },
     ...branches.map((device) => ({
       code: 'device_hourly_energy', subject: 'DEVICE', subjectId: device.id, granularity: 'HOUR', cron: '5 * * * *',
       source: { points: { device_energy: counter(device) }, counter: { decreaseMode: 'RESET' } },
@@ -189,7 +188,8 @@ WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'R
       code: 'hourly_cooling', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', cron: '5 * * * *', name: '逐时供冷量（每小时）',
       source: { points: { site_cooling: counter(cooling) }, counter: { decreaseMode: 'RESET' } },
     }] : []),
-  ].map((binding, index) => ({ ...binding, index: index + 1 }));
+  // Slot 3 was the retired energy_cost binding (#575): the bindings after it keep their ids.
+  ].map((binding, index) => ({ ...binding, index: index < 2 ? index + 1 : index + 2 }));
   const nextFire = (cron) => cron.startsWith('5 ') ? 'clock_timestamp()'
     : `(date_trunc('day', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 day' + interval '${Number(cron.split(' ')[0])} minutes') AT TIME ZONE '${site.timezone}'`;
   const schedules = bindings.map((binding) => `  (${id('7600', binding.index)}, ${sqlLiteral(`${binding.code.replaceAll('_', '-')}-${site.code}${binding.subject === 'DEVICE' ? `-${binding.index}` : ''}`)}, ${sqlLiteral(binding.name)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', ${sqlLiteral(binding.cron)}, '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rowId(site.id, '7500', binding.index) })}, ${nextFire(binding.cron)})`);

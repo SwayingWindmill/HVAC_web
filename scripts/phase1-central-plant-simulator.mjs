@@ -419,9 +419,6 @@ const touImportSlices = [
   ['VALLEY', 0, 360], ['FLAT', 360, 480], ['PEAK', 480, 660], ['FLAT', 660, 780], ['PEAK', 780, 900],
   ['FLAT', 900, 1080], ['PEAK', 1080, 1260], ['FLAT', 1260, 1320], ['VALLEY', 1320, 1440],
 ];
-// The daily energy cost Metric prices each hour of the plant's hourly energy, which the savings
-// seed registers first, at the import Tariff in effect then (TARIFF_ENERGY_COST).
-const hourlyEnergyMetricId = localUUID(0x830000000001);
 
 function buildOptimizationSeed(site, points) {
   const { tenantId, siteId } = site;
@@ -430,12 +427,13 @@ function buildOptimizationSeed(site, points) {
   if (!energyPointId) throw new Error('METER-HVAC-TOTAL/hvac_meter.energy is required for the daily energy metric');
   let tenantSequence = 0x800000000001;
   const tenantID = () => localUUID(tenantSequence++);
-  const [energyMetricId, energyVersionId, energyDependencyId, costMetricId, costVersionId, costDependencyId] =
-    [tenantID(), tenantID(), tenantID(), tenantID(), tenantID(), tenantID()];
+  // The cost Metric's ids stay reserved so the ids after them do not move (energy_cost retired in #575).
+  const [energyMetricId, energyVersionId, energyDependencyId] = [tenantID(), tenantID(), tenantID()];
+  tenantID(); tenantID(); tenantID();
   const [policyId, policyVersionId, modelDefinitionId, deploymentRevisionId] = [tenantID(), tenantID(), tenantID(), tenantID()];
   let siteSequence = 0x810000000001;
   const siteID = () => siteUUID(site, siteSequence++);
-  const [energyBindingId, costBindingId, energyScheduleId, costScheduleId, boundaryId, tariffId, tariffVersionId, assignmentId, deploymentBindingId] =
+  const [energyBindingId, , energyScheduleId, , boundaryId, tariffId, tariffVersionId, assignmentId, deploymentBindingId] =
     [siteID(), siteID(), siteID(), siteID(), siteID(), siteID(), siteID(), siteID(), siteID()];
   const topologyVersionId = siteUUID(site, 0x600000000001);
   const gridNodeId = siteUUID(site, 0x600000000002);
@@ -464,34 +462,24 @@ INSERT INTO core_registry.unit_registry (unit_code, display_name, quantity_kind,
 VALUES ('CNY', '人民币元', 'OTHER', 'CNY', 1, 0, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT DO NOTHING;
 INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at) VALUES
-  (${id(energyMetricId)}, ${t}, 'daily_energy', '冷站日用电量', 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp()),
-  (${id(costMetricId)}, ${t}, 'energy_cost', '冷站日电度电费', 'FINANCIAL', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+  (${id(energyMetricId)}, ${t}, 'daily_energy', '冷站日用电量', 'ENERGY', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at) VALUES
-  (${id(energyVersionId)}, ${t}, ${id(energyMetricId)}, 1, 'kWh', 'NUMBER', 'SITE', 'DAY', 'LAST', 'DELTA', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp()),
-  (${id(costVersionId)}, ${t}, ${id(costMetricId)}, 1, 'CNY', 'NUMBER', 'SITE', 'DAY', 'SUM', 'TARIFF_ENERGY_COST', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
+  (${id(energyVersionId)}, ${t}, ${id(energyMetricId)}, 1, 'kWh', 'NUMBER', 'SITE', 'DAY', 'LAST', 'DELTA', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
 SELECT ${id(energyDependencyId)}::uuid, ${t}::uuid, ${id(energyVersionId)}::uuid, 'POINT', 'site_energy', NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
 ${draftVersion(energyVersionId)}
 ON CONFLICT (id) DO NOTHING;
-INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
-SELECT ${id(costDependencyId)}::uuid, ${t}::uuid, ${id(costVersionId)}::uuid, 'METRIC', 'hourly_energy', ${id(hourlyEnergyMetricId)}::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
-${draftVersion(costVersionId)}
-ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
-WHERE id IN (${id(energyVersionId)}, ${id(costVersionId)}) AND status = 'DRAFT';
+WHERE id = ${id(energyVersionId)} AND status = 'DRAFT';
 -- A binding is written once; after its Metric Version is superseded the overlap guard would
 -- refuse it again before ON CONFLICT could skip it.
 INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
 SELECT ${id(energyBindingId)}, ${t}, ${st}, ${id(energyVersionId)}, ${id(energyMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', ${id(JSON.stringify({ points: { site_energy: energyPointId }, counter: { decreaseMode: 'RESET' } }))}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
 WHERE NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id(energyBindingId)});
-INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
-SELECT ${id(costBindingId)}, ${t}, ${st}, ${id(costVersionId)}, ${id(costMetricId)}, 1, 1, 'SITE', ${st}, 'DAY', '{}', '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
-WHERE NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id(costBindingId)});
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
-  (${id(energyScheduleId)}, ${id(`daily-energy-${site.siteCode}`)}, '冷站日用电量（每日零点后）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '10 0 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: energyBindingId }))}, ${nextLocalTime(10)}),
-  (${id(costScheduleId)}, ${id(`daily-energy-cost-${site.siteCode}`)}, '冷站日电度电费（每日零点后）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '20 0 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: costBindingId }))}, ${nextLocalTime(20)})
+  (${id(energyScheduleId)}, ${id(`daily-energy-${site.siteCode}`)}, '冷站日用电量（每日零点后）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '10 0 * * *', '5-field-v1', 'Asia/Shanghai', 'FIRE_ONCE', 60, ${id(JSON.stringify({ bindingId: energyBindingId }))}, ${nextLocalTime(10)})
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
 
 INSERT INTO core_registry.settlement_boundaries (id, tenant_id, site_id, topology_version_id, boundary_code, display_name, boundary_type, energy_type_id, direction, definition_mode, node_id, effective_from, status, revision, created_at, updated_at)
@@ -581,7 +569,6 @@ function buildSavingsSeed(site, points) {
     { code: 'hourly_energy', name: '冷站逐时用电量', dependency: 'site_energy', pointId: energyPointId },
     { code: 'hourly_cooling', name: '冷站逐时供冷量', dependency: 'site_cooling', pointId: coolingPointId },
   ].map((metric) => ({ ...metric, metricId: tenantID(), versionId: tenantID(), dependencyId: tenantID(), bindingId: siteID(), scheduleId: siteID() }));
-  if (metrics[0].metricId !== hourlyEnergyMetricId) throw new Error('the daily energy cost Metric depends on hourly_energy being the first savings Metric');
   const evaluationScheduleId = siteID();
   const deviceMetric = { code: 'device_hourly_energy', name: '设备逐时用电量', dependency: 'device_energy', metricId: tenantID(), versionId: tenantID(), dependencyId: tenantID() };
   const deviceByName = new Map(siteDevices(site).map((device) => [device.name, device]));

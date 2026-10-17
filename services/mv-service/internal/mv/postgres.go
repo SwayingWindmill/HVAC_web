@@ -10,11 +10,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
-	"github.com/quanlaihe/hvac-web/libs/tariffmodel"
 )
 
 // PostgresStore keeps measures and verified days in core_registry as mv_runtime, scoped by
-// Tenant and Site row security; it also reads the Site's clock and import Tariff.
+// Tenant and Site row security; it also reads the Site's clock.
 type PostgresStore struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
@@ -217,8 +216,7 @@ FROM core_registry.savings_daily_results WHERE tenant_id=$1::uuid AND site_id=$2
 	return results, err
 }
 
-// SiteClock reads the Site's timezone and the released Tariff Version assigned to the Site's grid
-// import now, with the version's own timezone, choosing it the way Settlement does.
+// SiteClock reads the Site's timezone.
 func (store *PostgresStore) SiteClock(ctx context.Context, tenantID, siteID string) (SiteClock, error) {
 	var clock SiteClock
 	err := store.scoped(ctx, tenantID, siteID, true, func(tx pgx.Tx) error {
@@ -227,49 +225,8 @@ func (store *PostgresStore) SiteClock(ctx context.Context, tenantID, siteID stri
 			return fmt.Errorf("read Site timezone: %w", err)
 		}
 		location, err := time.LoadLocation(timezone)
-		if err != nil {
-			return err
-		}
 		clock.Location = location
-		var versionID, versionTimezone string
-		err = tx.QueryRow(ctx, `
-SELECT version.id::text, version.timezone
-FROM core_registry.tariff_assignments AS assignment
-JOIN core_registry.settlement_boundaries AS boundary
-  ON boundary.tenant_id = assignment.tenant_id AND boundary.site_id = assignment.site_id AND boundary.id = assignment.boundary_id
-JOIN core_registry.tariff_versions AS version
-  ON version.tenant_id = assignment.tenant_id AND version.site_id = assignment.site_id AND version.tariff_id = assignment.tariff_id
-WHERE assignment.tenant_id = $1::uuid AND assignment.site_id = $2::uuid
-  AND assignment.status = 'RELEASED' AND assignment.effective_from <= now() AND (assignment.effective_to IS NULL OR assignment.effective_to > now())
-  AND boundary.status = 'ACTIVE' AND boundary.boundary_type = 'GRID_CONNECTION' AND boundary.direction = 'IMPORT'
-  AND version.status = 'RELEASED' AND version.effective_from <= now() AND (version.effective_to IS NULL OR version.effective_to > now())
-ORDER BY boundary.boundary_code
-LIMIT 1`, tenantID, siteID).Scan(&versionID, &versionTimezone)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		tariffLocation, err := time.LoadLocation(versionTimezone)
-		if err != nil {
-			return err
-		}
-		clock.Tariff = &ImportTariff{Location: tariffLocation}
-		rows, err := tx.Query(ctx, `SELECT period_code, day_type, local_start_minute, local_end_minute, (pricing_rule->>'energyRatePerKWh')::float8
-FROM core_registry.tariff_periods WHERE tariff_version_id = $1::uuid ORDER BY day_type, local_start_minute`, versionID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var period tariffmodel.Period
-			if err := rows.Scan(&period.Code, &period.DayType, &period.StartMinute, &period.EndMinute, &period.EnergyRatePerKWh); err != nil {
-				return err
-			}
-			clock.Tariff.Periods = append(clock.Tariff.Periods, period)
-		}
-		return rows.Err()
+		return err
 	})
 	return clock, err
 }

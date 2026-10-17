@@ -21,6 +21,13 @@ func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, 
 	}
 
 	var definition PreparationDefinition
+	err = tx.QueryRow(ctx, `SELECT timezone FROM core_registry.sites WHERE tenant_id=$1::uuid AND id=$2::uuid`, request.TenantID, request.SiteID).Scan(&definition.SiteTimezone)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PreparationDefinition{}, fmt.Errorf("%w: the Site is not visible", ErrPreparationUnavailable)
+	}
+	if err != nil {
+		return PreparationDefinition{}, err
+	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
  pv.id::text,pv.objective,pv.horizon,pv.horizon_minutes,pv.granularity,pv.constraints,count(*) OVER ()
