@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,9 +34,10 @@ type IntelligenceConfig struct {
 	ReportBaseURL       string
 	OptimizationBaseURL string
 	HTTPClient          *http.Client
-	// FDDHTTPClient calls FDD over mutual TLS with the Gateway's workload identity (#595).
-	FDDHTTPClient *http.Client
-	Timeout       time.Duration
+	// OwnerHTTPClient calls FDD, Forecast, Optimization and M&V over mutual TLS with the Gateway's
+	// workload identity (#595, #612).
+	OwnerHTTPClient *http.Client
+	Timeout         time.Duration
 }
 
 type intelligenceController struct {
@@ -47,22 +47,35 @@ type intelligenceController struct {
 	reportBaseURL       string
 	optimizationBaseURL string
 	httpClient          *http.Client
-	fddHTTPClient       *http.Client
+	ownerHTTPClient     *http.Client
 	timeout             time.Duration
 }
 
+// intelligenceOwner is an owner that serves only contexts the Gateway signs, each for one action on
+// one Tenant and Site (#595, #612); before, they trusted whatever X-Tenant-ID a caller sent.
+type intelligenceOwner struct{ audience, header string }
+
+var (
+	fddOwner          = intelligenceOwner{audience: "fdd-service", header: "X-FDD-Context"}
+	forecastOwner     = intelligenceOwner{audience: "forecast-service", header: "X-Forecast-Context"}
+	optimizationOwner = intelligenceOwner{audience: "optimization-service", header: "X-Optimization-Context"}
+	mvOwner           = intelligenceOwner{audience: "mv-service", header: "X-MV-Context"}
+)
+
 const (
-	fddContextHeader = "X-FDD-Context"
-	fddAudience      = "fdd-service"
-	fddReadAction    = "fdd:read"
-	fddWriteAction   = "fdd:write"
+	fddReadAction           = "fdd:read"
+	fddWriteAction          = "fdd:write"
+	forecastReadAction      = "forecast:read"
+	optimizationReadAction  = "optimization:read"
+	optimizationWriteAction = "optimization:write"
+	mvReadAction            = "mv:read"
+	mvWriteAction           = "mv:write"
 )
 
 type publicIntelligenceRoute struct {
 	owner      string
 	siteID     string
 	findingID  string
-	runID      string
 	target     string
 	method     string
 	publicPath string
@@ -104,7 +117,7 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 	}
 	return &intelligenceController{
 		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, mvBaseURL: resolved.MVBaseURL, reportBaseURL: resolved.ReportBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
-		httpClient: resolved.HTTPClient, fddHTTPClient: resolved.FDDHTTPClient, timeout: resolved.Timeout,
+		httpClient: resolved.HTTPClient, ownerHTTPClient: resolved.OwnerHTTPClient, timeout: resolved.Timeout,
 	}
 }
 
@@ -132,9 +145,6 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	}
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
-	}
-	if runID, ok := matchSinglePathParameter(path, "/api/v1/optimization/runs/{runId}", "{runId}"); ok {
-		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, runID: runID, method: http.MethodGet, publicPath: "/api/v1/optimization/runs/{runId}"}, method == http.MethodGet
 	}
 	return publicIntelligenceRoute{}, false
 }
@@ -189,11 +199,7 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 		h.serveLatestOptimizationRecommendation(writer, request, session, route)
 		return
 	}
-	if route.method == http.MethodPost {
-		h.createOptimizationRun(writer, request, session)
-		return
-	}
-	h.getOptimizationRun(writer, request, session, route.runID)
+	h.createOptimizationRun(writer, request, session)
 }
 
 func (h *handler) intelligenceSession(writer http.ResponseWriter, request *http.Request, requireCSRF bool) (bffSession, bool) {
@@ -248,7 +254,7 @@ func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/forecast/" + route.target
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.forecastBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
+	raw, status, err := h.executeOwner(request, session, forecastOwner, h.intelligence.forecastBaseURL, route.siteID, forecastReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
@@ -272,7 +278,7 @@ func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request
 	} else if rawQuery := strings.TrimSpace(request.URL.RawQuery); rawQuery != "" {
 		internalPath += "?" + rawQuery
 	}
-	raw, status, err := h.executeFDD(request, session, route.siteID, fddReadAction, http.MethodGet, internalPath, nil)
+	raw, status, err := h.executeOwner(request, session, fddOwner, h.intelligence.fddBaseURL, route.siteID, fddReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
@@ -327,7 +333,7 @@ func (h *handler) serveFDDLink(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/fdd/findings/" + url.PathEscape(route.findingID) + "/links"
-	responseBody, status, callErr := h.executeFDD(request, session, route.siteID, fddWriteAction, http.MethodPatch, internalPath, raw)
+	responseBody, status, callErr := h.executeOwner(request, session, fddOwner, h.intelligence.fddBaseURL, route.siteID, fddWriteAction, http.MethodPatch, internalPath, raw)
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
@@ -417,7 +423,7 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 		writeProblem(writer, request, http.StatusBadRequest, "FDD_EVALUATION_REQUEST_INVALID", "FDD evaluation request invalid", "The FDD evaluation request could not be encoded.", false, nil)
 		return
 	}
-	responseBody, status, callErr := h.executeFDD(request, session, route.siteID, fddWriteAction, http.MethodPost, "/v1/fdd/evaluate/low-delta-t", upstreamBody)
+	responseBody, status, callErr := h.executeOwner(request, session, fddOwner, h.intelligence.fddBaseURL, route.siteID, fddWriteAction, http.MethodPost, "/v1/fdd/evaluate/low-delta-t", upstreamBody)
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
@@ -435,7 +441,7 @@ func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWrit
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/recommendations/latest"
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.optimizationBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
+	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
@@ -476,40 +482,15 @@ func (h *handler) createOptimizationRun(writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_REQUEST_INVALID", "Optimization request invalid", "The Optimization request could not be encoded.", false, nil)
 		return
 	}
-	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.optimizationBaseURL+"/v1/optimize", upstreamBody, map[string]string{"X-Tenant-ID": session.TenantID})
+	responseBody, status, callErr := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, siteID, optimizationWriteAction, http.MethodPost, "/v1/optimize", upstreamBody)
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
-func (h *handler) getOptimizationRun(writer http.ResponseWriter, request *http.Request, session bffSession, runID string) {
-	if !isLowerUUIDv7(runID) || h.intelligence.optimizationBaseURL == "" {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization run was not found.", false, nil)
-		return
-	}
-	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
-	if !ok {
-		return
-	}
-	siteIDs := make([]string, 0, len(allowedSites))
-	for siteID := range allowedSites {
-		siteIDs = append(siteIDs, siteID)
-	}
-	sort.Strings(siteIDs)
-	if len(siteIDs) == 0 {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization run was not found.", false, nil)
-		return
-	}
-	internalPath := "/v1/optimization/runs/" + url.PathEscape(runID)
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.optimizationBaseURL+internalPath, nil, map[string]string{
-		"X-Tenant-ID": session.TenantID, "X-Authorized-Site-IDs": strings.Join(siteIDs, ","),
-	})
-	h.writeIntelligenceResult(writer, request, raw, status, err)
-}
-
-// fddContext signs the context FDD serves (#595): one action on one Tenant and Site, for the
-// workload that presents it — the Gateway for the pages, the Operations Agent for its findings.
-func (h *handler) fddContext(session bffSession, siteID, action, presenter string) (string, error) {
+// ownerContext signs the context an intelligence owner serves: one action on one Tenant and Site,
+// for the workload that presents it — the Gateway for the pages, the Operations Agent for FDD findings.
+func (h *handler) ownerContext(session bffSession, owner intelligenceOwner, siteID, action, presenter string) (string, error) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil {
-		return "", errors.New("FDD context signing is not configured")
+		return "", errors.New("intelligence context signing is not configured")
 	}
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
@@ -519,23 +500,23 @@ func (h *handler) fddContext(session bffSession, siteID, action, presenter strin
 	return identitycontext.SignDelegation(h.identity.config.DelegationSigner, identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
-		ExecutingService: presenter, Audience: fddAudience, TenantID: session.TenantID,
+		ExecutingService: presenter, Audience: owner.audience, TenantID: session.TenantID,
 		Actions: []string{action}, Scopes: []string{"tenant:" + session.TenantID, "site:" + siteID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	})
 }
 
-// executeFDD calls FDD for the pages over mutual TLS with a context naming the Gateway.
-func (h *handler) executeFDD(publicRequest *http.Request, session bffSession, siteID, action, method, path string, body []byte) ([]byte, int, error) {
-	if h.intelligence.fddHTTPClient == nil {
-		return nil, 0, errors.New("the FDD client is not configured")
+// executeOwner calls an intelligence owner for the pages over mutual TLS with a context naming the Gateway.
+func (h *handler) executeOwner(publicRequest *http.Request, session bffSession, owner intelligenceOwner, baseURL, siteID, action, method, path string, body []byte) ([]byte, int, error) {
+	if h.intelligence.ownerHTTPClient == nil {
+		return nil, 0, errors.New("the intelligence owner client is not configured")
 	}
-	fddContext, err := h.fddContext(session, siteID, action, h.identity.config.ExecutingWorkloadSPIFFE)
+	signed, err := h.ownerContext(session, owner, siteID, action, h.identity.config.ExecutingWorkloadSPIFFE)
 	if err != nil {
 		return nil, 0, err
 	}
-	return h.callIntelligence(h.intelligence.fddHTTPClient, publicRequest, method, h.intelligence.fddBaseURL+path, body, map[string]string{fddContextHeader: fddContext})
+	return h.callIntelligence(h.intelligence.ownerHTTPClient, publicRequest, method, baseURL+path, body, map[string]string{owner.header: signed})
 }
 
 func (h *handler) executeIntelligence(publicRequest *http.Request, method, endpoint string, body []byte, headers map[string]string) ([]byte, int, error) {

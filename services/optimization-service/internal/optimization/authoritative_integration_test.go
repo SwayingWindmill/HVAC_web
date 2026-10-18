@@ -95,7 +95,7 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	}, origin.Add(4*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	published, err := service.GetRecommendation(t.Context(), request.TenantID, request.SiteID, prepared.OptimizationRunID)
+	published, err := service.LatestRecommendation(t.Context(), request.TenantID, request.SiteID)
 	if err != nil {
 		t.Fatal(err)
 	}

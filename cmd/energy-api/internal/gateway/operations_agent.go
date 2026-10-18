@@ -337,7 +337,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			}
 			return
 		}
-		grant, err := h.fddContext(session, siteID, fddReadAction, h.operations.workloadSPIFFEID)
+		grant, err := h.ownerContext(session, fddOwner, siteID, fddReadAction, h.operations.workloadSPIFFEID)
 		if err != nil {
 			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The FDD context could not be signed.", true, nil)
 			return

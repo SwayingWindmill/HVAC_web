@@ -1,19 +1,80 @@
 package mv
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-func call(t *testing.T, handler http.Handler, method, path, body string) (int, map[string]any) {
+const testGatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
+
+// testGatewaySigner signs contexts the way the Gateway does.
+var testGatewaySigner = func() *ecdsa.PrivateKey {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}()
+
+func newTestHandler(t *testing.T, service *Service) http.Handler {
+	t.Helper()
+	handler, err := NewHTTPHandler(service, AuthConfig{GatewayPublicKey: &testGatewaySigner.PublicKey, GatewaySPIFFE: testGatewaySPIFFE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
+// presented is a request from the peer workload carrying a context signed for presenter, action,
+// Tenant, Site and person.
+func presented(t *testing.T, method, path, body, peer, presenter, action, tenantID, siteID, subject string) *http.Request {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request.Header.Set(headerTenant, testTenant)
-	request.Header.Set(headerActor, testActor)
+	uri, _ := url.Parse(peer)
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+	request.Header.Set(ContextHeader, signContext(t, presenter, Audience, action, tenantID, siteID, subject))
+	return request
+}
+
+func signContext(t *testing.T, presenter, audience, action, tenantID, siteID, subject string) string {
+	t.Helper()
+	now := time.Now()
+	token, err := identitycontext.SignDelegation(testGatewaySigner, identitycontext.DelegationClaims{
+		Issuer: testGatewaySPIFFE, Subject: subject, SubjectIssuer: "https://identity.example.test",
+		ExecutingService: presenter, Audience: audience, TenantID: tenantID,
+		Actions: []string{action}, Scopes: []string{"tenant:" + tenantID, "site:" + siteID},
+		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
+		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// call is the Gateway asking for testActor on testTenant's testSite: a read for GET, a write otherwise.
+func call(t *testing.T, handler http.Handler, method, path, body string) (int, map[string]any) {
+	t.Helper()
+	action := WriteAction
+	if method == http.MethodGet {
+		action = ReadAction
+	}
+	return serve(handler, presented(t, method, path, body, testGatewaySPIFFE, testGatewaySPIFFE, action, testTenant, testSite, testActor))
+}
+
+func serve(handler http.Handler, request *http.Request) (int, map[string]any) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	var decoded map[string]any
@@ -21,14 +82,63 @@ func call(t *testing.T, handler http.Handler, method, path, body string) (int, m
 	return recorder.Code, decoded
 }
 
+// #612: M&V trusted any caller's X-Tenant-ID and X-Actor-ID. It now serves only the Gateway, with a
+// context the Gateway signed for the Site, and takes the Tenant and the person from that context.
+func TestSavingsServesOnlyTheGatewayWithAContextForTheSite(t *testing.T) {
+	store := newMemoryStore()
+	handler := newTestHandler(t, newTestService(t, store, plantHistory{}))
+	base := "/v1/sites/" + testSite + "/savings/measures"
+	register := `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00"}`
+	other := "spiffe://hvac.local/telemetry-worker"
+	otherSite := "01990000-5000-7000-8000-0000000000ff"
+	elsewhere := presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite, testActor)
+	elsewhere.Header.Set(ContextHeader, signContext(t, testGatewaySPIFFE, "fdd-service", WriteAction, testTenant, testSite, testActor))
+	uncontexted := presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite, testActor)
+	uncontexted.Header.Del(ContextHeader)
+	for name, request := range map[string]*http.Request{
+		"a context for another owner":   elsewhere,
+		"the Gateway without a context": uncontexted,
+		"another workload":              presented(t, http.MethodPost, base, register, other, other, WriteAction, testTenant, testSite, testActor),
+		"a read context":                presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite, testActor),
+		"a context for another Site":    presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, otherSite, testActor),
+	} {
+		if status, _ := serve(handler, request); status != http.StatusForbidden {
+			t.Fatalf("%s registered a measure: %d", name, status)
+		}
+	}
+	bare := httptest.NewRequest(http.MethodPost, base, strings.NewReader(register))
+	bare.Header.Set("X-Tenant-ID", testTenant)
+	bare.Header.Set("X-Actor-ID", testActor)
+	if status, _ := serve(handler, bare); status != http.StatusForbidden {
+		t.Fatalf("a request with only X-Tenant-ID and X-Actor-ID registered a measure: %d", status)
+	}
+	if measures, _ := store.Measures(t.Context(), testTenant, testSite); len(measures) != 0 {
+		t.Fatalf("a refused request registered: %v", measures)
+	}
+
+	// The person and Tenant come from the context; the headers a caller writes decide nothing.
+	someone := "01990000-2000-7000-8000-0000000000aa"
+	request := presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite, someone)
+	request.Header.Set("X-Actor-ID", testActor)
+	status, created := serve(handler, request)
+	if status != http.StatusCreated {
+		t.Fatalf("the Gateway's context could not register: %d %v", status, created)
+	}
+	stored, err := store.Measure(t.Context(), testTenant, testSite, created["id"].(string))
+	if err != nil || stored.CreatedBy != someone {
+		t.Fatalf("the measure was not registered by the context's person: %+v %v", stored, err)
+	}
+	otherTenant := "01990000-3000-7000-8000-000000000002"
+	if status, _ := serve(handler, presented(t, http.MethodGet, base+"/"+stored.ID, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, otherTenant, testSite, testActor)); status != http.StatusNotFound {
+		t.Fatalf("another Tenant's context read this Tenant's measure: %d", status)
+	}
+}
+
 func TestTheMeasureLifecycleOverHTTP(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	store := newMemoryStore()
 	service := newTestService(t, store, plantHistory{changedAt: implemented, factor: 0.9})
-	handler, err := NewHTTPHandler(service)
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newTestHandler(t, service)
 	base := "/v1/sites/" + testSite + "/savings/measures"
 
 	status, created := call(t, handler, http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00","investmentCny":0}`)
@@ -66,10 +176,7 @@ func TestTheMeasureLifecycleOverHTTP(t *testing.T) {
 }
 
 func TestBadRequestsAreRefusedWithAReason(t *testing.T) {
-	handler, err := NewHTTPHandler(newTestService(t, newMemoryStore(), plantHistory{}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newTestHandler(t, newTestService(t, newMemoryStore(), plantHistory{}))
 	base := "/v1/sites/" + testSite + "/savings/measures"
 	for _, test := range []struct {
 		method, path, body string
@@ -91,10 +198,7 @@ func TestABaselineWithoutEnoughHoursCarriesNoModel(t *testing.T) {
 	implemented := time.Date(2026, 10, 15, 9, 0, 0, 0, shanghai)
 	// Only the last two days before implementation have data.
 	history := plantHistory{changedAt: implemented, factor: 0.9, gapFrom: implemented.Add(-14 * 24 * time.Hour), gapTo: implemented.Add(-48 * time.Hour)}
-	handler, err := NewHTTPHandler(newTestService(t, newMemoryStore(), history))
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newTestHandler(t, newTestService(t, newMemoryStore(), history))
 	base := "/v1/sites/" + testSite + "/savings/measures"
 	_, created := call(t, handler, http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00"}`)
 	_, measure := call(t, handler, http.MethodPost, base+"/"+created["id"].(string)+"/implement", `{"implementedAt":"2026-10-15T09:00:00+08:00"}`)
@@ -105,10 +209,7 @@ func TestABaselineWithoutEnoughHoursCarriesNoModel(t *testing.T) {
 }
 
 func TestAMeasureCitesTheExecutedCommandItCameFrom(t *testing.T) {
-	handler, err := NewHTTPHandler(newTestService(t, newMemoryStore(), plantHistory{}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newTestHandler(t, newTestService(t, newMemoryStore(), plantHistory{}))
 	base := "/v1/sites/" + testSite + "/savings/measures"
 	command := "ec61c2dc-2d2c-4933-8fb7-bdc284a76a28"
 	status, created := call(t, handler, http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00","evidenceCommandId":"`+command+`"}`)

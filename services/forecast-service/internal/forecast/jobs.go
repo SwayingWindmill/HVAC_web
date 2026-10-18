@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
@@ -66,4 +67,12 @@ func ValidateScheduledForecastPlan(job schedulerjob.Job) (PreparationRequest, er
 		return PreparationRequest{}, fmt.Errorf("scheduled Forecast plan: %w", err)
 	}
 	return request, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err == io.EOF {
+		return nil
+	}
+	return errors.New("trailing JSON")
 }

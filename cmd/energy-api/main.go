@@ -87,19 +87,19 @@ func main() {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
 		os.Exit(1)
 	}
-	fddClient, err := loadFDDClient(workloadCertificate)
+	ownerClient, err := loadIntelligenceOwnerClient(workloadCertificate)
 	if err != nil {
-		logger.Error("gateway_fdd_config_invalid", "error_code", "FDD_CONFIG_INVALID")
+		logger.Error("gateway_intelligence_config_invalid", "error_code", "INTELLIGENCE_CONFIG_INVALID")
 		os.Exit(1)
 	}
 	intelligenceConfig := &gateway.IntelligenceConfig{
-		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "http://forecast-service:19092"),
+		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "https://forecast-service:19092"),
 		FDDBaseURL:          envOr("FDD_SERVICE_URL", "https://fdd-service:19094"),
-		MVBaseURL:           envOr("MV_SERVICE_URL", "http://mv-service:19096"),
+		MVBaseURL:           envOr("MV_SERVICE_URL", "https://mv-service:19096"),
 		ReportBaseURL:       envOr("REPORT_SERVICE_URL", "http://report-service:19097"),
-		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
+		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "https://optimization-service:19093"),
 		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
-		FDDHTTPClient:       fddClient,
+		OwnerHTTPClient:     ownerClient,
 		Timeout:             8 * time.Second,
 	}
 	operationsConfig, closeOperations, err := loadOperationsConfig(runContext, workloadCertificate)
@@ -529,16 +529,17 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 	}, nil
 }
 
-// loadFDDClient calls FDD over mutual TLS (#595); without the Gateway's workload identity FDD stays unreachable.
-func loadFDDClient(certificate *tls.Certificate) (*http.Client, error) {
+// loadIntelligenceOwnerClient calls FDD, Forecast, Optimization and M&V over mutual TLS (#595, #612),
+// each checked under its own host name; without the Gateway's workload identity they stay unreachable.
+func loadIntelligenceOwnerClient(certificate *tls.Certificate) (*http.Client, error) {
 	if certificate == nil {
 		return nil, nil
 	}
-	roots, err := loadCertPool(strings.TrimSpace(os.Getenv("FDD_SERVICE_SERVER_CA")), "FDD Service server CA")
+	roots, err := loadCertPool(strings.TrimSpace(os.Getenv("INTELLIGENCE_SERVER_CA")), "intelligence owners' server CA")
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Timeout: 8 * time.Second, Transport: workloadTransport(roots, certificate, envOr("FDD_SERVICE_SERVER_NAME", "fdd-service"))}, nil
+	return &http.Client{Timeout: 8 * time.Second, Transport: workloadTransport(roots, certificate, "")}, nil
 }
 
 func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error) {
