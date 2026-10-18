@@ -164,6 +164,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 	var telemetryTarget telemetryauth.Target
 	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
 	alarmList := false
+	fddFindings := false
 	switch input.Request.Tool {
 	case "registry.getSite":
 		var registryInput struct {
@@ -228,6 +229,16 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, alarmList = alarmInput.SiteID, true
+	case "fdd.listFindings":
+		var fddInput struct {
+			SiteID string `json:"siteId"`
+			Limit  int    `json:"limit"`
+		}
+		if decodeStrictOperationsJSON(input.Request.Input, &fddInput) != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The FDD findings request is invalid.", false, nil)
+			return
+		}
+		siteID, fddFindings = fddInput.SiteID, true
 	case "telemetry.current.getDeviceObservationSnapshot":
 		var telemetryInput struct {
 			SiteID    string   `json:"siteId"`
@@ -275,6 +286,29 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	session := bffSession{Session: stored}
+	if fddFindings {
+		// Findings are read on site.read, as the 诊断 page reads them; the Agent presents the context (#595).
+		if h.intelligence == nil || h.intelligence.fddBaseURL == "" {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "FDD is not configured.", true, nil)
+			return
+		}
+		authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+		if failure != nil || !registryAuthorizationAllowsSite(authorization, siteID) {
+			if failure == nil || failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+			} else {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Site authorization could not be completed.", true, nil)
+			}
+			return
+		}
+		grant, err := h.fddContext(session, siteID, fddReadAction, h.operations.workloadSPIFFEID)
+		if err != nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The FDD context could not be signed.", true, nil)
+			return
+		}
+		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision})
+		return
+	}
 	if alarmList {
 		// The Agent reads the list from the alarm owner itself, with a context naming it (#594).
 		if h.alarm == nil {

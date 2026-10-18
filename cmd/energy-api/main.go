@@ -87,13 +87,19 @@ func main() {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	fddClient, err := loadFDDClient(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_fdd_config_invalid", "error_code", "FDD_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	intelligenceConfig := &gateway.IntelligenceConfig{
 		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "http://forecast-service:19092"),
-		FDDBaseURL:          envOr("FDD_SERVICE_URL", "http://fdd-service:19094"),
+		FDDBaseURL:          envOr("FDD_SERVICE_URL", "https://fdd-service:19094"),
 		MVBaseURL:           envOr("MV_SERVICE_URL", "http://mv-service:19096"),
 		ReportBaseURL:       envOr("REPORT_SERVICE_URL", "http://report-service:19097"),
 		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
 		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
+		FDDHTTPClient:       fddClient,
 		Timeout:             8 * time.Second,
 	}
 	operationsConfig, closeOperations, err := loadOperationsConfig(runContext, workloadCertificate)
@@ -521,6 +527,19 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		MaxResponseBytes:  256 << 10,
 		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
 	}, nil
+}
+
+// loadFDDClient calls FDD over mutual TLS (#595); without the Gateway's workload identity FDD stays unreachable.
+func loadFDDClient(certificate *tls.Certificate) (*http.Client, error) {
+	caPath := strings.TrimSpace(os.Getenv("FDD_SERVICE_SERVER_CA"))
+	if caPath == "" || certificate == nil {
+		return nil, nil
+	}
+	roots, err := loadCertPool(caPath, "FDD Service server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Timeout: 8 * time.Second, Transport: workloadTransport(roots, certificate, envOr("FDD_SERVICE_SERVER_NAME", "fdd-service"))}, nil
 }
 
 func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error) {

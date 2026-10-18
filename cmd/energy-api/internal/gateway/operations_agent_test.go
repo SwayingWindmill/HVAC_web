@@ -53,6 +53,7 @@ type operationsGatewayFixture struct {
 	rejectUnsafe     atomic.Bool
 	lastUpstream     atomic.Pointer[http.Request]
 	lastUpstreamBody atomic.Pointer[string]
+	lastFDD          atomic.Pointer[http.Request]
 	registryActions  []registryauth.Action
 }
 
@@ -86,7 +87,12 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		},
 		Analytics: &AnalyticsConfig{QueryAudience: "telemetry-query-service"},
 		// The Agent reads alarms from the owner itself; the Gateway only authorizes.
-		Alarm:     &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
+		Alarm: &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
+		// FDD is read by the Gateway for the pages and by the Agent with a Gateway-signed context.
+		Intelligence: &IntelligenceConfig{
+			FDDBaseURL: "https://fdd.example.test", FDDHTTPClient: fddUpstream(&fixture.lastFDD),
+			HTTPClient: &http.Client{}, Timeout: time.Second,
+		},
 		Telemetry: &TelemetryConfig{RuntimeAudience: "telemetry-runtime-service"},
 		Operations: &OperationsAgentConfig{
 			BaseURL: "https://operations.example.test", Audience: "operations-agent-service",
