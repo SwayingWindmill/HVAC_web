@@ -40,18 +40,19 @@ func (store *memoryStore) UpdateMeasure(_ context.Context, measure Measure) erro
 	return nil
 }
 
-func (store *memoryStore) Measure(_ context.Context, _, _, id string) (Measure, error) {
+// Measure and Measures answer only the Tenant's own rows, as the Postgres store's row security does.
+func (store *memoryStore) Measure(_ context.Context, tenantID, siteID, id string) (Measure, error) {
 	measure, ok := store.measures[id]
-	if !ok {
+	if !ok || measure.TenantID != tenantID || measure.SiteID != siteID {
 		return Measure{}, ErrMeasureNotFound
 	}
 	return measure, nil
 }
 
-func (store *memoryStore) Measures(_ context.Context, _, siteID string) ([]Measure, error) {
+func (store *memoryStore) Measures(_ context.Context, tenantID, siteID string) ([]Measure, error) {
 	var measures []Measure
 	for _, measure := range store.measures {
-		if measure.SiteID == siteID {
+		if measure.TenantID == tenantID && measure.SiteID == siteID {
 			measures = append(measures, measure)
 		}
 	}

@@ -54,7 +54,7 @@ type operationsGatewayFixture struct {
 	rejectUnsafe     atomic.Bool
 	lastUpstream     atomic.Pointer[http.Request]
 	lastUpstreamBody atomic.Pointer[string]
-	lastFDD          atomic.Pointer[http.Request]
+	lastOwner        atomic.Pointer[http.Request]
 	registryActions  []registryauth.Action
 }
 
@@ -90,10 +90,12 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		// The Agent reads alarms from the owner itself; the Gateway only authorizes.
 		Alarm:     &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
 		WorkOrder: &WorkOrderConfig{BackendBaseURL: "https://work-order.example.test"},
-		// FDD is read by the Gateway for the pages and by the Agent with a Gateway-signed context.
+		// The intelligence owners serve the Gateway, and FDD also the Agent, a Gateway-signed context.
 		Intelligence: &IntelligenceConfig{
-			FDDBaseURL: "https://fdd.example.test", FDDHTTPClient: fddUpstream(&fixture.lastFDD),
-			HTTPClient: &http.Client{}, Timeout: time.Second,
+			FDDBaseURL: "https://fdd.example.test", ForecastBaseURL: "https://forecast.example.test",
+			OptimizationBaseURL: "https://optimization.example.test", MVBaseURL: "https://mv.example.test",
+			OwnerHTTPClient: ownerUpstream(&fixture.lastOwner),
+			HTTPClient:      &http.Client{}, Timeout: time.Second,
 		},
 		Telemetry: &TelemetryConfig{RuntimeAudience: "telemetry-runtime-service"},
 		Operations: &OperationsAgentConfig{
@@ -154,7 +156,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			}
 			var input registryauth.DecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil ||
-				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList && input.Action != registryauth.ActionAssetModelRead) {
+				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionSavingsManage) {
 				t.Fatal("invalid Registry authorization request")
 			}
 			fixture.registryActions = append(fixture.registryActions, input.Action)

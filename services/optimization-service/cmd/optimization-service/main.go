@@ -13,7 +13,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
 )
 
@@ -62,7 +64,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := optimization.NewHTTPHandler(service, preparer)
+	// Only the Gateway may call Optimization, over mutual TLS with a context it signed (#612).
+	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
+		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("OPTIMIZATION_TLS_CERT"), PrivateKeyPath: requiredEnv("OPTIMIZATION_TLS_KEY")},
+		ClientCAPath:     requiredEnv("OPTIMIZATION_TLS_CA"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(requiredEnv("OPTIMIZATION_GATEWAY_DELEGATION_CERT"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := optimization.NewHTTPHandler(service, preparer, optimization.AuthConfig{
+		GatewayPublicKey: gatewayKey,
+		GatewaySPIFFE:    envOrDefault("OPTIMIZATION_GATEWAY_SPIFFE", optimization.DefaultGatewaySPIFFEID),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,14 +110,25 @@ func main() {
 
 	server := &http.Server{
 		Addr:              envOrDefault("OPTIMIZATION_HTTP_ADDR", ":19093"),
-		Handler:           handler.Routes(),
+		Handler:           handler,
+		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
+	diagnostics := &http.Server{
+		Addr: envOrDefault("OPTIMIZATION_DIAGNOSTICS_ADDR", ":19100"), Handler: optimization.HealthHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
 	log.Printf("optimization-service listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

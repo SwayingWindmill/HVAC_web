@@ -4,10 +4,16 @@ go 1.25.12
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 )
 
+replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
+
 replace github.com/quanlaihe/hvac-web/libs/schedulerjob => ../../libs/schedulerjob
+
+replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

@@ -77,7 +77,7 @@ func dispatchSavingsRoute(h *handler, writer http.ResponseWriter, request *http.
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
-	headers := map[string]string{"X-Tenant-ID": session.TenantID}
+	action := mvReadAction
 	var body []byte
 	if route.write {
 		authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSavingsManage)
@@ -95,7 +95,7 @@ func dispatchSavingsRoute(h *handler, writer http.ResponseWriter, request *http.
 			return
 		}
 		body = raw
-		headers["X-Actor-ID"] = session.Principal.Subject
+		action = mvWriteAction
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/savings" + route.internalPath
 	if rawQuery := request.URL.RawQuery; rawQuery != "" && !route.write {
@@ -105,7 +105,7 @@ func dispatchSavingsRoute(h *handler, writer http.ResponseWriter, request *http.
 	if route.write {
 		method = http.MethodPost
 	}
-	raw, status, err := h.executeIntelligence(request, method, h.intelligence.mvBaseURL+internalPath, body, headers)
+	raw, status, err := h.executeOwner(request, session, mvOwner, h.intelligence.mvBaseURL, route.siteID, action, method, internalPath, body)
 	h.writeSavingsResult(writer, request, raw, status, err)
 }
 
