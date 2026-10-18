@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { BellRing, CheckCheck, CircleCheck, EyeOff, Link2, Plus, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { BellRing, CheckCheck, CircleCheck, EyeOff, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
 import { InfoTip } from '@/components/info-tip';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -19,6 +19,7 @@ import {
   TimelineTitle,
 } from '@/components/ui/timeline';
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
+import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
@@ -56,6 +57,15 @@ function Fact({ label, children }: { readonly label: string; readonly children: 
   );
 }
 
+/** What 解释 asks the assistant: the alarm by its title, when it started in Site time, whether it has cleared, and its device. */
+function explainAlarmQuestion(title: string, startedAt: string, cleared: boolean, deviceName: string | undefined, timeZone: string): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(startedAt)).map((part) => [part.type, part.value]));
+  const when = `${parts.year}年${Number(parts.month)}月${Number(parts.day)}日 ${parts.hour}:${parts.minute}`;
+  return `${when} 开始${cleared ? '、已恢复' : ''}的告警「${title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
+}
+
 /**
  * The selected alarm beside the list: what it is and its state, what the operator can do now,
  * its facts, its history and the work raised from it.
@@ -83,6 +93,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
     enabled: Boolean(alarmId) && capabilities.includes('work-order.list'),
   });
   const { acknowledge, claim, canClaim, canCreateWorkOrder } = useAlarmActions();
+  const explain = useAssistantPanel((state) => state.explain);
 
   if (!alarmId) {
     return (
@@ -162,6 +173,9 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           {canCreateWorkOrder ? (
             <Button variant="outline" onClick={() => onCreatingWorkOrderChange(true)}><Plus data-icon="inline-start" />创建工单</Button>
           ) : null}
+          <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, alarm.condition === 'CLEARED', deviceName, site.timezone))}>
+            <Sparkles data-icon="inline-start" className="text-primary" />解释
+          </Button>
         </div>
         {actionError ? <p className="text-sm text-destructive-text">{actionError.message}</p> : null}
       </header>

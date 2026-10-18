@@ -12,7 +12,7 @@ const context = Object.freeze({
   tenantId,
   siteId,
   principalId: 'principal-1',
-  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'telemetry.history.read', 'analytics.energy-series.read']),
+  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'telemetry.history.read', 'analytics.energy-series.read', 'alarm.read']),
   sessionId: 'session-1',
   runId: 'run-1',
   correlationId: 'correlation-1',
@@ -102,13 +102,14 @@ const historyPayload = (query) => ({
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
 });
 
-const createHarness = ({ energyFor, registryFailure, semanticFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
+const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
   const historyInputs = [];
   const energyInputs = [];
   const semanticInputs = [];
+  const alarmInputs = [];
   let activeEnergyReads = 0;
   let maxActiveEnergyReads = 0;
 
@@ -191,6 +192,13 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, timezone = 'Am
     },
   };
 
+  const alarmReader = {
+    read: async (input) => {
+      alarmInputs.push(input);
+      return ownerResult(input.request, 'alarm-service', 'alarms', 'GOOD', 'alarm-service:alarm-list/v1', alarmsFor(input));
+    },
+  };
+
   const tools = createHvacReadTools({
     capabilities,
     authorization,
@@ -200,11 +208,12 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, timezone = 'Am
     telemetryHistoryReader,
     energyAnalyticsReader,
     semanticQueryReader,
+    alarmReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
     now: () => Date.parse('2026-10-17T13:30:00.000Z'),
   });
 
-  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
+  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
 
 const byName = (tools, name) => {
@@ -221,7 +230,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query', 'alarm_list']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -740,4 +749,63 @@ test('a result too large for one answer tells the model how to narrow it', async
     () => execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-14', endDate: '2026-10-15', granularity: 'hour' }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_RESULT_TOO_LARGE' && /缩短|粒度/u.test(error.hint),
   );
+});
+
+// #594: alarms as the 告警 page shows them — severity and state in words, Site-local times, each
+// machine by its device name, no identifiers.
+const alarmItem = (overrides = {}) => ({
+  deviceId: chillerDeviceId, title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟',
+  currentSeverity: 'CRITICAL', acknowledged: false, assigned: false, suppressed: false, occurrenceCount: 3,
+  firstOccurredAt: '2026-10-17T12:00:00.000Z', lastOccurredAt: '2026-10-17T13:10:00.000Z',
+  timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00.000Z' }],
+  ...overrides,
+});
+
+test('alarm_list reads the Site’s active alarms in the operator’s words, each machine by its device name', async () => {
+  const harness = createHarness({
+    alarmsFor: () => ({
+      schemaVersion: 1,
+      items: [
+        alarmItem(),
+        alarmItem({ deviceId: undefined, title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', currentSeverity: 'WARNING', occurrenceCount: 1, acknowledged: true, assigned: true, timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00.000Z' }, { operation: 'ACKNOWLEDGE', occurredAt: '2026-10-17T13:20:00.000Z' }] }),
+      ],
+      hasMore: false,
+    }),
+  });
+  const result = await execute(byName(harness.tools, 'alarm_list'), {});
+
+  assert.equal(harness.alarmInputs[0].request.tool, 'alarm.listAlarms');
+  assert.deepEqual(harness.alarmInputs[0].request.input, { siteId, condition: 'ACTIVE', limit: 50 });
+  assert.equal(harness.authorizationInputs.find(({ request }) => request.tool === 'alarm.listAlarms').request.input.siteId, siteId);
+  assert.equal(result.status, '正在发生');
+  assert.deepEqual(result.alarms, [
+    { title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟', severity: '紧急', device: 'C 机组控制器', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 3, handled: '未确认', history: ['2026-10-17 05:00 触发'] },
+    { title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', severity: '预警', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 1, handled: '已确认', claimed: '有人认领', history: ['2026-10-17 05:00 触发', '2026-10-17 06:20 确认'] },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /[0-9a-f]{8}-[0-9a-f]{4}-|CRITICAL|WARNING|ACTIVE|SITE_RULE/u);
+});
+
+test('alarm_list says plainly when nothing is active, and reads recently cleared alarms when asked', async () => {
+  const empty = createHarness({ alarmsFor: () => ({ items: [], hasMore: false }) });
+  const none = await execute(byName(empty.tools, 'alarm_list'), {});
+  assert.deepEqual(none.alarms, []);
+  assert.equal(none.note, '当前没有正在发生的告警');
+
+  const cleared = createHarness({
+    alarmsFor: () => ({ items: [alarmItem({ clearedAt: '2026-10-17T13:30:00.000Z' })], hasMore: true }),
+  });
+  const result = await execute(byName(cleared.tools, 'alarm_list'), { status: 'cleared' });
+  assert.equal(cleared.alarmInputs[0].request.input.condition, 'CLEARED');
+  assert.equal(result.status, '已恢复');
+  assert.equal(result.alarms[0].clearedAt, '2026-10-17 06:30');
+  assert.equal(result.note, '只列出最近 50 条，还有更多');
+});
+
+test('alarm_list refuses other arguments and tells the model what it takes', async () => {
+  const harness = createHarness({ alarmsFor: () => { throw new Error('not read'); } });
+  await assert.rejects(
+    () => execute(byName(harness.tools, 'alarm_list'), { status: 'all', siteId }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /active|cleared/u.test(error.hint),
+  );
+  assert.equal(harness.alarmInputs.length, 0);
 });

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { OwnerReadError } from '../dist/application/index.js';
 import {
+  createAlarmOwnerReader,
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
@@ -688,5 +689,51 @@ test('Gateway Tool authorization rejects incomplete context and malformed grant 
         delegationGrant: 'operations-service-grant',
       },
     },
+  }), 'OWNER_RESPONSE_INVALID');
+});
+
+// #594: the alarm owner takes the Gateway's context in its own header and treats a delegation
+// header as a forged identity, so the reader sends only the former.
+test('Alarm reader lists a Site’s alarms with the context in the alarm owner’s own header', async () => {
+  const calls = [];
+  const alarm = {
+    tenantId: scope.tenantId, siteId, title: '冷冻水出水温度过高', summary: '高于 12 ℃', condition: 'ACTIVE',
+    currentSeverity: 'MAJOR', occurrenceCount: 2, firstOccurredAt: '2026-10-17T12:00:00Z', lastOccurredAt: '2026-10-17T12:30:00Z',
+    alarmId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f709001', fingerprint: 'f'.repeat(64), assigneeId: 'principal-7',
+    timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00Z', actorId: 'principal-7', reason: 'rule matched' }],
+  };
+  const reader = createAlarmOwnerReader({
+    baseUrl: 'https://alarm-service.internal',
+    fetchImplementation: async (url, init) => {
+      calls.push({ url: String(url), init });
+      // The alarm owner's list envelope is schema 2 (libs/alarmmodel).
+      return jsonResponse({ schemaVersion: 2, items: [alarm], nextCursor: null, hasMore: false });
+    },
+  });
+  const alarmContext = { ...context, authorization: { ...context.authorization, toolDelegationGrants: { 'alarm.listAlarms': 'alarm-context-value' } } };
+  const result = await reader.read({
+    request: { requestId: 'read-alarms-001', tool: 'alarm.listAlarms', input: { siteId, condition: 'ACTIVE', limit: 50 } },
+    context: alarmContext,
+  });
+
+  assert.equal(calls[0].url, `https://alarm-service.internal/internal/v1/sites/${siteId}/alarms?condition=ACTIVE&limit=50`);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers['X-Alarm-Read-Context'], 'alarm-context-value');
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], undefined);
+  assert.equal(result.owner, 'alarm-service');
+  // Only what the Tool says survives the reader: no identifiers, actors or reasons.
+  assert.deepEqual(result.payload.items, [{
+    title: '冷冻水出水温度过高', summary: '高于 12 ℃', currentSeverity: 'MAJOR', acknowledged: false, assigned: true, suppressed: false,
+    occurrenceCount: 2, firstOccurredAt: '2026-10-17T12:00:00Z', lastOccurredAt: '2026-10-17T12:30:00Z',
+    timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00Z' }],
+  }]);
+
+  const otherSite = createAlarmOwnerReader({
+    baseUrl: 'https://alarm-service.internal',
+    fetchImplementation: async () => jsonResponse({ schemaVersion: 2, items: [{ ...alarm, siteId: deviceId }], nextCursor: null, hasMore: false }),
+  });
+  await expectOwnerError(() => otherSite.read({
+    request: { requestId: 'read-alarms-002', tool: 'alarm.listAlarms', input: { siteId, condition: 'ACTIVE', limit: 50 } },
+    context: alarmContext,
   }), 'OWNER_RESPONSE_INVALID');
 });

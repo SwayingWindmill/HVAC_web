@@ -565,7 +565,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		h.writeAlarmFailure(writer, request, *failure)
 		return
 	}
-	contextToken, failure := h.signAlarmServiceContext(session, route, decision)
+	contextToken, failure := h.signAlarmServiceContext(session, route, decision, h.identity.config.ExecutingWorkloadSPIFFE)
 	if failure != nil {
 		h.writeAlarmFailure(writer, request, *failure)
 		return
@@ -799,7 +799,9 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 	return decision, nil
 }
 
-func (h *handler) signAlarmServiceContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision) (string, *alarmFailure) {
+// signAlarmServiceContext signs the context the alarm owner reads, naming the workload that will
+// present it: the Gateway for the pages, the Operations Agent for its alarm list.
+func (h *handler) signAlarmServiceContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision, presenter string) (string, *alarmFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !isLowerUUIDv7(session.TenantID) {
 		failure := alarmUnavailable("Alarm service context signing is unavailable.")
 		return "", &failure
@@ -816,7 +818,7 @@ func (h *handler) signAlarmServiceContext(session bffSession, route publicAlarmR
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
-		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: presenter,
 		Audience: h.alarm.backendAudience, TenantID: session.TenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),

@@ -73,3 +73,11 @@ test('J and K move through the list', async ({ page }) => {
   await page.keyboard.press('k');
   await expect(rows(page).nth(0)).toHaveAttribute('aria-current', 'true');
 });
+
+// #594: 解释 hands the assistant a question about the alarm in view, with its start in Site time.
+test('解释 opens the assistant with a question about the alarm in view', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
+  await page.getByRole('region', { name: '告警详情' }).getByRole('button', { name: '解释' }).click();
+  const panel = page.getByRole('complementary', { name: 'AI 助手' });
+  await expect(panel.getByRole('textbox', { name: '向助手提问' })).toHaveValue('2026年9月29日 16:26 开始的告警「冷冻水回水温度过低」是怎么回事？');
+});

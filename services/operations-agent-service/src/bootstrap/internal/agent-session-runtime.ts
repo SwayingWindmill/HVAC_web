@@ -17,6 +17,7 @@ import {
   type PiModelEnvironment,
 } from '../../runtime-pi/index.js';
 import {
+  createAlarmOwnerReader,
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
   createSemanticQueryOwnerReader,
@@ -24,6 +25,7 @@ import {
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
   createRegistryOwnerReader,
+  type AlarmOwnerReaderConfig,
   type DeviceTelemetryOwnerReaderConfig,
   type EnergyAnalyticsOwnerReaderConfig,
   type GatewayToolAuthorizationReaderConfig,
@@ -44,6 +46,7 @@ export interface ProductionAgentSessionOwnerConfig {
   /** Energy Series and device history, both served by the Telemetry Query Service. */
   readonly telemetryQuery: EnergyAnalyticsOwnerReaderConfig;
   readonly gatewayToolAuthorization: GatewayToolAuthorizationReaderConfig;
+  readonly alarm: AlarmOwnerReaderConfig;
 }
 
 export interface ProductionAgentSessionRuntimeOptions {
@@ -85,6 +88,7 @@ export const createProductionAgentSessionRuntime = async (
     const deviceTelemetryReader = createDeviceTelemetryOwnerReader(options.owners.deviceTelemetry);
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.telemetryQuery);
     const semanticQueryReader = createSemanticQueryOwnerReader(options.owners.telemetryQuery);
+    const alarmReader = createAlarmOwnerReader(options.owners.alarm);
     const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.telemetryQuery);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
@@ -107,6 +111,7 @@ export const createProductionAgentSessionRuntime = async (
         telemetryHistoryReader,
         energyAnalyticsReader,
         semanticQueryReader,
+        alarmReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
         now: options.now ?? Date.now,
       }),

@@ -626,6 +626,7 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 	})
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
 		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
+		ReaderSPIFFE:   envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
 	})
 	if err != nil {

@@ -182,7 +182,13 @@ func (handler *httpHandler) authorize(request *http.Request, header, action stri
 		return identitycontext.DelegationClaims{}, false
 	}
 	expectedScopes := append([]string{"tenant:" + claims.TenantID}, resourceScopes...)
-	if err := identitycontext.ValidateDelegationAnyScope(claims, handler.now().UTC(), handler.gatewaySPIFFEID, handler.audience, action, expectedScopes); err != nil {
+	// The Gateway always signs; a grant names the workload that presents it, which is the Gateway
+	// itself unless the owner router let a reader through (#594).
+	executing := handler.gatewaySPIFFEID
+	if peer := workloadSPIFFE(request); peer != "" {
+		executing = peer
+	}
+	if err := identitycontext.ValidateDelegationFromIssuerAnyScope(claims, handler.now().UTC(), handler.gatewaySPIFFEID, executing, handler.audience, action, expectedScopes); err != nil {
 		return identitycontext.DelegationClaims{}, false
 	}
 	if !sameStringSet(claims.Scopes, expectedScopes) {

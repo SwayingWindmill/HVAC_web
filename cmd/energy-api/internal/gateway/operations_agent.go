@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
@@ -162,6 +163,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 	var analytics *analyticsScope
 	var telemetryTarget telemetryauth.Target
 	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
+	alarmList := false
 	switch input.Request.Tool {
 	case "registry.getSite":
 		var registryInput struct {
@@ -214,6 +216,18 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, analytics = scope.SiteID, &scope
+	case "alarm.listAlarms":
+		var alarmInput struct {
+			SiteID    string `json:"siteId"`
+			Condition string `json:"condition"`
+			Limit     int    `json:"limit"`
+		}
+		// Condition and size travel with the request the Agent's reader sends; the owner checks them.
+		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Alarm list request is invalid.", false, nil)
+			return
+		}
+		siteID, alarmList = alarmInput.SiteID, true
 	case "telemetry.current.getDeviceObservationSnapshot":
 		var telemetryInput struct {
 			SiteID    string   `json:"siteId"`
@@ -261,6 +275,29 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	session := bffSession{Session: stored}
+	if alarmList {
+		// The Agent reads the list from the alarm owner itself, with a context naming it (#594).
+		if h.alarm == nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Alarm Service is not configured.", true, nil)
+			return
+		}
+		route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead, siteID: siteID}
+		decision, failure := h.authorizeAlarm(request, session, route)
+		if failure == nil {
+			var grant string
+			grant, failure = h.signAlarmServiceContext(session, route, decision, h.operations.workloadSPIFFEID)
+			if failure == nil {
+				writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.PolicyRevision})
+				return
+			}
+		}
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		} else {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Alarm authorization could not be completed.", true, nil)
+		}
+		return
+	}
 	if input.Request.Tool == "telemetry.current.getDeviceObservationSnapshot" || input.Request.Tool == "telemetry.history.aggregateDeviceHistory" {
 		caller := telemetryCaller{
 			principal: session.Principal,
