@@ -32,6 +32,14 @@ export {
   type AlarmOwnerReaderConfig,
 } from './internal/alarm-owner-reader.js';
 export {
+  createFddOwnerReader,
+  type FddOwnerReaderConfig,
+} from './internal/fdd-owner-reader.js';
+export {
+  createWorkOrderOwnerReader,
+  type WorkOrderOwnerReaderConfig,
+} from './internal/work-order-owner-reader.js';
+export {
   createGatewayToolAuthorizationReader,
   type GatewayToolAuthorizationReaderConfig,
 } from './internal/gateway-tool-authorization-reader.js';

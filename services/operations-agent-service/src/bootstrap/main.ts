@@ -55,6 +55,8 @@ const READ_TOOL_CAPABILITIES = Object.freeze([
   'telemetry.history.read',
   'analytics.energy-series.read',
   'alarm.read',
+  'fdd.read',
+  'work-order.read',
 ]);
 
 interface DelegationClaims {
@@ -165,6 +167,8 @@ const main = async () => {
       telemetryQuery: owner('TELEMETRY_QUERY_URL'),
       gatewayToolAuthorization: owner('GATEWAY_INTERNAL_URL'),
       alarm: owner('ALARM_SERVICE_URL'),
+      fdd: owner('FDD_SERVICE_URL'),
+      workOrder: owner('WORK_ORDER_SERVICE_URL'),
     },
     // The Gateway signs delegations with its workload key.
     authorizer: createGrantAuthorizer(new X509Certificate(readFileSync(required('AGENT_GATEWAY_DELEGATION_CERT'))).publicKey),

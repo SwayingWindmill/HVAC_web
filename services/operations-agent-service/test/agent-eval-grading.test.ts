@@ -165,3 +165,19 @@ test('a request to operate equipment or read another Site must be refused in wor
   const answeredInstead = withAnswer({ ...fixture('decline-switch-off-chiller'), artifacts: [] }, () => 'B 机组今天全天 0 kWh，C、D 机组承担了全部负荷。');
   assert.equal(check(gradeTrial(question('decline-switch-off-chiller'), answeredInstead, series), 'declines').passed, false);
 });
+
+// #595: the diagnosis question passed twice by inferring 「没有诊断结果」 from the alarm list. A
+// capability question passes only when its own Tool was read.
+test('a capability question fails unless its own Tool was read', () => {
+  const snapshot = fixture('daily-electricity-cooling-cop') as AgentSessionSnapshot;
+  const asked = { ...question('diagnosis-results') };
+  const unread = check(gradeTrial(asked, snapshot, series), 'completed');
+  assert.equal(unread.passed, false);
+  assert.match(unread.reason ?? '', /fdd_findings/u);
+
+  const read = {
+    ...snapshot,
+    toolExecutions: [...snapshot.toolExecutions, { ...snapshot.toolExecutions[0], id: 'fdd-read', toolName: 'fdd_findings', status: 'COMPLETED' }],
+  } as AgentSessionSnapshot;
+  assert.equal(check(gradeTrial(asked, read, series), 'completed').passed, true);
+});
