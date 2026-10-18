@@ -285,3 +285,20 @@ last 7 days and one unfinished work order (「C 机组：」, 来自设备 C 机
 | active-alarms | 3/3 | 2.5 / 0.7k / 2.0 | — |
 | diagnosis-results | 3/3 | 2.3 / 0.7k / 2.0 | — |
 | open-work-orders | 2/3 | 2.9 / 1.0k / 2.0 | chinese-only (1), no-repetition (1) |
+
+## After #596 — 2026-10-18 21:06 (device-explain only, plus the three readings questions)
+
+The suite gains `device-explain`, what the device page's 解释 asks, about 冷冻水泵（总管）; it
+passes only after reading the device's current readings.
+
+- device-explain 3/3 (6–7 reads, 7–9 s).
+- Before the readings Tools changed, the same question about 「A 机组」 failed in every round: the
+  model answered UNABLE_TO_CONCLUDE or SUPPORTED_FINDING by turns (its readings are dubious, #614),
+  `STOPPED` reached one answer, and repeated history reads ran past 8. About 冷冻水泵（总管）, before
+  the history note: 2/3, the third trial read 10 times.
+- The three questions that read device readings, rerun after the change: current-supply-temperature
+  2/3 (after #595: 0/3), outdoor-temperature-history 1/3 — all three trials answered the stuck
+  21.5 ℃ correctly; two said 「没有变化」「可疑」, which the question's accepted words did not include
+  (now widened) — incomplete-day 0/3 (after #595: 0/3, 1/3 on rerun; too many reads and the
+  outcome, as before).
+
