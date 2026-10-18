@@ -46,7 +46,7 @@
   ],
   "readingsNotUpdated": {
     "title": "{device}读数长时间没有更新",
-    "summary": "{device}有读数超过 30 分钟没有更新，或一直没有读数（这台设备的读数：{points}）。可能是测点、接线或通讯出了问题。所有读数恢复更新后自动恢复。",
+    "summary": "{device}有读数超过 {minutes} 分钟没有更新，或一直没有读数（这台设备的读数：{points}）。可能是测点、接线或通讯出了问题。所有读数恢复更新后自动恢复。",
     "severity": "WARNING",
     "ageSeconds": 1800
   }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
@@ -53,7 +54,8 @@ type rule struct {
 }
 
 // readingsRule raises, per device, when one of its active points has had no new reading for
-// ageSeconds; {device} and {points} in the wording are the device and its points by name.
+// ageSeconds; {device}, {points} and {minutes} in the wording are the device and its points by
+// name and ageSeconds in minutes.
 type readingsRule struct {
 	Title      string              `json:"title"`
 	Summary    string              `json:"summary"`
@@ -90,8 +92,14 @@ type device struct {
 	points []sitePoint
 }
 
-// Readings outside any plausible range still count as a reading.
+// A number within ±anyReading is a reading: the clear condition only asks that one arrived.
 const anyReading = 1e12
+
+// Kinds in the ids derived for a rule's policy family and its Site assignment.
+const (
+	policyKind     = "7a01"
+	assignmentKind = "7a02"
+)
 
 func Load(rulesPath string) (Compiled, error) {
 	var rules rulesFile
@@ -160,7 +168,7 @@ func Load(rulesPath string) (Compiled, error) {
 				fresh = append(fresh, hasReading(input, point.ValueType))
 				names = append(names, plainName(point.Name))
 			}
-			wording := strings.NewReplacer("{device}", entry.name, "{points}", strings.Join(names, "、"))
+			wording := strings.NewReplacer("{device}", entry.name, "{points}", strings.Join(names, "、"), "{minutes}", strconv.FormatInt(readings.AgeSeconds/60, 10))
 			compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "readings-not-updated/"+code, alarmservice.AlarmPolicyRevision{
 				Title: wording.Replace(readings.Title), Summary: wording.Replace(readings.Summary), Severity: readings.Severity,
 				QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: readings.AgeSeconds, TriggerMode: alarmservice.TriggerSimple,
@@ -239,11 +247,11 @@ func either(kind alarmservice.ConditionKind, conditions []alarmservice.Condition
 // publishing the file again finds the same ones.
 func sitePolicy(siteID, siteCode, code string, policy alarmservice.AlarmPolicyRevision) SitePolicy {
 	policy.SchemaVersion = alarmservice.AlarmPolicySchemaVersion
-	policy.PolicyID = derivedID(siteID, "7a01", code)
+	policy.PolicyID = derivedID(siteID, policyKind, code)
 	policy.AlarmType = code
 	policy.SourceType = alarmmodel.SourceSiteRule
 	policy.SourceReference = "alarm-rules:" + siteCode + "/" + code
-	return SitePolicy{AssignmentID: derivedID(siteID, "7a02", code), Policy: policy}
+	return SitePolicy{AssignmentID: derivedID(siteID, assignmentKind, code), Policy: policy}
 }
 
 func derivedID(siteID, kind, code string) string {
@@ -251,7 +259,8 @@ func derivedID(siteID, kind, code string) string {
 	return siteID[:8] + "-" + kind + "-7000-8000-" + hex.EncodeToString(digest[:6])
 }
 
-// plainName is a name without its bracketed wiring detail: 「C 机组电表（3 号，UID 3）」→「C 机组电表」.
+// plainName is a name without its bracketed detail: 「C 机组电表（3 号，UID 3）」→「C 机组电表」,
+// 「冷却水进水温度（冷凝进，四台共用）」→「冷却水进水温度」.
 func plainName(name string) string {
 	before, _, _ := strings.Cut(name, "（")
 	return strings.TrimSpace(before)

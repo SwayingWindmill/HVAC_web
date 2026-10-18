@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
@@ -63,7 +64,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	if got := inputs(chillerC.Raise); len(got) != 7 || !contains(got, "01a14000-4000-7000-8000-000000000005/cw_leaving_temperature") {
 		t.Fatalf("C 机组电表 readings rule reads %v", got)
 	}
-	if !strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
+	if !strings.Contains(chillerC.Summary, "超过 30 分钟没有更新") || !strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
 		t.Fatalf("C 机组电表 readings rule is not said plainly: %q / %q", chillerC.Title, chillerC.Summary)
 	}
 
@@ -95,7 +96,7 @@ func TestRulesNamingAPointTheSiteDoesNotReadAreRefused(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "site.json"), site, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, input := range []string{"meter-uid5/no_such_point", "cooling-tower/leaving_water_temperature", "no-such-device/run_state"} {
+	for _, input := range []string{"cooling-tower/leaving_water_temperature", "no-such-device/run_state"} {
 		rules, _ := json.Marshal(map[string]any{
 			"schemaVersion": 1, "siteFile": "site.json",
 			"rules": []any{map[string]any{
@@ -141,4 +142,105 @@ func keys(policies map[string]alarmservice.AlarmPolicyRevision) []string {
 		titles = append(titles, title)
 	}
 	return titles
+}
+
+// #609: the compiled rules raise and clear as their wording says, run through the evaluator itself.
+func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
+	compiled, err := Load(songyaxuanRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
+
+	// 读数长时间没有更新: raised while 冷却水出水温度 has no reading, cleared once every reading is fresh.
+	chillerC := published(t, compiled, "C 机组电表读数长时间没有更新")
+	meter := func(withLeavingWater bool) map[string]alarmservice.InputFact {
+		inputs := map[string]alarmservice.InputFact{}
+		for _, point := range []string{"power_total", "active_energy_total", "chw_leaving_temperature", "chw_entering_temperature", "cw_entering_temperature", "cw_leaving_temperature"} {
+			inputs[point] = alarmservice.NumberInput(point, 20, "GOOD", start.Format(time.RFC3339Nano))
+		}
+		inputs["run_state"] = alarmservice.StringInput("run_state", "RUNNING", "GOOD", start.Format(time.RFC3339Nano))
+		if !withLeavingWater {
+			inputs["cw_leaving_temperature"] = alarmservice.InputFact{Key: "cw_leaving_temperature", Present: false}
+		}
+		return prefixed("01a14000-4000-7000-8000-000000000005", inputs)
+	}
+	raised := evaluate(t, chillerC, "c-1", meter(false), alarmservice.AlarmEvaluationState{}, start)
+	if raised.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("a point with no reading did not raise: %#v", raised)
+	}
+	if cleared := evaluate(t, chillerC, "c-2", meter(true), active(raised.State), start.Add(time.Minute)); cleared.Effect != alarmservice.EvaluationEffectClear {
+		t.Fatalf("fresh readings did not clear: %#v", cleared)
+	}
+
+	// 冷冻水供水温度过高: 15 minutes above 10 ℃ with a chiller running; 9.5 ℃ is not yet recovered, 8.5 ℃ is.
+	supply := published(t, compiled, "冷冻水供水温度过高")
+	plant := func(at time.Time, temperature float64) map[string]alarmservice.InputFact {
+		observed := at.Format(time.RFC3339Nano)
+		inputs := map[string]alarmservice.InputFact{
+			"01a14000-4000-7000-8000-000000000009/supply_water_temperature": alarmservice.NumberInput("01a14000-4000-7000-8000-000000000009/supply_water_temperature", temperature, "GOOD", observed),
+		}
+		for device, state := range map[string]string{"03": "STOPPED", "04": "STOPPED", "05": "RUNNING", "06": "STOPPED"} {
+			key := "01a14000-4000-7000-8000-0000000000" + device + "/run_state"
+			inputs[key] = alarmservice.StringInput(key, state, "GOOD", observed)
+		}
+		return inputs
+	}
+	candidate := evaluate(t, supply, "s-1", plant(start, 11), alarmservice.AlarmEvaluationState{}, start)
+	if candidate.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("raised before 15 minutes: %#v", candidate)
+	}
+	high := evaluate(t, supply, "s-2", plant(start.Add(15*time.Minute), 11), candidate.State, start.Add(15*time.Minute))
+	if high.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("15 minutes above 10 ℃ did not raise: %#v", high)
+	}
+	if still := evaluate(t, supply, "s-3", plant(start.Add(16*time.Minute), 9.5), active(high.State), start.Add(16*time.Minute)); still.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("9.5 ℃ already cleared: %#v", still)
+	}
+	if recovered := evaluate(t, supply, "s-4", plant(start.Add(17*time.Minute), 8.5), active(high.State), start.Add(17*time.Minute)); recovered.Effect != alarmservice.EvaluationEffectClear {
+		t.Fatalf("8.5 ℃ did not clear: %#v", recovered)
+	}
+}
+
+func published(t *testing.T, compiled Compiled, title string) alarmservice.AlarmPolicyRevision {
+	t.Helper()
+	for _, sitePolicy := range compiled.Policies {
+		if sitePolicy.Policy.Title == title {
+			policy := sitePolicy.Policy
+			policy.PolicyRevisionID, policy.Revision = "01a14000-7a00-7000-8000-000000000001", 1
+			policy.Digest, _ = alarmservice.AlarmPolicyDigest(policy)
+			return policy
+		}
+	}
+	t.Fatalf("no rule %s", title)
+	return alarmservice.AlarmPolicyRevision{}
+}
+
+func prefixed(deviceID string, inputs map[string]alarmservice.InputFact) map[string]alarmservice.InputFact {
+	keyed := map[string]alarmservice.InputFact{}
+	for key, fact := range inputs {
+		fact.Key = deviceID + "/" + key
+		keyed[fact.Key] = fact
+	}
+	return keyed
+}
+
+func evaluate(t *testing.T, policy alarmservice.AlarmPolicyRevision, revision string, inputs map[string]alarmservice.InputFact, previous alarmservice.AlarmEvaluationState, now time.Time) alarmservice.EvaluationDecision {
+	t.Helper()
+	const site = "01a14000-1000-7000-8000-000000000001"
+	decision, err := alarmservice.EvaluatePolicy(policy, alarmservice.EvaluationSnapshot{
+		TenantID: "018f3d00-0000-7000-8000-000000000001", SiteID: site, SubjectType: "SITE", SubjectID: site,
+		InputRevision: revision, AsOf: now.Format(time.RFC3339Nano), Inputs: inputs, CorrelationID: revision,
+	}, previous, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decision
+}
+
+// active is the state after the owner recorded the raised alarm.
+func active(state alarmservice.AlarmEvaluationState) alarmservice.AlarmEvaluationState {
+	state.ActiveAlarmID = "01a14000-7a03-7000-8000-000000000001"
+	state.ActiveIncidentCorrelationID = "01a14000-7a03-7000-8000-000000000002"
+	return state
 }

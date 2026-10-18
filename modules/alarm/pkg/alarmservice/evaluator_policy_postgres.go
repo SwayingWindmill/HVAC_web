@@ -201,7 +201,13 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 	if err != nil {
 		return AlarmPolicyRevision{}, false, err
 	}
-	if latest == nil || !samePolicyContent(*latest, policy) {
+	unchanged := false
+	if latest != nil {
+		if unchanged, err = samePolicyContent(*latest, policy); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+	}
+	if !unchanged {
 		policy.Revision = 1
 		if latest != nil {
 			policy.Revision = latest.Revision + 1
@@ -265,11 +271,15 @@ func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteI
 }
 
 // samePolicyContent compares two revisions of a family by what they say, not by their identity.
-func samePolicyContent(left, right AlarmPolicyRevision) bool {
-	for _, policy := range []*AlarmPolicyRevision{&left, &right} {
-		policy.PolicyRevisionID, policy.Revision, policy.Digest = "", 0, ""
+func samePolicyContent(left, right AlarmPolicyRevision) (bool, error) {
+	var digests [2]string
+	for index, policy := range []AlarmPolicyRevision{left, right} {
+		policy.PolicyRevisionID, policy.Revision = "", 0
+		digest, err := AlarmPolicyDigest(policy)
+		if err != nil {
+			return false, err
+		}
+		digests[index] = digest
 	}
-	leftJSON, leftErr := json.Marshal(left)
-	rightJSON, rightErr := json.Marshal(right)
-	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+	return digests[0] == digests[1], nil
 }
