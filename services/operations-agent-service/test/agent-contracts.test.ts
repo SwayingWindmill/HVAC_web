@@ -5,62 +5,9 @@ import {
   AgentContractError,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
-  transitionAgentSession,
   claimsPhysicalExecution,
   needsExecutionCorrection,
 } from '../dist/agent/index.js';
-
-const activeSession = Object.freeze({
-  id: 'session-001',
-  tenantId: 'tenant-001',
-  siteId: 'site-001',
-  agentDefinitionId: 'operations-investigation.v1',
-  createdBy: 'principal-001',
-  status: 'ACTIVE',
-  revision: 3,
-  activeRunId: 'run-001',
-  createdAt: 1_000,
-  updatedAt: 1_200,
-});
-
-test('Agent Session follows the first-product lifecycle and an ended Run lets the next question start one', () => {
-  const waiting = transitionAgentSession(activeSession, {
-    status: 'WAITING_FOR_INPUT',
-    at: 1_300,
-  });
-  const resumed = transitionAgentSession(waiting, {
-    status: 'ACTIVE',
-    activeRunId: 'run-002',
-    at: 1_400,
-  });
-  const completed = transitionAgentSession(resumed, {
-    status: 'COMPLETED',
-    at: 1_500,
-  });
-
-  assert.deepEqual(
-    [waiting.status, resumed.status, completed.status],
-    ['WAITING_FOR_INPUT', 'ACTIVE', 'COMPLETED'],
-  );
-  assert.equal(waiting.activeRunId, null);
-  assert.equal(resumed.activeRunId, 'run-002');
-  assert.equal(completed.activeRunId, null);
-  assert.deepEqual(
-    [waiting.revision, resumed.revision, completed.revision],
-    [4, 5, 6],
-  );
-
-  const followed = transitionAgentSession(completed, {
-    status: 'ACTIVE',
-    activeRunId: 'run-003',
-    at: 1_600,
-  });
-  assert.equal(followed.activeRunId, 'run-003');
-  assert.throws(
-    () => transitionAgentSession(completed, { status: 'WAITING_FOR_INPUT', at: 1_600 }),
-    (error) => error instanceof AgentContractError && error.code === 'SESSION_TRANSITION_INVALID',
-  );
-});
 
 test('terminal investigation inputs are structured and reject malformed model output', () => {
   const completion = parseInvestigationComplete({

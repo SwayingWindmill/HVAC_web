@@ -402,8 +402,7 @@ test('a question and the Run it starts carry the same time', async () => {
   assert.equal(completed.messages[0].createdAt, completed.runs[0].startedAt);
 });
 
-// #617: the panel asks the next question in the Session it last showed. An answered or stopped
-// Session takes it, and the model reads the conversation so far with it.
+// #617: every follow-up in the panel failed with SESSION_TERMINAL.
 test('an answered or stopped Session takes the next question and the model reads the conversation so far', async () => {
   const seen = [];
   const { service } = createService(async (input) => {

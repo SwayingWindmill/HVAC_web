@@ -1,6 +1,6 @@
 // The Operations Agent behind the Gateway, as its Session rules apply: a new Session or a
 // question starts a Run; the event stream opens with the Session's snapshot, replays the Run's
-// steps, streamed answer and finding, and closes on the terminal snapshot. The answer is
+// steps, streamed answer and finding, and closes on the snapshot that ends the Run. The answer is
 // scripted from the question, so a test reads the same reply every time.
 
 type Json = Record<string, any>;

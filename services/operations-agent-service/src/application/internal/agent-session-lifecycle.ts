@@ -243,8 +243,7 @@ const startState = (
   if (command.expectedSessionRevision !== current.session.revision) {
     fail('SESSION_REVISION_CONFLICT', 'Session revision changed before the Run could start.');
   }
-  // A Session is a conversation (#617): once its Run has ended, answered, failed or stopped, the
-  // next question starts the next Run, and the model reads everything said so far.
+  // A Session is a conversation (#617): after a Run ends, the next question starts the next Run.
   if (current.session.status === 'ACTIVE') {
     const activeRun = requireRun(
       current.runs.find(({ id }) => id === current.session.activeRunId),
