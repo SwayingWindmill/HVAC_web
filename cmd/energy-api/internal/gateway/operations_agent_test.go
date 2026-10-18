@@ -52,6 +52,8 @@ type operationsGatewayFixture struct {
 	invalidStream    atomic.Bool
 	invalidIdentity  atomic.Bool
 	rejectUnsafe     atomic.Bool
+	auditRead        atomic.Bool
+	usageExtraField  atomic.Bool
 	lastUpstream     atomic.Pointer[http.Request]
 	lastUpstreamBody atomic.Pointer[string]
 	lastOwner        atomic.Pointer[http.Request]
@@ -280,6 +282,23 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 					PolicyRevision: "analytics-policy-7", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 				},
 			}), nil
+		case "/internal/v1/principal/current":
+			principal := identitycontext.UserPrincipal{Subject: parent.Subject, Issuer: parent.SubjectIssuer, Roles: []string{"operator"}}
+			capabilities := []identitycontext.Capability{identitycontext.CapabilitySiteRead}
+			if fixture.auditRead.Load() {
+				capabilities = append(capabilities, identitycontext.CapabilityAuditRead)
+			}
+			return telemetryJSONResponse(http.StatusOK, identitycontext.InternalPrincipalResponse{
+				PrincipalID: "018f3e00-5000-7000-8000-000000000001", Principal: principal,
+				Context: identitycontext.PrincipalContext{
+					InitiatingPrincipal: principal, ExecutingServicePrincipal: identitycontext.ServicePrincipal{Service: "platform-gateway", SPIFFEID: parent.ExecutingService},
+					TenantID: parent.TenantID, Audience: parent.Audience, PolicyRevision: parent.PolicyRevision,
+					DelegationExpiresAt: time.Unix(parent.ExpiresAt, 0).UTC().Format(time.RFC3339),
+				},
+				Authorization: identitycontext.EffectiveAuthorization{
+					CapabilitySetVersion: identitycontext.CapabilitySetVersion, PolicyRevision: "registry-read:1/iam:1", Capabilities: capabilities,
+				},
+			}), nil
 		default:
 			t.Fatalf("unexpected IAM path %s", request.URL.Path)
 			return nil, io.EOF
@@ -287,11 +306,26 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 	})}
 }
 
-// The Tool authorization route never calls the Agent; any upstream call fails the test.
+// The Tool authorization route never calls the Agent; only the usage read (#597) is answered.
 func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, _ time.Time) *http.Client {
 	t.Helper()
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.operationsCalls.Add(1)
+		if strings.HasSuffix(request.URL.Path, "/operations/agent-usage") {
+			fixture.lastUpstream.Store(request)
+			days := make([]map[string]any, 14)
+			for index := range days {
+				days[index] = map[string]any{
+					"date": time.Date(2026, 10, 5+index, 0, 0, 0, 0, time.UTC).Format("2006-01-02"), "completed": index, "failed": 1, "cancelled": 0,
+					"averageDurationMs": 7000, "inputTokens": 1200, "outputTokens": 300,
+					"tools": []map[string]any{{"toolName": "alarm_list", "calls": 2, "failed": 1}},
+				}
+			}
+			if fixture.usageExtraField.Load() {
+				days[0]["question"] = "10月17日用了多少电？"
+			}
+			return telemetryJSONResponse(http.StatusOK, map[string]any{"schemaVersion": 1, "timezone": "Asia/Shanghai", "days": days}), nil
+		}
 		t.Errorf("unexpected Operations Agent call %s %s", request.Method, request.URL.Path)
 		return nil, http.ErrHandlerTimeout
 	})}

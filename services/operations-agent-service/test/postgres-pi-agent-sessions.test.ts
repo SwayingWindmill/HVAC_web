@@ -577,3 +577,69 @@ test('PostgreSQL persists typed INPUT_RESPONSE attribution across restart', asyn
     submitted_by: 'principal-authenticated-input',
   }]);
 });
+
+// #597: the operations lead reads, per Site-local day, how many Runs ended which way, how long
+// they took, their tokens and how often each Tool failed — only figures and Tool names.
+test('PostgreSQL usage counts each Site-local day from the Session records and carries no text or ids', async (t) => {
+  const persistence = createPersistence();
+  t.after(() => persistence.close());
+  const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+  const usageSession = Object.freeze({ ...sessionDescriptor, id: 'usage-session-1', tenantId: 'tenant-usage', siteId: 'site-usage' });
+  // 2026-10-17 23:59 and 2026-10-18 00:01 in Asia/Shanghai: two Site-local days, one UTC day.
+  const lateRun = Object.freeze({ ...run('usage-run-1', Date.parse('2026-10-17T15:59:00Z')), sessionId: usageSession.id });
+  const tool = (id, runId, toolName, status, startedAt) => Object.freeze({
+    id, sessionId: usageSession.id, runId, toolName, argumentsDigest: `digest-${id}`, status, startedAt,
+    finishedAt: startedAt + 100, resultSummary: status === 'COMPLETED' ? 'Tool completed.' : null,
+    provenance: Object.freeze([]), failureCode: status === 'COMPLETED' ? null : 'TOOL_OWNER_UNAVAILABLE',
+  });
+
+  const started = await lifecycle.start({
+    session: usageSession, expectedSessionRevision: null, run: lateRun,
+    operatorMessage: Object.freeze({ ...operatorMessage('usage-message-1', '10月17日用了多少电？', lateRun.startedAt - 10), sessionId: usageSession.id }),
+  });
+  const answered = await lifecycle.complete({
+    sessionId: usageSession.id, runId: lateRun.id, expectedSessionRevision: started.session.revision,
+    run: completedRun(lateRun, lateRun.startedAt + 7_000, { inputTokens: 1_200, outputTokens: 300, modelCalls: 2, toolCalls: 2 }),
+    sessionStatus: 'COMPLETED',
+    finalizedMessages: [Object.freeze({ ...assistantMessage('usage-answer-1', lateRun.id, '10月17日用电 1634 kWh。', lateRun.startedAt + 6_900), sessionId: usageSession.id })],
+    toolExecutions: [
+      tool('usage-tool-1', lateRun.id, 'energy_query_series', 'COMPLETED', lateRun.startedAt + 1_000),
+      tool('usage-tool-2', lateRun.id, 'alarm_list', 'FAILED', lateRun.startedAt + 2_000),
+    ],
+    artifacts: [],
+  });
+
+  const nextRun = Object.freeze({ ...run('usage-run-2', Date.parse('2026-10-17T16:01:00Z')), sessionId: usageSession.id });
+  const resumed = await lifecycle.start({
+    session: usageSession, expectedSessionRevision: answered.session.revision, run: nextRun,
+    operatorMessage: Object.freeze({ ...operatorMessage('usage-message-2', '那 C 机组呢？', nextRun.startedAt - 10), sessionId: usageSession.id }),
+  });
+  await lifecycle.complete({
+    sessionId: usageSession.id, runId: nextRun.id, expectedSessionRevision: resumed.session.revision,
+    run: Object.freeze({ ...nextRun, status: 'FAILED', finishedAt: nextRun.startedAt + 3_000, usage: { inputTokens: 800, outputTokens: 0, modelCalls: 1, toolCalls: 1 }, failureCode: 'MODEL_CALL_LIMIT' }),
+    sessionStatus: 'FAILED',
+    finalizedMessages: [],
+    toolExecutions: [tool('usage-tool-3', nextRun.id, 'energy_query_series', 'FAILED', nextRun.startedAt + 500)],
+    artifacts: [],
+  });
+
+  const usage = await persistence.agentUsageReader.daily('tenant-usage', 'site-usage', 'Asia/Shanghai', '2026-10-16', '2026-10-18');
+  assert.deepEqual(usage, {
+    schemaVersion: 1,
+    timezone: 'Asia/Shanghai',
+    days: [
+      { date: '2026-10-16', completed: 0, failed: 0, cancelled: 0, averageDurationMs: null, inputTokens: 0, outputTokens: 0, tools: [] },
+      {
+        date: '2026-10-17', completed: 1, failed: 0, cancelled: 0, averageDurationMs: 7_000, inputTokens: 1_200, outputTokens: 300,
+        tools: [{ toolName: 'alarm_list', calls: 1, failed: 1 }, { toolName: 'energy_query_series', calls: 1, failed: 0 }],
+      },
+      {
+        date: '2026-10-18', completed: 0, failed: 1, cancelled: 0, averageDurationMs: 3_000, inputTokens: 800, outputTokens: 0,
+        tools: [{ toolName: 'energy_query_series', calls: 1, failed: 1 }],
+      },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(usage), /用电|C 机组|usage-|tenant-usage|site-usage|MODEL_CALL_LIMIT/u);
+  // Another Site's records stay out.
+  assert.deepEqual((await persistence.agentUsageReader.daily('tenant-usage', 'site-other', 'Asia/Shanghai', '2026-10-17', '2026-10-17')).days[0].completed, 0);
+});

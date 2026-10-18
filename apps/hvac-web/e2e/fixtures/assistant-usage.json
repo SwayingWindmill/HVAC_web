@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "timezone": "Asia/Shanghai",
+  "days": [
+    {
+      "date": "2026-10-05",
+      "completed": 0,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tools": []
+    },
+    {
+      "date": "2026-10-06",
+      "completed": 0,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tools": []
+    },
+    {
+      "date": "2026-10-07",
+      "completed": 3,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 5800,
+      "inputTokens": 7200,
+      "outputTokens": 1800,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 3,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 3,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 6,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-08",
+      "completed": 5,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 6100,
+      "inputTokens": 12000,
+      "outputTokens": 3000,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 5,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 5,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 10,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-09",
+      "completed": 2,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 6400,
+      "inputTokens": 4800,
+      "outputTokens": 1200,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 2,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 2,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 4,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-10",
+      "completed": 0,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tools": []
+    },
+    {
+      "date": "2026-10-11",
+      "completed": 4,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 7000,
+      "inputTokens": 9600,
+      "outputTokens": 2400,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 4,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 4,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 8,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-12",
+      "completed": 6,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 7300,
+      "inputTokens": 14400,
+      "outputTokens": 3600,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 6,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 6,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 12,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-13",
+      "completed": 1,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 7600,
+      "inputTokens": 2400,
+      "outputTokens": 600,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 1,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 1,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 2,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-14",
+      "completed": 0,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tools": []
+    },
+    {
+      "date": "2026-10-15",
+      "completed": 2,
+      "failed": 0,
+      "cancelled": 0,
+      "averageDurationMs": 8200,
+      "inputTokens": 4800,
+      "outputTokens": 1200,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 2,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 2,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 4,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-16",
+      "completed": 7,
+      "failed": 1,
+      "cancelled": 0,
+      "averageDurationMs": 8500,
+      "inputTokens": 19200,
+      "outputTokens": 4800,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 8,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 8,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 16,
+          "failed": 2
+        }
+      ]
+    },
+    {
+      "date": "2026-10-17",
+      "completed": 11,
+      "failed": 0,
+      "cancelled": 1,
+      "averageDurationMs": 8800,
+      "inputTokens": 28800,
+      "outputTokens": 7200,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 12,
+          "failed": 0
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 12,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 24,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "date": "2026-10-18",
+      "completed": 6,
+      "failed": 1,
+      "cancelled": 0,
+      "averageDurationMs": 9100,
+      "inputTokens": 16800,
+      "outputTokens": 4200,
+      "tools": [
+        {
+          "toolName": "alarm_list",
+          "calls": 7,
+          "failed": 1
+        },
+        {
+          "toolName": "investigation_complete",
+          "calls": 7,
+          "failed": 0
+        },
+        {
+          "toolName": "telemetry_get_current",
+          "calls": 14,
+          "failed": 0
+        }
+      ]
+    }
+  ]
+}

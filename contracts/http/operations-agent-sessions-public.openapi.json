@@ -24,6 +24,9 @@
     },
     "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:submit-input": {
       "post": { "operationId": "submitAgentSessionInput", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionInputRequest" } } } }, "responses": { "202": { "description": "Input committed and continuation Run accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionSnapshot" } } } } } }
+    },
+    "/api/v1/sites/{siteId}/operations/agent-usage": {
+      "get": { "operationId": "getAgentUsage", "description": "Per Site-local day over the last 14 days: how many assistant Runs completed, failed or were stopped, their average duration, their tokens and how often each Tool was called and failed. Figures and Tool names only. Requires audit.read.", "parameters": [{ "name": "timezone", "in": "query", "required": true, "description": "The Site's IANA time zone; days are Site-local dates.", "schema": { "type": "string", "minLength": 1, "maxLength": 64 } }], "responses": { "200": { "description": "Assistant usage per day", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentUsage" } } } } } }
     }
   },
   "components": {
@@ -175,6 +178,18 @@
       "AgentLimitationArtifact": {
         "type": "object", "additionalProperties": false, "required": ["id", "sessionId", "runId", "kind", "description", "createdAt"],
         "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "sessionId": { "type": "string", "minLength": 1, "maxLength": 256 }, "runId": { "type": "string", "minLength": 1, "maxLength": 256 }, "kind": { "const": "LIMITATION" }, "description": { "type": "string", "minLength": 1, "maxLength": 4000 }, "createdAt": { "type": "integer", "minimum": 0 } }
+      },
+      "AgentToolUsage": {
+        "type": "object", "additionalProperties": false, "required": ["toolName", "calls", "failed"],
+        "properties": { "toolName": { "type": "string", "minLength": 1, "maxLength": 512 }, "calls": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 } }
+      },
+      "AgentUsageDay": {
+        "type": "object", "additionalProperties": false, "required": ["date", "completed", "failed", "cancelled", "averageDurationMs", "inputTokens", "outputTokens", "tools"],
+        "properties": { "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }, "completed": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 }, "cancelled": { "type": "integer", "minimum": 0 }, "averageDurationMs": { "type": ["integer", "null"], "minimum": 0 }, "inputTokens": { "type": "integer", "minimum": 0 }, "outputTokens": { "type": "integer", "minimum": 0 }, "tools": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/AgentToolUsage" } } }
+      },
+      "AgentUsage": {
+        "type": "object", "additionalProperties": false, "required": ["schemaVersion", "timezone", "days"],
+        "properties": { "schemaVersion": { "const": 1 }, "timezone": { "type": "string", "minLength": 1, "maxLength": 64 }, "days": { "type": "array", "minItems": 14, "maxItems": 14, "items": { "$ref": "#/components/schemas/AgentUsageDay" } } }
       },
       "AgentEvent": {
         "type": "object", "additionalProperties": false,

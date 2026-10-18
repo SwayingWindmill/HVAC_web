@@ -15,6 +15,7 @@ import { CLIMATE_ZONE_LABEL } from '@/lib/climate-zone';
 import { formatDecimal } from '@/lib/operator-format';
 import { roleLabels } from '@/lib/role-labels';
 import { cn } from '@/lib/utils';
+import { AssistantUsage } from './assistant-usage/AssistantUsage';
 import { AuditLog } from './audit/AuditLog';
 import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import { RuleManagement } from './rule-management/RuleManagement';
@@ -274,6 +275,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
     { key: 'registry', label: '资产与点位', children: <RegistryAdministration capabilities={capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'rules', label: '自动化规则', children: <RuleManagement principal={principal} sites={sites} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '操作记录', children: <AuditLog viewer={auditViewer} canRead={capabilities.includes('audit.read')} active={activeTab === 'audit'} /> },
+    { key: 'assistant', label: 'AI 助手', children: <AssistantUsage sites={sites} canRead={capabilities.includes('audit.read')} active={activeTab === 'assistant'} /> },
   ] as const;
   const normalizedActiveTab = items.some((item) => item.key === activeTab) ? activeTab : 'overview';
   function setTab(key: string) {

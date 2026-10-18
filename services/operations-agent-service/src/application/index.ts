@@ -13,6 +13,12 @@ export {
   type InterruptAgentSessionRunCommand,
   type StartAgentSessionRunCommand,
 } from './internal/agent-session-lifecycle.js';
+export type {
+  AgentToolUsage,
+  AgentUsage,
+  AgentUsageDay,
+  AgentUsageReader,
+} from './internal/agent-usage.js';
 export {
   AgentSessionServiceError,
   createAgentSessionService,

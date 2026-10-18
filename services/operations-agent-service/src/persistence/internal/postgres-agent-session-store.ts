@@ -8,7 +8,9 @@ import {
 import type {
   AgentSessionState,
   AgentSessionStateStore,
+  AgentUsageReader,
 } from '../../application/index.js';
+import { createPostgresAgentUsageReader } from './postgres-agent-usage.js';
 
 interface Queryable {
   query<T extends QueryResultRow>(text: string, values?: readonly unknown[]): Promise<QueryResult<T>>;
@@ -406,6 +408,7 @@ export interface PostgresAgentSessionPersistenceOptions {
 
 export interface PostgresAgentSessionPersistence {
   readonly agentSessionStateStore: AgentSessionStateStore;
+  readonly agentUsageReader: AgentUsageReader;
   close(): Promise<void>;
 }
 
@@ -421,6 +424,7 @@ export const createPostgresAgentSessionPersistence = (
   const pool = new Pool({ connectionString: options.connectionString, application_name: 'operations-agent-operations', max });
   return Object.freeze({
     agentSessionStateStore: createPostgresAgentSessionStateStore(pool),
+    agentUsageReader: createPostgresAgentUsageReader(pool),
     close: () => pool.end(),
   });
 };

@@ -3,7 +3,12 @@
 // steps, streamed answer and finding, and closes on the snapshot that ends the Run. The answer is
 // scripted from the question, so a test reads the same reply every time.
 
+import { readFileSync } from 'node:fs';
+
 type Json = Record<string, any>;
+
+// Fourteen Site-local days of figures, as the Agent's usage read returns them.
+const usage: Json = JSON.parse(readFileSync(new URL('./fixtures/assistant-usage.json', import.meta.url), 'utf8'));
 
 export interface AssistantReply {
   readonly tools: readonly string[];
@@ -38,6 +43,8 @@ export class AssistantOwner {
 
   /** Routes under /api/v1/sites/{site}/operations/agent-sessions; undefined for any other path. */
   respond(siteId: string, method: string, path: string, body: Json | null): { status?: number; body?: unknown; stream?: string } | undefined {
+    // The usage view (#597): the Gateway has already checked audit.read and the Site.
+    if (path === `/api/v1/sites/${siteId}/operations/agent-usage` && method === 'GET') return { body: usage };
     const base = `/api/v1/sites/${siteId}/operations/agent-sessions`;
     if (!path.startsWith(base)) return undefined;
     if (this.unavailable) {
