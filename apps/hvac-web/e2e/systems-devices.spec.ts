@@ -49,3 +49,11 @@ test('a work order created from a device names the device as its origin', async 
   expect(create?.csrfToken).toBe('e2e-csrf-token');
   expect(create?.body?.sourceReferences).toEqual([{ domain: 'ASSET', resourceId: expect.any(String), relationship: 'ORIGIN' }]);
 });
+
+// #596: 解释 hands the assistant a question about the device in view.
+test('解释 opens the assistant with a question about the device in view', async ({ page }) => {
+  await page.goto(`/operations/systems-devices?site=${SITE_ID}&inspect=018f3e00-4000-7000-8000-000000000001`);
+  await page.getByRole('dialog').getByRole('button', { name: '解释' }).click();
+  const panel = page.getByRole('complementary', { name: 'AI 助手' });
+  await expect(panel.getByRole('textbox', { name: '向助手提问' })).toHaveValue('「CHILLER-01」最近 24 小时运行得怎么样？现在的读数有没有异常？');
+});

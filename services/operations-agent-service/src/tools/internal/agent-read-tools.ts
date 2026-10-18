@@ -729,6 +729,10 @@ const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate 
 };
 
 /** One series per point, in the order asked: averages for readings, increases for counters. */
+// Equipment states as the device page says them.
+const STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({ RUNNING: '运行', STOPPED: '停机', STANDBY: '待机', FAULT: '故障' });
+const stateWord = <T>(value: T): T | string => (typeof value === 'string' ? STATE_WORDS[value] ?? value : value);
+
 const readHistory = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
@@ -766,16 +770,19 @@ const readHistory = async (
         siteTime: siteTime(bucket.periodStart, timezone),
         ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
         ...(bucket.counter === undefined ? {} : { increase: bucket.counter.deltaSum }),
-        ...(bucket.state === undefined ? {} : { lastValue: bucket.state.lastValue }),
+        ...(bucket.state === undefined ? {} : { lastValue: stateWord(bucket.state.lastValue) }),
         coverage: bucket.completeness,
       })),
     }];
   });
+  const missingKeys = query.pointKeys.filter((key) => !series.some((entry) => entry.key === key));
   // The history owner reader rates a result GOOD only when it is projected past the range and every bucket is whole.
   return {
     query: { startDate: query.startDate, endDate: query.endDate, granularity: HISTORY_GRANULARITY_WORDS[query.granularity] },
     series,
-    missingKeys: query.pointKeys.filter((key) => !series.some((entry) => entry.key === key)),
+    missingKeys,
+    // Without it the model asks again for the same readings (#596).
+    ...(missingKeys.length === 0 ? {} : { note: 'missingKeys 里的读数这段时间没有历史，再查也一样；要说现在的状态，用当前读数。' }),
     dataStatus: dataStatus(result.quality !== 'GOOD', payload.projectionWatermark, timezone),
   };
 };
@@ -897,7 +904,13 @@ const readTelemetry = async (
     deviceState: payload.displayState === null ? '状态不明' : DEVICE_STATE_WORDS[payload.displayState] ?? '状态不明',
     values: payload.values.map((value) => (value.state === 'MISSING'
       ? { key: value.key, state: valueState(value) }
-      : { key: value.key, value: value.value, unit: value.unit, siteTime: siteTime(value.sampledAt, timezone), state: valueState(value) })),
+      : {
+        key: value.key,
+        value: stateWord(value.value),
+        unit: value.unit,
+        siteTime: siteTime(value.sampledAt, timezone),
+        state: valueState(value),
+      })),
     dataStatus: complete ? '完整' : '不完整：有读数过期或缺失',
   };
 };
