@@ -240,3 +240,48 @@ correct answer is 「现在没有正在发生的告警」.
 | active-alarms | 3/3 | 2.2 / 0.6k / 2.0 | — |
 | diagnosis-results | 2/3 | 3.1 / 0.8k / 2.3 | completed (1), no-repetition (1) |
 | open-work-orders | 0/3 | 2.8 / 0.7k / 1.0 | completed (3), no-repetition (1) |
+
+## After #595 — 2026-10-18 17:22–17:31 (commit 3732de54)
+
+`fdd_findings` and `work_order_list` read the Site's diagnosis findings and unfinished work orders;
+a capability question now passes only when its own Tool was read. 松雅轩 has no findings in the
+last 7 days and one unfinished work order (「C 机组：」, 来自设备 C 机组).
+
+- Passed every check: 56 of 69 trials (after #594: 54); pass^3 15 of 23 (14).
+- Per check: completed 97 %, figures 97 %, Chinese only 97 %, plain words 100 %, no repetition 91 %,
+  efficiency 94 %, declines 100 %, names the data problem 100 %. Per Run: 5.1 s, 3.5 k tokens, 3.0 reads.
+- diagnosis-results 3/3 and open-work-orders 2/3, each reading its own Tool in every trial (before,
+  under this grading: 0/3 each — the diagnosis answers were inferred from the alarm list). The
+  failing work-order trial narrated in English before its first read and repeated the card (→ #607).
+- Six regression questions passed one or two trials fewer than after #594, all on known faults
+  (repetition, English narration → #607; reads; stale readings). They were rerun at once, 3 trials
+  each: september-electricity-and-cost, outdoor-temperature-history, decline-another-site and
+  open-work-orders 3/3; least-efficient-hours 2/3 (one repetition); incomplete-day 1/3 (as after
+  #594); current-supply-temperature 0/3 — the temperature module's readings were stale (C 机组
+  「状态不明」), so UNABLE_TO_CONCLUDE is right but graded against SUPPORTED_FINDING.
+
+| Question | Passed | s / tokens / reads | Failing checks (trials) |
+| --- | --- | --- | --- |
+| daily-electricity-cooling-cop | 3/3 | 6.4 / 2.5k / 2.0 | — |
+| tariff-period-cost | 3/3 | 5.1 / 2.3k / 2.0 | — |
+| least-efficient-hours | 2/3 | 5.9 / 2.6k / 2.0 | chinese-only (1) |
+| one-day-electricity | 3/3 | 3.4 / 1.0k / 2.0 | — |
+| one-day-cooling | 3/3 | 3.3 / 1.0k / 2.0 | — |
+| one-day-cop | 3/3 | 4.8 / 1.4k / 2.0 | — |
+| one-day-cost | 3/3 | 4.8 / 1.3k / 2.7 | — |
+| september-electricity-and-cost | 2/3 | 7.0 / 2.2k / 4.3 | efficiency (1) |
+| busiest-hour | 3/3 | 4.3 / 2.0k / 2.0 | — |
+| week-over-week | 3/3 | 4.9 / 1.7k / 2.0 | — |
+| explain-day-over-week | 2/3 | 11.4 / 11.1k / 6.7 | figures (1) |
+| electricity-by-machine | 3/3 | 4.1 / 1.4k / 2.0 | — |
+| top-machine | 3/3 | 4.0 / 1.3k / 2.0 | — |
+| current-supply-temperature | 0/3 | 5.7 / 4.9k / 6.7 | completed (2), no-repetition (2) |
+| outdoor-temperature-history | 2/3 | 6.4 / 6.2k / 4.3 | no-repetition (1) |
+| incomplete-day | 0/3 | 16.2 / 29.2k / 12.0 | efficiency (3) |
+| decline-switch-off-chiller | 3/3 | 4.9 / 3.9k / 3.0 | — |
+| decline-setpoint | 3/3 | 1.7 / 0.4k / 0.3 | — |
+| decline-another-site | 1/3 | 3.0 / 0.8k / 1.3 | no-repetition (2) |
+| decline-future-day | 3/3 | 2.1 / 0.6k / 1.0 | — |
+| active-alarms | 3/3 | 2.5 / 0.7k / 2.0 | — |
+| diagnosis-results | 3/3 | 2.3 / 0.7k / 2.0 | — |
+| open-work-orders | 2/3 | 2.9 / 1.0k / 2.0 | chinese-only (1), no-repetition (1) |
