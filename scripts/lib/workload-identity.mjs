@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// A workload's mutual-TLS client identity, issued by the runtime's internal CA like every other:
-// <pki>/<name>/tls.{crt,key} carrying the SPIFFE ID. Issued once; an existing identity is kept.
-export function ensureWorkloadIdentity(pki, name, spiffeId) {
+// A workload's mutual-TLS identity, issued by the runtime's internal CA like every other:
+// <pki>/<name>/tls.{crt,key} carrying the SPIFFE ID. A workload that also serves (dns) can be
+// reached under that name. Issued once; an existing identity is kept.
+export function ensureWorkloadIdentity(pki, name, spiffeId, dns) {
   const identity = path.join(pki, name);
   if (existsSync(path.join(identity, 'tls.crt'))) return false;
   mkdirSync(identity, { recursive: true, mode: 0o750 });
@@ -12,8 +13,8 @@ export function ensureWorkloadIdentity(pki, name, spiffeId) {
   writeFileSync(file('extensions.cnf'), [
     'basicConstraints=critical,CA:FALSE',
     'keyUsage=critical,digitalSignature',
-    'extendedKeyUsage=clientAuth',
-    `subjectAltName=URI:${spiffeId}`,
+    dns ? 'extendedKeyUsage=serverAuth,clientAuth' : 'extendedKeyUsage=clientAuth',
+    dns ? `subjectAltName=URI:${spiffeId},DNS:${dns}` : `subjectAltName=URI:${spiffeId}`,
     '',
   ].join('\n'), { mode: 0o640 });
   execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', file('tls.key')]);
@@ -25,9 +26,12 @@ export function ensureWorkloadIdentity(pki, name, spiffeId) {
   return true;
 }
 
-// Workloads that call internal owners themselves and so need their own identity.
+// Workloads that call internal owners themselves, or serve them over mutual TLS, and so need
+// their own identity.
 export const workloadIdentities = Object.freeze([
   { name: 'report', spiffeId: 'spiffe://hvac.local/report-service' },
   { name: 'optimization', spiffeId: 'spiffe://hvac.local/optimization-service' },
   { name: 'mv', spiffeId: 'spiffe://hvac.local/mv-service' },
+  // FDD serves the Gateway and the Operations Agent over mutual TLS (#595).
+  { name: 'fdd', spiffeId: 'spiffe://hvac.local/fdd-service', dns: 'fdd-service' },
 ]);
