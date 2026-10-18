@@ -961,3 +961,29 @@ test('a finding citing a read that did not happen is refused with the ids it may
   assert.doesNotMatch(refusal, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/u);
   assert.equal(result.runStatus, 'COMPLETED');
 });
+
+// #592: the answer text streams to the operator before the card, so a claim of having operated
+// equipment cannot be withdrawn; the Run may only finish after the model corrects it in writing.
+const declineCard = Object.freeze({ outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: ['B 机组现在的负荷是多少？'] });
+
+test('an answer that claims it operated equipment must be corrected before the Run can finish', async () => {
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'text', text: '好的，已为你关闭 B 机组。' }, { type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: '更正：我只能读取数据，没有也不能关闭 B 机组。' }, { type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+  ]);
+
+  const refusal = requests[1].findLast((message) => message.role === 'toolResult').text;
+  assert.match(refusal, /更正：/u);
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), ['好的，已为你关闭 B 机组。', '更正：我只能读取数据，没有也不能关闭 B 机组。']);
+});
+
+test('a claim of operating equipment that is never corrected leaves the Run without a card', async () => {
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: '我已把冷冻水出水温度设定值调到 8 度。' }, { type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+  ]);
+
+  assert.equal(result.runStatus, 'FAILED');
+  assert.equal(result.artifacts.length, 0);
+});

@@ -5,6 +5,7 @@ import {
   AgentToolError,
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
+  claimsPhysicalExecution,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
   type AgentArtifact,
@@ -23,7 +24,13 @@ interface CreatePiToolsInput {
   readonly runId: string;
   readonly onArtifact: (artifact: AgentArtifact) => void;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
+  /** The answer text this Run has shown the operator so far, one entry per message. */
+  readonly answers: () => readonly string[];
 }
+
+// The answer has already reached the operator, so a claim of operating equipment is corrected in
+// writing rather than withdrawn (#592).
+const CORRECTION_REQUIRED = '回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再调用 investigation_complete。';
 
 const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
 const toolFailureCodes = new Set<AgentToolErrorCode>([
@@ -47,6 +54,8 @@ interface ProjectToolBudgetState {
   readonly completedToolIds: Set<string>;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
+  /** From which answer on a correction is due, once the answer claimed it operated equipment. */
+  correctionFrom: number | null;
   calls: number;
   active: number;
   /** Calls waiting for a free slot, released in order as running calls finish. */
@@ -184,7 +193,8 @@ const createInvestigationCompleteTool = ({
   sessionId,
   runId,
   onArtifact,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  answers,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
   description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
@@ -192,6 +202,11 @@ const createInvestigationCompleteTool = ({
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const finding = parseInvestigationComplete(parameters);
+    const shown = answers();
+    if (state.correctionFrom === null && shown.some(claimsPhysicalExecution)) state.correctionFrom = shown.length;
+    if (state.correctionFrom !== null && !shown.slice(state.correctionFrom).some((answer) => answer.includes('更正：'))) {
+      throw new Error(CORRECTION_REQUIRED);
+    }
     if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
       // The model reads this refusal, so it says which ids it may cite.
       const cited = [...state.completedToolIds];
@@ -253,6 +268,7 @@ export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
     completedToolIds: new Set<string>(),
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
+    correctionFrom: null,
     calls: 0,
     active: 0,
     waiting: [],

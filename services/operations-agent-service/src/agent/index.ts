@@ -8,6 +8,7 @@ export {
 export {
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
+  claimsPhysicalExecution,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
   type AgentArtifact,

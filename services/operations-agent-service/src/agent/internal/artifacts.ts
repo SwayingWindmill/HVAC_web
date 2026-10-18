@@ -185,10 +185,31 @@ const stringList = (
   )));
 };
 
-const physicalExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)\s+(?:(?:have|has)\s+)?(?:changed|set|started|stopped|turned|commanded|executed|applied|adjusted|overrode|reset)\b/iu;
+const englishExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)\s+(?:(?:have|has)\s+)?(?:changed|set|started|stopped|turned|commanded|executed|applied|adjusted|overrode|reset)\b/iu;
+
+// Verbs that operate equipment. 「设定」 alone is left out: 「设定值」 is a reading's name.
+const CONTROL_VERBS = '关闭|关掉|关停|停掉|停止|开启|打开|启动|调整|调到|调为|调高|调低|修改|改为|改成|设为|设定为|设置为|设置成|下发|切换|复位|重启';
+const EQUIPMENT = '机组|水泵|泵|阀|风机|冷却塔|设定值|温度|频率|模式|指令|命令|计划';
+// 「我已为你关闭……」「系统刚把设定值调到……」: the speaker acting, unless negated (「我不能关闭……」).
+const actorClaim = new RegExp(`(?:我|助手|系统)([^。！？；\\n]{0,12}?)(?:${CONTROL_VERBS})`, 'gu');
+const ACTED = /已|刚|帮|为|替|把|将|这就|马上/u;
+const NEGATED = /不|没|未|无|别/u;
+const executionClaims = [
+  // 「已为你关闭……」「已把设定值调整为……」
+  new RegExp(`已经?(?:为|帮|替)(?:你|您)[^。！？；\\n]{0,8}?(?:${CONTROL_VERBS})|已经?(?:把|将)[^。！？；\\n]{0,12}?(?:${CONTROL_VERBS})`, 'u'),
+  // 「已关闭 B 机组」 operates a machine; 「B 机组已关闭两天」 and 「已关闭的机组」 describe one.
+  new RegExp(`已经?(?:${CONTROL_VERBS})\\s*[^。！？；，,\\n的了]{0,6}?(?:${EQUIPMENT})`, 'u'),
+];
+
+/** Whether a text says the assistant operated equipment, which it never can (#592). */
+export const claimsPhysicalExecution = (text: string): boolean => (
+  englishExecutionClaim.test(text)
+  || executionClaims.some((pattern) => pattern.test(text))
+  || [...text.matchAll(actorClaim)].some(([, between = '']) => ACTED.test(between) && !NEGATED.test(between))
+);
 
 const assertNoPhysicalExecutionClaim = (narrative: string): void => {
-  if (physicalExecutionClaim.test(narrative)) {
+  if (claimsPhysicalExecution(narrative)) {
     invalidTerminalArtifact('investigation_complete cannot claim physical execution by the Agent.');
   }
 };

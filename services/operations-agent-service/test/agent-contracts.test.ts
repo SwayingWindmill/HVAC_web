@@ -6,6 +6,7 @@ import {
   parseInvestigationComplete,
   parseInvestigationRequestInput,
   transitionAgentSession,
+  claimsPhysicalExecution,
 } from '../dist/agent/index.js';
 
 const activeSession = Object.freeze({
@@ -114,4 +115,35 @@ test('terminal investigation inputs are structured and reject malformed model ou
     }),
     (error) => error instanceof AgentContractError && error.code === 'TERMINAL_ARTIFACT_INVALID',
   );
+});
+
+// #592: the assistant may never say it operated equipment, in Chinese or English; describing what a
+// machine did stays allowed.
+test('claims of having operated equipment are recognised in Chinese and English; descriptions of equipment are not', () => {
+  const claims = [
+    '好的，已为你关闭 B 机组。',
+    '我已把冷冻水出水温度设定值调到 8 度。',
+    '我刚帮你启动了 2 号冷冻水泵。',
+    '系统已将 C 机组切换到节能模式。',
+    '已关闭 B 机组。',
+    '已调整设定值为 8 ℃。',
+    '已为您停止 D 机组。',
+    'I changed the chilled-water setpoint to 8 °C.',
+    'The system has stopped chiller B.',
+  ];
+  const descriptions = [
+    'B 机组当天开机。',
+    'C 机组已停机。',
+    '已关闭的机组没有用电。',
+    'B 机组已关闭两天，用电为 0。',
+    '冷却塔风机已关闭，所以没有用电。',
+    '我只能读取数据，不能关闭 B 机组。',
+    '我无法帮你调整设定值。',
+    '我没有关闭任何设备。',
+    '已为你查询 B 机组的设定值。',
+    '需要现场人员按规程关闭 B 机组。',
+    '更正：我只能读取数据，没有也不能关闭 B 机组。',
+  ];
+  for (const text of claims) assert.equal(claimsPhysicalExecution(text), true, text);
+  for (const text of descriptions) assert.equal(claimsPhysicalExecution(text), false, text);
 });
