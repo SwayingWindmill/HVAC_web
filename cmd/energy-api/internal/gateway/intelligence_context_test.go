@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 )
 
 // requireOwnerContext checks the Gateway's last call to an intelligence owner carried a context it
@@ -76,4 +77,38 @@ func TestOptimizationCallsCarryAGatewaySignedContextForTheirAction(t *testing.T)
 		t.Fatalf("run request got %d: %s", response.Code, response.Body.String())
 	}
 	requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", "optimization:write")
+}
+
+// #612: M&V no longer trusts X-Tenant-ID or X-Actor-ID; reading the Site's measures is a read and
+// registering one a write, each on the Site's context, which names the person.
+func TestSavingsCallsCarryAGatewaySignedContextForTheirAction(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	controller := fixture.handler.(*handler)
+	session := fixture.session(t)
+	session.CSRFToken = "operations-csrf-fixture"
+	routed := func(method, path, body string) *http.Request {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Origin", "https://web.example.test")
+		request.Header.Set("X-CSRF-Token", "operations-csrf-fixture")
+		ctx := context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{SelectedOwner: ownershipregistry.OwnerMV})
+		return request.WithContext(context.WithValue(ctx, routeSessionContextKey, session))
+	}
+	base := "/api/v1/sites/" + fixture.siteID + "/savings/measures"
+
+	response := httptest.NewRecorder()
+	dispatchSavingsRoute(controller, response, routed(http.MethodGet, base, ""), publicSavingsRoute{siteID: fixture.siteID, internalPath: "/measures"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("measures read got %d: %s", response.Code, response.Body.String())
+	}
+	requireOwnerContext(t, fixture, "X-MV-Context", "mv-service", "mv:read")
+
+	response = httptest.NewRecorder()
+	dispatchSavingsRoute(controller, response, routed(http.MethodPost, base, `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00"}`),
+		publicSavingsRoute{siteID: fixture.siteID, internalPath: "/measures", write: true})
+	if response.Code != http.StatusOK {
+		t.Fatalf("measure registration got %d: %s", response.Code, response.Body.String())
+	}
+	if claims := requireOwnerContext(t, fixture, "X-MV-Context", "mv-service", "mv:write"); claims.Subject != "operations-user" {
+		t.Fatalf("the registration context does not name the person: %+v", claims)
+	}
 }

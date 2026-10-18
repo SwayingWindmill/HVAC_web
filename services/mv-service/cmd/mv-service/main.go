@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/mv-service/internal/mv"
 )
 
@@ -44,7 +46,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := mv.NewHTTPHandler(service)
+	// Only the Gateway may call M&V, over mutual TLS with a context it signed (#612).
+	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
+		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("MV_TLS_CERT"), PrivateKeyPath: requiredEnv("MV_TLS_KEY")},
+		ClientCAPath:     requiredEnv("MV_TLS_CA"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(requiredEnv("MV_GATEWAY_DELEGATION_CERT"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := mv.NewHTTPHandler(service, mv.AuthConfig{
+		GatewayPublicKey: gatewayKey,
+		GatewaySPIFFE:    envOrDefault("MV_GATEWAY_SPIFFE", mv.DefaultGatewaySPIFFEID),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,14 +88,25 @@ func main() {
 	server := &http.Server{
 		Addr:              envOrDefault("MV_HTTP_ADDR", ":19096"),
 		Handler:           handler,
+		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		// Implementing a measure fits fourteen days of hours read from ClickHouse.
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
+	diagnostics := &http.Server{
+		Addr: envOrDefault("MV_DIAGNOSTICS_ADDR", ":19101"), Handler: mv.HealthHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
 	go func() {
-		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+	go func() {
+		if serveErr := server.ListenAndServeTLS("", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Printf("mv service stopped unexpectedly: %v", serveErr)
 			stop()
 		}
@@ -87,6 +115,7 @@ func main() {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdown)
+	_ = diagnostics.Shutdown(shutdown)
 }
 
 func hostname() string {

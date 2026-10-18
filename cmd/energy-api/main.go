@@ -95,9 +95,9 @@ func main() {
 	intelligenceConfig := &gateway.IntelligenceConfig{
 		ForecastBaseURL:     envOr("FORECAST_SERVICE_URL", "https://forecast-service:19092"),
 		FDDBaseURL:          envOr("FDD_SERVICE_URL", "https://fdd-service:19094"),
-		MVBaseURL:           envOr("MV_SERVICE_URL", "http://mv-service:19096"),
+		MVBaseURL:           envOr("MV_SERVICE_URL", "https://mv-service:19096"),
 		ReportBaseURL:       envOr("REPORT_SERVICE_URL", "http://report-service:19097"),
-		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "http://optimization-service:19093"),
+		OptimizationBaseURL: envOr("OPTIMIZATION_SERVICE_URL", "https://optimization-service:19093"),
 		HTTPClient:          &http.Client{Timeout: 8 * time.Second},
 		OwnerHTTPClient:     ownerClient,
 		Timeout:             8 * time.Second,

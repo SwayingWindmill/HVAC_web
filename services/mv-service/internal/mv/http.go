@@ -2,42 +2,90 @@ package mv
 
 import (
 	"bytes"
+	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 const maxMVRequestBytes = int64(64 << 10)
 
-// The Gateway reaches mv-service on the private network after deciding the caller may read the
-// Site (site.read) or manage its measures (savings.manage); it names the Tenant and the actor.
+// M&V serves only the Gateway, with a context it signed for the Site after deciding the person may
+// read it (site.read) or manage its measures (savings.manage) (#612). Before, any caller on the
+// network was trusted with whatever X-Tenant-ID and X-Actor-ID it sent.
 const (
-	headerTenant = "X-Tenant-ID"
-	headerActor  = "X-Actor-ID"
+	ContextHeader          = "X-MV-Context"
+	ReadAction             = "mv:read"
+	WriteAction            = "mv:write"
+	Audience               = "mv-service"
+	DefaultGatewaySPIFFEID = "spiffe://hvac.local/platform-gateway"
 )
+
+type AuthConfig struct {
+	GatewayPublicKey crypto.PublicKey
+	GatewaySPIFFE    string
+	Now              func() time.Time
+}
 
 type HTTPHandler struct{ service *Service }
 
-func NewHTTPHandler(service *Service) (http.Handler, error) {
+func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	if service == nil {
 		return nil, errors.New("savings service is required")
 	}
+	gateway := strings.TrimSpace(auth.GatewaySPIFFE)
+	verifier := identitycontext.SiteContextVerifier{PublicKey: auth.GatewayPublicKey, Issuer: gateway, Audience: Audience, Header: ContextHeader, Now: auth.Now}
+	if err := verifier.Validate(); err != nil {
+		return nil, err
+	}
+	guard := func(action string, next http.HandlerFunc) http.HandlerFunc {
+		return func(writer http.ResponseWriter, request *http.Request) {
+			site, err := verifier.Verify(request, action, gateway)
+			if errors.Is(err, identitycontext.ErrSiteContextWorkload) {
+				writeMVJSON(writer, http.StatusForbidden, map[string]any{"code": "savings_workload_forbidden", "status": http.StatusForbidden})
+				return
+			}
+			if err != nil {
+				writeMVJSON(writer, http.StatusForbidden, map[string]any{"code": "savings_context_invalid", "status": http.StatusForbidden})
+				return
+			}
+			next(writer, request.WithContext(context.WithValue(request.Context(), siteKey{}, site)))
+		}
+	}
 	handler := &HTTPHandler{service: service}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures", guard(ReadAction, handler.list))
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures", guard(WriteAction, handler.register))
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures/{measureId}", guard(ReadAction, handler.detail))
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/implement", guard(WriteAction, handler.implement))
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/refit", guard(WriteAction, handler.refit))
+	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/end", guard(WriteAction, handler.end))
+	mux.HandleFunc("GET /v1/sites/{siteId}/savings/summary", guard(ReadAction, handler.summary))
+	return mux, nil
+}
+
+// HealthHandler answers the container health check on the plain diagnostics port.
+func HealthHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures", handler.list)
-	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures", handler.register)
-	mux.HandleFunc("GET /v1/sites/{siteId}/savings/measures/{measureId}", handler.detail)
-	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/implement", handler.implement)
-	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/refit", handler.refit)
-	mux.HandleFunc("POST /v1/sites/{siteId}/savings/measures/{measureId}/end", handler.end)
-	mux.HandleFunc("GET /v1/sites/{siteId}/savings/summary", handler.summary)
-	return mux, nil
+	return mux
+}
+
+type siteKey struct{}
+
+// siteOf is the Tenant, Site and person the Gateway's context named; handlers never read them from a header.
+func siteOf(request *http.Request) identitycontext.SiteContext {
+	site, _ := request.Context().Value(siteKey{}).(identitycontext.SiteContext)
+	return site
 }
 
 type baselineView struct {
@@ -136,7 +184,7 @@ func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 }
 
 func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Request) {
-	ledger, err := handler.service.Ledger(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"))
+	ledger, err := handler.service.Ledger(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID)
 	if err != nil {
 		writeMVError(writer, err)
 		return
@@ -149,7 +197,7 @@ func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Reque
 }
 
 func (handler *HTTPHandler) detail(writer http.ResponseWriter, request *http.Request) {
-	verified, err := handler.service.Verified(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"))
+	verified, err := handler.service.Verified(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
@@ -174,9 +222,9 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 		return
 	}
 	measure, err := handler.service.Register(request.Context(), MeasureInput{
-		TenantID: request.Header.Get(headerTenant), SiteID: request.PathValue("siteId"), Name: input.Name, Kind: input.Kind,
+		TenantID: siteOf(request).TenantID, SiteID: siteOf(request).SiteID, Name: input.Name, Kind: input.Kind,
 		Description: input.Description, PlannedAt: input.PlannedAt, InvestmentCNY: input.InvestmentCNY,
-		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: request.Header.Get(headerActor),
+		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: siteOf(request).Subject,
 	})
 	if err != nil {
 		writeMVError(writer, err)
@@ -209,7 +257,7 @@ func (handler *HTTPHandler) implement(writer http.ResponseWriter, request *http.
 		ImplementedAt time.Time `json:"implementedAt"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.Implement(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.ImplementedAt, request.Header.Get(headerActor))
+		return handler.service.Implement(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.ImplementedAt, siteOf(request).Subject)
 	})
 }
 
@@ -219,7 +267,7 @@ func (handler *HTTPHandler) refit(writer http.ResponseWriter, request *http.Requ
 		To   time.Time `json:"to"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.Refit(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.From, input.To, request.Header.Get(headerActor))
+		return handler.service.Refit(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.From, input.To, siteOf(request).Subject)
 	})
 }
 
@@ -228,14 +276,14 @@ func (handler *HTTPHandler) end(writer http.ResponseWriter, request *http.Reques
 		EndedAt time.Time `json:"endedAt"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.End(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("measureId"), input.EndedAt, request.Header.Get(headerActor))
+		return handler.service.End(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.EndedAt, siteOf(request).Subject)
 	})
 }
 
 // summary totals the Site's verified days in [from, to], given as Site-local dates.
 func (handler *HTTPHandler) summary(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
-	totals, err := handler.service.Savings(request.Context(), request.Header.Get(headerTenant), request.PathValue("siteId"), query.Get("from"), query.Get("to"))
+	totals, err := handler.service.Savings(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, query.Get("from"), query.Get("to"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
