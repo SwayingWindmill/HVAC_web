@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。机组电表上的「冷冻水出水温度」和总管供水对不上（C、D 机组运行时显示 28–32 ℃，总管供水 6 ℃），所以供水温度看冷量计的总管供水，不看各台机组。",
+  "siteFile": "songyaxuan.site.json",
+  "rules": [
+    {
+      "code": "chilled-water-supply-high",
+      "title": "冷冻水供水温度过高",
+      "summary": "有机组在运行，冷冻水总管供水温度高于 10 ℃ 已持续 15 分钟（正常运行时在 6–7 ℃），制冷可能跟不上，请到机房查看。降到 9 ℃ 以下或机组全部停机后自动恢复。",
+      "severity": "MAJOR",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 900,
+      "raise": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          },
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 10 } }
+        ]
+      },
+      "clear": {
+        "kind": "OR",
+        "children": [
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 9 } },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "readingsNotUpdated": {
+    "title": "{device}读数长时间没有更新",
+    "summary": "{device}有读数超过 {minutes} 分钟没有更新，或一直没有读数（这台设备的读数：{points}）。可能是测点、接线或通讯出了问题。所有读数恢复更新后自动恢复。",
+    "severity": "WARNING",
+    "ageSeconds": 1800
+  }
+}
