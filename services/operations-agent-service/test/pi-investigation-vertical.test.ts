@@ -1024,3 +1024,18 @@ test('process talk beside a read is not kept, and the card drops a limitation th
   assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
   assert.deepEqual(result.artifacts.at(-1).finding.limitations, ['没有室外温度数据，不能判断负荷变化是不是天气原因。']);
 });
+
+// #607: on the server a model wrote its answer in the same turn as one more read; that answer is
+// the Run's last words and stays, even though the turn reads data.
+test('the last words of a Run stay even when the model wrote them beside a read', async () => {
+  const seriesTool = projectTool('energy_query_series', async () => ({ totalKWh: 6264 }));
+  const answer = '10 月 13 日到 16 日用电 6264 kWh，比 10 月 6 日到 9 日多 2478 kWh。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: '先查一下两段时间的用电。' }, { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: answer }, { type: 'tool-call', id: 'series-2', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [] } }], stopReason: 'toolUse' },
+  ], [seriesTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
+});

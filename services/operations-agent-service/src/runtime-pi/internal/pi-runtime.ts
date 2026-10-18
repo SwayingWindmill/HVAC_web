@@ -112,7 +112,8 @@ const textFromAssistantMessage = (message: Extract<PiAgentEvent, { type: 'messag
 };
 
 // Words written in a turn that also reads data are process talk ("I'll start by reading…"), not
-// the answer; only a turn that reads nothing (it answers, and may close the Run) is kept (#607).
+// the answer, and are not kept (#607). The Run's last words are its answer and always stay: a model
+// may write the answer beside one more read.
 const readsData = (message: Extract<PiAgentEvent, { type: 'message_end' }>['message']): boolean => (
   message.role === 'assistant'
   && message.content.some((block) => block.type === 'toolCall'
@@ -176,6 +177,10 @@ export const createPiAgentEngine = ({
   const toolExecutions: AgentToolExecution[] = [];
   const pendingTools = new Map<string, PendingToolExecution>();
   const finalizedMessages: AgentMessage[] = [];
+  const processTalk = new Set<string>();
+  const spokenMessages = (): AgentMessage[] => finalizedMessages.filter(
+    (message, index) => !processTalk.has(message.id) || index === finalizedMessages.length - 1,
+  );
   let sequence = 0;
   let assistantMessageIndex = 0;
   let activeAssistantMessageId: string | null = null;
@@ -370,9 +375,10 @@ export const createPiAgentEngine = ({
           }
           if (inputTokens >= input.budget.maxInputTokens) markBudgetFailure('INPUT_TOKEN_LIMIT');
           if (outputTokens >= input.budget.maxOutputTokens) markBudgetFailure('OUTPUT_TOKEN_LIMIT');
-          if (!input.signal.aborted && activeAssistantMessageId !== null && !readsData(event.message)) {
+          if (!input.signal.aborted && activeAssistantMessageId !== null) {
             const content = textFromAssistantMessage(event.message);
             if (content.length > 0) {
+              if (readsData(event.message)) processTalk.add(activeAssistantMessageId);
               finalizedMessages.push(Object.freeze({
                 id: activeAssistantMessageId,
                 sessionId: input.session.id,
@@ -478,7 +484,7 @@ export const createPiAgentEngine = ({
       sessionStatus: 'FAILED',
       failureCode: 'OPERATOR_PROMPT_REQUIRED',
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -508,7 +514,7 @@ export const createPiAgentEngine = ({
         sessionStatus: 'FAILED',
         failureCode: 'PI_RUNTIME_FAILED',
         usage: usage(),
-        finalizedMessages,
+        finalizedMessages: spokenMessages(),
         toolExecutions,
         artifacts,
       });
@@ -544,7 +550,7 @@ export const createPiAgentEngine = ({
       sessionStatus: 'FAILED',
       failureCode: budgetFailureCode,
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -558,7 +564,7 @@ export const createPiAgentEngine = ({
       sessionStatus: terminalArtifact.kind === 'INPUT_REQUEST' ? 'WAITING_FOR_INPUT' : 'COMPLETED',
       failureCode: null,
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -572,7 +578,7 @@ export const createPiAgentEngine = ({
     sessionStatus: 'FAILED',
     failureCode: 'TERMINAL_ARTIFACT_REQUIRED',
     usage: usage(),
-    finalizedMessages,
+    finalizedMessages: spokenMessages(),
     toolExecutions,
     artifacts,
   } satisfies AgentEngineResult);
