@@ -4,8 +4,10 @@ go 1.25.12
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/intelligencemodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -17,5 +19,9 @@ require (
 )
 
 replace github.com/quanlaihe/hvac-web/libs/intelligencemodel => ../../libs/intelligencemodel
+
+replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
+
+replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
 
 replace github.com/quanlaihe/hvac-web/libs/schedulerjob => ../../libs/schedulerjob
