@@ -100,7 +100,7 @@ func TestOwnerRouterLetsAReaderWorkloadOnlyListASitesAlarms(t *testing.T) {
 	router, err := NewOwnerRouter(OwnerRouterConfig{
 		GatewaySPIFFE:   ownerRouterGatewaySPIFFE,
 		TelemetrySPIFFE: ownerRouterTelemetrySPIFFE,
-		ReaderSPIFFEs:   []string{agent},
+		ReaderSPIFFE:    agent,
 		GatewayHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			calls++
 			writer.WriteHeader(http.StatusNoContent)

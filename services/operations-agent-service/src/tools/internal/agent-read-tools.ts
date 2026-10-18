@@ -1014,9 +1014,9 @@ const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
   Number(points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6))
 );
 
-/** The Site total split by sub-metered device, largest first, each named from the asset model. */
 // Alarms as the 告警 page names them (#594).
 const SEVERITY_WORDS = Object.freeze({ CRITICAL: '紧急', MAJOR: '重要', MINOR: '次要', WARNING: '预警', INFO: '提示' } as const);
+const OPERATION_WORDS = Object.freeze({ PUBLISH: '触发', ACKNOWLEDGE: '确认', ASSIGN: '认领', UNASSIGN: '取消认领', SUPPRESS: '抑制', UNSUPPRESS: '解除抑制', CLEAR: '恢复' } as const);
 const ALARM_STATUS = Object.freeze({ active: { condition: 'ACTIVE', words: '正在发生', none: '当前没有正在发生的告警' }, cleared: { condition: 'CLEARED', words: '已恢复', none: '最近没有已恢复的告警' } } as const);
 const ALARM_REFUSAL = '告警参数有误：只接受 status，取值 active（正在发生，默认）或 cleared（最近已恢复）。';
 
@@ -1030,7 +1030,7 @@ const parseAlarmArguments = (value: unknown): keyof typeof ALARM_STATUS => {
 
 const alarmsPayloadFrom = (result: OwnerReadResult): AlarmListResult => {
   const payload = result.payload as AlarmListResult;
-  if (payload.schemaVersion !== 1 || !Array.isArray(payload.items)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  if (!Array.isArray(payload.items)) fail('TOOL_OWNER_RESPONSE_INVALID');
   return payload;
 };
 
@@ -1050,6 +1050,7 @@ const readAlarms = async (
   return alarmsPayloadFrom(await alarms.read({ request, context: ownerContext }));
 };
 
+/** The Site total split by sub-metered device, largest first, each named from the asset model. */
 const readEquipmentEnergy = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
@@ -1367,7 +1368,7 @@ export const createHvacReadTools = ({
   const alarmTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'alarm_list',
-      '列出当前站点的告警：默认是正在发生的告警，status 用 cleared 看最近已恢复的。每条有标题、说明、严重程度、设备、开始和最近发生的时间、发生次数、是否已确认，最多 50 条。',
+      '列出当前站点的告警：默认是正在发生的告警，status 用 cleared 看最近已恢复的。每条有标题、说明、严重程度、设备、开始和最近发生的时间、发生次数、是否已确认，以及经过（触发、确认、恢复的时间），最多 50 条。',
       alarmInputSchema,
       ALARM_CAPABILITIES,
     ),
@@ -1397,7 +1398,10 @@ export const createHvacReadTools = ({
             latest: siteTime(alarm.lastOccurredAt, timezone),
             ...(alarm.clearedAt === undefined ? {} : { clearedAt: siteTime(alarm.clearedAt, timezone) }),
             times: alarm.occurrenceCount,
-            handled: alarm.acknowledgement === undefined ? '未确认' : '已确认',
+            handled: alarm.acknowledged ? '已确认' : '未确认',
+            ...(alarm.assigned ? { claimed: '有人认领' } : {}),
+            ...(alarm.suppressed ? { suppressed: '已抑制' } : {}),
+            history: alarm.timeline.map((entry) => `${siteTime(entry.occurredAt, timezone)} ${OPERATION_WORDS[entry.operation]}`),
           })),
           ...(note === undefined ? {} : { note }),
         }, limits);

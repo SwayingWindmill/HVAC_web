@@ -57,19 +57,19 @@ function Fact({ label, children }: { readonly label: string; readonly children: 
   );
 }
 
-/**
- * The selected alarm beside the list: what it is and its state, what the operator can do now,
- * its facts, its history and the work raised from it.
- */
-/** What 解释 asks the assistant: the alarm by its title, when it started in Site time, and its device. */
-function explainAlarmQuestion(title: string, startedAt: string, deviceName: string | undefined, timeZone: string): string {
+/** What 解释 asks the assistant: the alarm by its title, when it started in Site time, whether it has cleared, and its device. */
+function explainAlarmQuestion(title: string, startedAt: string, cleared: boolean, deviceName: string | undefined, timeZone: string): string {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(new Date(startedAt)).map((part) => [part.type, part.value]));
   const when = `${parts.year}年${Number(parts.month)}月${Number(parts.day)}日 ${parts.hour}:${parts.minute}`;
-  return `${when} 开始的告警「${title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
+  return `${when} 开始${cleared ? '、已恢复' : ''}的告警「${title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
 }
 
+/**
+ * The selected alarm beside the list: what it is and its state, what the operator can do now,
+ * its facts, its history and the work raised from it.
+ */
 export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder, onCreatingWorkOrderChange }: {
   readonly alarmId: string | undefined;
   /** The list has nothing to select. */
@@ -173,7 +173,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           {canCreateWorkOrder ? (
             <Button variant="outline" onClick={() => onCreatingWorkOrderChange(true)}><Plus data-icon="inline-start" />创建工单</Button>
           ) : null}
-          <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, deviceName, site.timezone))}>
+          <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, alarm.condition === 'CLEARED', deviceName, site.timezone))}>
             <Sparkles data-icon="inline-start" className="text-primary" />解释
           </Button>
         </div>

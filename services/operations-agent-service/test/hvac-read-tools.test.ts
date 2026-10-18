@@ -754,13 +754,10 @@ test('a result too large for one answer tells the model how to narrow it', async
 // #594: alarms as the 告警 page shows them — severity and state in words, Site-local times, each
 // machine by its device name, no identifiers.
 const alarmItem = (overrides = {}) => ({
-  schemaVersion: 1, alarmId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f709001', tenantId, siteId, deviceId: chillerDeviceId,
-  alarmType: 'CHW_SUPPLY_HIGH', fingerprint: 'f'.repeat(64), incidentCorrelationId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f709002',
-  sourceType: 'SITE_RULE', sourceReference: 'alarm-policy:chw-high', ruleRevision: 'rule-3',
-  title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟', condition: 'ACTIVE',
-  currentSeverity: 'CRITICAL', peakSeverity: 'CRITICAL', occurrenceCount: 3,
+  deviceId: chillerDeviceId, title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟',
+  currentSeverity: 'CRITICAL', acknowledged: false, assigned: false, suppressed: false, occurrenceCount: 3,
   firstOccurredAt: '2026-10-17T12:00:00.000Z', lastOccurredAt: '2026-10-17T13:10:00.000Z',
-  evidence: [], links: [], timeline: [], version: 4, createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T13:10:00.000Z',
+  timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00.000Z' }],
   ...overrides,
 });
 
@@ -770,9 +767,8 @@ test('alarm_list reads the Site’s active alarms in the operator’s words, eac
       schemaVersion: 1,
       items: [
         alarmItem(),
-        alarmItem({ alarmId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f709003', deviceId: undefined, title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', currentSeverity: 'WARNING', occurrenceCount: 1, acknowledgement: { acknowledgedAt: '2026-10-17T13:20:00.000Z', acknowledgedBy: 'operator-1' } }),
+        alarmItem({ deviceId: undefined, title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', currentSeverity: 'WARNING', occurrenceCount: 1, acknowledged: true, assigned: true, timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00.000Z' }, { operation: 'ACKNOWLEDGE', occurredAt: '2026-10-17T13:20:00.000Z' }] }),
       ],
-      nextCursor: null,
       hasMore: false,
     }),
   });
@@ -783,20 +779,20 @@ test('alarm_list reads the Site’s active alarms in the operator’s words, eac
   assert.equal(harness.authorizationInputs.find(({ request }) => request.tool === 'alarm.listAlarms').request.input.siteId, siteId);
   assert.equal(result.status, '正在发生');
   assert.deepEqual(result.alarms, [
-    { title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟', severity: '紧急', device: 'C 机组控制器', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 3, handled: '未确认' },
-    { title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', severity: '预警', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 1, handled: '已确认' },
+    { title: '冷冻水出水温度过高', summary: '出水温度高于 12 ℃ 持续 10 分钟', severity: '紧急', device: 'C 机组控制器', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 3, handled: '未确认', history: ['2026-10-17 05:00 触发'] },
+    { title: '网关上报中断', summary: '超过 15 分钟没有收到网关数据', severity: '预警', since: '2026-10-17 05:00', latest: '2026-10-17 06:10', times: 1, handled: '已确认', claimed: '有人认领', history: ['2026-10-17 05:00 触发', '2026-10-17 06:20 确认'] },
   ]);
   assert.doesNotMatch(JSON.stringify(result), /[0-9a-f]{8}-[0-9a-f]{4}-|CRITICAL|WARNING|ACTIVE|SITE_RULE/u);
 });
 
 test('alarm_list says plainly when nothing is active, and reads recently cleared alarms when asked', async () => {
-  const empty = createHarness({ alarmsFor: () => ({ schemaVersion: 1, items: [], nextCursor: null, hasMore: false }) });
+  const empty = createHarness({ alarmsFor: () => ({ items: [], hasMore: false }) });
   const none = await execute(byName(empty.tools, 'alarm_list'), {});
   assert.deepEqual(none.alarms, []);
   assert.equal(none.note, '当前没有正在发生的告警');
 
   const cleared = createHarness({
-    alarmsFor: () => ({ schemaVersion: 1, items: [alarmItem({ condition: 'CLEARED', clearedAt: '2026-10-17T13:30:00.000Z' })], nextCursor: 'next', hasMore: true }),
+    alarmsFor: () => ({ items: [alarmItem({ clearedAt: '2026-10-17T13:30:00.000Z' })], hasMore: true }),
   });
   const result = await execute(byName(cleared.tools, 'alarm_list'), { status: 'cleared' });
   assert.equal(cleared.alarmInputs[0].request.input.condition, 'CLEARED');

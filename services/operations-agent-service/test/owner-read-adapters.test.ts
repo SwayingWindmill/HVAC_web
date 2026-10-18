@@ -699,6 +699,8 @@ test('Alarm reader lists a Site’s alarms with the context in the alarm owner�
   const alarm = {
     tenantId: scope.tenantId, siteId, title: '冷冻水出水温度过高', summary: '高于 12 ℃', condition: 'ACTIVE',
     currentSeverity: 'MAJOR', occurrenceCount: 2, firstOccurredAt: '2026-10-17T12:00:00Z', lastOccurredAt: '2026-10-17T12:30:00Z',
+    alarmId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f709001', fingerprint: 'f'.repeat(64), assigneeId: 'principal-7',
+    timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00Z', actorId: 'principal-7', reason: 'rule matched' }],
   };
   const reader = createAlarmOwnerReader({
     baseUrl: 'https://alarm-service.internal',
@@ -719,7 +721,12 @@ test('Alarm reader lists a Site’s alarms with the context in the alarm owner�
   assert.equal(calls[0].init.headers['X-Alarm-Read-Context'], 'alarm-context-value');
   assert.equal(calls[0].init.headers['X-Delegation-Grant'], undefined);
   assert.equal(result.owner, 'alarm-service');
-  assert.deepEqual(result.payload.items.map(({ title }) => title), ['冷冻水出水温度过高']);
+  // Only what the Tool says survives the reader: no identifiers, actors or reasons.
+  assert.deepEqual(result.payload.items, [{
+    title: '冷冻水出水温度过高', summary: '高于 12 ℃', currentSeverity: 'MAJOR', acknowledged: false, assigned: true, suppressed: false,
+    occurrenceCount: 2, firstOccurredAt: '2026-10-17T12:00:00Z', lastOccurredAt: '2026-10-17T12:30:00Z',
+    timeline: [{ operation: 'PUBLISH', occurredAt: '2026-10-17T12:00:00Z' }],
+  }]);
 
   const otherSite = createAlarmOwnerReader({
     baseUrl: 'https://alarm-service.internal',

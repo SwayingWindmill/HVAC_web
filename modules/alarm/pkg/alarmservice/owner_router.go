@@ -10,9 +10,9 @@ import (
 type OwnerRouterConfig struct {
 	GatewaySPIFFE   string
 	TelemetrySPIFFE string
-	// ReaderSPIFFEs may only list a Site's alarms, with a grant the Gateway issued in their name
-	// (the Operations Agent, #594).
-	ReaderSPIFFEs    []string
+	// ReaderSPIFFE may only list a Site's alarms, with a grant the Gateway issued in its name
+	// (the Operations Agent, #594). Empty when no reader is deployed.
+	ReaderSPIFFE     string
 	GatewayHandler   http.Handler
 	TelemetryHandler http.Handler
 }
@@ -23,13 +23,9 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 	if !strings.HasPrefix(gatewaySPIFFE, "spiffe://") || !strings.HasPrefix(telemetrySPIFFE, "spiffe://") || config.GatewayHandler == nil || config.TelemetryHandler == nil {
 		return nil, errors.New("Alarm owner router configuration is invalid")
 	}
-	readers := map[string]struct{}{}
-	for _, reader := range config.ReaderSPIFFEs {
-		reader = strings.TrimSpace(reader)
-		if !strings.HasPrefix(reader, "spiffe://") || reader == gatewaySPIFFE || reader == telemetrySPIFFE {
-			return nil, errors.New("Alarm owner router reader identity is invalid")
-		}
-		readers[reader] = struct{}{}
+	readerSPIFFE := strings.TrimSpace(config.ReaderSPIFFE)
+	if readerSPIFFE != "" && (!strings.HasPrefix(readerSPIFFE, "spiffe://") || readerSPIFFE == gatewaySPIFFE || readerSPIFFE == telemetrySPIFFE) {
+		return nil, errors.New("Alarm owner router reader identity is invalid")
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		peer := workloadSPIFFE(request)
@@ -41,7 +37,7 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 			config.TelemetryHandler.ServeHTTP(writer, request)
 			return
 		}
-		if _, reader := readers[peer]; reader {
+		if readerSPIFFE != "" && peer == readerSPIFFE {
 			if route, ok := matchAlarmPath(request.URL.Path); !ok || request.Method != http.MethodGet || route.alarmID != "" {
 				writeOwnerForbidden(writer, "ALARM_READER_WORKLOAD_FORBIDDEN")
 				return

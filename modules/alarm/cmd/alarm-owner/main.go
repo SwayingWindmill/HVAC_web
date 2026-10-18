@@ -70,7 +70,7 @@ func main() {
 	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
 		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
-		ReaderSPIFFEs:  []string{envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service")},
+		ReaderSPIFFE:   envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
 	})
 	if err != nil {

@@ -52,6 +52,7 @@ export {
   type SemanticQueryReader,
   type AlarmListReadRequest,
   type AlarmListResult,
+  type AlarmOperation,
   type AlarmReader,
   type SemanticQueryResult,
   type TelemetryHistoryAggregate,

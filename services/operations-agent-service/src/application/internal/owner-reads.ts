@@ -137,20 +137,24 @@ export interface AlarmListReadRequest {
   };
 }
 
-/** What the alarm Tool tells an operator about each alarm; the owner keeps the rest. */
+export type AlarmOperation = 'PUBLISH' | 'ACKNOWLEDGE' | 'ASSIGN' | 'UNASSIGN' | 'SUPPRESS' | 'UNSUPPRESS' | 'CLEAR';
+
+/** What the alarm Tool tells an operator about each alarm, taken from the owner's alarm and nothing more. */
 export interface AlarmListResult {
-  readonly schemaVersion: 1;
   readonly items: readonly {
     readonly deviceId?: string;
     readonly title: string;
     readonly summary: string;
-    readonly condition: 'ACTIVE' | 'CLEARED';
     readonly currentSeverity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
-    readonly acknowledgement?: object;
+    readonly acknowledged: boolean;
+    readonly assigned: boolean;
+    readonly suppressed: boolean;
     readonly occurrenceCount: number;
     readonly firstOccurredAt: string;
     readonly lastOccurredAt: string;
     readonly clearedAt?: string;
+    /** What happened to the alarm and when: raised, acknowledged, cleared… */
+    readonly timeline: readonly { readonly operation: AlarmOperation; readonly occurredAt: string }[];
   }[];
   readonly hasMore: boolean;
 }

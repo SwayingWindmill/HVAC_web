@@ -222,8 +222,8 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			Condition string `json:"condition"`
 			Limit     int    `json:"limit"`
 		}
-		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil ||
-			(alarmInput.Condition != "ACTIVE" && alarmInput.Condition != "CLEARED") || alarmInput.Limit < 1 || alarmInput.Limit > 200 {
+		// Condition and size travel with the request the Agent's reader sends; the owner checks them.
+		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Alarm list request is invalid.", false, nil)
 			return
 		}
@@ -294,7 +294,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		} else {
-			h.writeAlarmFailure(writer, request, *failure)
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Alarm authorization could not be completed.", true, nil)
 		}
 		return
 	}
