@@ -18,6 +18,7 @@ import {
 
 export type AlarmOwnerReaderConfig = OwnerReaderHttpConfig;
 
+const OWNER_LIST_SCHEMA = 2;
 const severities = new Set(['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO']);
 const conditions = new Set(['ACTIVE', 'CLEARED']);
 
@@ -67,7 +68,8 @@ export const createAlarmOwnerReader = (input: AlarmOwnerReaderConfig): AlarmRead
         method: 'GET',
         headers: { ...headers, 'X-Alarm-Read-Context': grant ?? '' },
       });
-      if (!isRecord(payload) || payload.schemaVersion !== 1 || !Array.isArray(payload.items)
+      // The owner's list envelope is schema 2 (libs/alarmmodel); the Tool reads its own shape.
+      if (!isRecord(payload) || payload.schemaVersion !== OWNER_LIST_SCHEMA || !Array.isArray(payload.items)
         || payload.items.length > query.limit || typeof payload.hasMore !== 'boolean') {
         invalid('The alarm owner returned an invalid alarm list.');
       }

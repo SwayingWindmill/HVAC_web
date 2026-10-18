@@ -704,7 +704,8 @@ test('Alarm reader lists a Siteâ€™s alarms with the context in the alarm ownerâ€
     baseUrl: 'https://alarm-service.internal',
     fetchImplementation: async (url, init) => {
       calls.push({ url: String(url), init });
-      return jsonResponse({ schemaVersion: 1, items: [alarm], nextCursor: null, hasMore: false });
+      // The alarm owner's list envelope is schema 2 (libs/alarmmodel).
+      return jsonResponse({ schemaVersion: 2, items: [alarm], nextCursor: null, hasMore: false });
     },
   });
   const alarmContext = { ...context, authorization: { ...context.authorization, toolDelegationGrants: { 'alarm.listAlarms': 'alarm-context-value' } } };
@@ -722,7 +723,7 @@ test('Alarm reader lists a Siteâ€™s alarms with the context in the alarm ownerâ€
 
   const otherSite = createAlarmOwnerReader({
     baseUrl: 'https://alarm-service.internal',
-    fetchImplementation: async () => jsonResponse({ schemaVersion: 1, items: [{ ...alarm, siteId: deviceId }], nextCursor: null, hasMore: false }),
+    fetchImplementation: async () => jsonResponse({ schemaVersion: 2, items: [{ ...alarm, siteId: deviceId }], nextCursor: null, hasMore: false }),
   });
   await expectOwnerError(() => otherSite.read({
     request: { requestId: 'read-alarms-002', tool: 'alarm.listAlarms', input: { siteId, condition: 'ACTIVE', limit: 50 } },
