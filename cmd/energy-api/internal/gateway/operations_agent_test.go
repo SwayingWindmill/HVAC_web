@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
@@ -84,6 +85,8 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 			IAMHTTPClient: fixture.iamClient(t, now),
 		},
 		Analytics: &AnalyticsConfig{QueryAudience: "telemetry-query-service"},
+		// The Agent reads alarms from the owner itself; the Gateway only authorizes.
+		Alarm:     &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
 		Telemetry: &TelemetryConfig{RuntimeAudience: "telemetry-runtime-service"},
 		Operations: &OperationsAgentConfig{
 			BaseURL: "https://operations.example.test", Audience: "operations-agent-service",
@@ -211,6 +214,25 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				delegation = unsignedTelemetryGrant(claims)
 			}
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: delegation}), nil
+		case alarmDecisionPath:
+			if len(parent.Actions) != 1 || parent.Actions[0] != "alarm:authorize" {
+				t.Fatalf("unexpected Alarm parent claims: %+v", parent)
+			}
+			var input alarmauth.DecisionRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != alarmauth.ActionRead || input.AlarmID != "" {
+				t.Fatal("invalid Alarm authorization request")
+			}
+			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
+			reason := alarmauth.ReasonDenyScope
+			if allowed {
+				reason = alarmauth.ReasonAllowExactScope
+			}
+			return telemetryJSONResponse(http.StatusOK, alarmauth.DecisionResponse{Decision: alarmauth.Decision{
+				Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
+				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
+				SiteID: input.SiteID, Action: input.Action, PolicyRevision: "alarm-policy-3",
+				ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
+			}}), nil
 		case analyticsDecisionPath:
 			if len(parent.Actions) != 1 || parent.Actions[0] != analyticsAuthorizeAction {
 				t.Fatalf("unexpected Analytics parent claims: %+v", parent)
@@ -608,5 +630,44 @@ func TestOperationsToolAuthorizationGrantsASemanticQueryOnlyForTheOperatorsSite(
 	}
 	if fixture.iamCalls.Load() != decisions {
 		t.Fatal("a semantic query outside the catalog reached IAM")
+	}
+}
+
+// #594: the Agent lists the operator's Site's alarms from the alarm owner with a grant naming it.
+func TestOperationsToolAuthorizationGrantsAnAlarmListOnlyForTheOperatorsSite(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	body := func(requestID, siteID string) string {
+		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"alarm.listAlarms","input":{"siteId":"` + siteID + `"}}}`
+	}
+	response := fixture.authorizeTool(t, body("alarm-001", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected an alarm list grant, got %d: %s", response.Code, response.Body.String())
+	}
+	var issued operationsToolAuthorizationResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, issued.DelegationGrant)
+	if err != nil {
+		t.Fatalf("invalid alarm list delegation: %v", err)
+	}
+	if claims.Issuer != "spiffe://hvac.local/platform-gateway" || claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" ||
+		claims.Audience != "alarm-service" || claims.TenantID != fixture.tenantID ||
+		len(claims.Actions) != 1 || claims.Actions[0] != "alarm:read" ||
+		len(claims.Scopes) != 2 || claims.Scopes[0] != "tenant:"+fixture.tenantID || claims.Scopes[1] != "site:"+fixture.siteID {
+		t.Fatalf("alarm list grant is not exact: %+v", claims)
+	}
+
+	// Another Site stops at the Agent's own delegation, before IAM and before any alarm is read.
+	decisions := fixture.iamCalls.Load()
+	elsewhere := fixture.authorizeTool(t, body("alarm-002", "018f1e00-1000-7000-8000-0000000000ff"), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if elsewhere.Code != http.StatusForbidden || strings.Contains(elsewhere.Body.String(), "delegationGrant") || fixture.iamCalls.Load() != decisions {
+		t.Fatalf("another Site's alarms got %d (IAM calls %d→%d): %s", elsewhere.Code, decisions, fixture.iamCalls.Load(), elsewhere.Body.String())
+	}
+
+	fixture.denySite.Store(true)
+	if denied := fixture.authorizeTool(t, body("alarm-003", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service"); denied.Code != http.StatusNotFound {
+		t.Fatalf("a Site whose alarms the operator may not read must be not found, got %d", denied.Code)
 	}
 }
