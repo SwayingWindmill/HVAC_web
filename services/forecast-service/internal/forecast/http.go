@@ -1,48 +1,84 @@
 package forecast
 
 import (
+	"crypto"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
+	"strings"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
+
+// Forecast serves only the Gateway, with a context it signed for the Site (#612). Before, any
+// caller on the network was trusted with whatever X-Tenant-ID it sent.
+const (
+	ContextHeader          = "X-Forecast-Context"
+	ReadAction             = "forecast:read"
+	Audience               = "forecast-service"
+	DefaultGatewaySPIFFEID = "spiffe://hvac.local/platform-gateway"
+)
+
+type AuthConfig struct {
+	GatewayPublicKey crypto.PublicKey
+	GatewaySPIFFE    string
+	Now              func() time.Time
+}
 
 type HTTPHandler struct {
 	service  *Service
-	preparer *Preparer
+	verifier identitycontext.SiteContextVerifier
+	gateway  string
 }
 
-func NewHTTPHandler(service *Service, preparer *Preparer) (*HTTPHandler, error) {
-	if service == nil || preparer == nil {
-		return nil, errors.New("forecast service and input preparer are required")
+func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
+	if service == nil {
+		return nil, errors.New("forecast service is required")
 	}
-	return &HTTPHandler{service: service, preparer: preparer}, nil
+	gateway := strings.TrimSpace(auth.GatewaySPIFFE)
+	verifier := identitycontext.SiteContextVerifier{PublicKey: auth.GatewayPublicKey, Issuer: gateway, Audience: Audience, Header: ContextHeader, Now: auth.Now}
+	if err := verifier.Validate(); err != nil {
+		return nil, err
+	}
+	handler := &HTTPHandler{service: service, verifier: verifier, gateway: gateway}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/load", handler.guard(func(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+		handler.handleLatestForecast(writer, request, site, "SITE_LOAD")
+	}))
+	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/pv", handler.guard(func(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+		handler.handleLatestForecast(writer, request, site, "PV_GENERATION")
+	}))
+	return mux, nil
 }
 
-func (handler *HTTPHandler) Routes() http.Handler {
+// HealthHandler answers the container health check on the plain diagnostics port.
+func HealthHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("POST /v1/forecast", handler.handleForecast)
-	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/load", handler.handleLatestSiteLoad)
-	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/pv", handler.handleLatestPV)
 	return mux
 }
 
-func (handler *HTTPHandler) handleLatestSiteLoad(writer http.ResponseWriter, request *http.Request) {
-	handler.handleLatestForecast(writer, request, "SITE_LOAD")
+func (handler *HTTPHandler) guard(next func(http.ResponseWriter, *http.Request, identitycontext.SiteContext)) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		site, err := handler.verifier.Verify(request, ReadAction, handler.gateway)
+		if errors.Is(err, identitycontext.ErrSiteContextWorkload) {
+			writeJSONError(writer, http.StatusForbidden, "forecast_workload_forbidden")
+			return
+		}
+		if err != nil {
+			writeJSONError(writer, http.StatusForbidden, "forecast_context_invalid")
+			return
+		}
+		next(writer, request, site)
+	}
 }
 
-func (handler *HTTPHandler) handleLatestPV(writer http.ResponseWriter, request *http.Request) {
-	handler.handleLatestForecast(writer, request, "PV_GENERATION")
-}
-
-func (handler *HTTPHandler) handleLatestForecast(writer http.ResponseWriter, request *http.Request, target string) {
-	tenantID := request.Header.Get("X-Tenant-ID")
-	siteID := request.PathValue("siteId")
-	result, err := handler.service.LatestForecast(request.Context(), tenantID, siteID, target)
+func (handler *HTTPHandler) handleLatestForecast(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext, target string) {
+	result, err := handler.service.LatestForecast(request.Context(), site.TenantID, site.SiteID, target)
 	if errors.Is(err, ErrForecastNotFound) {
 		writeJSONError(writer, http.StatusNotFound, "forecast_not_found")
 		return
@@ -53,43 +89,6 @@ func (handler *HTTPHandler) handleLatestForecast(writer http.ResponseWriter, req
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(result)
-}
-
-func (handler *HTTPHandler) handleForecast(writer http.ResponseWriter, request *http.Request) {
-	reader := http.MaxBytesReader(writer, request.Body, 64*1024)
-	defer reader.Close()
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
-	var input PreparationRequest
-	if err := decoder.Decode(&input); err != nil {
-		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		writeJSONError(writer, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	input.TenantID = request.Header.Get("X-Tenant-ID")
-	prepared, err := handler.preparer.Prepare(request.Context(), input)
-	if errors.Is(err, ErrPreparationUnavailable) {
-		writeJSONError(writer, http.StatusServiceUnavailable, "forecast_input_unavailable")
-		return
-	}
-	if err != nil {
-		writeJSONError(writer, http.StatusUnprocessableEntity, "forecast_rejected")
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(writer).Encode(prepared)
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); err == io.EOF {
-		return nil
-	}
-	return errors.New("trailing JSON")
 }
 
 func writeJSONError(writer http.ResponseWriter, status int, code string) {

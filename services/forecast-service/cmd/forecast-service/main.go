@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/forecast-service/internal/forecast"
 )
 
@@ -55,7 +57,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := forecast.NewHTTPHandler(service, preparer)
+	// Only the Gateway may call Forecast, over mutual TLS with a context it signed (#612).
+	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
+		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("FORECAST_TLS_CERT"), PrivateKeyPath: requiredEnv("FORECAST_TLS_KEY")},
+		ClientCAPath:     requiredEnv("FORECAST_CLIENT_CA"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(requiredEnv("FORECAST_GATEWAY_DELEGATION_CERT"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := forecast.NewHTTPHandler(service, forecast.AuthConfig{
+		GatewayPublicKey: gatewayKey,
+		GatewaySPIFFE:    envOrDefault("FORECAST_GATEWAY_SPIFFE", forecast.DefaultGatewaySPIFFEID),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,14 +106,25 @@ func main() {
 
 	server := &http.Server{
 		Addr:              envOrDefault("FORECAST_HTTP_ADDR", ":19092"),
-		Handler:           handler.Routes(),
+		Handler:           handler,
+		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
+	diagnostics := &http.Server{
+		Addr: envOrDefault("FORECAST_DIAGNOSTICS_ADDR", ":19099"), Handler: forecast.HealthHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
 	log.Printf("forecast-service listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

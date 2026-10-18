@@ -12,8 +12,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-// fddUpstream records what the Gateway sends FDD and answers an empty findings list.
-func fddUpstream(seen *atomic.Pointer[http.Request]) *http.Client {
+// ownerUpstream records what the Gateway sends an intelligence owner and answers an empty list.
+func ownerUpstream(seen *atomic.Pointer[http.Request]) *http.Client {
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		seen.Store(request)
 		return telemetryJSONResponse(http.StatusOK, map[string]any{"items": []any{}}), nil
@@ -36,7 +36,7 @@ func TestFDDReadsCarryAGatewaySignedContextInsteadOfATenantHeader(t *testing.T) 
 	if response.Code != http.StatusOK {
 		t.Fatalf("findings read got %d: %s", response.Code, response.Body.String())
 	}
-	upstream := fixture.lastFDD.Load()
+	upstream := fixture.lastOwner.Load()
 	if upstream == nil || upstream.Header.Get("X-Tenant-ID") != "" {
 		t.Fatalf("FDD was called with a Tenant header or not at all: %v", upstream)
 	}
