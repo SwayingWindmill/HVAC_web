@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"log"
 	"net/http"
@@ -14,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/fdd-service/internal/fdd"
 )
@@ -46,7 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	gatewayKey, err := loadCertificatePublicKey(requiredEnv("FDD_GATEWAY_DELEGATION_CERT"))
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(requiredEnv("FDD_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -109,22 +107,6 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutdown)
 	_ = diagnostics.Shutdown(shutdown)
-}
-
-func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(body)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, errors.New("public key certificate is invalid")
-	}
-	certificate, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return certificate.PublicKey, nil
 }
 
 func hostname() string {

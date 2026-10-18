@@ -28,9 +28,9 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	handler := &HTTPHandler{service: service}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/fdd/evaluate/low-delta-t", guard.guard(WriteAction, false, handler.handleEvaluateLowDeltaT))
-	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/rules/low-delta-t", guard.guard(ReadAction, false, ignoreClaims(handler.handleCurrentRule)))
-	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/findings", guard.guard(ReadAction, true, ignoreClaims(handler.handleListFindings)))
-	mux.HandleFunc("PATCH /v1/sites/{siteId}/fdd/findings/{findingId}/links", guard.guard(WriteAction, false, ignoreClaims(handler.handleLinkFinding)))
+	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/rules/low-delta-t", guard.guard(ReadAction, false, ignoreContext(handler.handleCurrentRule)))
+	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/findings", guard.guard(ReadAction, true, ignoreContext(handler.handleListFindings)))
+	mux.HandleFunc("PATCH /v1/sites/{siteId}/fdd/findings/{findingId}/links", guard.guard(WriteAction, false, ignoreContext(handler.handleLinkFinding)))
 	return mux, nil
 }
 
@@ -44,15 +44,15 @@ func HealthHandler() http.Handler {
 	return mux
 }
 
-func ignoreClaims(next http.HandlerFunc) func(http.ResponseWriter, *http.Request, identitycontext.DelegationClaims) {
-	return func(writer http.ResponseWriter, request *http.Request, _ identitycontext.DelegationClaims) {
+func ignoreContext(next http.HandlerFunc) func(http.ResponseWriter, *http.Request, identitycontext.SiteContext) {
+	return func(writer http.ResponseWriter, request *http.Request, _ identitycontext.SiteContext) {
 		next(writer, request)
 	}
 }
 
 // handleEvaluateLowDeltaT diagnoses a loop now, over the window of the rule in effect, for the
 // Tenant and Site the context covers.
-func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, request *http.Request, claims identitycontext.DelegationClaims) {
+func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
 	var input struct {
 		TenantID string `json:"tenantId"`
 		SiteID   string `json:"siteId"`
@@ -63,7 +63,7 @@ func (handler *HTTPHandler) handleEvaluateLowDeltaT(writer http.ResponseWriter, 
 		writeFDDError(writer, http.StatusBadRequest, "fdd_request_invalid")
 		return
 	}
-	if input.TenantID != claims.TenantID || !coversSite(claims, input.SiteID) {
+	if input.TenantID != site.TenantID || input.SiteID != site.SiteID {
 		writeFDDError(writer, http.StatusForbidden, "fdd_context_invalid")
 		return
 	}
