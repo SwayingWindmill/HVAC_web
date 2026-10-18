@@ -5,6 +5,7 @@ import {
   AgentToolError,
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
+  needsExecutionCorrection,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
   type AgentArtifact,
@@ -23,7 +24,17 @@ interface CreatePiToolsInput {
   readonly runId: string;
   readonly onArtifact: (artifact: AgentArtifact) => void;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
+  /** The answer text this Run has shown the operator so far, one entry per message. */
+  readonly answers: () => readonly string[];
 }
+
+// The answer has already reached the operator, so a claim of operating equipment is corrected in
+// writing rather than withdrawn; both ways of ending a Run check it (#592).
+const assertAnswerCorrected = (answers: readonly string[]): void => {
+  if (needsExecutionCorrection(answers)) {
+    throw new Error('回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。');
+  }
+};
 
 const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
 const toolFailureCodes = new Set<AgentToolErrorCode>([
@@ -184,7 +195,8 @@ const createInvestigationCompleteTool = ({
   sessionId,
   runId,
   onArtifact,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  answers,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
   description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
@@ -192,6 +204,7 @@ const createInvestigationCompleteTool = ({
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const finding = parseInvestigationComplete(parameters);
+    assertAnswerCorrected(answers());
     if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
       // The model reads this refusal, so it says which ids it may cite.
       const cited = [...state.completedToolIds];
@@ -221,7 +234,8 @@ const createInvestigationRequestInputTool = ({
   sessionId,
   runId,
   onArtifact,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  answers,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   label: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   description: '缺少关键信息、没法继续时，向值班人员提一个问题，并结束这次回答。',
@@ -229,6 +243,7 @@ const createInvestigationRequestInputTool = ({
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const request = parseInvestigationRequestInput(parameters);
+    assertAnswerCorrected(answers());
     claimTerminalOperation(state, toolCallId);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,

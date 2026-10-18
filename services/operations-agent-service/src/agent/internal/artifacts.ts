@@ -185,10 +185,50 @@ const stringList = (
   )));
 };
 
-const physicalExecutionClaim = /\b(?:i|we|the\s+agent|agent|the\s+system|system)\s+(?:(?:have|has)\s+)?(?:changed|set|started|stopped|turned|commanded|executed|applied|adjusted|overrode|reset)\b/iu;
+// A claim needs the assistant as the one acting: 「我已……」「已为你……」「帮你……了」. The plant's
+// control system (「群控系统已停止 C 机组」), operators and plain state (「C 机组已停机」) are what
+// it reports, so they never count; a wrong match would force a needless correction (#592).
+const englishExecutionClaim = /\b(?:I|we|the\s+(?:assistant|agent))(?:'ve|\s+ha(?:ve|s))?\s+(?:just\s+)?(?:turned\s+(?:off|on)|switched\s+(?:off|on)|shut\s+down|started|stopped|restarted|changed|adjusted|set|reset)\s+(?:the\s+)?(?:[\w-]+\s+)?(?:chiller|pump|fan|tower|valve|setpoint|unit)s?\b|\bas\s+you\s+requested\b/iu;
+
+// 「设定」 alone is left out (「设定值」 is a reading); one-character verbs count only once finished
+// (「关了」), since 「开始」 is not 「开」.
+const controlVerb = '关闭|关掉|关停|关机|停掉|停止|停机|开启|打开|启动|开机|调整|调到|调为|调高|调低|修改|改为|改成|设为|设定为|设置为|设置成|下发|切换|复位|重启';
+const finished = `(?:${controlVerb})了|[关停开调改]了|[关停]掉了`;
+const acted = `${finished}|${controlVerb}`;
+const done = '已经|已|刚刚|刚才|刚|这就|马上|现在就';
+const forYou = '[为帮给替][你您]';
+const moved = '[把将][^。！？，；\\n]{1,12}?';
+const notAsked = '(?<![让要请叫想])';
+const chineseExecutionClaims = [
+  // 「我已把设定值调到 8 度」「B 机组我已经帮你关了」「我把 B 机组关了」, not 「你让我把 B 机组关掉」.
+  new RegExp(`${notAsked}我(?:${done})(?:${forYou})?(?:${moved})?(?:${acted})|${notAsked}我(?:${forYou})?(?:${moved})?(?:${finished})`, 'u'),
+  // 「已为你关闭 B 机组」「已为你把 B 机组停了」「已按你的要求关闭……」
+  new RegExp(`(?:${done})(?:${forYou}|按[你您]的(?:要求|指示))(?:${moved})?[^。！？，；\\n]{0,4}?(?:${acted})`, 'u'),
+  // 「帮你关闭了 B 机组」, not 「不能帮你关闭」.
+  new RegExp(`(?<![让要请叫想不没未无别能法])${forYou}(?:${moved})?(?:${finished})`, 'u'),
+  // A sentence of the assistant's own that opens with the act: 「已关闭 B 机组。」「已调整设定值……」,
+  // not 「已启动 2 台水泵」 (a count of running pumps) or 「已关闭的机组」.
+  new RegExp(`(?:^|[。！？；\\n]|好的?[，,])\\s*(?:${done})(?:${controlVerb})(?![的了])\\s*(?!\\d+\\s*台)\\S`, 'u'),
+];
+
+/** Whether a text says the assistant operated equipment, which it never can (#592). */
+export const claimsPhysicalExecution = (text: string): boolean => (
+  englishExecutionClaim.test(text) || chineseExecutionClaims.some((pattern) => pattern.test(text))
+);
+
+/**
+ * Whether the answer the operator has read still stands uncorrected: some sentence claims the
+ * assistant operated equipment and no 「更正」 follows the last such claim (#592).
+ */
+export const needsExecutionCorrection = (answers: readonly string[]): boolean => {
+  const sentences = answers.flatMap((answer) => answer.split(/(?<=[。！？!?\n])/u));
+  const claims = sentences.map((sentence, index) => (claimsPhysicalExecution(sentence) && !sentence.includes('更正') ? index : -1));
+  const lastClaim = Math.max(-1, ...claims);
+  return lastClaim !== -1 && !sentences.slice(lastClaim + 1).some((sentence) => /更正[：:]/u.test(sentence));
+};
 
 const assertNoPhysicalExecutionClaim = (narrative: string): void => {
-  if (physicalExecutionClaim.test(narrative)) {
+  if (claimsPhysicalExecution(narrative)) {
     invalidTerminalArtifact('investigation_complete cannot claim physical execution by the Agent.');
   }
 };

@@ -258,6 +258,7 @@ export const createPiAgentEngine = ({
     runId: input.run.id,
     onArtifact: (artifact) => artifacts.push(artifact),
     onBudgetExhausted: (code) => markBudgetFailure(code),
+    answers: () => finalizedMessages.map(({ content }) => content),
   });
 
   // A turn that ends in text without a terminal Tool (most often a refusal) gets one reminder, so
