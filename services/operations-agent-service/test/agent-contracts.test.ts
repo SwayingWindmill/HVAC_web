@@ -23,7 +23,7 @@ const activeSession = Object.freeze({
   updatedAt: 1_200,
 });
 
-test('Agent Session follows the first-product lifecycle without reopening terminal states', () => {
+test('Agent Session follows the first-product lifecycle and an ended Run lets the next question start one', () => {
   const waiting = transitionAgentSession(activeSession, {
     status: 'WAITING_FOR_INPUT',
     at: 1_300,
@@ -50,12 +50,14 @@ test('Agent Session follows the first-product lifecycle without reopening termin
     [4, 5, 6],
   );
 
+  const followed = transitionAgentSession(completed, {
+    status: 'ACTIVE',
+    activeRunId: 'run-003',
+    at: 1_600,
+  });
+  assert.equal(followed.activeRunId, 'run-003');
   assert.throws(
-    () => transitionAgentSession(completed, {
-      status: 'ACTIVE',
-      activeRunId: 'run-003',
-      at: 1_600,
-    }),
+    () => transitionAgentSession(completed, { status: 'WAITING_FOR_INPUT', at: 1_600 }),
     (error) => error instanceof AgentContractError && error.code === 'SESSION_TRANSITION_INVALID',
   );
 });

@@ -90,9 +90,10 @@ export type AgentSessionTransition =
 const allowedTransitions: Readonly<Record<AgentSessionStatus, readonly AgentSessionStatus[]>> = {
   ACTIVE: ['WAITING_FOR_INPUT', 'COMPLETED', 'FAILED', 'CANCELLED'],
   WAITING_FOR_INPUT: ['ACTIVE', 'CANCELLED'],
-  COMPLETED: [],
-  FAILED: [],
-  CANCELLED: [],
+  // The next question in the conversation starts the next Run (#617).
+  COMPLETED: ['ACTIVE'],
+  FAILED: ['ACTIVE'],
+  CANCELLED: ['ACTIVE'],
 };
 
 export const transitionAgentSession = (
