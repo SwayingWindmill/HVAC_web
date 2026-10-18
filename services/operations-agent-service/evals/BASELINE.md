@@ -92,3 +92,63 @@ Same model and suite as v1, after the read Tools moved to Site-local dates and p
 | active-alarms | 0/3 | 4.1 / 3.6k / 3.3 | completed (3) |
 | diagnosis-results | 0/3 | 5.7 / 3.7k / 4.0 | completed (3), chinese-only (2), plain-words (1), no-repetition (2), efficiency (1) |
 | open-work-orders | 0/3 | 2.6 / 1.5k / 1.7 | completed (3) |
+
+## v3 — 2026-10-18 09:52–10:01 (#591, prompt as of commit 8ef15c85)
+
+The finding card no longer repeats the answer's conclusion (`summary` removed), the system prompt is
+four sections (role, data rules, answer, examples) with four example answers, a Run that stops in
+text without `investigation_complete` is reminded once, and the Tools describe themselves in
+Chinese. Since this version **no repetition** means the answer restating a limitation the card shows
+(the card has no conclusion sentence any more), and `decline-another-site` asks about
+「另一个站点『中央机房』」: with 「中央机房」 alone every trial read it as 松雅轩's own plant room.
+Hours written as a range (「18–19 点」) now count as naming the hour.
+
+- Passed every check: 50 of 69 trials (v2: 5); pass^3 13 of 23 (v2: 0).
+- Per check: completed 86 % (v2 71), figures 92 % (97), Chinese only 97 % (94), plain words
+  100 % (81), no repetition 88 % (v2 also counted the summary), efficiency 96 % (86),
+  declines 100 % (75), names the data problem 100 % (67).
+- Per Run on average: 5.2 s (7.7), 2.9 k tokens (4.8), 2.8 reads (3.6).
+- No regression question passed fewer trials than in v2.
+- Not reached: no repetition and Chinese only in every trial of every regression question. Left:
+  - incomplete-day (no repetition 0/3): the answer says which hours are missing and the card's first
+    limitation says it again;
+  - English narration before the first Tool call in 2 of 69 trials (「I'll start by reading…」);
+  - decline-setpoint repeats its reason on the card in 1 of 3.
+- current-supply-temperature asks about the plant now; while the readings were stale (09:27 on
+  10-18) the assistant answered UNABLE_TO_CONCLUDE, which is right but graded against
+  SUPPORTED_FINDING.
+
+How the prompt got there (each a full 23 × 3 run on the server):
+
+| Version | Passed | No repetition | Chinese only | What changed after it |
+| --- | --- | --- | --- | --- |
+| b7b44025 | 41/69 | 80 % | 97 % | the example gave the cooling change in %; 「中央机房」 answered with 松雅轩's data; the prompt asked for reasons on the card |
+| 49aa89ca | 38/69 | 72 % | 100 % | notes (the cost caveat) in the answer and on the card |
+| 7ad9c5a4 | 47/69 | 88 % | 99 % | refusals repeated their reason; 「我先看一下……」 narration |
+| 8ef15c85 | 50/69 | 88 % | 97 % | — |
+
+| Question | Passed | s / tokens / reads | Failing checks (trials) |
+| --- | --- | --- | --- |
+| daily-electricity-cooling-cop | 3/3 | 6.3 / 3.8k / 2.0 | — |
+| tariff-period-cost | 2/3 | 4.8 / 1.9k / 2.0 | figures (1) |
+| least-efficient-hours | 3/3 | 5.7 / 2.8k / 2.0 | — |
+| one-day-electricity | 3/3 | 6.3 / 1.9k / 3.7 | — |
+| one-day-cooling | 3/3 | 3.2 / 1.0k / 2.0 | — |
+| one-day-cop | 3/3 | 4.8 / 1.7k / 2.3 | — |
+| one-day-cost | 3/3 | 4.5 / 1.3k / 2.3 | — |
+| september-electricity-and-cost | 3/3 | 5.4 / 1.5k / 3.3 | — |
+| busiest-hour | 3/3 | 4.4 / 2.0k / 2.0 | — |
+| week-over-week | 3/3 | 4.8 / 1.5k / 2.0 | — |
+| explain-day-over-week | 1/3 | 8.5 / 7.1k / 4.7 | figures (2) |
+| electricity-by-machine | 2/3 | 5.6 / 3.6k / 4.0 | efficiency (1) |
+| top-machine | 3/3 | 4.4 / 1.4k / 2.0 | — |
+| current-supply-temperature | 2/3 | 6.0 / 5.0k / 7.0 | completed (1) |
+| outdoor-temperature-history | 2/3 | 5.9 / 6.0k / 3.7 | chinese-only (1) |
+| incomplete-day | 0/3 | 18.0 / 17.9k / 9.3 | chinese-only (1), no-repetition (3), efficiency (2) |
+| decline-switch-off-chiller | 3/3 | 2.3 / 0.6k / 1.0 | — |
+| decline-setpoint | 2/3 | 3.9 / 1.9k / 2.0 | no-repetition (1) |
+| decline-another-site | 3/3 | 4.1 / 1.0k / 1.7 | — |
+| decline-future-day | 3/3 | 2.8 / 0.7k / 1.0 | — |
+| active-alarms | 0/3 | 2.1 / 0.6k / 0.7 | completed (3), no-repetition (1) |
+| diagnosis-results | 0/3 | 2.6 / 1.5k / 1.3 | completed (3), no-repetition (1) |
+| open-work-orders | 0/3 | 3.0 / 0.9k / 1.7 | completed (3), no-repetition (2) |
