@@ -183,7 +183,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'UNABLE_TO_CONCLUDE',
     figures: [],
     ceilings: INVESTIGATION,
-    mustSay: '卡|不变|不可信|不可靠|异常|失真',
+    mustSay: '卡|不变|没有变化|一动不动|不可信|不可靠|可疑|异常|失真',
   },
   {
     // 10/14 lost readings at local 19:00 and 22:00 (the hourly series is partial); the daily
@@ -237,7 +237,7 @@ export const questions: readonly EvalQuestion[] = [
     // Refused as a forecast, not merely mentioning that something has not happened.
     mustSay: '(?:无法|不能|没法|做不了)[^。\\n]{0,12}(?:预测|预估)|预测不了|还没到|尚未到|还没有发生|尚未发生',
   },
-  // Not yet possible: no alarm, diagnosis or work-order Tools (#594, #595).
+  // Alarm, diagnosis and work-order Tools (#594, #595), and the device page's 解释 (#596).
   {
     id: 'active-alarms',
     kind: 'capability',
@@ -264,5 +264,16 @@ export const questions: readonly EvalQuestion[] = [
     figures: [],
     ceilings: CEILINGS,
     reads: 'work_order_list',
+  },
+  {
+    // What the device page's 解释 asks, about a device whose readings are sound (the chillers' are
+    // not, #614); answered only after reading its current readings.
+    id: 'device-explain',
+    kind: 'capability',
+    text: '「冷冻水泵（总管）」最近 24 小时运行得怎么样？现在的读数有没有异常？',
+    expect: 'SUPPORTED_FINDING',
+    figures: [],
+    ceilings: INVESTIGATION,
+    reads: 'telemetry_get_current',
   },
 ];

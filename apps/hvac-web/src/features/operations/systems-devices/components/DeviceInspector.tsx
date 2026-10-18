@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Sparkles } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
@@ -11,6 +11,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
+import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
@@ -24,6 +25,9 @@ import { boundAssetId, deviceLocation } from '../device-ledger';
 const siteRoute = getRouteApi('/_app/_site');
 
 const CONNECTION_LABELS = { ONLINE: '在线', OFFLINE: '离线', UNKNOWN: '未知' } as const;
+
+/** What 解释 asks the assistant about a device: how it ran over the last day and whether its readings look wrong now. */
+const explainDeviceQuestion = (name: string) => `「${name}」最近 24 小时运行得怎么样？现在的读数有没有异常？`;
 
 /** Numeric measurements worth a trend, the role's key readings first. */
 function trendKeys(device: PlantDevice): string[] {
@@ -56,6 +60,7 @@ export function DeviceInspector({ device, categoryLabel, onClose }: {
 function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice; readonly categoryLabel: string }) {
   const { site, principal } = siteRoute.useRouteContext();
   const queryClient = useQueryClient();
+  const explain = useAssistantPanel((state) => state.explain);
   const [creatingWorkOrder, setCreatingWorkOrder] = useState(false);
   const capabilities = principal.authorization.capabilities;
   const status = deviceStatus(device);
@@ -75,7 +80,12 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
           {categoryLabel} · {deviceLocation(device)}
           <StatusBadge tone={status.tone} label={status.label} />
         </div>
-        <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
+        <div className="flex items-start justify-between gap-3">
+          <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
+          <Button size="sm" variant="outline" className="shrink-0" onClick={() => explain(explainDeviceQuestion(device.name))}>
+            <Sparkles data-icon="inline-start" className="text-primary" />解释
+          </Button>
+        </div>
         <SheetDescription className="sr-only">{categoryLabel}，{deviceLocation(device)}</SheetDescription>
       </SheetHeader>
 
