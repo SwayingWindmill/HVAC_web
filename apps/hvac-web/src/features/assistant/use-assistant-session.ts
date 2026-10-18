@@ -32,7 +32,7 @@ export interface AssistantSession {
 
 /**
  * The Site's current conversation: the latest Session, or a new one once the operator starts
- * one. A Session with a running Run is followed live until its terminal snapshot.
+ * one. A Session with a running Run is followed live until the Run ends.
  */
 export function useAssistantSession(siteId: string, csrfToken: string): AssistantSession {
   const queryClient = useQueryClient();

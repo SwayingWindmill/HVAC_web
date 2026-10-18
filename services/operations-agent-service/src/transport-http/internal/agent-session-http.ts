@@ -201,7 +201,6 @@ const mapError = (error: unknown): Response => {
     if (error.code === 'SESSION_REVISION_CONFLICT'
       || error.code === 'RUN_ALREADY_ACTIVE'
       || error.code === 'RUN_STALE'
-      || error.code === 'SESSION_TERMINAL'
       || error.code === 'IDEMPOTENCY_CONFLICT') {
       return problem(409, error.code, 'Agent Session conflict', error.message);
     }

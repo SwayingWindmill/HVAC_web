@@ -65,7 +65,6 @@ export {
 } from './internal/telemetry.js';
 
 export {
-  transitionAgentSession,
   type ActiveAgentSession,
   type AgentMessage,
   type AgentMessageRole,
@@ -75,7 +74,6 @@ export {
   type AgentRunUsage,
   type AgentSession,
   type AgentSessionStatus,
-  type AgentSessionTransition,
   type AgentToolExecution,
   type AgentToolExecutionStatus,
   type InactiveAgentSession,

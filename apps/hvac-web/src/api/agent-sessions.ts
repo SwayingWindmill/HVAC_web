@@ -98,7 +98,7 @@ export const answerAssistantQuestion = async (
 );
 
 /**
- * Follows a Session's events until its terminal snapshot. Returns the close function.
+ * Follows a Session's events until the snapshot after its Run ends. Returns the close function.
  * Events that fail the contract end the stream rather than being shown half-parsed.
  */
 export const followAssistantSession = (
@@ -125,7 +125,7 @@ export const followAssistantSession = (
     if (parsed.data.type === 'session.snapshot' && parsed.data.payload.snapshot.session.status !== 'ACTIVE') end(false);
   };
   for (const type of agentSessionEventTypes) source.addEventListener(type, handle as EventListener);
-  // The server closes the stream after the terminal snapshot; a close before it is a failure.
+  // The server closes the stream after the snapshot that ends the Run; a close before it is a failure.
   source.onerror = () => end(source.readyState !== EventSource.CLOSED);
   return () => end(false);
 };

@@ -11,7 +11,6 @@ import type {
 export type AgentSessionLifecycleErrorCode =
   | 'SESSION_NOT_FOUND'
   | 'SESSION_REVISION_CONFLICT'
-  | 'SESSION_TERMINAL'
   | 'SESSION_IDENTITY_CONFLICT'
   | 'RUN_ALREADY_ACTIVE'
   | 'RUN_NOT_FOUND'
@@ -244,11 +243,7 @@ const startState = (
   if (command.expectedSessionRevision !== current.session.revision) {
     fail('SESSION_REVISION_CONFLICT', 'Session revision changed before the Run could start.');
   }
-  if (current.session.status === 'COMPLETED'
-    || current.session.status === 'FAILED'
-    || current.session.status === 'CANCELLED') {
-    fail('SESSION_TERMINAL', 'A terminal Session cannot start another Run.');
-  }
+  // A Session is a conversation (#617): after a Run ends, the next question starts the next Run.
   if (current.session.status === 'ACTIVE') {
     const activeRun = requireRun(
       current.runs.find(({ id }) => id === current.session.activeRunId),

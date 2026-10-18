@@ -401,3 +401,38 @@ test('a question and the Run it starts carry the same time', async () => {
   }, 'Session did not complete');
   assert.equal(completed.messages[0].createdAt, completed.runs[0].startedAt);
 });
+
+// #617: every follow-up in the panel failed with SESSION_TERMINAL.
+test('an answered or stopped Session takes the next question and the model reads the conversation so far', async () => {
+  const seen = [];
+  const { service } = createService(async (input) => {
+    seen.push(input.messages.map(({ role, content }) => `${role}: ${content}`));
+    if (input.messages.at(-1).content === '先停一下') {
+      await new Promise((resolve) => input.signal.addEventListener('abort', resolve, { once: true }));
+      return Object.freeze({
+        runStatus: 'CANCELLED', sessionStatus: 'CANCELLED', failureCode: 'RUN_CANCELLED', usage: zeroUsage,
+        finalizedMessages: Object.freeze([]), toolExecutions: Object.freeze([]), artifacts: Object.freeze([]),
+      });
+    }
+    return completedResult(input);
+  });
+  const settled = (sessionId, runs) => waitFor(async () => {
+    const state = await service.get(context, sessionId);
+    return state.runs.length === runs && state.session.status !== 'ACTIVE' ? state : null;
+  });
+
+  const created = await service.create(context, { message: '10月15日用了多少电？' });
+  const answered = await settled(created.session.id, 1);
+  assert.equal(answered.session.status, 'COMPLETED');
+  const followed = await service.start(context, { sessionId: created.session.id, expectedRevision: answered.session.revision, message: '那 C 机组呢？' });
+  assert.equal(followed.session.id, created.session.id);
+  assert.equal((await settled(created.session.id, 2)).session.status, 'COMPLETED');
+  assert.deepEqual(seen.at(-1), ['OPERATOR: 10月15日用了多少电？', 'ASSISTANT: Investigation completed.', 'OPERATOR: 那 C 机组呢？']);
+
+  const stopping = await service.create(context, { message: '先停一下' });
+  const stopped = await service.cancel(context, { sessionId: stopping.session.id, expectedRevision: stopping.session.revision });
+  assert.equal(stopped.session.status, 'CANCELLED');
+  const resumed = await service.start(context, { sessionId: stopping.session.id, expectedRevision: stopped.session.revision, message: '10月15日用了多少电？' });
+  assert.equal(resumed.session.status, 'ACTIVE');
+  assert.equal((await settled(stopping.session.id, 2)).session.status, 'COMPLETED');
+});

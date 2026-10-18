@@ -1,6 +1,4 @@
-export type AgentContractErrorCode =
-  | 'SESSION_TRANSITION_INVALID'
-  | 'TERMINAL_ARTIFACT_INVALID';
+export type AgentContractErrorCode = 'TERMINAL_ARTIFACT_INVALID';
 
 export class AgentContractError extends Error {
   readonly code: AgentContractErrorCode;
