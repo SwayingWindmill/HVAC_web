@@ -291,7 +291,10 @@ last 7 days and one unfinished work order (「C 机组：」, 来自设备 C 机
 The suite gains `device-explain`, what the device page's 解释 asks, about 冷冻水泵（总管）; it
 passes only after reading the device's current readings.
 
-- device-explain 3/3 (6–7 reads, 7–9 s).
+- device-explain 3/3 (6–7 reads, 7–9 s) with the first history note. After the review narrowed the note to
+  what is true (no history for those keys in that range; the same range returns the same), two runs:
+  1/3 then 3/3 — the two failures were an English narration before the first read (「设备 ID」, → #607)
+  and one extra history and current read (9 > 8). outdoor-temperature-history 3/3 in both runs.
 - Before the readings Tools changed, the same question about 「A 机组」 failed in every round: the
   model answered UNABLE_TO_CONCLUDE or SUPPORTED_FINDING by turns (its readings are dubious, #614),
   `STOPPED` reached one answer, and repeated history reads ran past 8. About 冷冻水泵（总管）, before
