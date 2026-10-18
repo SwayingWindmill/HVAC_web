@@ -728,11 +728,11 @@ const historyPayloadFrom = (result: OwnerReadResult): TelemetryHistoryAggregate 
   return payload;
 };
 
-/** One series per point, in the order asked: averages for readings, increases for counters. */
 // Equipment states as the device page says them.
-const STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({ RUNNING: '运行', STOPPED: '停机', STANDBY: '待机', FAULT: '故障' });
-const stateWord = <T>(value: T): T | string => (typeof value === 'string' ? STATE_WORDS[value] ?? value : value);
+const EQUIPMENT_STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({ RUNNING: '运行', STOPPED: '停机', STANDBY: '待机', FAULT: '故障' });
+const equipmentStateWord = (value: unknown): unknown => (typeof value === 'string' ? EQUIPMENT_STATE_WORDS[value] ?? value : value);
 
+/** One series per point, in the order asked: averages for readings, increases for counters. */
 const readHistory = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
@@ -770,7 +770,7 @@ const readHistory = async (
         siteTime: siteTime(bucket.periodStart, timezone),
         ...(bucket.gauge === undefined ? {} : { average: bucket.gauge.average, minimum: bucket.gauge.minimum, maximum: bucket.gauge.maximum }),
         ...(bucket.counter === undefined ? {} : { increase: bucket.counter.deltaSum }),
-        ...(bucket.state === undefined ? {} : { lastValue: stateWord(bucket.state.lastValue) }),
+        ...(bucket.state === undefined ? {} : { lastValue: equipmentStateWord(bucket.state.lastValue) }),
         coverage: bucket.completeness,
       })),
     }];
@@ -782,7 +782,7 @@ const readHistory = async (
     series,
     missingKeys,
     // Without it the model asks again for the same readings (#596).
-    ...(missingKeys.length === 0 ? {} : { note: 'missingKeys 里的读数这段时间没有历史，再查也一样；要说现在的状态，用当前读数。' }),
+    ...(missingKeys.length === 0 ? {} : { note: 'missingKeys 里的读数在查的这段时间没有历史数据，同样的时段再查一次结果也一样。' }),
     dataStatus: dataStatus(result.quality !== 'GOOD', payload.projectionWatermark, timezone),
   };
 };
@@ -906,7 +906,7 @@ const readTelemetry = async (
       ? { key: value.key, state: valueState(value) }
       : {
         key: value.key,
-        value: stateWord(value.value),
+        value: equipmentStateWord(value.value),
         unit: value.unit,
         siteTime: siteTime(value.sampledAt, timezone),
         state: valueState(value),

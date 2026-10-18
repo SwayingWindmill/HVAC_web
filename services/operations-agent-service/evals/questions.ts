@@ -183,7 +183,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'UNABLE_TO_CONCLUDE',
     figures: [],
     ceilings: INVESTIGATION,
-    mustSay: '卡|不变|没有变化|一动不动|固定在|不可信|不可靠|可疑|异常|失真',
+    mustSay: '卡|不变|没有变化|一动不动|不可信|不可靠|可疑|异常|失真',
   },
   {
     // 10/14 lost readings at local 19:00 and 22:00 (the hourly series is partial); the daily

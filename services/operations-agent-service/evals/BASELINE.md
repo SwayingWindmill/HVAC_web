@@ -299,6 +299,6 @@ passes only after reading the device's current readings.
 - The three questions that read device readings, rerun after the change: current-supply-temperature
   2/3 (after #595: 0/3), outdoor-temperature-history 1/3 — all three trials answered the stuck
   21.5 ℃ correctly; two said 「没有变化」「可疑」, which the question's accepted words did not include
-  (now widened) — incomplete-day 0/3 (after #595: 0/3, 1/3 on rerun; too many reads and the
+  (now widened with 没有变化、一动不动、可疑) — incomplete-day 0/3 (after #595: 0/3, 1/3 on rerun; too many reads and the
   outcome, as before).
 
