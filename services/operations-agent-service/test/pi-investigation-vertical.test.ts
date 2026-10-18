@@ -1013,7 +1013,12 @@ test('process talk beside a read is not kept, and the card drops a limitation th
         type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], recommendedNext: [],
-          limitations: ['10 月 14 日 14–16 点和 20 点没有读数，这天的综合能效不完整。', '没有室外温度数据，不能判断负荷变化是不是天气原因。'],
+          limitations: [
+            '10 月 14 日 14–16 点和 20 点没有读数，这天的综合能效不完整。',
+            // Another day in the same words is not a restatement.
+            '10 月 13 日 14–16 点也没有读数。',
+            '没有室外温度数据，不能判断负荷变化是不是天气原因。',
+          ],
         },
       }],
       stopReason: 'toolUse',
@@ -1022,7 +1027,7 @@ test('process talk beside a read is not kept, and the card drops a limitation th
 
   assert.equal(result.runStatus, 'COMPLETED');
   assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
-  assert.deepEqual(result.artifacts.at(-1).finding.limitations, ['没有室外温度数据，不能判断负荷变化是不是天气原因。']);
+  assert.deepEqual(result.artifacts.at(-1).finding.limitations, ['10 月 13 日 14–16 点也没有读数。', '没有室外温度数据，不能判断负荷变化是不是天气原因。']);
 });
 
 // #607: on the server a model wrote its answer in the same turn as one more read; that answer is
@@ -1038,4 +1043,19 @@ test('the last words of a Run stay even when the model wrote them beside a read'
 
   assert.equal(result.runStatus, 'COMPLETED');
   assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
+});
+
+// #607 review: a correction of an execution claim (#592) stays even when written beside a read, so
+// the kept answer never shows the claim without it.
+test('a correction written beside a read stays with the claim it corrects', async () => {
+  const siteTool = projectTool('site_get_context', async () => ({ site: { name: '松雅轩' } }));
+  const correction = '更正：我只能读取数据，没有也不能关闭 B 机组。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: '好的，已为你关闭 B 机组。' }, { type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: correction }, { type: 'tool-call', id: 'site-1', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: '需要的话，我可以帮你看 B 机组现在的读数。' }, { type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+  ], [siteTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.ok(result.finalizedMessages.some(({ content }) => content === correction));
 });

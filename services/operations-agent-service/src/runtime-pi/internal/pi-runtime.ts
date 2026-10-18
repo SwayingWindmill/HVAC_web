@@ -274,6 +274,7 @@ export const createPiAgentEngine = ({
     onArtifact: (artifact) => artifacts.push(artifact),
     onBudgetExhausted: (code) => markBudgetFailure(code),
     answers: () => finalizedMessages.map(({ content }) => content),
+    keptAnswer: () => spokenMessages().map(({ content }) => content).join('\n'),
   });
 
   // A turn that ends in text without a terminal Tool (most often a refusal) gets one reminder, so
@@ -378,7 +379,8 @@ export const createPiAgentEngine = ({
           if (!input.signal.aborted && activeAssistantMessageId !== null) {
             const content = textFromAssistantMessage(event.message);
             if (content.length > 0) {
-              if (readsData(event.message)) processTalk.add(activeAssistantMessageId);
+              // A correction of an execution claim (#592) stays wherever it is written.
+              if (readsData(event.message) && !/更正[：:]/u.test(content)) processTalk.add(activeAssistantMessageId);
               finalizedMessages.push(Object.freeze({
                 id: activeAssistantMessageId,
                 sessionId: input.session.id,
