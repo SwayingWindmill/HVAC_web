@@ -116,14 +116,6 @@ const emptyInputSchema = Object.freeze({
   additionalProperties: false,
 });
 
-const workOrderInputSchema = Object.freeze({
-  type: 'object',
-  properties: Object.freeze({
-    status: Object.freeze({ type: 'string', enum: Object.freeze(['open', 'closed']), description: 'open（默认）是还没处理完的（待处理、处理中、受阻），closed 是已完成或已取消的。' }),
-  }),
-  additionalProperties: false,
-});
-
 const alarmInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({
@@ -1042,25 +1034,12 @@ const FINDING_RULES: Readonly<Record<string, { readonly rule: string; readonly m
 });
 // How far a finding fell past its threshold, as the 诊断 page grades it.
 const deviation = (observed: number, threshold: number): string => {
-  const shortfall = threshold === 0 ? 0 : Math.abs(threshold - observed) / Math.abs(threshold);
+  const shortfall = Math.abs(threshold - observed) / threshold;
   return shortfall >= 0.3 ? '严重偏离' : shortfall >= 0.1 ? '明显偏离' : '轻微偏离';
 };
 const WORK_ORDER_PRIORITY_WORDS = Object.freeze({ URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' } as const);
 const WORK_ORDER_STATUS_WORDS = Object.freeze({ DRAFT: '草稿', OPEN: '待处理', IN_PROGRESS: '处理中', BLOCKED: '受阻', COMPLETED: '已完成', CANCELLED: '已取消' } as const);
-const WORK_ORDER_SOURCE_WORDS: Readonly<Record<string, string>> = Object.freeze({ ALARM: '告警', MANUAL: '手工创建', ASSET: '设备', EQUIPMENT: '设备', INVESTIGATION: '诊断', EXTERNAL: '外部系统' });
-const WORK_ORDER_SCOPES = Object.freeze({
-  open: { statuses: ['OPEN', 'IN_PROGRESS', 'BLOCKED'], words: '还没处理完', none: '现在没有还没处理完的工单' },
-  closed: { statuses: ['COMPLETED', 'CANCELLED'], words: '已完成或已取消', none: '最近没有已完成或已取消的工单' },
-} as const);
-const WORK_ORDER_REFUSAL = '工单参数有误：只接受 status，取值 open（还没处理完，默认）或 closed（已完成或已取消）。';
-
-const parseWorkOrderArguments = (value: unknown): keyof typeof WORK_ORDER_SCOPES => {
-  const record = requireRecord(value, WORK_ORDER_REFUSAL);
-  if (!hasOnlyKeys(record, ['status']) || (record.status !== undefined && record.status !== 'open' && record.status !== 'closed')) {
-    fail('TOOL_ARGUMENTS_INVALID', WORK_ORDER_REFUSAL);
-  }
-  return (record.status ?? 'open') as keyof typeof WORK_ORDER_SCOPES;
-};
+const UNFINISHED_WORK_ORDER: ReadonlySet<string> = new Set(['OPEN', 'IN_PROGRESS', 'BLOCKED']);
 
 const readFddFindings = async (
   context: AgentRunContext,
@@ -1530,29 +1509,38 @@ export const createHvacReadTools = ({
   const workOrderTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'work_order_list',
-      '列出当前站点的工单：默认是还没处理完的（待处理、处理中、受阻），status 用 closed 看已完成或已取消的。每条有标题、说明、优先级、状态、是否已指派、截止时间、来源和创建时间。',
-      workOrderInputSchema,
+      '列出当前站点还没处理完的工单（待处理、处理中、受阻）：每条有标题、说明、优先级、状态、是否已指派、截止时间、来源（告警、哪台设备或人工创建）和创建时间。',
+      emptyInputSchema,
       WORK_ORDER_CAPABILITIES,
     ),
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
-      const scope = WORK_ORDER_SCOPES[parseWorkOrderArguments(argumentsValue)];
+      exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, WORK_ORDER_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
         const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
         const timezone = sitePayload.site.timezone;
         const list = await readWorkOrders(context, authorization, toolAuthorizationReader, workOrderReader);
-        const chosen = list.items.filter((workOrder) => (scope.statuses as readonly string[]).includes(workOrder.status));
-        const note = chosen.length === 0 ? scope.none : list.hasMore ? `只看了最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单，可能还有更早的` : undefined;
+        const unfinished = list.items.filter((workOrder) => UNFINISHED_WORK_ORDER.has(workOrder.status));
+        const note = !list.hasMore
+          ? (unfinished.length === 0 ? '现在没有还没处理完的工单' : undefined)
+          : unfinished.length === 0
+            ? `最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单都已处理完，更早的没有看`
+            : `只看了最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单，可能还有更早的`;
+        // A work order raised from a device names it, when the operator may read the asset model.
+        const assets = new Map<string, string>(
+          unfinished.some((workOrder) => workOrder.assetId !== undefined) && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+            ? (await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model.assets.map((asset) => [asset.id, asset.displayName])
+            : [],
+        );
         return assertResultBytes({
-          status: scope.words,
-          workOrders: chosen.map((workOrder) => ({
+          workOrders: unfinished.map((workOrder) => ({
             title: workOrder.title,
             description: workOrder.description,
             priority: WORK_ORDER_PRIORITY_WORDS[workOrder.priority],
             status: WORK_ORDER_STATUS_WORDS[workOrder.status],
             assigned: workOrder.assigned ? '已指派' : '未指派',
             ...(workOrder.dueAt === undefined ? {} : { dueAt: siteTime(workOrder.dueAt, timezone) }),
-            ...(workOrder.sources.length === 0 ? {} : { from: [...new Set(workOrder.sources.map((source) => WORK_ORDER_SOURCE_WORDS[source] ?? '其他'))].join('、') }),
+            from: workOrder.fromAlarm ? '来自告警' : workOrder.assetId !== undefined ? `来自设备 ${assets.get(workOrder.assetId) ?? '未登记的设备'}` : '人工创建',
             createdAt: siteTime(workOrder.createdAt, timezone),
             updatedAt: siteTime(workOrder.updatedAt, timezone),
           })),

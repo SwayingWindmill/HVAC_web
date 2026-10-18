@@ -89,7 +89,7 @@ func main() {
 	}
 	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
 	diagnostics := &http.Server{
-		Addr: envOrDefault("FDD_DIAGNOSTICS_ADDR", ":19096"), Handler: fdd.HealthHandler(),
+		Addr: envOrDefault("FDD_DIAGNOSTICS_ADDR", ":19098"), Handler: fdd.HealthHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {

@@ -49,7 +49,7 @@ func (fixture authFixture) context(t *testing.T, executing, action, tenantID, si
 	t.Helper()
 	token, err := identitycontext.SignDelegation(fixture.signer, identitycontext.DelegationClaims{
 		Issuer: testGatewaySPIFFE, Subject: "operator", SubjectIssuer: "https://identity.example.test",
-		DisplayName: "Operator", ExecutingService: executing, Audience: DefaultAudience,
+		DisplayName: "Operator", ExecutingService: executing, Audience: Audience,
 		TenantID: tenantID, Actions: []string{action}, Scopes: []string{"tenant:" + tenantID, "site:" + siteID},
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: fixture.now.Add(-time.Second).Unix(),
 		ExpiresAt: fixture.now.Add(30 * time.Second).Unix(), TokenID: "token-1",

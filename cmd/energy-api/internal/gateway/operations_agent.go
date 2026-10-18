@@ -232,10 +232,9 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		}
 		siteID, alarmList = alarmInput.SiteID, true
 	case "workorder.listWorkOrders":
-		// Status and size travel with the request the Agent's reader sends; the owner checks them.
+		// Size travels with the request the Agent's reader sends; the owner checks it.
 		var workOrderInput struct {
 			SiteID string `json:"siteId"`
-			Status string `json:"status"`
 			Limit  int    `json:"limit"`
 		}
 		if decodeStrictOperationsJSON(input.Request.Input, &workOrderInput) != nil {

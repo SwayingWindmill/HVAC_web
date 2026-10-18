@@ -20,7 +20,7 @@ func TestWorkOrderHTTPCreateAndAssignAreAuthorizedIdempotentAndVersioned(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{
+	handler, err := newGatewayHandler(HTTPConfig{
 		Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
 		NewWorkOrderID: func(time.Time) (string, error) { return httpMutationWorkOrderID, nil },
 	})
@@ -93,7 +93,7 @@ func TestWorkOrderHTTPMutationBoundaryFailsClosedBeforeStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{
+	handler, err := newGatewayHandler(HTTPConfig{
 		Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
 		NewWorkOrderID: func(time.Time) (string, error) { return httpMutationWorkOrderID, nil },
 	})
@@ -144,7 +144,7 @@ func TestWorkOrderHTTPMutationContextIsBoundToIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{
+	handler, err := newGatewayHandler(HTTPConfig{
 		Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
 		NewWorkOrderID: func(time.Time) (string, error) { return httpMutationWorkOrderID, nil },
 	})
@@ -174,7 +174,7 @@ func TestWorkOrderHTTPAssignmentRequiresExplicitOwnershipTuple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ const (
 	ContextHeader          = "X-FDD-Context"
 	ReadAction             = "fdd:read"
 	WriteAction            = "fdd:write"
-	DefaultAudience        = "fdd-service"
+	Audience               = "fdd-service"
 	DefaultGatewaySPIFFEID = "spiffe://hvac.local/platform-gateway"
 )
 
@@ -27,7 +27,6 @@ type AuthConfig struct {
 	// ReaderSPIFFE may only list a Site's findings, with a context the Gateway signed in its name
 	// (the Operations Agent). Empty when no reader is deployed.
 	ReaderSPIFFE string
-	Audience     string
 	Now          func() time.Time
 }
 
@@ -35,7 +34,6 @@ type authorizer struct {
 	publicKey crypto.PublicKey
 	gateway   string
 	reader    string
-	audience  string
 	now       func() time.Time
 }
 
@@ -44,22 +42,18 @@ func newAuthorizer(config AuthConfig) (*authorizer, error) {
 		return nil, errors.New("FDD requires the Gateway's delegation key")
 	}
 	gateway := strings.TrimSpace(config.GatewaySPIFFE)
-	if gateway == "" {
-		gateway = DefaultGatewaySPIFFEID
+	if !strings.HasPrefix(gateway, "spiffe://") {
+		return nil, errors.New("FDD requires the Gateway's workload identity")
 	}
 	reader := strings.TrimSpace(config.ReaderSPIFFE)
 	if reader != "" && (!strings.HasPrefix(reader, "spiffe://") || reader == gateway) {
 		return nil, errors.New("FDD reader identity is invalid")
 	}
-	audience := strings.TrimSpace(config.Audience)
-	if audience == "" {
-		audience = DefaultAudience
-	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &authorizer{publicKey: config.GatewayPublicKey, gateway: gateway, reader: reader, audience: audience, now: now}, nil
+	return &authorizer{publicKey: config.GatewayPublicKey, gateway: gateway, reader: reader, now: now}, nil
 }
 
 type tenantKey struct{}
@@ -80,9 +74,10 @@ func (auth *authorizer) guard(action string, readerAllowed bool, next func(http.
 			return
 		}
 		claims, err := identitycontext.VerifyDelegation(auth.publicKey, strings.TrimSpace(request.Header.Get(ContextHeader)))
-		// A context covers one Tenant and one Site; which Site is checked against the request below.
-		if err != nil || len(claims.Scopes) != 2 || claims.Scopes[0] != "tenant:"+claims.TenantID || !strings.HasPrefix(claims.Scopes[1], "site:") ||
-			identitycontext.ValidateDelegationFromIssuerAnyScope(claims, auth.now().UTC(), auth.gateway, peer, auth.audience, action, claims.Scopes) != nil {
+		// A context names one Tenant and one Site, in that order; which Site is checked against the
+		// request below.
+		if err != nil || len(claims.Scopes) != 2 || !strings.HasPrefix(claims.Scopes[1], "site:") ||
+			identitycontext.ValidateDelegationFromIssuerAnyScope(claims, auth.now().UTC(), auth.gateway, peer, Audience, action, []string{"tenant:" + claims.TenantID, claims.Scopes[1]}) != nil {
 			writeFDDError(writer, http.StatusForbidden, "fdd_context_invalid")
 			return
 		}
@@ -94,12 +89,9 @@ func (auth *authorizer) guard(action string, readerAllowed bool, next func(http.
 	}
 }
 
-// coversSite is whether the context names exactly this Tenant and Site.
+// coversSite is whether a context guard admitted names this Site.
 func coversSite(claims identitycontext.DelegationClaims, siteID string) bool {
-	if len(claims.Scopes) != 2 {
-		return false
-	}
-	return claims.Scopes[0] == "tenant:"+claims.TenantID && claims.Scopes[1] == "site:"+siteID
+	return claims.Scopes[1] == "site:"+siteID
 }
 
 func workloadSPIFFE(request *http.Request) string {

@@ -771,7 +771,7 @@ test('FDD and work-order readers send the context in the owner’s own header an
     baseUrl: 'https://work-order-service.internal',
     fetchImplementation: record({ schemaVersion: 1, items: [{
       schemaVersion: 1, workOrderId: 'wo-1', tenantId: scope.tenantId, siteId, title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN',
-      sourceReferences: [{ domain: 'ALARM', resourceId: 'alarm-1', relationship: 'ORIGIN' }], assigneeId: 'principal-7',
+      sourceReferences: [{ domain: 'ALARM', resourceId: 'alarm-1', relationship: 'ORIGIN' }, { domain: 'ASSET', resourceId: 'asset-1', relationship: 'ORIGIN' }], assigneeId: 'principal-7',
       tasks: {}, noteCount: 0, attachmentCount: 0, completionEvidence: [], timeline: [], version: 1, createdAt: '2026-10-17T12:00:00Z', updatedAt: '2026-10-17T12:30:00Z',
     }], nextCursor: null, hasMore: false }),
   });
@@ -780,7 +780,7 @@ test('FDD and work-order readers send the context in the owner’s own header an
   assert.equal(calls[1].init.headers['X-Work-Order-Read-Context'], 'workorder.listWorkOrders-context');
   assert.equal(calls[1].init.headers['X-Delegation-Grant'], undefined);
   assert.deepEqual(list.payload.items, [{
-    title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN', assigned: true, sources: ['ALARM'],
+    title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN', assigned: true, fromAlarm: true, assetId: 'asset-1',
     createdAt: '2026-10-17T12:00:00Z', updatedAt: '2026-10-17T12:30:00Z',
   }]);
 });

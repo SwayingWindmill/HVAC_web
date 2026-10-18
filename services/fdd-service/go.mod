@@ -7,7 +7,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/intelligencemodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
-	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0-00010101000000-000000000000
+	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 )
 
 require (

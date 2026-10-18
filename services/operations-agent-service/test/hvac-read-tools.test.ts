@@ -852,33 +852,39 @@ test('fdd_findings reads the Site’s findings in the 诊断 page’s words, eac
   assert.equal((await execute(byName(none.tools, 'fdd_findings'), {})).note, '最近没有故障诊断结果');
 });
 
-test('work_order_list reads the Site’s unfinished work orders in the 工单 page’s words', async () => {
+test('work_order_list reads the Site’s unfinished work orders in the 工单 page’s words, the source device by name', async () => {
   const workOrder = (overrides) => ({
     title: '检查 2 号冷冻水泵', description: '低温差持续，检查水泵频率', priority: 'HIGH', status: 'OPEN', assigned: false,
-    sources: ['ALARM'], createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T12:30:00.000Z', ...overrides,
+    fromAlarm: true, createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T12:30:00.000Z', ...overrides,
   });
   const harness = createHarness({
     workOrdersFor: () => ({
-      items: [workOrder({}), workOrder({ title: '更换温度传感器', status: 'IN_PROGRESS', assigned: true, dueAt: '2026-10-18T09:00:00.000Z', sources: [] }), workOrder({ title: '清洗过滤器', status: 'COMPLETED' })],
+      items: [
+        workOrder({}),
+        workOrder({ title: '更换温度传感器', status: 'IN_PROGRESS', assigned: true, dueAt: '2026-10-18T09:00:00.000Z', fromAlarm: false, assetId: 'asset-1' }),
+        workOrder({ title: '补做巡检', status: 'BLOCKED', fromAlarm: false }),
+        workOrder({ title: '清洗过滤器', status: 'COMPLETED' }),
+      ],
       hasMore: false,
     }),
   });
   const result = await execute(byName(harness.tools, 'work_order_list'), {});
 
   assert.deepEqual(harness.workOrderInputs[0].request.input, { siteId, limit: 100 });
-  assert.equal(result.status, '还没处理完');
   assert.deepEqual(result.workOrders, [
-    { title: '检查 2 号冷冻水泵', description: '低温差持续，检查水泵频率', priority: '高', status: '待处理', assigned: '未指派', from: '告警', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
-    { title: '更换温度传感器', description: '低温差持续，检查水泵频率', priority: '高', status: '处理中', assigned: '已指派', dueAt: '2026-10-18 02:00', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+    { title: '检查 2 号冷冻水泵', description: '低温差持续，检查水泵频率', priority: '高', status: '待处理', assigned: '未指派', from: '来自告警', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+    { title: '更换温度传感器', description: '低温差持续，检查水泵频率', priority: '高', status: '处理中', assigned: '已指派', dueAt: '2026-10-18 02:00', from: '来自设备 Chiller 1', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+    { title: '补做巡检', description: '低温差持续，检查水泵频率', priority: '高', status: '受阻', assigned: '未指派', from: '人工创建', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
   ]);
-
-  const closed = await execute(byName(harness.tools, 'work_order_list'), { status: 'closed' });
-  assert.deepEqual(closed.workOrders.map(({ title }) => title), ['清洗过滤器']);
+  assert.doesNotMatch(JSON.stringify(result), /asset-1|IN_PROGRESS|BLOCKED/u);
 
   const none = createHarness({ workOrdersFor: () => ({ items: [], hasMore: false }) });
   assert.equal((await execute(byName(none.tools, 'work_order_list'), {})).note, '现在没有还没处理完的工单');
+  // The newest 100 all finished does not mean none is left: older ones were not read.
+  const unread = createHarness({ workOrdersFor: () => ({ items: [workOrder({ status: 'COMPLETED' })], hasMore: true }) });
+  assert.equal((await execute(byName(unread.tools, 'work_order_list'), {})).note, '最近更新的 100 张工单都已处理完，更早的没有看');
   await assert.rejects(
-    () => execute(byName(none.tools, 'work_order_list'), { status: 'all' }),
-    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /open|closed/u.test(error.hint),
+    () => execute(byName(none.tools, 'work_order_list'), { status: 'closed' }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
 });

@@ -64,7 +64,7 @@ func TestWorkOrderHTTPListAndDetail(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	signer := newSigner(t)
 	store := &fakeStore{item: validHTTPWorkOrder()}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestWorkOrderHTTPRejectsUntrustedScopeBeforeStore(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	signer := newSigner(t)
 	store := &fakeStore{item: validHTTPWorkOrder()}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestWorkOrderHTTPRejectsInvalidBoundary(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	signer := newSigner(t)
 	store := &fakeStore{item: validHTTPWorkOrder()}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 	item := validHTTPWorkOrder()
 	item.Priority = workordermodel.PriorityLow
 	store := &fakeStore{item: item}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +193,17 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "WORK_ORDER_RESPONSE_INVALID") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+// The owner router serves the handler only over mutual TLS; these tests present the Gateway.
+func newGatewayHandler(config HTTPConfig) (http.Handler, error) {
+	handler, err := NewHTTPHandler(config)
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		handler.ServeHTTP(writer, presentedBy(request, DefaultGatewaySPIFFEID))
+	}), nil
 }
 
 func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, tenantID, siteID, workOrderID string, extraScopes ...string) string {

@@ -700,7 +700,7 @@ func TestOperationsToolAuthorizationGrantsAWorkOrderListOnlyForTheOperatorsSite(
 	fixture := newOperationsGatewayFixture(t, 30)
 	serviceGrant := fixture.serviceDelegation(t)
 	body := func(requestID, siteID string) string {
-		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"workorder.listWorkOrders","input":{"siteId":"` + siteID + `","status":"OPEN","limit":50}}}`
+		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"workorder.listWorkOrders","input":{"siteId":"` + siteID + `","limit":100}}}`
 	}
 	response := fixture.authorizeTool(t, body("work-order-001", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service")
 	if response.Code != http.StatusOK {

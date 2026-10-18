@@ -200,7 +200,9 @@ export interface WorkOrderListResult {
     readonly status: WorkOrderStatus;
     readonly assigned: boolean;
     readonly dueAt?: string;
-    readonly sources: readonly string[];
+    /** Where it came from, as the 工单 page says it: an alarm, a device, or neither (made by hand). */
+    readonly fromAlarm: boolean;
+    readonly assetId?: string;
     readonly createdAt: string;
     readonly updatedAt: string;
   }[];

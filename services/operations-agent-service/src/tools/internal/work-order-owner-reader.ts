@@ -36,6 +36,8 @@ const decodeWorkOrder = (value: unknown, tenantId: string, siteId: string): Work
     invalid('The work-order owner returned an invalid work order.');
   }
   const workOrder = value as Record<string, unknown>;
+  const sources = (workOrder.sourceReferences as unknown[]).filter(isRecord);
+  const asset = sources.find((source) => source.domain === 'ASSET' && isNonEmptyString(source.resourceId));
   return {
     title: workOrder.title as string,
     description: workOrder.description as string,
@@ -43,7 +45,8 @@ const decodeWorkOrder = (value: unknown, tenantId: string, siteId: string): Work
     status: workOrder.status as WorkOrderListResult['items'][number]['status'],
     assigned: workOrder.assigneeId !== undefined || workOrder.teamId !== undefined,
     ...(workOrder.dueAt === undefined ? {} : { dueAt: workOrder.dueAt as string }),
-    sources: (workOrder.sourceReferences as unknown[]).flatMap((source) => (isRecord(source) && isNonEmptyString(source.domain) ? [source.domain] : [])),
+    fromAlarm: sources.some((source) => source.domain === 'ALARM'),
+    ...(asset === undefined ? {} : { assetId: asset.resourceId as string }),
     createdAt: workOrder.createdAt as string,
     updatedAt: workOrder.updatedAt as string,
   };

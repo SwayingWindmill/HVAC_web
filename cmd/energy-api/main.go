@@ -531,11 +531,10 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 
 // loadFDDClient calls FDD over mutual TLS (#595); without the Gateway's workload identity FDD stays unreachable.
 func loadFDDClient(certificate *tls.Certificate) (*http.Client, error) {
-	caPath := strings.TrimSpace(os.Getenv("FDD_SERVICE_SERVER_CA"))
-	if caPath == "" || certificate == nil {
+	if certificate == nil {
 		return nil, nil
 	}
-	roots, err := loadCertPool(caPath, "FDD Service server CA")
+	roots, err := loadCertPool(strings.TrimSpace(os.Getenv("FDD_SERVICE_SERVER_CA")), "FDD Service server CA")
 	if err != nil {
 		return nil, err
 	}
