@@ -193,7 +193,11 @@ const createInvestigationCompleteTool = ({
   execute: async (toolCallId, parameters) => {
     const finding = parseInvestigationComplete(parameters);
     if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
-      throw new Error('Finding evidence must reference successful Tool executions from this Run.');
+      // The model reads this refusal, so it says which ids it may cite.
+      const cited = [...state.completedToolIds];
+      throw new Error(cited.length === 0
+        ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
+        : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
     claimTerminalOperation(state, toolCallId);
     const artifact = Object.freeze({

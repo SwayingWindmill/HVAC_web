@@ -936,3 +936,28 @@ test('the system prompt gives the role, the data rules and one answer shape with
   // Incomplete data or a refusal ends as unable to conclude, still through investigation_complete.
   assert.match(system, /UNABLE_TO_CONCLUDE/u);
 });
+
+// Suite v3: a model that cited a wrong id retried investigation_complete six times on an English
+// refusal and told the operator about a 「系统回执错误」. The refusal now names the ids it may cite.
+test('a finding citing a read that did not happen is refused with the ids it may cite, and the next try completes', async () => {
+  const energyTool = projectTool('energy_compare_periods', async () => ({
+    comparison: { status: '可以比较', absoluteChangeKWh: 5, percentChange: 25 },
+  }));
+  const finding = (toolExecutionId) => ({
+    outcome: 'SUPPORTED_FINDING',
+    evidenceRefs: [{ owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'comparison-1', toolExecutionId }],
+    limitations: [],
+    recommendedNext: [],
+  });
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'energy-read-1', name: 'energy_compare_periods', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: finding('device-7') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: finding('energy-read-1') }], stopReason: 'toolUse' },
+  ], [energyTool]);
+
+  const refusal = requests[2].findLast((message) => message.role === 'toolResult').text;
+  assert.match(refusal, /evidenceId/u);
+  assert.match(refusal, /energy-read-1/u);
+  assert.doesNotMatch(refusal, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/u);
+  assert.equal(result.runStatus, 'COMPLETED');
+});
