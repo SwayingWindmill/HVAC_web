@@ -91,3 +91,46 @@ func ownerRouterRequest(t *testing.T, path, identity string) *http.Request {
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
 	return request
 }
+
+// #594: the Operations Agent reads a Site's alarm list with a Gateway grant; it may not open,
+// acknowledge or change an alarm, nor resolve an alarm's scope.
+func TestOwnerRouterLetsAReaderWorkloadOnlyListASitesAlarms(t *testing.T) {
+	const agent = "spiffe://hvac.local/operations-agent-service"
+	calls := 0
+	router, err := NewOwnerRouter(OwnerRouterConfig{
+		GatewaySPIFFE:   ownerRouterGatewaySPIFFE,
+		TelemetrySPIFFE: ownerRouterTelemetrySPIFFE,
+		ReaderSPIFFEs:   []string{agent},
+		GatewayHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			calls++
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+		TelemetryHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("telemetry handler called") }),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := InternalSiteAlarmsPrefix + "01910000-0001-7000-8000-000000000001/alarms"
+	list := ownerRouterRequest(t, site+"?condition=ACTIVE", agent)
+	list.Method = http.MethodGet
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, list)
+	if response.Code != http.StatusNoContent || calls != 1 {
+		t.Fatalf("reader could not list a Site's alarms: status=%d calls=%d", response.Code, calls)
+	}
+	for _, refused := range []struct{ method, path string }{
+		{http.MethodGet, site + "/01910000-0003-7000-8000-000000000001"},
+		{http.MethodPost, site + "/01910000-0003-7000-8000-000000000001:acknowledge"},
+		{http.MethodPost, site},
+		{http.MethodGet, InternalAlarmScopePrefix + "01910000-0003-7000-8000-000000000001/scope"},
+		{http.MethodPost, InternalTelemetryEvaluationPath},
+	} {
+		request := ownerRouterRequest(t, refused.path, agent)
+		request.Method = refused.method
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden || calls != 1 {
+			t.Fatalf("reader reached %s %s: status=%d calls=%d", refused.method, refused.path, recorder.Code, calls)
+		}
+	}
+}

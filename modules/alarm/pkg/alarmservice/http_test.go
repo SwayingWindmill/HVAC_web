@@ -5,9 +5,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -358,4 +361,51 @@ func validHTTPAlarm(test ...*testing.T) alarmmodel.Alarm {
 		panic(err)
 	}
 	return alarm
+}
+
+// #594: a list grant the Gateway issues for the Operations Agent names the Agent as the executing
+// service; only the Agent may present it, and the Agent may not present the Gateway's own grants.
+func TestAlarmHTTPAcceptsAListGrantOnlyFromTheWorkloadItNames(t *testing.T) {
+	const agent = "spiffe://hvac.local/operations-agent-service"
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore([]alarmmodel.Alarm{validHTTPAlarm()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := func(executing string) string {
+		value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
+			Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test",
+			DisplayName: "Operator", ExecutingService: executing, Audience: DefaultAudience,
+			TenantID: testTenantID, Actions: []string{AlarmListAction}, Scopes: []string{"tenant:" + testTenantID, "site:" + testSiteID},
+			PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
+			ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "id-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	read := func(presenter, executing string) int {
+		uri, _ := url.Parse(presenter)
+		request := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms?condition=ACTIVE", nil)
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+		request.Header.Set(AlarmReadContextHeader, grant(executing))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	if status := read(agent, agent); status != http.StatusOK {
+		t.Fatalf("the Agent could not present its own list grant: %d", status)
+	}
+	if status := read(DefaultGatewaySPIFFEID, agent); status != http.StatusForbidden {
+		t.Fatalf("the Gateway presented a grant naming the Agent: %d", status)
+	}
+	if status := read(agent, DefaultGatewaySPIFFEID); status != http.StatusForbidden {
+		t.Fatalf("the Agent presented the Gateway's own grant: %d", status)
+	}
 }
