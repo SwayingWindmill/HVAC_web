@@ -828,27 +828,8 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 			return
 		}
 	}
-	if h.operations.rateLimiter == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
-		return
-	}
-	decision := h.operations.rateLimiter.Allow(request.Context(), limitpolicy.DimensionOperationsAgent, session.ID)
-	if !decision.Allowed {
-		if decision.Reason == "counter-unavailable" {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
-			return
-		}
-		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Agent Session request rate has been exceeded.", true, nil)
-		return
-	}
-	siteAuthorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
-	if failure != nil || !registryAuthorizationAllowsSite(siteAuthorization, route.siteID) {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-		return
-	}
-	serviceDelegation, err := h.operationsServiceDelegation(session, route.siteID)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AGENT_UNAVAILABLE", "Operations Agent unavailable", "The Operations Agent delegation could not be created.", true, nil)
+	serviceDelegation, admitted := h.admitAgentRequest(writer, request, session, route.siteID)
+	if !admitted {
 		return
 	}
 
@@ -871,11 +852,7 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 	} else {
 		upstream.Header.Set("Accept", "application/json, application/problem+json")
 	}
-	upstream.Header.Set("X-Tenant-ID", session.TenantID)
-	upstream.Header.Set("X-Delegation-Grant", serviceDelegation)
-	upstream.Header.Set("X-Route-Policy-Revision", formatRevision(routeDecisionFromContext(request.Context()).RegistryRevision))
-	upstream.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	injectOperationsTrace(ctx, upstream.Header)
+	h.setAgentUpstreamHeaders(ctx, upstream.Header, request, session, serviceDelegation)
 	response, err := h.operations.httpClient.Do(upstream)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent unavailable", "The Operations Agent did not complete the Agent Session request.", true, nil)
@@ -914,19 +891,62 @@ func (h *handler) proxyAgentSession(writer http.ResponseWriter, request *http.Re
 		_, _ = writer.Write(raw)
 		return
 	}
-	if response.StatusCode == http.StatusNotFound {
+	writeAgentFailure(writer, request, response.StatusCode, contentType, raw)
+}
+
+// admitAgentRequest charges the Agent rate limit, checks the operator may read the Site and signs
+// the Agent's delegation for it. It writes the refusal itself.
+func (h *handler) admitAgentRequest(writer http.ResponseWriter, request *http.Request, session bffSession, siteID string) (string, bool) {
+	if h.operations.rateLimiter == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
+		return "", false
+	}
+	decision := h.operations.rateLimiter.Allow(request.Context(), limitpolicy.DimensionOperationsAgent, session.ID)
+	if !decision.Allowed {
+		if decision.Reason == "counter-unavailable" {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
+			return "", false
+		}
+		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Agent Session request rate has been exceeded.", true, nil)
+		return "", false
+	}
+	siteAuthorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if failure != nil || !registryAuthorizationAllowsSite(siteAuthorization, siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return "", false
+	}
+	serviceDelegation, err := h.operationsServiceDelegation(session, siteID)
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AGENT_UNAVAILABLE", "Operations Agent unavailable", "The Operations Agent delegation could not be created.", true, nil)
+		return "", false
+	}
+	return serviceDelegation, true
+}
+
+// setAgentUpstreamHeaders tells the Agent who asks, under which policy and request.
+func (h *handler) setAgentUpstreamHeaders(ctx context.Context, header http.Header, request *http.Request, session bffSession, serviceDelegation string) {
+	header.Set("X-Tenant-ID", session.TenantID)
+	header.Set("X-Delegation-Grant", serviceDelegation)
+	header.Set("X-Route-Policy-Revision", formatRevision(routeDecisionFromContext(request.Context()).RegistryRevision))
+	header.Set("X-Request-ID", requestIDFromContext(request.Context()))
+	injectOperationsTrace(ctx, header)
+}
+
+// writeAgentFailure passes an Agent refusal on, its problem sanitized; anything else is a bad gateway.
+func writeAgentFailure(writer http.ResponseWriter, request *http.Request, status int, contentType string, raw []byte) {
+	if status == http.StatusNotFound {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Agent Session was not found.", false, nil)
 		return
 	}
-	if strings.HasPrefix(contentType, "application/problem+json") && response.StatusCode >= 400 && response.StatusCode < 500 {
-		sanitized, err := sanitizeAgentSessionProblem(raw, response.StatusCode)
+	if strings.HasPrefix(contentType, "application/problem+json") && status >= 400 && status < 500 {
+		sanitized, err := sanitizeAgentSessionProblem(raw, status)
 		if err != nil {
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid Agent Session problem.", true, nil)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.Header().Set("Cache-Control", "no-store")
-		writer.WriteHeader(response.StatusCode)
+		writer.WriteHeader(status)
 		_, _ = writer.Write(sanitized)
 		return
 	}

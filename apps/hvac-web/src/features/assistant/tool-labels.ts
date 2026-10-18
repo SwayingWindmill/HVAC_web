@@ -1,4 +1,4 @@
-// How each read Tool is named to the operator, and the page its evidence links back to.
+// How each Tool is named to the operator, and the page its evidence links back to.
 
 interface ToolPresentation {
   readonly label: string;

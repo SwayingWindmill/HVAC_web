@@ -8,11 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
-	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 const PublicAgentUsagePathTemplate = "/api/v1/sites/{siteId}/operations/agent-usage"
@@ -94,26 +93,8 @@ func (h *handler) proxyAgentUsage(writer http.ResponseWriter, request *http.Requ
 		writeProblem(writer, request, http.StatusForbidden, "OPERATIONS_USAGE_FORBIDDEN", "Assistant usage forbidden", "Reading the assistant's usage requires audit.read.", false, nil)
 		return
 	}
-	if h.operations.rateLimiter == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
-		return
-	}
-	if decision := h.operations.rateLimiter.Allow(request.Context(), limitpolicy.DimensionOperationsAgent, session.ID); !decision.Allowed {
-		if decision.Reason == "counter-unavailable" {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Agent Session limit policy could not be evaluated.", true, nil)
-			return
-		}
-		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Agent Session request rate has been exceeded.", true, nil)
-		return
-	}
-	siteAuthorization, siteFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
-	if siteFailure != nil || !registryAuthorizationAllowsSite(siteAuthorization, route.siteID) {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-		return
-	}
-	serviceDelegation, err := h.operationsServiceDelegation(session, route.siteID)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AGENT_UNAVAILABLE", "Operations Agent unavailable", "The Operations Agent delegation could not be created.", true, nil)
+	serviceDelegation, admitted := h.admitAgentRequest(writer, request, session, route.siteID)
+	if !admitted {
 		return
 	}
 
@@ -125,20 +106,20 @@ func (h *handler) proxyAgentUsage(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	upstream.Header.Set("Accept", "application/json, application/problem+json")
-	upstream.Header.Set("X-Tenant-ID", session.TenantID)
-	upstream.Header.Set("X-Delegation-Grant", serviceDelegation)
-	upstream.Header.Set("X-Route-Policy-Revision", formatRevision(routeDecisionFromContext(request.Context()).RegistryRevision))
-	upstream.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	injectOperationsTrace(ctx, upstream.Header)
+	h.setAgentUpstreamHeaders(ctx, upstream.Header, request, session, serviceDelegation)
 	response, err := h.operations.httpClient.Do(upstream)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent unavailable", "The Operations Agent did not answer the usage request.", true, nil)
 		return
 	}
 	defer response.Body.Close()
-	raw, err := readBoundedBody(response.Body, 256<<10)
-	if err != nil || response.StatusCode != http.StatusOK {
-		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent unavailable", "The Operations Agent did not answer the usage request.", true, nil)
+	raw, err := readBoundedBody(response.Body, h.operations.maxResponseBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The assistant usage response was unreadable or oversized.", true, nil)
+		return
+	}
+	if response.StatusCode != http.StatusOK {
+		writeAgentFailure(writer, request, response.StatusCode, strings.ToLower(response.Header.Get("Content-Type")), raw)
 		return
 	}
 	usage, valid := decodeAgentUsage(raw)

@@ -60,9 +60,9 @@ test('leaving system management with an unsaved registry import asks before drop
   await expect(page.getByRole('region', { name: '系统概况' })).toBeVisible();
 });
 
-// #597: the operations lead reads, per day, how the assistant's answers went and which reads
-// failed, with every read named as the panel names it.
-test('the AI 助手 tab shows each day of answers and the failed reads in plain words', async ({ page }) => {
+// #597: the operations lead reads, per day, how the assistant's answers went and which steps
+// failed that day, every step named as the panel names it.
+test('the AI 助手 tab shows each day of answers and that day\'s failed steps in plain words', async ({ page }) => {
   await page.route('**/api/v1/principal', (route) => route.fulfill({ json: {
     ...principal,
     authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'audit.read'] },
@@ -74,9 +74,14 @@ test('the AI 助手 tab shows each day of answers and the failed reads in plain 
   const days = usage.getByRole('table', { name: '每天的回答' });
   await expect(days.getByRole('row', { name: /10月18日/ })).toContainText('出错 1');
   await expect(days.getByRole('row', { name: /10月17日/ })).toContainText('被停下 1');
-  const reads = usage.getByRole('table', { name: '读数据的情况' });
-  await expect(reads.getByRole('row', { name: /读取当前读数/ })).toContainText('2');
-  await expect(reads).toContainText('写结论');
+  const steps = usage.getByRole('table', { name: '各个步骤' });
+  await expect(steps).toContainText('写结论');
+  await days.getByRole('button', { name: '10月16日' }).click();
+  await expect(usage).toContainText('10月16日的步骤');
+  await expect(steps.getByRole('row', { name: /读取当前读数/ })).toHaveText(/读取当前读数\s*16\s*2/);
+  await expect(steps.getByRole('row', { name: /读取告警/ })).toHaveText(/读取告警\s*8\s*0/);
+  await days.getByRole('button', { name: '10月18日' }).click();
+  await expect(steps.getByRole('row', { name: /读取告警/ })).toHaveText(/读取告警\s*7\s*1/);
   await expect(usage).not.toContainText(/alarm_list|telemetry_get_current|investigation_complete/);
 });
 
