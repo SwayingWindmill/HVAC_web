@@ -2147,15 +2147,6 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
-    "/api/v1/optimization/runs/{runId}": {
-      "get": {
-        "operationId": "getOptimizationRunV212",
-        "x-architecture-status": "ACTIVE",
-        "x-owner": "optimization-service",
-        "parameters": [{ "name": "runId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
-      }
-    },
     "/api/v1/rules/catalog": {
       "get": {
         "operationId": "getRuleCatalog",

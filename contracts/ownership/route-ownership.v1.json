@@ -1370,22 +1370,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/optimization/runs/{runId}",
-      "owner": "optimization-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "rollout": {
-        "mode": "all"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "principal"
-      ]
-    },
-    {
-      "method": "GET",
       "path": "/api/v1/rules/catalog",
       "owner": "rule-runtime-service",
       "publicIngress": "platform-gateway",

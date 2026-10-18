@@ -44,12 +44,6 @@ func (store *memoryEvaluationStore) GetRecommendation(context.Context, string, s
 	}
 	return store.recommendation, nil
 }
-func (store *memoryEvaluationStore) GetRecommendationForSites(context.Context, string, []string, string) (PublishedRecommendation, error) {
-	if store.recommendation.RunID == "" {
-		return PublishedRecommendation{}, ErrOptimizationNotFound
-	}
-	return store.recommendation, nil
-}
 func (store *memoryEvaluationStore) LatestRecommendation(context.Context, string, string) (PublishedRecommendation, error) {
 	if store.recommendation.RunID == "" {
 		return PublishedRecommendation{}, ErrOptimizationNotFound

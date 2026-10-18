@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,7 +32,6 @@ type EvaluationPublicationStore interface {
 	FailRun(context.Context, Request, string, time.Time) error
 	ListStalePublications(context.Context, time.Time, int) ([]Evaluation, error)
 	GetRecommendation(context.Context, string, string, string) (PublishedRecommendation, error)
-	GetRecommendationForSites(context.Context, string, []string, string) (PublishedRecommendation, error)
 	LatestRecommendation(context.Context, string, string) (PublishedRecommendation, error)
 }
 
@@ -249,41 +247,6 @@ func (store *PostgresStore) LatestRecommendation(ctx context.Context, tenantID, 
 	err = tx.QueryRow(ctx, `SELECT id::text FROM core_registry.optimization_runs
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='PUBLISHED'
 ORDER BY created_at DESC, id DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return PublishedRecommendation{}, ErrOptimizationNotFound
-	}
-	if err != nil {
-		return PublishedRecommendation{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return PublishedRecommendation{}, err
-	}
-	return store.GetRecommendation(ctx, tenantID, siteID, runID)
-}
-
-func (store *PostgresStore) GetRecommendationForSites(ctx context.Context, tenantID string, allowedSiteIDs []string, runID string) (PublishedRecommendation, error) {
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(runID) || len(allowedSiteIDs) == 0 || len(allowedSiteIDs) > 256 {
-		return PublishedRecommendation{}, errors.New("optimization recommendation authorization scope is invalid")
-	}
-	for _, siteID := range allowedSiteIDs {
-		if !uuidPattern.MatchString(siteID) {
-			return PublishedRecommendation{}, errors.New("optimization recommendation authorized site is invalid")
-		}
-	}
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return PublishedRecommendation{}, err
-	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, "SELECT set_config('app.tenant_id',$1,true)", tenantID); err != nil {
-		return PublishedRecommendation{}, err
-	}
-	if _, err = tx.Exec(ctx, "SELECT set_config('app.authorized_site_ids',$1,true)", "{"+strings.Join(allowedSiteIDs, ",")+"}"); err != nil {
-		return PublishedRecommendation{}, err
-	}
-	var siteID string
-	err = tx.QueryRow(ctx, `SELECT site_id::text FROM core_registry.optimization_runs
-WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='PUBLISHED'`, tenantID, runID).Scan(&siteID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
 	}

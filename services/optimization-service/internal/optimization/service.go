@@ -182,10 +182,6 @@ func (service *Service) GetRecommendation(ctx context.Context, tenantID, siteID,
 	return service.publication.GetRecommendation(ctx, tenantID, siteID, runID)
 }
 
-func (service *Service) GetRecommendationForSites(ctx context.Context, tenantID string, allowedSiteIDs []string, runID string) (PublishedRecommendation, error) {
-	return service.publication.GetRecommendationForSites(ctx, tenantID, allowedSiteIDs, runID)
-}
-
 func (service *Service) LatestRecommendation(ctx context.Context, tenantID, siteID string) (PublishedRecommendation, error) {
 	return service.publication.LatestRecommendation(ctx, tenantID, siteID)
 }

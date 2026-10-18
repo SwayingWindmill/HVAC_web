@@ -60,7 +60,7 @@ func main() {
 	// Only the Gateway may call Forecast, over mutual TLS with a context it signed (#612).
 	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("FORECAST_TLS_CERT"), PrivateKeyPath: requiredEnv("FORECAST_TLS_KEY")},
-		ClientCAPath:     requiredEnv("FORECAST_CLIENT_CA"),
+		ClientCAPath:     requiredEnv("FORECAST_TLS_CA"),
 	})
 	if err != nil {
 		log.Fatal(err)

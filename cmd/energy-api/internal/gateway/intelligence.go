@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -77,7 +76,6 @@ type publicIntelligenceRoute struct {
 	owner      string
 	siteID     string
 	findingID  string
-	runID      string
 	target     string
 	method     string
 	publicPath string
@@ -148,9 +146,6 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
 	}
-	if runID, ok := matchSinglePathParameter(path, "/api/v1/optimization/runs/{runId}", "{runId}"); ok {
-		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, runID: runID, method: http.MethodGet, publicPath: "/api/v1/optimization/runs/{runId}"}, method == http.MethodGet
-	}
 	return publicIntelligenceRoute{}, false
 }
 
@@ -204,11 +199,7 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 		h.serveLatestOptimizationRecommendation(writer, request, session, route)
 		return
 	}
-	if route.method == http.MethodPost {
-		h.createOptimizationRun(writer, request, session)
-		return
-	}
-	h.getOptimizationRun(writer, request, session, route.runID)
+	h.createOptimizationRun(writer, request, session)
 }
 
 func (h *handler) intelligenceSession(writer http.ResponseWriter, request *http.Request, requireCSRF bool) (bffSession, bool) {
@@ -450,7 +441,7 @@ func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWrit
 		return
 	}
 	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/recommendations/latest"
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.optimizationBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
+	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
@@ -491,33 +482,8 @@ func (h *handler) createOptimizationRun(writer http.ResponseWriter, request *htt
 		writeProblem(writer, request, http.StatusBadRequest, "OPTIMIZATION_REQUEST_INVALID", "Optimization request invalid", "The Optimization request could not be encoded.", false, nil)
 		return
 	}
-	responseBody, status, callErr := h.executeIntelligence(request, http.MethodPost, h.intelligence.optimizationBaseURL+"/v1/optimize", upstreamBody, map[string]string{"X-Tenant-ID": session.TenantID})
+	responseBody, status, callErr := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, siteID, optimizationWriteAction, http.MethodPost, "/v1/optimize", upstreamBody)
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
-}
-
-func (h *handler) getOptimizationRun(writer http.ResponseWriter, request *http.Request, session bffSession, runID string) {
-	if !isLowerUUIDv7(runID) || h.intelligence.optimizationBaseURL == "" {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization run was not found.", false, nil)
-		return
-	}
-	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
-	if !ok {
-		return
-	}
-	siteIDs := make([]string, 0, len(allowedSites))
-	for siteID := range allowedSites {
-		siteIDs = append(siteIDs, siteID)
-	}
-	sort.Strings(siteIDs)
-	if len(siteIDs) == 0 {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization run was not found.", false, nil)
-		return
-	}
-	internalPath := "/v1/optimization/runs/" + url.PathEscape(runID)
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.optimizationBaseURL+internalPath, nil, map[string]string{
-		"X-Tenant-ID": session.TenantID, "X-Authorized-Site-IDs": strings.Join(siteIDs, ","),
-	})
-	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
 
 // ownerContext signs the context an intelligence owner serves: one action on one Tenant and Site,
