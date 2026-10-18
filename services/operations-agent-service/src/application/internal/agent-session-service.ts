@@ -271,25 +271,28 @@ export const createAgentSessionService = ({
   };
 
   // A question and the Run it starts share one time, so the panel never orders the answer first.
-  const createRunningRun = (sessionId: string, startedAt: number): AgentRun => Object.freeze({
-    id: nextId('run'),
-    sessionId,
-    modelRef,
-    status: 'RUNNING',
-    startedAt,
-    finishedAt: null,
-    usage: Object.freeze({ inputTokens: 0, outputTokens: 0, modelCalls: 0, toolCalls: 0 }),
-    failureCode: null,
-  });
-
-  const createOperatorMessage = (sessionId: string, content: string, createdAt: number) => Object.freeze({
-    id: nextId('message'),
-    sessionId,
-    runId: null,
-    role: 'OPERATOR' as const,
-    content,
-    createdAt,
-  });
+  const askQuestion = (sessionId: string, content: string) => {
+    const at = now();
+    const run: AgentRun = Object.freeze({
+      id: nextId('run'),
+      sessionId,
+      modelRef,
+      status: 'RUNNING',
+      startedAt: at,
+      finishedAt: null,
+      usage: Object.freeze({ inputTokens: 0, outputTokens: 0, modelCalls: 0, toolCalls: 0 }),
+      failureCode: null,
+    });
+    const operatorMessage = Object.freeze({
+      id: nextId('message'),
+      sessionId,
+      runId: null,
+      role: 'OPERATOR' as const,
+      content,
+      createdAt: at,
+    });
+    return { at, run, operatorMessage };
+  };
 
   const scopedGet = async (
     context: AgentSessionAccessContext,
@@ -304,8 +307,7 @@ export const createAgentSessionService = ({
       const context = requireContext(rawContext);
       const message = requireMessage(input.message);
       const sessionId = nextId('session');
-      const askedAt = now();
-      const run = createRunningRun(sessionId, askedAt);
+      const { run, operatorMessage } = askQuestion(sessionId, message);
       const started = await lifecycle.start({
         session: Object.freeze({
           id: sessionId,
@@ -317,7 +319,7 @@ export const createAgentSessionService = ({
         }),
         expectedSessionRevision: null,
         run,
-        operatorMessage: createOperatorMessage(sessionId, message, askedAt),
+        operatorMessage,
       });
       launch(context, started, run);
       return started;
@@ -337,8 +339,7 @@ export const createAgentSessionService = ({
       const state = await scopedGet(context, input.sessionId);
       requireRevision(input.expectedRevision);
       const message = requireMessage(input.message);
-      const askedAt = now();
-      const run = createRunningRun(state.session.id, askedAt);
+      const { run, operatorMessage } = askQuestion(state.session.id, message);
       const started = await lifecycle.start({
         session: Object.freeze({
           id: state.session.id,
@@ -350,7 +351,7 @@ export const createAgentSessionService = ({
         }),
         expectedSessionRevision: input.expectedRevision,
         run,
-        operatorMessage: createOperatorMessage(state.session.id, message, askedAt),
+        operatorMessage,
       });
       launch(context, started, run);
       return started;
@@ -397,13 +398,12 @@ export const createAgentSessionService = ({
       const displayValue = request.request.response.kind === 'SINGLE_SELECT'
         ? request.request.response.choices.find((choice) => choice.value === value)?.label ?? value
         : value;
-      const answeredAt = now();
-      const run = createRunningRun(state.session.id, answeredAt);
+      const { at: answeredAt, run, operatorMessage } = askQuestion(state.session.id, displayValue);
       const continued = await lifecycle.continueWithInput({
         sessionId: state.session.id,
         expectedSessionRevision: input.expectedRevision,
         run,
-        operatorMessage: createOperatorMessage(state.session.id, displayValue, answeredAt),
+        operatorMessage,
         inputResponse: Object.freeze({
           id: nextId('artifact'),
           sessionId: state.session.id,

@@ -15,9 +15,8 @@ export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { 
   })).values()];
 
   return (
-    <section aria-label="结论" className="flex flex-col gap-3 rounded-lg border bg-card p-3.5" data-testid="assistant-finding">
+    <section aria-label="回答依据" className="flex flex-col gap-3 rounded-lg border bg-card p-3.5" data-testid="assistant-finding">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-muted-foreground">结论</span>
         <Badge variant={supported ? 'secondary' : 'outline'}>{supported ? '有数据依据' : '数据不足以下结论'}</Badge>
       </div>
       {finding.keyFigures !== undefined && finding.keyFigures.length > 0 ? (
