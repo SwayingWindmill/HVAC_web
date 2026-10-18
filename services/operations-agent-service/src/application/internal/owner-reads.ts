@@ -126,12 +126,42 @@ export interface SemanticQueryReadRequest {
   };
 }
 
+/** A Site's alarms from the alarm owner, active or recently cleared (#594). */
+export interface AlarmListReadRequest {
+  readonly requestId: string;
+  readonly tool: 'alarm.listAlarms';
+  readonly input: {
+    readonly siteId: string;
+    readonly condition: 'ACTIVE' | 'CLEARED';
+    readonly limit: number;
+  };
+}
+
+/** What the alarm Tool tells an operator about each alarm; the owner keeps the rest. */
+export interface AlarmListResult {
+  readonly schemaVersion: 1;
+  readonly items: readonly {
+    readonly deviceId?: string;
+    readonly title: string;
+    readonly summary: string;
+    readonly condition: 'ACTIVE' | 'CLEARED';
+    readonly currentSeverity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
+    readonly acknowledgement?: object;
+    readonly occurrenceCount: number;
+    readonly firstOccurredAt: string;
+    readonly lastOccurredAt: string;
+    readonly clearedAt?: string;
+  }[];
+  readonly hasMore: boolean;
+}
+
 export type ToolAuthorizableReadRequest =
   | RegistryReadRequest
   | DeviceTelemetryReadRequest
   | TelemetryHistoryReadRequest
   | EnergyAnalyticsReadRequest
-  | SemanticQueryReadRequest;
+  | SemanticQueryReadRequest
+  | AlarmListReadRequest;
 
 /** The semantic query's answer: titled columns and rows in column order, nulls kept as unknown. */
 export interface SemanticQueryResult {
@@ -191,7 +221,7 @@ export interface EnergySeries {
 
 export interface OwnerReadResult {
   readonly requestId: string;
-  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service';
+  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service' | 'alarm-service';
   readonly scope: OwnerScope;
   readonly revision: string;
   readonly quality: 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
@@ -257,4 +287,8 @@ export interface EnergyAnalyticsReader {
 
 export interface SemanticQueryReader {
   read(input: OwnerReadInput<SemanticQueryReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface AlarmReader {
+  read(input: OwnerReadInput<AlarmListReadRequest>): Promise<OwnerReadResult>;
 }

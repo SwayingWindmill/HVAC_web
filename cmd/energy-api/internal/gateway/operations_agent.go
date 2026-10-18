@@ -218,9 +218,12 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		siteID, analytics = scope.SiteID, &scope
 	case "alarm.listAlarms":
 		var alarmInput struct {
-			SiteID string `json:"siteId"`
+			SiteID    string `json:"siteId"`
+			Condition string `json:"condition"`
+			Limit     int    `json:"limit"`
 		}
-		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil {
+		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil ||
+			(alarmInput.Condition != "ACTIVE" && alarmInput.Condition != "CLEARED") || alarmInput.Limit < 1 || alarmInput.Limit > 200 {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Alarm list request is invalid.", false, nil)
 			return
 		}

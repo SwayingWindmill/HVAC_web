@@ -638,7 +638,7 @@ func TestOperationsToolAuthorizationGrantsAnAlarmListOnlyForTheOperatorsSite(t *
 	fixture := newOperationsGatewayFixture(t, 30)
 	serviceGrant := fixture.serviceDelegation(t)
 	body := func(requestID, siteID string) string {
-		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"alarm.listAlarms","input":{"siteId":"` + siteID + `"}}}`
+		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"alarm.listAlarms","input":{"siteId":"` + siteID + `","condition":"ACTIVE","limit":50}}}`
 	}
 	response := fixture.authorizeTool(t, body("alarm-001", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service")
 	if response.Code != http.StatusOK {

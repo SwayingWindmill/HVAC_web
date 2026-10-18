@@ -28,6 +28,10 @@ export {
   type SemanticQueryOwnerReaderConfig,
 } from './internal/semantic-query-owner-reader.js';
 export {
+  createAlarmOwnerReader,
+  type AlarmOwnerReaderConfig,
+} from './internal/alarm-owner-reader.js';
+export {
   createGatewayToolAuthorizationReader,
   type GatewayToolAuthorizationReaderConfig,
 } from './internal/gateway-tool-authorization-reader.js';

@@ -28,6 +28,9 @@ import {
   type ToolAuthorizableReadRequest,
   type RegistryReader,
   type ToolAuthorizationReader,
+  type AlarmListReadRequest,
+  type AlarmListResult,
+  type AlarmReader,
 } from '../../application/index.js';
 import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
@@ -44,6 +47,7 @@ export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'energy_compare_periods',
   'energy_by_equipment',
   'energy_semantic_query',
+  'alarm_list',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -67,6 +71,7 @@ export interface CreateHvacReadToolsInput {
   readonly telemetryHistoryReader: TelemetryHistoryReader;
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly semanticQueryReader: SemanticQueryReader;
+  readonly alarmReader: AlarmReader;
   readonly limits?: Partial<HvacReadToolLimits>;
   /** The clock site_get_context reads the Site's local date and time from. */
   readonly now?: () => number;
@@ -88,10 +93,20 @@ const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.r
 const HISTORY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.history.read']);
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
 const EQUIPMENT_ENERGY_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read', 'analytics.energy-series.read']);
+const ALARM_CAPABILITIES = Object.freeze(['site.read', 'alarm.read']);
+const ALARM_LIST_LIMIT = 50;
 
 const emptyInputSchema = Object.freeze({
   type: 'object',
   properties: Object.freeze({}),
+  additionalProperties: false,
+});
+
+const alarmInputSchema = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    status: Object.freeze({ type: 'string', enum: Object.freeze(['active', 'cleared']), description: 'active（默认）是正在发生的告警，cleared 是最近已恢复的。' }),
+  }),
   additionalProperties: false,
 });
 
@@ -1000,6 +1015,41 @@ const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
 );
 
 /** The Site total split by sub-metered device, largest first, each named from the asset model. */
+// Alarms as the 告警 page names them (#594).
+const SEVERITY_WORDS = Object.freeze({ CRITICAL: '紧急', MAJOR: '重要', MINOR: '次要', WARNING: '预警', INFO: '提示' } as const);
+const ALARM_STATUS = Object.freeze({ active: { condition: 'ACTIVE', words: '正在发生', none: '当前没有正在发生的告警' }, cleared: { condition: 'CLEARED', words: '已恢复', none: '最近没有已恢复的告警' } } as const);
+const ALARM_REFUSAL = '告警参数有误：只接受 status，取值 active（正在发生，默认）或 cleared（最近已恢复）。';
+
+const parseAlarmArguments = (value: unknown): keyof typeof ALARM_STATUS => {
+  const record = requireRecord(value, ALARM_REFUSAL);
+  if (!hasOnlyKeys(record, ['status']) || (record.status !== undefined && record.status !== 'active' && record.status !== 'cleared')) {
+    fail('TOOL_ARGUMENTS_INVALID', ALARM_REFUSAL);
+  }
+  return (record.status ?? 'active') as keyof typeof ALARM_STATUS;
+};
+
+const alarmsPayloadFrom = (result: OwnerReadResult): AlarmListResult => {
+  const payload = result.payload as AlarmListResult;
+  if (payload.schemaVersion !== 1 || !Array.isArray(payload.items)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload;
+};
+
+const readAlarms = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  alarms: AlarmReader,
+  condition: 'ACTIVE' | 'CLEARED',
+): Promise<AlarmListResult> => {
+  const draft = {
+    tool: 'alarm.listAlarms' as const,
+    input: { siteId: context.siteId, condition, limit: ALARM_LIST_LIMIT },
+  };
+  const request: AlarmListReadRequest = { ...draft, requestId: requestIdFor(context, 'alarm_list', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  return alarmsPayloadFrom(await alarms.read({ request, context: ownerContext }));
+};
+
 const readEquipmentEnergy = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
@@ -1102,6 +1152,7 @@ export const createHvacReadTools = ({
   telemetryHistoryReader,
   energyAnalyticsReader,
   semanticQueryReader,
+  alarmReader,
   limits: inputLimits,
   now = Date.now,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
@@ -1313,6 +1364,47 @@ export const createHvacReadTools = ({
     },
   });
 
+  const alarmTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'alarm_list',
+      '列出当前站点的告警：默认是正在发生的告警，status 用 cleared 看最近已恢复的。每条有标题、说明、严重程度、设备、开始和最近发生的时间、发生次数、是否已确认，最多 50 条。',
+      alarmInputSchema,
+      ALARM_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      const status = ALARM_STATUS[parseAlarmArguments(argumentsValue)];
+      assertExecutionCapability(context, ALARM_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const timezone = sitePayload.site.timezone;
+        const list = await readAlarms(context, authorization, toolAuthorizationReader, alarmReader, status.condition);
+        // Each machine by the name the pages use, when the operator may read the device list.
+        const devices = new Map<string, string>(
+          list.items.some((alarm) => alarm.deviceId !== undefined) && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+            ? describeEquipment((await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model)
+              .map((device) => [device.deviceId, device.name])
+            : [],
+        );
+        const note = list.items.length === 0 ? status.none : list.hasMore ? `只列出最近 ${ALARM_LIST_LIMIT} 条，还有更多` : undefined;
+        return assertResultBytes({
+          status: status.words,
+          alarms: list.items.map((alarm) => ({
+            title: alarm.title,
+            summary: alarm.summary,
+            severity: SEVERITY_WORDS[alarm.currentSeverity],
+            ...(alarm.deviceId === undefined ? {} : { device: devices.get(alarm.deviceId) ?? '未登记的设备' }),
+            since: siteTime(alarm.firstOccurredAt, timezone),
+            latest: siteTime(alarm.lastOccurredAt, timezone),
+            ...(alarm.clearedAt === undefined ? {} : { clearedAt: siteTime(alarm.clearedAt, timezone) }),
+            times: alarm.occurrenceCount,
+            handled: alarm.acknowledgement === undefined ? '未确认' : '已确认',
+          })),
+          ...(note === undefined ? {} : { note }),
+        }, limits);
+      });
+    },
+  });
+
   const semanticQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_semantic_query',
@@ -1359,5 +1451,6 @@ export const createHvacReadTools = ({
     energyCompareTool,
     equipmentEnergyTool,
     semanticQueryTool,
+    alarmTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));
 };

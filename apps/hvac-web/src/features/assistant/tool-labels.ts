@@ -8,6 +8,7 @@ interface ToolPresentation {
 
 const ENERGY_PAGE = { label: '能耗分析', to: '/energy-analysis/consumption' } as const;
 const DEVICES_PAGE = { label: '系统与设备', to: '/operations/systems-devices' } as const;
+const ALARMS_PAGE = { label: '告警', to: '/operations/alarms' } as const;
 
 const tools: Record<string, ToolPresentation> = {
   site_get_context: { label: '读取站点信息', page: null },
@@ -19,6 +20,7 @@ const tools: Record<string, ToolPresentation> = {
   energy_compare_periods: { label: '对比两个时段', page: ENERGY_PAGE },
   energy_by_equipment: { label: '读取各设备用电', page: ENERGY_PAGE },
   energy_semantic_query: { label: '查询能耗指标', page: ENERGY_PAGE },
+  alarm_list: { label: '读取告警', page: ALARMS_PAGE },
 };
 
 export const toolPresentation = (toolName: string): ToolPresentation => (
