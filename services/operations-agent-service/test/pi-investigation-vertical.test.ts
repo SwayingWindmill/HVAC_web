@@ -999,3 +999,28 @@ test('asking the operator a question does not let a claim of operating equipment
   assert.equal(result.runStatus, 'COMPLETED');
   assert.equal(result.artifacts.at(-1).kind, 'INPUT_REQUEST');
 });
+
+// #607: words a model writes in a turn that also reads data are process talk ("I'll start by
+// reading…"), not the answer; they are not kept. A card limitation that restates the answer is
+// dropped; one that adds something stays.
+test('process talk beside a read is not kept, and the card drops a limitation the answer already says', async () => {
+  const siteTool = projectTool('site_get_context', async () => ({ site: { name: '松雅轩', localNow: '2026-10-18 10:00' } }));
+  const answer = '10 月 14 日 14–16 点、20 点没有读数，这天的综合能效不完整，没法判断原因。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: "I'll start by reading the site context." }, { type: 'tool-call', id: 'site-1', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
+    {
+      parts: [{ type: 'text', text: answer }, {
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], recommendedNext: [],
+          limitations: ['10 月 14 日 14–16 点和 20 点没有读数，这天的综合能效不完整。', '没有室外温度数据，不能判断负荷变化是不是天气原因。'],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], [siteTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
+  assert.deepEqual(result.artifacts.at(-1).finding.limitations, ['没有室外温度数据，不能判断负荷变化是不是天气原因。']);
+});

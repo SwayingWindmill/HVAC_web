@@ -9,6 +9,8 @@ import type { Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import {
   HVAC_AGENT_EVENT_VERSION,
+  INVESTIGATION_COMPLETE_TOOL_NAME,
+  INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   NOOP_AGENT_RUNTIME_TELEMETRY,
   type AgentArtifact,
   type AgentEngine,
@@ -108,6 +110,14 @@ const textFromAssistantMessage = (message: Extract<PiAgentEvent, { type: 'messag
     .map((block) => block.text)
     .join('\n');
 };
+
+// Words written in a turn that also reads data are process talk ("I'll start by reading…"), not
+// the answer; only a turn that reads nothing (it answers, and may close the Run) is kept (#607).
+const readsData = (message: Extract<PiAgentEvent, { type: 'message_end' }>['message']): boolean => (
+  message.role === 'assistant'
+  && message.content.some((block) => block.type === 'toolCall'
+    && block.name !== INVESTIGATION_COMPLETE_TOOL_NAME && block.name !== INVESTIGATION_REQUEST_INPUT_TOOL_NAME)
+);
 
 const EMPTY_PI_USAGE = Object.freeze({
   input: 0,
@@ -360,7 +370,7 @@ export const createPiAgentEngine = ({
           }
           if (inputTokens >= input.budget.maxInputTokens) markBudgetFailure('INPUT_TOKEN_LIMIT');
           if (outputTokens >= input.budget.maxOutputTokens) markBudgetFailure('OUTPUT_TOKEN_LIMIT');
-          if (!input.signal.aborted && activeAssistantMessageId !== null) {
+          if (!input.signal.aborted && activeAssistantMessageId !== null && !readsData(event.message)) {
             const content = textFromAssistantMessage(event.message);
             if (content.length > 0) {
               finalizedMessages.push(Object.freeze({

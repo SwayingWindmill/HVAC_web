@@ -191,6 +191,25 @@ const adaptProjectTool = (
   },
 });
 
+// A card limitation restates the answer when most of its Chinese character pairs are in it; the
+// card shows only what the answer does not already say (#607).
+const characterPairs = (text: string): Set<string> => {
+  const characters = [...text.matchAll(/\p{Script=Han}/gu)].map(([character]) => character).join('');
+  const pairs = new Set<string>();
+  for (let index = 0; index < characters.length - 1; index += 1) pairs.add(characters.slice(index, index + 2));
+  return pairs;
+};
+const RESTATED_SHARE = 0.6;
+const withoutRestatedLimitations = <T extends { readonly limitations: readonly string[] }>(finding: T, answer: string): T => {
+  const answerPairs = characterPairs(answer);
+  const limitations = finding.limitations.filter((limitation) => {
+    const own = characterPairs(limitation);
+    const shared = [...own].filter((pair) => answerPairs.has(pair)).length;
+    return own.size === 0 || shared / own.size < RESTATED_SHARE;
+  });
+  return limitations.length === finding.limitations.length ? finding : Object.freeze({ ...finding, limitations: Object.freeze(limitations) });
+};
+
 const createInvestigationCompleteTool = ({
   sessionId,
   runId,
@@ -218,7 +237,7 @@ const createInvestigationCompleteTool = ({
       sessionId,
       runId,
       kind: 'FINDING',
-      finding,
+      finding: withoutRestatedLimitations(finding, answers().join('\n')),
       createdAt: Date.now(),
     } as const);
     onArtifact(artifact);
