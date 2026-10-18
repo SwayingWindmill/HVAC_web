@@ -646,7 +646,7 @@ func dispatchWorkOrderReadRoute(h *handler, writer http.ResponseWriter, request 
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved."))
 		return
 	}
-	readContext, failure := h.signWorkOrderReadContext(session, route, decision, site.TenantID)
+	readContext, failure := h.signWorkOrderReadContext(session, route, decision, site.TenantID, h.identity.config.ExecutingWorkloadSPIFFE)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
@@ -869,7 +869,9 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	return decision, nil
 }
 
-func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, tenantID string) (string, *workOrderFailure) {
+// signWorkOrderReadContext signs the context the work-order owner reads, naming the workload that
+// presents it: the Gateway for the pages, the Operations Agent for its list (#595).
+func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, tenantID, presenter string) (string, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := workOrderUnavailable("Work Order read context signing is unavailable.")
 		return "", &failure
@@ -886,7 +888,7 @@ func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkO
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
-		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: presenter,
 		Audience: h.workOrder.backendAudience, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),

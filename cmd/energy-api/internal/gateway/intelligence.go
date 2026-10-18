@@ -349,7 +349,7 @@ func (h *handler) validateFDDWorkOrder(request *http.Request, session bffSession
 		unavailable := workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved.")
 		return &unavailable
 	}
-	readContext, failure := h.signWorkOrderReadContext(session, route, decision, site.TenantID)
+	readContext, failure := h.signWorkOrderReadContext(session, route, decision, site.TenantID, h.identity.config.ExecutingWorkloadSPIFFE)
 	if failure != nil {
 		return failure
 	}

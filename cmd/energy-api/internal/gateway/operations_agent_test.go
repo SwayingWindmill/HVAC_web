@@ -21,6 +21,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 )
 
 type fakeOperationsRateLimiter struct {
@@ -87,7 +88,8 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		},
 		Analytics: &AnalyticsConfig{QueryAudience: "telemetry-query-service"},
 		// The Agent reads alarms from the owner itself; the Gateway only authorizes.
-		Alarm: &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
+		Alarm:     &AlarmConfig{BackendBaseURL: "https://alarm.example.test"},
+		WorkOrder: &WorkOrderConfig{BackendBaseURL: "https://work-order.example.test"},
 		// FDD is read by the Gateway for the pages and by the Agent with a Gateway-signed context.
 		Intelligence: &IntelligenceConfig{
 			FDDBaseURL: "https://fdd.example.test", FDDHTTPClient: fddUpstream(&fixture.lastFDD),
@@ -220,6 +222,21 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				delegation = unsignedTelemetryGrant(claims)
 			}
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: delegation}), nil
+		case workOrderDecisionPath:
+			var input workorderauth.DecisionRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != workorderauth.ActionList || input.WorkOrderID != "" {
+				t.Fatal("invalid Work Order authorization request")
+			}
+			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
+			decision := workorderauth.Decision{
+				Allowed: allowed, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
+				SiteID: input.SiteID, Action: input.Action, PolicyRevision: "work-order-access:1", ReasonCode: workorderauth.ReasonDenyScope,
+				DecidedAt: now.Format(time.RFC3339Nano),
+			}
+			if allowed {
+				decision.PrincipalID, decision.ReasonCode = "018f3e00-5000-7000-8000-000000000001", workorderauth.ReasonAllowExactScope
+			}
+			return telemetryJSONResponse(http.StatusOK, workorderauth.DecisionResponse{Decision: decision}), nil
 		case alarmDecisionPath:
 			if len(parent.Actions) != 1 || parent.Actions[0] != "alarm:authorize" {
 				t.Fatalf("unexpected Alarm parent claims: %+v", parent)
@@ -675,5 +692,42 @@ func TestOperationsToolAuthorizationGrantsAnAlarmListOnlyForTheOperatorsSite(t *
 	fixture.denySite.Store(true)
 	if denied := fixture.authorizeTool(t, body("alarm-003", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service"); denied.Code != http.StatusNotFound {
 		t.Fatalf("a Site whose alarms the operator may not read must be not found, got %d", denied.Code)
+	}
+}
+
+// #595: the Agent lists the operator's Site's work orders from the owner with a context naming it.
+func TestOperationsToolAuthorizationGrantsAWorkOrderListOnlyForTheOperatorsSite(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	body := func(requestID, siteID string) string {
+		return `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"` + requestID + `","tool":"workorder.listWorkOrders","input":{"siteId":"` + siteID + `","status":"OPEN","limit":50}}}`
+	}
+	response := fixture.authorizeTool(t, body("work-order-001", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected a work-order list grant, got %d: %s", response.Code, response.Body.String())
+	}
+	var issued operationsToolAuthorizationResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, issued.DelegationGrant)
+	if err != nil {
+		t.Fatalf("invalid work-order delegation: %v", err)
+	}
+	if claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" || claims.Audience != "work-order-service" ||
+		len(claims.Actions) != 1 || claims.Actions[0] != "work-order:list" ||
+		len(claims.Scopes) != 2 || claims.Scopes[0] != "tenant:"+fixture.tenantID || claims.Scopes[1] != "site:"+fixture.siteID {
+		t.Fatalf("work-order list grant is not exact: %+v", claims)
+	}
+
+	decisions := fixture.iamCalls.Load()
+	elsewhere := fixture.authorizeTool(t, body("work-order-002", "018f1e00-1000-7000-8000-0000000000ff"), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if elsewhere.Code != http.StatusForbidden || strings.Contains(elsewhere.Body.String(), "delegationGrant") || fixture.iamCalls.Load() != decisions {
+		t.Fatalf("another Site's work orders got %d (IAM calls %d→%d)", elsewhere.Code, decisions, fixture.iamCalls.Load())
+	}
+
+	fixture.denySite.Store(true)
+	if denied := fixture.authorizeTool(t, body("work-order-003", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service"); denied.Code != http.StatusNotFound {
+		t.Fatalf("a Site whose work orders the operator may not read must be not found, got %d", denied.Code)
 	}
 }
