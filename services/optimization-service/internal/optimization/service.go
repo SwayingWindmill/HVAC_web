@@ -178,10 +178,6 @@ func (service *Service) Optimize(ctx context.Context, request Request) (Recommen
 	return recommendation, nil
 }
 
-func (service *Service) GetRecommendation(ctx context.Context, tenantID, siteID, runID string) (PublishedRecommendation, error) {
-	return service.publication.GetRecommendation(ctx, tenantID, siteID, runID)
-}
-
 func (service *Service) LatestRecommendation(ctx context.Context, tenantID, siteID string) (PublishedRecommendation, error) {
 	return service.publication.LatestRecommendation(ctx, tenantID, siteID)
 }

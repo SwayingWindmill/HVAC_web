@@ -31,7 +31,6 @@ type EvaluationPublicationStore interface {
 	CompletePublication(context.Context, Evaluation, time.Time) error
 	FailRun(context.Context, Request, string, time.Time) error
 	ListStalePublications(context.Context, time.Time, int) ([]Evaluation, error)
-	GetRecommendation(context.Context, string, string, string) (PublishedRecommendation, error)
 	LatestRecommendation(context.Context, string, string) (PublishedRecommendation, error)
 }
 

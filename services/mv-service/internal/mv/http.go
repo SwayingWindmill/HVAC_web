@@ -184,7 +184,8 @@ func viewOf(verified VerifiedMeasure, withDays bool) measureView {
 }
 
 func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Request) {
-	ledger, err := handler.service.Ledger(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID)
+	site := siteOf(request)
+	ledger, err := handler.service.Ledger(request.Context(), site.TenantID, site.SiteID)
 	if err != nil {
 		writeMVError(writer, err)
 		return
@@ -197,7 +198,8 @@ func (handler *HTTPHandler) list(writer http.ResponseWriter, request *http.Reque
 }
 
 func (handler *HTTPHandler) detail(writer http.ResponseWriter, request *http.Request) {
-	verified, err := handler.service.Verified(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"))
+	site := siteOf(request)
+	verified, err := handler.service.Verified(request.Context(), site.TenantID, site.SiteID, request.PathValue("measureId"))
 	if err != nil {
 		writeMVError(writer, err)
 		return
@@ -206,6 +208,7 @@ func (handler *HTTPHandler) detail(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.Request) {
+	site := siteOf(request)
 	var input struct {
 		Name              string    `json:"name"`
 		Kind              Kind      `json:"kind"`
@@ -222,9 +225,9 @@ func (handler *HTTPHandler) register(writer http.ResponseWriter, request *http.R
 		return
 	}
 	measure, err := handler.service.Register(request.Context(), MeasureInput{
-		TenantID: siteOf(request).TenantID, SiteID: siteOf(request).SiteID, Name: input.Name, Kind: input.Kind,
+		TenantID: site.TenantID, SiteID: site.SiteID, Name: input.Name, Kind: input.Kind,
 		Description: input.Description, PlannedAt: input.PlannedAt, InvestmentCNY: input.InvestmentCNY,
-		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: siteOf(request).Subject,
+		ExpectedAnnualKWh: input.ExpectedAnnualKWh, Evidence: input.Evidence, EvidenceCommandID: input.EvidenceCommandID, BoundaryDeviceID: input.BoundaryDeviceID, Actor: site.Subject,
 	})
 	if err != nil {
 		writeMVError(writer, err)
@@ -253,37 +256,41 @@ func (handler *HTTPHandler) transition(writer http.ResponseWriter, request *http
 }
 
 func (handler *HTTPHandler) implement(writer http.ResponseWriter, request *http.Request) {
+	site := siteOf(request)
 	var input struct {
 		ImplementedAt time.Time `json:"implementedAt"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.Implement(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.ImplementedAt, siteOf(request).Subject)
+		return handler.service.Implement(request.Context(), site.TenantID, site.SiteID, request.PathValue("measureId"), input.ImplementedAt, site.Subject)
 	})
 }
 
 func (handler *HTTPHandler) refit(writer http.ResponseWriter, request *http.Request) {
+	site := siteOf(request)
 	var input struct {
 		From time.Time `json:"from"`
 		To   time.Time `json:"to"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.Refit(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.From, input.To, siteOf(request).Subject)
+		return handler.service.Refit(request.Context(), site.TenantID, site.SiteID, request.PathValue("measureId"), input.From, input.To, site.Subject)
 	})
 }
 
 func (handler *HTTPHandler) end(writer http.ResponseWriter, request *http.Request) {
+	site := siteOf(request)
 	var input struct {
 		EndedAt time.Time `json:"endedAt"`
 	}
 	handler.transition(writer, request, &input, func() (Measure, error) {
-		return handler.service.End(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, request.PathValue("measureId"), input.EndedAt, siteOf(request).Subject)
+		return handler.service.End(request.Context(), site.TenantID, site.SiteID, request.PathValue("measureId"), input.EndedAt, site.Subject)
 	})
 }
 
 // summary totals the Site's verified days in [from, to], given as Site-local dates.
 func (handler *HTTPHandler) summary(writer http.ResponseWriter, request *http.Request) {
+	site := siteOf(request)
 	query := request.URL.Query()
-	totals, err := handler.service.Savings(request.Context(), siteOf(request).TenantID, siteOf(request).SiteID, query.Get("from"), query.Get("to"))
+	totals, err := handler.service.Savings(request.Context(), site.TenantID, site.SiteID, query.Get("from"), query.Get("to"))
 	if err != nil {
 		writeMVError(writer, err)
 		return

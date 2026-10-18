@@ -32,7 +32,6 @@ type HTTPHandler struct {
 	service  *Service
 	preparer *Preparer
 	verifier identitycontext.SiteContextVerifier
-	gateway  string
 }
 
 func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http.Handler, error) {
@@ -44,7 +43,7 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	if err := verifier.Validate(); err != nil {
 		return nil, err
 	}
-	handler := &HTTPHandler{service: service, preparer: preparer, verifier: verifier, gateway: gateway}
+	handler := &HTTPHandler{service: service, preparer: preparer, verifier: verifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/optimize", handler.guard(WriteAction, handler.handleOptimize))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/recommendations/latest", handler.guard(ReadAction, handler.handleLatestRecommendation))
@@ -63,7 +62,7 @@ func HealthHandler() http.Handler {
 
 func (handler *HTTPHandler) guard(action string, next func(http.ResponseWriter, *http.Request, identitycontext.SiteContext)) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		site, err := handler.verifier.Verify(request, action, handler.gateway)
+		site, err := handler.verifier.Verify(request, action, handler.verifier.Issuer)
 		if errors.Is(err, identitycontext.ErrSiteContextWorkload) {
 			writeJSONError(writer, http.StatusForbidden, "optimization_workload_forbidden")
 			return

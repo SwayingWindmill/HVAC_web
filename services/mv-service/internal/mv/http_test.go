@@ -44,10 +44,16 @@ func presented(t *testing.T, method, path, body, peer, presenter, action, tenant
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	uri, _ := url.Parse(peer)
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+	request.Header.Set(ContextHeader, signContext(t, presenter, Audience, action, tenantID, siteID, subject))
+	return request
+}
+
+func signContext(t *testing.T, presenter, audience, action, tenantID, siteID, subject string) string {
+	t.Helper()
 	now := time.Now()
 	token, err := identitycontext.SignDelegation(testGatewaySigner, identitycontext.DelegationClaims{
 		Issuer: testGatewaySPIFFE, Subject: subject, SubjectIssuer: "https://identity.example.test",
-		ExecutingService: presenter, Audience: Audience, TenantID: tenantID,
+		ExecutingService: presenter, Audience: audience, TenantID: tenantID,
 		Actions: []string{action}, Scopes: []string{"tenant:" + tenantID, "site:" + siteID},
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
 		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-1",
@@ -55,8 +61,7 @@ func presented(t *testing.T, method, path, body, peer, presenter, action, tenant
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set(ContextHeader, token)
-	return request
+	return token
 }
 
 // call is the Gateway asking for testActor on testTenant's testSite: a read for GET, a write otherwise.
@@ -86,10 +91,16 @@ func TestSavingsServesOnlyTheGatewayWithAContextForTheSite(t *testing.T) {
 	register := `{"name":"提高冷冻水供水温度","kind":"SETPOINT_RESET","plannedAt":"2026-10-15T09:00:00+08:00"}`
 	other := "spiffe://hvac.local/telemetry-worker"
 	otherSite := "01990000-5000-7000-8000-0000000000ff"
+	elsewhere := presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite, testActor)
+	elsewhere.Header.Set(ContextHeader, signContext(t, testGatewaySPIFFE, "fdd-service", WriteAction, testTenant, testSite, testActor))
+	uncontexted := presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite, testActor)
+	uncontexted.Header.Del(ContextHeader)
 	for name, request := range map[string]*http.Request{
-		"another workload":           presented(t, http.MethodPost, base, register, other, other, WriteAction, testTenant, testSite, testActor),
-		"a read context":             presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite, testActor),
-		"a context for another Site": presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, otherSite, testActor),
+		"a context for another owner":   elsewhere,
+		"the Gateway without a context": uncontexted,
+		"another workload":              presented(t, http.MethodPost, base, register, other, other, WriteAction, testTenant, testSite, testActor),
+		"a read context":                presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite, testActor),
+		"a context for another Site":    presented(t, http.MethodPost, base, register, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, otherSite, testActor),
 	} {
 		if status, _ := serve(handler, request); status != http.StatusForbidden {
 			t.Fatalf("%s registered a measure: %d", name, status)

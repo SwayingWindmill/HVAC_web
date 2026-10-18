@@ -29,7 +29,6 @@ type AuthConfig struct {
 type HTTPHandler struct {
 	service  *Service
 	verifier identitycontext.SiteContextVerifier
-	gateway  string
 }
 
 func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
@@ -41,7 +40,7 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	if err := verifier.Validate(); err != nil {
 		return nil, err
 	}
-	handler := &HTTPHandler{service: service, verifier: verifier, gateway: gateway}
+	handler := &HTTPHandler{service: service, verifier: verifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sites/{siteId}/forecast/load", handler.guard(func(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
 		handler.handleLatestForecast(writer, request, site, "SITE_LOAD")
@@ -64,7 +63,7 @@ func HealthHandler() http.Handler {
 
 func (handler *HTTPHandler) guard(next func(http.ResponseWriter, *http.Request, identitycontext.SiteContext)) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		site, err := handler.verifier.Verify(request, ReadAction, handler.gateway)
+		site, err := handler.verifier.Verify(request, ReadAction, handler.verifier.Issuer)
 		if errors.Is(err, identitycontext.ErrSiteContextWorkload) {
 			writeJSONError(writer, http.StatusForbidden, "forecast_workload_forbidden")
 			return

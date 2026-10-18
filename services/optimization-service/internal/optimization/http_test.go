@@ -43,6 +43,8 @@ type optimizationFixture struct {
 	prepared *preparationStoreStub
 	signer   *ecdsa.PrivateKey
 	now      time.Time
+	// audience the contexts are signed for; Optimization's own unless a test changes it.
+	audience string
 }
 
 func newOptimizationFixture(t *testing.T) optimizationFixture {
@@ -72,11 +74,12 @@ func newOptimizationFixture(t *testing.T) optimizationFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return optimizationFixture{handler: handler, prepared: store, signer: signer, now: at}
+	return optimizationFixture{handler: handler, prepared: store, signer: signer, now: at, audience: Audience}
 }
 
-// call presents a context signed for presenter, action, Tenant and Site from the peer workload.
-// It also sends the X-Tenant-ID a caller could always write; that must decide nothing.
+// call presents a context signed for presenter, action, Tenant and Site from the peer workload, or
+// none when action is empty. It also sends the X-Tenant-ID a caller could always write; that must
+// decide nothing.
 func (fixture optimizationFixture) call(t *testing.T, method, path, body, peer, presenter, action, tenantID, siteID string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
@@ -87,17 +90,19 @@ func (fixture optimizationFixture) call(t *testing.T, method, path, body, peer, 
 	uri, _ := url.Parse(peer)
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
 	request.Header.Set("X-Tenant-ID", testTenant)
-	token, err := identitycontext.SignDelegation(fixture.signer, identitycontext.DelegationClaims{
-		Issuer: testGatewaySPIFFE, Subject: "operator", SubjectIssuer: "https://identity.example.test",
-		ExecutingService: presenter, Audience: Audience, TenantID: tenantID,
-		Actions: []string{action}, Scopes: []string{"tenant:" + tenantID, "site:" + siteID},
-		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: fixture.now.Add(-time.Second).Unix(),
-		ExpiresAt: fixture.now.Add(30 * time.Second).Unix(), TokenID: "token-1",
-	})
-	if err != nil {
-		t.Fatal(err)
+	if action != "" {
+		token, err := identitycontext.SignDelegation(fixture.signer, identitycontext.DelegationClaims{
+			Issuer: testGatewaySPIFFE, Subject: "operator", SubjectIssuer: "https://identity.example.test",
+			ExecutingService: presenter, Audience: fixture.audience, TenantID: tenantID,
+			Actions: []string{action}, Scopes: []string{"tenant:" + tenantID, "site:" + siteID},
+			PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: fixture.now.Add(-time.Second).Unix(),
+			ExpiresAt: fixture.now.Add(30 * time.Second).Unix(), TokenID: "token-1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set(ContextHeader, token)
 	}
-	request.Header.Set(ContextHeader, token)
 	response := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(response, request)
 	return response
@@ -126,6 +131,15 @@ func TestOptimizationServesOnlyTheGatewayWithAContextForTheSite(t *testing.T) {
 	}
 	if status := read(testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite); status != http.StatusForbidden {
 		t.Fatalf("a run context read the recommendation: %d", status)
+	}
+
+	if status := read(testGatewaySPIFFE, testGatewaySPIFFE, "", testTenant, testSite); status != http.StatusForbidden {
+		t.Fatalf("the Gateway's workload was served without a context: %d", status)
+	}
+	elsewhere := fixture
+	elsewhere.audience = "fdd-service"
+	if status := elsewhere.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a context for another owner was accepted: %d", status)
 	}
 
 	bare := httptest.NewRequest(http.MethodGet, latest, nil)
