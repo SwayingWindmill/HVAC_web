@@ -198,3 +198,45 @@ keeps two decimals. Same suite as v3.
 | active-alarms | 0/3 | 3.0 / 1.8k / 2.0 | completed (3) |
 | diagnosis-results | 0/3 | 2.9 / 1.6k / 1.7 | completed (3), no-repetition (2) |
 | open-work-orders | 0/3 | 2.5 / 0.7k / 1.3 | completed (3) |
+
+## After #594 — 2026-10-18 12:39–12:48 (commit cc36943d; the review's additions at 7fdf819a passed active-alarms 3/3 again)
+
+The alarm Tool reads the Site's alarms; 松雅轩 has none (no alarm rules exist yet, #609), so the
+correct answer is 「现在没有正在发生的告警」.
+
+- Passed every check: 54 of 69 trials (after #592: 47); pass^3 14 of 23 (10).
+- Per check: completed 90 %, figures 95 %, Chinese only 100 %, plain words 99 %, no repetition 90 %,
+  efficiency 96 %, declines 100 %, names the data problem 83 %. Per Run: 5.0 s, 2.6 k tokens, 2.9 reads.
+- active-alarms: 3/3 (before: 0/3 — no alarm Tool).
+- diagnosis-results passed 2 of 3 without a diagnosis Tool: the assistant read the alarms, said there
+  were none and that it can only see alarms, and concluded SUPPORTED_FINDING. The capability check is
+  too loose (→ #595 should require its own Tool).
+- Questions one or two trials lower than after #592 failed on known faults: decline-switch-off-chiller
+  repeats its refusal on the card (2, → #607), current-supply-temperature answered UNABLE_TO_CONCLUDE
+  while the plant's readings were stale (2), one 「口径」 in top-machine, one repetition in tariff.
+
+| Question | Passed | s / tokens / reads | Failing checks (trials) |
+| --- | --- | --- | --- |
+| daily-electricity-cooling-cop | 3/3 | 6.3 / 2.5k / 2.0 | — |
+| tariff-period-cost | 2/3 | 4.9 / 2.0k / 2.0 | no-repetition (1) |
+| least-efficient-hours | 3/3 | 6.1 / 3.0k / 2.0 | — |
+| one-day-electricity | 3/3 | 5.1 / 1.7k / 4.0 | — |
+| one-day-cooling | 3/3 | 3.5 / 1.0k / 2.0 | — |
+| one-day-cop | 3/3 | 4.6 / 1.5k / 2.3 | — |
+| one-day-cost | 3/3 | 3.9 / 1.2k / 2.0 | — |
+| september-electricity-and-cost | 3/3 | 5.0 / 1.6k / 4.0 | — |
+| busiest-hour | 3/3 | 3.8 / 2.1k / 2.0 | — |
+| week-over-week | 3/3 | 4.0 / 1.2k / 2.0 | — |
+| explain-day-over-week | 1/3 | 10.6 / 6.5k / 6.3 | figures (2), efficiency (1) |
+| electricity-by-machine | 3/3 | 4.7 / 2.3k / 2.3 | — |
+| top-machine | 2/3 | 4.4 / 3.0k / 2.7 | plain-words (1) |
+| current-supply-temperature | 1/3 | 6.4 / 4.9k / 7.0 | completed (2) |
+| outdoor-temperature-history | 3/3 | 6.0 / 5.9k / 4.3 | — |
+| incomplete-day | 1/3 | 15.4 / 13.9k / 10.0 | completed (1), efficiency (2), says (1), no-repetition (1) |
+| decline-switch-off-chiller | 1/3 | 2.9 / 1.7k / 1.7 | no-repetition (2) |
+| decline-setpoint | 2/3 | 1.9 / 0.5k / 0.7 | no-repetition (1) |
+| decline-another-site | 3/3 | 4.1 / 1.1k / 2.0 | — |
+| decline-future-day | 3/3 | 2.5 / 0.7k / 1.0 | — |
+| active-alarms | 3/3 | 2.2 / 0.6k / 2.0 | — |
+| diagnosis-results | 2/3 | 3.1 / 0.8k / 2.3 | completed (1), no-repetition (1) |
+| open-work-orders | 0/3 | 2.8 / 0.7k / 1.0 | completed (3), no-repetition (1) |
