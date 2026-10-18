@@ -188,3 +188,98 @@ func lockArtifactStream(ctx context.Context, tx pgx.Tx, key string) error {
 	}
 	return nil
 }
+
+// PublishSitePolicy makes policy, given without revision identity, the revision the Site
+// assignment evaluates (#609). It releases the next revision of the family only when the latest
+// one says something else, so publishing the same rules file again changes nothing. It returns the
+// revision now assigned and whether this call changed anything.
+func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, siteID string, policy AlarmPolicyRevision, assignmentID string, at time.Time, by string) (AlarmPolicyRevision, bool, error) {
+	if store == nil || store.pool == nil {
+		return AlarmPolicyRevision{}, false, ErrUnavailable
+	}
+	latest, assignmentRevision, assignedPolicyRevisionID, err := store.sitePolicyState(ctx, tenantID, siteID, policy.PolicyID, assignmentID)
+	if err != nil {
+		return AlarmPolicyRevision{}, false, err
+	}
+	unchanged := false
+	if latest != nil {
+		if unchanged, err = samePolicyContent(*latest, policy); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+	}
+	if !unchanged {
+		policy.Revision = 1
+		if latest != nil {
+			policy.Revision = latest.Revision + 1
+		}
+		if policy.PolicyRevisionID, err = store.newID(at); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+		if policy.Digest, err = AlarmPolicyDigest(policy); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+		if err := store.ReleaseAlarmPolicyRevision(ctx, tenantID, siteID, policy, at, by); err != nil {
+			return AlarmPolicyRevision{}, false, err
+		}
+		latest = &policy
+	} else if assignedPolicyRevisionID == latest.PolicyRevisionID {
+		return *latest, false, nil
+	}
+	if err := store.AssignAlarmPolicyRevision(ctx, tenantID, siteID, AlarmPolicyAssignmentInput{
+		AssignmentID: assignmentID, AssignmentRevision: assignmentRevision + 1, PolicyRevisionID: latest.PolicyRevisionID,
+		SubjectType: "SITE", SubjectID: siteID, AssignedAt: at.UTC().Format(time.RFC3339Nano), AssignedBy: by,
+	}); err != nil {
+		return AlarmPolicyRevision{}, false, err
+	}
+	return *latest, true, nil
+}
+
+// sitePolicyState is the latest revision of a policy family (nil before the first) and the latest
+// revision of its Site assignment with the policy revision it points at (0 and "" before the first).
+func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteID, policyID, assignmentID string) (*AlarmPolicyRevision, uint64, string, error) {
+	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var latest *AlarmPolicyRevision
+	var policyJSON []byte
+	err = tx.QueryRow(ctx, `
+		SELECT policy FROM alarm_runtime.alarm_policy_revision
+		WHERE tenant_id=$1 AND site_id=$2 AND policy_id=$3
+		ORDER BY revision DESC LIMIT 1`, tenantID, siteID, policyID).Scan(&policyJSON)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, "", fmt.Errorf("read latest Alarm policy release: %w", err)
+	}
+	if err == nil {
+		decoded, err := decodeAlarmPolicy(policyJSON)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		latest = &decoded
+	}
+	var assignmentRevision uint64
+	var assignedPolicyRevisionID string
+	err = tx.QueryRow(ctx, `
+		SELECT assignment_revision, policy_revision_id::text FROM alarm_runtime.alarm_policy_assignment
+		WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3
+		ORDER BY assignment_revision DESC LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assignmentRevision, &assignedPolicyRevisionID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, "", fmt.Errorf("read latest Alarm policy assignment: %w", err)
+	}
+	return latest, assignmentRevision, assignedPolicyRevisionID, nil
+}
+
+// samePolicyContent compares two revisions of a family by what they say, not by their identity.
+func samePolicyContent(left, right AlarmPolicyRevision) (bool, error) {
+	var digests [2]string
+	for index, policy := range []AlarmPolicyRevision{left, right} {
+		policy.PolicyRevisionID, policy.Revision = "", 0
+		digest, err := AlarmPolicyDigest(policy)
+		if err != nil {
+			return false, err
+		}
+		digests[index] = digest
+	}
+	return digests[0] == digests[1], nil
+}
