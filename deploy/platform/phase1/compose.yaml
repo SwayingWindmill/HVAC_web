@@ -159,13 +159,13 @@ services:
       WORK_ORDER_SERVICE_ADDR: :8449
       NOTIFICATION_SERVICE_URL: https://notification-service:8450
       NOTIFICATION_SERVICE_SERVER_NAME: notification-service
-      FORECAST_SERVICE_URL: http://forecast-service:19092
+      # FDD, Forecast, Optimization and M&V serve the Gateway over mutual TLS (#595, #612).
+      INTELLIGENCE_SERVER_CA: ${INTELLIGENCE_SERVER_CA:-/run/hvac/pki/ca.crt}
+      FORECAST_SERVICE_URL: https://forecast-service:19092
       FDD_SERVICE_URL: https://fdd-service:19094
-      FDD_SERVICE_SERVER_CA: ${FDD_SERVICE_SERVER_CA:-/run/hvac/pki/ca.crt}
-      FDD_SERVICE_SERVER_NAME: fdd-service
-      MV_SERVICE_URL: http://mv-service:19096
+      MV_SERVICE_URL: https://mv-service:19096
       REPORT_SERVICE_URL: http://report-service:19097
-      OPTIMIZATION_SERVICE_URL: http://optimization-service:19093
+      OPTIMIZATION_SERVICE_URL: https://optimization-service:19093
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
@@ -521,11 +521,18 @@ services:
     environment:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FORECAST_HTTP_ADDR: :19092
+      FORECAST_DIAGNOSTICS_ADDR: :19099
+      FORECAST_TLS_CERT: /run/hvac/pki/forecast/tls.crt
+      FORECAST_TLS_KEY: /run/hvac/pki/forecast/tls.key
+      FORECAST_TLS_CA: /run/hvac/pki/ca.crt
+      FORECAST_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
       FORECAST_POSTGRES_DSN: ${FORECAST_POSTGRES_DSN:-}
       FORECAST_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       FORECAST_CLICKHOUSE_DATABASE: analytics
       FORECAST_CLICKHOUSE_TABLE: forecast_series
       FORECAST_CLICKHOUSE_USERNAME: forecast_service_writer
+    volumes:
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -534,7 +541,7 @@ services:
         required: false
     expose: ["19092"]
     healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/healthz"]
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19099/healthz"]
       interval: 10s
       timeout: 4s
       retries: 12
@@ -555,6 +562,7 @@ services:
     environment:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       OPTIMIZATION_HTTP_ADDR: :19093
+      OPTIMIZATION_DIAGNOSTICS_ADDR: :19100
       OPTIMIZATION_POSTGRES_DSN: ${OPTIMIZATION_POSTGRES_DSN:-}
       OPTIMIZATION_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       OPTIMIZATION_CLICKHOUSE_USERNAME: optimization_service_writer
@@ -565,6 +573,7 @@ services:
       OPTIMIZATION_TLS_CERT: /run/hvac/pki/optimization/tls.crt
       OPTIMIZATION_TLS_KEY: /run/hvac/pki/optimization/tls.key
       OPTIMIZATION_TLS_CA: /run/hvac/pki/ca.crt
+      OPTIMIZATION_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
@@ -575,7 +584,7 @@ services:
         required: false
     expose: ["19093"]
     healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19093/healthz"]
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19100/healthz"]
       interval: 10s
       timeout: 4s
       retries: 12
@@ -633,6 +642,7 @@ services:
     environment:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       MV_HTTP_ADDR: :19096
+      MV_DIAGNOSTICS_ADDR: :19101
       MV_DATABASE_URL: ${MV_DATABASE_URL:-}
       MV_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       MV_CLICKHOUSE_READER_USERNAME: mv_service_reader
@@ -642,6 +652,7 @@ services:
       MV_TLS_CERT: /run/hvac/pki/mv/tls.crt
       MV_TLS_KEY: /run/hvac/pki/mv/tls.key
       MV_TLS_CA: /run/hvac/pki/ca.crt
+      MV_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
@@ -649,7 +660,7 @@ services:
         condition: service_completed_successfully
     expose: ["19096"]
     healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19096/healthz"]
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19101/healthz"]
       interval: 10s
       timeout: 4s
       retries: 12
