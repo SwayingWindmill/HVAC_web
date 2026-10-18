@@ -4,8 +4,10 @@ import {
   agentSessionListSchema,
   agentSessionPaths,
   agentSessionSnapshotSchema,
+  agentUsageSchema,
   type AgentSessionEvent,
   type AgentSessionSnapshot,
+  type AgentUsage,
 } from '@/api/generated/operationsAgentSessions.gen';
 
 // The Agent Session routes behind the Gateway. Responses are parsed with the generated
@@ -57,6 +59,11 @@ const post = (path: string, csrfToken: string, body: unknown) => send(path, {
 
 export const listAssistantSessions = async (siteId: string): Promise<readonly AgentSessionSnapshot[]> => (
   agentSessionListSchema.parse(await read(agentSessionPaths.collection(siteId)))
+);
+
+/** The assistant's last 14 Site-local days on a Site (#597); needs the audit.read capability. */
+export const getAssistantUsage = async (siteId: string, timezone: string): Promise<AgentUsage> => (
+  agentUsageSchema.parse(await read(agentSessionPaths.usage(siteId, timezone)))
 );
 
 export const createAssistantSession = async (siteId: string, csrfToken: string, message: string): Promise<AgentSessionSnapshot> => (

@@ -25,6 +25,8 @@ const tools: Record<string, ToolPresentation> = {
   alarm_list: { label: '读取告警', page: ALARMS_PAGE },
   fdd_findings: { label: '读取故障诊断结果', page: DIAGNOSTICS_PAGE },
   work_order_list: { label: '读取工单', page: WORK_ORDERS_PAGE },
+  investigation_complete: { label: '写结论', page: null },
+  investigation_request_input: { label: '向值班人员提问', page: null },
 };
 
 export const toolPresentation = (toolName: string): ToolPresentation => (

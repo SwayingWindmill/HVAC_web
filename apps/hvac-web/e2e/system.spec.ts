@@ -59,3 +59,28 @@ test('leaving system management with an unsaved registry import asks before drop
   await expect(page).not.toHaveURL(/tab=registry/);
   await expect(page.getByRole('region', { name: '系统概况' })).toBeVisible();
 });
+
+// #597: the operations lead reads, per day, how the assistant's answers went and which reads
+// failed, with every read named as the panel names it.
+test('the AI 助手 tab shows each day of answers and the failed reads in plain words', async ({ page }) => {
+  await page.route('**/api/v1/principal', (route) => route.fulfill({ json: {
+    ...principal,
+    authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'audit.read'] },
+  } }));
+  await page.goto('/system?tab=assistant');
+  const usage = page.getByRole('tabpanel');
+  await expect(usage).toContainText('最近 14 天回答 50 次，其中 3 次没答完');
+
+  const days = usage.getByRole('table', { name: '每天的回答' });
+  await expect(days.getByRole('row', { name: /10月18日/ })).toContainText('出错 1');
+  await expect(days.getByRole('row', { name: /10月17日/ })).toContainText('被停下 1');
+  const reads = usage.getByRole('table', { name: '读数据的情况' });
+  await expect(reads.getByRole('row', { name: /读取当前读数/ })).toContainText('2');
+  await expect(reads).toContainText('写结论');
+  await expect(usage).not.toContainText(/alarm_list|telemetry_get_current|investigation_complete/);
+});
+
+test('the AI 助手 tab says so when the account cannot read records', async ({ page }) => {
+  await page.goto('/system?tab=assistant');
+  await expect(page.getByRole('tabpanel')).toContainText('当前账号没有查看操作记录的权限');
+});

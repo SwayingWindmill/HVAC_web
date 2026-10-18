@@ -3,6 +3,7 @@ import {
   AgentSessionServiceError,
   type AgentSessionAccessContext,
   type AgentSessionService,
+  type AgentUsageReader,
   type AuthorizationDecision,
 } from '../../application/index.js';
 export interface AgentSessionHttpAuthorizationInput {
@@ -22,6 +23,7 @@ export interface AgentSessionHttpAuthorizer {
 export interface AgentSessionHttpOptions {
   readonly authorizer: AgentSessionHttpAuthorizer;
   readonly service: AgentSessionService;
+  readonly usage: AgentUsageReader;
   readonly createEventStreamResponse: (
     service: AgentSessionService,
     context: AgentSessionAccessContext,
@@ -34,7 +36,7 @@ export interface AgentSessionHttpHandler {
   handle(request: Request): Promise<Response>;
 }
 
-type AgentSessionRouteKind = 'CREATE' | 'LIST' | 'GET' | 'START' | 'CANCEL' | 'SUBMIT_INPUT' | 'STREAM';
+type AgentSessionRouteKind = 'CREATE' | 'LIST' | 'GET' | 'START' | 'CANCEL' | 'SUBMIT_INPUT' | 'STREAM' | 'USAGE';
 
 interface AgentSessionRoute {
   readonly kind: AgentSessionRouteKind;
@@ -43,6 +45,9 @@ interface AgentSessionRoute {
 }
 
 const collectionPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/agent-sessions$/u;
+const usagePattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/agent-usage$/u;
+// The usage view covers the last two weeks of Site-local days, today included (#597).
+const USAGE_DAYS = 14;
 const itemPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/agent-sessions\/([^/:]+)$/u;
 const streamPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/agent-sessions\/([^/:]+)\/events$/u;
 const startPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/agent-sessions\/([^/:]+):run$/u;
@@ -96,6 +101,12 @@ const matchRoute = (request: Request): AgentSessionRoute | null => {
     if (request.method === 'POST') return { kind: 'CREATE', siteId, sessionId: null };
     throw problem(405, 'METHOD_NOT_ALLOWED', 'Method not allowed', 'This route requires GET or POST.');
   }
+  const usage = usagePattern.exec(path);
+  if (usage !== null) {
+    if (request.method !== 'GET') throw problem(405, 'METHOD_NOT_ALLOWED', 'Method not allowed', 'This route requires GET.');
+    const siteId = decodeIdentity(usage[1] ?? '');
+    return siteId === null ? null : { kind: 'USAGE', siteId, sessionId: null };
+  }
   const candidates: readonly [RegExp, AgentSessionRouteKind, string][] = [
     [streamPattern, 'STREAM', 'GET'],
     [startPattern, 'START', 'POST'],
@@ -114,6 +125,21 @@ const matchRoute = (request: Request): AgentSessionRoute | null => {
     return siteId === null || sessionId === null ? null : { kind, siteId, sessionId };
   }
   return null;
+};
+
+/** The Site-local dates the usage view covers, from the Site's time zone; null when it is not one. */
+const usageRange = (url: URL, now: Date): { readonly timezone: string; readonly fromDate: string; readonly toDate: string } | null => {
+  const timezone = url.searchParams.get('timezone') ?? '';
+  if ([...url.searchParams.keys()].some((key) => key !== 'timezone') || timezone.length === 0 || timezone.length > 64) return null;
+  let today: string;
+  try {
+    today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  } catch {
+    return null;
+  }
+  const [year, month, day] = today.split('-').map(Number);
+  const fromDate = new Date(Date.UTC(year!, month! - 1, day! - (USAGE_DAYS - 1))).toISOString().slice(0, 10);
+  return { timezone, fromDate, toDate: today };
 };
 
 const requiredHeader = (request: Request, name: string): string | null => {
@@ -237,14 +263,18 @@ export const createAgentSessionHttpHandler = (options: AgentSessionHttpOptions):
     async handle(request: Request): Promise<Response> {
       try {
         const url = new URL(request.url);
-        if (url.search !== '') {
-          return problem(400, 'QUERY_UNSUPPORTED', 'Query unsupported', 'Agent Session routes do not accept query parameters.');
-        }
         const route = matchRoute(request);
         if (route === null) {
           return problem(404, 'ROUTE_NOT_FOUND', 'Route not found', 'The requested internal Agent Session route does not exist.');
         }
-        if ((route.kind === 'GET' || route.kind === 'LIST' || route.kind === 'STREAM') && request.body !== null) {
+        const range = route.kind === 'USAGE' ? usageRange(url, new Date()) : null;
+        if (route.kind === 'USAGE' && range === null) {
+          return problem(400, 'REQUEST_INVALID', 'Request invalid', 'Agent usage takes only the Site time zone, as timezone.');
+        }
+        if (route.kind !== 'USAGE' && url.search !== '') {
+          return problem(400, 'QUERY_UNSUPPORTED', 'Query unsupported', 'Agent Session routes do not accept query parameters.');
+        }
+        if ((route.kind === 'GET' || route.kind === 'LIST' || route.kind === 'STREAM' || route.kind === 'USAGE') && request.body !== null) {
           return problem(400, 'REQUEST_INVALID', 'Request invalid', 'GET requests must not contain a body.');
         }
 
@@ -272,6 +302,9 @@ export const createAgentSessionHttpHandler = (options: AgentSessionHttpOptions):
         }
 
         if (route.kind === 'LIST') return jsonResponse(200, await options.service.list(context));
+        if (range !== null) {
+          return jsonResponse(200, await options.usage.daily(context.tenantId, context.siteId, range.timezone, range.fromDate, range.toDate));
+        }
         if (route.kind === 'CREATE') {
           const body = parseMessageBody(await readBody(request, maximumRequestBytes));
           if (body.expectedRevision !== undefined) {

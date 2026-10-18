@@ -41,12 +41,19 @@ func matchPublicAgentSessionRoute(path string) (publicAgentSessionRoute, bool) {
 		return publicAgentSessionRoute{}, false
 	}
 	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
-	if len(parts) < 3 || parts[0] == "" || parts[1] != "operations" || parts[2] != "agent-sessions" {
+	usage := len(parts) == 3 && parts[0] != "" && parts[1] == "operations" && parts[2] == "agent-usage"
+	if !usage && (len(parts) < 3 || parts[0] == "" || parts[1] != "operations" || parts[2] != "agent-sessions") {
 		return publicAgentSessionRoute{}, false
 	}
 	siteID, err := url.PathUnescape(parts[0])
 	if err != nil || !isLowerUUIDv7(siteID) {
 		return publicAgentSessionRoute{siteID: ""}, true
+	}
+	if usage {
+		return publicAgentSessionRoute{
+			kind: "USAGE", template: PublicAgentUsagePathTemplate, siteID: siteID, method: http.MethodGet,
+			internalPath: "/internal/v1/sites/" + url.PathEscape(siteID) + "/operations/agent-usage",
+		}, true
 	}
 	internalBase := "/internal/v1/sites/" + url.PathEscape(siteID) + "/operations/agent-sessions"
 	if len(parts) == 3 {
@@ -112,6 +119,14 @@ func dispatchAgentSessionRoute(h *handler, writer http.ResponseWriter, request *
 			writeProblem(writer, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "This Agent Session collection accepts GET or POST.", false, nil)
 			return
 		}
+	}
+	if route.kind == "USAGE" {
+		if request.Method != route.method {
+			writeMethodNotAllowedFor(writer, request, route.method)
+			return
+		}
+		h.proxyAgentUsage(writer, request, route)
+		return
 	}
 	if route.kind != "CREATE" && route.kind != "LIST" && route.sessionID == "" {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Agent Session was not found.", false, nil)

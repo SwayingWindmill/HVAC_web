@@ -127,6 +127,7 @@ export const createProductionAgentSessionRuntime = async (
       }),
     });
     const handler = createAgentSessionHttpHandler({
+      usage: persistence.agentUsageReader,
       authorizer: options.authorizer,
       service,
       createEventStreamResponse: createAgentSessionEventStreamResponse,
