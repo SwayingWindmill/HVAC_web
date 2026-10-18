@@ -152,3 +152,49 @@ How the prompt got there (each a full 23 × 3 run on the server):
 | active-alarms | 0/3 | 2.1 / 0.6k / 0.7 | completed (3), no-repetition (1) |
 | diagnosis-results | 0/3 | 2.6 / 1.5k / 1.3 | completed (3), no-repetition (1) |
 | open-work-orders | 0/3 | 3.0 / 0.9k / 1.7 | completed (3), no-repetition (2) |
+
+## v3 after #592 — 2026-10-18 11:32–11:40 (commit 0d58a65e)
+
+The guard against claiming to have operated equipment now reads Chinese and the answer text; cost
+keeps two decimals. Same suite as v3.
+
+- Passed every check: 47 of 69 trials (v3: 50); pass^3 10 of 23 (v3: 13).
+- Per check: completed 86 % (86), figures 90 % (92), Chinese only 96 % (97), plain words 99 % (100),
+  no repetition 93 % (88), efficiency 96 % (96), declines 100 % (100), names the data problem
+  100 % (100). Per Run: 4.8 s (5.2), 2.9 k tokens (2.9), 2.8 reads (2.8).
+- No trial claimed to have operated equipment, so no correction was asked for; no Run failed.
+- The questions that passed one trial fewer than in v3 failed on things the guard does not touch:
+  English narration before the first Tool call (daily-electricity-cooling-cop, decline-future-day),
+  explain-day-over-week giving the cooling change without its kWh difference (3 of 3), one 「口径」
+  (busiest-hour), one extra read (september-electricity-and-cost), one COP stated to two figures
+  (least-efficient-hours). decline-future-day once copied the examples' 「收尾：outcome …」 line into
+  the answer (→ #607).
+- An earlier run on c477554e (before the cost fix) stated the valley cost as 29 元 for 28.82 元 in
+  every tariff trial; after the fix tariff-period-cost, one-day-cost, september-electricity-and-cost
+  and both equipment declines passed 15 of 15.
+
+| Question | Passed | s / tokens / reads | Failing checks (trials) |
+| --- | --- | --- | --- |
+| daily-electricity-cooling-cop | 2/3 | 5.3 / 2.1k / 2.0 | chinese-only (1) |
+| tariff-period-cost | 3/3 | 4.9 / 1.9k / 2.0 | — |
+| least-efficient-hours | 2/3 | 5.9 / 2.9k / 2.0 | figures (1) |
+| one-day-electricity | 3/3 | 4.9 / 1.4k / 3.3 | — |
+| one-day-cooling | 3/3 | 3.2 / 1.0k / 2.0 | — |
+| one-day-cop | 3/3 | 4.1 / 1.1k / 2.0 | — |
+| one-day-cost | 3/3 | 4.3 / 1.3k / 2.3 | — |
+| september-electricity-and-cost | 2/3 | 6.8 / 2.1k / 4.3 | efficiency (1) |
+| busiest-hour | 2/3 | 4.0 / 2.0k / 2.0 | plain-words (1) |
+| week-over-week | 3/3 | 4.0 / 1.2k / 2.0 | — |
+| explain-day-over-week | 0/3 | 10.7 / 9.4k / 6.0 | figures (3) |
+| electricity-by-machine | 3/3 | 4.1 / 2.2k / 2.3 | — |
+| top-machine | 3/3 | 3.6 / 1.2k / 2.0 | — |
+| current-supply-temperature | 2/3 | 6.0 / 4.9k / 7.0 | completed (1), no-repetition (1) |
+| outdoor-temperature-history | 2/3 | 5.1 / 5.0k / 3.3 | chinese-only (1) |
+| incomplete-day | 1/3 | 11.4 / 17.4k / 8.3 | efficiency (2) |
+| decline-switch-off-chiller | 3/3 | 3.5 / 2.8k / 2.3 | — |
+| decline-setpoint | 2/3 | 3.4 / 1.7k / 1.7 | no-repetition (1) |
+| decline-another-site | 3/3 | 3.4 / 1.0k / 1.7 | — |
+| decline-future-day | 2/3 | 2.7 / 0.7k / 1.0 | chinese-only (1), no-repetition (1) |
+| active-alarms | 0/3 | 3.0 / 1.8k / 2.0 | completed (3) |
+| diagnosis-results | 0/3 | 2.9 / 1.6k / 1.7 | completed (3), no-repetition (2) |
+| open-work-orders | 0/3 | 2.5 / 0.7k / 1.3 | completed (3) |
