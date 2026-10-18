@@ -6,7 +6,7 @@ import { toolPresentation } from '../tool-labels';
 
 type FindingData = Extract<AssistantPart, { type: 'data-finding' }>['data'];
 
-/** The Run's conclusion: one or two sentences, the numbers it rests on, what the data could not tell, and where to look. */
+/** Under the answer: whether the data supports it, the numbers it rests on, what the data could not tell, and where to look. */
 export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { readonly siteId: string }) {
   const supported = finding.outcome === 'SUPPORTED_FINDING';
   const pages = [...new Map(evidenceTools.flatMap((tool) => {
@@ -15,12 +15,10 @@ export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { 
   })).values()];
 
   return (
-    <section aria-label="结论" className="flex flex-col gap-3 rounded-lg border bg-card p-3.5" data-testid="assistant-finding">
+    <section aria-label="回答依据" className="flex flex-col gap-3 rounded-lg border bg-card p-3.5" data-testid="assistant-finding">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-muted-foreground">结论</span>
         <Badge variant={supported ? 'secondary' : 'outline'}>{supported ? '有数据依据' : '数据不足以下结论'}</Badge>
       </div>
-      <p className="m-0 text-sm leading-relaxed font-medium">{finding.summary}</p>
       {finding.keyFigures !== undefined && finding.keyFigures.length > 0 ? (
         <dl className="m-0 grid grid-cols-2 gap-2">
           {finding.keyFigures.map((figure) => (

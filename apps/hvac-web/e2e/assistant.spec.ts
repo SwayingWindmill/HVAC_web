@@ -16,11 +16,13 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   await panel.getByRole('button', { name: '发送' }).click();
 
   const finding = panel.getByTestId('assistant-finding');
-  await expect(finding).toContainText('多用的电主要来自 2 号机组开机');
+  await expect(finding).toContainText('有数据依据');
   await expect(finding).toContainText('多用电+18kWh');
   await expect(finding).toContainText('平台没有室外温度历史');
   await expect(finding.getByRole('link', { name: '能耗分析' })).toHaveAttribute('href', `/energy-analysis/consumption?site=${SITE_ID}`);
   await expect(panel).toContainText('这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。');
+  // The conclusion is said once, in the answer; the card does not repeat it.
+  await expect(finding).not.toContainText('主要来自 2 号机组');
 
   // The steps fold to one line; opened, each read has its plain name.
   await panel.getByRole('button', { name: '查询了 2 项数据' }).click();

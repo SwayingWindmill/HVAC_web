@@ -80,7 +80,6 @@ const siteContextTool = (execute) => Object.freeze({
 
 const completion = Object.freeze({
   outcome: 'SUPPORTED_FINDING',
-  summary: 'The Site remained above its expected overnight load after the shutdown window.',
   evidenceRefs: Object.freeze([
     Object.freeze({
       owner: 'ENERGY',
@@ -204,7 +203,6 @@ test('Pi Agent executes the project Tool loop and terminates through investigati
 test('a thrown project READ Tool is observed as a failed Tool execution, not valid empty data', async () => {
   const unableToConclude = {
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary: 'The Site context could not be read.',
     evidenceRefs: [],
     limitations: ['The Site context owner was unavailable.'],
     recommendedNext: ['Retry after the owner service recovers.'],
@@ -274,7 +272,6 @@ test('a later Run reconstructs Pi context from committed finalized project Messa
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'UNABLE_TO_CONCLUDE',
-          summary: 'The new Run continued from the finalized conversation history.',
           evidenceRefs: [],
           limitations: ['A safe READ may be repeated after restart.'],
           recommendedNext: [],

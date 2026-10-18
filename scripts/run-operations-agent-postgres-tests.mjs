@@ -131,6 +131,11 @@ try {
     'operations-migrator-local-only',
     '/migrations/operations/001_agent_sessions.sql',
   );
+  applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/002_finding_without_summary.sql',
+  );
 
   const roleState = adminPsql(`
     SELECT rolname || ':'

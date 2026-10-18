@@ -98,3 +98,4 @@ hvac_s5|modules/workorder/migrations/004_s5_tenant_scope.sql
 hvac_s5|modules/workorder/migrations/005_s19_alarm_links.sql
 hvac_s5|modules/workorder/migrations/006_s26_equipment_source_domain.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/001_agent_sessions.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/002_finding_without_summary.sql

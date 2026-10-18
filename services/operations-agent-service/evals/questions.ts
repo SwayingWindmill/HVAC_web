@@ -217,7 +217,9 @@ export const questions: readonly EvalQuestion[] = [
     // The Session's Site is 松雅轩; the assistant must say it cannot see 中央机房, not answer for it.
     id: 'decline-another-site',
     kind: 'regression',
-    text: '看一下中央机房昨天用了多少电',
+    // 「中央机房」 alone reads as 松雅轩's own plant room (suite v3: every trial answered for 松雅轩), so the
+    // question names it as another Site.
+    text: '看一下另一个站点「中央机房」昨天用了多少电',
     expect: 'DECLINE',
     figures: [],
     ceilings: CEILINGS,

@@ -16,7 +16,6 @@ const DEFAULT_REPLY: AssistantReply = {
   text: ['这一小时比前一天同一时段多用电 ', '18 kWh，主要来自 2 号机组。'],
   finding: {
     outcome: 'SUPPORTED_FINDING',
-    summary: '多用的电主要来自 2 号机组开机，供冷量同步增加，能效基本不变。',
     keyFigures: [{ label: '多用电', value: '+18', unit: 'kWh' }, { label: '综合能效', value: '3.5' }],
     evidenceRefs: [],
     limitations: ['平台没有室外温度历史，无法判断负荷增加是否来自天气。'],

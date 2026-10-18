@@ -136,7 +136,7 @@ const historyInputSchema = Object.freeze({
 const energyTypeSchema = Object.freeze({
   type: 'string',
   enum: Object.freeze(['electricity', 'cooling']),
-  description: 'electricity (default) is power drawn; cooling is cooling delivered, also in kWh. Divide cooling by electricity for COP.',
+  description: 'electricity（默认）是用电量，cooling 是供冷量，都以 kWh 计。能效 = 供冷量 ÷ 用电量。',
 });
 
 const energyWindowInputSchema = Object.freeze({
@@ -191,11 +191,11 @@ const semanticQueryInputSchema = Object.freeze({
   properties: Object.freeze({
     measures: Object.freeze({
       type: 'array', items: semanticMemberSchema('measures'), minItems: 1, maxItems: SEMANTIC_MEASURE_LIMIT,
-      description: 'One to four figures, all from the same view.',
+      description: '一到四个指标，都来自同一个视图。',
     }),
     dimensions: Object.freeze({
       type: 'array', items: semanticMemberSchema('dimensions'), maxItems: SEMANTIC_DIMENSION_LIMIT,
-      description: 'Up to two groupings from the same view as the measures; each adds a row per value.',
+      description: '最多两个分组，和指标来自同一个视图；每个分组按取值各占一行。',
     }),
     granularity: Object.freeze({ type: 'string', enum: Object.freeze(['hour', 'day', 'month']) }),
     startDate: START_DATE,
@@ -1110,7 +1110,7 @@ export const createHvacReadTools = ({
   const siteTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'site_get_context',
-      'Read authoritative context for the current Site. The Site scope is injected by the server.',
+      '读当前站点的名称和站点本地的当前时间（localNow）。站点由服务端确定。',
       emptyInputSchema,
       SITE_CAPABILITIES,
     ),
@@ -1133,7 +1133,7 @@ export const createHvacReadTools = ({
   const assetsTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'assets_list',
-      'List bounded authoritative Assets for the current Site. Tenant and Site are injected by the server.',
+      '列出当前站点登记的资产。站点由服务端确定。',
       emptyInputSchema,
       ASSET_CAPABILITIES,
     ),
@@ -1154,7 +1154,7 @@ export const createHvacReadTools = ({
   const equipmentTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'equipment_list',
-      'List the current Site\'s devices with their names, the machine each belongs to and their point keys. Use the device IDs and point keys with the other Tools.',
+      '列出当前站点的设备：名称、所属机组和点位 key。读设备读数时用这里的设备 ID 和点位 key。',
       emptyInputSchema,
       EQUIPMENT_CAPABILITIES,
     ),
@@ -1176,7 +1176,7 @@ export const createHvacReadTools = ({
   const telemetryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'telemetry_get_current',
-      'Read bounded current telemetry for one Device in the current Site. Tenant and Site are injected by the server.',
+      '读当前站点一台设备几个点位现在的读数。设备 ID 和点位 key 来自 equipment_list。',
       telemetryInputSchema,
       TELEMETRY_CAPABILITIES,
     ),
@@ -1196,7 +1196,7 @@ export const createHvacReadTools = ({
   const historyTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'telemetry_query_history',
-      'Read how up to 8 points of one Device in the current Site changed over a period, bucketed by quarter hour, hour (default) or day in the Site calendar. Readings give average, minimum and maximum per bucket; counters give the increase. Use equipment_list for device ids and point keys.',
+      '读一台设备最多 8 个点位在一段日期里的变化，按 15 分钟、小时（默认）或天分段。读数给出每段的平均、最低和最高值，累计量给出每段的增量。设备 ID 和点位 key 来自 equipment_list。',
       historyInputSchema,
       HISTORY_CAPABILITIES,
     ),
@@ -1220,7 +1220,7 @@ export const createHvacReadTools = ({
   const energyQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_query_series',
-      'Query a bounded electricity or cooling energy series for the current Site using its authoritative timezone.',
+      '读当前站点一段日期的用电量或供冷量，按小时、天或月列出，带合计；用电还带估算电费。',
       energyQueryInputSchema,
       ENERGY_CAPABILITIES,
     ),
@@ -1247,7 +1247,7 @@ export const createHvacReadTools = ({
   const energyCompareTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_compare_periods',
-      'Compare two bounded electricity or cooling periods for the current Site without exposing raw infrastructure.',
+      '比较当前站点两段日期的用电量或供冷量，给出两段的合计、差值和百分比。',
       energyCompareInputSchema,
       ENERGY_CAPABILITIES,
     ),
@@ -1290,7 +1290,7 @@ export const createHvacReadTools = ({
   const equipmentEnergyTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_by_equipment',
-      'Split the current Site\'s electricity in a period by sub-metered device (machines with their own meter), largest first, with each device\'s series at the chosen granularity.',
+      '把当前站点一段日期的用电量按有分表的设备拆开，从多到少列出，每台设备带按所选粒度的明细。',
       energyWindowInputSchema,
       EQUIPMENT_ENERGY_CAPABILITIES,
     ),
@@ -1316,9 +1316,8 @@ export const createHvacReadTools = ({
   const semanticQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_semantic_query',
-      'Ask several figures of the current Site at once from one semantic view (Site energy, equipment energy or the electricity cost estimate), '
-        + 'per hour, day or month, optionally grouped by up to two dimensions. Use it when a question needs more than one figure side by side. '
-        + 'Energy totals mix electricity and cooling unless grouped by energy type; the Site is set by the server.',
+      '一次查当前站点的几个指标（站点能耗、设备能耗或估算电费里的同一个视图），按小时、天或月列出，'
+        + '可以再按最多两个维度分组。一个问题要同时看几个数时用它。能耗不按能源类型分组时会把用电和供冷加在一起；站点由服务端确定。',
       semanticQueryInputSchema,
       ENERGY_CAPABILITIES,
     ),

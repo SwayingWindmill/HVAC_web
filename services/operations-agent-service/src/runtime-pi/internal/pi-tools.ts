@@ -91,7 +91,6 @@ const investigationCompleteParameters = Type.Object({
     Type.Literal('SUPPORTED_FINDING'),
     Type.Literal('UNABLE_TO_CONCLUDE'),
   ]),
-  summary: Type.String({ minLength: 1, maxLength: 2_000 }),
   evidenceRefs: Type.Array(Type.Object({
     owner: Type.Union([
       Type.Literal('REGISTRY'),
@@ -188,13 +187,17 @@ const createInvestigationCompleteTool = ({
 }: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
-  description: 'Complete the investigation with a typed evidence-backed outcome.',
+  description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
   parameters: investigationCompleteParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const finding = parseInvestigationComplete(parameters);
     if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
-      throw new Error('Finding evidence must reference successful Tool executions from this Run.');
+      // The model reads this refusal, so it says which ids it may cite.
+      const cited = [...state.completedToolIds];
+      throw new Error(cited.length === 0
+        ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
+        : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
     claimTerminalOperation(state, toolCallId);
     const artifact = Object.freeze({
@@ -221,7 +224,7 @@ const createInvestigationRequestInputTool = ({
 }: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   label: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
-  description: 'Request one bounded operator input and end the current investigation run.',
+  description: '缺少关键信息、没法继续时，向值班人员提一个问题，并结束这次回答。',
   parameters: investigationRequestInputParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {

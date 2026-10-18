@@ -72,14 +72,13 @@ const createIds = () => {
   };
 };
 
-const findingFor = (input, summary = 'Investigation completed.') => Object.freeze({
+const findingFor = (input) => Object.freeze({
   id: `finding-${input.run.id}`,
   sessionId: input.session.id,
   runId: input.run.id,
   kind: 'FINDING',
   finding: Object.freeze({
     outcome: 'UNABLE_TO_CONCLUDE',
-    summary,
     evidenceRefs: Object.freeze([]),
     limitations: Object.freeze([]),
     recommendedNext: Object.freeze([]),
@@ -389,4 +388,16 @@ test('typed operator input is durable, attributed to the authenticated principal
 
   await waitFor(async () => (await service.get(context, created.session.id)).session.status === 'COMPLETED');
   assert.equal(engineCalls, 2);
+});
+
+// The panel orders a conversation by time; a Run started a millisecond before the question that
+// started it showed the answer above the question (server, 2026-10-18).
+test('a question and the Run it starts carry the same time', async () => {
+  const { service } = createService(async (input) => completedResult(input));
+  const created = await service.create(context, { message: '10月15日用了多少电？' });
+  const completed = await waitFor(async () => {
+    const state = await service.get(context, created.session.id);
+    return state.session.status === 'COMPLETED' ? state : null;
+  }, 'Session did not complete');
+  assert.equal(completed.messages[0].createdAt, completed.runs[0].startedAt);
 });

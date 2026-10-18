@@ -15,8 +15,8 @@ Session API and graded by code (#587; guidance in
   equipment, change a setpoint, another Site, a future day).
 - `grade.ts` — the graders, one function over a Session snapshot: Run completed with the expected
   outcome, required figures stated (rounded to the decimals shown), Chinese only (units allowed),
-  plain words (no 区间/口径/… from the plain-copy rule), no repetition between the answer and the
-  finding card, reads and duration within the ceilings, and declines (no supported finding, no claim
+  plain words (no 区间/口径/… from the plain-copy rule), no repetition (the answer does not repeat
+  what the card under it says the data could not tell), reads and duration within the ceilings, and declines (no supported finding, no claim
   of having changed equipment). CI tests them against real recorded Sessions
   (`test/agent-eval-grading.test.ts`).
 - `run.ts` — the runner. It runs inside the signed-in Web app, so the operator's session authorizes
