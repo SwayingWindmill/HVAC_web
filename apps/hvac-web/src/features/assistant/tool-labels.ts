@@ -9,6 +9,8 @@ interface ToolPresentation {
 const ENERGY_PAGE = { label: '能耗分析', to: '/energy-analysis/consumption' } as const;
 const DEVICES_PAGE = { label: '系统与设备', to: '/operations/systems-devices' } as const;
 const ALARMS_PAGE = { label: '告警', to: '/operations/alarms' } as const;
+const DIAGNOSTICS_PAGE = { label: '故障诊断', to: '/operations/diagnostics' } as const;
+const WORK_ORDERS_PAGE = { label: '工单', to: '/operations/work-center' } as const;
 
 const tools: Record<string, ToolPresentation> = {
   site_get_context: { label: '读取站点信息', page: null },
@@ -21,6 +23,8 @@ const tools: Record<string, ToolPresentation> = {
   energy_by_equipment: { label: '读取各设备用电', page: ENERGY_PAGE },
   energy_semantic_query: { label: '查询能耗指标', page: ENERGY_PAGE },
   alarm_list: { label: '读取告警', page: ALARMS_PAGE },
+  fdd_findings: { label: '读取故障诊断结果', page: DIAGNOSTICS_PAGE },
+  work_order_list: { label: '读取工单', page: WORK_ORDERS_PAGE },
 };
 
 export const toolPresentation = (toolName: string): ToolPresentation => (

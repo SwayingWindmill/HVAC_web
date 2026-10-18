@@ -31,6 +31,12 @@ import {
   type AlarmListReadRequest,
   type AlarmListResult,
   type AlarmReader,
+  type FddFindingsReadRequest,
+  type FddFindingsResult,
+  type FddReader,
+  type WorkOrderListReadRequest,
+  type WorkOrderListResult,
+  type WorkOrderReader,
 } from '../../application/index.js';
 import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
@@ -48,6 +54,8 @@ export const HVAC_READ_TOOL_NAMES = Object.freeze([
   'energy_by_equipment',
   'energy_semantic_query',
   'alarm_list',
+  'fdd_findings',
+  'work_order_list',
 ] as const);
 
 export type HvacReadToolName = typeof HVAC_READ_TOOL_NAMES[number];
@@ -72,6 +80,8 @@ export interface CreateHvacReadToolsInput {
   readonly energyAnalyticsReader: EnergyAnalyticsReader;
   readonly semanticQueryReader: SemanticQueryReader;
   readonly alarmReader: AlarmReader;
+  readonly fddReader: FddReader;
+  readonly workOrderReader: WorkOrderReader;
   readonly limits?: Partial<HvacReadToolLimits>;
   /** The clock site_get_context reads the Site's local date and time from. */
   readonly now?: () => number;
@@ -94,6 +104,10 @@ const HISTORY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.history.read
 const ENERGY_CAPABILITIES = Object.freeze(['site.read', 'analytics.energy-series.read']);
 const EQUIPMENT_ENERGY_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read', 'analytics.energy-series.read']);
 const ALARM_CAPABILITIES = Object.freeze(['site.read', 'alarm.read']);
+const FDD_CAPABILITIES = Object.freeze(['site.read', 'fdd.read']);
+const WORK_ORDER_CAPABILITIES = Object.freeze(['site.read', 'work-order.read']);
+const FDD_LIST_LIMIT = 50;
+const WORK_ORDER_LIST_LIMIT = 100;
 const ALARM_LIST_LIMIT = 50;
 
 const emptyInputSchema = Object.freeze({
@@ -1014,6 +1028,47 @@ const sumKWh = (points: readonly { readonly energyKWh: number }[]): number => (
   Number(points.reduce((sum, point) => sum + point.energyKWh, 0).toFixed(6))
 );
 
+// Diagnosis findings and work orders as the 诊断 and 工单 pages name them (#595).
+const FINDING_RULES: Readonly<Record<string, { readonly rule: string; readonly measures: string }>> = Object.freeze({
+  CHILLED_WATER_LOW_DELTA_T: { rule: '冷冻水低温差', measures: '冷冻水供回水温差' },
+});
+// How far a finding fell past its threshold, as the 诊断 page grades it.
+const deviation = (observed: number, threshold: number): string => {
+  const shortfall = Math.abs(threshold - observed) / threshold;
+  return shortfall >= 0.3 ? '严重偏离' : shortfall >= 0.1 ? '明显偏离' : '轻微偏离';
+};
+const WORK_ORDER_PRIORITY_WORDS = Object.freeze({ URGENT: '紧急', HIGH: '高', MEDIUM: '中', LOW: '低' } as const);
+const WORK_ORDER_STATUS_WORDS = Object.freeze({ DRAFT: '草稿', OPEN: '待处理', IN_PROGRESS: '处理中', BLOCKED: '受阻', COMPLETED: '已完成', CANCELLED: '已取消' } as const);
+const UNFINISHED_WORK_ORDER: ReadonlySet<string> = new Set(['OPEN', 'IN_PROGRESS', 'BLOCKED']);
+
+const readFddFindings = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  fdd: FddReader,
+): Promise<FddFindingsResult> => {
+  const draft = { tool: 'fdd.listFindings' as const, input: { siteId: context.siteId, limit: FDD_LIST_LIMIT } };
+  const request: FddFindingsReadRequest = { ...draft, requestId: requestIdFor(context, 'fdd_findings', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const payload = (await fdd.read({ request, context: ownerContext })).payload as FddFindingsResult;
+  if (!Array.isArray(payload.items)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload;
+};
+
+const readWorkOrders = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  workOrders: WorkOrderReader,
+): Promise<WorkOrderListResult> => {
+  const draft = { tool: 'workorder.listWorkOrders' as const, input: { siteId: context.siteId, limit: WORK_ORDER_LIST_LIMIT } };
+  const request: WorkOrderListReadRequest = { ...draft, requestId: requestIdFor(context, 'work_order_list', draft) };
+  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
+  const payload = (await workOrders.read({ request, context: ownerContext })).payload as WorkOrderListResult;
+  if (!Array.isArray(payload.items)) fail('TOOL_OWNER_RESPONSE_INVALID');
+  return payload;
+};
+
 // Alarms as the 告警 page names them (#594).
 const SEVERITY_WORDS = Object.freeze({ CRITICAL: '紧急', MAJOR: '重要', MINOR: '次要', WARNING: '预警', INFO: '提示' } as const);
 const OPERATION_WORDS = Object.freeze({ PUBLISH: '触发', ACKNOWLEDGE: '确认', ASSIGN: '认领', UNASSIGN: '取消认领', SUPPRESS: '抑制', UNSUPPRESS: '解除抑制', CLEAR: '恢复' } as const);
@@ -1154,6 +1209,8 @@ export const createHvacReadTools = ({
   energyAnalyticsReader,
   semanticQueryReader,
   alarmReader,
+  fddReader,
+  workOrderReader,
   limits: inputLimits,
   now = Date.now,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
@@ -1409,6 +1466,90 @@ export const createHvacReadTools = ({
     },
   });
 
+  const fddTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'fdd_findings',
+      '列出当前站点最近的故障诊断结果（最多 50 条）：哪条诊断规则、哪台设备、在什么时间段、测到多少、阈值多少、偏离程度，以及是否已转成告警或工单。',
+      emptyInputSchema,
+      FDD_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      exactEmptyArguments(argumentsValue);
+      assertExecutionCapability(context, FDD_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const timezone = sitePayload.site.timezone;
+        const findings = await readFddFindings(context, authorization, toolAuthorizationReader, fddReader);
+        // Each finding names the equipment it diagnoses, when the operator may read the asset model.
+        const assets = new Map<string, string>(
+          findings.items.length > 0 && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+            ? (await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model.assets.map((asset) => [asset.id, asset.displayName])
+            : [],
+        );
+        return assertResultBytes({
+          findings: findings.items.map((finding) => {
+            const rule = FINDING_RULES[finding.findingType];
+            return {
+              rule: rule?.rule ?? '其他诊断',
+              equipment: assets.get(finding.assetId) ?? '未登记的设备',
+              period: `${siteTime(finding.evaluationFrom, timezone)} 至 ${siteTime(finding.evaluationTo, timezone)}`,
+              measured: `${rule?.measures ?? '测量值'} ${finding.observedValue} ${finding.valueUnit}，阈值 ${finding.thresholdValue} ${finding.valueUnit}`,
+              deviation: deviation(finding.observedValue, finding.thresholdValue),
+              reportedAt: siteTime(finding.createdAt, timezone),
+              ...(finding.linkedToAlarm ? { alarm: '已转成告警' } : {}),
+              ...(finding.linkedToWorkOrder ? { workOrder: '已建工单' } : {}),
+            };
+          }),
+          ...(findings.items.length === 0 ? { note: '最近没有故障诊断结果' } : {}),
+        }, limits);
+      });
+    },
+  });
+
+  const workOrderTool: AgentTool = Object.freeze({
+    definition: toolDefinition(
+      'work_order_list',
+      '列出当前站点还没处理完的工单（待处理、处理中、受阻）：每条有标题、说明、优先级、状态、是否已指派、截止时间、来源（告警、哪台设备或人工创建）和创建时间。',
+      emptyInputSchema,
+      WORK_ORDER_CAPABILITIES,
+    ),
+    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
+      exactEmptyArguments(argumentsValue);
+      assertExecutionCapability(context, WORK_ORDER_CAPABILITIES);
+      return runBounded(signal, limits.timeoutMs, async () => {
+        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const timezone = sitePayload.site.timezone;
+        const list = await readWorkOrders(context, authorization, toolAuthorizationReader, workOrderReader);
+        const unfinished = list.items.filter((workOrder) => UNFINISHED_WORK_ORDER.has(workOrder.status));
+        const note = !list.hasMore
+          ? (unfinished.length === 0 ? '现在没有还没处理完的工单' : undefined)
+          : unfinished.length === 0
+            ? `最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单都已处理完，更早的没有看`
+            : `只看了最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单，可能还有更早的`;
+        // A work order raised from a device names it, when the operator may read the asset model.
+        const assets = new Map<string, string>(
+          unfinished.some((workOrder) => workOrder.assetId !== undefined) && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+            ? (await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model.assets.map((asset) => [asset.id, asset.displayName])
+            : [],
+        );
+        return assertResultBytes({
+          workOrders: unfinished.map((workOrder) => ({
+            title: workOrder.title,
+            description: workOrder.description,
+            priority: WORK_ORDER_PRIORITY_WORDS[workOrder.priority],
+            status: WORK_ORDER_STATUS_WORDS[workOrder.status],
+            assigned: workOrder.assigned ? '已指派' : '未指派',
+            ...(workOrder.dueAt === undefined ? {} : { dueAt: siteTime(workOrder.dueAt, timezone) }),
+            from: workOrder.fromAlarm ? '来自告警' : workOrder.assetId !== undefined ? `来自设备 ${assets.get(workOrder.assetId) ?? '未登记的设备'}` : '人工创建',
+            createdAt: siteTime(workOrder.createdAt, timezone),
+            updatedAt: siteTime(workOrder.updatedAt, timezone),
+          })),
+          ...(note === undefined ? {} : { note }),
+        }, limits);
+      });
+    },
+  });
+
   const semanticQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_semantic_query',
@@ -1456,5 +1597,7 @@ export const createHvacReadTools = ({
     equipmentEnergyTool,
     semanticQueryTool,
     alarmTool,
+    fddTool,
+    workOrderTool,
   ].filter((tool) => hasCapabilities(capabilities, tool.definition.requiredCapabilities)));
 };

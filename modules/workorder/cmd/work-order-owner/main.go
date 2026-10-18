@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"log/slog"
@@ -69,13 +68,15 @@ func main() {
 		logger.Error("work_order_http_configuration_invalid", "error_code", "WORK_ORDER_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if peerSPIFFE(request) != gatewaySPIFFE {
-			writeProblem(writer, http.StatusForbidden, "WORK_ORDER_GATEWAY_WORKLOAD_FORBIDDEN")
-			return
-		}
-		handler.ServeHTTP(writer, request)
+	router, err := workorderservice.NewOwnerRouter(workorderservice.OwnerRouterConfig{
+		GatewaySPIFFE: gatewaySPIFFE,
+		ReaderSPIFFE:  envOr("WORK_ORDER_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		Handler:       handler,
 	})
+	if err != nil {
+		logger.Error("work_order_owner_router_configuration_invalid", "error_code", "WORK_ORDER_OWNER_ROUTER_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
 	server := &http.Server{
 		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: router, TLSConfig: serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
@@ -130,27 +131,6 @@ func loadRequiredValueFile(path string, maximumBytes int64) (string, error) {
 		return "", errors.New("value file content is invalid")
 	}
 	return value, nil
-}
-
-func peerSPIFFE(request *http.Request) string {
-	if request == nil || request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
-		return ""
-	}
-	leaf := request.TLS.PeerCertificates[0]
-	if leaf == nil || len(leaf.URIs) != 1 || leaf.URIs[0] == nil {
-		return ""
-	}
-	identity := leaf.URIs[0].String()
-	if !strings.HasPrefix(identity, "spiffe://") {
-		return ""
-	}
-	return identity
-}
-
-func writeProblem(writer http.ResponseWriter, status int, code string) {
-	writer.Header().Set("Content-Type", "application/problem+json")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(map[string]any{"code": code, "retryable": false})
 }
 
 func envOr(name, fallback string) string {

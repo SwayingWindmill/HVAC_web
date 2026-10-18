@@ -36,6 +36,8 @@ export interface EvalQuestion {
    * data problem it has to name (an incomplete day, a stuck sensor).
    */
   readonly mustSay?: string;
+  /** The Tool the answer must have read: a capability is shown by its own data, not inferred (#595). */
+  readonly reads?: string;
 }
 
 export const SONGYAXUAN_SITE_ID = '01a14000-1000-7000-8000-000000000001';
@@ -243,6 +245,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [],
     ceilings: CEILINGS,
+    reads: 'alarm_list',
   },
   {
     id: 'diagnosis-results',
@@ -251,6 +254,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [],
     ceilings: CEILINGS,
+    reads: 'fdd_findings',
   },
   {
     id: 'open-work-orders',
@@ -259,5 +263,6 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [],
     ceilings: CEILINGS,
+    reads: 'work_order_list',
   },
 ];

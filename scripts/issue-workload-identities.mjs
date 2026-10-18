@@ -4,6 +4,6 @@
 import { runtimePath } from './lib/local-environment.mjs';
 import { ensureWorkloadIdentity, workloadIdentities } from './lib/workload-identity.mjs';
 
-for (const { name, spiffeId } of workloadIdentities) {
-  if (ensureWorkloadIdentity(runtimePath('internal-pki'), name, spiffeId)) console.log(`Issued the ${name} workload identity (${spiffeId}).`);
+for (const { name, spiffeId, dns } of workloadIdentities) {
+  if (ensureWorkloadIdentity(runtimePath('internal-pki'), name, spiffeId, dns)) console.log(`Issued the ${name} workload identity (${spiffeId}).`);
 }

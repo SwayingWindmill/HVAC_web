@@ -160,7 +160,9 @@ services:
       NOTIFICATION_SERVICE_URL: https://notification-service:8450
       NOTIFICATION_SERVICE_SERVER_NAME: notification-service
       FORECAST_SERVICE_URL: http://forecast-service:19092
-      FDD_SERVICE_URL: http://fdd-service:19094
+      FDD_SERVICE_URL: https://fdd-service:19094
+      FDD_SERVICE_SERVER_CA: ${FDD_SERVICE_SERVER_CA:-/run/hvac/pki/ca.crt}
+      FDD_SERVICE_SERVER_NAME: fdd-service
       MV_SERVICE_URL: http://mv-service:19096
       REPORT_SERVICE_URL: http://report-service:19097
       OPTIMIZATION_SERVICE_URL: http://optimization-service:19093
@@ -594,6 +596,11 @@ services:
     environment:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       FDD_HTTP_ADDR: :19094
+      FDD_DIAGNOSTICS_ADDR: :19098
+      FDD_TLS_CERT: /run/hvac/pki/fdd/tls.crt
+      FDD_TLS_KEY: /run/hvac/pki/fdd/tls.key
+      FDD_CLIENT_CA: /run/hvac/pki/ca.crt
+      FDD_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
       FDD_DATABASE_URL: ${FDD_DATABASE_URL:-}
       FDD_CLICKHOUSE_HTTP_URL: ${PHASE1_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
       FDD_CLICKHOUSE_READER_USERNAME: fdd_service_reader
@@ -601,9 +608,11 @@ services:
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
+    volumes:
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     expose: ["19094"]
     healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/healthz"]
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19098/healthz"]
       interval: 10s
       timeout: 4s
       retries: 12
@@ -744,6 +753,8 @@ services:
       TELEMETRY_QUERY_URL: https://telemetry-query-service:18447
       GATEWAY_INTERNAL_URL: https://platform-gateway:8452
       ALARM_SERVICE_URL: https://alarm-service:8448
+      FDD_SERVICE_URL: https://fdd-service:19094
+      WORK_ORDER_SERVICE_URL: https://work-order-service:8449
       AGENT_MODEL_PROVIDER: deepseek
       AGENT_MODEL_ID: ${AGENT_MODEL_ID:-deepseek-flash}
       AGENT_MODEL_ALLOWLIST: deepseek-flash,deepseek-v4-pro

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"log"
 	"net/http"
@@ -11,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/fdd-service/internal/fdd"
 )
 
@@ -33,7 +37,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := fdd.NewHTTPHandler(service)
+	// Only the Gateway, and the Operations Agent for a Site's findings, may call FDD, each over mutual
+	// TLS with a context the Gateway signed (#595).
+	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
+		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("FDD_TLS_CERT"), PrivateKeyPath: requiredEnv("FDD_TLS_KEY")},
+		ClientCAPath:     requiredEnv("FDD_CLIENT_CA"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	gatewayKey, err := loadCertificatePublicKey(requiredEnv("FDD_GATEWAY_DELEGATION_CERT"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := fdd.NewHTTPHandler(service, fdd.AuthConfig{
+		GatewayPublicKey: gatewayKey,
+		GatewaySPIFFE:    envOrDefault("FDD_GATEWAY_SPIFFE", fdd.DefaultGatewaySPIFFEID),
+		ReaderSPIFFE:     envOrDefault("FDD_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -60,14 +81,26 @@ func main() {
 	server := &http.Server{
 		Addr:              envOrDefault("FDD_HTTP_ADDR", ":19094"),
 		Handler:           handler,
+		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
+	diagnostics := &http.Server{
+		Addr: envOrDefault("FDD_DIAGNOSTICS_ADDR", ":19098"), Handler: fdd.HealthHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
 	go func() {
-		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := server.ListenAndServeTLS("", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Printf("fdd service stopped unexpectedly: %v", serveErr)
+			stop()
+		}
+	}()
+	go func() {
+		if serveErr := diagnostics.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Printf("fdd diagnostics stopped unexpectedly: %v", serveErr)
 			stop()
 		}
 	}()
@@ -75,6 +108,23 @@ func main() {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdown)
+	_ = diagnostics.Shutdown(shutdown)
+}
+
+func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(body)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errors.New("public key certificate is invalid")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return certificate.PublicKey, nil
 }
 
 func hostname() string {

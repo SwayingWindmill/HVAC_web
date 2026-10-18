@@ -159,13 +159,65 @@ export interface AlarmListResult {
   readonly hasMore: boolean;
 }
 
+/** A Site's recent diagnosis findings from FDD (#595). */
+export interface FddFindingsReadRequest {
+  readonly requestId: string;
+  readonly tool: 'fdd.listFindings';
+  readonly input: { readonly siteId: string; readonly limit: number };
+}
+
+/** What the diagnosis Tool tells an operator about each finding, taken from FDD and nothing more. */
+export interface FddFindingsResult {
+  readonly items: readonly {
+    readonly assetId: string;
+    readonly findingType: string;
+    readonly evaluationFrom: string;
+    readonly evaluationTo: string;
+    readonly observedValue: number;
+    readonly thresholdValue: number;
+    readonly valueUnit: string;
+    readonly linkedToAlarm: boolean;
+    readonly linkedToWorkOrder: boolean;
+    readonly createdAt: string;
+  }[];
+}
+
+/** A Site's work orders from the work-order owner (#595). */
+export interface WorkOrderListReadRequest {
+  readonly requestId: string;
+  readonly tool: 'workorder.listWorkOrders';
+  readonly input: { readonly siteId: string; readonly limit: number };
+}
+
+export type WorkOrderStatus = 'DRAFT' | 'OPEN' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED' | 'CANCELLED';
+
+/** What the work-order Tool tells an operator about each work order, taken from the owner and nothing more. */
+export interface WorkOrderListResult {
+  readonly items: readonly {
+    readonly title: string;
+    readonly description: string;
+    readonly priority: 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW';
+    readonly status: WorkOrderStatus;
+    readonly assigned: boolean;
+    readonly dueAt?: string;
+    /** Where it came from, as the 工单 page says it: an alarm, a device, or neither (made by hand). */
+    readonly fromAlarm: boolean;
+    readonly assetId?: string;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  }[];
+  readonly hasMore: boolean;
+}
+
 export type ToolAuthorizableReadRequest =
   | RegistryReadRequest
   | DeviceTelemetryReadRequest
   | TelemetryHistoryReadRequest
   | EnergyAnalyticsReadRequest
   | SemanticQueryReadRequest
-  | AlarmListReadRequest;
+  | AlarmListReadRequest
+  | FddFindingsReadRequest
+  | WorkOrderListReadRequest;
 
 /** The semantic query's answer: titled columns and rows in column order, nulls kept as unknown. */
 export interface SemanticQueryResult {
@@ -225,7 +277,7 @@ export interface EnergySeries {
 
 export interface OwnerReadResult {
   readonly requestId: string;
-  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service' | 'alarm-service';
+  readonly owner: 'registry' | 'telemetry-runtime-service' | 'telemetry-query-service' | 'alarm-service' | 'fdd-service' | 'work-order-service';
   readonly scope: OwnerScope;
   readonly revision: string;
   readonly quality: 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
@@ -295,4 +347,12 @@ export interface SemanticQueryReader {
 
 export interface AlarmReader {
   read(input: OwnerReadInput<AlarmListReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface FddReader {
+  read(input: OwnerReadInput<FddFindingsReadRequest>): Promise<OwnerReadResult>;
+}
+
+export interface WorkOrderReader {
+  read(input: OwnerReadInput<WorkOrderListReadRequest>): Promise<OwnerReadResult>;
 }

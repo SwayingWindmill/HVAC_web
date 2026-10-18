@@ -684,13 +684,15 @@ func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http
 		store.Close()
 		return nil, func() {}, err
 	}
-	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
-			embeddedWriteProblem(writer, http.StatusForbidden, "WORK_ORDER_GATEWAY_WORKLOAD_FORBIDDEN")
-			return
-		}
-		handler.ServeHTTP(writer, request)
+	router, err := workorderservice.NewOwnerRouter(workorderservice.OwnerRouterConfig{
+		GatewaySPIFFE: gatewaySPIFFE,
+		ReaderSPIFFE:  envOr("WORK_ORDER_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		Handler:       handler,
 	})
+	if err != nil {
+		store.Close()
+		return nil, func() {}, err
+	}
 	server := &http.Server{
 		Addr: envOr("WORK_ORDER_SERVICE_ADDR", ":8449"), Handler: router,
 		TLSConfig: &tls.Config{

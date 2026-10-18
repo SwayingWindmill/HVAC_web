@@ -12,7 +12,7 @@ const context = Object.freeze({
   tenantId,
   siteId,
   principalId: 'principal-1',
-  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'telemetry.history.read', 'analytics.energy-series.read', 'alarm.read']),
+  capabilities: Object.freeze(['site.read', 'asset.list', 'asset-model.read', 'telemetry.snapshot.read', 'telemetry.history.read', 'analytics.energy-series.read', 'alarm.read', 'fdd.read', 'work-order.read']),
   sessionId: 'session-1',
   runId: 'run-1',
   correlationId: 'correlation-1',
@@ -102,7 +102,7 @@ const historyPayload = (query) => ({
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
 });
 
-const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
+const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, findingsFor, workOrdersFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
@@ -110,6 +110,8 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, tim
   const energyInputs = [];
   const semanticInputs = [];
   const alarmInputs = [];
+  const fddInputs = [];
+  const workOrderInputs = [];
   let activeEnergyReads = 0;
   let maxActiveEnergyReads = 0;
 
@@ -199,6 +201,19 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, tim
     },
   };
 
+  const fddReader = {
+    read: async (input) => {
+      fddInputs.push(input);
+      return ownerResult(input.request, 'fdd-service', 'fdd-findings', 'GOOD', 'fdd-service:findings/v1', findingsFor(input));
+    },
+  };
+  const workOrderReader = {
+    read: async (input) => {
+      workOrderInputs.push(input);
+      return ownerResult(input.request, 'work-order-service', 'work-order-list', 'GOOD', 'work-order-service:work-order-list/v1', workOrdersFor(input));
+    },
+  };
+
   const tools = createHvacReadTools({
     capabilities,
     authorization,
@@ -209,11 +224,13 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, tim
     energyAnalyticsReader,
     semanticQueryReader,
     alarmReader,
+    fddReader,
+    workOrderReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
     now: () => Date.parse('2026-10-17T13:30:00.000Z'),
   });
 
-  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
+  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, fddInputs, workOrderInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
 
 const byName = (tools, name) => {
@@ -230,7 +247,7 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query', 'alarm_list']);
+  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query', 'alarm_list', 'fdd_findings', 'work_order_list']);
 
   const limited = createHvacReadTools({
     capabilities: ['site.read'],
@@ -808,4 +825,66 @@ test('alarm_list refuses other arguments and tells the model what it takes', asy
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /active|cleared/u.test(error.hint),
   );
   assert.equal(harness.alarmInputs.length, 0);
+});
+
+// #595: diagnosis findings and work orders as the 诊断 and 工单 pages name them, no identifiers.
+test('fdd_findings reads the Site’s findings in the 诊断 page’s words, each piece of equipment by name', async () => {
+  const harness = createHarness({
+    findingsFor: () => ({
+      items: [{
+        assetId: 'asset-1', findingType: 'CHILLED_WATER_LOW_DELTA_T',
+        evaluationFrom: '2026-10-17T11:00:00.000Z', evaluationTo: '2026-10-17T12:00:00.000Z',
+        observedValue: 3.2, thresholdValue: 5, valueUnit: 'K', linkedToAlarm: true, linkedToWorkOrder: false, createdAt: '2026-10-17T12:01:00.000Z',
+      }],
+    }),
+  });
+  const result = await execute(byName(harness.tools, 'fdd_findings'), {});
+
+  assert.deepEqual(harness.fddInputs[0].request.input, { siteId, limit: 50 });
+  assert.equal(harness.authorizationInputs.find(({ request }) => request.tool === 'fdd.listFindings').request.input.siteId, siteId);
+  assert.deepEqual(result.findings, [{
+    rule: '冷冻水低温差', equipment: 'Chiller 1', period: '2026-10-17 04:00 至 2026-10-17 05:00',
+    measured: '冷冻水供回水温差 3.2 K，阈值 5 K', deviation: '严重偏离', reportedAt: '2026-10-17 05:01', alarm: '已转成告警',
+  }]);
+  assert.doesNotMatch(JSON.stringify(result), /CHILLED_WATER|asset-1|[0-9a-f]{8}-[0-9a-f]{4}-/u);
+
+  const none = createHarness({ findingsFor: () => ({ items: [] }) });
+  assert.equal((await execute(byName(none.tools, 'fdd_findings'), {})).note, '最近没有故障诊断结果');
+});
+
+test('work_order_list reads the Site’s unfinished work orders in the 工单 page’s words, the source device by name', async () => {
+  const workOrder = (overrides) => ({
+    title: '检查 2 号冷冻水泵', description: '低温差持续，检查水泵频率', priority: 'HIGH', status: 'OPEN', assigned: false,
+    fromAlarm: true, createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T12:30:00.000Z', ...overrides,
+  });
+  const harness = createHarness({
+    workOrdersFor: () => ({
+      items: [
+        workOrder({}),
+        workOrder({ title: '更换温度传感器', status: 'IN_PROGRESS', assigned: true, dueAt: '2026-10-18T09:00:00.000Z', fromAlarm: false, assetId: 'asset-1' }),
+        workOrder({ title: '补做巡检', status: 'BLOCKED', fromAlarm: false }),
+        workOrder({ title: '清洗过滤器', status: 'COMPLETED' }),
+      ],
+      hasMore: false,
+    }),
+  });
+  const result = await execute(byName(harness.tools, 'work_order_list'), {});
+
+  assert.deepEqual(harness.workOrderInputs[0].request.input, { siteId, limit: 100 });
+  assert.deepEqual(result.workOrders, [
+    { title: '检查 2 号冷冻水泵', description: '低温差持续，检查水泵频率', priority: '高', status: '待处理', assigned: '未指派', from: '来自告警', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+    { title: '更换温度传感器', description: '低温差持续，检查水泵频率', priority: '高', status: '处理中', assigned: '已指派', dueAt: '2026-10-18 02:00', from: '来自设备 Chiller 1', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+    { title: '补做巡检', description: '低温差持续，检查水泵频率', priority: '高', status: '受阻', assigned: '未指派', from: '人工创建', createdAt: '2026-10-17 05:00', updatedAt: '2026-10-17 05:30' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /asset-1|IN_PROGRESS|BLOCKED/u);
+
+  const none = createHarness({ workOrdersFor: () => ({ items: [], hasMore: false }) });
+  assert.equal((await execute(byName(none.tools, 'work_order_list'), {})).note, '现在没有还没处理完的工单');
+  // The newest 100 all finished does not mean none is left: older ones were not read.
+  const unread = createHarness({ workOrdersFor: () => ({ items: [workOrder({ status: 'COMPLETED' })], hasMore: true }) });
+  assert.equal((await execute(byName(unread.tools, 'work_order_list'), {})).note, '最近更新的 100 张工单都已处理完，更早的没有看');
+  await assert.rejects(
+    () => execute(byName(none.tools, 'work_order_list'), { status: 'closed' }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
+  );
 });

@@ -4,6 +4,8 @@ import test from 'node:test';
 import { OwnerReadError } from '../dist/application/index.js';
 import {
   createAlarmOwnerReader,
+  createFddOwnerReader,
+  createWorkOrderOwnerReader,
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
@@ -736,4 +738,49 @@ test('Alarm reader lists a Site’s alarms with the context in the alarm owner�
     request: { requestId: 'read-alarms-002', tool: 'alarm.listAlarms', input: { siteId, condition: 'ACTIVE', limit: 50 } },
     context: alarmContext,
   }), 'OWNER_RESPONSE_INVALID');
+});
+
+// #595: FDD and the work-order owner read the Gateway's context from their own headers; the readers
+// send nothing else and keep only what the Tools say.
+test('FDD and work-order readers send the context in the owner’s own header and keep only what is said', async () => {
+  const calls = [];
+  const record = (body) => async (url, init) => {
+    calls.push({ url: String(url), init });
+    return jsonResponse(body);
+  };
+  const withGrant = (tool) => ({ ...context, authorization: { ...context.authorization, toolDelegationGrants: { [tool]: `${tool}-context` } } });
+
+  const fdd = createFddOwnerReader({
+    baseUrl: 'https://fdd-service.internal',
+    fetchImplementation: record({ items: [{
+      id: 'finding-1', tenantId: scope.tenantId, siteId, assetId: 'asset-1', findingType: 'CHILLED_WATER_LOW_DELTA_T',
+      evaluationFrom: '2026-10-17T11:00:00Z', evaluationTo: '2026-10-17T12:00:00Z', evidenceIds: ['e-1'], confidence: 0.9,
+      observedValue: 3.2, thresholdValue: 5, valueUnit: 'K', alarmId: 'alarm-1', createdAt: '2026-10-17T12:01:00Z',
+    }] }),
+  });
+  const findings = await fdd.read({ request: { requestId: 'read-fdd-001', tool: 'fdd.listFindings', input: { siteId, limit: 50 } }, context: withGrant('fdd.listFindings') });
+  assert.equal(calls[0].url, `https://fdd-service.internal/v1/sites/${siteId}/fdd/findings?limit=50`);
+  assert.equal(calls[0].init.headers['X-FDD-Context'], 'fdd.listFindings-context');
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], undefined);
+  assert.deepEqual(findings.payload.items, [{
+    assetId: 'asset-1', findingType: 'CHILLED_WATER_LOW_DELTA_T', evaluationFrom: '2026-10-17T11:00:00Z', evaluationTo: '2026-10-17T12:00:00Z',
+    observedValue: 3.2, thresholdValue: 5, valueUnit: 'K', linkedToAlarm: true, linkedToWorkOrder: false, createdAt: '2026-10-17T12:01:00Z',
+  }]);
+
+  const workOrders = createWorkOrderOwnerReader({
+    baseUrl: 'https://work-order-service.internal',
+    fetchImplementation: record({ schemaVersion: 1, items: [{
+      schemaVersion: 1, workOrderId: 'wo-1', tenantId: scope.tenantId, siteId, title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN',
+      sourceReferences: [{ domain: 'ALARM', resourceId: 'alarm-1', relationship: 'ORIGIN' }, { domain: 'ASSET', resourceId: 'asset-1', relationship: 'ORIGIN' }], assigneeId: 'principal-7',
+      tasks: {}, noteCount: 0, attachmentCount: 0, completionEvidence: [], timeline: [], version: 1, createdAt: '2026-10-17T12:00:00Z', updatedAt: '2026-10-17T12:30:00Z',
+    }], nextCursor: null, hasMore: false }),
+  });
+  const list = await workOrders.read({ request: { requestId: 'read-wo-001', tool: 'workorder.listWorkOrders', input: { siteId, limit: 100 } }, context: withGrant('workorder.listWorkOrders') });
+  assert.equal(calls[1].url, `https://work-order-service.internal/internal/v1/sites/${siteId}/work-orders?limit=100`);
+  assert.equal(calls[1].init.headers['X-Work-Order-Read-Context'], 'workorder.listWorkOrders-context');
+  assert.equal(calls[1].init.headers['X-Delegation-Grant'], undefined);
+  assert.deepEqual(list.payload.items, [{
+    title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN', assigned: true, fromAlarm: true, assetId: 'asset-1',
+    createdAt: '2026-10-17T12:00:00Z', updatedAt: '2026-10-17T12:30:00Z',
+  }]);
 });

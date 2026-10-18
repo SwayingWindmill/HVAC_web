@@ -28,7 +28,7 @@ func TestWorkOrderHTTPLifecycleRunsReviewedGraphWithExactContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestWorkOrderHTTPLifecycleRejectsWrongActionMissingEvidenceAndStaleVersion(
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "create-lifecycle-http", OccurredAt: now.Format(time.RFC3339Nano),
 	})
 	store, _ := NewMemoryStore([]workordermodel.WorkOrder{initial})
-	handler, _ := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, _ := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 
 	wrongKey := "start-http-wrong1"
 	wrong := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":start", strings.NewReader("{\"expectedVersion\":1,\"reason\":\"start\"}"))
@@ -162,7 +162,7 @@ func TestWorkOrderHTTPLifecyclePreconditionRequiresExactWriteContextAndKeyScope(
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestWorkOrderHTTPLifecycleRejectsStoreAuditEvidenceDrift(t *testing.T) {
 		t.Fatalf("drift fixture must remain structurally valid: %v", err)
 	}
 	store := &fakeStore{item: started}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now.Add(time.Minute) }})
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now.Add(time.Minute) }})
 	if err != nil {
 		t.Fatal(err)
 	}

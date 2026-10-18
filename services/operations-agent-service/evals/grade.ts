@@ -164,11 +164,15 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
 
   const checks: Check[] = [];
   const expectedOutcome = question.expect === 'DECLINE' ? null : question.expect;
+  const readsOwnTool = question.reads === undefined
+    || snapshot.toolExecutions.some((execution) => execution.toolName === question.reads && execution.status === 'COMPLETED');
   checks.push(run?.status !== 'COMPLETED'
     ? fail('completed', `Run ended ${run?.status ?? 'without a Run'}`)
-    : expectedOutcome !== null && finding?.outcome !== expectedOutcome
-      ? fail('completed', `finding is ${finding?.outcome ?? 'missing'}, expected ${expectedOutcome}`)
-      : pass('completed'));
+    : !readsOwnTool
+      ? fail('completed', `did not read ${question.reads}`)
+      : expectedOutcome !== null && finding?.outcome !== expectedOutcome
+        ? fail('completed', `finding is ${finding?.outcome ?? 'missing'}, expected ${expectedOutcome}`)
+        : pass('completed'));
 
   if (question.figures.length > 0) {
     const stated = [answer, ...findingText].join('\n');

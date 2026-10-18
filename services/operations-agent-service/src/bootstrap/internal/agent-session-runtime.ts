@@ -18,6 +18,8 @@ import {
 } from '../../runtime-pi/index.js';
 import {
   createAlarmOwnerReader,
+  createFddOwnerReader,
+  createWorkOrderOwnerReader,
   createDeviceTelemetryOwnerReader,
   createEnergyAnalyticsOwnerReader,
   createSemanticQueryOwnerReader,
@@ -26,6 +28,8 @@ import {
   createHvacReadTools,
   createRegistryOwnerReader,
   type AlarmOwnerReaderConfig,
+  type FddOwnerReaderConfig,
+  type WorkOrderOwnerReaderConfig,
   type DeviceTelemetryOwnerReaderConfig,
   type EnergyAnalyticsOwnerReaderConfig,
   type GatewayToolAuthorizationReaderConfig,
@@ -47,6 +51,8 @@ export interface ProductionAgentSessionOwnerConfig {
   readonly telemetryQuery: EnergyAnalyticsOwnerReaderConfig;
   readonly gatewayToolAuthorization: GatewayToolAuthorizationReaderConfig;
   readonly alarm: AlarmOwnerReaderConfig;
+  readonly fdd: FddOwnerReaderConfig;
+  readonly workOrder: WorkOrderOwnerReaderConfig;
 }
 
 export interface ProductionAgentSessionRuntimeOptions {
@@ -89,6 +95,8 @@ export const createProductionAgentSessionRuntime = async (
     const energyAnalyticsReader = createEnergyAnalyticsOwnerReader(options.owners.telemetryQuery);
     const semanticQueryReader = createSemanticQueryOwnerReader(options.owners.telemetryQuery);
     const alarmReader = createAlarmOwnerReader(options.owners.alarm);
+    const fddReader = createFddOwnerReader(options.owners.fdd);
+    const workOrderReader = createWorkOrderOwnerReader(options.owners.workOrder);
     const telemetryHistoryReader = createTelemetryHistoryOwnerReader(options.owners.telemetryQuery);
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
@@ -112,6 +120,8 @@ export const createProductionAgentSessionRuntime = async (
         energyAnalyticsReader,
         semanticQueryReader,
         alarmReader,
+        fddReader,
+        workOrderReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
         now: options.now ?? Date.now,
       }),
