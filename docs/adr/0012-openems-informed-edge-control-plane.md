@@ -12,7 +12,7 @@ The existing Phase 1 architecture treated Edge primarily as an OT gateway with l
 
 OpenEMS provides mature architectural mechanisms for on-site EMS control: Input-Process-Output cycles, immutable Process Images, Channel value/nextValue buffering, Controller/Scheduler ordering, device-independent Natures, reusable protocol Bridges, local Timedata/resend policies and simulators that reuse production Controllers/Schedulers.
 
-A project-level adjudication compared 50 architecture concerns without giving incumbency preference to either OpenEMS or HVAC Web. The machine-readable result is `contracts/architecture/edge-control-plane.v1.json`; the detailed reasoning is `docs/architecture/openems-architecture-adjudication.md`.
+A project-level adjudication compared 50 architecture concerns without giving incumbency preference to either OpenEMS or HVAC Web. The machine-readable result is `contracts/architecture/edge-control-plane.v1.json`.
 
 ## Decision
 
@@ -166,7 +166,7 @@ For every `OPENEMS` decision and every `MERGE` decision whose Edge behavior mate
 
 1. read the relevant official OpenEMS source at the pinned baseline;
 2. read the relevant upstream tests and official documentation;
-3. record observed runtime semantics and lifecycle behavior in `docs/architecture/openems-source-review.md`;
+3. record observed runtime semantics and lifecycle behavior in the pull request that adopts them;
 4. classify each relevant mechanism as `ADOPT`, `ADAPT`, or `REJECT` for HVAC Web;
 5. only then implement or refactor the local code;
 6. add local behavior tests that exercise the adopted/adapted semantics.
@@ -205,7 +205,6 @@ Before claiming the Edge control architecture complete, implement:
 ## References
 
 - `contracts/architecture/edge-control-plane.v1.json`
-- `docs/architecture/openems-architecture-adjudication.md`
 - OpenEMS Edge Architecture: <https://openems.github.io/openems.io/openems/latest/edge/architecture.html>
 - OpenEMS Configuration: <https://openems.github.io/openems.io/openems/latest/edge/configuration.html>
 - OpenEMS Device implementation: <https://openems.github.io/openems.io/openems/latest/edge/implement.html>

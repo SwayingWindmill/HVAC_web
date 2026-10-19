@@ -10,7 +10,7 @@ Issue: #48
 
 S2 must replace the Legacy boolean `active` and untyped latest-telemetry behavior with platform-owned semantics that are safe for UI, alerting, FDD and future control decisions.
 
-The current Legacy path collapses confirmed inactivity, missing activity attributes and upstream failure into `false`; returns cache-only latest values without source or freshness metadata; and has no Snapshot, Cursor or Revision recovery model. The factual boundary is documented in `docs/research/s2-telemetry-thingsboard-boundary.md`.
+The current Legacy path collapses confirmed inactivity, missing activity attributes and upstream failure into `false`; returns cache-only latest values without source or freshness metadata; and has no Snapshot, Cursor or Revision recovery model.
 
 The terms `online`, `offline`, `stale`, `unknown` and `unavailable` cannot be one authoritative field because they answer different questions:
 
