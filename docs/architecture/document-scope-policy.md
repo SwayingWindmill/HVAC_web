@@ -46,7 +46,7 @@ S0 历史 durable-session/audit 实现和认证测试可以继续描述 Kafka-co
 
 保留的 Kubernetes 文档必须明确其作用域是 certification/reference/local fixture/future stage 中的一种，不得使用“Phase 1 正式部署必须”“Production 必须 Kubernetes”等表述。
 
-`deploy/s0/staging/`、`deploy/s3/target/`、Kind-based S3 local profiles 可以继续存在，但不得成为 `deployment:phase1:check` 的运行前置。
+仓库里已经没有 Kubernetes 清单（`deploy/s0/staging/`、`deploy/s3/target/` 已删除）；到多服务器阶段需要时再按当时的拓扑编写。
 
 ## S0–S5 表述规则
 

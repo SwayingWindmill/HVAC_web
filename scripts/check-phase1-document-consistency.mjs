@@ -39,7 +39,7 @@ assert(canonical.architecture.includes('一级架构只表达职责'), 'overall 
 assert(canonical.architecture.includes('Phase 1 canonical deployment'), 'overall architecture must define the canonical Phase 1 deployment');
 assert(canonical.architecture.includes('Docker Compose'), 'overall architecture must keep Docker Compose as the Phase 1 orchestration baseline');
 assert(canonical.architecture.includes('Kubernetes') && canonical.architecture.includes('不作为 Phase 1 前置'), 'overall architecture must explicitly defer Kubernetes as a Phase 1 prerequisite');
-assert(canonical.deployment.includes('Kubernetes/Kustomize assets elsewhere in the repository are future-stage or certification references'), 'canonical deployment README must bound retained Kubernetes assets');
+assert(canonical.deployment.includes('The repository keeps no Kubernetes manifests'), 'canonical deployment README must say Phase 1 has no Kubernetes manifests');
 assert(canonical.scopePolicy.includes('CANONICAL_ARCHITECTURE'), 'document scope policy must define CANONICAL_ARCHITECTURE');
 assert(canonical.scopePolicy.includes('CANONICAL_PHASE1_DEPLOYMENT'), 'document scope policy must define CANONICAL_PHASE1_DEPLOYMENT');
 assert(canonical.scopePolicy.includes('CERTIFICATION_REFERENCE'), 'document scope policy must define CERTIFICATION_REFERENCE');
@@ -53,7 +53,6 @@ const scopedDocuments = {
   'docs/operations/s0-security-failure-gates.md': ['Scope: CERTIFICATION_REFERENCE', 'not a Phase 1 deployment prerequisite'],
   'docs/operations/s0-observability.md': ['Scope: CERTIFICATION_REFERENCE', 'Redpanda is not required by the canonical Phase 1 deployment'],
   'docs/security/s0-durable-session-audit.md': ['Scope: CERTIFICATION_REFERENCE', 'does not make Kafka/Redpanda a Phase 1 Production dependency'],
-  'deploy/s3/target/README.md': ['Scope: CERTIFICATION_REFERENCE', 'not the canonical Phase 1 platform deployment'],
 };
 
 for (const [path, markers] of Object.entries(scopedDocuments)) {
@@ -79,9 +78,6 @@ for (const path of files) {
 
   if ((path.startsWith('docs/operations/s0-') || path.startsWith('docs/security/s0-')) && /Redpanda|Kubernetes/.test(content)) {
     assert(content.includes('Scope: CERTIFICATION_REFERENCE'), `${path} mentions Kubernetes/Redpanda but is missing CERTIFICATION_REFERENCE scope`);
-  }
-  if (path.startsWith('deploy/s3/') && path.endsWith('README.md') && /Kubernetes|kind cluster|ClusterIP/.test(content)) {
-    assert(/Scope: (CERTIFICATION_REFERENCE|LOCAL_FIXTURE)/.test(content), `${path} mentions Kubernetes but is missing certification/local-fixture scope`);
   }
 }
 

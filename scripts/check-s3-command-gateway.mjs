@@ -5,8 +5,7 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
-const [plan, routes, openapi, gateway, gatewayTests, gatewayMain, gatewayServer, iam, iamServer, iamTests, commandHTTP, commandHTTPTests, commandModel] = await Promise.all([
-  readJSON('deploy/s3/implementation-plan.v1.json'),
+const [routes, openapi, gateway, gatewayTests, gatewayMain, gatewayServer, iam, iamServer, iamTests, commandHTTP, commandHTTPTests, commandModel] = await Promise.all([
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/http/s3-command-public.openapi.json'),
   read('cmd/energy-api/internal/gateway/command.go'),
@@ -25,11 +24,6 @@ const errors = [];
 const assert = (condition, message) => {
   if (!condition) errors.push(message);
 };
-
-assert(plan.completedTickets?.includes('S3-04'), 'S3-04 is not marked complete');
-assert((plan.currentFrontier ?? []).some((ticket) => ['S3-07', 'S3-08', 'S3-09'].includes(ticket)), 'S3 frontier regressed before S3-07');
-assert(plan.productionTrafficPercent === 0, 'S3 Gateway baseline must keep zero production traffic');
-assert(plan.firstTracerBullet?.publicRoutesEnabled === false, 'S3 public Command routes enabled too early');
 
 const createRoute = routes.routes?.find((item) => item.method === 'POST' && item.path === '/api/v1/commands');
 const getRoute = routes.routes?.find((item) => item.method === 'GET' && item.path === '/api/v1/commands/{commandId}');

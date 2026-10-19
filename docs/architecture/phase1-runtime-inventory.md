@@ -73,10 +73,6 @@ This distinction matters when RC-03/RC-04 reorganize source code: one-shot comma
 
 The following roots must not define a second runtime truth:
 
-- `deploy/s0/`
-- `deploy/s2/`
-- `deploy/s3/`
-- `deploy/s4/`
 - `infra/durability/`
 - `infra/observability/`
 - `infra/registry/`

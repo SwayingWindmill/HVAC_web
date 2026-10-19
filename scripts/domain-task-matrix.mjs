@@ -27,7 +27,6 @@ export const gateCommandMatrix = Object.freeze({
       npmRun('backend:architecture:check'),
       npmRun('data:architecture:check'),
       npmRun('observability:phase1:check'),
-      npmRun('security:network-policies'),
       npmRun('notification:check'),
       npmRun('analytics:history:check'),
     ]),
@@ -85,7 +84,6 @@ export const gateCommandMatrix = Object.freeze({
       nodeRun('scripts/check-operations-agent-service-boundaries.mjs'),
       npmRun('test:gateway'),
     ]),
-    pocs: Object.freeze([npmRun('pocs:components:check')]),
   }),
   integration: Object.freeze({
     platform: Object.freeze([npmRun('test:durable-postgres')]),
@@ -130,7 +128,6 @@ export const gateProfileSets = Object.freeze({
       'command',
       'operations-agent',
       'platform',
-      'pocs',
       'registry',
       'telemetry',
       'web',
@@ -233,12 +230,6 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['operations-agent']),
     integration: Object.freeze(['operations-agent']),
-    browser: Object.freeze([]),
-  }),
-  pocs: Object.freeze({
-    contracts: Object.freeze([]),
-    unit: Object.freeze(['pocs']),
-    integration: Object.freeze([]),
     browser: Object.freeze([]),
   }),
 });
