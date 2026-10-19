@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
 import { History, SquarePen, Sparkles, X } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -48,6 +48,7 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
   const pending = thread.pendingInput;
   // 历史 shows my conversations in place of the open one; choosing one opens it (#639).
   const [showingHistory, setShowingHistory] = useState(false);
+  const threads = useMemo(() => history.map(({ id, question }) => ({ id, status: 'regular' as const, title: question })), [history]);
 
   const runtime = useExternalStoreRuntime<AssistantMessage>({
     messages: thread.messages,
@@ -66,11 +67,8 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
     adapters: {
       threadList: {
         threadId: thread.sessionId ?? undefined,
-        threads: history.map(({ id, question, startedAt, status }) => ({ id, status: 'regular', title: question, custom: { startedAt, status } })),
-        onSwitchToThread: (sessionId) => {
-          open(sessionId);
-          setShowingHistory(false);
-        },
+        threads,
+        onSwitchToThread: open,
       },
     },
   });
@@ -127,7 +125,7 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
       ) : (
         <AssistantRuntimeProvider runtime={runtime}>
           {showingHistory ? (
-            <AssistantHistory timezone={timezone} />
+            <AssistantHistory conversations={history} timezone={timezone} onChosen={() => setShowingHistory(false)} />
           ) : (
             <AssistantThread
               siteId={siteId}

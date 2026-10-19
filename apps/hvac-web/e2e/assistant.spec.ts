@@ -97,6 +97,10 @@ test('历史 lists my conversations newest first, and an older one opens with it
   await expect(history).toHaveCount(0);
   await expect(panel.locator('[data-role="user"]')).toHaveText(['10月15日用了多少电？']);
   await expect(panel.getByTestId('assistant-finding')).toHaveCount(1);
+  // Choosing the conversation already open closes the list as well.
+  await panel.getByRole('button', { name: '历史对话' }).click();
+  await history.getByRole('button', { name: '10月15日用了多少电？' }).click();
+  await expect(history).toHaveCount(0);
 
   await composer.fill('那 C 机组呢？');
   await panel.getByRole('button', { name: '发送' }).click();

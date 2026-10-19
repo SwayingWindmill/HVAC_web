@@ -30,7 +30,7 @@ export interface AssistantConversation {
 
 export interface AssistantSession {
   readonly thread: AssistantThread;
-  /** My conversations on the Site, the newest started first. */
+  /** My conversations on the Site, the newest started first, as the Agent lists them. */
   readonly history: readonly AssistantConversation[];
   readonly loading: boolean;
   readonly error: string | null;
@@ -147,14 +147,13 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
   }, [siteId, stopFollowing]);
   const startNew = useCallback(() => select(null), [select]);
 
-  const history = useMemo(() => [...(sessions.data ?? [])]
-    .sort((left, right) => right.session.createdAt - left.session.createdAt)
-    .map(({ session, messages }) => ({
-      id: session.id,
-      question: messages.find((message) => message.role === 'OPERATOR')?.content ?? '',
-      startedAt: session.createdAt,
-      status: session.status,
-    })), [sessions.data]);
+  // A conversation always starts with a question, so the first message is the operator's.
+  const history = useMemo(() => (sessions.data ?? []).map(({ session, messages }) => ({
+    id: session.id,
+    question: messages.find((message) => message.role === 'OPERATOR')!.content,
+    startedAt: session.createdAt,
+    status: session.status,
+  })), [sessions.data]);
 
   return {
     thread,
