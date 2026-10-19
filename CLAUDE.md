@@ -4,7 +4,7 @@
 
 接手工作先读 `docs/HANDOFF.md`（当前状态、下一步、本地环境偏差）；用户可见的变化记入 `CHANGELOG.md`，两者随 PR 一起更新。
 
-`docs/` 里带日期或名为 `*-source-review*` 的文档是当时的调研记录，只作背景；当前约定看 `GLOSSARY.md`、`docs/adr/` 和 AGENTS.md 列出的权威文档，与代码冲突时以代码为准。AGENTS.md 是更详细的规则来源，本文件是它的精简版。
+当前约定看 `GLOSSARY.md`、`docs/adr/`、`docs/specs/` 和 `DESIGN.md`，与代码冲突时以代码为准。AGENTS.md 是更详细的规则来源，本文件是它的精简版。
 
 ## 仓库结构
 
@@ -74,6 +74,11 @@ node scripts/run-s2-realtime-postgres-tests.mjs          # 遥测 Postgres 集�
 - 组件不直接 fetch，统一走 OpenAPI 生成的客户端加 feature 内的 query。URL 状态归 Router 管，服务端状态归 Query 管。
 - 面向运维人员的界面只显示业务事实，不显示 UUID、trace ID 或内部枚举。
 - 只面向桌面端，不做移动端与响应式适配；UI 改动要在 1440px 宽度下用真实数据实际看过，不能拿构建通过代替。
+
+## 文档
+
+- 一律用中文和具体的大白话：说清楚谁会看到什么、哪个数字会变；讲规则时给一个例子；专业词第一次出现时解释或换成日常说法；代码里的名字照原样写。
+- 只写现在成立的事：过时的直接改掉或删掉，历史留在 git 里；不写 S0–S5 这类阶段代号。调研记录只在被现行 ADR、规格、HANDOFF 或代码引用时保留。
 
 ## Git
 
