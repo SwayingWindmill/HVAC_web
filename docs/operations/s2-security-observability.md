@@ -56,21 +56,61 @@ Exporter 使用有界异步队列。Collector 不可用、export timeout 或 que
 
 ## 告警处理
 
-### snapshot-slo / snapshot-age
+### snapshot-slo
 
 检查 Gateway 与 Telemetry Runtime、PostgreSQL owner、route stage 和 Snapshot age。确认不存在 authority bypass；需要回退时仅执行 route revision rollback，不做 request-level Legacy fallback。
 
-### ingest-lag / presence-lateness / upstream
+### snapshot-age
+
+处理方法同 snapshot-slo。
+
+### ingest-lag
 
 检查 ThingsBoard / MQTT source adapter、reconciliation、quarantine 和 source lag。原始 Device/key/value 不进入告警 label，详细对象通过 Audit Ledger 与 HMAC reference 定位。
 
-### outbox-lag / publication-lag / recovery / subscription / revocation / slow-consumers
+### presence-lateness
+
+处理方法同 ingest-lag。
+
+### upstream
+
+处理方法同 ingest-lag。
+
+### outbox-lag
 
 检查 outbox lease、Redis、Centrifugo、publication history、server-side unsubscribe 和 client Snapshot recovery。任何 unknown recovery 或 Revision gap 强制 fresh Snapshot。
 
-### redis / postgres / exporter
+### publication-lag
+
+处理方法同 outbox-lag。
+
+### recovery
+
+处理方法同 outbox-lag。
+
+### subscription
+
+处理方法同 outbox-lag。
+
+### revocation
+
+处理方法同 outbox-lag。
+
+### slow-consumers
+
+处理方法同 outbox-lag。
+
+### redis
 
 依赖故障告警分别路由到 primary/secondary owner。Exporter 故障不得升级为业务失败；Redis/PostgreSQL 故障不得触发 Legacy/Mock fallback。
+
+### postgres
+
+处理方法同 redis。
+
+### exporter
+
+处理方法同 redis。
 
 ## 可运行门禁
 

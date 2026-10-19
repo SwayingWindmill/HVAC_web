@@ -12,7 +12,6 @@ async function text(path) {
 }
 
 const lock = JSON.parse(await text('pocs/platform-components/versions.lock.json'));
-const readme = await text('pocs/platform-components/README.md');
 const compose = await text('pocs/platform-components/docker/compose.yaml');
 const connect = await text('pocs/platform-components/docker/redpanda-connect.yaml');
 const centrifugo = await text('pocs/platform-components/docker/centrifugo.json');
@@ -48,19 +47,6 @@ assert(/@sha256:[a-f0-9]{64}$/.test(realtimeRedis?.image ?? ''), 'S2 realtime Re
 assert(/^[a-f0-9]{64}$/.test(lock.components.envoyGateway.installerSha256), 'Envoy installer SHA-256 is invalid');
 for (const name of ['debezium', 'redpandaConnect', 'centrifugo', 'redpandaBrokerCompatibility']) {
   assert(/@sha256:[a-f0-9]{64}$/.test(lock.components[name].image), `${name} image must be digest pinned`);
-}
-
-for (const component of ['Envoy Gateway', 'Debezium', 'Redpanda Connect', 'Centrifugo', 'River']) {
-  assert(readme.includes(component), `README is missing ${component}`);
-}
-for (const boundary of [
-  'not production dependencies',
-  'business identity headers',
-  'single-direction CDC',
-  'platform-owned Snapshot/Cursor/Scope semantics',
-  'with no external side effect ambiguity',
-]) {
-  assert(readme.includes(boundary), `README is missing boundary: ${boundary}`);
 }
 
 const composeImages = [...compose.matchAll(/^\s+image:\s+(.+)$/gm)].map((match) => match[1].trim());

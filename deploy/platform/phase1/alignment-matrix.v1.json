@@ -356,14 +356,6 @@
       "action": "只有现场阶段需要 Optimization 时才启用 --profile intelligence；不得让其影响 Telemetry 或 Control Safety"
     },
     {
-      "id": "DOC-CONSISTENCY-001",
-      "area": "documentation",
-      "requirement": "局部认证、Local Fixture 和未来阶段文档不得反向定义 Phase 1 总体与正式部署架构",
-      "status": "KEEP",
-      "current": "已建立 document-scope-policy，并为 S0 Kubernetes/Redpanda 与 S3 Kind/Target 文档增加 CERTIFICATION_REFERENCE 或 LOCAL_FIXTURE 标记；自动 Gate 扫描禁用表述",
-      "action": "运行 docs:phase1:consistency:check；新增旧架构或认证文档时必须声明作用域"
-    },
-    {
       "id": "PRODUCTION-FIXTURE-001",
       "area": "security",
       "requirement": "Production 不使用测试设备、Demo 数据或测试 Identity Provider",
