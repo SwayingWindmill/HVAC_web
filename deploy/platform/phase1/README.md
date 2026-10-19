@@ -10,7 +10,7 @@ The Phase 1 runtime model is:
 Docker Compose
 ```
 
-Kubernetes/Kustomize assets elsewhere in the repository are future-stage or certification references. They are not required to run or accept Phase 1.
+The repository keeps no Kubernetes manifests; Phase 1 neither needs nor ships any.
 
 ## Public boundary
 

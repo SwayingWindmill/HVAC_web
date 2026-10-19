@@ -24,8 +24,8 @@
       "area": "orchestration",
       "requirement": "Kubernetes 在多服务器、多实例、高可用、自动扩缩容阶段再引入",
       "status": "DEFER",
-      "current": "deploy/s0/staging 与 deploy/s3/target 已有 Kustomize/NetworkPolicy/PDB/CSI",
-      "action": "保留为 Phase 3/future reference，不作为 Phase 1 acceptance blocker"
+      "current": "仓库里没有 Kubernetes 清单",
+      "action": "到多服务器阶段再按当时的拓扑编写，不作为 Phase 1 验收前提"
     },
     {
       "id": "ENV-001",

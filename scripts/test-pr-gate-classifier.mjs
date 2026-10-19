@@ -67,7 +67,7 @@ test('domain module changes stay scoped to product domains', () => {
 });
 
 test('retired migration evidence does not trigger product gates', () => {
-  for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go', 'pocs/telemetry-shadow-comparator/internal/comparison/comparison.go']) {
+  for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go']) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, []);
     assert.deepEqual(classification.integrationProfiles, []);
@@ -86,7 +86,6 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
     assert.equal(classification.broad, true);
     assert.equal(classification.unknown, false);
     assert.ok(classification.unitProfiles.includes('operations-agent'));
-    assert.ok(classification.unitProfiles.includes('pocs'));
     assert.deepEqual(classification.integrationProfiles, []);
     assert.deepEqual(classification.browserProfiles, []);
   }

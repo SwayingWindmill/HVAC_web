@@ -22,7 +22,6 @@ const paths = {
   deploymentTiers: 'deploy/platform/phase1/deployment-tiers.v1.json',
   runtimeInventory: 'deploy/platform/phase1/runtime-inventory.v1.json',
   availabilityTier: 'deploy/platform/phase1/availability-tier.v1.json',
-  s2ReleaseGates: 'deploy/s2/release-gates.v1.json',
   recoveryAttainment: 'deploy/platform/phase1/recovery/attainment.v1.json',
   loki: 'deploy/platform/phase1/observability/loki.yaml',
   tempo: 'deploy/platform/phase1/observability/tempo.yaml',
@@ -109,13 +108,12 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
-const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
+const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
   read(paths.otelLogs),
   readJSON(paths.deploymentTiers),
   readJSON(paths.runtimeInventory),
   readJSON(paths.availabilityTier),
   readJSON(paths.recoveryAttainment),
-  readJSON(paths.s2ReleaseGates),
   read(paths.clickhouseResourceLimits),
   readJSON(paths.processFailureScenarios),
   read(paths.ownerSplitCompose),
@@ -198,17 +196,11 @@ assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerS
 for (const owner of ['iam-owner', 'audit-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
   assert(ownerSplitCompose.includes(`  ${owner}:`), `owner-split Compose must define ${owner}`);
 }
-assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile') && !compose.includes('dockerfile: deploy/s'), 'canonical Compose must build Go workloads from the canonical Phase 1 image definition, not historical deploy/s* paths');
-assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile') && !ownerSplitCompose.includes('dockerfile: deploy/s'), 'owner-split overlay must reuse the canonical Phase 1 image definition, not historical deploy/s* paths');
+assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'canonical Compose must build Go workloads from the canonical Phase 1 image definition');
+assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'owner-split overlay must reuse the canonical Phase 1 image definition');
 assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Notification in-process without adding a message backbone');
 assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
 assert(thingsboardSourceReview.includes('## 18. Phase 1 deployment tiers / owner split 实施源码复核') && thingsboardSourceReview.includes('DefaultTbServiceInfoProvider.java') && thingsboardSourceReview.includes('DefaultInMemoryStorageTest.java'), 'deployment topology changes must retain the pinned ThingsBoard source/test review');
-assert(
-  s2ReleaseGates.slo?.snapshotHttp?.availabilityScope === 'snapshot-http-conditional-on-required-infrastructure'
-    && JSON.stringify(s2ReleaseGates.slo?.snapshotHttp?.appliesToAvailabilityTiers) === JSON.stringify(['COMPONENT_REDUNDANT', 'HA'])
-    && s2ReleaseGates.slo?.snapshotHttp?.wholePlatformClaimAllowed === false,
-  'S2 Snapshot 99.9 objective must be scoped away from SINGLE_NODE_RECOVERABLE and whole-platform claims',
-);
 assert((availabilityTier.spofInventory ?? []).length >= 6 && availabilityTier.spofInventory.every((entry) => entry.spof === true && entry.component && Array.isArray(entry.upgradePath) && entry.upgradePath.length > 0), 'availability tier must enumerate SPOF impacts and upgrade costs');
 assert(availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'upgrade path reference must pin the reviewed ThingsBoard source');
 try {

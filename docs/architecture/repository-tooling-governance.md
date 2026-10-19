@@ -10,7 +10,7 @@ GitHub language statistics must describe product/runtime source rather than repo
 
 - Product/runtime source lives under `apps/`, `cmd/`, `modules/`, `libs/`, intentionally independent `services/`, `infra/`, and the governed contracts/deployment trees. New JavaScript or JSX source is not allowed there; use TypeScript/TSX for web/Node code and the existing owner language for backend/runtime code.
 - Repository tooling lives primarily under `scripts/`. New tooling must be TypeScript. Existing `.js`/`.mjs` files are a legacy surface that may shrink or be migrated, but must not silently grow.
-- `benchmarks/`, `pocs/`, and `services/operations-agent-service/test/` are ancillary verification/research surfaces. They remain subject to the JavaScript ratchet while being excluded from GitHub Linguist product-language statistics.
+- `benchmarks/` and `services/operations-agent-service/test/` are ancillary verification/research surfaces. They remain subject to the JavaScript ratchet while being excluded from GitHub Linguist product-language statistics.
 - `.scratch/` is not a runtime/tooling ownership boundary. Tracked executable JavaScript is not allowed there; the Phase 1 governance change removes the remaining tracked scratch capture script.
 
 ## Machine contract
@@ -31,7 +31,6 @@ The initial #288 ratchet was 256 JavaScript files / 2,890,378 bytes, including 2
 
 - `scripts/**`
 - `benchmarks/**`
-- `pocs/**`
 - `services/operations-agent-service/test/**`
 - `.agents/**`
 

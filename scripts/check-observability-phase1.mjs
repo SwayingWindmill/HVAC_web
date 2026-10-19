@@ -72,14 +72,6 @@ for (const label of forbidden) {
   if (prometheusLabelPattern.test(`${dashboardText}\n${alertText}`)) throw new Error(`operations query uses forbidden high-cardinality label: ${label}`);
 }
 
-for (const marker of [
-  'hvac_s2_data_quality_records_total',
-  'quality',
-  '"mqtt"',
-]) {
-  const s2Catalog = await read('deploy/s2/observability/metric-catalog.v1.json');
-  if (!s2Catalog.includes(marker)) throw new Error(`S2 metric catalog is missing ${marker}`);
-}
 for (const alert of [
   'EdgeMQTTPublisherDisconnected',
   'EdgeStoreForwardQueueHigh',
