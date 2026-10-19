@@ -6,7 +6,6 @@ import {
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   MAX_CHART_CATEGORIES,
-  MAX_CHART_SERIES,
   needsExecutionCorrection,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
@@ -104,13 +103,16 @@ const toolFailureCodes = new Set<AgentToolErrorCode>([
   'TOOL_EXECUTION_FAILED',
 ]);
 
+/** A successful read: the provider's call id, and the read's chart as its Tool draws it (#640). */
+interface ReadEvidence {
+  readonly toolCallId: string;
+  readonly chart: () => FindingChart | null;
+}
+
 interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
-  /**
-   * Each successful read by the short id the model cites in a card ("E1"): the provider's call id,
-   * and the read's chart as its Tool draws it (#640).
-   */
-  readonly reads: Map<string, { readonly toolCallId: string; readonly chart: () => FindingChart | null }>;
+  /** Each successful read by the short id the model cites in a card ("E1"). */
+  readonly reads: Map<string, ReadEvidence>;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
   calls: number;
@@ -307,11 +309,28 @@ const chartOf = (
       : `chartFrom 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
   }
   const chart = read.chart();
-  if (chart === null || chart.categories.length > MAX_CHART_CATEGORIES || chart.series.length > MAX_CHART_SERIES) {
-    return refuse('FINDING_CHART_UNAVAILABLE', `${chartFrom} 读到的数据画不了图（不是按时间、按设备或对比的数据，或者数据点太多）：换一次合适的读数据，或者不写 chartFrom。`);
+  if (chart === null) {
+    return refuse('FINDING_CHART_UNAVAILABLE', `${chartFrom} 读到的数据画不了图（只画按时间、按设备或两段对比的用电、供冷和设备读数）：换一次合适的读数据，或者不写 chartFrom。`);
   }
-  return Object.freeze(chart);
+  if (chart.categories.length > MAX_CHART_CATEGORIES) {
+    return refuse('FINDING_CHART_UNAVAILABLE', `${chartFrom} 有 ${chart.categories.length} 个点，图最多画 ${MAX_CHART_CATEGORIES} 个：按天读一次再画，或者不写 chartFrom。`);
+  }
+  return publicChart(chart);
 };
+
+// The contract bounds a chart's text, and a value read as empty still needs a label, so the card
+// shows the Tool's chart as the gateway will accept it.
+const clip = (text: string, length: number): string => (text.length > length ? text.slice(0, length) : text);
+const publicChart = (chart: FindingChart): FindingChart => Object.freeze({
+  kind: chart.kind,
+  title: clip(chart.title, 64),
+  unit: clip(chart.unit, 16),
+  categories: Object.freeze(chart.categories.map((category) => clip(category.trim() === '' ? '—' : category, 32))),
+  series: Object.freeze(chart.series.map((series) => Object.freeze({
+    name: clip(series.name.trim() === '' ? '—' : series.name, 32),
+    values: Object.freeze(series.values.map((value) => (value !== null && Number.isFinite(value) ? value : null))),
+  }))),
+});
 
 const createInvestigationCompleteTool = ({
   sessionId,
@@ -411,7 +430,7 @@ const createInvestigationRequestInputTool = ({
 export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
   const state: ProjectToolBudgetState = {
     budget: input.budget,
-    reads: new Map<string, { readonly toolCallId: string; readonly chart: () => FindingChart | null }>(),
+    reads: new Map<string, ReadEvidence>(),
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
     calls: 0,

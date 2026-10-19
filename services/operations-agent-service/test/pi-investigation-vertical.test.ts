@@ -1196,3 +1196,23 @@ test('a card charts the read it names, drawn by that read\'s Tool, and refuses o
   assert.deepEqual(result.artifacts[0].finding.chart, hourly);
   assert.equal('chartFrom' in result.artifacts[0].finding, false);
 });
+
+// #640: the card's chart fits the public contract whatever the read held, and a read with more
+// points than a chart holds is refused with how many and what to do.
+test('a chart is fitted to the public contract, and one with too many points is refused saying so', async () => {
+  const long = '冷'.repeat(40);
+  const fitted = Object.freeze({ ...projectTool('telemetry_query_history', async () => ({})), chart: () => ({ kind: 'LINE', title: long.repeat(2), unit: '', categories: ['', long], series: [{ name: long, values: [1, Number.NaN] }] }) });
+  const crowded = Object.freeze({ ...projectTool('energy_query_series', async () => ({})), chart: () => ({ kind: 'LINE', title: '每小时用电', unit: 'kWh', categories: Array.from({ length: 201 }, (_, index) => `${index}`), series: [{ name: '用电', values: Array(201).fill(1) }] }) });
+  const card = (chartFrom) => ({ outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [], chartFrom });
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'history-1', name: 'telemetry_query_history', arguments: {} }, { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'crowded', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E2') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'fitted', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E1') }], stopReason: 'toolUse' },
+  ], [fitted, crowded], { ...budget, maxModelCalls: 5 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'crowded').failureCode, 'FINDING_CHART_UNAVAILABLE');
+  assert.match(requests[2].filter((message) => message.role === 'toolResult').at(-1).text, /201 个点，图最多画 200 个：按天读一次再画/u);
+  assert.deepEqual(result.artifacts[0].finding.chart, {
+    kind: 'LINE', title: long.repeat(2).slice(0, 64), unit: '', categories: ['—', long.slice(0, 32)], series: [{ name: long.slice(0, 32), values: [1, null] }],
+  });
+});

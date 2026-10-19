@@ -751,9 +751,8 @@ test('Tariff periods read as the pages show them, energy no Tariff covers as unp
     measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
   });
   assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
-  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
-    kind: 'BAR', title: '10月15日各电价时段的电费', unit: '元', categories: ['尖峰', '谷', '未计价'], series: [{ name: '电费', values: [12, 3, null] }],
-  });
+  // Only energy is charted (#640).
+  assert.equal(byName(harness.tools, 'energy_semantic_query').chart(result), null);
 });
 
 test('one semantic query reads the Site\'s energy and its estimated cost together, one row per period', async () => {
@@ -1000,4 +999,16 @@ test('energy_query_series draws hours as a line and days as bars, and nothing wi
   const empty = seriesHarness([], 'hour');
   const nothing = byName(empty.tools, 'energy_query_series');
   assert.equal(nothing.chart(await execute(nothing, { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' })), null);
+});
+
+// #640: a comparison the Tool would not make is not charted either.
+test('energy_compare_periods draws no chart when it could not compare the periods', async () => {
+  const harness = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'compare-partial', 'UNCERTAIN', 'telemetry-query-service:energy-series/v1',
+      energyPayload({ from: input.request.input.from, to: input.request.input.to, partial: true })),
+  });
+  const tool = byName(harness.tools, 'energy_compare_periods');
+  const comparison = await execute(tool, { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' });
+  assert.equal(comparison.comparison.status, '数据不完整，不能比较');
+  assert.equal(tool.chart(comparison), null);
 });
