@@ -132,6 +132,7 @@
 - **在 worktree 里跑 local:up。** Windows git 建的 worktree 在 `.git` 里存的是 Windows 路径，要设 `GIT_DIR`/`GIT_WORK_TREE`，并把 `PHASE1_RUNTIME_DIR`、`PHASE1_ENV_FILE` 指向主目录的运行时文件和环境文件。
 - **Go 代理不稳。** `goproxy.cn` 有时下载失败，用 `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` 跑 `local:up`，网络出错就重跑。
 - **本地栈开着时跑 e2e。** e2e 构建本身就可能超过 Playwright 240 秒的启动超时，并行的 worker 也会在加载不完的页面上超时。先构建一次 `dist-e2e`，自己开 `vite preview --outDir dist-e2e --port 5190`（配置会复用），再 `npm run web:e2e -- --workers=1`。
+- **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（端口被占时会直接报错，而不是悄悄复用）。
 - **集成测试只在改到对应模块时才跑。** 所以一个迁移弄坏了别的模块的种子数据，要等以后改到那个模块才会发现（例如 #504 修的 Registry 种子写 FDD 结论）。
 
 ## 流程

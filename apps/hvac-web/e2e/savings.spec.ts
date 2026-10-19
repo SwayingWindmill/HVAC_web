@@ -65,11 +65,15 @@ test('a measure on the plant meter reports alone, and the owner says so', async 
   expect(gateway.measures.filter((measure) => measure.status === 'IMPLEMENTED')).toHaveLength(1);
 });
 
-// The planned time defaults to now; the clock passing a minute must not wipe what the operator typed.
-test('a half-filled measure keeps what was typed when the clock passes a minute', async ({ page }) => {
+// The planned time defaults to when the form is opened, and the clock passing a minute must not wipe what was typed.
+test('a new measure is planned for when the form is opened and keeps what was typed while the clock runs', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-10-20T10:00:30+08:00') });
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
-  await page.getByRole('button', { name: '登记措施' }).first().click();
+  const open = page.getByRole('button', { name: '登记措施' }).first();
+  await expect(open).toBeVisible();
+  await page.clock.fastForward('02:00:00');
+  await open.click();
+  await expect(page.getByLabel('计划实施时间')).toHaveValue('2026-10-20T12:00');
   await page.getByLabel('名称').fill('冷冻泵降频');
   await page.clock.fastForward('01:00');
   await page.getByLabel('计量电表').click();
