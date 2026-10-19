@@ -9,7 +9,7 @@ test('authorized sites rank by plant COP over the period, read on each site\'s c
 
   const ranking = page.getByRole('region', { name: '站点排名' });
   await expect(ranking.getByRole('row', { name: /中央机房/ })).toContainText('3.48');
-  await expect(page.getByRole('region', { name: '更多对标维度' })).toContainText('1 / 1 个站点登记了建筑面积');
+  await expect(page.getByRole('region', { name: '更多对比项' })).toContainText('1 / 1 个站点登记了建筑面积');
 
   const reads = gateway.writes.filter((write) => write.path === '/api/v1/analytics/energy-series');
   expect(reads.map((read) => read.body?.energyType).sort()).toEqual(['cooling', 'electricity']);
@@ -48,7 +48,7 @@ test('sites also compare on electricity per square metre per cooling degree day'
   const row = ranking.getByRole('row', { name: /中央机房/ });
   await expect(ranking.getByRole('columnheader', { name: '单位度日用电（kWh/m²·℃·d）' })).toBeVisible();
   await expect(row.getByRole('cell').nth(6)).toHaveText(/^\d+\.\d{4}度日数 \d+\.\d ℃·d$/);
-  await expect(page.getByRole('region', { name: '更多对标维度' })).toContainText('1 / 1 个站点有气象站');
+  await expect(page.getByRole('region', { name: '更多对比项' })).toContainText('1 / 1 个站点有气象站');
 
   await ranking.getByRole('tab', { name: '按度日修正用电' }).click();
   await expect(page).toHaveURL(/rank=climate/);
@@ -68,5 +68,5 @@ test('a site whose temperature cannot be read says so and keeps its other compar
   const row = page.getByRole('region', { name: '站点排名' }).getByRole('row', { name: /中央机房/ });
   await expect(row.getByRole('cell').nth(6)).toHaveText('气温暂不可用');
   await expect(row).toContainText('3.48');
-  await expect(page.getByRole('region', { name: '更多对标维度' })).toContainText('1 个站点气温暂不可用');
+  await expect(page.getByRole('region', { name: '更多对比项' })).toContainText('1 个站点气温暂不可用');
 });

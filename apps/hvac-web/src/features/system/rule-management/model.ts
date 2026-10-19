@@ -80,7 +80,7 @@ export function buildRollbackAssignment(binding: RuleBinding, revision: RuleRevi
 }
 
 export function diffRuleDraft(draft: RuleDraft, revision: RuleRevision | null): string[] {
-  if (!revision) return ['尚未选择用于比较的已发布 Revision。'];
+  if (!revision) return ['还没选要对比的已发布版本。'];
   const lines: string[] = [];
   const draftNodes = new Map(draft.nodes.map((node) => [node.id, node]));
   const revisionNodes = new Map(revision.nodes.map((node) => [node.id, node]));
@@ -99,5 +99,5 @@ export function diffRuleDraft(draft: RuleDraft, revision: RuleRevision | null): 
   for (const key of ['maxNodes', 'maxDepth', 'maxFanout', 'maxResourceCost', 'maxAttempts'] as const) {
     if (draft[key] !== revision[key]) lines.push(`~ ${key}: ${revision[key]} -> ${draft[key]}`);
   }
-  return lines.length ? lines : ['草稿与所选 Revision 没有结构差异。'];
+  return lines.length ? lines : ['草稿和所选版本的结构一样。'];
 }

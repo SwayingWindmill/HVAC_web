@@ -413,7 +413,7 @@ export function RuleManagement({ principal, sites, registerUnsavedDraft }: Props
       <div className="inline-flex flex-wrap rounded-md border bg-muted/30 p-1" role="tablist" aria-label="规则管理工作区">
         <Button size="sm" variant={activeTab === 'editor' ? 'secondary' : 'ghost'} role="tab" aria-selected={activeTab === 'editor'} onClick={() => changeTab('editor')}>规则设计</Button>
         <Button size="sm" variant={activeTab === 'lifecycle' ? 'secondary' : 'ghost'} role="tab" aria-selected={activeTab === 'lifecycle'} onClick={() => changeTab('lifecycle')}>版本与应用</Button>
-        <Button size="sm" variant={activeTab === 'evidence' ? 'secondary' : 'ghost'} role="tab" aria-selected={activeTab === 'evidence'} onClick={() => changeTab('evidence')}>运行证据</Button>
+        <Button size="sm" variant={activeTab === 'evidence' ? 'secondary' : 'ghost'} role="tab" aria-selected={activeTab === 'evidence'} onClick={() => changeTab('evidence')}>运行记录</Button>
       </div>
 
       {activeTab === 'editor' ? (
@@ -486,16 +486,16 @@ export function RuleManagement({ principal, sites, registerUnsavedDraft }: Props
 
       {activeTab === 'evidence' ? (
         <DataTableBlock
-          title="规则运行证据"
+          title="规则运行记录"
           description="完整记录可在审计中查看"
         >
           {!selectedSiteId ? (
-            <div className="rounded-md border p-5 text-sm text-muted-foreground">选择站点后查看运行证据</div>
+            <div className="rounded-md border p-5 text-sm text-muted-foreground">选择站点后查看运行记录</div>
           ) : (
             <DataTable
               table={evidenceTable}
-              tableAriaLabel="规则运行证据"
-              empty="当前站点没有规则执行证据"
+              tableAriaLabel="规则运行记录"
+              empty="当前站点还没有规则运行记录"
               getHeaderCellProps={(header) => ({
                 className: header.id === 'status' ? 'w-28 text-center' : undefined,
               })}

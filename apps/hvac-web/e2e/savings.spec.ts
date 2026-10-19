@@ -34,7 +34,7 @@ test('a measure is registered on the Site clock and implemented, and a baseline 
   expect(implemented.body).toEqual({ implementedAt: '2026-10-12T07:17:00.000Z' });
   await expect(sheet).toContainText('对比基线不可靠，暂不统计');
   await expect(sheet).toContainText('对比基线期完整小时不足 72 小时');
-  const checks = sheet.getByRole('table', { name: '基线检验' });
+  const checks = sheet.getByRole('table', { name: '对比基线的检验' });
   await expect(checks.getByRole('row').filter({ hasText: '数据完整度' })).toContainText('15 / 336（4%）');
   await expect(checks.getByRole('row').filter({ hasText: 'CV(RMSE)' })).toContainText('未拟合');
   await expect(sheet).toContainText('数据不足，未拟合模型');
@@ -126,11 +126,11 @@ test('a verified measure shows its trusted baseline and what each day saved', as
   await expect(sheet).toContainText('累计节电373 kWh');
   await expect(sheet).toContainText('节省电费¥353');
   await expect(sheet).toContainText('节电率1.5%');
-  const checks = sheet.getByRole('table', { name: '基线检验' });
+  const checks = sheet.getByRole('table', { name: '对比基线的检验' });
   await expect(checks.getByRole('row').filter({ hasText: '数据完整度' })).toContainText('336 / 336（100%）');
   await expect(checks.getByLabel('未通过')).toHaveCount(0);
   await expect(sheet.getByLabel('每日节电量')).toBeVisible();
-  const days = sheet.getByRole('table', { name: '逐日核算' });
+  const days = sheet.getByRole('table', { name: '每日节电' });
   await expect(days.getByRole('row')).toHaveCount(7);
   await expect(days.getByRole('row').filter({ hasText: '2026-10-02' })).toContainText('81');
   await expect(days.getByRole('row').filter({ hasText: '2026-09-30' })).toContainText('100%');
@@ -150,5 +150,5 @@ test("a measure verified on a machine's sub-meter fits that machine against plan
   await expect(sheet).toContainText('设备用电 = 45.0 + 0.000 × 冷站供冷量');
   await expect(sheet).toContainText('累计节电1,646 kWh');
   await expect(sheet).toContainText('节电率27.1%');
-  await expect(sheet.getByRole('table', { name: '逐日核算' }).getByRole('row')).toHaveCount(7);
+  await expect(sheet.getByRole('table', { name: '每日节电' }).getByRole('row')).toHaveCount(7);
 });

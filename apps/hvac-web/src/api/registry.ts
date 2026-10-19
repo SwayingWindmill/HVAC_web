@@ -76,7 +76,7 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
     return {
       kind: 'invalid-request',
       title: '资源链接无效',
-      description: '资源标识必须是平台生成的 UUIDv7。请从授权 Registry 列表重新打开该资源。',
+      description: '这条记录的编号不对，请从列表里重新打开它。',
       retryable: false,
     };
   }
@@ -95,7 +95,7 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
       case 'MAPPING_QUARANTINED':
         return { kind: 'mapping', title: 'Registry 映射尚未就绪', description: detail, retryable, traceId };
       case 'REGISTRY_REVISION_CONFLICT':
-        return { kind: 'revision-conflict', title: '资源已被其他操作更新', description: '当前编辑基于旧 Revision。请重新加载权威数据后再决定是否重做本次修改。', retryable: false, traceId };
+        return { kind: 'revision-conflict', title: '资源已被其他操作更新', description: '你改的是旧版本。请刷新后再决定要不要重新修改。', retryable: false, traceId };
       case 'REGISTRY_BINDING_CONFLICT':
         return { kind: 'binding-conflict', title: '绑定变更冲突', description: detail, retryable: false, traceId };
       case 'REGISTRY_IMPORT_PLAN_INVALID':
@@ -110,7 +110,7 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
   return {
     kind: 'unavailable',
     title: 'Registry 连接失败',
-    description: '无法通过 Platform Gateway 读取权威 Registry 数据。真实模式不会回退到本地演示数据。',
+    description: '暂时读不到设备登记的数据，请稍后重试；页面不会用示例数据代替。',
     retryable: true,
   };
 }

@@ -39,7 +39,7 @@ const retryRuleQuery = (failureCount: number, error: Error) => {
 
 export function presentRuleError(error: unknown): RuleErrorPresentation {
   if (error instanceof ZodError) {
-    return { kind: 'invalid', title: '规则请求无效', description: '规则草稿或资源标识没有通过生成契约校验。', retryable: false };
+    return { kind: 'invalid', title: '规则请求无效', description: '规则草稿或对象编号的格式不对。', retryable: false };
   }
   if (error instanceof PlatformApiError) {
     const { code, detail, retryable, traceId } = error.problem;

@@ -14,7 +14,7 @@ const config = {
   actualKW: { label: '实际', color: 'var(--chart-1)' },
   previousKW: { label: '昨日同时段', color: 'var(--chart-5)' },
   forecastKW: { label: '预测', color: 'var(--chart-1)' },
-  band: { label: '预测区间', color: 'var(--chart-1)' },
+  band: { label: '预测范围', color: 'var(--chart-1)' },
 } satisfies ChartConfig;
 
 const HOUR_MS = 3_600_000;
@@ -46,7 +46,7 @@ export function LoadCurve({ rows, days, now, monthPeakKW, spans, timeZone, forec
           <Legend swatch={<span className="h-2 w-3 rounded-[2px] border-t-2 border-chart-1 bg-chart-1/15" aria-hidden="true" />}>实际</Legend>
           <Legend swatch={<span className="h-0.5 w-3 rounded-full bg-chart-5/70" aria-hidden="true" />}>昨日同时段</Legend>
           {forecastNote === null ? (
-            <Legend swatch={<span className="h-2 w-3 rounded-[2px] border-t-2 border-dashed border-chart-1 bg-chart-1/10" aria-hidden="true" />}>预测及区间</Legend>
+            <Legend swatch={<span className="h-2 w-3 rounded-[2px] border-t-2 border-dashed border-chart-1 bg-chart-1/10" aria-hidden="true" />}>预测及范围</Legend>
           ) : <span>{forecastNote}</span>}
           {spans.length ? <Legend swatch={<span className="size-2.5 rounded-[2px] bg-warning/25" aria-hidden="true" />}>电价高峰</Legend> : null}
           {monthPeakKW !== null ? (
@@ -85,7 +85,7 @@ export function LoadCurve({ rows, days, now, monthPeakKW, spans, timeZone, forec
                   <p className="font-medium">{label(row.at)}–{clock(row.at + 15 * 60_000)}</p>
                   {row.actualKW !== null ? line(row.at + 15 * 60_000 > now ? '实际（进行中）' : '实际', `${formatDecimal(row.actualKW, 1)} kW`) : null}
                   {row.forecastKW !== null ? line('预测', `${formatDecimal(row.forecastKW, 1)} kW`) : null}
-                  {row.band ? line('区间', `${formatDecimal(row.band[0], 0)}–${formatDecimal(row.band[1], 0)} kW`) : null}
+                  {row.band ? line('范围', `${formatDecimal(row.band[0], 0)}–${formatDecimal(row.band[1], 0)} kW`) : null}
                   {row.previousKW !== null ? line('昨日同时段', `${formatDecimal(row.previousKW, 1)} kW`) : null}
                 </div>
               );

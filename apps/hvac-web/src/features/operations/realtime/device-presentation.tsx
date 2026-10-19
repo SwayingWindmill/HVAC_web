@@ -83,7 +83,7 @@ export function LiveIndicator({ mode }: { readonly mode: PlantLiveMode }) {
 export function ReadingValue({ reading, className }: { readonly reading: PlantReading | null; readonly className?: string }) {
   if (!reading || reading.state !== 'PRESENT') return <span className={cn('text-muted-foreground', className)}>—</span>;
   return (
-    <span className={cn('tabular-nums', !reading.current && 'text-muted-foreground', className)} title={reading.current ? undefined : '数据过期或质量降级'}>
+    <span className={cn('tabular-nums', !reading.current && 'text-muted-foreground', className)} title={reading.current ? undefined : '数据过期或不可靠'}>
       {reading.display}
       {reading.unit ? <span className="ml-0.5 text-xs font-normal text-muted-foreground">{reading.unit}</span> : null}
     </span>

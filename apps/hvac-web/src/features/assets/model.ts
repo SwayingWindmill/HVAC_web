@@ -517,7 +517,7 @@ export function buildAssetsHierarchy(model: SiteAssetModel, siteLabel: string, n
       .sort(compareRegistryIdentity)
       .map((device) => deviceNode(device, `space:${space.id}`));
     const directDeviceGroup = directDevices.length > 0
-      ? [hierarchyNode('asset', `unbound:${space.id}`, '未绑定设备', '关系待治理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
+      ? [hierarchyNode('asset', `unbound:${space.id}`, '未绑定设备', '归属待整理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
       : [];
     const children = [...nestedSpaces, ...asset, ...directDeviceGroup];
     return hierarchyNode(
@@ -539,11 +539,11 @@ export function buildAssetsHierarchy(model: SiteAssetModel, siteLabel: string, n
   const orphanChildren = [
     ...unassignedAsset,
     ...(unassignedDevices.length > 0
-      ? [hierarchyNode('asset', 'unbound:site', '未绑定设备', '关系待治理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
+      ? [hierarchyNode('asset', 'unbound:site', '未绑定设备', '归属待整理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
       : []),
   ];
   const children = orphanChildren.length > 0
-    ? [...roots, hierarchyNode('space', 'unbound:site', '未分配区域', '关系待治理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
+    ? [...roots, hierarchyNode('space', 'unbound:site', '未分配区域', '归属待整理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
     : roots;
   return hierarchyNode('site', model.siteId, siteLabel, '站点资产', model.devices.map((device) => device.id), children);
 }

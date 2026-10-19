@@ -33,7 +33,7 @@ type Registration = z.infer<typeof registrationSchema>;
 type Health = 'good' | 'warn' | 'idle';
 const HEALTH_DOT: Record<Health, string> = { good: 'bg-success', warn: 'bg-warning', idle: 'bg-subtle-foreground' };
 
-const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分降级', unavailable: '不可用' } as const;
+const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分不可用', unavailable: '不可用' } as const;
 const DIRECTORY_STATE = { checking: '读取中', available: '已同步', forbidden: '无权读取', unavailable: '暂时读不到' } as const;
 const REGISTRY_STATE = { ACTIVE: null, INACTIVE: '登记已停用', RETIRED: '已退役' } as const;
 
@@ -99,7 +99,7 @@ export function IntegrationsWorkspace() {
 
   // The chain from the plant to this page, each link as its owner reports it.
   const platform = snapshot.platform?.status;
-  const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分降级') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
+  const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分不可用') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
   const realtime = realtimeStatusPresentation(snapshot.realtime ?? createIdleRealtimeStatus());
   const activeGateways = gateways.filter((gateway) => gateway.status === 'ACTIVE');
   const validCertificates = activeGateways.filter((gateway) => credentialOf.get(gateway.id)?.data?.status === 'ACTIVE').length;

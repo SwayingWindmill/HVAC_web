@@ -151,11 +151,11 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
       <div className="grid gap-4 xl:grid-cols-[1.5fr_.8fr]">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Upload className="size-4" />受控导入</CardTitle>
+            <CardTitle className="flex items-center gap-2"><Upload className="size-4" />导入</CardTitle>
             <CardDescription>先生成服务端校验计划，所有记录可提交后才能正式写入。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Alert><AlertTitle>导入不会直接写入拓扑</AlertTitle><AlertDescription>文件会先经过服务端校验。若登记版本已经变化或存在不合法记录，必须重新复核后再提交。</AlertDescription></Alert>
+            <Alert><AlertTitle>导入不会直接改设备登记</AlertTitle><AlertDescription>文件会先经过服务端校验。若登记版本已经变化或存在不合法记录，必须重新复核后再提交。</AlertDescription></Alert>
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50">
                 <FileJson className="size-4" />选择 JSON 文件
@@ -171,9 +171,9 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><Download className="size-4" />受控导出</CardTitle><CardDescription>导出当前站点的规范化登记快照。</CardDescription></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Download className="size-4" />导出</CardTitle><CardDescription>导出当前站点的设备登记数据。</CardDescription></CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm leading-6 text-muted-foreground">导出只包含规范化身份、拓扑关系、版本和测点采集语义，不包含凭据、秘密或自由格式的敏感元数据。</p>
+            <p className="text-sm leading-6 text-muted-foreground">导出只包含编号、上下级关系、版本和点位的采集设置，不包含凭据、密钥或可能敏感的自由备注。</p>
             <dl className="grid gap-2 text-sm">
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">站点</dt><dd className="font-medium">{site.displayName}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">空间</dt><dd className="font-medium">{model.counts.spaces}</dd></div>
@@ -181,7 +181,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">设备端点</dt><dd className="font-medium">{model.counts.deviceEndpoints}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">测点</dt><dd className="font-medium">{model.counts.points}</dd></div>
             </dl>
-            <Button variant="outline" className="w-full" onClick={exportRegistry}><Download />导出登记快照</Button>
+            <Button variant="outline" className="w-full" onClick={exportRegistry}><Download />导出登记数据</Button>
           </CardContent>
         </Card>
       </div>
