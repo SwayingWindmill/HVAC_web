@@ -18,11 +18,11 @@ Cube 从不直接读原始读数。表计清零的处理、换算成每段的电
 
 对外只有视图（ADR 0023）。查询服务查它们，AI 助手的语义查询也在它们的字段里选；每个字段都有中文标题和说明。
 
-| 视图 | 内部 cube | 数据 | 除共有字段外的字段 |
+| 视图 | 内部 cube | 数据 | 字段 |
 |---|---|---|---|
-| `site_energy` | `site_energy_facts` | 站点总表（`SITE`）的记录：站点总量 | `electricity_valid_kwh`、`cooling_valid_kwh`、`cop`（同一时间段的供冷 ÷ 用电） |
-| `equipment_energy` | `equipment_energy_facts` | 设备分表（`BRANCH`）的记录：已经包含在总量里 | `equipment_id`（装分表的设备） |
-| `site_energy_cost` | `site_energy_cost_facts` | 站点总表的用电，按电价窗口计价（`docs/specs/estimated-energy-cost.md`） | `cost_valid_cny`、`cost_valid_and_suspect_cny`、`priced_valid_kwh`、`priced_valid_and_suspect_kwh`、`unpriced_valid_kwh`、`unpriced_valid_and_suspect_kwh`、`tariff_period` |
+| `site_energy` | `site_energy_facts` | 站点总表（`SITE`）的记录：站点总量 | 共有字段（见下）加 `electricity_valid_kwh`、`cooling_valid_kwh`、`cop`（同一时间段的供冷 ÷ 用电） |
+| `equipment_energy` | `equipment_energy_facts` | 设备分表（`BRANCH`）的记录：已经包含在总量里 | 共有字段加 `equipment_id`（装分表的设备） |
+| `site_energy_cost` | `site_energy_cost_facts` | 站点总表的用电，按电价窗口计价（`docs/specs/estimated-energy-cost.md`） | `cost_valid_cny`、`cost_valid_and_suspect_cny`、`priced_valid_kwh`、`priced_valid_and_suspect_kwh`、`unpriced_valid_kwh`、`unpriced_valid_and_suspect_kwh`、`site_id`、`tariff_period`、`period_end`（没有共有字段） |
 
 前两个 cube 都继承 `energy_facts`（`model/cubes/energy_facts.yml`，基于 `analytics.energy_interval_facts_visible`），各自在 SQL 里固定计入范围，所以一个视图不会把总量和它的分表混在一起。共有字段：`energy_valid_kwh`、`energy_valid_and_suspect_kwh`（两者都要加 `energy_type` 条件）、三个质量计数、`max_data_watermark`、`max_dataset_revision`、`site_id`、`energy_type`、`quality`、`period_end`。租户、电表、点位和传感器的编号不是视图字段。
 
@@ -34,7 +34,7 @@ Cube 从不直接读原始读数。表计清零的处理、换算成每段的电
 
 查询服务每次生成一张 30 秒有效的 HS256 JWT，里面有：`tenantId`、`siteId` 和 `siteIds`、`principalId`、`policyRevision`、用户组 `analytics_reader`。
 
-`cube.py` 把 JWT 里的信息对应到 Cube 的用户组。基础 cube `energy_facts` 带行级规则，由两个子 cube 继承：只返回 `securityContext.tenantId` 和 `securityContext.siteId` 的数据。查视图时，Cube 会把 cube 的行规则和视图的合在一起，所以租户不必是视图字段。视图（`model/views/energy.yml`）只把字段开放给 `analytics_reader`（默认拒绝）。cube 设成 `public: false`，直接查 cube 字段的请求会因为字段不可见被拒。
+`cube.py` 把 JWT 里的信息对应到 Cube 的用户组。基础 cube `energy_facts` 带行级规则，由 `site_energy_facts` 和 `equipment_energy_facts` 继承（`site_energy_cost_facts` 不继承它，有自己同样的行级规则）：只返回 `securityContext.tenantId` 和 `securityContext.siteId` 的数据。查视图时，Cube 会把 cube 的行规则和视图的合在一起，所以租户不必是视图字段。视图（`model/views/energy.yml`）只把字段开放给 `analytics_reader`（默认拒绝）。cube 设成 `public: false`，直接查 cube 字段的请求会因为字段不可见被拒。
 
 Cube 用的 ClickHouse 账号是 `cube_analytics_reader`，只能查 `analytics.energy_interval_facts_visible`（以及电价窗口的可见视图），不能写。
 

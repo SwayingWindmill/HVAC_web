@@ -69,31 +69,6 @@ go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
 
 协议验收：`node scripts/run-atv630-protocol-acceptance.mjs`。
 
-## 旧的 ThingsBoard 模式
-
-`cmd/eg8200-simulator` 经 ThingsBoard 的设备 HTTP 接口发读数、轮询服务端 RPC 指令。用法：在 ThingsBoard 里按 `configs/central-plant.local.json` 的 id 建六台设备，用环境变量传各自的访问令牌（`TB_TOKEN_CHILLER_01` 等，不要写进配置文件），然后：
-
-```bash
-go run ./tools/eg8200-simulator/cmd/eg8200-simulator \
-  -config ./tools/eg8200-simulator/configs/central-plant.local.json
-```
-
-默认目标是 `http://localhost:8080`；只有本机地址可以用 HTTP，别的地址必须 HTTPS。
-
-## 运行状态
-
-诊断端口默认 `19092`：`GET /health/live`、`GET /health/ready`。所有设备在一个周期里都发送成功之后，才算就绪。
-
-## 镜像
-
-在仓库根目录构建非 root 的镜像：
-
-```bash
-npm run build:eg8200-simulator-image
-```
-
-运行镜像时把配置只读挂进去，令牌用环境变量传；镜像里没有凭据，也没有正式环境的默认配置。
-
 ## 读数之间的关系
 
 - 水泵流量和转速成正比；
@@ -103,6 +78,8 @@ npm run build:eg8200-simulator-image
 - 冷却水流量、冷冻水流量或冷却塔不够时，机组不制冷；
 - 空调总功率 = 机组 + 两台水泵 + 冷却塔风机；
 - 冷量计的制冷量和机组用同一个能量平衡。
+
+`cmd/eg8200-simulator`（旧的、经 ThingsBoard 发数据的程序）已经下线，运行时只提示改用 `eg8200-mqtt-publisher`。
 
 ## 测试
 

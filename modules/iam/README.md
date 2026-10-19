@@ -14,7 +14,7 @@ IAM 只接受 TLS 1.3，并且必须出示客户端证书。知道地址不够�
 | `POST /internal/v1/principal/tenant-contexts` | 平台网关 | 当前的人所在的租户列表 |
 | `POST /internal/v1/registry/decision`、`telemetry/decision`、`command/decision`、`analytics/decision`、`alarm/decision`、`work-order/decision` | 平台网关 | 判定这个人能不能做这件事，允许时签授权 |
 | `POST /internal/v1/registry/workload-decision`、`analytics/workload-decision` | 后台服务（报告、优化、节能验证、能耗计算等） | 判定后台服务自己能不能读（ADR 0017） |
-| `POST /internal/v1/telemetry/grants`、`telemetry/revocations` | 遥测 | 查遥测授权的状态和撤销 |
+| `POST /internal/v1/telemetry/grants:consume`、`telemetry/revocations:poll` | 遥测 | 用掉一张遥测授权、拉取撤销 |
 | `POST /internal/v1/registry-read/grant-status` | 登记服务 | 查一张登记授权当前是否还有效 |
 | `POST /internal/v1/admin/members`、`admin/mutations`、`admin/api-credentials/*` | 平台网关 | 用户与角色管理、API 凭据 |
 
