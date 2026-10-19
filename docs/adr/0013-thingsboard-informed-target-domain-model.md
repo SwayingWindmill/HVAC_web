@@ -1,270 +1,154 @@
-# ADR 0013 — ThingsBoard-informed target domain model and ownership boundaries
+# ADR 0013：业务领域的名词和归属（参照 ThingsBoard）
 
-Status: accepted
+状态：已采纳（2026-08-18，问题单 #240）。ADR 0019 修订了第 12 节。名词见 `GLOSSARY.md`。
 
-Date: 2026-08-18
+## 背景
 
-Issue: #240
+对照 ThingsBoard CE v4.3.1.1 的源码逐项审查后，发现几处不能再各说各的：早期 ADR 还用「组织 / 区域 / 设备（Equipment）」，而现在的说法是「租户 / 空间 / 资产」；ThingsBoard 那种可以随便改的跨领域「档案」和本项目「一类数据一个负责方」冲突；Redis、PostgreSQL、ClickHouse、指标结果和展示数据需要清楚地说明谁说了算；通用的规则执行不能变成告警、指令、通知、遥测或对外动作的负责方；告警的条件、确认、屏蔽、指派、工单关联和通知结果是不同的事；云端指令不能绕过现场仲裁或设备 / PLC 的安全保护；模板、规则、告警、现场、展示和模型的发布需要一套统一的说法，但不能变成一个什么都管的「超级档案」；通知和对外集成需要一个统一的、可靠的外发负责方；第一阶段可以把几个模块放进少数几个进程里，但不合并它们的逻辑归属。
 
-## Context
+已有代码没有先占的权利：本地做法和参照的 ThingsBoard 有重大冲突、又说不出暖通、安全、复杂度或实测性能上的理由时，按审查后的目标做法。
 
-The ThingsBoard CE v4.3.1.1 source audit and HVAC Web reverse audit are complete. Ten capability-domain adjudications and the cross-domain reverse audit agree on many local strengths, but they also expose conflicts that cannot remain as parallel interpretations:
+## 决定
 
-- early Registry ADRs still use Organization / Area / Equipment while the current canonical language is Tenant / Space / Asset;
-- ThingsBoard-style mutable cross-domain Profiles conflict with the project's single-owner bounded contexts;
-- Redis, PostgreSQL, ClickHouse, Metric results and presentation projections need unambiguous truth ownership;
-- generic Rule execution must not become the owner of Alarm, Command, Notification, Telemetry or external side effects;
-- Alarm condition, acknowledgment, suppression, assignment, work-order linkage and notification disposition are different facts;
-- Cloud Command governance must not bypass Edge arbitration or device/PLC safety;
-- Template, Rule, Alarm, Edge, Presentation and Model releases need one release language without becoming one mutable God Profile;
-- Notification and external integrations need one durable outbound-delivery ownership model;
-- Phase 1 may physically merge modules into a small number of deployables without merging their logical ownership.
-
-Existing HVAC Web code has no incumbency preference. When a local behavior conflicts materially with the fixed ThingsBoard reference and lacks an explicit HVAC, safety, complexity or measured-performance justification, the adjudicated target behavior wins.
-
-## Decision
-
-### 1. Canonical domain language
-
-The canonical business hierarchy is:
+### 1. 标准名词
 
 ```text
-Tenant
-└─ Site
-   ├─ Space (recursive spatial containment)
-   ├─ Asset (maintainable physical business object)
-   └─ Device (addressable communication/control endpoint)
-      └─ Point (canonical typed data/control point)
+租户（Tenant）
+└─ 站点（Site）
+   ├─ 空间（Space，一层套一层）
+   ├─ 资产（Asset，要维护的实物）
+   └─ 设备（Device，能通信、能控制的端点）
+      └─ 点位（Point，有类型的数据点或控制点）
 ```
 
-`PhysicalSensor` is optional. It exists only for a real probe with an independent identification, installation, replacement, calibration or traceability lifecycle. It never replaces Point as the canonical measurement identity and is never required between Device and Point.
+物理传感器（PhysicalSensor）是可选的：只有真实探头需要单独管理编号、安装、更换、校准或追溯时才有。它从不代替点位作为标准的测量身份，也不要求在设备和点位之间。
 
-Calculated/derived results are `Metric` facts, not synthetic Device Points. Point remains the operational data/control identity owned by Registry and referenced by Telemetry, Command and Edge.
+计算出来的结果是「指标」（Metric），不是假的设备点位。点位仍是登记负责的运行数据 / 控制身份，被遥测、指令和现场引用。
 
-Organization, Area and Equipment are no longer canonical API, contract or code vocabulary. Display labels may be localized, but compatibility DTOs, fallback routes and dual domain names are forbidden.
+组织、区域、Equipment 不再是接口、约定或代码里的标准名词。显示的文字可以本地化，但不允许兼容用的 DTO、回退路由或两套领域名并存。
 
-### 2. Ownership is logical, not process-shaped
+### 2. 归属按逻辑，不按进程
 
-Every authoritative resource has exactly one bounded-context owner. The owner alone may mutate its authoritative state. Other contexts may:
+每份说了算的数据只有一个负责方，只有它能改。别的部分可以：调它的命令 / 查询接口；消费它发出的不可变事件；维护明确可以重建的副本；保存带负责方编号和版本的引用。放进同一个进程不改变这条规则：同一进程里的模块也不能写对方的表或绕过对方的接口。
 
-- call the owner's command/query port;
-- consume owner-authored immutable events;
-- maintain explicitly rebuildable projections;
-- store references containing owner identity and revision.
+### 3. 登记负责身份、拓扑和不可变的模板
 
-Physical process convergence does not change this rule. Modules co-located in one deployable may not write each other's schemas or bypass owner ports.
+登记负责：站点、空间、资产、设备、可选的物理传感器和点位的身份和生命周期；有类型、按时间生效的安装 / 测量对象 / 控制 / 上报绑定；外部编号的对照；不可变的资产 / 设备模板版本和它们的分配；从模板版本到其他领域已发布内容的引用。
 
-### 3. Registry owns identity, topology and immutable templates
+登记不负责：传输凭据、在线的传输会话、规则执行状态、告警生命周期、通知投递、现场运行状态或第三方密钥。模板版本可以描述稳定的分类、需要的能力、应有的点位格式和引用；不能嵌入会变的凭据、规则内容、告警状态、现场运行状态或密钥。
 
-Registry owns:
-
-- Site, Space, Asset, Device, optional PhysicalSensor and Point identity/lifecycle;
-- typed, effective-dated placement/subject/control/reporting bindings;
-- external identity mappings;
-- immutable Asset/Device Template Revisions and their effective assignments;
-- stable references from a Template Revision to released artifacts owned by other domains.
-
-Registry does not own transport credentials, active transport sessions, Rule execution state, Alarm lifecycle, Notification delivery, Edge runtime state or provider secrets.
-
-A Template Revision may describe stable classification, required capabilities, expected Point schema and references. It may not embed mutable live credentials, Rule bodies, Alarm state, Edge runtime state or secrets.
-
-### 4. Domain releases share a language but keep separate owners
-
-Released artifacts use a common lifecycle and metadata vocabulary:
+### 4. 各领域的发布用同一套说法，但各管各的
 
 ```text
-DRAFT -> VALIDATED -> RELEASED -> RETIRED
-identity + revision + schemaVersion + digest + dependencies + createdBy + releasedBy
+DRAFT（草稿）-> VALIDATED（已校验）-> RELEASED（已发布）-> RETIRED（已退役）
+编号 + 版本 + 格式版本 + 摘要 + 依赖 + 创建人 + 发布人
 ```
 
-Once RELEASED, an artifact is immutable. Rollback or reassignment creates a new assignment/release decision; it never edits a released revision in place.
+发布后不能改；回滚或重新分配是一次新的分配 / 发布决定，从不就地改已发布的版本。负责方各自不同：登记（模板版本 / 模板分配）、接入（传输配置版本、期望配置版本、凭据策略引用）、规则（规则版本 / 规则绑定）、告警（告警策略版本）、展示（看板定义）、现场（签名的现场发布）、智能（模型定义 / 部署版本）、平台运维（产品发布清单：锁定一起运行的各领域确切版本，协调校验、上线和回滚，但不负责里面的业务数据）。
 
-The owners remain separate:
+### 5. 遥测的数据按种类分负责方，不按缓存方便
 
-- Registry: TemplateRevision / TemplateAssignment;
-- Connectivity: TransportProfileRevision / DesiredConfigurationRevision / Credential policy reference;
-- Rule Runtime: RuleRevision / RuleBinding;
-- Alarm: AlarmPolicyRevision;
-- Presentation: DashboardViewDefinition or other first-party presentation revision;
-- Edge: signed EdgeRelease;
-- Intelligence: ModelDefinition / ModelDeploymentRevision;
-- Platform Operations: ProductReleaseManifest, which locks exact domain revisions and coordinates validation, rollout and rollback evidence without becoming their business owner.
+- 遥测负责接收，以及 PostgreSQL 里持久的设备当前快照；只有提交的当前状态真的变了，状态版本号才加。
+- ClickHouse 负责发布之后只追加的原始 / 历史数据；合法的乱序读数可以查到，但从不让当前状态倒退。
+- Redis 只是可以重建的副本 / 缓存，它的可用性只影响延迟或分发，从不影响当前业务数据是否正确、是否存在。
+- 遥测查询负责对外的历史和统计查询的含义，不负责底层数据的身份。指标模块负责有版本的指标定义、计算和只追加的指标结果；指标结果从不悄悄变成原始读数或点位。
+- 分析和总览的汇总都是派生的数据，带明确的版本、截至时间、完整度和质量，不能成为登记、遥测、告警或指令的写入方。
 
-### 5. Telemetry truth is split by fact type, never by convenience cache
+### 6. 规则负责执行，不负责业务结果
 
-Telemetry Runtime owns ingest acceptance and the durable current Device Observation Snapshot in PostgreSQL. Business Revision advances only when committed current runtime truth changes.
+规则（rule-runtime）负责：通用的节点定义、规则版本 / 绑定、执行、持久的续接、通用的规则状态、追踪 / 调试记录和有类型的「效果意图」。规则节点不能直接：改登记；写原始读数或指标；产生 / 清除 / 确认告警；审批或完成指令；发邮件、短信、Slack、REST、MQTT、Kafka、Rabbit 或云服务；读凭据；改工单或 AI 结论。规则保存想要的效果，交给说了算的领域；那个领域再检查范围、版本、策略和幂等，并负责最终的结果。
 
-ClickHouse owns append-only raw/history facts after accepted publication. Valid out-of-order observations remain queryable and never roll current state backward.
+专门的领域判断仍归各自领域：告警的持续 / 重复 / 清除状态归告警，指标的计算状态归指标，AI 助手的会话归助手；它们可以复用表达式、调度或任务这些基础件，但不把归属交给通用规则。
 
-Redis is only a rebuildable projection/cache. Redis availability may affect latency or fan-out, but never the correctness or existence of current business truth.
+### 7. 告警的几件事分开
 
-Telemetry Query owns public typed history/aggregation query semantics, not the underlying fact identity. Metric Engine owns versioned Metric definitions, runs and append-only Metric Result facts. A Metric result never silently becomes raw Telemetry or a Point.
+告警负责有版本的告警策略、判断状态和告警事件。一个告警事件分开记：条件状态（发生 / 已恢复）、确认、当前和最高的严重程度、屏蔽和到期、指派历史、不可改的时间线、工单关联、通知结果。确认不清除条件；屏蔽不清除也不删除；工单完成不清除；通知已读或已送达不算确认也不清除。同一个租户 / 站点 / 指纹最多一个正在发生的告警事件；恢复后再出现是新的一次（按关联串起来），不重新打开旧的。
 
-Analytics and Dashboard summaries are derived read models with explicit revision, watermark, completeness and quality. They cannot become write authorities for Registry, Telemetry, Alarm or Command.
+### 8. 通知和外发分开
 
-### 6. Rule Runtime owns execution, not business effects
-
-Rule Runtime owns generic Node definitions, Rule revisions/bindings, executions, durable continuations, generic Rule state, trace/debug evidence and typed Effect Intents.
-
-A Rule node cannot directly:
-
-- mutate Registry;
-- write raw Telemetry or Metric facts;
-- create/clear/ack an Alarm;
-- approve or complete a Command;
-- send email/SMS/Slack/REST/MQTT/Kafka/Rabbit/cloud effects;
-- read credential material;
-- mutate Work Orders or AI findings.
-
-Rule Runtime persists the intended effect and hands it to the authoritative domain. The target domain validates scope, revision, policy and idempotency again and owns the final fact/receipt.
-
-Specialized domain evaluators remain owned by their domain. Alarm duration/repeat/clear state is Alarm state, Metric calculation state is Metric state, and Operations Investigation state is Operations state; they may reuse typed expression, scheduler or work primitives without surrendering ownership to generic Rule Runtime.
-
-### 7. Alarm uses orthogonal facts
-
-Alarm owns versioned Alarm policies, evaluation state and Alarm Incidents. The canonical Incident model separates:
-
-- condition state: ACTIVE / CLEARED;
-- acknowledgment fact;
-- current and peak severity;
-- suppression fact and expiry;
-- assignment history;
-- immutable timeline;
-- Work Order links;
-- Notification disposition/projection.
-
-Acknowledgment does not clear a condition. Suppression does not clear or delete it. Work Order completion does not clear it. Notification read/delivery state does not acknowledge or clear it.
-
-One Tenant/Site/Fingerprint has at most one active Incident. Recovery then recurrence creates a new Incident linked by correlation, rather than reopening the historical Incident.
-
-### 8. Notification policy and outbound delivery have different owners
-
-Notification owns Audience definitions, Template revisions, Notification policy/rule revisions, escalation stages, in-app Inbox items and business disposition.
-
-External delivery is owned by the shared Outbound Delivery context:
+通知负责收件人群、模板版本、通知策略 / 规则版本、升级、站内收件箱和业务上的处理结果。对外发送由共用的外发服务负责：
 
 ```text
-DeliveryIntent -> DeliveryAttempt -> DeliveryReceipt -> DeadLetter/ReplayApproval
+外发请求 -> 发送尝试 -> 对方确认 -> 进入死信 / 批准重发
 ```
 
-Notification submits a durable external-delivery intent referencing its immutable Template/recipient snapshot. The Delivery owner handles CredentialRef, destination policy, retry classification, lease/fence, provider receipt, outcome-unknown and dead-letter behavior. Notification derives its business disposition from those receipts but never owns provider retry internals.
+通知提交一个持久的外发请求，引用不可变的模板和收件人快照；外发服务负责凭据引用、目标策略、重试分类、租约 / 栅栏、对方确认、结果不明和死信。通知从这些确认推出业务处理结果，但不管对方的重试细节。别的对外集成也用同一个外发服务；需要持久的对外效果和重试记录的模型调用，也用同样的尝试 / 确认和出站策略，普通的同步模型调用仍归智能服务自己管。
 
-Non-notification outbound integrations use the same Delivery owner. AI/provider calls that require durable external-effect/retry evidence reuse the same Attempt/Receipt and egress-policy pattern; advisory synchronous model inference remains owned by the Intelligence invocation lifecycle.
+### 9. 指令审批和现场执行是一条单向的安全链
 
-### 9. Command governance and Edge actuation form a one-way safety chain
-
-Cloud Command owns Command Intent identity, authorization, approval, idempotency, lease/fence, dispatch state and authoritative business outcome.
-
-Connectivity/Transport owns delivery sessions and protocol mechanics, not Command success.
-
-Edge owns local Process Image, Controller/Scheduler/Arbiter execution, effective value selection, local safety/interlock decisions and actuation attempt evidence.
-
-Device/PLC firmware/hardware remains the final hard-real-time safety boundary.
-
-The chain is:
+云端指令负责：指令请求的身份、权限、审批、幂等、租约 / 栅栏、下发状态和业务上的最终结果。接入 / 传输负责投递会话和协议细节，不负责指令成功。现场负责：本地过程映像、控制器 / 调度器 / 仲裁的执行、实际生效值的选择、本地安全 / 联锁判断和执行尝试的证据。设备 / PLC 的固件和硬件是最后的硬实时安全边界。
 
 ```text
-Authorized Cloud Command Intent
-  -> approved leased/fenced dispatch
-  -> transport delivery
-  -> Edge capability + local lease + scheduler + arbiter + interlock
-  -> device/PLC actuation
-  -> independent reported-state/readback evidence
-  -> Cloud Command verification and final outcome
+授权的云端指令请求
+  -> 批准的、有租约和栅栏的下发
+  -> 传输投递
+  -> 现场能力 + 本地租约 + 调度器 + 仲裁 + 联锁
+  -> 设备 / PLC 执行
+  -> 独立的读回状态证据
+  -> 云端核对并给出最终结果
 ```
 
-Transport ACK, broker ACK, Edge receipt or device ACK alone never means business success. Cloud cannot bypass Edge arbitration. Edge cannot extend an expired Cloud lease or rewrite Cloud approval/governance facts.
+传输确认、MQTT 服务器确认、现场收到或设备确认，单独都不算业务成功。云端不能绕过现场仲裁；现场不能延长已过期的云端租约，也不能改写云端的审批记录。
 
-### 10. Edge is a projection/execution authority, not a second Cloud Registry
+### 10. 现场执行，但不是第二个云端登记
 
-Cloud Registry owns master identity/topology. Edge receives versioned, signed, assignment-scoped projections and reports observed capabilities/state.
+云端登记负责主数据的身份和拓扑。现场收到有版本、签名、按分配范围的副本，并报告观察到的能力和状态。同一个字段只有一边能写：现场发现的差异是「观察到的事实」或「建议」，云端接受后才产生新的负责方版本。现场同步用不可变的初始快照加增量版本、持久的投递项、连续的确认游标、删除标记和隔离；失败或不完整的快照从不就地改当前状态。离线时只按最后接受的签名发布、在本地安全和租约规则内运行；安全、控制和操作记录的证据比低价值的诊断数据更优先保留。
 
-For a field, only one side is writable. Edge-originated differences are Observed Facts or Proposals; Cloud acceptance creates a new owner revision.
+### 11. 身份服务和权限分开
 
-Edge synchronization uses immutable bootstrap snapshots plus incremental owner revisions, durable DeliveryItems, contiguous ACK cursors, tombstones and quarantine. A failed or incomplete snapshot never mutates active state in place.
+身份服务负责登录凭据的生命周期和认证强度；平台的 IAM 负责租户 / 站点授权、权限、明确禁止、授权转交和策略判断。浏览器会话由网关后端管理，浏览器不持有长期的令牌；高风险的指令和安全操作需要明确的认证强度 / 二次验证证据。目标架构不绑定某个身份服务厂家，但平台必须对接一个维护良好、符合 OIDC / OAuth2 标准的边界；现在的最小身份服务不会因为已经存在，就自动成为目标的通用身份服务。
 
-Offline operation continues only from the last accepted signed release and within local safety/lease rules. Safety/control/audit evidence has retention priority over low-value diagnostics.
+### 12. 展示只管配置，不管业务数据
 
-### 11. Identity Provider and IAM are separate authorities
+看板 / 大屏等展示定义可以负责布局、视图状态、有类型的数据源引用和跳转意图，不负责设备、指标、告警、指令、规则或权限。（ADR 0019 修订：站点总览直接读各个负责方，并在会过期的数据上写明时间；没有统一的站点总览汇总。）界面上通往控制的操作跳到指令预览，由指令领域重新授权并创建请求；展示代码从不直接下发控制。
 
-The Identity Provider owns authentication credential lifecycle and authentication assurance. HVAC IAM owns Tenant/Site authorization, Capability grants, Explicit Deny, delegation and policy decisions.
+### 13. 平台运维负责可靠性机制，不负责业务数据
 
-Browser sessions remain BFF-managed; the browser does not own long-lived bearer credentials. High-risk Command and security actions require explicit authentication assurance/step-up evidence.
+平台运维负责：可用性等级、限流策略、迁移和发布的执行、通用的持久任务 / 死信约定、就绪的含义、可观测性和产品发布清单。第一阶段是「单机、可恢复」，不是高可用；Kafka、actor 集群、共享的限流后端和多实例分区，只在容量 / 可用性的证据超过写明的门槛后才引入。迁移和发布从不用运行时回退、双写或跳过格式版本来假装兼容；遇到不支持的表结构或产品版本，服务拒绝启动。
 
-The target architecture does not require a particular IdP vendor, but the platform must consume a maintained standards-compliant OIDC/OAuth2 boundary. The current minimal identity-service is not automatically the target general-purpose IdP merely because it exists.
+## 各部分的边界
 
-### 12. Presentation owns configuration, never business truth
-
-Dashboard/BigScreen/other presentation definitions may own layout, view state, typed datasource references and navigation intents. They do not own Device, Metric, Alarm, Command, Rule or authorization facts.
-
-The primary Site dashboard consumes a coherent SiteDashboardSummary with explicit as-of time, watermarks, completeness, quality and denominator policy. BigScreen consumes the same authoritative summary/projection family.
-
-Amended by [ADR 0019](0019-overview-reads-owners-directly.md): the Site overview reads each owner directly and states freshness on the facts that age; there is no Site dashboard summary.
-
-A presentation action that leads toward control navigates to Command Preview; Command Domain re-authorizes and creates the Intent. Presentation code never directly dispatches control.
-
-### 13. Platform Operations owns reliability mechanisms, not domain facts
-
-Platform Operations owns AvailabilityTier, LimitPolicy, migration/release execution, generic durable Work/Dead Letter conventions, readiness semantics, observability and ProductReleaseManifest.
-
-Phase 1 is `SINGLE_NODE_RECOVERABLE`, not HA. Kafka, actor clustering, shared rate-limit backends and multi-instance partition ownership are introduced only after capacity/availability evidence crosses a documented threshold.
-
-Migration and release never use runtime fallback, dual write or schema-version bypass to pretend compatibility. Service startup fails closed on unsupported schema/product versions.
-
-## Canonical bounded-context seams
-
-| Context | Authoritative writes | May consume/reference | Must never own |
+| 部分 | 说了算地写 | 可以消费 / 引用 | 绝不负责 |
 | --- | --- | --- | --- |
-| Identity Provider | credentials, authentication assurance | Tenant membership hints as input only | platform authorization |
-| IAM | Tenant/Principal/Membership/Capability/Explicit Deny/Delegation | IdP assurance, Registry scope | device/telemetry/control facts |
-| Registry | Site/Space/Asset/Device/PhysicalSensor/Point, typed bindings, templates | IAM actor, domain release references | credentials, runtime sessions, alarm/command state |
-| Connectivity | integration/transport profiles, CredentialRef lifecycle, sessions, provisioning, desired/reported config, OTA campaign governance | Registry identities, Command intents | Registry identity, Command success |
-| Telemetry Runtime | acceptance/quarantine/current Device snapshot/revision | Registry Point/binding revisions | Registry lifecycle, Metric facts |
-| Telemetry Query | query/cursor/aggregation contract and read projections | raw/history/current facts | source facts |
-| Metric | metric definitions/runs/results/current metric projection | Telemetry/Registry revisions | raw Telemetry, Alarm lifecycle |
-| Command | intents/approvals/attempts/leases/fences/outcomes/verification | IAM, Registry command/readback bindings, Edge evidence | Edge arbitration internals |
-| Edge Control | channels/process image/controllers/arbiter/local leases/observed state/sync evidence | signed Cloud releases/intents | Cloud approval, Registry master data |
-| Rule Runtime | rule revisions/bindings/execution/state/continuation/effect intent | owner facts/snapshots | target-domain final effects |
-| Alarm | alarm policies/evaluation state/incidents/ack/suppression/assignment/timeline | Telemetry/Metric/FDD evidence | notification provider delivery |
-| Notification | audience/template/policy/escalation/inbox/disposition | Alarm/other trigger facts, Delivery receipts | provider retry/credential internals |
-| Outbound Delivery | integration definitions/intents/attempts/receipts/dead letter | owner requests, CredentialRef | originating business state |
-| Work Order | work order aggregate/timeline/links | Alarm/Asset references | Alarm recovery truth |
-| Intelligence | Investigation/Evidence/Finding, Forecast facts, Optimization recommendations, model deployment/invocation | governed owner reads | direct control/alarm truth |
-| Presentation | view definitions and derived presentation projections | owner read models | business truth or authorization |
-| Platform Operations | release/migration/limits/readiness/work conventions | owner health/revisions | domain business facts |
+| 身份服务 | 凭据、认证强度 | 租户成员提示（只作输入） | 平台权限 |
+| IAM | 租户 / 人员 / 成员 / 权限 / 明确禁止 / 授权转交 | 认证强度、登记范围 | 设备 / 读数 / 控制数据 |
+| 登记 | 站点 / 空间 / 资产 / 设备 / 物理传感器 / 点位、有类型的绑定、模板 | IAM 操作人、各领域发布的引用 | 凭据、运行会话、告警 / 指令状态 |
+| 接入 | 集成 / 传输配置、凭据引用的生命周期、会话、开通、期望 / 报告的配置、固件升级的管理 | 登记身份、指令请求 | 登记身份、指令成功 |
+| 遥测 | 接收 / 隔离 / 设备当前快照 / 版本号 | 登记的点位 / 绑定版本 | 登记生命周期、指标 |
+| 遥测查询 | 查询 / 游标 / 统计的约定和只读副本 | 原始 / 历史 / 当前数据 | 源数据 |
+| 指标 | 指标定义 / 计算 / 结果 / 当前指标副本 | 遥测 / 登记版本 | 原始读数、告警生命周期 |
+| 指令 | 请求 / 审批 / 尝试 / 租约 / 栅栏 / 结果 / 核对 | IAM、登记的指令 / 读回绑定、现场证据 | 现场仲裁的内部 |
+| 现场控制 | 通道 / 过程映像 / 控制器 / 仲裁 / 本地租约 / 观察到的状态 / 同步证据 | 签名的云端发布 / 意图 | 云端审批、登记主数据 |
+| 规则 | 规则版本 / 绑定 / 执行 / 状态 / 续接 / 效果意图 | 负责方的数据 / 快照 | 目标领域的最终结果 |
+| 告警 | 告警策略 / 判断状态 / 事件 / 确认 / 屏蔽 / 指派 / 时间线 | 遥测 / 指标 / 诊断的证据 | 通知的对外投递 |
+| 通知 | 收件人群 / 模板 / 策略 / 升级 / 收件箱 / 处理结果 | 告警等触发事实、外发确认 | 对方重试 / 凭据的内部 |
+| 外发 | 集成定义 / 请求 / 尝试 / 确认 / 死信 | 负责方的请求、凭据引用 | 发起方的业务状态 |
+| 工单 | 工单 / 时间线 / 关联 | 告警 / 资产引用 | 告警是否恢复 |
+| 智能 | AI 助手会话和结论、诊断结论、预测、优化建议、模型部署 / 调用 | 经授权读各负责方 | 直接控制、告警的事实 |
+| 展示 | 视图定义和派生的展示数据 | 负责方的只读数据 | 业务数据或权限 |
+| 平台运维 | 发布 / 迁移 / 限流 / 就绪 / 任务约定 | 负责方的健康 / 版本 | 领域业务数据 |
 
-## Forbidden paths
+## 禁止的做法
 
-The target architecture explicitly forbids:
+1. 新的正式约定或接口里用组织 / 区域 / Equipment 的兼容名词。
+2. 用自由的关系图作为说了算的暖通拓扑。
+3. 可以随便改的跨领域「超级档案」。
+4. 跨负责方直接写数据库 / 表，即使在同一个进程里。
+5. 浏览器从不完整的列表自己拼出站点 / 设备 / 告警 / 能耗的事实。
+6. 把 Redis、传输位置、队列位置、缓存、actor 邮箱或展示状态当作业务依据。
+7. 规则节点直接跨领域写入、读凭据或产生对外效果。
+8. 用告警的确认、屏蔽、通知或工单状态来判断是否恢复。
+9. 云端指令绕过现场安全 / 仲裁，或把传输确认当作物理上成功。
+10. 现场和云端都能改同一个说了算的字段。
+11. AI、诊断、优化建议不走正常的指令流程就直接产生物理效果。
+12. 模板、规则 JSON、通知内容、现场发布内容、操作记录、日志或浏览器接口里出现密钥。
+13. 就地修改已发布的内容。
+14. 为了保留被取代的架构，用运行时双写、回退读取或兼容层。
+15. 在网页里退回到演示 / 假数据 / ThingsBoard（ADR 0007）。
 
-1. Organization / Area / Equipment compatibility vocabulary in new production contracts or APIs.
-2. Free-form Relation graphs as authoritative HVAC topology.
-3. Mutable cross-domain God Profiles.
-4. Cross-owner direct database/schema writes, even when modules share one process.
-5. Browser-side reconstruction of authoritative site/device/alarm/energy truth from partial lists.
-6. Redis, transport offsets, queue offsets, caches, actor mailboxes or presentation state as business authority.
-7. Rule nodes directly performing cross-domain writes, credential reads or external side effects.
-8. Alarm acknowledgment, suppression, notification or Work Order state being used as recovery truth.
-9. Cloud Command bypass of Edge safety/arbiter or transport ACK being treated as physical success.
-10. Edge and Cloud both mutating the same authoritative field.
-11. AI/FDD/Optimization recommendations directly creating physical effects without the normal governed Command path.
-12. Secret material in templates, Rule JSON, Notification payloads, Edge release payloads, audit records, logs or browser APIs.
-13. Released artifacts being edited in place.
-14. Runtime dual-write, fallback read or compatibility layer used to preserve a superseded architecture.
-15. Demo/Mock/ThingsBoard runtime fallback inside Real Mode.
+## 后果
 
-## Consequences
-
-- ADR 0001 remains historical evidence for UUIDv7, cursor/RLS and single-owner Registry principles, but its Organization/Equipment public model and fallback route assumptions are superseded.
-- ADR 0011 is superseded where it defines Organization/Area/Equipment as canonical and Sensor as a generally first-class measurement identity; Point is canonical and PhysicalSensor is optional.
-- ADR 0012 remains accepted for Edge IPO/Process Image/Controller/Scheduler/Arbiter/Driver/Bridge mechanisms, but its Area/Equipment/Sensor terminology is interpreted through this ADR's Tenant/Space/Asset/optional PhysicalSensor model.
-- The ten ThingsBoard adjudication documents remain source evidence. Where their local terminology or cross-domain ownership differs, this ADR is the final cross-domain decision.
-- Runtime implementation is not completed by this ADR. The implementation order and migration/removal slices belong to #244.
-
-## Evidence
-
-Primary decision inputs:
-
-- `GLOSSARY.md`
-- `contracts/registry/s1-registry-model.v1.json`
-- ADR 0003, 0006, 0009, 0010, 0011 and 0012.
+- ADR 0001 关于 UUIDv7、游标 / 行级隔离和登记单一负责方的部分仍然有效，它的组织 / Equipment 对外模型和回退路由作废。
+- ADR 0011 中把组织 / 区域 / Equipment 当标准、把传感器当一般的一等测量身份的部分作废：点位是标准，物理传感器是可选的。
+- ADR 0012 的周期 / 过程映像 / 控制器 / 调度器 / 仲裁 / 驱动 / 协议桥仍然有效，名词按本 ADR 理解。
+- 这份 ADR 不代表运行时已经全部实现；各部分的实现情况见各模块的 README。
