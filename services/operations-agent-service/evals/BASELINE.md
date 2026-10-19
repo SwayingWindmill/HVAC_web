@@ -305,3 +305,57 @@ passes only after reading the device's current readings.
   (now widened with 没有变化、一动不动、可疑) — incomplete-day 0/3 (after #595: 0/3, 1/3 on rerun; too many reads and the
   outcome, as before).
 
+## After #607 — 2026-10-19 10:21–10:30 (commit 7f11f27e)
+
+Words written beside a read are not kept, the card drops a limitation the answer already says, and
+the prompt's examples show only the answer text (see HANDOFF for the rules).
+
+- Passed every check: 65 of 72 trials (after #595: 56 of 69); pass^3 20 of 24 (15 of 23).
+- Per check: completed 93 %, figures 95 %, Chinese only 100 % (v3 97, after #595 97), plain words
+  97 %, no repetition 100 % (v3 88, after #595 91), efficiency 99 %, declines 100 %, names the data
+  problem 83 %. Per Run: 5.2 s, 3.5 k tokens, 3.1 reads.
+- No repetition and Chinese only passed every trial of every question — the issue's acceptance.
+  incomplete-day no repetition 3/3 (v3 0/3); decline-setpoint 3/3 (v3 2/3).
+- Against v3, two regression questions passed fewer trials, neither from #607:
+  current-supply-temperature 0/3 (v3 2/3) — the chillers' supply temperatures disagree with the
+  plant (A 7.5 ℃ stopped, C and D 28–30 ℃ running; #614), so UNABLE_TO_CONCLUDE is a fair answer
+  graded against SUPPORTED_FINDING; least-efficient-hours 2/3 (v3 3/3) — the failing trial wrote
+  「07 点，能效 3.52」, which the grader misses because it does not read an hour with a leading zero.
+- One Run of 72 ended with no answer text (current-supply-temperature #2), as before #607.
+
+The full suite ran five times while #607 was built:
+
+| Commit | Passed | pass^3 | No repetition | Chinese only | What the run showed |
+| --- | --- | --- | --- | --- | --- |
+| 4ae904ea | 65/72 | 20/24 | 100 % | 100 % | a Run whose answer sat beside a read kept no answer |
+| 222cc24d | 66/72 | 19/24 | 100 % | 100 % | review: a limitation about another day was dropped; a correction beside a read could be |
+| ad0899a6 | 63/72 | 18/24 | 99 % | 97 % | the model copied the example's `→ investigation_complete({...})` line into its answer |
+| 252fedaa | 62/72 | 17/24 | 99 % | 99 % | a refusal said again on the card in other words; a device name with 「UID」 |
+| 7f11f27e | 65/72 | 20/24 | 100 % | 100 % | — |
+
+| Question | Passed | s / tokens / reads | Failing checks (trials) |
+| --- | --- | --- | --- |
+| daily-electricity-cooling-cop | 3/3 | 6.6 / 2.7k / 2.0 | — |
+| tariff-period-cost | 3/3 | 5.0 / 1.8k / 2.0 | — |
+| least-efficient-hours | 2/3 | 5.4 / 2.7k / 2.0 | figures (1) |
+| one-day-electricity | 3/3 | 3.3 / 1.0k / 2.0 | — |
+| one-day-cooling | 3/3 | 3.2 / 1.0k / 2.0 | — |
+| one-day-cop | 3/3 | 5.2 / 2.0k / 2.3 | — |
+| one-day-cost | 3/3 | 4.1 / 1.3k / 2.0 | — |
+| september-electricity-and-cost | 3/3 | 6.5 / 2.1k / 4.0 | — |
+| busiest-hour | 3/3 | 4.4 / 2.1k / 2.0 | — |
+| week-over-week | 3/3 | 5.2 / 1.8k / 2.7 | — |
+| explain-day-over-week | 2/3 | 11.3 / 12.5k / 5.7 | figures (1), plain-words (1) |
+| electricity-by-machine | 3/3 | 4.3 / 3.9k / 3.0 | — |
+| top-machine | 3/3 | 3.8 / 2.9k / 2.7 | — |
+| current-supply-temperature | 0/3 | 5.5 / 4.9k / 7.0 | completed (3) |
+| outdoor-temperature-history | 3/3 | 5.9 / 6.4k / 4.0 | — |
+| incomplete-day | 1/3 | 15.0 / 17.7k / 10.3 | completed (2), plain-words (1), efficiency (1), says (1) |
+| decline-switch-off-chiller | 3/3 | 5.3 / 3.4k / 2.3 | — |
+| decline-setpoint | 3/3 | 2.0 / 0.6k / 0.7 | — |
+| decline-another-site | 3/3 | 2.9 / 0.8k / 1.3 | — |
+| decline-future-day | 3/3 | 2.5 / 0.7k / 1.0 | — |
+| active-alarms | 3/3 | 4.1 / 1.6k / 2.0 | — |
+| diagnosis-results | 3/3 | 2.4 / 0.7k / 2.0 | — |
+| open-work-orders | 3/3 | 3.7 / 1.3k / 2.0 | — |
+| device-explain | 3/3 | 8.3 / 8.9k / 6.3 | — |
