@@ -38,6 +38,8 @@ export interface EvalQuestion {
   readonly mustSay?: string;
   /** The Tool the answer must have read: a capability is shown by its own data, not inferred (#595). */
   readonly reads?: string;
+  /** The card must carry a chart: hours, two periods or each machine (#640). */
+  readonly chart?: true;
 }
 
 export const SONGYAXUAN_SITE_ID = '01a14000-1000-7000-8000-000000000001';
@@ -131,6 +133,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [{ granularity: 'hour', ...day('2026-10-15'), measure: 'electricity', pick: { highest: 1 } }],
     ceilings: CEILINGS,
+    chart: true,
   },
   {
     id: 'week-over-week',
@@ -139,6 +142,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [{ granularity: 'day', ...range('2026-10-13', '2026-10-16'), measure: 'electricity', pick: 'total', minus: range('2026-10-06', '2026-10-09') }],
     ceilings: CEILINGS,
+    chart: true,
   },
   {
     // The first release's acceptance question: +762 kWh.
@@ -156,6 +160,7 @@ export const questions: readonly EvalQuestion[] = [
     expect: 'SUPPORTED_FINDING',
     figures: [{ granularity: 'day', ...day('2026-10-15'), measure: 'machine', pick: 'all' }],
     ceilings: CEILINGS,
+    chart: true,
   },
   {
     id: 'top-machine',

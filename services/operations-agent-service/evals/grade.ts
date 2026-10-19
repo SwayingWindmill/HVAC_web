@@ -20,7 +20,7 @@ export type SeriesByKey = Readonly<Record<string, {
   readonly devices?: readonly { readonly deviceId: string; readonly points: readonly SeriesPoint[] }[];
 }>>;
 
-export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says';
+export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says' | 'chart';
 
 export interface Check {
   readonly name: CheckName;
@@ -219,6 +219,9 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
   } else if (question.mustSay !== undefined) {
     checks.push(new RegExp(question.mustSay, 'u').test(shown) ? pass('says') : fail('says', 'does not name the data problem'));
   }
+
+  // The Agent draws a chart from the read the card names, so its numbers are the owner's (#640).
+  if (question.chart) checks.push(finding?.chart === undefined ? fail('chart', 'the card has no chart') : pass('chart'));
 
   return { passed: checks.every((each) => each.passed), checks, durationMs, tokens, toolCalls: reads.length };
 };

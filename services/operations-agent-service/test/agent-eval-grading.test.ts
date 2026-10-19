@@ -191,3 +191,18 @@ test('a capability question fails unless its own Tool was read', () => {
   } as AgentSessionSnapshot;
   assert.equal(check(gradeTrial(asked, read, series), 'completed').passed, true);
 });
+
+// #640: an answer about hours, two periods or each machine carries a chart on its card.
+test('a question that asks for a chart fails without one on the card', () => {
+  const charted = { ...question('daily-electricity-cooling-cop'), chart: true as const };
+  const snapshot = fixture('daily-electricity-cooling-cop');
+  assert.deepEqual(check(gradeTrial(charted, snapshot, series), 'chart'), { name: 'chart', passed: false, reason: 'the card has no chart' });
+  const withChart = {
+    ...snapshot,
+    artifacts: snapshot.artifacts.map((artifact: AgentSessionSnapshot['artifacts'][number]) => (artifact.kind === 'FINDING'
+      ? { ...artifact, finding: { ...artifact.finding, chart: { kind: 'BAR', title: '每天用电', unit: 'kWh', categories: ['10/10'], series: [{ name: '用电', values: [1] }] } } }
+      : artifact)),
+  };
+  assert.equal(check(gradeTrial(charted, withChart, series), 'chart').passed, true);
+  assert.equal(gradeTrial(question('daily-electricity-cooling-cop'), snapshot, series).checks.some((each) => each.name === 'chart'), false);
+});
