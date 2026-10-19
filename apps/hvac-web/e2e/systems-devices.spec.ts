@@ -4,7 +4,7 @@ import { expect, test } from './test';
 test('a workspace opened without a Site carries the default Site in the URL', async ({ page }) => {
   await page.goto('/operations/systems-devices');
   await expect(page).toHaveURL(new RegExp(`[?&]site=${SITE_ID}`));
-  await expect(page.getByRole('heading', { name: '设备' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '设备', exact: true })).toBeVisible();
 });
 
 test('the device wall lists registered equipment and counts only observed points', async ({ page }) => {

@@ -164,7 +164,7 @@ const POINT_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   COUNTER: '累计量',
   STATE: '状态',
   SETTING: '设定',
-  COMMAND: '命令',
+  COMMAND: '控制点',
 });
 
 const REGISTRY_STATUS_LABELS: Readonly<Record<string, string>> = Object.freeze({

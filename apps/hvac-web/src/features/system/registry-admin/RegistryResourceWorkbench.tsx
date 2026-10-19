@@ -151,7 +151,7 @@ function pointTypeLabel(value: string): string {
     COUNTER: '累计量',
     STATE: '状态',
     SETTING: '设定值',
-    COMMAND: '控制命令',
+    COMMAND: '控制点',
   };
   return labels[value] ?? value;
 }
