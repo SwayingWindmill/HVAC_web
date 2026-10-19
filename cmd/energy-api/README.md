@@ -42,7 +42,7 @@ OIDC 令牌在服务端交换并加密保存。浏览器只拿到一个不透明
 
 旧系统的路由适配器已经不在网关里；历史上的迁移定义会被现在的解析器拒绝。
 
-数据归属、回滚、防腐、超时和熔断的细节见 `docs/security/route-ownership.md`。
+数据归属和回滚的细节见 `docs/security/route-ownership.md`。
 
 ## 测试
 
