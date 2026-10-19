@@ -1,202 +1,89 @@
-# Pi Agent source review
+# pi 源码调研
 
-Status: accepted reference baseline
+2026-09-03；2026-10-16 升级到 v1.3.0 时补了最后一节。决定见 ADR 0014。
 
-Date: 2026-09-03
+## 参照的版本
 
-## Reference pin
+最初参照 Earendil Works 的 pi：
 
-The adopted upstream reference is Earendil Works Pi:
+- 仓库：`https://github.com/earendil-works/pi`
+- 版本：`v0.84.4`（npm 包 `@earendil-works/pi-agent-core@0.84.4`、`@earendil-works/pi-ai@0.84.4`，`gitHead` 为 `b79e4cc834970cca69daebffab7df1da7d1e52c4`）
+- pi 要求 Node `>=22.19.0`；项目要求 Node `>=22.22.0`
 
-- repository: `https://github.com/earendil-works/pi`
-- release: `v0.84.4`
-- npm packages: `@earendil-works/pi-agent-core@0.84.4`, `@earendil-works/pi-ai@0.84.4`
-- npm `gitHead`: `b79e4cc834970cca69daebffab7df1da7d1e52c4`
-- runtime floor: Node `>=22.19.0`
-- project runtime floor: Node `>=22.22.0`
+现在用的是 1.3.0（见最后一节）。两个包都固定确切版本，实际安装以仓库的 lockfile 为准。
 
-The package versions must be exact pins while Pi remains on the fast-moving `0.x` release line. The repository lockfile remains the installation ground truth.
+## 读了哪些上游内容
 
-## Upstream material reviewed
+只看把 pi 嵌进自己服务时要用到的部分，不看它的编程助手外壳：
 
-The review covered the official release documentation, source and tests around the production embedding seam rather than the coding-agent product shell:
+- 根目录 `README.md`：包的划分，以及权限和容器隔离的边界；
+- `packages/agent/src/agent.ts`：`Agent` 的生命周期和稳定的嵌入接口；
+- `packages/agent/src/types.ts`：助手状态、工具、钩子和执行顺序的约定；
+- `packages/agent/test/e2e.test.ts`：直接用 `Agent`、模型回答写死的测试；
+- `packages/agent/docs/harness-v2-state-machine.md`：持久化方案的方向，文档自己写明还没定稿；
+- `packages/agent/src/harness/session/session.ts`、`packages/agent/src/harness/reducer.ts`：还在开发中的持久会话和恢复；
+- `packages/ai/README.md`：`Models`、各厂商的接入、认证、逐字输出、假模型、跨厂商的上下文和打包建议。
 
-- root `README.md` — package split and permission/containerization boundary;
-- `packages/agent/src/agent.ts` — `Agent` lifecycle and stable embedding surface;
-- `packages/agent/src/types.ts` — Agent state, tools, hooks and execution mode contracts;
-- `packages/agent/test/e2e.test.ts` — direct `Agent` use with deterministic provider responses;
-- `packages/agent/docs/harness-v2-state-machine.md` — durable harness direction and explicit non-canonical status;
-- `packages/agent/src/harness/session/session.ts` and `packages/agent/src/harness/reducer.ts` — durable session/recovery concepts under active development;
-- `packages/ai/README.md` — `Models`, provider factories, auth, streaming, faux provider, cross-provider context and bundle guidance.
+当时把已有的助手代码（LangGraph、绑定 OpenAI 的部分、断点、CopilotKit）都当成没验证过的旧代码：只有它本身比参照 pi 的新设计更好时才保留。结果都没保留。
 
-This review treats current HVAC Agent code as unverified incumbent code. Existing LangGraph, OpenAI-specific, checkpoint or CopilotKit integration is retained only when it independently satisfies the target product contract better than the adopted Pi-informed design.
+## 上游的做法
 
-## Relevant upstream behavior
+**pi-agent-core**：建立在 `pi-ai` 上的带状态的助手。稳定的用法是 `Agent` 加一个模型、一段提示词和一组工具；它发出事件，管一个内存里的助手的「模型 → 工具」循环。它有工具调用前后的钩子，也能控制工具的执行顺序，这些适合接入，但不是授权系统。上游明确说：除非嵌入它的程序另加限制，pi 拥有启动它的进程的全部文件、进程、网络和凭据权限。
 
-### Agent Core
+**pi-ai**：用 `Models` 集合管理各厂商的模型清单、认证和逐字输出，支持 OpenAI、DeepSeek、Anthropic、Google 等很多家。单独引入某一家（例如 `@earendil-works/pi-ai/providers/openai`）只加载那一家。`providers/all` 会把所有内置厂商都引进来；上游建议在意打包大小时单独引入，新项目不要用旧的 `compat` 入口。
 
-`@earendil-works/pi-agent-core` is a stateful Agent runtime built on `pi-ai`. The stable embedding path uses `Agent`, a model, a system prompt and a tool set. The runtime emits Agent events and owns the model/tool loop for one in-memory Agent state.
+**测试**：pi 带一个假模型，可以写死文字、思考和工具调用，不需要外部密钥。上游的助手测试都用它，不调付费接口。我们的运行时测试也这样做。
 
-Pi exposes tool lifecycle hooks and supports tool execution ordering. These are useful integration seams, but they are not an authorization system. Upstream explicitly states that Pi inherits the filesystem, process, network and credential permissions of the process that launched it unless the embedding application adds stronger boundaries.
+**持久化方案（Harness v2）**：pi 正在做一个更完整的持久化 `AgentHarness`，文档自己说只是工作交接稿，不是正式规格。里面有好的想法（记下要产生外部影响的意图、重放安全、完整的操作状态、用量记录、可恢复的会话记录），但这些接口不能作为第一版的生产依赖。
 
-### Model runtime
+## 采用
 
-`@earendil-works/pi-ai` uses a `Models` collection with provider-owned catalogs, auth and streaming. The release supports OpenAI, DeepSeek, Anthropic, Google and many other providers. Provider-specific factories such as `@earendil-works/pi-ai/providers/openai` load only that provider's catalog/lazy API wrapper.
+1. **用 `Agent` 跑第一版**，不用还没定稿的 Harness v2。原因：嵌入面最小、上游有直接的测试、框架管的持久状态更少、以后容易换。
+2. **用 `createModels()` 只登记明确支持的厂商**，只在服务端，不引入 `providers/all`。这样不绑定厂商，又不用引入整个模型生态。
+3. **用假模型测**助手循环、工具和事件。调真实厂商的测试是可选的、依赖环境的集成测试，不作为主要的正确性检查。
+4. **让 pi 管「模型 → 工具 → 模型」的循环**。互不依赖的只读工具可以并行；有副作用的或「建议」类操作按顺序执行。真正的助手应该自己选去读哪些数据，而不是换个接口再写一个固定流程。
+5. **工具失败就是失败**，不能返回一段写着「error」的正常文字。助手要能分清「数据读不到」和「数据确实为空」。
+6. **用量和模型信息不绑定厂商**：从 pi 统一的接口记下厂商、模型、耗时和令牌用量，按项目的「少记数据」规则处理。
 
-The `providers/all` entry point deliberately imports all built-in provider factories and catalogs. The release documentation recommends individual provider factories when bundle/runtime surface matters and warns against the legacy `compat` entry point for new bundled applications.
+## 改造后采用
 
-### Tests
+1. **工具由我们定义**。pi 的工具类型只是适配用的，不是业务能力的约定；项目定义讲业务的工具，在运行时边界上转成 pi 的工具。模型只看到这些工具（现在的清单见 `services/operations-agent-service/README.md`），永远看不到接口路径、SQL、ClickHouse、ThingsBoard 地址、数据库连接或任意 HTTP。
+2. **可信的范围是运行时上下文，不是模型的输入**。租户、站点、提问人、权限、代理授权和关联编号由服务端提供，不是模型生成的参数。执行工具时把校验过的模型参数和可信上下文合在一起，在数据负责方那边重新授权。
+3. **pi 的钩子只是预检，不是最终权限**。`beforeToolCall` 可以执行助手内部的白名单、预算和执行规则；真正执行的工具仍要用服务端的身份和范围调数据负责方，只接受负责方校验过的结果。pi 的钩子不能成为唯一的授权或现场安全边界。
+4. **pi 的事件转成我们自己的事件**。pi 的事件和类型都不是对外接口，先转成带版本的 HVAC 助手事件，再给网关和网页。
+5. **第一版的持久状态由我们自己存**。只保存重启后重建 pi `Agent` 所需的最少会话和回答记录，在上游定稿前不照搬 Harness v2 的存储模型。只借用它关于重放安全的原则：记下会产生外部影响的意图，要求防重复或明确可以安全重放，外部系统做不到的「恰好一次」不声称做到。
+6. **用收尾工具给出结构化结果**。专门的收尾工具把自由的循环变成有类型的产品结果，结束前校验结论类型、依据、局限说明和建议的下一步。这个结果是业务记录，模型最后说的话不自动算数。
 
-Pi ships a deterministic faux provider that can script text, thinking and tool calls without external credentials. Upstream Agent tests exercise the Agent against fake provider behavior instead of paid provider APIs. This is the preferred pattern for HVAC runtime contract tests.
+## 不采用
 
-### Durable Harness
+1. **在生产服务里用 pi 的编程助手**：不依赖 `@earendil-works/pi-coding-agent`、pi 的终端界面、编程助手扩展、文件工具、bash 工具、通用的编辑写入工具或通用的浏览器和网络工具。它们解决的是写代码的问题，会在工业服务里白白暴露进程、文件和网络的权限。
+2. **在生产代码里用 `providers/all` 和 `compat`**。
+3. **让模型选租户、站点或授权**：任何让模型决定租户、站点、提问人、权限或凭据引用的工具接口都不要。
+4. **直接操作设备的工具**：不给执行指令、写设定值、任意 RPC 或现场通道的工具。模型可以产生有类型的「建议」；以后任何写操作都要走负责模块的审批、租约、防重复和执行后核对。
+5. **保存模型的推理过程**：模型的推理、厂商请求和响应的原文、密钥都不作为业务或审计记录保存。只保存产品需要的、给人看的对话、工具结果和引用、用量信息和有类型的结果。
+6. **pi 的类型出现在适配层以外**：应用、数据库、网关和接口定义、网页的代码都不引用 pi 的类型。
 
-Pi is actively developing a richer durable `AgentHarness`. The `harness-v2-state-machine.md` document explicitly says it is a working handoff document and not yet the canonical implementation specification. Its design contains valuable ideas — explicit effect intent, replay safety, total operation state, usage ledgers and recoverable session records — but those APIs are not an acceptable production dependency for the first HVAC Pi release.
+## 模型厂商
 
-## ADOPT
+先只接一家，不搞多家的组合。第一版端到端只用一个在允许名单里的模型，测试用假模型；有了具体的部署或评测需要才加第二家。用 `pi-ai` 是为了不被一家厂商绑住，不是说一定要接很多家。
 
-### 1. `Agent` as the first production Pi execution primitive
+## 升级规则
 
-Use the stable `Agent` API for the first runtime. Do not build the first product slice on the non-canonical Harness v2 state machine.
+- `pi-agent-core` 和 `pi-ai` 固定确切版本，并且从同一个 pi 版本一起升级；
+- 每次升级前看上游的 `packages/agent`、`packages/ai`、发布说明和受影响的测试；
+- 升级前跑服务的测试和评测题库（`services/operations-agent-service/evals/`）；
+- 不因为 pi 新出了某个功能就用，它必须能减少项目里的复杂度或解决眼前的需求。
 
-Reason: smallest supported embedding surface, direct upstream tests, less framework-owned durable state, and easier replacement later.
+## 结论
 
-### 2. `pi-ai` provider collection and individual provider factories
+pi 是现在的助手执行引擎，不是 HVAC 的业务架构。它擅长的部分（不绑定厂商的模型调用、助手循环、工具执行和事件）交给它；现场范围、授权、业务数据、审批、审计和对外接口都留在 pi 的依赖边界以外。
 
-Use `createModels()` and register only explicitly supported providers. The initial provider set should be minimal and server-only. Do not import `providers/all`.
+## 升级到 v1.3.0（2026-10-16）
 
-Reason: provider neutrality without importing the complete model ecosystem.
+对照本服务用到的接口（`Agent`、`AgentTool`、`createModels`、`streamSimple`、DeepSeek 和假模型）看了 v0.85.0–v1.3.0 的发布说明：
 
-### 3. Deterministic faux provider testing
-
-Use Pi's faux provider for Agent loop/tool/event tests. External provider tests are optional environment-bound integration tests and must not be the primary correctness gate.
-
-Reason: deterministic, fast and credential-free tests matching upstream practice.
-
-### 4. Pi tool loop and read parallelism
-
-Let Pi own model -> tool -> model iteration. Independent HVAC READ capabilities may execute in parallel; side-effecting/proposal operations are serialized.
-
-Reason: a real Agent should select evidence-gathering capabilities instead of encoding another static graph in a different API.
-
-### 5. Tool failure as an actual error
-
-Tool execution failures must surface as typed failures rather than successful text that says `error`. The Agent must be able to distinguish unavailable data from valid empty business data.
-
-### 6. Provider-neutral usage and model metadata
-
-Capture provider/model identity, latency and token/usage accounting from Pi's normalized model interface, subject to the project's data-minimization rules.
-
-## ADAPT
-
-### 1. Tool definitions remain HVAC-owned
-
-Pi's tool types are adapter types, not the business capability contract. The project defines the semantic tool catalog and maps it into Pi at the runtime boundary.
-
-The model sees semantic capabilities such as:
-
-```text
-site.get_context
-assets.list
-assets.get
-telemetry.get_current
-telemetry.query_series
-energy.query_series
-energy.compare_periods
-alarms.search
-alarms.get
-fdd.list_findings
-fdd.get_evidence
-work_orders.search
-work_orders.get
-investigation.complete
-```
-
-It never sees raw REST paths, SQL, ClickHouse, ThingsBoard addresses, database handles or arbitrary HTTP.
-
-### 2. Trusted Scope is runtime context, not model input
-
-Tenant, Site, principal identity, capabilities, delegation and correlation identities are supplied by the server execution context. They are not normal model-generated tool parameters.
-
-Tool execution combines validated model arguments with trusted runtime context and reauthorizes at the owning service boundary.
-
-### 3. Pi hooks are policy preflight, not final authority
-
-`beforeToolCall` may enforce Agent-local allowlists, budget and execution policy. The actual Tool executor must still call the authoritative owner using server-owned identity/scope and must accept only owner-validated results.
-
-A Pi hook cannot become the only authorization or OT safety boundary.
-
-### 4. Pi events are translated to project events
-
-No Pi event/type is public API. Pi events are projected into a versioned HVAC Agent event contract before Gateway/Web exposure.
-
-This keeps Pi event mechanics out of browser and business contracts while allowing each layer to evolve around its own product responsibility.
-
-### 5. Durable state stays project-owned in the first release
-
-Persist only the minimum durable Agent session/run facts needed to reconstruct a Pi `Agent` state after restart. Do not copy Pi Harness v2's complete storage model before the upstream API is canonical.
-
-Use the upstream Harness design only as a source of replay-safety principles: record repeat-sensitive external-effect intent, require idempotency or explicit safe replay, and never claim exactly-once behavior that the external system cannot provide.
-
-### 6. Structured terminal outcome
-
-A dedicated `investigation.complete` Tool converts the free-form Agent loop into a typed product result. It validates outcome, evidence references, limitations and required-next actions before completion.
-
-The terminal product result is an application/business record; the final LLM prose is not automatically authoritative.
-
-## REJECT
-
-### 1. Pi Coding Agent runtime in production HVAC
-
-Do not depend on `@earendil-works/pi-coding-agent`, Pi TUI, coding-agent extensions, filesystem tools, bash tools, generic edit/write tools or generic browser/network tools.
-
-Reason: they solve a coding-agent problem and would unnecessarily expose process/filesystem/network authority in an industrial service.
-
-### 2. `providers/all` and `compat` in production code
-
-Do not register all providers by default and do not use the legacy compatibility entry point in new runtime code.
-
-### 3. Model-controlled Tenant/Site/authorization
-
-Reject any Tool API where the model chooses the authoritative Tenant, Site, principal, capability grant or credential reference.
-
-### 4. Direct physical execution Tools
-
-The first Pi Agent receives no direct `command.execute`, setpoint write, arbitrary RPC or transport Tool. A model may produce a typed proposal. Any later write path must go through the owning domain's approval, lease/fence, idempotency and verification contract.
-
-### 5. Hidden reasoning persistence
-
-Do not persist model chain-of-thought/reasoning streams, raw provider request bodies, raw provider responses or secrets as business/Audit facts. Persist only the minimum user-visible transcript, finalized Tool facts/references, usage metadata and typed product outcomes required by the product.
-
-### 6. Pi-specific types outside the adapter boundary
-
-Application commands, persistence schemas, Gateway/OpenAPI contracts and Web source must not import Pi types.
-
-## Initial provider policy
-
-Start with one production provider, not a broad provider matrix. The first implementation should use one exact allowlisted provider/model end to end and a faux provider in tests. Add a second provider only when there is a concrete deployment or evaluation requirement.
-
-`pi-ai` is adopted because it removes provider lock-in; provider plurality is not itself a release requirement.
-
-## Upgrade policy
-
-- pin `pi-agent-core` and `pi-ai` exactly;
-- upgrade both together from the same Pi release/gitHead;
-- before each version bump, review upstream `packages/agent`, `packages/ai`, release notes and affected tests;
-- run the project Agent benchmark and production contract tests before accepting an upgrade;
-- do not adopt a newly published Pi subsystem merely because it exists — it must replace project complexity or solve a current requirement.
-
-## Result
-
-Pi is adopted as the current Agent execution engine, not as the HVAC business architecture. The project will lean on Pi for the parts it does well — provider-neutral model execution, Agent loop, tool execution and events — while keeping industrial scope, authorization, business truth, approval, audit and public contracts outside the Pi dependency boundary.
-
-## Upgrade to v1.3.0 (2026-10-16)
-
-Reviewed the v0.85.0–v1.3.0 release notes against the APIs this service uses (`Agent`, `AgentTool`, `createModels`, `streamSimple`, the DeepSeek and faux providers).
-
-- ADAPT: `shouldStopAfterTurn` was removed in v0.87.0; the Run's terminal-Artifact and budget stop moved to `finishTurn`, which returns `{ action: 'end' }` or nothing to keep pi's scheduling.
-- ADOPT: since v0.86.0 providers read the system prompt from the transcript (`TranscriptContext`); the policy is still set once through `initialState.systemPrompt` and arrives as the first message.
-- ADOPT: tool-call arguments are JSON values only (v0.86.0); the faux test harness types them as `JsonObject`.
-- ADAPT: the DeepSeek catalog now lists `deepseek-flash` (V4.1 Flash) and `deepseek-v4-pro`; the Compose default and allowlist follow it.
-- REJECT for now: codemode, MCP, virtual models and the coding-agent session manager (v0.99–v1.x) are coding-agent features with no consumer here.
-
+- **改造后采用**：`shouldStopAfterTurn` 在 v0.87.0 删了；一次回答在出现收尾产出或用完预算时停止，改由 `finishTurn` 返回 `{ action: 'end' }`，什么都不返回就继续由 pi 安排。
+- **采用**：从 v0.86.0 起，厂商从对话记录里读提示词（`TranscriptContext`）；提示词仍只通过 `initialState.systemPrompt` 设一次，作为第一条消息发给模型。
+- **采用**：工具调用的参数只能是 JSON 值（v0.86.0）；假模型测试里把它们的类型写成 `JsonObject`。
+- **改造后采用**：DeepSeek 的模型清单现在是 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro`；Compose 的默认值和允许名单跟着改了。
+- **暂不采用**：codemode、MCP、虚拟模型和编程助手的会话管理（v0.99–v1.x），这些是编程助手的功能，这里用不上。
