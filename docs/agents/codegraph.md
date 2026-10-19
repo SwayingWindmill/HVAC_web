@@ -1,17 +1,17 @@
 # CodeGraph
 
-CodeGraph provides a local code knowledge graph for structural search, call paths and change-impact analysis.
+CodeGraph 在本地给代码建一张关系图，可以按结构搜索、查调用路径、看改一个文件会影响哪些地方。
 
-## Setup
+## 安装
 
 ```bash
 npm ci
 npm run codegraph:init
 ```
 
-Restart the MCP-capable agent after installation. The project-level MCP configuration launches the pinned local package and disables anonymous telemetry.
+装好后重启支持 MCP 的 agent。项目级的 MCP 配置会启动固定版本的本地包，并关闭匿名统计。
 
-## Commands
+## 命令
 
 ```bash
 npm run codegraph:status
@@ -20,4 +20,4 @@ npx --no-install codegraph explore "how does command submission reach PostgreSQL
 npx --no-install codegraph affected path/to/changed-file.ts
 ```
 
-The index is stored under `.codegraph/` and must not be committed. `codegraph.json` excludes worktrees, scratch data, generated output, prototypes, references and the frozen Legacy backend so results describe the active platform.
+索引存在 `.codegraph/`，不要提交。`codegraph.json` 排除了 worktree、临时数据、生成的产物、原型、参考资料和冻结的旧后端，所以结果只描述现在在用的平台代码。

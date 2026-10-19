@@ -1,17 +1,23 @@
-# ADR 0020 — FDD reads authoritative telemetry history as its own workload
+# ADR 0020：故障诊断用自己的只读账号读遥测历史
 
-Status: accepted
+状态：已采纳（2026-10-12）
 
-Date: 2026-10-12
+## 决定
 
-FDD evaluates rules on a schedule as well as when an operator asks, so it reads the evidence it needs, the latest supply and return water temperatures of a loop's BTU meter, from the Telemetry history owner tables in ClickHouse with its own read-only account (`fdd_service_reader`, `SELECT` on `telemetry_history.observations` only), scoped in the query to the Tenant, Site and Device. Optimization already reads its current-state Telemetry this way (#345). Platform Gateway still decides whether a user may ask for an evaluation of a Site; the evaluation itself no longer carries that user's history delegation, and FDD no longer calls the Telemetry history HTTP owner. We chose this because the history owner accepts only Gateway-signed user delegations, so no unattended evaluation could ever run, and one evidence path for both triggers keeps a scheduled finding and an operator's finding comparable.
+故障诊断（FDD）既按计划定时诊断，也在值班人员要求时诊断。诊断需要的数据（一个水路上冷量表最新的供水和回水温度），它从 ClickHouse 里遥测历史的表直接读，用自己的只读账号 `fdd_service_reader`（只有 `telemetry_history.observations` 一张表的 `SELECT` 权限），在查询里限定租户、站点和设备。优化服务读当前的遥测数据也是这样（#345）。
 
-## Considered Options
+平台网关仍然判断一个用户能不能对某个站点发起诊断；但诊断本身不再带这个用户的历史读取授权，FDD 也不再调遥测历史的 HTTP 接口。
 
-- **Extend ADR 0017 to Telemetry history**: IAM signs history grants for Workload Principals and the history owner accepts them beside Gateway delegations. Rejected for now: it adds a second grant issuer and verification path to the history owner for a single reader whose scope is already one Site's two readings, and Optimization's equivalent read has not needed it.
-- **Keep the delegated path for operator runs and add a direct read for scheduled runs.** Rejected: two evidence paths could disagree about the same loop at the same moment.
+## 原因
 
-## Consequences
+遥测历史的接口只接受网关签发的用户代理授权，所以没人在场的定时诊断永远跑不起来。两种触发方式走同一条读数路径，定时诊断和手动诊断的结论才能放在一起比。
 
-- `fdd_service_reader` can read every Tenant's observations; the query, not the database, scopes it. A compromised FDD service exposes observation history, which is why the account cannot write and sees no other table.
-- A persisting condition is recorded once a day per asset and rule: an evaluation that finds an open finding from the last 24 hours reports the condition as ongoing instead of adding another.
+## 考虑过的做法
+
+- **把 ADR 0017 扩展到遥测历史**：IAM 给程序身份签历史读取授权，遥测历史接口在网关授权之外也接受它。暂不采用：只为一个读取范围本来就只有「一个站点的两个读数」的使用方，给遥测历史加第二个授权签发方和第二条校验路径；优化服务同样的读取也一直没需要它。
+- **手动诊断保留代理授权，定时诊断另加直接读取**：没有采用。两条读数路径可能在同一时刻对同一个水路给出不同的结论。
+
+## 结果
+
+- `fdd_service_reader` 能读所有租户的读数，限定范围靠查询，不靠数据库。FDD 服务被攻破会泄露读数历史，所以这个账号不能写，也看不到别的表。
+- 持续存在的问题每台设备每条规则一天只记一次：诊断时发现最近 24 小时里已有一条没关闭的结论，就报告「还在持续」，不再新加一条。

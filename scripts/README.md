@@ -1,17 +1,17 @@
-# Repository scripts
+# 仓库脚本
 
-`scripts/` is the repository orchestration surface, not a product/runtime package. Existing script names are intentionally stable because CI, package scripts, release evidence, and deployment certification reference them directly.
+`scripts/` 是仓库的编排脚本：构建、检查、测试、生成代码、部署和验收，不是产品代码。很多脚本被 `package.json`、CI 和部署文件直接引用，所以名字不随便改。
 
-Use these placement rules for new work:
+新脚本按用途命名：
 
-- `scripts/lib/`: reusable script-only helpers with no standalone workflow entry.
-- `scripts/fixtures/`: bounded test and browser-audit fixtures.
-- `check-*.{mjs,ts}`: static or contract checks that fail closed.
-- `test-*.{mjs,ts}`: deterministic Node test entrypoints.
-- `run-*.{mjs,ts}`: bounded integration, browser, migration, certification, or operational runners.
-- `generate-*`: generated-contract or generated-config producers.
-- `build-*`, `assemble-*`, `render-*`, `verify-*`: release/evidence production and verification.
+- `scripts/lib/`：只给其他脚本用的公共函数，没有单独的入口。
+- `scripts/fixtures/`：测试和浏览器检查用的固定数据。
+- `check-*.{mjs,ts}`：检查代码、配置或接口定义，不符合就失败。
+- `test-*.{mjs,ts}`：确定性的 Node 测试。
+- `run-*.{mjs,ts}`：集成测试、浏览器测试、迁移、验收或运维操作。
+- `generate-*`：生成接口代码或配置。
+- `build-*`、`assemble-*`、`render-*`、`verify-*`：生成和校验发布产物。
 
-Do not add ad-hoc screenshots, browser profiles, downloaded toolchains, temporary PowerShell scripts, or one-off logs here or at repository root. Put disposable local work under an ignored scratch location and run `npm run repo:clean:local` after browser/UI investigations.
+不要在这里或仓库根目录放临时截图、浏览器配置、下载的工具、临时 PowerShell 脚本或日志。临时的东西放到被忽略的目录，做完浏览器或界面检查后跑 `npm run repo:clean:local`。
 
-The directory is still intentionally flat for existing ticket/release scripts. Do not bulk-move established entries merely for aesthetics: those paths are referenced by package scripts, CI, deployment assets, and historical certification evidence. Reorganize a family only when its callers are migrated in the same change.
+目录是平铺的。不要只为了好看成批移动脚本：引用它们的地方很多，要移动一类脚本，就在同一个改动里把调用方一起改掉。

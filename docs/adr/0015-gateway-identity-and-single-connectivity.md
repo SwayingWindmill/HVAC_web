@@ -1,34 +1,32 @@
-# ADR 0015 — Gateway identity is its certificate; one Connectivity serves every Gateway
+# ADR 0015：网关的身份就是它的证书，一个设备接入服务管所有网关
 
-Status: accepted
+状态：已采纳（2026-10-02）
 
-Date: 2026-10-02
+参照：`docs/architecture/references/thingsboard-v4.4.md` §2、`openems-2026.9.0.md` §5、`myems-v6.9.0.md` §2
 
-Reference review: `docs/architecture/references/thingsboard-v4.4.md` §2, `openems-2026.9.0.md` §5, `myems-v6.9.0.md` §2
+## 背景
 
-## Context
+以前每个网关要单独跑一个 `iot-service`：接入数据只能属于一个租户，进程只服务一个集成，MQTT 服务器的权限文件里按网关写死了租户和站点的编号。加第二个站点要改六个文件、重启三个进程，同一个设备的身份散在七个互不同步的地方。消息主题里带租户、站点和网关，接入程序还得拿它们和配置核对。
 
-Device ingress ran one `iot-service` per Gateway: the connectivity store was pinned to one Tenant, the process to one integration instance, and the broker ACL file named Tenant and Site UUIDs per Gateway. Adding a second Site meant editing six files and restarting three processes, and Device identity lived in seven unsynchronised places. Topics carried Tenant, Site and Gateway, which the adapter then had to cross-check against configuration.
+## 决定
 
-## Decision
+- 网关在线上的身份就是它的网关证书：一张 X.509 证书，主体名（CN）是这个网关在设备登记里的设备编号。租户和站点从设备登记里查，消息里不带。
+- 主题只带网关编号：上行 `hvac/v1/{gatewayId}/up/{telemetry|event|reply}`，下行 `hvac/v1/{gatewayId}/down/command`。
+- MQTT 服务器仍用 Mosquitto，用证书认证，权限是固定的模式规则（`infra/telemetry/mqtt/acl`：`pattern write hvac/v1/%u/up/#`、`pattern read hvac/v1/%u/down/#`），每个网关只能读写自己的主题。加网关不用改 MQTT 服务器的任何配置。
+- 一个设备接入服务（Connectivity）服务所有租户和网关。它先把网关对应到租户，再做任何按租户的事。
+- 设备接入服务持有网关的签发 CA。运维人员给一个已登记的网关生成一个开通码；网关用开通码和证书申请（CSR）换一张 90 天的证书，之后用现有证书续期。
+- 吊销由设备接入服务执行：没有有效证书的网关发来的消息会被隔离，也不再给它发指令。MQTT 服务器不维护吊销列表。
+- 吊销对这个网关是永久的：它所有还有效的证书和没用掉的开通码一起作废，之后不能再生成开通码或续期。网关被盗或被攻破，就重新登记一个新网关，重新绑定数据来源。原因是 MQTT 的订阅方看到的是网关的主题，看不到证书的指纹；如果允许同一个网关「恢复」，一张被盗的旧证书也会跟着恢复。这是把网关整个隔离，不是让 MQTT 服务器断开某一张证书（调研：`docs/architecture/gateway-credentials-source-review-2026-10-05.md`）。
+- 直接删掉、不做替代的：集成实例和传输配置、接入会话、指令发送的归属租约、按网关的静态绑定文件和环境变量列表、边缘设备管理（版本发布、远程升级、快照）。下发边缘配置以后和边缘运行时一起重新设计。
 
-- A Gateway's identity on the wire is its Gateway Credential: an X.509 certificate whose subject CN is the Gateway's Registry Device id. Tenant and Site are looked up from Registry; messages never carry them.
-- Topics carry only the Gateway id: `hvac/v1/{gatewayId}/up/{telemetry|event|reply}` and `hvac/v1/{gatewayId}/down/command`.
-- The broker stays Mosquitto with certificate authentication and a static pattern ACL (`pattern write hvac/v1/%u/up/#`, `pattern read hvac/v1/%u/down/#`). Adding a Gateway changes no broker configuration.
-- One Connectivity process serves every Tenant and Gateway. It resolves the Gateway to its Tenant before any Tenant-scoped work.
-- Connectivity holds the Gateway CA. An operator issues an Enrollment Code for a registered Gateway; the Gateway exchanges the code and a CSR once for a 90-day certificate and renews with its current certificate.
-- Revocation is enforced by Connectivity: messages from a Gateway without an active credential are quarantined and no commands are sent to it. The broker carries no CRL.
-- Gateway revocation is terminal for that registered Gateway identity: revoke all overlapping certificates and outstanding Enrollment Codes atomically; generating a new code or renewing afterward is forbidden. A compromised Gateway is replaced with a newly registered identity and explicit source bindings. MQTT consumers receive Gateway topics, not leaf-certificate fingerprints, so re-enabling the same identity could also re-enable a stolen older certificate. This is Gateway isolation, not per-certificate broker disconnect (source review: `docs/architecture/gateway-credentials-source-review-2026-10-05.md`).
-- Removed with no replacement: integration instances and transport profiles, connectivity sessions, the command connector ownership lease, per-Gateway static bindings files and environment lists, and the edge fleet runtime (releases, OTA, snapshots). Edge configuration delivery is designed again with the edge runtime.
+## 考虑过的做法
 
-## Considered options
+- **让 MQTT 服务器查数据库做认证**（Mosquitto 动态安全、go-auth 插件、EMQX 回调）：没有采用。证书已经证明了身份，模式规则已经把每个网关限制在自己的主题里，插件只多一个会出错的环节，不多任何保证。
+- **在设备接入服务里内嵌一个 Go 写的 MQTT 服务器**：暂不采用。权限检查会变成进程内调用，但要拿成熟服务器的会话和持久化能力去换我们自己写的。
+- **主题里带租户和站点**：没有采用。主题会变成第二个、可以伪造的范围来源，还得来回核对；网关换站点时主题也要变。
 
-- **Database-driven broker auth (Mosquitto dynamic-security, go-auth plugin, EMQX webhooks).** Rejected: the certificate already proves identity and a pattern ACL already confines each Gateway to its own topics, so a plugin adds a moving part without adding a guarantee.
-- **Embedded Go broker inside Connectivity.** Rejected for now: it would make authorization an in-process call, but trades a mature broker's session and persistence behaviour for our own.
-- **Tenant and Site in the topic.** Rejected: the topic becomes a second, forgeable source of scope that has to be cross-checked, and moving a Gateway between Sites would change its topics.
+## 结果
 
-## Consequences
-
-- `contracts/mqtt/*`, the simulator and the telemetry source contract change together; `energy/v1` topics are removed, not kept alongside.
-- Telemetry trusts Connectivity as its only MQTT source and receives the resolved Tenant, Site, Device and Point from it (Telemetry lives in its own database and cannot read Registry views, ADR 0016), so per-integration source bindings and Telemetry's Registry projections disappear.
-- A stolen Gateway certificate can still hold a broker connection until it expires, but nothing it sends is accepted and it can only reach its own topics.
+- `contracts/mqtt/*`、模拟器和遥测的数据来源约定一起改；旧的 `energy/v1` 主题直接删掉，不和新主题并存。
+- 遥测只信任设备接入服务这一个 MQTT 来源，由它把查好的租户、站点、设备和点位一起交过来（遥测在自己的数据库里，读不到设备登记的视图，见 ADR 0016）。所以按集成的数据来源绑定和遥测里的设备登记副本都没有了。
+- 被盗的网关证书在到期前仍能连上 MQTT 服务器，但它发的任何东西都不会被接受，而且只能碰到它自己的主题。

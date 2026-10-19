@@ -1,138 +1,54 @@
-# ADR 0011 — Spatial asset, sensor and telemetry point model
+# ADR 0011：空间、资产、设备和点位分开表示
 
-Status: accepted, superseded in part by ADR 0013
+状态：已采纳（2026-08-03），部分被 ADR 0013 取代：「组织 / 区域 / 设备（Equipment）」的叫法、把每个传感器都当一等对象、计算点位归谁，都以 ADR 0013 为准（名词见 `GLOSSARY.md`）。下面是仍然有效的部分。
 
-Date: 2026-08-03
+## 背景
 
-ADR 0013 supersedes the Organization/Area/Equipment canonical terminology, the general first-class Sensor assumption and calculated Point ownership. The surviving decision is the separation of spatial placement, Asset, Device and Point identity, effective-dated bindings, independent observations and optional physical probe traceability.
+商用暖通的现场是这样的：设备装在站点下一层套一层的空间里；一台机组可能通过几台设备（控制器、电表）观察或控制；一台设备也可能服务几台机组或一个区域；传感器可能是内置的、外接的，或者自己就能通信；一个传感器可以出几个点位；每个点位都各自采样、各自带时间和质量、各自上报；测量、计算、指令和反馈点位的来源和生命周期各不相同。
 
-## Context
+把每个传感器都当成设备，设备清单会膨胀，机组视图也没了；把每个传感器都当成匿名的点位名，又丢了校准、来源、更换历史和各自上报的含义。
 
-ADR 0001 separates Equipment from Device, but the platform now needs to represent commercial HVAC installations where:
+## 决定
 
-- Equipment is installed in a recursive spatial hierarchy below a Site;
-- one Equipment may be observed or controlled through several Device Endpoints;
-- one Device Endpoint may serve several Equipment objects or an Area;
-- a Sensor may be embedded, externally wired, or an independently communicating Device;
-- one Sensor may emit several Telemetry Points;
-- every Telemetry Point is sampled, timestamped, quality-classified and published independently;
-- measured, calculated, command and feedback points have different authority and lifecycle rules.
+### 分开表示、按时间绑定
 
-Treating every sensor as a Device inflates inventory and destroys the Equipment view. Treating every sensor as an anonymous telemetry key loses calibration, provenance, replacement history and independent reporting semantics.
+- 空间（Space）只表示「装在哪里」，一层套一层，不代替资产或设备的身份。
+- 资产（Asset）是要维护的实物，是值班人员查看、维修和控制的主要对象。
+- 设备（Device）是能单独通信的端点，是替资产上报或执行的技术设施，不另做一个面向值班人员的控制工作台。
+- 点位（Point）是设备上有类型的数据通道。设备和点位是主关系；只有某个探头需要单独管理安装、更换、校准时，点位才关联一个物理传感器（可选）。
+- 资产、设备、传感器和空间之间的关系都是带 `validFrom` / `validTo` 的绑定：挪位置、换设备不覆盖历史。
+- 安装位置和测量对象是两回事：装在一个空间的传感器，可以测量别处的站点、空间或资产。
+- 设备可以绑定到资产、空间或两者，并写明角色，例如控制器、电表、传感器、网关、上位控制器。
 
-## Decision
+### 点位的种类
 
-### Canonical hierarchy
+- `MEASURED`：传感器或控制器直接测到的；
+- `CALCULATED`：由其他点位按有版本的公式算出来的（现在这类数由指标模块负责，见 ADR 0013 和 `GLOSSARY.md` 的「指标」）；
+- `STATE`：设备或控制器报告的状态；
+- `COMMAND`：写给可写端点的目标值；
+- `FEEDBACK`：对指令的确认或实际反馈。
 
-The canonical inventory hierarchy is:
+指令点位和反馈点位分开。只有当一个有效的 `COMMAND` 点位以「控制」角色绑定到某个资产、并通过一台有效的、能控制的设备上报时，界面才提供控制；`STATE` 和 `FEEDBACK` 用来描述和核对资产的行为，和表达目标值的 `COMMAND` 点位分开。发起控制的主要入口是资产详情，指令的审批、下发和核对仍是后端的正式记录（ADR 0006）。
 
-```text
-Organization
-└─ Site
-   ├─ Area
-   │  ├─ Child Area
-   │  ├─ Equipment
-   │  ├─ Device Endpoint
-   │  ├─ Independent Sensor Device
-   │  └─ Calculated Point
-   ├─ Equipment
-   │  ├─ Device Endpoint Binding
-   │  ├─ Sensor Binding
-   │  └─ Calculated Point
-   ├─ Site Gateway Endpoint
-   └─ Site Calculated Point
-```
+### 读数各报各的
 
-`Area` is recursive and represents spatial containment. It does not replace Equipment or Device identity.
+每条已接收的读数至少保留：上报的设备、可选的传感器、点位、采样时间、收到时间、顺序号或来源位置、值和单位、质量和原因、有的话还有来源协议和地址。采样间隔、上报间隔和统计间隔互不相关；一台设备上的多个传感器可以各自带时间、各自上报，不要求每个传感器是一台单独的设备。外部系统的编号只作为对照，不成为平台的身份。
 
-### Identity and bindings
+### 数量不能混着说
 
-- `Equipment` remains the maintainable physical business asset.
-- `Device Endpoint` is the existing Registry `Device`: an addressable communication endpoint.
-- `Sensor` is a first-class measurement identity with calibration and replacement lifecycle.
-- `Telemetry Point` is a typed data channel. A Sensor may own zero or more points; a Device may also expose controller-internal points without a separately managed Sensor.
-- Equipment, Device, Sensor and Area relationships are versioned bindings with `validFrom` and optional `validTo`; current placement must never overwrite history.
-- Mounting location and measured subject are independent. A Sensor may be mounted in one Area while measuring a Site, Area or Equipment elsewhere.
-- A Device may be bound to an Equipment, an Area, or both with explicit roles such as `CONTROLLER`, `METER`, `SENSOR`, `GATEWAY` or `SUPERVISORY_CONTROLLER`.
+界面不显示一个含糊的「设备数」，要分开：空间数、资产数、设备数、传感器数、点位数，以及当前可用、可疑、不可用的点位数。
 
-### Product interaction hierarchy
+### 安全和租户
 
-The product-facing Asset workspace is Equipment-centered even though Registry keeps Equipment, Device, Sensor and Point identities independently addressable.
+所有登记对象都带租户和站点范围，用 UUIDv7 编号、强制行级隔离和现有的站点授权。点位级的遥测授权仍按确切的设备和点位范围；传感器的身份从不扩大已授权的点位。
 
-- `Equipment` is the primary object operators inspect, maintain and control.
-- `Device Endpoint` is subordinate technical infrastructure that reports or executes on behalf of Equipment. It must not become a parallel operator-facing control workspace.
-- `Sensor` is an observation identity. A Sensor may be embedded, wired, or independently communicating, but measurement values never become editable merely because their value type is numeric.
-- A control is exposed only when an active `COMMAND` Telemetry Point is bound to an Equipment with point-subject role `CONTROLS` and is reported through an active controller-capable Device Endpoint.
-- `STATE` and `FEEDBACK` points describe or verify Equipment behavior. They remain distinct from the `COMMAND` point that expresses the desired value.
-- Command lifecycle, approval, dispatch and verification remain first-class backend records, but the primary product entry point for initiating control is the Equipment Asset detail rather than a standalone Command workspace.
+## 必须成立的规则
 
-### Point authority
-
-Telemetry Points are classified as:
-
-- `MEASURED`: direct sensor or controller observation;
-- `CALCULATED`: derived from one or more input points and a versioned formula;
-- `STATE`: reported equipment or controller state;
-- `COMMAND`: desired value submitted to a writable endpoint;
-- `FEEDBACK`: authoritative acknowledgement or physical feedback for a command.
-
-Command and feedback points are distinct. A calculated point records its ordered input references and formula revision.
-
-### Independent observations
-
-Every accepted observation preserves at least:
-
-- reporting Device identity;
-- optional Sensor identity;
-- point key;
-- sampled/observed time;
-- received time;
-- sequence or source position;
-- value and engineering unit;
-- quality and quality reason;
-- source protocol and source address when available.
-
-Sample interval, publish interval and aggregation interval are independent. A Device containing many Sensors may publish each point independently with its own timestamp. Independent reporting does not require each Sensor to be a ThingsBoard Device.
-
-### ThingsBoard mapping
-
-- EG8200 is represented as one Gateway Device when Gateway MQTT transport is enabled.
-- Physical controllers, meters, VAV controllers and independently communicating sensors may be downstream ThingsBoard Devices.
-- Embedded or externally wired Sensors normally publish as separate telemetry keys on their reporting Device.
-- An independently communicating Sensor may be both a Registry Sensor and a Registry/ThingsBoard Device.
-- ThingsBoard identifiers remain external bindings and never become platform identity.
-
-### Spatial and count semantics
-
-The product must not expose a single ambiguous “device count”. Inventory summaries distinguish:
-
-- Area count;
-- Equipment count;
-- Device Endpoint count;
-- Sensor count;
-- Telemetry Point count;
-- current usable, suspect and unavailable point counts.
-
-### Security and tenancy
-
-All new Registry entities carry Organization and Site scope, use UUIDv7 identities, forced PostgreSQL RLS and the existing Site authorization context. Point-level telemetry authorization continues to use exact Device and telemetry-key scope; Sensor identity never broadens an authorized key set.
-
-## Consequences
-
-- Existing Equipment and Device identities remain valid.
-- The Registry gains Area, Sensor, Telemetry Point and versioned binding tables.
-- The EG8200 simulator configuration moves to schema version 2 and validates the complete identity graph before publishing.
-- Simulator publication changes from one synchronized Device snapshot to independently scheduled point observations.
-- Existing clients may continue using Equipment and Device collections; richer spatial and sensor views can be introduced without redefining those identities.
-- Expanding the commercial HVAC fixture becomes data-driven instead of adding more singleton fields to `PlantConfig`.
-
-## Invariants
-
-1. Area parent and child belong to the same Organization and Site, and Area cycles are rejected.
-2. A current primary Equipment placement has at most one active `INSTALLED_IN` Area binding.
-3. A Sensor reports through at most one active Device Endpoint at a time.
-4. A point key is unique within its reporting Device.
-5. A `CALCULATED` point has at least one input reference; non-calculated points cannot own calculated inputs.
-6. A point observation is authoritative only for its exact Device and point key.
-7. Replacing a Sensor closes the previous binding; historical observations retain their original Sensor identity.
-8. Site, Area and Equipment calculated points never erase their input provenance or formula revision.
+1. 上下级空间属于同一个租户和站点，不允许形成环。
+2. 一个资产当前的主要安装位置，最多一条有效的「安装在」绑定。
+3. 一个传感器同一时间最多通过一台设备上报。
+4. 点位名在它所在的设备里唯一。
+5. 计算点位至少有一个输入；非计算点位不能有计算输入。
+6. 一条读数只对它确切的设备和点位有效。
+7. 更换传感器时关闭旧的绑定，历史读数保留原来的传感器身份。
+8. 计算出来的数从不抹掉它的输入来源和公式版本。

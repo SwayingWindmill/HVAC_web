@@ -1,212 +1,96 @@
-# ADR 0012 — OpenEMS-informed HVAC Edge Control Plane
+# ADR 0012：参照 OpenEMS 的现场控制层
 
-Status: accepted, terminology superseded in part by ADR 0013
+状态：已采纳（2026-08-17）。名词按 ADR 0013（租户 / 空间 / 资产 / 可选的物理传感器）。逐项的对照结果在 `contracts/architecture/edge-control-plane.v1.json`。
 
-Date: 2026-08-17
+现在的情况：控制周期、过程映像、通道、驱动、协议桥（Modbus）、指令意图、现场时序数据这些基础在 `libs/edgecontrol` 里，模拟冷站和 ATV630 协议验收（`tools/eg8200-simulator`）用它们。松雅轩的真实网关是 Node-RED，不跑这套运行时；现场的指令下发也还没接到 Node-RED（见 `docs/specs/site-gateway-onboarding.md`）。
 
-ADR 0013 supersedes Organization/Area/Equipment/Sensor wording with Tenant/Space/Asset/optional PhysicalSensor. The IPO Cycle, Process Image, Controller/Scheduler/Arbiter, Capability Profile, Driver/Bridge, Edge Timedata and source-first implementation decisions remain accepted.
+## 背景
 
-## Context
+原来把现场网关主要当作采集、断网缓存、云端故障隔离和补发的工具。这对传读数和基本的远程指令够了，但不足以做商用暖通的现场控制。OpenEMS 在现场能源控制上有成熟的做法：「输入 → 处理 → 输出」的周期、不可变的过程映像、通道的「下一个值 / 当前值」双缓冲、控制器和调度器的顺序、和设备无关的能力描述、可复用的协议桥、本地时序数据和补发策略，以及复用正式控制器的模拟器。我们逐项对比了 50 个架构问题，不偏向 OpenEMS，也不偏向已有代码。
 
-The existing Phase 1 architecture treated Edge primarily as an OT gateway with local collection, store-and-forward, Cloud failure isolation and replay. That is sufficient for telemetry transport and basic remote commands, but not for a production-grade commercial HVAC control plane.
+## 决定
 
-OpenEMS provides mature architectural mechanisms for on-site EMS control: Input-Process-Output cycles, immutable Process Images, Channel value/nextValue buffering, Controller/Scheduler ordering, device-independent Natures, reusable protocol Bridges, local Timedata/resend policies and simulators that reuse production Controllers/Schedulers.
-
-A project-level adjudication compared 50 architecture concerns without giving incumbency preference to either OpenEMS or HVAC Web. The machine-readable result is `contracts/architecture/edge-control-plane.v1.json`; the detailed reasoning is `docs/architecture/openems-architecture-adjudication.md`.
-
-## Decision
-
-### 1. Introduce a first-class HVAC Edge Control Plane
-
-The target system has two complementary control planes:
+### 1. 两层控制
 
 ```text
-Cloud Control Plane
-  Tenant / IAM / Registry / Analytics / Alarm / Work Order
-  Command Governance / Approval / Audit / Forecast / Optimization
-                     │
+云端：租户 / 权限 / 登记 / 分析 / 告警 / 工单 / 指令审批 / 操作记录 / 预测 / 优化
                      │ MQTT TLS
                      ▼
-HVAC Edge Control Plane
-  Component Registry / Capability Profiles / Channels
-  Process Image / Cycle / Controllers / Scheduler / Arbiter
-  Safety / Interlocks / Drivers / Protocol Bridges
-  Edge Manifest / Edge Timedata / Store & Forward
+现场控制层：组件登记 / 能力描述 / 通道 / 过程映像 / 周期 / 控制器 / 调度器 / 仲裁
+           安全 / 联锁 / 驱动 / 协议桥 / 现场清单 / 现场时序数据 / 断网缓存
                      │
                      ▼
-                OT Equipment
+                  现场设备
 ```
 
-The Edge Control Plane owns fast local closed-loop execution. Cloud owns durable business governance, authorization, fleet policy, long-horizon intent and analytics.
+现场负责快速的本地闭环；云端负责持久的业务审批、权限、整体策略、长期的意图和分析。
 
-### 2. Adopt IPO Cycle and Process Image semantics
+### 2. 周期和过程映像
 
-Edge device communication remains asynchronous. Each governed Channel has a latest incoming value (`nextValue`) and a cycle-visible value (`value`). Only the cycle boundary promotes incoming values into the Process Image. All Controllers in one cycle read the same immutable snapshot.
+和设备的通信仍然是异步的。每个受控通道有一个最新收到的值（`nextValue`）和一个本周期可见的值（`value`）；只有在周期边界才把收到的值放进过程映像，同一周期里所有控制器读的是同一份不可变的快照。默认控制周期 1 秒，除非设备或能力明确需要别的软实时周期。
 
-Default Phase 1 control cycle is 1 second unless a device/capability explicitly requires a different soft-real-time cycle.
+### 3. 硬实时的安全不归现场软件
 
-### 3. Hard real-time safety remains outside the Edge software runtime
+现场控制层是软实时的。PLC / 设备的保护、紧急停机、消防和灾害控制等硬实时安全功能，留在专门的硬件和固件里，不能由现场运行时代替。
 
-The Edge Control Plane is soft-real-time. PLC/device protection, emergency trip, fire/disaster control and other hard-real-time safety functions remain in dedicated hardware/firmware and cannot be replaced by the Edge runtime.
+### 4. 控制器、调度器和仲裁
 
-### 4. Introduce Controller, Scheduler and Control Arbiter
-
-Controllers execute in deterministic priority order. Higher-priority Controllers may establish constraints that later Controllers cannot violate. Cloud and manual commands enter this system as intents rather than bypassing it.
-
-Typical order:
+控制器按确定的优先级执行：优先级高的可以设下约束，后面的不能违反。云端和人工的指令作为「意图」进入这个体系，不能绕过。典型顺序：
 
 ```text
-Safety
-→ Equipment Protection / Interlock
-→ Minimum operating constraints
-→ Equipment Controller
-→ Cluster / Plant Controller
-→ Optimization / Schedule
-→ Cloud Command Intent
-→ Manual Intent
+安全 → 设备保护 / 联锁 → 最低运行约束 → 单台设备控制 → 机组群 / 冷站控制 → 优化 / 计划 → 云端指令意图 → 人工意图
 ```
 
-The exact priority policy is explicit configuration, not implicit call order.
+具体的优先级是明确的配置，不靠调用顺序。
 
-### 5. Keep durable Cloud Command governance, change execution semantics
+### 5. 云端仍然管指令，执行方式变了
 
-Cloud retains Command identity, IAM authorization, approval, idempotency, audit, dispatch tracking and durable outcome.
+云端保留指令的身份、权限、审批、幂等、操作记录、下发跟踪和最终结果（ADR 0006）。下发的指令在现场变成一个有租约的意图，现场仲裁可以约束或拒绝它。指令的证据至少区分：请求的值、实际生效的值、约束的原因、胜出的控制器、控制周期、意图到期时间。过期的远程意图失效，控制权交回本地策略。
 
-A dispatched Command becomes a leased Edge intent. The Edge Arbiter may constrain or reject it. Target Command evidence will distinguish at least:
+### 6. 点位是身份，通道是运行时对象
 
-```text
-requestedValue
-effectiveValue
-constraintReason
-winningController
-controlCycle
-intentExpiresAt
-```
+点位仍是平台持久的数据点身份和权限边界。通道是现场的运行时对象，带值、类型、单位、质量、读写方式，以及传输和持久化的优先级。每个受控通道对应一个点位；通道地址不能代替平台身份。
 
-Stale remote intents expire and relinquish control to local policy.
+### 7. 能力描述
 
-### 6. Keep Point as canonical identity and add Edge Channel as runtime object
+能力描述（Capability Profile）相当于 OpenEMS 的 Nature：声明必需 / 可选的通道、支持的指令和限制。控制器依赖能力描述，从不依赖厂家或型号。最初的能力：变频水泵、冷水机组、冷却塔、电表、气象站。
 
-`Point` remains the durable platform data-point identity and authority boundary.
+### 8. 驱动和协议桥
 
-`Channel` is introduced as the live Edge runtime object carrying value, type, engineering unit, quality, access mode and transport/persistence priorities.
+厂家和型号的细节放在设备驱动里；连接生命周期、重试、连接池、协议调度和序列化放在可复用的协议桥里。最初的协议桥：Modbus TCP、Modbus RTU、MQTT；BACnet 和 OPC UA 以后用同样的抽象。
 
-Every governed Channel maps to one canonical Point. Channel address is not a replacement platform identity.
+### 9. 现场清单和对账
 
-### 7. Introduce Capability Profiles as the controller/driver contract
+现场运行时提供一份自描述的清单：配置的组件、驱动、能力、通道、控制器、限制和协议绑定。云端登记仍是主数据的依据；现场清单和登记对账，但不代替租户 / 站点 / 资产 / 设备 / 传感器 / 点位的生命周期管理。
 
-Capability Profile is the HVAC equivalent of OpenEMS Nature. It declares required/optional Channels, supported commands and limits. Controllers depend on Capability Profiles, never on vendor/product names.
+### 10. 断网缓存升级成现场时序数据
 
-Initial profiles include:
+持久的 MQTT 队列仍然有用，但不是完整的本地数据模型。现场时序数据负责本地的最新值 / 历史、统计信息和补发游标；持久化、统计和补发的优先级是明确的通道 / 点位策略。
 
-- `VARIABLE_SPEED_PUMP`
-- `CHILLER`
-- `COOLING_TOWER`
-- `ELECTRICITY_METER`
-- `WEATHER_STATION`
+### 11. 模拟和真设备用同样的正式接口
 
-### 8. Introduce Device Drivers and Protocol Bridges
+模拟只替换驱动、协议和物理行为，不替换控制器、调度器、指令或遥测的业务逻辑。模拟要有：会反应的物理行为、变化速率、启停延时、最短运行 / 停机时间、故障、过期数据、传感器噪声、通信超时、卡住的执行器、被拒绝的写入（见 `docs/specs/virtual-central-plant.md`）。
 
-Vendor/product details belong in Device Drivers. Shared connection lifecycle, retries, pooling, protocol scheduling and serialization belong in reusable Protocol Bridges.
+### 12. 单台控制和群控分开
 
-Initial Bridges:
+单台设备的控制器负责设备状态机和本地顺序；机组群 / 冷站控制器在几台单台控制器之间分配负荷或运行模式（例如冷站、冷冻水泵组、冷却水泵组、冷却塔组）。
 
-- Modbus TCP
-- Modbus RTU
-- MQTT
+### 13. 云端已经更好的地方不变
 
-BACnet and OPC UA use the same Bridge abstraction when implemented.
+租户 / 站点 / 角色 / 策略的权限和 PostgreSQL 行级隔离；空间 / 资产 / 设备 / 传感器 / 点位的生命周期和历史绑定；遥测 + ClickHouse + PostgreSQL 的云端读数和分析分工；告警、工单和持久的操作记录；MQTT TLS 作为现场到云端的标准通道。
 
-### 9. Introduce Edge Manifest and reconciliation
+### 14. 不把 OpenEMS 的 Java / OSGi / 后端 / 界面当依赖
 
-The Edge runtime exposes a self-describing Edge Manifest containing configured components, drivers, capabilities, channels, controllers, limits and protocol bindings.
+采纳的是它更好的机制，不是它的运行技术。可以做一个有边界的对比试验，但实现语言和运行时要单独论证（现在用的是 Go）。
 
-Cloud Registry remains master-data authority. Edge Manifest is reconciled with Registry; it does not replace Tenant/Site/Equipment/Device/Sensor/Point lifecycle governance.
+### 15. 先读源码再实现
 
-### 10. Upgrade Store & Forward into Edge Timedata
+参照基线固定在 OpenEMS 正式版 `2026.7.0`、提交 `2e2792d`（后来的参照记录在 `docs/architecture/references/openems-2026.9.0.md`）。凡是按 OpenEMS 做的决定，实现或重构都按这个顺序：读固定版本的源码 → 读上游测试和官方文档 → 在采纳它的 PR 里记下实际的运行和生命周期行为 → 逐项定为采纳、改造或拒绝 → 再实现 → 写本地的行为测试。这条也适用于已经写好的代码：没比对过的模块算「未验证」，已有代码没有先占的权利。发现重大冲突时，默认按参照实现；要保留不同的本地行为，必须有证据说明暖通的约束需要它，或者它明显更安全、更简单、更好维护。只看架构文字或图不算证据；比对的是行为，不是照抄源码。
 
-The existing persistent MQTT queue remains useful but is not sufficient as the complete local data model. Edge Timedata owns local latest/history, aggregation metadata and resend cursors. Persistence, aggregation and resend priorities are explicit Channel/Point policies.
+## 后果
 
-### 11. Simulator and real devices share production interfaces
+- 新的真实设备接入，从「能力描述 + 驱动 + 协议桥」开始，不写某个厂家从头到尾的专用代码。
+- 光是 MQTT 读数和指令能来回，不能说第一阶段已经有了可正式使用的现场控制。
+- 要说现场控制架构完成，需要：通道运行时、过程映像、周期、控制器接口、调度器 / 仲裁、能力描述登记、设备驱动抽象、协议桥抽象、本地安全 / 联锁控制器、有租约的云端指令意图、现场清单、现场时序数据和按优先级补发、真实和模拟驱动一致。`libs/edgecontrol` 里已有通道、过程映像、周期、控制器接口、调度器和带约束 / 拒绝的控制计划、能力描述、驱动、Modbus 协议桥、指令意图和现场时序数据；还没有的是安全 / 联锁控制器、现场清单、群控，以及在真实站点上运行。
 
-Simulation replaces Driver/Protocol/physical behavior, not Controller/Scheduler/Command/Telemetry business logic.
-
-The simulator target includes reacting physical behavior, ramp rates, startup/shutdown delays, minimum run/stop times, faults, stale data, sensor noise, communication timeout, stuck actuators and rejected writes.
-
-### 12. Introduce Single and Cluster Controller separation
-
-Single-equipment Controllers own equipment state machines and local sequences. Cluster/Plant Controllers allocate load or operating modes across multiple Single Controllers.
-
-Examples:
-
-- `ChillerPlantController`
-- `ChilledWaterPumpClusterController`
-- `CoolingWaterPumpClusterController`
-- `CoolingTowerClusterController`
-
-### 13. Keep the existing Cloud domains where they are stronger
-
-The following remain target Cloud authorities after explicit comparison:
-
-- Tenant/Site/Role/Policy IAM and PostgreSQL RLS;
-- Area/Equipment/Device/Sensor/Point lifecycle and historical bindings;
-- S2 + ClickHouse + PostgreSQL Cloud telemetry/analytics split;
-- Alarm, Work Order and durable Audit domains;
-- MQTT TLS as canonical Edge-Cloud transport.
-
-### 14. Do not make OpenEMS Java/OSGi/Backend/UI a target dependency
-
-The architectural mechanisms are adopted because they are stronger. The OpenEMS runtime technology is not adopted by default. A bounded A/B PoC may compare direct OpenEMS Edge with an equivalent HVAC Edge implementation, but implementation language/runtime must be justified independently.
-
-### 15. Source-first implementation is mandatory
-
-The OpenEMS reference baseline for this ADR is pinned to official release `2026.7.0`, commit `2e2792d`. `develop` may be consulted for later changes, but it does not silently change this architecture baseline.
-
-For every `OPENEMS` decision and every `MERGE` decision whose Edge behavior materially depends on OpenEMS, implementation or refactoring must follow this order:
-
-1. read the relevant official OpenEMS source at the pinned baseline;
-2. read the relevant upstream tests and official documentation;
-3. record observed runtime semantics and lifecycle behavior in `docs/architecture/openems-source-review.md`;
-4. classify each relevant mechanism as `ADOPT`, `ADAPT`, or `REJECT` for HVAC Web;
-5. only then implement or refactor the local code;
-6. add local behavior tests that exercise the adopted/adapted semantics.
-
-This requirement is retroactive. Edge modules that were implemented before their source review are `UNVERIFIED`, regardless of whether local tests pass. Existing HVAC Web code receives no incumbency preference. When a material conflict is found, the pinned OpenEMS behavior is the default outcome; retaining a conflicting local behavior requires an explicit, evidence-backed justification showing that the difference is required by HVAC domain constraints or is measurably safer, simpler, or more maintainable. Without such justification, the local module must be refactored to the reference behavior.
-
-Architecture prose or diagrams alone are not sufficient evidence for implementation. Source review is behavioral, not a license to copy upstream source verbatim. Project-specific mechanisms that are demonstrably stronger—such as durable Cloud Command governance or fail-closed HVAC safety behavior—remain only when that difference is explicitly documented and reviewed.
-
-## Consequences
-
-- Existing `IoT Runtime` and `Control` architecture conformance becomes `PARTIAL` until the Edge foundation exists.
-- EG8200 evolves from a publisher/command executor into, or is replaced by, a first-class HVAC Edge Control Plane runtime.
-- `iot-service` remains a Cloud-side IoT integration process; it is not the Edge Controller runtime.
-- Cloud Command APIs remain stable at the governance boundary, but downstream execution gains local intent arbitration and lease semantics.
-- New real-device work should start at Capability Profile + Driver + Bridge, not vendor-specific end-to-end service code.
-- Phase 1 production-grade controllable Edge cannot be claimed solely because MQTT telemetry and command round-trips work.
-
-## Required Phase 1 Edge foundation
-
-Before claiming the Edge control architecture complete, implement:
-
-1. Channel Runtime;
-2. Process Image;
-3. Cycle;
-4. Controller Contract;
-5. Scheduler / Control Arbiter;
-6. Capability Profile Registry;
-7. Device Driver abstraction;
-8. Protocol Bridge abstraction;
-9. Local Safety / Interlock Controllers;
-10. leased Cloud Command Intent adapter;
-11. Edge Manifest;
-12. Edge Timedata + priority resend;
-13. real/simulated Driver parity.
-
-## References
-
-- `contracts/architecture/edge-control-plane.v1.json`
-- `docs/architecture/openems-architecture-adjudication.md`
-- OpenEMS Edge Architecture: <https://openems.github.io/openems.io/openems/latest/edge/architecture.html>
-- OpenEMS Configuration: <https://openems.github.io/openems.io/openems/latest/edge/configuration.html>
-- OpenEMS Device implementation: <https://openems.github.io/openems.io/openems/latest/edge/implement.html>
-- OpenEMS Simulation: <https://openems.github.io/openems.io/openems/latest/simulation/realtime.html>
+参考：OpenEMS Edge 的架构、配置、设备实现和实时模拟文档（openems.github.io）。

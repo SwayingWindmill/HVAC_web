@@ -1,34 +1,29 @@
-# Identity Service
+# 身份服务（identity-service）
 
-`identity-service` is Phase 1 Identity Infrastructure. It authenticates platform-managed credentials and exposes the minimal standard OIDC surface required by `energy-api` / Platform Gateway.
+负责登录：校验平台账号的用户名和密码，并提供 `energy-api`（平台网关）需要的最基本的 OIDC 登录接口。
 
-It is **not** the platform authorization system. Tenant membership, Site bindings, Roles, Policies and explicit denies remain owned by IAM. The immutable identity handoff is standard OIDC `issuer + subject`.
+它**不管权限**。租户成员、角色指派、策略和明确禁止都由 IAM 管。两边交接只用一个不变的身份：OIDC 的「签发方 + 主体编号」。
 
-## Implemented scope
+## 做了什么
 
-- Username/password authentication.
-- Argon2id password hashing.
-- OIDC Discovery.
-- Authorization Code flow with PKCE S256.
-- `state` and `nonce` binding through the Gateway flow.
-- Single-use, short-lived authorization codes.
-- RS256 ID tokens and JWKS.
-- Minimal logout redirect endpoint.
-- Failed-password lockout: five failed attempts lock the user for 15 minutes.
-- Password rules (spec `docs/specs/iam-roles-and-users.md`, NIST SP 800-63B-4 with an 8-character minimum): 8 characters to 512 bytes, no composition rules, no forced rotation, not the username, and not one of the common passwords in `internal/identity/common-passwords.txt` (SecLists 2024.4, MIT).
-- No HTML of its own: `/authorize` and every login outcome redirect to the Web application's `/sign-in?login_challenge=…` (with `step=totp` or an `error` code), whose form posts the password or one-time code straight back to `/identity/login` and `/identity/mfa/totp`. The challenge must match the `__Host-hvac_idp_login` cookie (docs/specs/sign-in-page.md).
-- TOTP second factor for high-assurance (step-up) sign-in; enrolment is offline through `cmd/identity-admin` (`totp-start`, `totp-activate`, `totp-disable`).
-- User administration through `pkg/identityadmin`: the Platform Gateway embeds it, connected as `identity_admin`, so administrators create accounts, set passwords, update names and emails, and enable or disable sign-in from 系统管理 → 用户与角色, and every user changes their own password. Authorization stays with IAM. There is no public registration endpoint; `cmd/identity-admin` remains for the first administrator and recovery.
+- 用户名和密码登录，密码用 Argon2id 加密保存。
+- OIDC 发现接口；带 PKCE S256 的授权码流程；`state` 和 `nonce` 经网关的登录流程绑定；授权码一次性、短时有效。
+- RS256 的 ID 令牌和 JWKS 公钥；最基本的退出跳转。
+- 密码输错 5 次，锁定 15 分钟。
+- 密码规则（规格 `docs/specs/iam-roles-and-users.md`，按 NIST SP 800-63B-4，最短 8 位）：8 个字符到 512 字节，不要求字符组合，不强制定期更换，不能和用户名相同，也不能是 `internal/identity/common-passwords.txt` 里的常见密码（SecLists 2024.4，MIT 许可）。
+- 自己不出任何页面：`/authorize` 和每一种登录结果都跳到网页的 `/sign-in?login_challenge=…`（带 `step=totp` 或错误代码），网页的表单把密码或一次性验证码直接提交回 `/identity/login` 和 `/identity/mfa/totp`。挑战编号必须和 `__Host-hvac_idp_login` cookie 一致（`docs/specs/sign-in-page.md`）。
+- 需要更高安全等级的登录可以要求一次性验证码（TOTP）；开通验证码只能离线用 `cmd/identity-admin` 做（`totp-start`、`totp-activate`、`totp-disable`）。
+- 用户管理用 `pkg/identityadmin`：平台网关把它嵌在进程里，以 `identity_admin` 连接数据库，管理员在「系统管理 → 用户与角色」里新建账号、设密码、改姓名和邮箱、停用或启用登录；每个人都能改自己的密码。权限仍然归 IAM。没有公开的注册接口；`cmd/identity-admin` 留给第一个管理员和找回账号用。
 
-The service intentionally does not implement Refresh Token usage, social login, Passkeys, email/SMS login, self-service password recovery, SAML, enterprise federation, or Tenant/Site authorization. Add those only when product requirements require them.
+故意不做：刷新令牌、第三方登录、通行密钥（Passkey）、邮件或短信登录、自助找回密码、SAML、企业身份联合、租户和站点权限。产品真需要时再加。
 
-## Persistence
+## 数据
 
-Credentials and OIDC authorization artifacts live in the separate `hvac_identity` PostgreSQL database under the `identity` schema. IAM does not store password material. The `identity_directory_reader` database role can read only `id`, `display_name`, `email`, and `status` for reconciliation.
+账号、密码和登录过程中的临时数据存在单独的 PostgreSQL 库 `hvac_identity` 的 `identity` 表里。IAM 不保存任何密码。`identity_directory_reader` 这个数据库角色只能读 `id`、`display_name`、`email` 和 `status`，给身份同步用。
 
-## Runtime configuration
+## 配置
 
-Required environment variables:
+必填的环境变量：
 
 - `IDENTITY_ISSUER`
 - `IDENTITY_CLIENT_ID`
@@ -37,21 +32,21 @@ Required environment variables:
 - `IDENTITY_DATABASE_URL`
 - `IDENTITY_SIGNING_KEY_FILE`
 
-`IDENTITY_SIGNING_KEY_FILE` must point to a deployment-provided PKCS#8 RSA private key file. The service fails closed when the file is missing or invalid.
+`IDENTITY_SIGNING_KEY_FILE` 指向部署时提供的 PKCS#8 RSA 私钥文件；文件不存在或无效时，服务拒绝启动。
 
-Optional listener settings:
+可选的监听地址：
 
-- `IDENTITY_ADDR` (default `:19095`)
-- `IDENTITY_DIAGNOSTICS_ADDR` (default `:19085`)
+- `IDENTITY_ADDR`（默认 `:19095`）
+- `IDENTITY_DIAGNOSTICS_ADDR`（默认 `:19085`）
 
-In Phase 1 Docker Compose the public issuer is served through nginx under `/identity/`; the service itself is not published as an additional host port.
+第一阶段的 Compose 里，对外的登录地址由 nginx 在 `/identity/` 下提供，服务本身不另外开端口。
 
-## User provisioning
+## 开通账号
 
-`cmd/identity-admin` is an offline administrative command and must connect with the dedicated `identity_admin` database role, not `identity_runtime`. Supply the database URL and user fields through runtime environment variables; do not commit credentials or initial passwords to Git.
+`cmd/identity-admin` 是离线的管理命令，必须用专门的 `identity_admin` 数据库角色连接，不能用 `identity_runtime`。数据库地址和账号信息通过运行时的环境变量提供；不要把凭据或初始密码提交到 Git。
 
-Supported operations are `create`, `reset-password`, `reset-password-random`, `totp-start`, `totp-activate` and `totp-disable`. The random reset mode generates the replacement credential inside the command and prints it once. After creating the first administrator, reconcile its immutable `issuer + subject` into IAM with `modules/iam/cmd/identity-reconciler` and a seed that assigns the built-in `admin` Role; everyone after that is added from 系统管理. The IdP never assigns platform authorization.
+支持的操作：`create`、`reset-password`、`reset-password-random`、`totp-start`、`totp-activate`、`totp-disable`。随机重置会在命令里生成新密码，只打印一次。建好第一个管理员后，用 `modules/iam/cmd/identity-reconciler` 和一份给它整租户 `admin` 角色的种子，把它的「签发方 + 主体编号」同步进 IAM；之后的人都在系统管理里加。身份服务从不分配平台权限。
 
-## Signing-key behavior
+## 签名密钥
 
-Phase 1 runs a single `identity-service` instance and loads its RSA signing key from `IDENTITY_SIGNING_KEY_FILE`. `cmd/signing-keygen` creates a PKCS#8 RSA key for a deployment runtime directory; the private key must never be committed. The `kid` is deterministically derived from the public key, so service restarts preserve the JWKS identity while the same key file is mounted. ID tokens live for five minutes. Deliberate key rotation is an operator action and must replace the deployment key file in a controlled rollout.
+第一阶段只跑一个身份服务实例，从 `IDENTITY_SIGNING_KEY_FILE` 加载 RSA 签名密钥。`cmd/signing-keygen` 为部署的运行时目录生成 PKCS#8 RSA 密钥；私钥绝不提交。密钥编号（`kid`）由公钥推导，所以挂的是同一个密钥文件时，重启后 JWKS 不变。ID 令牌有效 5 分钟。换密钥是运维操作，要有计划地替换部署里的密钥文件。

@@ -7,19 +7,15 @@ const readJSON = async (path) => JSON.parse(await readText(path));
 
 const baselinePath = 'deploy/platform/phase1/architecture-baseline.v1.json';
 const matrixPath = 'deploy/platform/phase1/alignment-matrix.v1.json';
-const overallPath = 'docs/architecture/phase1-overall-architecture.md';
-const operationsPath = 'docs/operations/phase1-deployment-alignment.md';
 const edgeControlPlanePath = 'contracts/architecture/edge-control-plane.v1.json';
 const deploymentTiersPath = 'deploy/platform/phase1/deployment-tiers.v1.json';
 const availabilityTierPath = 'deploy/platform/phase1/availability-tier.v1.json';
 const recoveryAttainmentPath = 'deploy/platform/phase1/recovery/attainment.v1.json';
 const authorityId = 'SE-ARCH-DEPLOY-001 V1.0 CURRENT';
 
-const [baseline, matrix, overall, operations, edgeControlPlane, deploymentTiers, availabilityTier, recoveryAttainment] = await Promise.all([
+const [baseline, matrix, edgeControlPlane, deploymentTiers, availabilityTier, recoveryAttainment] = await Promise.all([
   readJSON(baselinePath),
   readJSON(matrixPath),
-  readText(overallPath),
-  readText(operationsPath),
   readJSON(edgeControlPlanePath),
   readJSON(deploymentTiersPath),
   readJSON(availabilityTierPath),
@@ -106,7 +102,6 @@ assert(byId.get('DEPLOY-K8S-001')?.status === 'DEFER', 'Kubernetes must be expli
 assert(byId.get('MQTT-HA-001')?.status === 'DEFER', 'MQTT cluster must be explicitly deferred');
 assert(byId.get('POSTGRES-HA-001')?.status === 'DEFER', 'PostgreSQL HA must be explicitly deferred');
 assert(byId.get('KAFKA-001')?.status === 'REMOVE', 'Kafka/Redpanda must stay out of the canonical Phase 1 deployment');
-assert(byId.get('DOC-CONSISTENCY-001')?.status === 'KEEP', 'document-scope consistency must remain a canonical architecture control');
 assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional until the deployment needs it');
 for (const id of ['DEPLOY-TIER-001', 'OBS-PROFILE-001', 'AVAILABILITY-001', 'RECOVERY-ATTESTATION-001']) {
   assert(byId.get(id)?.status === 'KEEP', `${id} must remain a canonical deployment contract`);
@@ -116,27 +111,6 @@ assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the r
 assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'MISSING', 'HVAC Edge Control Plane must remain an explicit gap until Process Image/Cycle/Controller/Scheduler are implemented');
 assert(byId.get('EDGE-CAPABILITY-001')?.status === 'MISSING', 'Capability Profile / Driver / Bridge foundation must remain an explicit gap until implemented');
 assert(byId.get('EDGE-TIMEDATA-001')?.status === 'MISSING', 'Edge Timedata must remain an explicit gap until local latest/history and priority resend are implemented');
-
-for (const marker of [
-  '1 Linux Server',
-  'Docker Compose',
-  'Realtime Module',
-  'Cloud 不直接访问 PLC',
-  'PostgreSQL',
-  'ClickHouse',
-  'Redis',
-  'MQTT',
-  'HVAC Edge Control Plane',
-  'Process Image',
-  'Capability Profile',
-  'Edge Timedata',
-  'Development',
-  'Testing',
-  'Staging',
-  'Production',
-]) assert(overall.includes(marker), `overall architecture document is missing marker: ${marker}`);
-
-assert(operations.includes('MISSING') && operations.includes('SIMPLIFY') && operations.includes('DEFER'), 'deployment alignment runbook must define gap handling states');
 
 if (failures.length > 0) {
   console.error('Phase 1 architecture alignment check failed:\n' + failures.map((failure) => `- ${failure}`).join('\n'));

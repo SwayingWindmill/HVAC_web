@@ -1,446 +1,139 @@
-# ADR 0014 — Pi-based Agent runtime architecture
+# ADR 0014：AI 助手用 pi 跑模型和工具的循环
 
-Status: accepted
+状态：已采纳（2026-09-03）
 
-Date: 2026-09-03
+参照：`docs/architecture/pi-agent-source-review.md`
 
-Supersedes: ADR 0010 runtime/framework selection and LangGraph-specific execution/checkpoint design
+## 背景
 
-Reference review: `docs/architecture/pi-agent-source-review.md`
+值班人员要能就一个站点问 AI 助手问题（「昨天为什么比上周多用电」），助手自己去读数据、给出有依据的回答。不管用什么框架，下面几条都不能变：
 
-## Context
+- 能看哪个租户、哪个站点、以哪个用户的身份看，由服务端决定，模型说了不算；
+- 设备、读数、用电、告警、诊断、工单、指令这些数据仍归各自的模块，助手只读；
+- 读到的数据（设备名、告警描述、备注）只当数据，里面写的「指令」不执行；
+- 模型说的话不等于操作了设备、不等于批准、也不是传感器的真实读数；
+- 没有任何工具能直接操作设备；
+- 密钥和模型的内部推理不保存、不给浏览器；浏览器从不直接调模型。
 
-The platform needs a Pi-based Agent runtime that can rapidly deliver useful Site-scoped investigation capabilities without carrying forward graph-era orchestration or adding framework-neutral abstractions that have no current consumer.
+pi 的 `Agent` 接口只做一件事：一个带状态的「模型 → 工具 → 模型」循环，加上逐字输出的事件和不绑定厂商的模型接入（`pi-ai`）。不用 pi 的编程助手，也不用它还在变的持久化方案（Harness v2）。
 
-The target is not a mechanical LangGraph replacement. Existing Agent code, persistence shapes, graph boundaries, model-specific abstractions and frontend integration have no incumbency preference. They may be deleted or redesigned when the Pi reference or a simpler product model produces a stronger result.
+## 决定
 
-The platform has several non-negotiable industrial constraints independent of any Agent framework:
+### 1. pi 只负责跑一次回答，产品的数据由我们自己存
 
-- Tenant/Site/user authorization cannot be chosen by model output;
-- authoritative Registry, Telemetry, Energy, Alarm, FDD, Work Order and Command facts stay with their owning domains;
-- retrieved data is untrusted model input, not executable instruction;
-- model output cannot itself mean physical execution, approval or authoritative sensor truth;
-- direct device actuation is never a generic Agent Tool;
-- external effects are not assumed exactly-once across process failure;
-- raw credentials and hidden model reasoning are not product/audit records;
-- the browser never receives provider credentials or framework-specific authority.
-
-Pi `v0.84.4` is selected because the stable `Agent` API provides a small stateful model/tool loop, event streaming and provider-neutral `pi-ai` integration without requiring the product to adopt Pi Coding Agent or the evolving durable Harness v2 state machine.
-
-## Decision
-
-### 1. Pi is the execution engine, not the product state model
-
-The first production Agent runtime uses exact-pinned:
+固定版本，两个包一起升级：
 
 ```text
 @earendil-works/pi-agent-core 1.3.0
 @earendil-works/pi-ai         1.3.0
 ```
 
-Both packages come from upstream tag `v1.3.0` (commit `71023aec1546d6d677a65669c5665c0927ce0dd0`) and are upgraded together. The first pin was `0.84.4`; the 2026-10-16 upgrade to 1.3.0 changed three things for this service: the removed `shouldStopAfterTurn` option became `finishTurn` returning `{ action: 'end' }`, the system policy now reaches the provider as the first transcript message, and pi's DeepSeek catalog renamed `deepseek-v4-flash` to `deepseek-flash`.
+都来自上游 `v1.3.0`（提交 `71023aec1546d6d677a65669c5665c0927ce0dd0`）。升级时要看什么、上次升级改了哪些，见 `docs/architecture/pi-agent-source-review.md`。
 
-The product does not expose Pi types in persistence, HTTP, Gateway, Web or business contracts.
-
-Pi owns one execution loop while it is running:
+pi 的类型不出现在数据库、接口、网关、网页和业务约定里，只在 `src/runtime-pi/` 里用。pi 只管一次回答从开始到结束：
 
 ```text
-context -> model -> tool(s) -> model -> terminal outcome
+对话内容 -> 模型 -> 工具 -> 模型 -> ... -> 结束
 ```
 
-The application owns session identity, trusted scope, durable transcript, typed artifacts, operator interaction state, policy and public events.
+会话编号、谁在问哪个站点、保存的对话、产出、待回答的问题、预算和推给网页的事件，都由服务自己管。不为「以后可能换框架」再包一层通用接口。
 
-### 2. Use Pi directly behind the service runtime boundary
+### 2. 产品里只有会话、回答和产出
 
-Do not create a speculative universal Agent engine abstraction. The Operations Agent service owns one Pi runtime module that constructs and runs `@earendil-works/pi-agent-core` `Agent` instances directly.
+- **会话**（AgentSession）：一次提问的上下文，属于一个站点和一个提问人；状态有进行中、等待补充信息、完成、失败、取消。
+- **回答**（AgentRun）：在会话上跑的一次「模型 + 工具」，记下用的模型、开始和结束时间、令牌用量和失败原因。
+- **消息**：只存最终给人看的文字。
+- **工具调用**：哪个工具、参数的摘要、结果和来源、耗时。
+- **产出**（AgentArtifact）：依据（`EVIDENCE_REF`）、结论卡片（`FINDING`）、建议（`PROPOSAL`，现在还没有工具会产生它）、向值班人员提的问题（`INPUT_REQUEST`）、局限说明（`LIMITATION`）。
 
-The runtime input contains finalized conversation context, one resolved Pi model reference, the currently allowed semantic Tool set, trusted execution context, policy/budget and an AbortSignal.
+产出可以指向设备、告警等数据，但不会变成那些数据本身。
 
-Application/domain code still does not import Pi types because model/tool-loop mechanics are not business facts. This separation exists for maintainability and testability, not to support another hypothetical harness.
+### 3. 不保存 pi 的内部状态
 
-Cancellation uses the run AbortSignal. Durable resume means creating a fresh Pi `Agent` from the last committed Agent Session state; Pi internal objects are not persisted.
+pi 的 `Agent` 只在内存里。每次新回答都从已保存的消息、工具结果和产出重建一个新的 pi `Agent`。回答到一半服务挂了，这次回答记为失败，不会当成已经说完；之后的回答从已保存的内容继续。等 pi 的持久化方案定稿、并且真有需要时再考虑换。
 
-### 3. The product state model is simplified to Session / Run / Artifact
+### 4. 一个助手定义，不做插件
 
-The first Agent product model is:
+助手的定义（提示词版本、可用工具、模型、预算、收尾工具）写在服务代码里，随版本发布。不支持运行时安装插件、技能或第三方工具。等出现第二个真正不同的助手时，再把共用的部分抽出来。
+
+### 5. 模型由环境变量决定
+
+用 `pi-ai` 的 `createModels()` 和单独引入的厂商，不引入 `providers/all` 或 `compat`。目前只接了 DeepSeek，模型 id 必须在服务器的允许名单里；有了具体的部署或评测需要才加第二家。
 
 ```text
-AgentSession
-  id
-  tenantId
-  siteId
-  agentDefinitionId
-  createdBy
-  status
-  revision
-  createdAt / updatedAt
-
-AgentRun
-  id
-  sessionId
-  modelRef
-  status
-  startedAt / finishedAt
-  usage
-  failureCode?
-
-AgentMessage
-  finalized user-visible messages only
-
-AgentToolExecution
-  tool identity
-  bounded validated arguments digest
-  result/provenance summary
-  status / timing / usage
-
-AgentArtifact
-  EVIDENCE_REF
-  FINDING
-  PROPOSAL
-  INPUT_REQUEST
-  LIMITATION
+AGENT_MODEL_PROVIDER / AGENT_MODEL_ID / AGENT_MODEL_ALLOWLIST
+AGENT_MODEL_THINKING_LEVEL / AGENT_MODEL_TIMEOUT_MS / AGENT_MODEL_MAX_OUTPUT_TOKENS
 ```
 
-This replaces the need to model the framework graph and a second framework checkpoint world as product concepts.
+模型的密钥只在服务器上。
 
-A Session is the durable user task/conversation container. A Run is one model/tool execution attempt against that Session. An Artifact is a typed, inspectable product result created from authoritative Tool facts or operator input.
+### 6. 工具是我们自己定义的、讲业务的只读工具
 
-Authoritative business resources remain external owner facts. An Agent Artifact may reference them but does not silently become Registry, Telemetry, Alarm, Work Order, FDD or Command truth.
+每个工具声明名字、说明、参数格式、能不能并行（`executionMode`）和能不能重复调用（`replayPolicy`）。租户、站点、提问人和授权不是模型能填的参数，由服务端在调用时传进去。
 
-### 4. Do not persist Pi internal state in the first production release
+现在的 12 个工具（`services/operations-agent-service/README.md`）都只读、可以并行、可以安全重复（`safe`）。工具只调各数据负责方的接口；模型拿不到 SQL、ClickHouse、Cube、ThingsBoard、任意 HTTP、文件或命令行。服务的边界检查会拒绝直连这些地方和指令接口。
 
-Persist the finalized transcript and product records needed to reconstruct the next run.
+### 7. 授权查两次
 
-On process failure:
+一次回答能用哪些工具，在建 pi `Agent` 之前按提问人的权限定好。每次工具读数据前，再向网关换一张这次读取专用的授权，数据负责方按它做最终的权限和可见性判断。pi 的 `beforeToolCall` / `afterToolCall` 用来记预算和整理结果，但不是唯一的安全边界。
 
-```text
-last committed Session revision
-        +
-finalized messages/tool results/artifacts
-        ↓
-create a fresh Pi Agent
-        ↓
-continue in a new AgentRun
-```
+### 8. 一次回答用收尾工具结束
 
-A provider stream interrupted before finalization is not replayed as if it completed. The interrupted Run is recorded as interrupted/failed and a later Run continues from committed state.
+模型说完话不算完成。它必须调用两个收尾工具之一：
 
-Do not adopt Pi Harness v2 persistence until its upstream API is canonical and a measured requirement justifies replacing project code.
+- `investigation_complete`：结果是「有结论」（`SUPPORTED_FINDING`）或「没法判断」（`UNABLE_TO_CONCLUDE`），带关键数字、依据和局限说明。服务先检查依据确实来自这次读到的数据，再生成产出、结束回答。结论本身写在回答正文里，卡片不再重复。
+- `investigation_request_input`：向值班人员提一个问题，会话进入「等待补充信息」。值班人员回答后开始新的一次回答。
 
-### 5. One AgentDefinition describes behavior; it is not a dynamic plugin system
+这样「等人回答」不依赖框架的中断和断点续跑。
 
-The first Agent is an Operations investigation Agent. Its definition contains:
+### 9. 只能建议，不能操作
 
-```text
-id
-system policy version
-allowed semantic Tools
-model policy
-run budget
-terminal Tools
-```
+现在没有任何能改变外部状态的工具。以后要加，也先做成「建议」（例如建议开工单、建议改设定值）；建议不是批准也不是执行，由负责的模块自己走权限、版本、防重复、审批和执行后核对的流程。直接执行指令、通用 RPC、任意写设定值或直连现场通道的工具一律不加。
 
-Agent definitions are code/config owned by the service and released with the application. Runtime plugin installation, arbitrary skills, filesystem extensions and dynamic third-party Tools are out of scope.
+### 10. 工具结果要小，预算写在代码里
 
-When a second genuinely independent Agent exists, common definition/runtime code may be extracted. No shared framework package is created solely for hypothetical reuse.
+工具返回简短的结构化结果，带来源、版本和数据质量。长时间序列留在数据负责方，助手只拿完成任务所需的最小摘要或一小段。每个工具都有记录数、字节数和时间范围的上限。
 
-### 6. Model configuration uses `pi-ai` provider factories
+每次回答都有硬上限（`AgentRunBudget`，正式环境的值在 `src/bootstrap/main.ts`）：模型调用 12 次、工具调用 24 次、120 秒、同时最多 4 个工具、查询范围 31 天、每个结果最多 2000 条或 128 KB、输入 64k 令牌、输出 8k 令牌。超了就以「没法判断」或失败结束，不会一直转下去。上限由产品定，模型改不了。
 
-Use `createModels()` and explicit provider factory imports. Do not use `providers/all` or `compat` in production runtime code.
+### 11. 推给网页的事件是我们自己的格式
 
-The first release enables one production provider/model pair through an exact server allowlist. A second provider is added only for a concrete deployment/evaluation requirement.
+pi 的事件在离开服务前转成 `hvac.agent.event/v1`：`session.snapshot`、`run.started`、`assistant.delta`、`tool.started`、`tool.completed`、`artifact.created`、`input.required`、`run.completed`、`run.failed`。模型的推理过程不推出去。
 
-Configuration is provider-neutral:
+网关原样转发这个 SSE 流。网页用自己的 React 状态和生成的类型来显示，不用 CopilotKit，也不用 AG-UI。
 
-```text
-AGENT_MODEL_PROVIDER
-AGENT_MODEL_ID
-AGENT_MODEL_ALLOWLIST
-AGENT_MODEL_THINKING_LEVEL
-AGENT_MODEL_TIMEOUT_MS
-AGENT_MODEL_MAX_OUTPUT_TOKENS
-```
+### 12. 运行记录和业务审计分开
 
-Provider credentials remain server secrets. The Web never calls a model provider directly.
+运行时只记有限的信息：助手定义、模型、耗时、令牌数、工具名、结果和耗时、预算用到哪一项。不记密钥、模型推理、完整的工具结果或模型的请求和响应原文。模型的运行记录不自动算审计。
 
-### 7. Semantic HVAC Tools are the primary capability boundary
+## 现状
 
-A Tool is defined by the project, then adapted into Pi.
+- LangGraph 的旧路径（它从没接进服务入口）连同它的断点数据库、调查接口、审计发件箱和评测都已删掉，现在只有 pi 会话一种。
+- 已有：服务和网关之间的会话接口、12 个只读工具、两个收尾工具、预算、SSE 事件、网页的 AI 助手面板、评测题库（`services/operations-agent-service/evals/`）。
+- 还没有：会话的业务审计、「建议」类工具。
 
-Minimum project contract:
+## 结果
 
-```ts
-type AgentToolExecutionMode = 'parallel' | 'sequential';
-type AgentToolReplayPolicy = 'safe' | 'idempotent' | 'never';
+好处：
 
-interface AgentToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: JsonSchema;
-  executionMode: AgentToolExecutionMode;
-  replayPolicy: AgentToolReplayPolicy;
-  requiredCapabilities: readonly string[];
-}
-```
+- 很快从固定流程变成真正的「模型 + 工具」循环；
+- 模型厂商可以换，又不用引入所有厂商；
+- 产品数据比「流程图 + 断点 + 对话」三套东西简单；
+- 权限、重复调用和安全的边界写得很清楚；
+- 可以用假的模型稳定地测 pi 循环。
 
-Execution receives trusted runtime context separately from model arguments:
+代价：
 
-```ts
-interface AgentRunContext {
-  tenantId: string;
-  siteId: string;
-  principalId: string;
-  capabilities: readonly string[];
-  sessionId: string;
-  runId: string;
-  correlationId: string;
-}
-```
+- pi 只在内存里，所以服务要自己保存每次回答的结果；
+- 服务挂了只能从已保存的内容开始新的回答，不能接着模型的输出流继续；
+- 工具的参数、来源和预算要认真设计；
+- 以后要用 pi 的持久化方案时，要专门迁移一次。
 
-`tenantId`, `siteId`, principal identity, credentials and grants are never normal model-selected Tool arguments.
+## 没有采用的做法
 
-### 8. First Tool catalog is read-heavy and product-semantic
-
-The first useful catalog is intentionally small:
-
-```text
-site.get_context
-assets.list
-assets.get
-telemetry.get_current
-telemetry.query_series
-energy.query_series
-energy.compare_periods
-alarms.search
-alarms.get
-fdd.list_findings
-fdd.get_evidence
-work_orders.search
-work_orders.get
-investigation.request_input
-investigation.complete
-```
-
-Tools call typed owner APIs. The model never receives raw SQL, ClickHouse/Cube query access, ThingsBoard endpoints, arbitrary HTTP, filesystem, process or shell capability.
-
-Independent READ Tools may run in parallel. Interaction/terminal/proposal Tools are sequential.
-
-### 9. Authorization happens before registration and again at execution
-
-The allowed Tool set for a Run is derived from trusted principal/Site capabilities before the Pi Agent is created. A Tool the user cannot possibly invoke should normally not be registered for that Run.
-
-At execution, the Tool adapter again invokes the authoritative owner with server-controlled scope/delegation. The owner remains the final authorization/data-visibility authority.
-
-Pi `beforeToolCall` and `afterToolCall` hooks may implement runtime policy, budget accounting and result normalization, but hooks are not the sole security boundary.
-
-### 10. Model-selected completion is structured through terminal Tools
-
-A normal Agent response is not automatically a completed investigation.
-
-The Agent finishes a product task by calling one of the project-owned terminal Tools:
-
-```text
-investigation.complete
-investigation.request_input
-```
-
-`investigation.complete` accepts a strict structure such as:
-
-```text
-outcome: SUPPORTED_FINDING | UNABLE_TO_CONCLUDE
-summary
-evidenceRefs[]
-limitations[]
-recommendedNext[]
-```
-
-It validates all referenced Evidence/owner facts and creates typed Agent Artifacts before terminating the run.
-
-`investigation.request_input` creates an INPUT_REQUEST Artifact and terminates the current run in a waiting-for-input Session state. The operator response starts a new Run from committed Session state.
-
-This avoids depending on framework-specific interrupt/checkpoint semantics for human-in-the-loop behavior.
-
-### 11. Model output can propose; it cannot directly actuate
-
-The first runtime has no direct physical command Tool.
-
-Future side-effect capabilities are introduced as typed proposals first:
-
-```text
-proposal.create_work_order
-proposal.create_control_change
-proposal.create_optimization_plan
-```
-
-A proposal is not approval or execution. The owning domain performs its own authorization, revision, idempotency, approval, lease/fence and verification flow.
-
-A direct `command.execute`, generic RPC, arbitrary write/setpoint or raw transport Tool is forbidden in the Agent runtime.
-
-### 12. Replay policy is explicit
-
-External effects cannot generally be made exactly once across process crashes.
-
-Every Tool declares one replay policy:
-
-```text
-safe
-  pure/authorized READ may be repeated
-
-idempotent
-  may be repeated only with a durable stable idempotency identity
-
-never
-  cannot be automatically repeated after an uncertain effect
-```
-
-The initial catalog is `safe` except terminal/session writes, which are local transactional/idempotent application operations. Direct `never` physical effects are not registered.
-
-### 13. Tool outputs are bounded evidence, not raw data dumps
-
-Tools return compact structured results with provenance/revision/quality metadata. Large time series remain owned by the source service; the Agent receives the smallest summary or bounded slice necessary for the task.
-
-Each Tool has explicit maximum records/bytes/time range. This controls context growth, provider cost and prompt-injection surface.
-
-Text from owner data, labels, notes, alarm descriptions and user fields is treated as untrusted data.
-
-### 14. Run budgets are enforced in runtime, not prompt prose
-
-Every Run has hard limits for at least:
-
-```text
-model calls
-Tool calls
-wall clock
-parallel Tool concurrency
-query range
-records/bytes returned
-input tokens
-output tokens
-```
-
-Pi's turn/tool lifecycle is used to enforce these limits. Budget exhaustion produces a typed unable-to-conclude/failure state instead of allowing an unbounded loop.
-
-The exact numbers are product policy and may differ by AgentDefinition/model; they are not model-controlled.
-
-### 15. Public events are framework-neutral
-
-Pi events are mapped into `hvac.agent.event/v1` before leaving the service.
-
-The minimum event vocabulary is:
-
-```text
-session.snapshot
-run.started
-assistant.delta
-tool.started
-tool.completed
-artifact.created
-input.required
-run.completed
-run.failed
-```
-
-Framework reasoning/thinking deltas are not part of the public contract by default.
-
-Platform Gateway remains the public browser ingress and forwards the project-owned `hvac.agent.event/v1` SSE stream directly. AG-UI is not part of the target architecture.
-
-### 16. Web consumes the project Agent protocol directly
-
-CopilotKit is removed from the product architecture. HVAC Web owns the investigation UI with normal React state and generated project API clients.
-
-The browser consumes durable Session snapshots plus `hvac.agent.event/v1` SSE events directly through Platform Gateway. No CopilotKit Provider, `AbstractAgent`, headless agent bridge, AG-UI adapter or framework-specific browser state remains.
-
-The `/ai` and `/operations` information architecture may be simplified as part of the Pi product implementation, but the Web must have one clear investigation experience backed by the project Session/event protocol.
-
-### 17. Observability separates runtime telemetry from business Audit
-
-Record bounded operational metadata such as:
-
-```text
-agentDefinitionId
-session/run hashed correlation
-provider/model
-latency
-token/usage counts
-Tool name/status/duration
-budget dimension/outcome
-```
-
-Do not emit raw secrets, hidden reasoning, unbounded Tool payloads or full provider request/response bodies into telemetry.
-
-Business Audit records only governed user/business actions and artifact/proposal lifecycle events that need auditability. Model tracing is not automatically an Audit fact.
-
-## Target module shape
-
-The first implementation stays inside the Operations Agent deployable until another Agent proves a reusable package is needed:
-
-```text
-services/operations-agent-service/src/
-├── agent/
-│   ├── definition.ts
-│   ├── session.ts
-│   ├── events.ts
-│   ├── policy.ts
-│   └── artifacts.ts
-├── runtime-pi/
-│   ├── pi-runtime.ts
-│   ├── pi-models.ts
-│   ├── pi-tools.ts
-│   └── pi-events.ts
-├── tools/
-│   ├── catalog.ts
-│   ├── registry-tools.ts
-│   ├── telemetry-tools.ts
-│   ├── energy-tools.ts
-│   ├── alarm-tools.ts
-│   ├── fdd-tools.ts
-│   └── work-order-tools.ts
-├── persistence/
-├── transport-http/
-├── transport-events/
-└── observability/
-```
-
-This is a destination layout, not a compatibility requirement. Existing files may be deleted or moved directly; no LangGraph compatibility adapter is required.
-
-## Migration rule
-
-Do not run two authoritative Agent architectures indefinitely.
-
-During development, the old runtime may exist only long enough to provide comparison evidence. New Pi runs use new Session/Run semantics; an active old-framework run is never silently resumed under Pi.
-
-Cutover is complete when the Pi vertical slice passes the framework-independent Agent benchmark, recovery/security acceptance and Web/Gateway acceptance. Then remove LangGraph-specific source, dependency, checkpoints, scripts and documentation rather than retaining fallback code.
-
-2026-10-16: done ahead of the benchmark gate. The LangGraph investigation path was never wired into the service entry, so it was deleted with its checkpoint database, investigation routes and contracts, typed investigation records, audit outbox, OpenAI finding synthesizer, tool catalog generator, benchmark and safety certification (they validated only that path). Pi Sessions are the only runtime; the per-Run budget lives in the pi runtime. Session audit and an Agent benchmark for Pi are not built yet.
-
-## Consequences
-
-### Benefits
-
-- fastest path from static graph orchestration to a real model/tool Agent loop;
-- provider-neutral model runtime without broad provider imports;
-- smaller product state model than graph + checkpoint + separate conversation abstractions;
-- explicit industrial authorization/replay/safety boundaries;
-- deterministic Pi loop tests via faux provider;
-- Pi-specific model/tool-loop mechanics stay inside the runtime module instead of leaking into business state;
-- no premature generic Agent platform or multi-agent plugin system.
-
-### Costs
-
-- the application must persist finalized Session/Run state because stable Pi `Agent` is in-memory;
-- process failure restarts a new run from committed state rather than resuming a provider stream byte-for-byte;
-- Tool schemas/provenance/budget policy require deliberate product design;
-- later adoption of a mature Pi durable Harness requires an explicit migration rather than leaking unstable framework storage into current business tables.
-
-## Rejected alternatives
-
-- **Retain LangGraph and wrap it with Pi model APIs** — rejected because this keeps graph orchestration as the primary mental model and prevents Pi from providing the simpler Agent loop being adopted.
-- **Adopt Pi Coding Agent** — rejected because coding-agent filesystem/process/network capabilities and UI/extension runtime are not appropriate production HVAC authority.
-- **Adopt Pi Harness v2 immediately** — rejected for the first release because the upstream state-machine document is explicitly non-canonical and would introduce more framework-owned durability than the current product needs.
-- **Build a generic `agent-runtime-service` before the first Pi vertical slice** — rejected as speculative infrastructure. Keep the runtime in the Operations Agent service until a real product boundary requires extraction.
-- **Retain CopilotKit or AG-UI around Pi** — rejected. They add a second Agent/event abstraction without product value once HVAC Web consumes the project Session/SSE protocol directly.
-- **Let the model call MCP/raw HTTP internally** — rejected for core platform capabilities. Typed owner APIs are simpler, safer and preserve domain authority.
-
-## Acceptance of this ADR
-
-Implementation follows `docs/operations-agent/pi-agent-implementation-plan.md`. ADR 0010 remains historical context for the former LangGraph architecture but is no longer the runtime selection authority.
+- **保留 LangGraph、只用 pi 调模型**：还是以流程图为主，pi 的简单循环用不上。
+- **用 pi 的编程助手**：它带文件、进程和网络的能力，不适合当 HVAC 生产环境的权限。
+- **马上用 pi Harness v2**：上游自己说还没定稿，而且现在不需要框架来管持久化。
+- **先做一个通用的助手运行服务**：还没有第二个助手，属于提前建设。
+- **在 pi 外面再套 CopilotKit 或 AG-UI**：网页直接用我们的会话接口和 SSE 之后，多一套事件格式没有任何好处。
+- **让模型通过 MCP 或任意 HTTP 读数据**：直接调各数据负责方的接口更简单、更安全，也守住了数据的归属。

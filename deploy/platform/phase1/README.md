@@ -1,43 +1,42 @@
-# Phase 1 canonical deployment
+# 第一阶段部署
 
-`deploy/platform/phase1` is the canonical deployment entry for `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能源系统总体部署架构设计 V1（单服务器基线）》.
+`deploy/platform/phase1` 是第一阶段唯一的部署入口，依据《智慧能源系统总体部署架构设计 V1（单服务器基线）》（`SE-ARCH-DEPLOY-001 V1.0`）：一台 Linux 服务器 + Docker Compose。仓库里没有 Kubernetes 清单，第一阶段也不需要。
 
-The Phase 1 runtime model is:
+本地开发平时只用 `npm run local:up` / `local:down` / `local:reset`（见 `CLAUDE.md`），它按顺序做完下面的迁移、身份初始化、种子数据和启动。服务器的部署方式见 `docs/HANDOFF.md`。本文讲这些步骤各自是什么。
 
-```text
-1 Linux Server
-+
-Docker Compose
-```
+## 对外的边界
 
-The repository keeps no Kubernetes manifests; Phase 1 neither needs nor ships any.
+### 网关证书
 
-## Public boundary
+接入服务（Connectivity）持有网关 CA，并在内部 8448 端口提供 HTTPS 的证书服务。每个部署用 Connectivity 的 `--initialize-gateway-ca` 命令初始化一次 `GATEWAY_CA_DIR`（用 `CONNECTIVITY_CA` 提供服务 CA）：它只新建文件，从不覆盖已有的密钥，并给 Connectivity 另签一张服务端证书。平时运行时这个目录只读挂载。只有公开的信任证书给 nginx、Mosquitto 和网页后端，CA 私钥只留在 Connectivity。`npm run local:up` 会自动做第一次初始化。
 
-### Gateway credential authority
+nginx 通过 HTTPS 对外提供 `/gateway/v1/enroll` 和 `/gateway/v1/renew`，并以平台网关的服务身份向 Connectivity 认证；续期时只转发验证过的客户端证书。运维人员在网页「集成管理」登记网关、生成 24 小时有效的一次性接入码；模拟器用同样的网页接口自动申请证书，不再手工签发或写种子。吊销对一台网关是永久的。证书的签发、续期、吊销记录写在 `connectivity.gateway_credential_audit` 里，还没有在操作记录页面显示。
 
-Connectivity owns the Gateway CA and HTTPS credential service on internal port 8448. Provision a deployment-specific `GATEWAY_CA_DIR` once with Connectivity's `--initialize-gateway-ca` command, supplying the workload CA via `CONNECTIVITY_CA_FILE`. It creates exclusive files, never overwrites existing keys, and creates a separate server-auth certificate for Connectivity. Normal runtime mounts the directory read-only. Only public trust certificates go to nginx, Mosquitto and the Web BFF; the CA private key stays with Connectivity. Local `npm run local:up` performs first provisioning automatically.
-
-nginx exposes `/gateway/v1/enroll` and `/gateway/v1/renew` over HTTPS and authenticates itself to Connectivity with the platform-gateway workload identity. Renewal forwards only the verified client leaf. Operators use Web 集成管理 to register a Gateway and generate a 24-hour one-time code. Simulator bootstrap uses that Web API and automatic CSR enrollment; it no longer signs or seeds Gateway credentials manually. Revocation is terminal for the Registry Gateway identity. Successful lifecycle records are transactional owner evidence in `connectivity.gateway_credential_audit`; they are not yet displayed in central Audit UI.
-
-The default single-node topology exposes only HTTPS/WSS. MQTT TLS is added only when the optional Integration profile is enabled:
+默认的单机部署只对外开 HTTPS / WSS。启用 `integration` 时才加 MQTT：
 
 ```text
-443   HTTPS / WSS -> Nginx -> React + energy-api (/api + /realtime) + identity-service (/identity)
-8883  MQTT TLS    -> Mosquitto -> Edge Gateway   [integration profile only]
+443   HTTPS / WSS -> Nginx -> 网页 + energy-api（/api、/realtime）+ identity-service（/identity）
+8883  MQTT TLS    -> Mosquitto -> 现场网关    [只在 integration 时]
 ```
 
-Local PostgreSQL, ClickHouse, Redis, Grafana, Loki, Tempo, Prometheus and all Go services publish no host ports. `identity-service` is Identity Infrastructure, not a business deployable; Nginx exposes only its `/identity` OIDC surface through the existing HTTPS boundary. The application network stays internal; the data network stays internal while state is local and permits outbound egress only when an external state endpoint is selected. Operational access to monitoring/data services must use a controlled management path such as VPN/SSH tunneling rather than additional public ports.
+（服务器上对外的 MQTT 是 8884，由主机的 nginx 转到 Mosquitto，见 `docs/specs/site-gateway-onboarding.md`。）
 
-## Runtime inventory
+本机的 PostgreSQL、ClickHouse、Redis、Grafana、Loki、Tempo、Prometheus 和所有 Go 服务都不对主机开端口。身份服务是基础设施，不是业务服务；nginx 只在已有的 HTTPS 入口下暴露它的 `/identity`。应用网络只在内部；数据网络在数据库都在本机时也只在内部，选了外部数据库时才允许出站。访问监控和数据服务要走 VPN / SSH 隧道这类受控的管理通道，不另开公网端口。
 
-`runtime-inventory.v1.json` is the machine-readable classification of every service in the canonical Compose. The default business deployables are `energy-api`, `telemetry-worker` and `metric-worker`. `scheduler` and `maintenance` are default supporting workloads; `identity-service` is Identity Infrastructure. `connectivity` plus `mqtt-broker` are optional and run only through the `integration` profile. Forecast, Optimization and FDD remain optional through the `intelligence` profile. Migration, schema preflight, identity bootstrap/admin/reconciliation and backup containers are one-shot operator actions rather than long-running product services.
+## 服务清单
 
-Any Compose service added or removed without updating this inventory is deployment drift and must fail `npm run deployment:phase1:check`.
+`runtime-inventory.v1.json` 给 Compose 里的每个服务分了类：
 
-## Environment contract
+- 默认的业务服务：`energy-api`、`telemetry-worker`、`metric-worker`；
+- 默认的支撑服务：`scheduler`、`maintenance`（运行 `cmd/maintenance-worker`）；身份服务 `identity-service` 是基础设施；
+- 可选：`connectivity` + `mqtt-broker`（`integration`），预测、优化、故障诊断、节能验证、报告（`intelligence`）；
+- 一次性的运维动作：迁移、表结构预检、身份初始化 / 管理 / 同步、备份。
 
-Checked-in examples exist for:
+Compose 里增删服务而不更新这份清单，`npm run deployment:phase1:check` 会失败。
+
+## 环境变量文件
+
+仓库里有四份示例：
 
 ```text
 environments/development.runtime.env.example
@@ -46,75 +45,71 @@ environments/staging.runtime.env.example
 environments/production.runtime.env.example
 ```
 
-Copy the required example to a non-versioned `*.runtime.env`, replace every `[REDACTED_SECRET]`, and point `PHASE1_ENV_FILE` at it. Real runtime env files and `deploy/platform/phase1/runtime/` are ignored by Git.
+复制需要的一份成不提交的 `*.runtime.env`，替换所有 `[REDACTED_SECRET]`，再用 `PHASE1_ENV_FILE` 指向它。真实的环境文件和 `deploy/platform/phase1/runtime/` 都被 Git 忽略。
 
-Development/Testing/Staging remain fail-closed for production egress. Production examples must never contain Demo/fixture/test identity endpoints.
+开发、测试、预发环境默认不允许正式的出站访问。正式环境的示例里绝不能有演示、测试数据或测试身份服务的地址。
 
-### Stateful placement
+### 数据库放在哪
 
-PostgreSQL, ClickHouse and Redis placement are independent runtime choices; none changes application roles:
+PostgreSQL、ClickHouse、Redis 各自可以放在本机或外部，互不影响，也不改应用的角色：
 
 ```text
-PHASE1_POSTGRES_MODE=local       -> launcher enables local-postgres
-PHASE1_POSTGRES_MODE=external    -> no PostgreSQL container; migration/preflight use PHASE1_POSTGRES_HOST/PORT/SSLMODE
+PHASE1_POSTGRES_MODE=local       -> 启动 local-postgres
+PHASE1_POSTGRES_MODE=external    -> 不起 PostgreSQL 容器；迁移和预检用 PHASE1_POSTGRES_HOST/PORT/SSLMODE
 
-PHASE1_CLICKHOUSE_MODE=local     -> launcher enables local-clickhouse
-PHASE1_CLICKHOUSE_MODE=external  -> no ClickHouse container; ClickHouse clients use PHASE1_CLICKHOUSE_HTTP_URL
+PHASE1_CLICKHOUSE_MODE=local     -> 启动 local-clickhouse
+PHASE1_CLICKHOUSE_MODE=external  -> 不起 ClickHouse 容器；客户端用 PHASE1_CLICKHOUSE_HTTP_URL
 
-PHASE1_REDIS_MODE=local          -> launcher enables local-redis
-PHASE1_REDIS_MODE=external       -> no Redis container; Redis consumers use their configured external endpoints
+PHASE1_REDIS_MODE=local          -> 启动 local-redis
+PHASE1_REDIS_MODE=external       -> 不起 Redis 容器；各服务用各自配置的外部地址
 ```
 
-For Stage 2 PostgreSQL, point `PHASE1_POSTGRES_HOST` at the external endpoint and update every application PostgreSQL DSN/URL in the runtime environment. `phase1-schema-preflight` remains mandatory, so the same product/schema contract is checked before application processes start.
+- 外部 PostgreSQL：把 `PHASE1_POSTGRES_HOST` 指向外部地址，并更新环境文件里每个应用的连接串。表结构预检（`phase1-schema-preflight`）照样必须先通过。
+- 外部 ClickHouse：`PHASE1_CLICKHOUSE_HTTP_URL` 设成受保护的外部 HTTP(S) 地址，Compose 会把它传给能耗查询、历史和能耗计算、指标、预测和优化。上线前在外部建好 `telemetry_history`、`analytics` 表结构和同样最小权限的账号。仓库里本机 ClickHouse 的初始化 SQL 用的是无密码的内部账号，不能原样用在网络可达的外部部署上，外部账号的密码放在部署密钥里。
+- 外部 Redis：保持一个 Redis，但保留原来的逻辑分隔：DB 0 / 前缀给实时推送和可重建的最新值，DB 1 给短时的 OIDC 登录状态，DB 2 给共享的限流计数。配置 `CENTRIFUGO_ENGINE_REDIS_ADDRESS`、`TELEMETRY_LATEST_CACHE_REDIS_URL`、`METRIC_REDIS_URL`、`OIDC_STATE_REDIS_URL`、`LIMIT_POLICY_REDIS_URL`。这一步不引入 Redis 哨兵或集群，也不算高可用。
 
-For Stage 2 ClickHouse, set `PHASE1_CLICKHOUSE_HTTP_URL` to the protected external HTTP(S) endpoint. The canonical Compose maps that endpoint into Energy Query, telemetry/history projection, analytics projection, metric, forecast and optimization clients. Provision the existing `telemetry_history` / `analytics` schema and equivalent least-privilege service users on the external data plane before rollout. The checked-in local ClickHouse init SQL uses local/internal no-password users and must not be copied unchanged into a network-reachable external deployment; external credentials belong in deployment secrets.
+任何一个数据服务放到外部时，启动程序会给这个部署的 `data` 网络开出站。三个都在本机时，`data` 只在内部。放到外部只是换了位置和故障范围，不是高可用。
 
-For Stage 2 Redis, keep one Redis placement but preserve the existing logical separation: DB 0/prefixes for realtime and rebuildable Latest projections, DB 1 for short-lived OIDC login state, and DB 2 for shared limit counters. Configure `CENTRIFUGO_ENGINE_REDIS_ADDRESS`, `TELEMETRY_LATEST_CACHE_REDIS_URL`, `METRIC_REDIS_URL`, `OIDC_STATE_REDIS_URL`, and `LIMIT_POLICY_REDIS_URL` for the external endpoint. Telemetry/Metric Latest can be rebuilt; OIDC state and Centrifugo recovery are short-lived coordination state. This placement step does not introduce Redis Sentinel/Cluster or claim Redis HA.
-
-When any state service is external, the launcher opens outbound connectivity on the existing `data` network for that deployment. With PostgreSQL, ClickHouse and Redis all local, `data` remains an internal Docker network. External state is a placement/failure-domain change, not an HA claim.
-
-## Static validation
+## 静态检查
 
 ```bash
 npm run architecture:phase1:check
 npm run deployment:phase1:check
 ```
 
-Compose parsing can be verified without starting services. The launcher is the canonical entry because it resolves `PHASE1_DEPLOYMENT_TIER`, applies that tier's CPU/memory and ClickHouse internal-memory limits, and selects the matching observability profile:
+不启动服务也能检查 Compose 能不能解析。要用启动程序，因为它根据 `PHASE1_DEPLOYMENT_TIER` 套上这一档的 CPU / 内存和 ClickHouse 内部内存上限，并选对应的观测档位：
 
 ```bash
 PHASE1_ENV_FILE=deploy/platform/phase1/environments/development.runtime.env \
   node --experimental-strip-types scripts/phase1-compose.ts config --quiet
 ```
 
-For the local WSL deployment, use the tracked `wsl.override.yaml` together with the launcher below. The launcher reads the Git-ignored `runtime/db-role-credentials/roles.sql`, builds the least-privilege Identity/IAM DSNs in memory, and passes them only to the Compose process; it does not copy database-role passwords into the runtime env file or print them.
+本地 WSL 部署用仓库里的 `wsl.override.yaml` 和下面的启动程序。它读 Git 忽略的 `runtime/db-role-credentials/roles.sql`，在内存里拼出最小权限的身份服务和 IAM 连接串，只传给 Compose 进程，不把数据库角色的密码写进环境文件，也不打印：
 
 ```bash
 npm run deployment:phase1:wsl -- config --quiet
 
-# Local source deployment: rebuild the current checkout's Web + first-party runtime images, then start them.
+# 从当前代码构建网页和自己的服务镜像，再启动
 npm run deployment:phase1:wsl -- --source-deploy up -d
 
-# Add local MQTT + connectivity only when this deployment needs Integration.
+# 需要 MQTT 和接入服务时
 npm run deployment:phase1:wsl -- --source-deploy --integration up -d
 ```
 
-Use `--source-deploy` for the local WSL product deployment so the Web bundle and first-party runtime binaries come from the same Git revision. It sets the Web build identity to the current revision before building. `PHASE1_GO_BUILD_IMAGE`, `PHASE1_GO_RUNTIME_IMAGE`, `PHASE1_GO_PROXY`, `PHASE1_WEB_BUILD_IMAGE`, `PHASE1_NGINX_RUNTIME_IMAGE`, and `PHASE1_NPM_REGISTRY` may override build sources for the local network without changing the checked-in production defaults. `PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed. `--simulator-acceptance` implies `--integration` because the simulator depends on the local MQTT/connectivity path.
+本地部署用 `--source-deploy`，保证网页和服务来自同一个 Git 版本（构建前把网页的构建号设成当前版本）。`PHASE1_GO_BUILD_IMAGE`、`PHASE1_GO_RUNTIME_IMAGE`、`PHASE1_GO_PROXY`、`PHASE1_WEB_BUILD_IMAGE`、`PHASE1_NGINX_RUNTIME_IMAGE`、`PHASE1_NPM_REGISTRY` 可以按本地网络换构建来源，不改仓库里正式环境的默认值；`PHASE1_ENV_FILE` 和 `PHASE1_DB_ROLE_CREDENTIALS_SQL` 可以换本地环境文件和角色密码 SQL 的位置。`--simulator-acceptance` 会自动带上 `--integration`，因为模拟器要走本地的 MQTT 和接入服务。
 
-## Startup prerequisites
+## 启动前要准备的
 
-Before `up -d`, the operator must provide:
+- `PUBLIC_TLS_DIR` 下的公网 HTTPS 证书和私钥；
+- 启用 `integration` 时，`MQTT_PKI_DIR` 下的 MQTT CA、服务器和客户端证书；
+- `INTERNAL_PKI_DIR` 下的内部服务证书；
+- 一份真实的、不提交的环境文件；
+- 数据库在本机时，独立的 PostgreSQL WAL / 基础备份位置和 ClickHouse 备份位置；外部数据库按它自己的备份方式；
+- 预发和正式环境：审核过的应用镜像版本和摘要。
 
-- public HTTPS certificate/key under `PUBLIC_TLS_DIR`;
-- MQTT CA/broker/client PKI under `MQTT_PKI_DIR` when the `integration` profile is enabled;
-- internal service PKI under `INTERNAL_PKI_DIR`;
-- a real non-versioned runtime environment file;
-- independent PostgreSQL WAL/base-backup and ClickHouse backup locations when those state services are local; external state uses the backup contract of its data plane;
-- reviewed application image versions/digests for Staging/Production.
+仓库里的示例只是格式说明，不是正式的密钥。
 
-The checked-in examples are contracts, not production secrets.
-
-Staging and Production environment contracts require every first-party application image to be bound to an immutable `@sha256:` digest. After replacing the digest placeholders and completing the migration pre-step, Production rollout must consume the approved images without rebuilding them on the host:
+预发和正式环境要求每个自己的应用镜像都固定到不可变的 `@sha256:` 摘要。替换好摘要、做完迁移之后，正式环境直接用批准的镜像，不在主机上重新构建：
 
 ```bash
 PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
@@ -123,15 +118,22 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
   node --experimental-strip-types scripts/phase1-compose.ts up -d --no-build
 ```
 
-## Database migration boundary
+## 数据库和迁移
 
-The PostgreSQL deployment, whether local or external, creates the authentication database boundary `hvac_identity` plus the existing domain database boundaries `hvac_s0` through `hvac_s5`. Credential hashes and IdP authorization requests/codes stay in `hvac_identity`; Gateway OIDC correlation state is a one-time Redis entry with a 10-minute TTL so login can survive Gateway process restart or multi-instance routing. The browser-facing issuer stays on the public HTTPS origin while Gateway server-to-server discovery, token exchange and JWKS retrieval use `OIDC_BACKCHANNEL_BASE_URL` to reach `identity-service` directly on the internal application network. IAM authorization facts remain in `hvac_s1`. BFF Sessions default to an 8-hour absolute lifetime (`SESSION_ABSOLUTE_TTL=8h`) and a 60-minute user-idle timeout (`SESSION_IDLE_TTL=60m`); only explicit browser user activity refreshes the idle timestamp, so background telemetry traffic cannot keep an unattended session alive.
+PostgreSQL（本机或外部）上有身份库 `hvac_identity`，以及各业务库 `hvac_s0` 到 `hvac_s5`（名字沿用了早期的阶段编号）。密码哈希和身份服务的授权请求、授权码在 `hvac_identity`；网关的 OIDC 登录关联状态是 Redis 里一条 10 分钟的一次性记录，所以网关重启或多实例时登录不受影响。浏览器看到的签发方是公网 HTTPS 地址，网关和身份服务之间的发现、换令牌、取 JWKS 走内部网络上的 `OIDC_BACKCHANNEL_BASE_URL`。IAM 的授权数据在 `hvac_s1`。登录会话默认最长 8 小时（`SESSION_ABSOLUTE_TTL=8h`），60 分钟没有操作就过期（`SESSION_IDLE_TTL=60m`）；只有用户在浏览器里的操作会刷新空闲时间，后台的遥测请求不会让无人值守的会话一直有效。
 
-The production-safe Phase 1 migration runner is implemented under `migrations/`. It uses an exact reviewed migration allowlist in `manifest.v1.json`, executes the reviewed canonical migration SQL bytes without runtime rewriting, keeps environment fixture and credential material outside the production sources, records migration state and source hashes in each database, and fails closed on drift or incomplete recovery state. Normal service startup first runs the one-shot Product/Schema preflight, which requires the exact product version and migration-manifest digest; there is no production skip switch.
+迁移程序在 `migrations/`：
 
-`limit-policy.v1.json` is the versioned Phase 1 high-risk LimitPolicy. The first enforced class is Operations Agent request usage: the Gateway reserves the per-Session window atomically in Redis and fails closed if that quota authority is unavailable. The policy is mounted read-only and is referenced by `product-release.v1.json`; it is not a generic runtime policy editor.
+- 只执行 `manifest.v1.json` 里精确列出的、审核过的迁移，按原样执行 SQL，不在运行时改写；
+- 测试数据和凭据不在正式的迁移里；
+- 在每个库里记下迁移状态和源文件哈希，发现被改过或恢复不完整就停下；
+- 新增迁移要同时登记到 `manifest.v1.json`、`migration-list.tsv` 和 `Dockerfile`（见 `CLAUDE.md`）。
 
-Database roles are created without checked-in production credentials. Copy `migrations/role-credentials.sql.example` to the Git-ignored runtime path, replace every redacted value with deployment-provided credentials, then execute the migration profile before application rollout:
+服务正常启动前先跑一次性的产品 / 表结构预检，要求产品版本和迁移清单的摘要完全一致；正式环境没有跳过的开关。
+
+`limit-policy.v1.json` 是有版本的高风险限流策略。第一个执行的是 AI 助手的请求次数：网关在 Redis 里原子地按会话预留时间窗口，Redis 不可用时拒绝请求。策略只读挂载，被 `product-release.v1.json` 引用。
+
+数据库角色不用仓库里的正式密码创建。把 `migrations/role-credentials.sql.example` 复制到 Git 忽略的运行时目录，换上部署提供的密码，再在应用上线前执行迁移：
 
 ```bash
 PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
@@ -139,124 +141,120 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
   --profile migration run --rm phase1-migrator
 ```
 
-Use the same launcher for Stage 1 and Stage 2. It derives `local-postgres` and the data-network egress setting from `PHASE1_POSTGRES_MODE`, so operators do not manually assemble placement profiles.
+不管数据库在本机还是外部，都用同一个启动程序；它根据 `PHASE1_POSTGRES_MODE` 决定要不要起 `local-postgres` 和开数据网络的出站。
 
-`testdata`, fixture bootstrap, legacy migration execution and local-only identity bootstrap are not in the production allowlist. `npm run deployment:phase1:migration:test` performs a fresh isolated PostgreSQL run, executes the migration set twice to prove idempotency, validates migration hashes, forced RLS and database CONNECT boundaries, and verifies that Command Dispatcher receives no database role.
+测试数据、种子数据、旧系统迁移和只用于本机的身份初始化都不在正式的迁移清单里。`npm run deployment:phase1:migration:test` 在一个隔离的新 PostgreSQL 上把迁移跑两遍（证明能重复执行），校验迁移哈希、强制行级隔离和数据库连接权限，并确认指令下发程序没有数据库角色。
 
-## Identity bootstrap
+## 身份初始化
 
-Identity bootstrap is an explicit operator action after database migration. It is not an application startup side effect and it never seeds Tenant/Site/Role authorization into the IdP.
+身份初始化是迁移之后运维人员明确执行的一步，不是服务启动时顺便做的，也从不把租户、站点、角色这些授权写进身份服务。
 
-1. Run the `identity-keygen` service from the `identity-bootstrap` profile once to create the non-versioned PKCS#8 RSA signing key under `IDENTITY_RUNTIME_DIR`. Existing key files are not overwritten.
-2. Run `identity-admin` with `IDENTITY_ADMIN_DATABASE_URL` bound to the dedicated `identity_admin` database role. `create` provisions a credential-bearing identity. For development/testing password recovery, use `npm run deployment:phase1:identity-reset`; it runs `reset-password-random` and atomically rewrites the canonical non-versioned `runtime/local-admin.credentials` file without printing the replacement password. Do not maintain a second local/test credential file by hand.
-3. For a fresh local WSL deployment, run `npm run deployment:phase1:local-foundation` once. It idempotently creates only the reviewed local Tenant/Site plus the Registry, Telemetry, Alarm and Work Order base policies required by the IAM resolvers; it does not create simulated equipment.
-4. Run `identity-reconciler` with a reviewed input document to project that identity's immutable `issuer + subject` into IAM together with its Tenant membership and Role Assignments (ADR 0022). Each `seed.roleBindings` entry names a Role by `roleKey` (a built-in Role such as `admin`, or one the Tenant owns) and optionally a `siteId`; without `siteId` the Role covers the whole Tenant. The first administrator is `{"roleKey": "admin"}`; everyone else is added from 系统管理 → 用户与角色. Changing the document requires a higher `sourceVersion`.
-5. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
+1. 用 `identity-bootstrap` profile 跑一次 `identity-keygen`，在 `IDENTITY_RUNTIME_DIR` 下生成不提交的 PKCS#8 RSA 签名密钥；已有的不覆盖。
+2. 用 `identity-admin`（`IDENTITY_ADMIN_DATABASE_URL` 绑定专门的 `identity_admin` 角色）`create` 一个带密码的账号。开发和测试环境找回密码用 `npm run deployment:phase1:identity-reset`：它执行 `reset-password-random`，原子地改写唯一的、不提交的 `runtime/local-admin.credentials`，不打印新密码。不要手工维护第二份本地凭据文件。
+3. 全新的本地 WSL 部署，跑一次 `npm run deployment:phase1:local-foundation`：可重复执行，只建审核过的本地租户和站点，以及 IAM 判定需要的登记、遥测、告警、工单基础策略；不建模拟设备。
+4. 用审核过的输入跑 `identity-reconciler`，把这个账号的「签发方 + 主体编号」连同租户成员关系和角色指派写进 IAM（ADR 0022）。`seed.roleBindings` 的每一项用 `roleKey` 指定角色（内置的如 `admin`，或租户自己的），可以带 `siteId`；不带就是整个租户。第一个管理员是 `{"roleKey": "admin"}`，之后的人在「系统管理 → 用户与角色」里加。改输入要提高 `sourceVersion`。
+5. 启动或重启 `identity-service`；签名密钥文件不存在或无效时它拒绝启动。
 
-`identity_runtime` cannot insert users. The separate `identity_admin` role exists so credential administration does not expand the long-running IdP runtime privilege set. Signing private keys, bootstrap credentials and reconciliation input containing deployment-specific authorization facts remain outside Git.
+`identity_runtime` 不能新增用户。单独的 `identity_admin` 角色让账号管理不扩大长期运行的身份服务的权限。签名私钥、初始化凭据和带部署授权的同步输入都不进 Git。
 
-## Local central-plant simulator
+## 本地模拟冷站
 
-WSL development does not seed simulated equipment as an application startup side effect. After the normal Phase 1 stack is up, run `npm run deployment:phase1:simulator` to idempotently bootstrap the local central-plant Registry/S2 projection, Connectivity Integration/Binding/Credential/Session state, then start the explicit `deploy/acceptance/phase1-simulator.compose.yaml` overlay with the `simulator-acceptance` profile. The EG8200 simulator is absent from the canonical production Compose graph. The Connectivity seed stores the simulator certificate fingerprint and a SecretRef only; it never writes the private key to PostgreSQL. This acceptance-only bootstrap uses the deployment PostgreSQL administrator for Registry/Connectivity fixture writes because forced RLS remains enabled and application/migrator roles are not granted a bypass; production deployments do not run this command.
+WSL 开发时，服务启动不会顺便写模拟设备。平台起来之后，跑 `npm run deployment:phase1:simulator`：它可重复地初始化本地冷站的登记数据和接入服务的状态，再用 `simulator-acceptance` profile 启动单独的 `deploy/acceptance/phase1-simulator.compose.yaml`。模拟器不在正式的 Compose 里。接入服务的种子只存模拟器证书的指纹和密钥引用，从不把私钥写进 PostgreSQL。这个只用于验收的初始化用部署的 PostgreSQL 管理员写登记和接入服务的测试数据（因为强制行级隔离仍然开着，应用和迁移角色都没有绕过权限）；正式部署不跑这个命令。
 
-## Backup
+## 备份
 
-Local PostgreSQL supports continuous WAL archiving and exposes a `backup` profile for base backups. WAL archiving is disabled by default and is enabled only with `POSTGRES_ARCHIVE_MODE=on`; development/testing keep it off unless a real archive destination is intentionally provisioned, while staging/production examples opt in. For external PostgreSQL, backup ownership follows that external database deployment; the repository backup container may be used only when that PostgreSQL endpoint permits `pg_basebackup` with the configured credentials. Local ClickHouse exposes the existing native backup profile; external ClickHouse backup/PITR ownership belongs to that external data plane. Details are in `backup/README.md`.
+本机 PostgreSQL 支持持续的 WAL 归档，并有 `backup` profile 做基础备份。WAL 归档默认关，`POSTGRES_ARCHIVE_MODE=on` 才开：开发和测试默认关（除非真的准备了归档目录），预发和正式的示例里是开的。外部 PostgreSQL 的备份由那边负责；只有外部数据库允许用配置的账号做 `pg_basebackup` 时，才能用仓库里的备份容器。本机 ClickHouse 用自带的备份 profile；外部 ClickHouse 的备份和时间点恢复由那边负责。细节见 `backup/README.md`。
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres --profile backup run --rm postgres-backup
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-clickhouse --profile backup run --rm clickhouse-backup
 ```
 
-`SE-OPS-009 V1.0 CURRENT CANDIDATE` now defines the Phase 1 recovery objectives and `recovery/` contains the machine target contract, whole-server runbook and drill evidence format. Backup configuration does not itself prove attainment: each production deployment must still run a timestamped disaster-recovery drill with real backup artifacts.
+恢复目标由《SE-OPS-009 V1.0》给出，`recovery/` 里有机器可读的目标、整台服务器的恢复步骤和演练记录格式。配好备份不等于达到目标：每个正式部署都要用真实的备份做一次带时间记录的灾难恢复演练。
 
-## Application Scheduler
+## 定时任务
 
-`SE-PLATFORM-006 V1.0 CURRENT CANDIDATE` is implemented as an independent `scheduler` process backed by PostgreSQL durable state. The authoritative chain is `schedule_definitions -> job_instances -> job_attempts`; Scheduler owns timing, deduplication, Misfire/Retry coordination and expired-Lease recovery, while Domain Workers own business execution.
+《SE-PLATFORM-006 V1.0》实现为一个单独的 `scheduler` 进程，状态存在 PostgreSQL 里。链条是 `schedule_definitions -> job_instances -> job_attempts`：调度器负责时间、去重、错过和重试的协调、过期租约的恢复；各业务服务负责实际执行。
 
-`metric-worker` no longer scans Metric bindings to decide when work should run. It claims `METRIC_WINDOW_CALC`, `METRIC_RECALC` and `METRIC_BACKFILL` jobs from PostgreSQL with `FOR UPDATE SKIP LOCKED`, records Attempts, renews Leases and uses the existing Metric Engine for calculation and persistence. Backfill claim execution is bounded to one concurrent job on the single-server baseline.
+`metric-worker` 不再自己扫指标绑定来决定什么时候算，而是用 `FOR UPDATE SKIP LOCKED` 从 PostgreSQL 领 `METRIC_WINDOW_CALC`、`METRIC_RECALC`、`METRIC_BACKFILL` 任务，记录每次尝试、续租约，用现有的指标引擎计算和保存。单机上补算一次只跑一个任务。
 
-Scheduler management HTTP routes remain `DESIGN_PROPOSED` in the source design. Until those URIs enter the OpenAPI contract, an operator can provision a reviewed schedule with `scheduler/schedule-definition.sql.example`; this does not make direct PostgreSQL access a public application API. PostgreSQL/ClickHouse backup scheduling remains outside the Application Scheduler and continues to use the infrastructure backup mechanism.
+调度器的 HTTP 管理接口还只是设计。进入接口定义之前，运维人员可以用 `scheduler/schedule-definition.sql.example` 建审核过的定时任务；这不代表直接改数据库是公开的接口。PostgreSQL / ClickHouse 的备份不归这个调度器，仍由基础设施的备份机制触发。
 
-## Deployment tiers and observability profiles
+## 档位和观测
 
-Phase 1 keeps one Compose file with explicit profiles instead of one all-inclusive default. The machine contract is `deployment-tiers.v1.json`.
+只有一份 Compose，用明确的 profile，不是一个什么都开的默认配置。机器可读的定义在 `deployment-tiers.v1.json`：
 
 ```text
 observability-core  = Prometheus + node-exporter + Grafana
 observability-logs  = core + OTel Collector + Loki
 observability-full  = logs + Tempo
-local-postgres      = Stage 1 local PostgreSQL placement
-local-clickhouse    = Stage 1 local ClickHouse placement
-local-redis         = Stage 1 local Redis placement
+local-postgres      = 本机 PostgreSQL
+local-clickhouse    = 本机 ClickHouse
+local-redis         = 本机 Redis
 integration         = connectivity + mqtt-broker
 intelligence        = forecast-service + optimization-service + fdd-service + mv-service + report-service
 ```
 
-Select the deployment tier in the runtime environment; do not pass an observability profile separately:
+档位在环境文件里选，不单独传观测 profile：
 
 ```bash
 PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
   node --experimental-strip-types scripts/phase1-compose.ts up -d --no-build
 ```
 
-`PHASE1_DEPLOYMENT_TIER` is authoritative. `PHASE1_OBSERVABILITY_PROFILE` must match the tier contract and controls the OTel Collector pipeline (`observability/otel-collector/{core,logs,full}.yaml`). Both launchers validate and inject the selected resource/profile contract. The tier also caps ClickHouse's internal allocator below the container memory limit.
+`PHASE1_DEPLOYMENT_TIER` 说了算。`PHASE1_OBSERVABILITY_PROFILE` 必须和档位一致，并决定 OTel Collector 的管道（`observability/otel-collector/{core,logs,full}.yaml`）。两个启动程序都会校验并注入选中的资源和 profile；档位还把 ClickHouse 的内部内存上限设得比容器内存上限低。
 
-The recommended production baselines:
-
-| Tier | Observability profile | Notes |
+| 档位 | 观测 | 说明 |
 |---|---|---|
-| `single-lite` | `observability-logs` | 8C/16G target; centralized metrics + logs, no centralized traces |
-| `single-full` | `observability-full` | 16C/32G target; adds single-instance Tempo |
+| `single-lite` | `observability-logs` | 目标 8 核 16G；集中的指标和日志，没有集中的追踪 |
+| `single-full` | `observability-full` | 目标 16 核 32G；加单实例 Tempo |
 
-`observability-core` is the minimal Tier 0/demo form. The current Compose no longer starts Tempo or the intelligence services by default; they are profile-gated.
-
-## Observability
-
-The Phase 1 Monitoring Platform is deliberately single-instance and tiered:
+`observability-core` 是最小的演示形态。Tempo 和智能服务默认不启动，要用 profile 打开。
 
 ```text
 observability-core
-  Metrics -> Prometheus -> Grafana
-  Host    -> node-exporter -> Prometheus
+  指标 -> Prometheus -> Grafana
+  主机 -> node-exporter -> Prometheus
 
 observability-logs
-  + Docker JSON logs -> OTel Collector -> Loki -> Grafana
+  + Docker JSON 日志 -> OTel Collector -> Loki -> Grafana
 
 observability-full
-  + OTLP traces -> OTel Collector -> Tempo -> Grafana
+  + OTLP 追踪 -> OTel Collector -> Tempo -> Grafana
 ```
 
-All application metrics are scraped directly from each Go diagnostics endpoint by Prometheus. The OTel Collector is required only for centralized logs/traces, so removing it in `observability-core` does not remove alerting or dashboards. No multi-node observability cluster is introduced in Phase 1.
+所有应用指标由 Prometheus 直接从各 Go 服务的诊断端口抓取。OTel Collector 只在集中日志和追踪时需要，所以 `observability-core` 去掉它也不影响告警和看板。第一阶段没有多节点的观测集群。告警怎么处理见 `docs/operations/alerts.md`。
 
-## Single-server storage and resource boundary
+## 单机的存储和资源
 
-The canonical Compose keeps PostgreSQL, ClickHouse, Redis and MQTT data on configurable host paths (`POSTGRES_DATA_DIR`, `CLICKHOUSE_DATA_DIR`, `REDIS_DATA_DIR`, `MQTT_DATA_DIR`) instead of opaque Docker named volumes. Production should bind these paths to the planned server data disk, and should place PostgreSQL WAL/base backups plus ClickHouse backups on storage independent from the primary data directories.
+PostgreSQL、ClickHouse、Redis 和 MQTT 的数据放在可配置的主机目录（`POSTGRES_DATA_DIR`、`CLICKHOUSE_DATA_DIR`、`REDIS_DATA_DIR`、`MQTT_DATA_DIR`），不用看不见的 Docker 卷。正式环境把这些目录放在规划好的数据盘上，PostgreSQL 的 WAL / 基础备份和 ClickHouse 备份放在和主数据目录分开的存储上。
 
-All long-running canonical containers have bounded CPU/memory settings and Docker JSON log rotation. `node-exporter` supplies host CPU/memory/disk/load/network metrics to Prometheus; disk usage alerts fire at the deployment baseline thresholds of 80% warning and 90% critical.
+所有长期运行的容器都有 CPU / 内存上限和 Docker JSON 日志轮转。`node-exporter` 给 Prometheus 提供主机的 CPU、内存、磁盘、负载和网络指标；磁盘用到 80% 预警、90% 严重告警。
 
-Kafka/Redpanda is not present in the canonical Phase 1 Compose. Any historical Kafka compatibility assets elsewhere in the repository are non-canonical future/certification references.
+第一阶段的 Compose 里没有 Kafka / Redpanda。
 
-## Availability and recovery evidence
+## 可用性和恢复的证据
 
-Phase 1 is `SINGLE_NODE_RECOVERABLE`, not HA. `availability-tier.v1.json` is the machine contract that:
+第一阶段是「单机、可恢复」（`SINGLE_NODE_RECOVERABLE`），不是高可用。`availability-tier.v1.json`：
 
-- enumerates PostgreSQL/ClickHouse/Redis/MQTT/Centrifugo/observability single points of failure;
-- records each component upgrade path and trigger condition; and
-- defines the Stage 0 -> Stage 3 monolith-to-multi-instance path that follows the ThingsBoard `service.type` topology-switch pattern while keeping PostgreSQL Outbox/Job leases as the durable backbone.
+- 列出 PostgreSQL、ClickHouse、Redis、MQTT、Centrifugo 和观测的单点故障；
+- 记下每个组件的升级路径和触发条件；
+- 定义从单机到多实例的路径，参照 ThingsBoard 按 `service.type` 切换拓扑的做法，同时保留 PostgreSQL 的待发事件和任务租约作为可靠的主干。
 
-The frozen RPO/RTO values remain recovery objectives. `recovery/attainment.v1.json` defaults to `TARGET_DEFINED` with `productionClaimAllowed=false`. A production deployment may claim the `SE-OPS-009` targets only after a real timestamped restore drill verifies the external backup, recovery hardware/path, actual PostgreSQL recovery point, component restoration times, Control reconciliation, Scheduler/Outbox recovery and final business validation. A local container-only test is insufficient, and numeric availability SLOs must cite the availability tier and measured evidence.
+RPO/RTO 只是恢复目标。`recovery/attainment.v1.json` 默认是「目标已定义」（`TARGET_DEFINED`），`productionClaimAllowed=false`。只有真实的、带时间记录的恢复演练验证了外部备份、恢复硬件和路径、PostgreSQL 实际恢复到的时间点、各组件的恢复时间、控制指令的核对、定时任务和待发事件的恢复以及最后的业务验证，正式部署才能声明达到《SE-OPS-009》的目标。只在本地容器里试一下不够；任何可用性百分比都要引用可用性等级和实测数据。
 
-After verifying a real whole-server drill record, generate and validate the time-bounded attainment claim explicitly:
+核实一份真实的整机演练记录后，明确地生成并校验有时限的达标声明：
 
 ```bash
 npm run deployment:phase1:recovery:verify -- --file=/evidence/drill-record.json --attainment-output=/evidence/attainment.json
 npm run deployment:phase1:recovery:claim:check -- --file=/evidence/attainment.json --drill-record=/evidence/drill-record.json
 ```
 
-The staging process-failure drill is separate from disaster recovery. It kills and restarts each critical container, checks its recovery bound and reruns the critical smoke set, but always records `productionClaimAllowed=false`.
+预发环境的进程故障演练和灾难恢复是两回事：它逐个杀掉并重启关键容器，检查恢复时间，再跑一遍关键的冒烟测试，但永远记 `productionClaimAllowed=false`。
 
-Stage 1 owner separation follows ThingsBoard's explicit topology-role selection pattern without adopting its in-memory queue or Kafka/actor runtime. It runs the existing same-version owner binaries and leaves only Notification embedded in `energy-api`. It requires the `single-full` tier:
+### 把业务模块拆成单独进程
+
+参照 ThingsBoard 明确选择拓扑角色的做法（不采用它的内存队列或 Kafka / actor 运行方式），可以用同版本的各模块入口把它们拆成单独进程，只留通知嵌在 `energy-api` 里。需要 `single-full` 档位：
 
 ```bash
 PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
@@ -268,6 +266,4 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/staging.runtime.env \
   --confirm-staging-owner-split --output=/evidence/owner-split.json
 ```
 
-Configuration success is not certification: Stage 1 stays `implemented-runtime-drill-required` until the staging live-contract drill passes. The operator must copy `owner-split-release.v1.json.example` and `owner-split-live-journeys.v1.json.example` into the Git-ignored runtime directory, replace every placeholder, bind the complete `energy-api` + Owner digest set to one product/source revision, set the approved manifest SHA-256, and provide authenticated live API journeys covering every extracted Owner. The evidence records no authorization headers or response bodies.
-
-Optimization is optional in `SE-ARCH-DEPLOY-001 V1.0 CURRENT` and remains deferred until a deployment actually requires it.
+配置通过不等于认证：在预发环境的真实接口演练通过之前，它一直是「已实现、需要演练」。运维人员要把 `owner-split-release.v1.json.example` 和 `owner-split-live-journeys.v1.json.example` 复制到 Git 忽略的运行时目录，替换所有占位符，把 `energy-api` 和各模块入口的镜像摘要绑定到同一个产品版本，设置批准的清单 SHA-256，并提供覆盖每个拆出模块的、带认证的真实接口操作。演练记录里不保存授权头和响应内容。
