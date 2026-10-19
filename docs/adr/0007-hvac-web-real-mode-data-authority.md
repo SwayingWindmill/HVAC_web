@@ -1,30 +1,19 @@
-# ADR 0007 — HVAC Web Real Mode data authority
+# ADR 0007：网页只显示真实来源的数据
 
-## Status
+状态：已采纳。当初网页分「真实模式」和「演示模式」两套；现在网页只有一个入口、一种构建，没有演示模式（见 `apps/hvac-web/README.md`），这条决定按现状写成下面的规则。
 
-Accepted.
+## 背景
 
-## Context
+网页曾经把平台的真实数据、由读数算出来的值和固定的演示数据混在一起。用户以为看到的是真实状态，其实某个接口缺了时被悄悄换成了演示数据，编出来的运行状态就显得像真的。登记、遥测和指令这些数据，平台已经由各自的负责方通过网关提供，客户端出错就明确失败，不退回旧系统、ThingsBoard 直连或假数据。
 
-HVAC Web contains a mixture of authoritative S1–S3 platform data, telemetry-derived values and deterministic demonstration fixtures. Several pages currently combine those sources without a sufficiently strong product boundary. Once a user selects Real Mode, silently substituting a fixture value for an unavailable backend capability can make fabricated operational state appear authoritative.
+## 决定
 
-The platform already treats Registry, Telemetry and Command resources as owner-authored facts exposed through Platform Gateway contracts. Their clients fail closed rather than falling back to Legacy, ThingsBoard-direct or Mock data.
+- 网页只显示平台接口给的真实数据，或者由真实输入按明确的规则算出来的值。
+- 接口缺了、不可用、无权或者覆盖不全时，绝不退回假数据、旧系统或编造的值；对应的页面或区块明确显示「不可用」「未接入」「无权限」或「部分可用」。
+- 示例数据只允许出现在 `HVAC_WEB_FRONTEND_REVIEW=true` 的评审构建里，并且看得出是示例；不能混进真实的合计、关键数字、状态、时间线或操作里，在示例里做的操作也不能显示成已保存的平台状态。
 
-## Decision
+## 后果
 
-HVAC Web has two explicitly separate operating modes:
-
-- **Real Mode** displays only authoritative platform API data or values derived through an explicitly defined read model from authoritative inputs.
-- **Demo Mode** may display deterministic fixture data, but it is visibly identified as non-authoritative.
-
-Real Mode must never fall back to Mock, Legacy or fabricated values when an API is missing, unavailable, unauthorized or returns incomplete coverage. The affected page or section must instead expose an explicit unavailable, not-yet-integrated, unauthorized or degraded state.
-
-A page must not mix Demo values into otherwise real operational totals, KPIs, statuses, timelines or actions. Actions performed in Demo Mode must not be represented as persisted platform state.
-
-## Consequences
-
-- Existing mixed pages require a section-by-section source audit before migration.
-- Pages whose backend domain does not yet exist cannot be made “real” by replacing local state with ad hoc Gateway storage.
-- Derived values must declare their source inputs, time range, Site timezone, freshness and partial-coverage behavior.
-- Demo Mode remains useful for product demonstrations but must be a separate, visibly non-authoritative experience.
-- Real Mode integration tests must fail if fixture modules or Mock stores contribute to rendered business facts.
+- 后端领域还不存在的页面，不能靠在网关里临时存点数据就变成「真实」的；先显示「未接入」。
+- 算出来的值要说明用了哪些输入、时间范围、站点时区、新鲜度，以及数据不全时怎么处理。
+- 测试要在示例数据或假数据混进了显示的业务数据时失败。

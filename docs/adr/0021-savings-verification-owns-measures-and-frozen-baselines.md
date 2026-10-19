@@ -1,41 +1,45 @@
-# ADR 0021 — Savings verification owns measures and frozen baselines
+# ADR 0021：节能验证单独负责节能措施和冻结的基线
 
-Status: accepted
+状态：已采纳（2026-10-12）
 
-Date: 2026-10-12
+## 决定
 
-## Decision
+节能验证（M&V，#484，规格 `docs/specs/savings-verification.md`）单独由 `mv-service` 负责，和预测、优化、故障诊断一样是一个独立的后台服务。
 
-Savings verification (M&V, #484, spec `docs/specs/savings-verification.md`) is its own owner: `mv-service`, a workload beside Forecast, Optimization and FDD.
+**它负责保存：**
 
-**What it owns.**
-- The Site's ledger of energy conservation measures (节能措施).
-- Each measure's baseline model. It is fitted on confirmation of implementation and frozen once the first day's savings are published.
-- Each day's verified result for each measure: hours, adjusted baseline, actual energy, avoided energy and avoided cost.
-- All of this lives in `core_registry` tables written only by the `mv_runtime` role, under the same Tenant/Site row-level security as the other intelligence owners.
+- 站点的节能措施清单；
+- 每项措施的基线模型：确认实施时拟合，第一天的节电量发布后就冻结；
+- 每项措施每天的验证结果：小时数、调整后基线、实际用电、节电量、节省电费。
 
-**What it reads.**
-- Hourly plant electricity and cooling come from released Metric results (`hourly_energy`, `hourly_cooling`). They are DELTA Metrics on the HVAC meter's energy counter and the BTU meter's cooling counter. mv-service reads them from ClickHouse with its own read-only account (`mv_service_reader`), the way Optimization reads `daily_energy`.
-- A measure bounded by one machine's sub-meter (IPMVP Option B, added 2026-10-13) reads that device's `device_hourly_energy`, a DELTA Metric on the sub-meter's counter, against the plant's `hourly_cooling`. Each verified day also records the plant's `hourly_energy` over the same hours, so a Site's savings are read against the whole plant.
-- The runtime role reads the Site's timezone, which verified days are split on.
-- It also reads the import Tariff in effect, to price each avoided hour. Hours are priced on the Tariff Version's own timezone, the way Settlement prices them. When no Tariff is assigned, energy is still verified and the hours stay unpriced.
-- A measure may cite the executed command it came from. This is a reference into Command Governance's records, not a key. mv-service does not check the command, and the page resolves it from the Site's command list. An executed optimization recommendation is cited through the command it produced.
+这些都在 `core_registry` 的表里，只有 `mv_runtime` 角色能写，和其他智能服务一样按租户和站点做行级隔离。
 
-**How it runs.**
-- A daily `MV_EVALUATION` Scheduler job verifies the Site's implemented measures, claimed through `libs/schedulerjob` like FDD.
-- Platform Gateway exposes measures under `/api/v1/sites/{siteId}/savings/…`. Reads need `site.read`. Writes (register, implement, refit, end) need the new IAM capability `savings.manage`.
+**它读的数据：**
 
-We chose a separate owner because "verified savings" is an audit claim (PRODUCT.md §4.7: 已验证收益). The record that states a saving should not be the same owner that proposed the change (Optimization). A frozen baseline must not move when later data changes, so the frontend cannot compute savings on the fly.
+- 冷站每小时的用电和供冷来自已发布的指标结果（`hourly_energy`、`hourly_cooling`），分别是冷站电表累计电量和冷量表累计冷量的差值指标。`mv-service` 用自己的只读账号 `mv_service_reader` 从 ClickHouse 读，和优化服务读 `daily_energy` 一样。
+- 以一台机组的分表为边界的措施（2026-10-13 加入；国际节能效果测量规程 IPMVP 的「方案 B」，即只量被改造设备本身）读这台设备的 `device_hourly_energy`（它分表累计电量的差值指标），对照冷站的 `hourly_cooling`。每个验证日还记下同一批小时里冷站的 `hourly_energy`，所以站点的节电率是对照整个冷站算的。
+- 站点的时区，验证日按它切分。
+- 每个小时的估算电价：用自己的程序身份（ADR 0017）读查询服务的能耗序列，取这个小时的电费 ÷ 计价电量（#575），所以节省电费和平台上其他电费用的是同一个算法。没有电价的小时照样验证电量，只是不算电费。
+- 一项措施可以注明它来自哪条已执行的指令。这只是对指令记录的引用，不是外键；`mv-service` 不检查这条指令，页面从站点的指令列表里查出它。已执行的优化建议通过它产生的那条指令来引用。
 
-## Considered Options
+**怎么运行：**
 
-- **Inside optimization-service.** Rejected. Proposing a change and verifying its outcome would share one owner, which blurs the audit boundary.
-- **Compute in the browser from the energy series.** Rejected. Nothing would be frozen, a published saving could change after the fact, and nothing could be reviewed later.
-- **Read raw `analytics.energy_interval_facts`.** Rejected. It would duplicate the revision and quality semantics the Metric engine already applies. Settlement also consumes released Metric results, so M&V and billing stay on one basis.
+- 每天一个 `MV_EVALUATION` 定时任务，验证站点所有已实施的措施，和故障诊断一样通过 `libs/schedulerjob` 领取任务。
+- 平台网关在 `/api/v1/sites/{siteId}/savings/…` 下提供措施的接口。读需要 `site.read`；写（登记、实施、重新拟合、结束）需要 IAM 的 `savings.manage` 权限。
 
-## Consequences
+## 原因
 
-- Two hourly Metrics per Site must be released and scheduled before a measure can be verified. The local seed provides them.
-- `mv_service_reader` can read every Tenant's Metric results. The query scopes it to the Site, so the account sees only metric result tables and cannot write.
-- Measures overlap only on different machines' sub-meters: two on one device, or any beside one on the plant's total meter, would count the same energy. The service and a table trigger enforce it.
-- Each sub-metered device needs its own released `device_hourly_energy` binding before it can bound a measure.
+「已验证的节能收益」是要经得起核对的说法（PRODUCT.md §4.7）。说明节能量的记录不应该和提出这项改动的服务（优化）是同一个负责方。冻结的基线不能因为后来的数据变了而跟着变，所以前端不能现场算节电量。
+
+## 考虑过的做法
+
+- **放在优化服务里**：没有采用。提出改动和验证效果归同一个负责方，核对的边界就模糊了。
+- **在浏览器里根据能耗序列算**：没有采用。什么都没冻结，已经发布的节电量事后会变，之后也没法核对。
+- **直接读原始的 `analytics.energy_interval_facts`**：没有采用。它会把指标引擎已经处理好的版本和质量规则再写一遍；结算服务也读已发布的指标结果，节能验证和结算按同一套数算。
+
+## 结果
+
+- 一个站点要先发布并排好两个小时指标的计算，才能验证措施。本地种子数据里有。
+- `mv_service_reader` 能读所有租户的指标结果，查询里限定站点；这个账号只看得到指标结果表，不能写。
+- 措施只有在不同机组的分表上才能重叠：同一台设备上两项措施，或者冷站总表上的一项措施旁边再有任何措施，都会把同一份电量算两次。服务和一个表触发器都会拒绝。
+- 每台有分表的设备要先有自己已发布的 `device_hourly_energy` 绑定，才能作为措施的边界。

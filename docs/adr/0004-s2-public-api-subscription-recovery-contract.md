@@ -1,456 +1,160 @@
-# ADR 0004 — S2 public Snapshot, subscription and recovery contract
+# ADR 0004：设备快照、实时订阅和断线恢复的公开接口
 
-Status: accepted
+状态：已采纳（2026-07-23，问题单 #51），已实现。接口定义在 `contracts/http/s2-telemetry-public.openapi.json`，推送格式在 `contracts/events/s2-device-observation-publication.v1.schema.json`；`telemetry:public-contract:check` 检查它们。
 
-Date: 2026-07-23
+## 背景
 
-Issue: #51
+网页要拿到设备的在线状态和最新读数，但不能回到旧系统那种做法：REST 取最新值、进程内的 Socket.IO 订阅、再去 ThingsBoard 读穿补数，三者各说各的。ADR 0002 定了含义（几个互不相干的维度 + 推出来的显示状态），ADR 0003 定了归属（遥测负责快照、状态版本号、恢复游标、订阅授权和推送）。这里定接口。
 
-## Context
+## 决定
 
-S2 must expose platform-owned Device Presence and latest telemetry to HVAC Web and other authorized callers without reintroducing the Legacy split between REST latest values, a process-local Socket.IO subscription manager and ThingsBoard read-through.
+### 1. 一个完整的快照，不分「在线」和「最新值」两个接口
 
-ADR 0002 fixes the semantic dimensions: Presence, Freshness, Quality and Evaluation Availability are orthogonal, and the five-state Device Display State is derived. ADR 0003 fixes ownership: `telemetry-runtime-service` owns the coherent Device Observation Snapshot, per-Device Business Revision, Recovery Cursor, subscription authorization and publication intent; Gateway remains the public Session seam; Centrifugo owns only transport position and bounded recovery.
+对外只有一种读法：设备当前快照（`DeviceObservationSnapshot`）。一个快照在同一个状态版本号上，包含：设备、租户、站点的平台编号；判断时间；能否判断和原因；是否判断在线；当前的和上一次的在线状态；最后上报时间和在线策略版本；选中点位的状态（每个点位的采样时间、收到时间、新鲜度、质量、原因代码和策略版本）；读数就绪；推出来的显示状态。
 
-The public contract must now decide:
-
-- which REST operations exist;
-- how Presence and latest values remain coherent;
-- how bounded batches represent partial results;
-- what a browser may submit;
-- how realtime publications advance Business Revision;
-- how clients recover without mistaking transport continuity for business continuity;
-- how generated clients and Legacy retirement remain compatible.
-
-The machine-readable planned contracts are:
-
-- `contracts/http/s2-telemetry-public.openapi.json`;
-- `contracts/events/s2-device-observation-publication.v1.schema.json`.
-
-They are planning locks and do not activate unimplemented production routes.
-
-## Decision
-
-### 1. Publish one coherent Snapshot model, not separate Presence and latest resources
-
-The public read model is `DeviceObservationSnapshot`.
-
-A Snapshot combines, at one Device Business Revision:
-
-- Device, Organization and Site platform IDs;
-- `evaluatedAt`;
-- Evaluation Availability and reason codes;
-- Presence Applicability;
-- current and Last Known Presence context;
-- `lastSeenAt` and Presence policy revision;
-- selected key states;
-- per-key `sampledAt`, `receivedAt`, Freshness, Quality, reason codes and policy revision;
-- Telemetry Readiness;
-- derived Device Display State.
-
-Separate public Presence and latest endpoints are rejected because two calls can observe different Business Revisions and force the browser to invent merge rules. A Presence-only read is the same Snapshot operation with no selected telemetry keys. A latest read is the same operation with an exact key selection.
-
-The single-Device operation is:
+不分两个接口，是因为分开调用可能读到两个不同的版本号，逼着浏览器自己发明合并规则。只看在线，就是不选点位的同一个接口；看最新值，就是选上确切的点位。
 
 ```text
 GET /api/v1/devices/{deviceId}/observation-snapshot?keys=k1,k2
 ```
 
-The key query is optional, unique and bounded to 64 keys. Omission or an empty selection returns a Presence-only Snapshot with `values=[]` and Telemetry Readiness `NOT_APPLICABLE`.
+`keys` 可选、不能重复，最多 64 个。不带或为空，返回只有在线状态的快照（`values=[]`，读数就绪为 `NOT_APPLICABLE`）。返回的值按请求的点位顺序排列；不提供「全部点位」这种没有边界的读法。
 
-The response value array preserves the caller's normalized requested-key order. The service does not return an unbounded “all keys” response.
+### 2. 数据不理想不是请求失败
 
-### 2. Snapshot state versus request failure
+下面这些都返回 HTTP 200，因为负责方已经用说了算的状态回答了问题：
 
-A valid Snapshot can explicitly describe non-ideal data. These conditions return HTTP `200`:
-
-| Condition | Contract representation |
+| 情况 | 怎么表示 |
 |---|---|
-| Device is applicable but has no accepted Presence Signal | Presence `UNKNOWN`. |
-| Requested configured key has never produced an accepted observation | `TelemetryMissingState` with `freshness=MISSING`. |
-| Only rejected candidates exist | `TelemetryMissingState` with `missingReason=ONLY_REJECTED_CANDIDATES`. |
-| Latest accepted value exceeded its freshness window | `TelemetryPresentState` with `freshness=STALE`. |
-| Latest accepted value is usable with warning | `quality=SUSPECT` plus reason codes. |
-| Upstream observation coverage is currently unavailable while owner state remains readable | `evaluationAvailability=UNAVAILABLE`; current Presence is not asserted and retained values are Last Known context. |
-| Presence is not applicable | Presence Applicability `NOT_APPLICABLE`, current Presence and Display State are null. |
+| 要判断在线、但没有在线信号 | 在线状态 `UNKNOWN` |
+| 配置了的点位从没收到过值 | 点位状态「没有」（`freshness=MISSING`） |
+| 只有无效的候选 | 点位状态「没有」，原因 `ONLY_REJECTED_CANDIDATES` |
+| 最新值超过了新鲜时限 | 点位有值，`freshness=STALE` |
+| 最新值能用但要提示 | 质量不是 `GOOD`，带原因代码 |
+| 上游观察中断、但负责方的数据还能读 | `evaluationAvailability=UNAVAILABLE`，不给当前在线状态，保留的值作为上次的值 |
+| 不判断在线 | `NOT_APPLICABLE`，当前在线状态和显示状态为空 |
 
-These are not HTTP failures because the owner successfully answered the question with authoritative state.
+HTTP 错误只用于请求本身做不了：点位格式不对或没配置；恢复游标无效或被篡改；设备不存在或无权查看；超出批量或订阅的上限；IAM、网关或遥测不可用；超时；订阅准备失败。
 
-HTTP problems are reserved for failure to perform the authorized request:
+一台看得到的设备没有当前值，绝不返回 `204`、`{}`、`null`、填 0 或悄悄省略。
 
-- malformed key syntax or unknown/unconfigured requested key;
-- invalid/tampered Recovery Cursor;
-- missing or unauthorized Device;
-- batch or subscription limit violation;
-- IAM/Gateway/Telemetry Runtime unavailability;
-- owner timeout;
-- subscription transport bootstrap failure.
+### 3. 点位选择是精确的
 
-A visible Device with no current values is never `204`, `{}`, `null`, zero-filled or silently omitted.
+选中的点位既是授权的一部分，也决定返回的含义：点位名区分大小写；重复的点位直接拒绝，不悄悄合并；格式不对或没配置返回 `TELEMETRY_KEY_INVALID`；配置了但没有值是正常的「没有」；可选点位要明确选上，只有在用途的必需读数里才影响就绪；负责方从不多给没选的点位；不选任何点位的订阅只看在线状态，但仍会收到这台设备每一个状态版本号。
 
-### 3. Exact key semantics
-
-A Telemetry Key Selection is part of authorization and response meaning.
-
-Rules:
-
-1. Keys are canonical case-sensitive names.
-2. Duplicate keys are rejected by request validation rather than silently collapsed.
-3. A syntactically invalid or unknown/unconfigured key produces `TELEMETRY_KEY_INVALID`.
-4. A valid configured key with no accepted value is a successful `MISSING` key state.
-5. Optional keys are selected explicitly but do not degrade a consumer's readiness unless the consumer's Required Telemetry Set names them.
-6. The owner never adds unrequested keys to a response or publication.
-7. A subscription to an empty key set is Presence-only and still receives every Device Business Revision.
-
-### 4. Bounded batch read has item results, not pagination
-
-The batch operation is:
+### 4. 批量读取逐项返回，不分页
 
 ```text
 POST /api/v1/telemetry/observation-snapshots:batchGet
 ```
 
-It accepts 1–100 request items. Each item has a caller-generated `requestId`, one Device ID and 0–64 exact keys. The total key selections are bounded to 2048.
+每次 1–100 项，每项有调用方自己生成的 `requestId`、一个设备编号和 0–64 个点位，点位总数不超过 2048。不分页：调用方先从登记的列表翻页拿到设备，再提交一个有边界的集合。
 
-There is no cursor or pagination because the caller already obtains a paginated Device list through the Registry contract and then submits an explicit bounded set.
+请求格式正确、全局的授权依赖可用时返回 200，按输入顺序每项一个结果：`status=OK` 加快照，或 `status=ERROR` 加普通的 Problem Details。某项设备不存在或无权查看，用 `RESOURCE_NOT_FOUND`，不会比调用方自己提交的编号透露更多。JSON 格式不对、`requestId` 缺失或重复、超出上限、会话或 CSRF 检查失败、IAM 授权没法安全判断、负责方整体不可用或超时，则整个请求失败。不用 HTTP 207：它多一种成功的外层格式，生成的客户端支持得不好。
 
-The response is HTTP `200` when the envelope is syntactically valid and global authorization dependencies are available. It contains exactly one item per input item, in input order:
-
-- `status=OK` plus a Snapshot; or
-- `status=ERROR` plus a normal public `ProblemDetails`.
-
-Per-item missing/unauthorized Devices use `RESOURCE_NOT_FOUND`. This reveals no more than the caller's own requested IDs.
-
-The whole request fails instead of returning item results when:
-
-- the JSON body is malformed;
-- request IDs are missing or duplicated;
-- item/key limits are exceeded;
-- the Session or CSRF check fails;
-- IAM authorization cannot be evaluated safely;
-- the owner service is globally unavailable or times out before a bounded result set can be produced.
-
-HTTP `207` is rejected because it adds a second success envelope with weaker generated-client support. A typed union under a normal `200` is simpler and preserves ordinary Problem Details for global failures.
-
-### 5. Subscription bootstrap is all-or-nothing
-
-The bootstrap operation is:
+### 5. 订阅准备要么全成，要么全不成
 
 ```text
 POST /api/v1/telemetry/subscriptions:bootstrap
 ```
 
-It accepts 1–100 exact Device/key targets and at most 2048 total key selections.
+每次 1–100 个设备 / 点位目标，点位总数不超过 2048。浏览器只能提交：自己的 `clientSubscriptionId`、登记的设备编号（UUIDv7）、确切的点位、可选的一个为同一订阅范围签发的恢复游标。不能提交：租户或站点、人员 / 角色 / 范围 / 策略版本、频道名、连接或订阅令牌、ThingsBoard 或旧系统的编号、任意的推送位置。
 
-The browser may submit only:
+网关从登录会话得出是谁和当前租户，向 IAM 换一张确切的授权，只转发验证过的信息；遥测按设备当前的租户 / 站点对照，授权确切的点位。只要有一个目标看不到、无效或不再有权限，就不发任何连接令牌或订阅描述，免得一个只部分授权的集合被当成完整的。
 
-- a caller-local `clientSubscriptionId`;
-- a Registry Device UUIDv7;
-- exact selected keys;
-- an optional opaque Recovery Cursor issued for that same subscription scope.
+成功返回：短时有效的 `wss` 地址和连接令牌、确切的订阅描述、平台选的不透明频道名、模式（`SNAPSHOT_THEN_LIVE` 先取快照再接推送，或 `ATTEMPT_RECOVERY` 尝试补发）、游标有效时才给的推送位置、当前的上限。这些只是传输用的凭据，不是授权；Centrifugo 仍会调遥测重新检查。响应头 `Cache-Control: private, no-store`。
 
-The browser may not submit:
+### 6. 恢复游标由适配器去换
 
-- Organization or Site scope;
-- Principal, roles, scopes or IAM policy revision;
-- channel names;
-- connection or subscription tokens;
-- ThingsBoard/Legacy IDs;
-- arbitrary epoch/offset values in the bootstrap request.
-
-Gateway derives the Principal and acting Organization from the BFF Session, obtains an exact IAM delegation, and forwards only verified context. Telemetry Runtime resolves the Device's current Organization/Site binding and authorizes the exact keys.
-
-Bootstrap is all-or-nothing. If any target is invisible, invalid or no longer authorized, no connection token or subscription descriptor is minted. This prevents partially authorized live sets from being mistaken for a complete requested scope.
-
-A successful response contains:
-
-- a short-lived `wss` endpoint and connection token;
-- exact subscription descriptors;
-- opaque channel names selected by the platform;
-- `SNAPSHOT_THEN_LIVE` or `ATTEMPT_RECOVERY` mode;
-- a decoded transport position only when a supplied owner-issued cursor is valid;
-- current limits.
-
-The returned token, channel and descriptor are transport capabilities, not authorization facts. Centrifugo still calls the Telemetry Runtime subscribe proxy, which re-evaluates current authorization and exact scope.
-
-Bootstrap responses use `Cache-Control: private, no-store`.
-
-### 6. Recovery Cursor checkpoint is an adapter operation
-
-The owner-issued Recovery Cursor must bind the last applied Business Revision to the matching Centrifugo Transport Position. The feature UI must not construct or interpret that token.
-
-The generated realtime adapter uses:
+恢复游标要把「已应用的状态版本号」和「对应的推送位置」绑在一起，页面代码不自己拼也不解读它。网页的实时适配器在：建好确切授权的订阅 → 装好一份快照 → 应用完缓存的连续推送 → 从推送 SDK 拿到当前的推送位置之后，调
 
 ```text
 POST /api/v1/telemetry/recovery-cursors:checkpoint
 ```
 
-After it has:
+只提交不透明的 `subscriptionId`、已应用的状态版本号和当前的推送位置。遥测确认这个会话拥有这个订阅、范围没变、版本号和位置的组合可以接受，然后签一个绑定范围的恢复游标。可以定期或在令牌续期前换一次，不必每条推送都换；游标落后是安全的，补发会带来重复，重复会被忽略。游标有效期不超过补发历史的保留时间。游标不能扩大范围；无效、被篡改、过期或不匹配返回 `RECOVERY_CURSOR_INVALID` 或「需要重新取快照」，从不跳过重新取快照。
 
-1. established the exact authorized subscription;
-2. installed an authoritative Snapshot;
-3. applied all contiguous buffered publications;
-4. obtained the current transport epoch/offset from the transport SDK;
+### 7. 推送是按订阅、连续的变化
 
-it submits only:
+推送类型 `DEVICE_OBSERVATION_DELTA`，格式版本 1。包含：固定的事件编号、不透明的订阅编号、设备编号、`previousRevision` 和 `revision`、判断和推送时间、当前的能否判断、这个版本的完整在线状态、所选点位的读数就绪和显示状态、这个版本里变了的所选点位。
 
-- opaque `subscriptionId`;
-- applied Business Revision;
-- current Transport Position.
+一条推送正好代表一次变化：`revision = previousRevision + 1`。这台设备的每个订阅都会收到它的每一个版本号，即使变的是没选的点位（这时 `telemetryChanges=[]`）：这样不会泄露没选的点位，又能发现推送丢了。不推送完整快照（高频点位会让推送变大、重复没变的值），也不只推送选中点位的变化（订阅方分不清是跳过了无关的版本还是丢了推送）。推送位置和恢复游标不放在业务推送里。推送至少一次，重试用同一个事件编号和版本号。
 
-Telemetry Runtime verifies that the Session owns the active subscription, that the Device/key scope still matches, and that the revision/position pair is acceptable. It then signs a scope-bound Recovery Cursor.
+### 8. 页面怎么用（第一次订阅）
 
-The adapter may checkpoint periodically and before planned token renewal rather than after every publication. A cursor that lags behind the latest applied state is safe: recovery may replay duplicates, which are ignored. Cursor lifetime must not exceed the recoverable history policy selected by the rollout ticket.
+1. 不带游标调订阅准备。
+2. 按返回的描述连接并订阅。
+3. 立刻缓存收到的推送，但不应用到还没初始化的状态上。
+4. 取同样设备 / 点位的单个或批量快照。
+5. `appliedRevision` 设为快照的版本号。
+6. 按传输送达的顺序处理缓存的推送：`revision <= appliedRevision` 忽略；`previousRevision == appliedRevision` 应用并更新 `appliedRevision`；否则不再当作当前状态，重新取快照。
+7. 缓存处理完，才把状态当作实时、当前的显示。
+8. 异步换一次恢复游标。
 
-A caller cannot use a cursor to expand scope. Invalid, tampered, expired or mismatched cursors produce `RECOVERY_CURSOR_INVALID` or a normalized recovery-required outcome and never bypass Snapshot reload.
+不能显示一个由新推送和旧快照拼出来的中间状态。
 
-### 7. Publication is a contiguous subscription-scoped delta
+### 9. 断线和恢复
 
-The realtime data publication is `DEVICE_OBSERVATION_DELTA` schema version 1.
+短暂断线、同一个传输会话里，Centrifugo SDK 可以按 epoch / offset 正常补发。令牌续期、页面恢复或重新订阅准备时，适配器提交最近的恢复游标。`ATTEMPT_RECOVERY` 时：按解出的推送位置连接并订阅 → 缓存补发和实时的推送 → 传输报告补发成功，就从游标的版本号开始按连续版本号的规则应用 → 只要有缺口、传输报告补发失败、epoch 变了、历史过期或游标被拒，就放弃增量，回到第一次订阅的流程 → 回到连续的当前状态后再换一次游标。传输补发成功是必要条件但不够；版本号有缺口，一律重新取快照。
 
-It contains:
+### 10. 推送异常怎么处理
 
-- stable event ID;
-- opaque subscription ID;
-- Registry Device ID;
-- `previousRevision` and `revision`;
-- evaluation and publication timestamps;
-- current Evaluation Availability;
-- full Presence state for this revision;
-- current Telemetry Readiness and Display State for the selected key set;
-- only selected key states changed by this revision.
-
-A publication represents exactly one transition:
-
-```text
-revision = previousRevision + 1
-```
-
-Every active subscription for that Device receives every Device Business Revision, even when only an unselected key changed. In that case `telemetryChanges=[]`. This small revision-only publication prevents an apparent gap at the next selected-key change without leaking an unrequested key.
-
-Full-Snapshot publications are rejected because they multiply payload size for high-frequency keys and repeat unchanged values. Key-only publications without every Device revision are rejected because a subscriber cannot distinguish an omitted irrelevant revision from a lost publication.
-
-Transport Position and Recovery Cursor are deliberately absent from the business publication. The Centrifugo SDK owns epoch/offset; the checkpoint operation mints the owner-issued cursor.
-
-Publication delivery is at-least-once. Relay retry reuses the same event ID and Business Revision.
-
-### 8. Initial subscribe and Snapshot algorithm
-
-The generated realtime adapter implements this sequence for each exact subscription:
-
-1. Call bootstrap without a cursor for a new subscription.
-2. Connect and subscribe using the returned descriptor.
-3. Buffer data publications immediately; do not apply them to an uninitialized business state.
-4. Load the authoritative single or batch Snapshot for the same Device/key selections.
-5. Set `appliedRevision` to the Snapshot Business Revision.
-6. Process buffered publications in transport delivery order:
-   - if `revision <= appliedRevision`, ignore the duplicate/old publication;
-   - if `previousRevision == appliedRevision`, apply the delta and set `appliedRevision=revision`;
-   - otherwise stop treating the local state as current and reload a Snapshot.
-7. After the buffer is reconciled, expose the state as live/current.
-8. Checkpoint the applied revision and current transport position asynchronously.
-
-The adapter must not expose a transient state assembled from a new publication and an older Snapshot.
-
-### 9. Reconnect and recovery algorithm
-
-On a short connection interruption within the same transport session, the Centrifugo SDK may perform normal epoch/offset recovery.
-
-On token renewal, page restoration or a new bootstrap, the adapter submits its most recent Recovery Cursor for the same exact Device/key selection.
-
-For `ATTEMPT_RECOVERY`:
-
-1. connect and subscribe with the decoded transport position;
-2. buffer recovered/live publications;
-3. if the transport reports successful recovery, apply the normal contiguous-revision algorithm from the cursor's Business Revision;
-4. if any publication has a gap, the transport reports unsuccessful recovery, the epoch changed, history expired, or the cursor is rejected, discard incremental assumptions and use the initial subscribe-and-Snapshot algorithm;
-5. checkpoint again after reaching a contiguous current state.
-
-Transport recovery success is necessary but not sufficient. A Business Revision gap always forces Snapshot reload.
-
-### 10. Duplicate, gap, out-of-order and invalid publication behavior
-
-The adapter rules are deterministic:
-
-| Publication condition | Client behavior |
+| 情况 | 页面怎么做 |
 |---|---|
-| `revision <= appliedRevision` | Ignore as duplicate or old. |
-| `previousRevision == appliedRevision` and `revision=previousRevision+1` | Apply. |
-| `previousRevision > appliedRevision` | Gap: mark not current and reload Snapshot. |
-| `previousRevision < appliedRevision < revision` | Invalid overlap: reload Snapshot and record protocol evidence. |
-| Device or subscription ID differs from descriptor | Reject publication, close that subscription and record security evidence. |
-| Key change is outside selected keys | Reject publication and record a contract violation. |
-| Schema version or kind unsupported | Stop applying live data and load/retain Snapshot as explicitly non-live; never interpret by guesswork. |
+| `revision <= appliedRevision` | 当作重复或旧的，忽略 |
+| `previousRevision == appliedRevision` 且 `revision = previousRevision + 1` | 应用 |
+| `previousRevision > appliedRevision` | 有缺口：标为非当前，重新取快照 |
+| `previousRevision < appliedRevision < revision` | 不合理的重叠：重新取快照，并记下协议证据 |
+| 设备或订阅编号和描述不一致 | 拒绝这条推送，关闭这个订阅，记下安全证据 |
+| 变了的点位不在所选范围内 | 拒绝这条推送，记下违反约定 |
+| 不支持的格式版本或类型 | 停止应用实时数据，保留或重新取快照并明确标为非实时，不猜含义 |
 
-The client does not sort arbitrary publications to conceal a gap. Per-channel transport ordering is an interface assumption and is tested by rollout gates.
+页面不会把乱序的推送排一排来掩盖缺口；每个频道内按顺序送达是接口的前提。
 
-### 11. Revocation and resource invisibility
+### 11. 撤销和不透露存在
 
-IAM owns revocation facts; Telemetry Runtime owns their live-subscription effect.
+撤销的事实由 IAM 负责，它对实时订阅的影响由遥测负责。权限被撤销时：遥测在服务端取消订阅；重新订阅和重用游标都被拒绝；适配器从浏览器缓存和页面状态里删掉受影响的实时数据；界面不保留无权的上次的值作为兜底；之后单个和批量读取对这台设备 / 范围返回不透露存在的 `RESOURCE_NOT_FOUND`。不存在和无权在公开接口上完全一样（状态、代码和格式都一样）。
 
-When authorization is revoked:
+### 12. 固定的错误代码
 
-- Telemetry Runtime invokes server unsubscribe;
-- resubscribe and cursor reuse are denied;
-- the adapter removes the affected live state from browser caches and feature stores;
-- the UI does not retain unauthorized Last Known telemetry as a fallback;
-- subsequent single and batch reads return nondiscoverable `RESOURCE_NOT_FOUND` for that Device/scope.
-
-Missing and unauthorized Devices are indistinguishable at the public seam. Negative tests must assert identical status, code and response shape, without comparing unstable detail text.
-
-### 12. Stable Problem Details
-
-The planned telemetry-specific stable codes are:
-
-| Code | Typical status | Retryable | Meaning |
+| 代码 | 常见状态 | 能否重试 | 含义 |
 |---|---:|---:|---|
-| `RESOURCE_NOT_FOUND` | 404 | no | Device does not exist or is not visible for the requested action. |
-| `TELEMETRY_REQUEST_INVALID` | 400 | no | Body/query shape, duplicate request ID or cross-field constraint is invalid. |
-| `TELEMETRY_KEY_INVALID` | 400 | no | Key syntax or configured-key validation failed. |
-| `RECOVERY_CURSOR_INVALID` | 400 | no | Cursor is malformed, tampered, expired or scope-mismatched. |
-| `TELEMETRY_BATCH_LIMIT_EXCEEDED` | 413 | no | Device/key batch bound exceeded. |
-| `SUBSCRIPTION_LIMIT_EXCEEDED` | 429 or 413 | conditional | Per-Principal/Session or request subscription bound exceeded. |
-| `TELEMETRY_UNAVAILABLE` | 503 | yes | Gateway/owner/storage cannot perform the request. |
-| `TELEMETRY_TIMEOUT` | 504 | yes | Bounded owner request exceeded its deadline. |
-| `SUBSCRIPTION_UNAVAILABLE` | 503 | yes | Bootstrap or transport coordination cannot be completed. |
-| `TELEMETRY_AUTHORIZATION_UNAVAILABLE` | 503 | yes | Current IAM authorization cannot be safely evaluated. |
+| `RESOURCE_NOT_FOUND` | 404 | 否 | 设备不存在，或这个动作看不到 |
+| `TELEMETRY_REQUEST_INVALID` | 400 | 否 | 请求格式、重复的 `requestId` 或字段之间的约束不对 |
+| `TELEMETRY_KEY_INVALID` | 400 | 否 | 点位格式不对或没配置 |
+| `RECOVERY_CURSOR_INVALID` | 400 | 否 | 游标格式不对、被篡改、过期或范围不匹配 |
+| `TELEMETRY_BATCH_LIMIT_EXCEEDED` | 413 | 否 | 超出批量的设备 / 点位上限 |
+| `SUBSCRIPTION_LIMIT_EXCEEDED` | 429 或 413 | 看情况 | 超出每人 / 每会话或单次请求的订阅上限 |
+| `TELEMETRY_UNAVAILABLE` | 503 | 是 | 网关、负责方或存储做不了 |
+| `TELEMETRY_TIMEOUT` | 504 | 是 | 超过了时限 |
+| `SUBSCRIPTION_UNAVAILABLE` | 503 | 是 | 订阅准备或传输协调做不了 |
+| `TELEMETRY_AUTHORIZATION_UNAVAILABLE` | 503 | 是 | 当前的权限没法安全判断 |
 
-`fieldErrors` identifies body/query fields for validly authenticated callers, but must not disclose hidden Organization, Site, Device or mapping facts.
+`fieldErrors` 给认证过的调用方指出哪个字段错了，但不透露隐藏的租户、站点、设备或对照。数据过期、没有、质量不好和上游观察不可用，只要能返回快照，就不算错误。
 
-Stale, missing, suspect and upstream observation unavailability are not Problem Details when authoritative Snapshot state can be returned.
+### 13. 认证和授权怎么传
 
-### 13. Authentication and authorization propagation
+浏览器用不透明的 HttpOnly 登录会话，JavaScript 从不带令牌；所有 POST 都要会话绑定的 CSRF 令牌。后台服务用验证过的服务身份和网关 / IAM 的授权。网关给负责方的授权至少绑定：发起的人和调用链、从会话得出的当前租户、动作、确切的设备编号和点位（或它们的哈希）、策略版本、对象和到期时间、接口和请求关联。遥测独立验证签名、设备当前的对照、确切的点位和接口 / 动作；客户端带的头或字段永远不能扩大授权。
 
-Browser callers use the opaque HttpOnly BFF Session. JavaScript never supplies a bearer token. All POST operations require the Session-bound CSRF token.
+### 14. 生成的客户端和页面边界
 
-Service callers use verified workload identity and an internal Gateway/IAM delegation; the eventual active OpenAPI may express browser and workload security alternatives, but public DTOs remain identical.
+接口代码由生成器产出：Go 网关的服务端接口、网页的 TypeScript 请求函数和类型、推送的 TypeScript 类型，以及一个 `TelemetryLiveClient` 适配器，把 Centrifugo 的令牌、频道、订阅授权事件、推送位置和游标兑换都藏起来。页面代码只用生成的请求函数和 `TelemetryLiveClient`，不直接引用 Centrifugo SDK、不解析频道、不看连接令牌，也不手写重复的快照或推送类型。页面看到的只是「快照 / 实时 / 不可用 / 已撤销」这几种状态。
 
-The Gateway-to-owner delegation binds at least:
+后来又加了设备历史的两个接口（`device-series:query` 原始读数、`device-series:aggregate` 按时间段统计），规则见 `modules/telemetry/README.md`。
 
-- initiating Principal and actor chain;
-- acting Organization derived from Session;
-- action;
-- exact Device IDs and key selections or a hash thereof;
-- IAM policy revision;
-- audience and expiration;
-- route and request correlation.
+### 15. 版本和兼容
 
-Telemetry Runtime independently verifies the signed grant, current Device binding, exact keys and route/action. Client-supplied headers or fields never enlarge the grant.
+路径都在 `/api/v1` 下；快照、批量、订阅准备、游标和推送都带 `schemaVersion=1`。去掉或改必填字段、改字段含义、改版本号规则、改点位或批量的顺序、改枚举或错误代码的含义，都是不兼容的改动；把数字 / 字符串 / 布尔 / JSON 换成另一种类型而不发新的点位策略版本，是无效数据，不是接口演进；新增可选字段，要先证明生成的客户端能安全忽略未知字段；新的枚举值要新的格式版本；不兼容的 HTTP 改动用新的路径 / 媒体类型 / 格式版本，并有明确的共存期；不兼容的推送改动用新的 `schemaVersion` 和推送类型。生成的文件里带接口定义的 SHA 和生成器版本，代码和定义对不上时检查失败。
 
-### 14. Client generation and module seam
+### 16. 网页的要求
 
-The planned OpenAPI is not merged into the active Gateway generator until implementation begins.
+网页从登记拿到看得到的设备编号；按当前页或选中的设备批量取快照；只看在线的视图不选点位；数字卡片选确切需要的点位；实时更新用实时适配器、同样的点位状态类型；快照失败、实时传输失败和上游观察不可用显示成三种不同的状态；过期的和上次的值保留原来的采样时间，从不盖上渲染或请求的时间；无权或被撤销的数据直接去掉，不用假数据代替。
 
-The implementation ticket must bump the platform contract generator and produce:
+## 后果
 
-- Go Gateway server/request/response interfaces for the four operations;
-- TypeScript HTTP DTOs and functions for HVAC Web;
-- shared TypeScript publication types from the JSON Schema;
-- one `TelemetryLiveClient` adapter that hides Centrifugo tokens, channels, subscribe proxy events, transport position and cursor checkpointing.
+- REST 和实时推送用同一个业务状态、同一条版本号规则；只看在线和看最新值不会在两个接口之间对不上。
+- 批量的部分结果是明确的，生成的客户端好处理；浏览器的请求没法声明身份、站点、频道或推送位置。
+- 每个版本号都能被发现，又不泄露没选的点位；传输层的补发可以替换，始终服从快照。
+- 代价：实时适配器要实现缓存、缺口检测、重新取快照和游标兑换；每个订阅都会收到这台设备每个版本号的小推送（包括空的变化）；需要多一个只给适配器用的接口来安全地换恢复游标；订阅准备要么全成要么全不成，调用方必须先改掉一个无效的目标才能拿到实时能力。
 
-Feature code may use only the generated HTTP functions and the `TelemetryLiveClient` interface. It must not import the Centrifugo SDK directly, parse channels, inspect connection tokens or handwrite duplicate Snapshot/publication DTOs.
-
-The HTTP interface is deep: four actions hide IAM delegation, mapping, Snapshot coherence, batching, transport capabilities and cursor signing. The realtime adapter is also deep: callers observe normalized Snapshot/live/unavailable/revoked states rather than Centrifugo-specific callbacks.
-
-### 15. Versioning and compatibility
-
-HTTP paths remain under `/api/v1`; every Snapshot, batch, bootstrap, cursor response and publication includes `schemaVersion=1` where applicable.
-
-Compatibility rules:
-
-- removing or changing a required field is breaking;
-- changing field meaning, Business Revision rules, key ordering, batch ordering, canonical enums or Problem code semantics is breaking;
-- changing a numeric/string/boolean/JSON value to another type without a new key policy revision is invalid data, not contract evolution;
-- additive optional fields are permitted only after generated clients are proven to ignore unknown fields safely;
-- new canonical enum values require a new schema version because exhaustive clients must not guess their meaning;
-- breaking HTTP changes use a new path/media/schema version with an explicit coexistence window;
-- breaking publication changes use a new `schemaVersion` and publication kind/channel contract.
-
-The contract SHA and generator version are embedded in generated files. Drift checks must fail when checked-in clients do not match the active contract.
-
-### 16. Legacy compatibility and retirement
-
-The following Legacy current-state paths are replaced by S2 and eventually retired:
-
-```text
-GET  /api/v1/telemetry/devices/{deviceId}/latest
-POST /api/v1/telemetry/latest/batch
-Socket.IO /ws/telemetry
-```
-
-The following historical routes remain a separately owned compatibility boundary:
-
-```text
-GET /api/v1/telemetry/devices/{deviceId}/timeseries
-GET /api/v1/devices/{deviceId}/telemetry
-```
-
-They do not update S2 current state and are not fallback sources for the new Snapshot routes.
-
-Current-state Legacy retirement requires all of the following:
-
-1. the S2 routes are implemented from the planned contract and registered to `telemetry-runtime-service`;
-2. generated Go/TypeScript contract drift checks pass;
-3. HVAC Web real mode uses only the generated S2 Snapshot client and `TelemetryLiveClient`;
-4. no production browser traffic uses Legacy latest/batch or `/ws/telemetry`;
-5. authorization negative tests prove missing/unauthorized nondiscoverability for single, batch, bootstrap and cursor operations;
-6. disconnect, duplicate, revision-gap, cursor-expiry, transport-reset and live-revocation tests pass;
-7. Issue #52 rollout gates accept Snapshot latency, publication lag, recovery rate, capacity and rollback evidence;
-8. route ownership reaches S2 primary with no real-to-Legacy or real-to-Mock fallback;
-9. source integrations no longer depend on the unauthenticated Legacy ingest path for S2 current state.
-
-Shadow comparison may record side-effect-free parity evidence. It cannot write, publish, repair or authorize either implementation.
-
-### 17. HVAC Web real-mode requirements
-
-The contract supports HVAC Web without Mock fallback:
-
-- Registry pages obtain visible Device IDs through S1;
-- pages batch Snapshot reads for the visible page or selected Device set;
-- Presence-only views select no keys;
-- metric cards select exact required keys;
-- realtime updates use the live adapter and the same key state types;
-- Snapshot failure, live transport failure and upstream observation unavailability are rendered as different states;
-- stale or Last Known values retain original `sampledAt` and are never stamped with render/request time;
-- unauthorized or revoked state is removed rather than replaced with Mock data.
-
-## Consequences
-
-### Positive
-
-- REST and realtime use one coherent business state and one revision rule.
-- Presence-only and latest reads do not drift across endpoints.
-- Batch partial results are explicit and generated-client friendly.
-- Browser DTOs cannot claim identity, Site scope, channels or transport positions.
-- Every Device revision remains detectable without leaking unselected keys.
-- Transport recovery remains replaceable and subordinate to Snapshot authority.
-- Real mode can express missing, stale, unavailable and revoked states without Mock fallback.
-
-### Costs
-
-- The generated realtime adapter must implement buffering, gap detection, Snapshot reload and cursor checkpointing.
-- Every active Device subscription receives a small publication for every Device revision, including empty key deltas; Issue #52 must validate capacity.
-- A fourth adapter-only HTTP operation is required to mint owner-issued Recovery Cursors safely.
-- Bootstrap is all-or-nothing, so callers must correct one invalid target before receiving any live capability.
-
-### Deferred
-
-Issue #52 selects concrete timeouts, token/cursor lifetimes, Redis history retention, publication payload/connection capacity, SLOs, canary gates and rollback thresholds.
-
-Issue #53 splits implementation into ordered tracer-bullet tickets without reopening this wire contract.
-
-## Architecture Decision Trace
-
-| Issue #51 requirement | Decision section | Machine-readable asset |
-|---|---|---|
-| Presence/latest paths and types | Sections 1–3 | OpenAPI Snapshot operation and schemas |
-| Batch boundary and partial results | Section 4 | OpenAPI batch operation, limits and result union |
-| Subscription bootstrap | Section 5 | OpenAPI bootstrap operation and descriptors |
-| Snapshot/Cursor/Revision/timestamps/quality/freshness | Sections 1–3, 6–7 | OpenAPI schemas and publication JSON Schema |
-| Gateway/IAM propagation and forbidden input | Sections 5 and 13 | `x-client-forbidden-fields` and closed request DTOs |
-| Empty/key/device/cursor/stale/unavailable/timeout/partial semantics | Sections 2, 4 and 12 | Problem code lock plus Snapshot key-state unions |
-| Disconnect/replay/gap client algorithm | Sections 8–10 | Publication invariants and ADR algorithm |
-| Generated clients | Section 14 | Planned operation IDs and event schema |
-| Compatibility/Legacy retirement | Sections 15–16 | `x-legacy-retirement` and ADR gates |
-
-Changing the operation set, coherent Snapshot boundary, batch ordering, all-or-nothing bootstrap, Recovery Cursor checkpoint model, publication revision sequence, stable Problem codes, client forbidden fields or Legacy retirement boundary requires a new ADR and compatible contract revision.
+要改接口的操作集合、快照的一致边界、批量的顺序、订阅准备「要么全成要么全不成」、恢复游标的兑换方式、版本号的递增规则、固定的错误代码或客户端禁止带的字段，都要新写一个 ADR，并同步修改接口约定。

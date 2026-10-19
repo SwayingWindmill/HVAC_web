@@ -206,7 +206,7 @@ new FC3ReadRegistersTask(19068, Priority.LOW,
 4. **控制周期全局只有一个**：所有控制器共用 1 秒（`Cycle.java:17`），HVAC 里慢变量（冷机加减机、按分钟甚至十分钟算）和快变量（压差 PID）只能在控制器内部自己分频。
 5. **JSON-RPC 弱类型、两套并存**：旧式手写 `*Request` 类 44 个（`io.openems.common/…/jsonrpc/request/`），新式 `EndpointRequestType` + `JsonSerializer` 路径 DSL（`…/jsonrpc/serialization/`）并存，载荷是 Gson `JsonObject`。没有 IDL 或生成的客户端，前后端靠手工对齐。
 6. **UI/Backend/Edge 耦合**：UI 直接调用 Edge 的方法和 Channel 地址（`ess0/Soc` 这类字符串），Backend 基本只是转发和存时序数据。Channel ID 一改，前端、历史数据和 B2B 集成都会断。
-7. **云端业务很薄**：没有租户层、资产台账、工单、告警生命周期，也没有能耗分析模型。告警只有"离线 + 整站状态"两种邮件（第 6 节），用户与业务元数据依赖 Odoo ERP。
+7. **云端业务很薄**：没有租户层、资产清单、工单、告警生命周期，也没有能耗分析模型。告警只有"离线 + 整站状态"两种邮件（第 6 节），用户与业务元数据依赖 Odoo ERP。
 8. **安全面**：Edge 只靠 apikey 认证；ADMIN 可以远程执行任意 shell 并带 sudo 密码（`Bash.java:102`）；Felix Web Console 端口 8080（`EdgeApp.bndrun:9`）。
 9. **数据保真度**：本地只存 5 分钟 RRD，补传也是 5 分钟聚合；秒级数据只在内存里保留 5 分钟（第 4 节）。对冷站 COP 诊断、故障回溯来说偏粗。
 10. **代码体积**：200 个 Edge bundle 里大部分是厂家驱动和电价源，每个都是独立 OSGi bundle、独立 Config 注解类。对一个小团队来说，维护成本主要花在这层上。
@@ -233,10 +233,10 @@ new FC3ReadRegistersTask(19068, Priority.LOW,
 1. **OSGi/Felix 与注解 + LDAP 依赖注入**：Go 的 Edge 用显式构造和编译期接口就够了；配置变更应该做成在线重载，而不是重启组件。证据：`EdgeApp.bndrun:1-12`；`ControllerEssBalancingImpl.java:42-48`；`AGENTS.md:23`。
 2. **吞掉异常、只打 warn**：控制器失败、通信失败必须变成显式状态并上报，而且要有测试保证。不要照抄 `executeCycleStep` 那种 catch-all。证据：`CycleWorker.java:135-146,184-200`。
 3. **Channel 层后写覆盖、只有 ESS 有仲裁**：我们应该给所有执行器（冷机启停、频率、阀位、设定值）统一定义写入方、优先级和约束聚合，不能只在一种设备上做。证据：`IntegerWriteChannel.java:25-27`。
-4. **弱类型、两套并存的 JSON-RPC**：Edge↔云和云↔前端应以 OpenAPI/Protobuf 等单一契约生成代码；控制面（下发命令）也不应复用 UI 的通用通道写接口。证据：`io.openems.common/…/jsonrpc/request/`（44 个类）与 `…/jsonrpc/serialization/` 并存。
-5. **UI 直接按 `组件ID/通道ID` 字符串访问设备**：前端应通过云端领域模型（站点/设备/指标）取数，让设备地址的变化只影响 owner 一处。证据：`coreconcepts.adoc:122-126`；`uiwebsocket/…/OnRequest.java:139-140,330`。
+4. **弱类型、两套并存的 JSON-RPC**：Edge↔云和云↔前端应用 OpenAPI/Protobuf 等同一份接口定义生成代码；控制面（下发命令）也不应复用 UI 的通用通道写接口。证据：`io.openems.common/…/jsonrpc/request/`（44 个类）与 `…/jsonrpc/serialization/` 并存。
+5. **UI 直接按 `组件ID/通道ID` 字符串访问设备**：前端应通过云端领域模型（站点/设备/指标）取数，让设备地址变了只影响负责设备数据的那一处。证据：`coreconcepts.adoc:122-126`；`uiwebsocket/…/OnRequest.java:139-140,330`。
 6. **远程任意 shell + sudo 密码、只靠 apikey 认证 Edge**：我们的边缘网关应只开放有限、有审计的运维动作，设备身份用证书或可轮换的密钥。证据：`HostImpl.java:193-196,284-285`；`Bash.java:102`；`edge/server/WebsocketServer.java:63-65`。
-7. **全局四档角色、无租户层、靠 ERP 做多租户**：本平台从第一天就需要组织/站点范围和动作级权限，不要把 Odoo 式元数据当权威。证据：`Role.java:9-24`；`MetadataFile.java:357-358`；`MetadataOdoo.java:778-795`。
+7. **全局四档角色、无租户层、靠 ERP 做多租户**：本平台从第一天就需要组织/站点范围和动作级权限，不要以 Odoo 式的元数据为准。证据：`Role.java:9-24`；`MetadataFile.java:357-358`；`MetadataOdoo.java:778-795`。
 8. **本地只存 5 分钟 RRD，补传只补聚合值**：冷站诊断需要分钟级甚至更细的原始数据。边缘缓冲应保存原始值（有界、按时间淘汰），聚合交给云端。证据：`Rrd4jConstants.java:9`；`Version1.java:45-46`；`backend/timedata.adoc:28-30`。
 9. **配置历史只在云端事后 diff**：应该用"期望配置版本 → 下发 → Edge 回报已生效版本"的对账模型，并支持回滚。证据：`MetadataOdoo.java:497-525`；`ComponentManagerImpl.java:614-617`。
 10. **一个驱动/电价源一个 bundle，所有控制器共用一个周期**：冷站设备种类有限，应该用数据驱动的点表模板加少量协议驱动；控制回路按时间尺度分层（秒级 PID、分钟级群控、15 分钟寻优），不要全塞进 1 秒周期。证据：`io.openems.edge.meter.*` / `io.openems.edge.timeofusetariff.*` 目录；`Cycle.java:17`。

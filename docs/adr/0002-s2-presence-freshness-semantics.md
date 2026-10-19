@@ -1,473 +1,159 @@
-# ADR 0002 — S2 Device Presence and telemetry freshness semantics
+# ADR 0002：在线状态和读数新鲜度怎么判断
 
-Status: accepted
+状态：已采纳（2026-07-23，问题单 #48）。名词见 `GLOSSARY.md`「在线状态和读数」一节。
 
-Date: 2026-07-23
+## 背景
 
-Issue: #48
+旧系统用一个 `active` 布尔值表示设备状态：确认不活动、缺了活动标记、上游出错，统统变成 `false`；最新读数只是缓存，不带来源和新鲜度，也没有快照和断线恢复。
 
-## Context
+「在线、离线、过期、未知、无法判断」不能放在一个字段里，因为它们回答的是不同的问题：
 
-S2 must replace the Legacy boolean `active` and untyped latest-telemetry behavior with platform-owned semantics that are safe for UI, alerting, FDD and future control decisions.
+- 在线：最近有没有观察到这台设备。
+- 新鲜度：某个读数对某个用途来说够不够新。
+- 质量：这个读数可不可信。
+- 能否判断：平台现在能不能下结论。
 
-The current Legacy path collapses confirmed inactivity, missing activity attributes and upstream failure into `false`; returns cache-only latest values without source or freshness metadata; and has no Snapshot, Cursor or Revision recovery model.
+所以要几个互不相干的维度，外加一个明确由它们推出来的、给界面用的五种状态。
 
-The terms `online`, `offline`, `stale`, `unknown` and `unavailable` cannot be one authoritative field because they answer different questions:
+## 决定
 
-- Presence asks whether the Device has been observed recently.
-- Freshness asks whether a telemetry value is recent enough for a consumer.
-- Quality asks whether an observation is trustworthy.
-- Availability asks whether the platform can make a current determination.
+### 1. 登记状态和运行状态无关
 
-S2 therefore needs orthogonal public dimensions and one explicitly derived five-state UI summary.
+设备的登记状态（启用、停用、退役）是管理上的状态，从不参与在线和新鲜度的判断。「是否判断在线」是单独的一项：一台设备可以已启用但还不判断在线，也可以已停用但还留着运行记录。页面可以决定怎么显示，但不能从一个推出另一个。
 
-## Decision
+### 2. 几个维度
 
-### 1. Registry Lifecycle is independent
+- **是否判断在线**：`APPLICABLE`（要判断）/ `NOT_APPLICABLE`（不判断）。不判断的设备没有在线状态，也没有设备显示状态；它不是「未知」，单独列出。
+- **能否判断**：`AVAILABLE` / `UNAVAILABLE`。不能判断是平台自己的问题（依赖出错、观察中断），不是设备的证据。
+- **在线状态**：`ONLINE` / `OFFLINE` / `UNKNOWN`。在线和离线是按在线策略从可信的在线信号得出的结论；未知是能判断、但证据不够下任何结论。不能判断时不给当前的在线状态，上一次的结论可以作为历史另外返回。
+- **读数新鲜度**（按点位、按用途的规则）：`FRESH`（有已接收的读数，且在新鲜时限内）/ `STALE`（有，但超过时限）/ `MISSING`（这个点位没有已接收的读数）。
+- **读数质量**：数据架构 V2（全平台的数据约定，见 `contracts/data/data-architecture.v2.json`）定的六档 `GOOD`、`PARTIAL`、`ESTIMATED`、`MANUAL`、`STALE`、`INVALID`。只有 `GOOD` 默认可以完全信任；`INVALID` 的读数只留作证据，从不替换最新的已接收值。被拒收、隔离、重复、乱序是接收时的处理结果，不是质量等级。
+- **读数就绪**：用途声明一份有版本的「必需读数」清单，合起来的结果是：
+  - `CURRENT`：每个必需点位都新鲜、质量 `GOOD`；
+  - `DEGRADED`：每个必需点位都有已接收的值，但至少一个过期或质量不是 `GOOD`；
+  - `INCOMPLETE`：至少一个必需点位没有值，或者只有无效的候选；
+  - `NOT_APPLICABLE`：这个用途对这台设备没有必需点位。
 
-Registry Lifecycle remains the administrative state of the platform Device resource. It is never an input to Presence or telemetry Freshness.
+  可选点位从不拉低就绪。
 
-Presence Applicability is an explicit S2 fact. A Device may be administratively active while Presence is not yet applicable, and an administratively inactive Device may still have retained runtime evidence. Product workflows may decide whether to display or act on those facts, but they must not infer one from the other.
+### 3. 四个时间
 
-### 2. Canonical dimensions
-
-S2 uses the following canonical dimensions.
-
-#### Presence Applicability
-
-```text
-APPLICABLE
-NOT_APPLICABLE
-```
-
-`APPLICABLE` means the platform is expected to evaluate Presence for this Device. `NOT_APPLICABLE` means no current Presence or Device Display State is asserted. A non-applicable Device is not `UNKNOWN`; it is reported separately from the five runtime states.
-
-#### Evaluation Availability
-
-```text
-AVAILABLE
-UNAVAILABLE
-```
-
-`AVAILABLE` means the owner has enough healthy dependencies and observation coverage to calculate a trustworthy current result.
-
-`UNAVAILABLE` means the platform cannot currently make that calculation. It is a platform-state conclusion, not Device evidence.
-
-#### Device Presence
-
-```text
-ONLINE
-OFFLINE
-UNKNOWN
-```
-
-`ONLINE` and `OFFLINE` are current conclusions from accepted Presence Signals under a versioned Presence Policy. `UNKNOWN` means the evaluation path is available but accepted evidence is insufficient for either conclusion.
-
-Device Presence is not evaluated as current when Evaluation Availability is `UNAVAILABLE`; a last-known Presence may be returned separately as historical context.
-
-#### Telemetry Freshness
-
-```text
-FRESH
-STALE
-MISSING
-```
-
-Freshness is calculated per Device key and per consumer policy.
-
-- `FRESH`: an accepted observation exists and its age is within the configured freshness window.
-- `STALE`: an accepted observation exists but its age exceeds that window.
-- `MISSING`: no accepted observation exists for that key and scope.
-
-#### Telemetry Quality
-
-```text
-GOOD
-SUSPECT
-REJECTED
-```
-
-- `GOOD`: the observation passed source, type, unit, range and timestamp validation.
-- `SUSPECT`: the observation is retained and may be displayed with a warning, but cannot be treated as fully trustworthy by default.
-- `REJECTED`: the observation is retained only as evidence and never replaces the latest accepted value.
-
-Quality reason codes are additive and typed. The initial semantic families are:
-
-```text
-SOURCE_UNTRUSTED
-TYPE_MISMATCH
-UNIT_MISMATCH
-OUT_OF_RANGE
-CLOCK_AHEAD
-CLOCK_BEHIND
-SOURCE_LAG_EXCEEDED
-DUPLICATE
-OUT_OF_ORDER
-REPLAYED
-```
-
-The later public-contract ticket decides the exact stable code names and wire representation.
-
-#### Telemetry Readiness
-
-A consumer declares a versioned Required Telemetry Set. Its aggregate readiness is:
-
-```text
-CURRENT
-DEGRADED
-INCOMPLETE
-NOT_APPLICABLE
-```
-
-- `CURRENT`: every required key is `FRESH` and `GOOD`.
-- `DEGRADED`: every required key has an accepted value, but at least one is `STALE` or `SUSPECT`.
-- `INCOMPLETE`: at least one required key is `MISSING`, or only rejected candidates exist for it.
-- `NOT_APPLICABLE`: the consumer has no required telemetry keys for this Device.
-
-Optional keys never degrade readiness.
-
-### 3. Time model
-
-Every current evaluation exposes or internally preserves four distinct instants.
-
-| Instant | Meaning |
+| 时间 | 含义 |
 |---|---|
-| `observedAt` | When a trusted source observed Device activity. |
-| `sampledAt` | When the telemetry value represents the physical measurement. |
-| `receivedAt` | When the platform accepted the source observation. |
-| `evaluatedAt` | When the platform calculated Presence, Freshness and derived state. |
+| `observedAt` | 可信来源观察到设备活动的时刻 |
+| `sampledAt` | 读数代表的物理测量时刻 |
+| `receivedAt` | 平台接收这条读数的时刻 |
+| `evaluatedAt` | 平台算出在线、新鲜度等结论的时刻 |
 
-`lastSeenAt` is the maximum `observedAt` among accepted Presence Signals. It is never synthesized from a cache read or from the time an old record happened to arrive.
+`lastSeenAt` 是已接收的在线信号里最大的 `observedAt`，从不用缓存读取时间或旧记录到达的时间凑出来。来源约定「只有收到时间可信」时，在线信号会明确记下这一点，平台不会悄悄把它改写成设备的采样时间。
 
-A source contract may declare that receipt time is its only authoritative activity time. In that case the accepted Presence Signal records that time basis explicitly; the platform still does not silently rewrite it as a device-sampled time.
+平台同时保留传输延迟（`receivedAt - observedAt`）和读数年龄（`evaluatedAt - sampledAt`）。超出允许时钟偏差的未来时间，不能成为最新值；晚到的读数可以留作历史，但不能替换更新的已接收值。
 
-The platform preserves both source lag and sample age:
+### 4. 用有版本的策略，不用一个全局超时
 
-```text
-sourceLag = receivedAt - observedAt
-sampleAge = evaluatedAt - sampledAt
-```
+在线和新鲜度的时限是按设备类别或单台设备设置的、有版本的策略，不在代码里写死几分钟。
 
-A future timestamp outside the policy's allowed clock skew cannot become the latest current value. A delayed observation may remain historical evidence but cannot replace a newer accepted observation.
+- 在线策略至少有：`policyRevision`、`onlineWithin`、`offlineAfter`、`maxFutureClockSkew`、`maxSourceLag`、`acceptedSignalTypes`。
+- 点位新鲜度策略至少有：`policyRevision`、`key`、`expectedSampleInterval`、`freshFor`、`valueType`、`unit`、`qualityRules`。
 
-### 4. Versioned policies, not a global timeout
+约束：`onlineWithin` 为正；`offlineAfter` 大于 `onlineWithin`；没有明确理由时，`freshFor` 不短于应有的采样间隔；每个结果记下用的策略版本；改时限不改写历史，只影响之后的判断。
 
-Presence and Freshness thresholds are versioned policy data assigned by Device class or Device override. S2 does not hard-code one global number of minutes.
+### 5. 在线状态怎么判断
 
-A Presence Policy contains at least:
+在 `evaluatedAt` 时刻按顺序：
 
-```text
-policyRevision
-onlineWithin
-offlineAfter
-maxFutureClockSkew
-maxSourceLag
-acceptedSignalTypes
-```
+1. 判断所需的依赖或观察覆盖不可用：能否判断为 `UNAVAILABLE`，不给当前的在线状态。
+2. 不判断在线：不给在线状态和显示状态。要判断、但没有有效的策略、来源对照或已接收的在线信号：`UNKNOWN`。
+3. `evaluatedAt - lastSeenAt <= onlineWithin`：`ONLINE`。
+4. 超过 `onlineWithin` 但不到 `offlineAfter`：`UNKNOWN`（这是故意留的不确定区间，免得一个稍晚的读数刚过时限就被误判为离线）。
+5. 达到 `offlineAfter`，并且这段决策时间里观察一直可用：`OFFLINE`。
+6. 观察中断过：`UNAVAILABLE`，不是 `OFFLINE`。
+7. 只有来源约定保证含义、且策略点名了这种信号时，可信的「明确断开」信号才能立刻判为 `OFFLINE`。
+8. 从观察中断中恢复后，按当前的证据重新判断；不能只因为最后上报时间早于中断，就立刻判为离线。
 
-A key Freshness Policy contains at least:
+### 6. 读数怎么接收和替换
 
-```text
-policyRevision
-key
-expectedSampleInterval
-freshFor
-valueType
-unit
-qualityRules
-```
+按顺序：验证来源和设备对照的身份和权限 → 检查时间范围和传输延迟 → 检查点位、值的类型、单位和范围 → 识别重复、重放和乱序 → 给出质量和原因代码 → 只有不是无效、并且按负责方的版本规则更新，才替换最新的已接收值 → 只有提交了状态变化，才增加状态版本号。
 
-Policy constraints are:
+收到一条新的不代表有新的物理采样。重复或重放的读数不会让设备保持在线，也不会推进 `lastSeenAt`，除非来源另外提供了被接收的在线信号。
 
-- `onlineWithin` is positive.
-- `offlineAfter` is greater than `onlineWithin`.
-- `freshFor` is not shorter than the expected sample interval without an explicit reason.
-- every result records the policy revision used for evaluation.
-- changing a threshold does not rewrite historical observations; it changes later evaluations.
+### 7. 设备显示状态（五种）
 
-### 5. Presence evaluation state machine
+对要判断在线的设备，接口返回上面这些维度；为了排序和简短的状态文字，还可以返回一个推出来的显示状态。按这个顺序取第一个符合的：
 
-Presence is evaluated only from accepted Presence Signals and observation coverage.
-
-```text
-                          accepted recent signal
-             ┌─────────────────────────────────────────┐
-             │                                         ▼
-          UNKNOWN  ────────────────────────────────>  ONLINE
-             ▲                                         │
-             │ no evidence / uncertainty window        │ signal age > onlineWithin
-             │                                         ▼
-             └──────────────────────────────────────  UNKNOWN
-                                                       │
-                                                       │ signal age >= offlineAfter
-                                                       │ and coverage remained available
-                                                       ▼
-                                                    OFFLINE
-                                                       │
-                                                       │ accepted recent signal
-                                                       └──────────────> ONLINE
-```
-
-The deterministic rules at `evaluatedAt` are:
-
-1. If Presence evaluation dependencies or observation coverage are unavailable, Evaluation Availability is `UNAVAILABLE`; no current Presence assertion is emitted.
-2. If Presence Applicability is `NOT_APPLICABLE`, no current Presence or Device Display State is emitted. If Applicability is `APPLICABLE` but no valid policy, source binding or accepted Presence Signal exists, Presence is `UNKNOWN`.
-3. If `evaluatedAt - lastSeenAt <= onlineWithin`, Presence is `ONLINE`.
-4. If the age is greater than `onlineWithin` but less than `offlineAfter`, Presence is `UNKNOWN`.
-5. If the age is at least `offlineAfter` and observation coverage was continuously available for the required decision window, Presence is `OFFLINE`.
-6. If coverage was interrupted, the result is `UNAVAILABLE`, not `OFFLINE`.
-7. A trusted explicit disconnect signal may produce immediate `OFFLINE` only when its source contract guarantees that meaning and the policy names that signal type.
-8. Recovery from an availability gap recomputes from current evidence. The platform does not immediately declare `OFFLINE` solely because an old last-seen time predates the outage.
-
-This uncertainty window prevents a late expected sample from becoming a false offline event immediately after the online window expires.
-
-### 6. Telemetry acceptance and replacement
-
-A telemetry candidate is processed in this order:
-
-1. Authenticate and authorize its source and Device mapping.
-2. Validate timestamp bounds and source lag.
-3. Validate key, value type, unit and configured range.
-4. Detect duplicate, replay and out-of-order delivery.
-5. Assign Quality and reason codes.
-6. Replace the latest accepted point only if the candidate is not `REJECTED` and is newer under the owner revision rule.
-7. Advance the owner Revision only for a committed state change.
-
-A new receipt does not prove a new physical sample. Duplicate or replayed observations do not keep a Device online and do not advance `lastSeenAt` unless the source supplies an independently accepted Presence Signal.
-
-### 7. Derived five-state Device Display State
-
-For an `APPLICABLE` Device, the public contract returns the canonical dimensions above. For UI sorting and concise status text it may also return a derived `DeviceDisplayState`:
-
-```text
-ONLINE
-OFFLINE
-STALE
-UNKNOWN
-UNAVAILABLE
-```
-
-The states are mutually exclusive and derived in this precedence order:
-
-1. `UNAVAILABLE` when Evaluation Availability is `UNAVAILABLE`.
-2. `OFFLINE` when current Device Presence is `OFFLINE`.
-3. `UNKNOWN` when current Device Presence is `UNKNOWN` or Telemetry Readiness is `INCOMPLETE`.
-4. `STALE` when Device Presence is `ONLINE` and Telemetry Readiness is `DEGRADED`.
-5. `ONLINE` when Device Presence is `ONLINE` and Telemetry Readiness is `CURRENT` or `NOT_APPLICABLE`.
-
-The derivation can be represented as:
-
-| Availability | Presence | Readiness | Display state |
+| 能否判断 | 在线状态 | 读数就绪 | 显示状态 |
 |---|---|---|---|
-| `UNAVAILABLE` | any last-known value | any | `UNAVAILABLE` |
-| `AVAILABLE` | `OFFLINE` | any | `OFFLINE` |
-| `AVAILABLE` | `UNKNOWN` | any | `UNKNOWN` |
+| `UNAVAILABLE` | 任意（上一次的值） | 任意 | `UNAVAILABLE`（无法判断） |
+| `AVAILABLE` | `OFFLINE` | 任意 | `OFFLINE`（离线） |
+| `AVAILABLE` | `UNKNOWN` | 任意 | `UNKNOWN`（未知） |
 | `AVAILABLE` | `ONLINE` | `INCOMPLETE` | `UNKNOWN` |
-| `AVAILABLE` | `ONLINE` | `DEGRADED` | `STALE` |
-| `AVAILABLE` | `ONLINE` | `CURRENT` | `ONLINE` |
-| `AVAILABLE` | `ONLINE` | `NOT_APPLICABLE` | `ONLINE` |
+| `AVAILABLE` | `ONLINE` | `DEGRADED` | `STALE`（读数过期） |
+| `AVAILABLE` | `ONLINE` | `CURRENT` 或 `NOT_APPLICABLE` | `ONLINE`（在线） |
 
-The derived state is not stored as an independent source of truth. Consumers that need safety or diagnostic decisions use the dimensions, policy revision and evidence, not the display summary.
+显示状态不单独存储。需要做安全或诊断决定的地方，用各个维度、策略版本和证据，不用这个概括。
 
-### 8. Value-display rules
+### 8. 值怎么显示
 
-| Key condition | Primary UI value | Secondary context | Default machine use |
+| 情况 | 主要显示 | 附带信息 | 默认能不能给程序用 |
 |---|---|---|---|
-| `FRESH + GOOD` | Display normally. | Sample time and source may be shown on demand. | Allowed when the consumer policy includes the key. |
-| `FRESH + SUSPECT` | Display with an explicit quality warning. | Quality reason and timestamps. | Not allowed by default. |
-| `STALE` | A Last Known Value may be displayed only with a stale label and its sample time. | Age and source availability. | Not allowed as current evidence. |
-| `MISSING` | Do not display a numeric current value. | Missing reason and expected key. | Not allowed. |
-| only `REJECTED` candidates | Do not display a numeric current value. | Validation reason; an older Last Known Value may be secondary. | Not allowed. |
-| Evaluation `UNAVAILABLE` | Do not present any value as current. | Last Known Value may be secondary with age and outage state. | Not allowed. |
+| 新鲜 + `GOOD` | 正常显示 | 需要时显示采样时间和来源 | 用途包含这个点位时可以 |
+| 新鲜 + 质量不是 `GOOD` | 显示，并明确提示质量 | 质量原因和时间 | 默认不行 |
+| 过期 | 只能作为「上次的值」显示，带过期标记和采样时间 | 已经多久、来源是否可用 | 不能当当前的证据 |
+| 没有 | 不显示当前数值 | 缺失原因和应有的点位 | 不行 |
+| 只有无效的候选 | 不显示当前数值 | 校验原因；可以附带更早的上次的值 | 不行 |
+| 无法判断 | 不把任何值当作当前值显示 | 可以附带上次的值、多久了、中断状态 | 不行 |
 
-A placeholder such as `—` means no trustworthy current value. Zero is a real value and must never be used as a missing-data placeholder.
+`—` 表示没有可信的当前值。0 是一个真实的值，绝不能拿来表示没有数据。
 
-### 9. Aggregation rules
+### 9. 怎么汇总
 
-#### Key to Device
+- 点位到设备：只有用途的必需读数参与就绪。所以一台设备可以对一个页面是齐全的，对另一条诊断规则是不全的。
+- 设备到站点：只给按显示状态的计数和覆盖率（例如判断了多少台、在线 / 离线 / 过期 / 未知 / 无法判断各多少），没有一个「站点在线」的布尔值。没权限看的设备不进分子也不进分母；不判断在线的单独列出、不拉低覆盖率；未知和无法判断从不算作离线；分母为 0 时不给百分比；汇总记下判断时间和用到的策略版本。
+- 资产和点位组的汇总同样按计数和覆盖率，不能因为大多数值新鲜，就把部分结果说成健康。
 
-Only the consumer's Required Telemetry Set participates in Telemetry Readiness. A Device may therefore be `CURRENT` for one view and `INCOMPLETE` for a different diagnostic rule.
+### 10. 几个边界情况
 
-#### Device to Site
+- 新设备，对照有效但还没有任何信号：能判断、在线状态未知、必需读数不全、显示「未知」。从没观察到过，所以不报离线告警。
+- 最近观察到，某个必需读数超过了它的时限：在线、部分可用、显示「读数过期」；可以带时间显示上次的值，但默认不用来下新的诊断结论。
+- 最近观察到，某个必需点位从没收到过值：在线、不全、显示「未知」；界面可以写「在线 · 数据缺失」，不能编一个值。
+- 最后上报超过了在线时限、还没到离线门槛：未知（不确定区间）。
+- 超过离线门槛、观察一直可用：离线。
+- 离线门槛之前上游观察就断了：无法判断，不给当前的在线状态；中断不能变成设备离线事件。
+- 平台在长时间中断后恢复：先显示无法判断，直到有了足够的当前证据或者走完一个新的决策时间；不会根据旧时间把每台设备都补标为离线。
+- 设备时钟快于平台、超过容许偏差：这条读数无效，带时钟原因；独立的可信在线信号仍然可以判为在线，但这个值不会成为当前读数。
 
-A Site Observation Summary contains counts by Device Display State and explicit coverage, for example:
+### 11. 用这些状态的地方要遵守的规则
 
-```text
-totalApplicableDevices
-nonApplicableDevices
-evaluatedDevices
-onlineDevices
-offlineDevices
-staleDevices
-unknownDevices
-unavailableDevices
-evaluationCoverage
-currentTelemetryCoverage
-```
+**页面**
 
-The summary rules are:
+- 设备的登记状态和显示状态分开显示。
+- 只有「新鲜 + `GOOD`」才按正常值显示。
+- 过期、可疑、缺失和无法判断都要有文字，不能只靠颜色。
+- 上次的值总要带采样时间或已经多久。
+- 平台自己出问题时，页面不能把它算成设备离线的数量。
 
-- unauthorized Devices do not enter either numerator or denominator.
-- non-applicable Devices are reported separately when needed and do not reduce coverage.
-- `UNKNOWN` and `UNAVAILABLE` are never counted as `OFFLINE`.
-- Site aggregation does not produce one `siteOnline` boolean.
-- percentages are omitted when the denominator is zero rather than invented as zero or one hundred percent.
-- Site summaries record `evaluatedAt` and the policy revisions represented.
+**告警和故障诊断**
 
-#### Key-family and Equipment aggregation
+- 设备故障和诊断规则只用它有版本的「必需读数」清单和质量规则允许的读数状态。
+- 读数过期、缺失、被拒收或无法判断，默认算「数据问题」或「观察中断」，不算设备故障。
+- 故意接受过期或可疑读数的规则，必须声明这一点，并在结果里写明用的读数状态。
+- 重算时记下用的策略版本和读数版本。
 
-Equipment and key-family summaries follow the same count-and-coverage rule. They cannot promote a partial result to healthy merely because a majority of values are fresh.
+**控制**
 
-### 10. Boundary scenarios
+在线是控制的必要条件，但不够。控制前还必须分别满足：能否判断为 `AVAILABLE`；在线状态 `ONLINE`；这条指令需要的读数 `CURRENT`；需要的值质量 `GOOD`；当前的权限、控制能力、安全和审批检查都通过。显示状态是离线、读数过期、未知或无法判断时，默认不能控制。任何控制逻辑都不能只看推出来的显示状态。
 
-#### New Device with a valid mapping but no signal
+### 12. 不变的几条
 
-```text
-Evaluation Availability: AVAILABLE
-Presence: UNKNOWN
-Required telemetry: INCOMPLETE
-Display: UNKNOWN
-```
+1. 登记状态从不代表在线状态。
+2. 平台不可用从不代表设备离线。
+3. `lastSeenAt` 来自已接收的来源观察时间，不来自缓存读取或晚到的接收时间。
+4. `sampledAt`、`receivedAt` 和 `evaluatedAt` 始终分开。
+5. 更旧的或被拒收的读数从不替换更新的已接收值。
+6. 没有数据不是 0、`false` 或空字符串。
+7. 过期的值或上次的值从不当作当前值显示。
+8. 可选点位不拉低就绪。
+9. 站点汇总给计数和覆盖率，不给一个合成的「在线」布尔值。
+10. 页面上的概括是推出来的；故障诊断、告警和控制用各个维度和证据。
 
-No offline alarm is created because the platform has never established an observed baseline.
-
-#### Device recently observed, all required values current
-
-```text
-Presence: ONLINE
-Readiness: CURRENT
-Display: ONLINE
-```
-
-#### Device recently observed, one required value aged past its key threshold
-
-```text
-Presence: ONLINE
-Readiness: DEGRADED
-Display: STALE
-```
-
-The value may be shown as Last Known with its timestamp. It is not eligible for a new FDD conclusion by default.
-
-#### Device recently observed, required key has never produced an accepted value
-
-```text
-Presence: ONLINE
-Readiness: INCOMPLETE
-Display: UNKNOWN
-```
-
-The UI may say “在线 · 数据缺失”; it must not invent a value.
-
-#### Last Seen passed the online window but not the offline threshold
-
-```text
-Evaluation Availability: AVAILABLE
-Presence: UNKNOWN
-Display: UNKNOWN
-```
-
-This is the policy uncertainty window.
-
-#### Last Seen passed the offline threshold with continuous observation coverage
-
-```text
-Evaluation Availability: AVAILABLE
-Presence: OFFLINE
-Display: OFFLINE
-```
-
-Stored telemetry may also be stale, but the concise display state remains `OFFLINE`.
-
-#### Upstream observation path failed before the offline threshold
-
-```text
-Evaluation Availability: UNAVAILABLE
-Current Presence: not asserted
-Last-known Presence: ONLINE or UNKNOWN, with its evaluation time
-Display: UNAVAILABLE
-```
-
-The outage cannot be converted into a Device offline event.
-
-#### Platform recovers after a long observation gap
-
-The owner first emits `UNAVAILABLE` until it has restored sufficient current evidence or completed a new decision window. It does not retroactively label every Device offline from old timestamps.
-
-#### Device clock is ahead of the platform
-
-The telemetry candidate is `REJECTED` with a clock reason when it exceeds policy tolerance. An independent trusted Presence Signal may still establish `ONLINE`; the invalid value does not become current telemetry.
-
-#### Delayed or replayed telemetry arrives after a newer accepted point
-
-The candidate remains evidence with an ordering/replay reason. It does not replace latest state, advance Revision or refresh Presence.
-
-#### One Device key is optional for the current view
-
-Its stale or missing state is visible in key detail but does not degrade that view's Telemetry Readiness.
-
-### 11. Consumer invariants
-
-#### UI
-
-- Registry Lifecycle and Device Display State are displayed as separate facts.
-- Normal values require `FRESH + GOOD` for that view.
-- stale, suspect, missing and unavailable states include text, not color alone.
-- Last Known Values always include their sample time or age.
-- the UI never turns an unavailable platform path into an offline Device count.
-
-#### Alerts and FDD
-
-- Equipment-fault and diagnostic rules consume only the key states allowed by their versioned Required Telemetry Set and quality policy.
-- stale, missing, rejected or unavailable data creates a data-quality or observation-gap condition, not an equipment fault by default.
-- a rule that intentionally supports stale or suspect input must declare that behavior and include the evidence state in its result.
-- recomputation records the policy and telemetry revisions used.
-
-#### Future control
-
-Presence is necessary but not sufficient for control. A future control precondition must separately require:
-
-- Evaluation Availability `AVAILABLE`;
-- Device Presence `ONLINE`;
-- the command-specific Required Telemetry Set `CURRENT`;
-- required values `GOOD`;
-- current authorization, capability, safety and approval checks.
-
-`OFFLINE`, `STALE`, `UNKNOWN` and `UNAVAILABLE` display states block control by default. No control path may rely only on the derived Display State.
-
-### 12. Stable invariants
-
-1. Registry Lifecycle never implies Presence.
-2. Platform unavailability never implies Device offline.
-3. `lastSeenAt` comes from accepted source observation time, not cache-read or delayed receipt time.
-4. `sampledAt`, `receivedAt` and `evaluatedAt` remain distinct.
-5. an older or rejected observation never replaces a newer accepted latest value.
-6. missing data is not zero, false or an empty string.
-7. stale or Last Known data is never presented as current.
-8. optional keys do not degrade a consumer's readiness.
-9. Site summaries report counts and coverage, not a synthetic online boolean.
-10. UI summaries are derived; FDD, alerts and future control consume canonical dimensions and evidence.
-
-## Consequences
-
-The ownership ticket must select one owner for Presence Signals, accepted latest observations, policy revision and monotonic Revision. The transport experiment must preserve these semantics across disconnect, replay and permission revocation. The public-contract ticket must expose the canonical dimensions, timestamps, policy revision, reason codes and derived display state without exposing ThingsBoard identifiers.
-
-Existing Legacy `active` cannot be mapped directly to `ONLINE` or `OFFLINE`. During migration it can only be treated as one candidate Presence Signal with declared source semantics and comparison evidence.
-
-The model is intentionally stricter than the current UI. Some existing mock rows that display “online” from a recent-looking string will become `UNKNOWN` until a valid Presence Policy and accepted signal exist.
-
-Changing the canonical states, their derivation precedence, the meaning of Last Seen, or the separation between availability and offline requires a new ADR and compatible contract revision.
-
-## Architecture Decision Trace
-
-| Issue #48 criterion | Decision location |
-|---|---|
-| `online`, `offline`, `stale`, `unknown`, `unavailable` and mutual exclusion | Canonical dimensions and derived Device Display State |
-| Last Seen and time semantics | Time model |
-| clock skew and source delay | Time model, policy and acceptance rules |
-| data quality and missing keys | Telemetry Quality, Freshness and Readiness |
-| Site, Device and key aggregation | Aggregation rules |
-| upstream/platform failure versus Device offline | Evaluation Availability and Presence state machine |
-| UI, FDD, alert and future-control invariants | Consumer invariants |
-| edge cases | Boundary scenarios |
-| canonical terminology | Root `GLOSSARY.md` |
+要改这些状态、它们的推导顺序、`lastSeenAt` 的含义，或「无法判断」和「离线」的区分，都要新写一个 ADR，并同步修改接口约定。

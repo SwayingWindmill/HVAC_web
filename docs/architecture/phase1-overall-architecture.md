@@ -1,374 +1,97 @@
-# Phase 1 总体架构基线
+# 第一阶段的总体架构
 
-本文件以 `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能源系统总体部署架构设计 V1（单服务器基线）》作为当前总体部署权威，并接受用户对 V2.1.2 的后续架构裁决。Edge 控制面的当前机器权威为 `contracts/architecture/edge-control-plane.v1.json`，ADR 为 `docs/adr/0012-openems-informed-edge-control-plane.md`。若旧“Edge Gateway”表述与该裁决冲突，以新的 HVAC Edge Control Plane 为准；单服务器 Cloud 部署边界不因此扩大。
+第一阶段的云端是**一台 Linux 服务器 + Docker Compose**。部署的机器可读描述在 `deploy/platform/phase1/`（进程清单 `runtime-inventory.v1.json`、架构基线 `architecture-baseline.v1.json`、恢复目标 `recovery/recovery-targets.v1.json`），`npm run architecture:phase1:check` 检查它们和 Compose 一致。现场控制层的设计见 ADR 0012 和 `contracts/architecture/edge-control-plane.v1.json`。
 
-## 1. 一级总体架构
+## 1. 整体
 
 ```text
-                         User
-                          │
-                    HTTPS / WSS
-                          │
+                    值班人员（浏览器）
+                          │ HTTPS / WSS
                           ▼
-                    Nginx / Gateway
+                 nginx  →  平台网关（energy-api）
                           │
-                 ┌────────┴────────┐
-                 │                 │
-                 ▼                 ▼
-              React          Central Platform
-                                   │
-                     ┌─────────────┼─────────────┐
-                     │             │             │
-                     ▼             ▼             ▼
-                 Business       IoT/Data      Control
-                 Services       Services      Services
-                     │             │             │
-                     └─────────────┼─────────────┘
-                                   ▼
-                            Data / Message
-                     ┌────────┬───────┬────────┐
-                     ▼        ▼       ▼        ▼
-                 PostgreSQL ClickHouse Redis  MQTT
-                                                │
-                                                ▼
-                                     HVAC Edge Control Plane
-                                                │
-                                      OT Protocol / Driver
-                                                │
-                                                ▼
-                                             Devices
+        ┌─────────────────┼──────────────────┐
+        ▼                 ▼                  ▼
+   业务模块           设备数据             智能服务
+ （登记、告警、     （设备接入、遥测、    （预测、优化、诊断、
+  工单、指令…）       指标计算）          节能验证、报表、AI 助手）
+        └─────────────────┼──────────────────┘
+                          ▼
+         PostgreSQL · ClickHouse · Redis · MQTT · Cube
+                          │ MQTT（TLS）
+                          ▼
+                    现场网关（Node-RED）
+                          │ Modbus / BACnet / …
+                          ▼
+                         设备
 ```
 
-旁路能力贯穿全部层级：
-
-```text
-Security
-Monitoring
-Logging
-Tracing
-Backup
-Deployment
-Audit
-```
-
-一级架构只表达职责，不暴露 S0/S1/S2/S3/S4、Projector、Adapter、Centrifugo 等工程实施细节。
-
-## 2. 二级逻辑服务架构
-
-Central Platform 按业务职责包含：
-
-- Identity / Authorization
-- Registry / Device Management
-- Telemetry
-- Energy / Analytics
-- Metric
-- Alarm
-- Command / Control
-- Work Order
-- Forecast
-- Optimization
-
-浏览器只通过 Nginx 和 Platform Gateway 进入业务 API，不直接访问数据库、MQTT 管理面或内部服务。
-
-## 3. 三级实现映射
-
-V2.1.2 要求逻辑领域与物理 Deployable 解耦，并在 Phase 1 避免把内部职责继续拆成独立进程。当前 Phase 1 已形成真实的 `energy-api` 与 `iot-service`，并进一步收敛 Telemetry Worker 内部职责：
-
-```text
-energy-api
-├─ Platform Gateway / BFF
-├─ Realtime Module        # 浏览器唯一 /realtime/ 入口；Centrifugo 仅为内部 transport 实现细节
-├─ IAM Module             # 保留独立 IAM mTLS listener / SPIFFE identity
-├─ Registry Core Module   # 保留独立 Core mTLS listener / SPIFFE identity
-├─ Telemetry Query Module # 保留独立 Query mTLS listener / SPIFFE identity
-├─ Audit Module           # Session Audit 使用 PostgreSQL Outbox 直投，不依赖 Kafka
-├─ Alarm Module           # 保留独立 Alarm mTLS listener / SPIFFE identity
-├─ Work Order Module      # 保留独立 Work Order mTLS listener / SPIFFE identity
-└─ Command Module         # 保留独立 Command mTLS listener / SPIFFE identity
-
-iot-service
-├─ MQTT telemetry / state / event / heartbeat receive
-├─ Command dispatch worker
-└─ reported-state verification worker
-   # Dispatcher / Verifier 仍加载各自的 workload credential
-
-telemetry-worker
-├─ Telemetry HTTP / ingest / latest / realtime
-├─ history projection
-└─ analytics energy projection
-   # 不再单独部署 telemetry-history-projector / analytics-read-model-projector
-
-scheduler
-├─ Schedule Definition scan / next_fire_at coordination
-├─ Job Instance creation + dedup / misfire / retry coordination
-└─ expired Lease recovery
-   # PostgreSQL 是 Schedule / Job / Attempt 权威；Scheduler 不执行业务公式或设备控制
-
-maintenance-worker
-├─ credential expiry scan
-├─ dead-work disposition
-└─ Tenant retirement coordination execution
-   # 这是跨领域 operational worker，不是新的业务 Domain；不并入 Scheduler 或在线 energy-api 进程
-
-metric-worker
-├─ Claim METRIC_* Job via FOR UPDATE SKIP LOCKED
-├─ Lease / Attempt / Timeout / cooperative cancel
-├─ Metric business execution + Scheduled run 幂等去重
-└─ stale PERSISTING 跨存储 reconcile
-   # 不再拥有 Schedule scan / next_fire_at authority
-```
-
-因此 Phase 1 的默认业务 deployable 固定为 `energy-api + telemetry-worker + metric-worker`。长期运行的 supporting workload 另有 `scheduler + maintenance`：`scheduler` 只负责 Application Job Coordination，`maintenance` 执行证书到期扫描、Dead Work 处置和 Tenant Retirement 等跨领域 operational job，两者都不形成新的业务 Domain/API authority。`identity-service` 是独立 Identity Infrastructure，也不计入默认业务 deployable。`iot-service + mqtt-broker` 统一归入可选 `integration` profile：只有部署本地 MQTT/现场接入链路时才启用。数据库迁移、Schema Preflight、Identity Bootstrap/Admin/Reconcile、PostgreSQL/ClickHouse Backup 都是 one-shot operator action，不计入长期运行拓扑。不再单独部署 `platform-gateway`、`iam-service`、`platform-core-service`、`telemetry-query-service`、`audit-ledger-service`、`alarm-service`、`work-order-service`、`command-service`、`mqtt-telemetry-adapter`、`command-dispatcher`、`command-verifier`、`telemetry-history-projector`、`analytics-read-model-projector`；原 `telemetry-runtime-service` 仅保留逻辑 DNS alias。Forecast / Optimization / FDD 统一归入可选 `intelligence` profile，不要求成为默认常驻基础进程。完整分类由 `deploy/platform/phase1/runtime-inventory.v1.json` 作为机器合同约束。Phase 1 不引入 Kubernetes、Service Mesh 或 Kafka 作为必需依赖。
-
-`iot-service` 是 Cloud 侧 IoT 集成进程，不等于新的 HVAC Edge Control Plane。生产 Edge 运行时位于现场 Gateway；Development 可以把 Simulator/Edge Runtime 与 Cloud Compose 放在同一台开发机，但不能据此改变生产职责边界。
-
-## 4. 数据权威
-
-- PostgreSQL：业务主数据、配置、Registry、控制状态、告警状态等权威业务状态。
-- ClickHouse：历史 Telemetry、聚合和分析读取模型。
-- Redis：Latest/current 可重建缓存与实时传输基础设施，不保存唯一业务事实。
-- Object Storage：Archive / Backup / Evidence / Dataset / Model Artifact 等大对象与冷数据；Phase 1 只冻结 provider-neutral 外部依赖 contract，具体产品由部署环境选择，治理元数据由 PostgreSQL `object_storage_buckets` / `archive_manifests` / `backup_manifests` 权威维护。
-- MQTT：Edge ↔ Cloud 传输。
-- Edge Timedata：现场 latest/history、恢复游标、优先级 Replay 和必要的本地聚合；它不替代 Cloud 的 Point/Telemetry/Analytics 权威。
-- Edge 本地磁盘：Edge Timedata 与 Store & Forward 的持久化介质；Cloud 恢复后按 resend priority Replay。
-
-## 5. Cloud / Edge 边界
-
-```text
-Cloud Control Plane
-  ├─ Tenant / IAM / RLS
-  ├─ Registry / Equipment / Device / Sensor / Point
-  ├─ Command Governance / Approval / Audit
-  ├─ S2 / Analytics / Alarm / Work Order
-  └─ Forecast / Optimization / desired intent
-          │
-          │ MQTT TLS
-          ▼
-HVAC Edge Control Plane
-  ├─ Edge Component Registry
-  ├─ Capability Profile Registry
-  ├─ Channel Runtime
-  ├─ Process Image
-  ├─ Cycle
-  ├─ Controller Runtime
-  ├─ Scheduler / Control Arbiter
-  ├─ Local Safety / Interlock Controllers
-  ├─ Equipment / Cluster Controllers
-  ├─ Device Drivers
-  ├─ Protocol Bridges
-  ├─ Edge Manifest
-  ├─ Edge Timedata
-  └─ Store & Forward / Replay
-          │
-          ▼
-Modbus / BACnet / OPC UA / MQTT / vendor protocol
-          │
-          ▼
-OT Device
-```
-
-Cloud 不直接访问 PLC、BMS、PCS 或其他现场设备。Cloud 故障不得阻止 Edge 继续采集、缓存、执行本地 Controller、维护本地 Schedule 或执行本地安全策略。
-
-### 5.1 Edge 是软实时控制面，不是硬实时安全系统
-
-HVAC Edge Control Plane 默认控制周期为 `1s`，设备或 Capability 可以显式配置更适合的软实时周期。PLC、设备保护、急停、消防、灾害保护等硬实时功能必须保留在专用硬件/固件中，不能由 Edge 软件替代。
-
-### 5.2 Input → Process → Output 与 Process Image
-
-Edge 必须采用明确的 IPO Cycle：
-
-```text
-Input
-  asynchronous Device/Protocol reads -> Channel.nextValue
-  ↓
-Switch Process Image
-  Channel.nextValue -> Channel.value
-  ↓
-Process
-  Controllers read one immutable Process Image
-  Scheduler / Arbiter applies constraints in deterministic priority order
-  ↓
-Output
-  effective values -> Device Driver -> Protocol Bridge -> device
-```
-
-一个 Cycle 内所有 Controller 必须看到同一份不可变数据。协议 I/O 不允许阻塞 Controller 运行。
-
-### 5.3 Point 与 Channel 的边界
-
-```text
-Point   = Cloud durable identity / authority / history / provenance
-Channel = Edge runtime value / quality / access / priority
-```
-
-每个受治理 Channel 映射一个 canonical Point；Edge Channel 地址不得成为新的平台主键。
-
-### 5.4 Capability Profile / Driver / Bridge
-
-Controller 不依赖厂家名或寄存器地址，而依赖 Capability Profile。第一批 Profile：
-
-```text
-VARIABLE_SPEED_PUMP
-CHILLER
-COOLING_TOWER
-ELECTRICITY_METER
-WEATHER_STATION
-```
-
-厂家/型号差异进入 Device Driver；连接、重试、轮询、协议任务调度进入 Protocol Bridge。第一批 Bridge：
-
-```text
-Modbus TCP
-Modbus RTU
-MQTT
-```
-
-BACnet / OPC UA 后续复用同一抽象。
-
-### 5.5 Cloud Command 是 governed intent
-
-Cloud 继续拥有 Command identity、IAM、审批、幂等、Audit 和 durable outcome，但 Dispatcher 不再拥有最终 actuator value。Edge Control Arbiter 对 Intent 应用安全、联锁、设备限制和更高优先级 Controller 后生成 `effectiveValue`。
-
-目标 Command evidence 至少包含：
-
-```text
-requestedValue
-effectiveValue
-constraintReason
-winningController
-controlCycle
-intentExpiresAt
-```
-
-远程 Intent 必须有 Lease/Expiry。Cloud 失联或 Intent 过期后，不允许最后一次远程设定值永久黏住；控制权回到本地策略。
-
-### 5.6 Local Timedata / publication priority
-
-Edge 不只维护“发送失败文件队列”。Channel/Point 应支持：
-
-```text
-pollPriority
-persistencePriority
-aggregationPriority
-resendPriority
-```
-
-实时变化优先发布，同时周期发送完整快照用于收敛。恢复 Replay 按优先级先发送故障、状态和控制证据，再发送低价值诊断数据。
-
-### 5.7 Simulator 与真实设备同构
-
-Simulator 与真实设备只能在 Driver/Protocol/physical model 边界不同。生产 Controller、Scheduler、Command Intent、Telemetry 和 Verification 路径必须共用。
+安全、监控、日志、追踪、备份和审计贯穿各层。浏览器只通过 nginx 和平台网关访问业务接口，不直接连数据库、MQTT 或内部服务。
 
-Simulator 目标行为至少包括：
+## 2. 进程
 
-```text
-startup / shutdown delay
-ramp rate
-minimum run / stop time
-fault / reset
-communication timeout
-stale value
-sensor noise
-stuck actuator
-write rejected
-interlock
-```
+逻辑上的业务模块和实际运行的进程是分开的：第一阶段尽量不把模块拆成单独的进程。
 
-### 5.8 Single / Cluster Controller
+| 进程 | 做什么 | 默认运行 |
+| --- | --- | --- |
+| `nginx` | 唯一的公开入口 | 是 |
+| `energy-api` | 平台网关；进程里还跑着权限（IAM）、设备登记、告警、通知、工单、指令、操作记录和查询服务（`telemetry-query-service`），每个模块有自己的双向 TLS 端口和身份，Compose 里用旧的服务名作为它的网络别名 | 是 |
+| `telemetry-worker` | 接收设备读数、最新值、实时推送、写历史、把电表读数算成用电量 | 是 |
+| `metric-worker` | 领取并执行指标计算任务 | 是 |
+| `scheduler` | 扫描定时计划、生成任务、处理错过和重试、回收过期的租约；不做业务计算，也不控制设备 | 是 |
+| `maintenance` | 证书到期扫描、处理一直失败的任务、停用租户（`cmd/maintenance-worker`） | 是 |
+| `identity-service` | 平台自己的登录服务（OIDC） | 是 |
+| `centrifugo` | 实时推送的内部传输；浏览器只看到网关的 `/realtime/` | 是 |
+| `postgres`、`clickhouse`、`redis`、`cube` | 数据和语义层 | 本机部署时 |
+| `connectivity`、`mqtt-broker` | 设备接入和 MQTT 服务器（ADR 0015） | 接现场或模拟器时 |
+| `forecast-service`、`optimization-service`、`fdd-service`、`mv-service`、`report-service`、`operations-agent-service` | 智能服务 | 按需（`intelligence`） |
+| 监控一组（`otel-collector`、`prometheus`、`alertmanager`、`loki`、`tempo`、`grafana` 等） | 指标、日志、追踪和告警 | 按档位选 |
 
-单设备 Controller 管单机状态机、sequence 和局部约束；Cluster/Plant Controller 负责多设备负荷分配与组合策略。Phase 2 目标包括：
+数据库迁移、启动前的表结构检查、身份初始化、备份都是一次性的运维操作，不算常驻进程。第一阶段不需要 Kubernetes、服务网格或 Kafka。
 
-```text
-ChillerPlantController
-ChilledWaterPumpClusterController
-CoolingWaterPumpClusterController
-CoolingTowerClusterController
-```
+本地环境还会跑冷站模拟器（`tools/eg8200-simulator/`），代替真实的现场网关。
 
-## 6. Phase 1 Edge 最小完成定义
+## 3. 数据放在哪
 
-在 ADR 0012 生效后，以下能力全部属于 Phase 1 Edge Foundation：
+- **PostgreSQL**：业务主数据、配置、设备登记、指令和告警状态等，以它为准。
+- **ClickHouse**：遥测历史、用电记录、指标结果等统计数据。
+- **Redis**：最新值和实时传输用的缓存，可以重建，不保存唯一的业务数据。
+- **对象存储**：归档、备份、数据集等大文件；第一阶段只定了和厂商无关的外部依赖约定（`object-storage.external.v1.json`），具体产品由部署环境选。
+- **MQTT**：现场和云端之间唯一的通道。
+- **现场网关**：断网时在本地存着待发的读数，恢复后再发。
 
-1. Channel Runtime；
-2. Process Image；
-3. Cycle；
-4. Controller Contract；
-5. Scheduler / Control Arbiter；
-6. Capability Profile Registry；
-7. Device Driver；
-8. Protocol Bridge；
-9. Local Safety / Interlock Controller；
-10. leased Cloud Command Intent adapter；
-11. Edge Manifest；
-12. Edge Timedata + priority resend；
-13. Simulator/real Driver parity。
+## 4. 云端和现场的分工
 
-仅有 MQTT telemetry、MQTT command 和 persistent queue 不再足以声明生产级可控 Edge 完成。当前实现因此对新的 Edge Control Plane 目标是 `PARTIAL`。
+云端不直接访问 PLC、楼控系统或其他现场设备。云端出故障时，现场必须能继续采集、缓存、执行本地控制和安全策略。
 
-## 7. Phase 1 部署边界
+云端负责：租户和权限、设备登记、指令的权限审批和记录、遥测和统计、告警、工单、预测和优化。现场负责：读写设备、本地控制和安全联锁、断网缓存。
 
-Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。
+ADR 0012 定了现场控制层的设计（参照 OpenEMS），要点：
 
-Phase 1 canonical Cloud deployment：
+- 现场是**软实时**的控制层，默认 1 秒一个周期；设备保护、急停、消防这类硬实时功能必须留在专用硬件和固件里。
+- 每个周期先读、再算、再写：所有控制器看同一份不变的数据，协议读写不能卡住控制器。
+- 点位（Point）是云端的身份和历史；通道（Channel）是现场的运行值。现场的通道地址不能变成平台的主键。
+- 云端的指令是「意图」：云端负责权限、审批、防重复和审计；现场在应用安全、联锁和设备限制之后决定实际写下去的值。远程意图有到期时间，云端断开或过期后，控制权回到现场的本地策略，不会一直停在最后一次远程设定值。
+- 模拟器和真实设备只在驱动、协议和物理模型上不同，控制和指令的路径共用。
 
-```text
-1 Linux Server
-+
-Docker Compose
-```
+现在实际做到哪一步、还缺什么，见 ADR 0012 和 `libs/edgecontrol`；真实的现场网关目前跑的是 Node-RED。
 
-当前正式 Cloud 基线只接受单服务器部署。Application / IoT / Telemetry / Metric / Data / MQTT / Observability 仍保持逻辑与进程边界；多服务器只作为未来拆分边界，不属于当前 Phase 1 Cloud 部署模式。
+## 5. 部署边界
 
-现场 HVAC Edge Control Plane 是独立 OT/Edge 边界，不计入“1 Linux Server Cloud”数量。Development/Testing 可以把它作为 Compose profile 同机模拟，Production 不允许因此把 Cloud 进程直接部署到 PLC/BMS 网络。
+第一阶段的正式云端只接受单台服务器。业务、设备数据、指标、数据库、MQTT 和监控仍保持逻辑和进程上的边界，以后要拆到多台服务器时按这些边界拆。
 
-以下能力不作为 Phase 1 Cloud 前置：
+现场网关是独立的现场边界，不算在「一台服务器」里。开发和测试时可以把模拟器放在同一台机器上，正式环境不能因此把云端进程部署进 PLC 或楼控网络。
 
-- Kubernetes 不作为 Phase 1 前置
-- Service Mesh
-- Auto Scaling
-- PostgreSQL Replica HA
-- ClickHouse Cluster
-- MQTT Cluster
-- Kafka/Redpanda 作为平台必需 backbone
-- Multi Region
-- GitOps Controller
+下面这些都不是第一阶段的前提：Kubernetes、服务网格、自动扩缩、PostgreSQL 主备、ClickHouse 集群、MQTT 集群、把 Kafka/Redpanda 当成必需的消息骨干、多地域、GitOps。
 
-这些资产如果已经存在，只能作为未来演进、认证实验或局部测试资产，不能成为 Phase 1 Cloud 部署成功的必要条件。
+## 6. 环境
 
-## 8. 环境
+正式上线前，开发、测试、预发、正式四套环境的数据库、Redis、MQTT、存储、密钥、域名和配置都要分开，开发和测试不能连正式的数据库或 MQTT。现在有本机的 `hvac-local` 一套和现场服务器一套。
 
-必须有独立：
+## 7. 恢复目标
 
-```text
-Development
-Testing
-Staging
-Production
-```
+以 `deploy/platform/phase1/recovery/recovery-targets.v1.json` 为准：PostgreSQL 最多丢 5 分钟数据、2 小时内恢复；控制相关最多丢 5 分钟、1 小时内恢复；云端遥测 4 小时内恢复；指标最多丢 30 分钟、4 小时内恢复；整台服务器更换 4 小时内恢复。
 
-四套环境分别隔离 Database、Redis、MQTT、Storage、Secrets、Domain 和 Configuration。Development/Testing 不得指向 Production 数据库或 MQTT。
+整机 4 小时恢复的前提是：有冷备或能及时更换的硬件、服务器以外的备份、有版本的配置和写好的恢复步骤。单台服务器不承诺不停机、自动切换、数据零丢失或 99.99% 的可用性。
 
-## 9. 恢复目标
-
-恢复目标以 `SE-OPS-009 V1.0 CURRENT CANDIDATE` 为权威，并由 `deploy/platform/phase1/recovery/recovery-targets.v1.json` 机器化。当前核心目标为 PostgreSQL `RPO≤5min/RTO≤2h`、Control `RPO≤5min/RTO≤1h`、Telemetry Cloud `RTO≤4h`、Metric `RPO≤30min/RTO≤4h`、Whole Server Replacement `RTO≤4h`。
-
-Whole Server 的 4 小时目标只有在 Cold Standby/可及时替换硬件、External Backup、Versioned Config 和 Recovery Runbook 同时成立时才可声明。单服务器不承诺 Zero Downtime、Automatic Failover、Database RPO=0 或 99.99% Availability。
-
-目标定义不等于达标证明。RTO 从故障被确认影响服务开始，到 Business Service Restored + 关键业务验证通过结束；Container Running 不是 RTO End。真实生产达标必须通过 timestamped Restore Drill 记录 Actual RPO/RTO。
-
-Phase 1 可用性档位固定为 `SINGLE_NODE_RECOVERABLE`，机器契约位于 `deploy/platform/phase1/availability-tier.v1.json`。观测栈按 `observability-core` / `observability-logs` / `observability-full` 三档 profile 选择，Forecast / Optimization / FDD 通过 `intelligence` profile 按需启用；资源档位位于 `deploy/platform/phase1/deployment-tiers.v1.json`。
-
-## 10. 验收来源
-
-机器可读基线：
-
-- `deploy/platform/phase1/architecture-baseline.v1.json`
-- `contracts/architecture/edge-control-plane.v1.json`
-- `deploy/platform/phase1/alignment-matrix.v1.json`
-- `deploy/platform/phase1/recovery/recovery-targets.v1.json`
-
-静态检查入口：
-
-```bash
-npm run architecture:phase1:check
-```
+定了目标不等于做到了。恢复时间从确认故障影响服务开始算，到业务恢复并通过关键业务验证为止；容器跑起来不算。是否达标要靠带时间记录的恢复演练（见 `deploy/platform/phase1/recovery/README.md`）。
