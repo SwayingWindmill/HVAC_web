@@ -714,21 +714,14 @@ try {
   `);
   expectEqual(settlementFixture, 'ACTIVE|2|Asia/Shanghai', 'Settlement/Tariff V2 fixture');
 
-  // The Metric engine prices hourly energy at the Site's import Tariff, within its Site scope only.
-  const metricTariffScope = (siteId) => psql(`
+  // Since #575 the Telemetry Query Service prices energy; the Metric engine no longer reads Tariffs (028).
+  const metricTariffDenied = psql(`
     BEGIN;
     SET LOCAL ROLE metric_engine_runtime;
-    SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
-    SET LOCAL app.authorized_site_ids = '{${siteId}}';
-    SELECT
-      (SELECT count(*) FROM core_registry.settlement_boundaries WHERE id = '${settlementBoundaryId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_assignments WHERE tariff_id = '${tariffId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_versions WHERE tariff_id = '${tariffId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_periods WHERE tariff_version_id = '${tariffVersion1}')::text;
+    SELECT count(*) FROM core_registry.tariff_versions;
     ROLLBACK;
-  `);
-  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000001'), '1|1|2|2', 'Metric engine reads its Site import Tariff');
-  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000002'), '0|0|0|0', 'Metric engine cannot read another Site Tariff');
+  `, { expectFailure: true });
+  if (!metricTariffDenied.includes('permission denied')) throw new Error('Metric engine unexpectedly read Tariff versions');
 
   const wrongTariffTimezone = psql(`
     INSERT INTO core_registry.tariff_versions (
