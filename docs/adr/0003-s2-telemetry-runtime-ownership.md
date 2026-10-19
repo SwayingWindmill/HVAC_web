@@ -1,419 +1,113 @@
-# ADR 0003 — S2 telemetry runtime ownership and service boundary
+# ADR 0003：遥测是设备当前状态唯一的负责方
 
-Status: accepted
+状态：已采纳（2026-07-23，问题单 #50）。当初的数据来源是 ThingsBoard；现在读数经接入服务（Connectivity，ADR 0015）进来，历史读数也有了自己的负责方（ADR 0008、0023），这两处按现状写在下面。
 
-Date: 2026-07-23
+## 背景
 
-Issue: #50
+在线状态、最新读数、设备快照、状态版本号、订阅授权和实时推送，需要一个说了算的负责方。旧系统做不到：同一个 Redis 键被 ThingsBoard 的公开 webhook、按需的 ThingsBoard WebSocket 和 REST 读穿补数三处写，没有统一的先后规则，也没有权限模型。
 
-## Context
+## 决定
 
-S2 needs one authoritative platform boundary for Device Presence, latest accepted telemetry, Device Snapshot, business Revision, subscription authorization and live publication. The Legacy implementation cannot provide that boundary because the same Redis key is written by a public ThingsBoard webhook, a demand-driven ThingsBoard WebSocket path and REST read-through backfill, with no shared monotonic rule or authorization model.
+### 1. 单独一个遥测负责方
 
-The prior decisions establish two constraints:
+遥测（`telemetry-runtime-service`，代码在 `modules/telemetry`，默认在 `cmd/telemetry-worker` 里跑）唯一负责：接收读数和验证来源；在线和新鲜度的策略；已接收的在线信号和最新读数；在线状态的判断；设备当前快照和每台设备的状态版本号；接收时的去重和隔离；在权限服务授权之后，按设备和点位检查订阅；推送的待发事件；决定接受断线补发，还是要求页面重新取快照。
 
-- ADR 0002 defines Presence, Freshness, Quality and Evaluation Availability as platform-owned semantics and requires a single owner for accepted observations, policy revision and monotonic Revision.
-- The Centrifugo experiment adopts Centrifugo only for connection transport, fan-out, bounded epoch/offset recovery and queue enforcement. Snapshot, business Revision, authorization, revocation and fallback remain platform responsibilities.
+它不是 ThingsBoard 的转发层：把来源的候选读数变成平台当前状态的规则都在这里。
 
-S2 must therefore decide which existing or new service owns runtime truth, how Registry and ThingsBoard identities are mapped, what is durable, what may be cached, and which data flows are prohibited.
+不放在别处的原因：
 
-## Decision
-
-### 1. Create a dedicated Telemetry Runtime bounded context
-
-A new `telemetry-runtime-service` is the unique owner of the Telemetry Runtime bounded context.
-
-It owns:
-
-- source authentication and observation acceptance;
-- the local runtime projection of Core-owned Device and ExternalBinding facts;
-- Presence and Freshness policy definitions and assignments;
-- accepted Presence Signals;
-- latest accepted Telemetry Observations;
-- Device Presence evaluation;
-- coherent Device Observation Snapshots;
-- monotonic per-Device Business Revision;
-- ingest deduplication and quarantine;
-- subscription authorization at the Device/key seam after IAM delegation;
-- the publication outbox;
-- the decision to accept transport recovery or require a new Snapshot.
-
-The service is not a pass-through ThingsBoard facade. It contains the state transition rules that turn source candidates into platform runtime truth.
-
-### 2. Do not place runtime ownership in existing services
-
-The following alternatives are rejected.
-
-| Candidate | Rejection reason |
+| 候选 | 为什么不行 |
 |---|---|
-| `legacy-hvac-backend` | It already has multiple latest writers, Legacy identifiers, direct ThingsBoard reads and process-local subscription state. Making it the S2 owner would preserve the ambiguity S2 exists to remove. |
-| `platform-core-service` | Core owns low-frequency Registry identity and binding lifecycle. High-frequency ingest, Presence evaluation, publication and runtime outage handling are a separate failure and scaling domain. Combining them would couple Device inventory availability to telemetry volume and source instability. |
-| `platform-gateway` | Gateway is the public Session and routing seam. Storing or merging telemetry there would make the edge tier a business database and publication owner. |
-| `iam-service` | IAM owns authorization facts, not telemetry state or Device evaluation. |
-| ThingsBoard | ThingsBoard is an upstream integration and historical store. Its Device IDs, activity attributes and telemetry history are not platform identity or S2 semantics. |
-| Redis or Centrifugo | They are storage/transport implementations, not business owners. Redis state and Centrifugo epoch/offset cannot define Snapshot or Business Revision. |
+| 旧后端 | 本来就有好几个写最新值的地方、旧编号、直连 ThingsBoard 和进程内的订阅状态 |
+| 登记服务 | 登记是低频的身份数据；高频接收、在线判断和推送是另一种故障和扩容范围，放一起会让设备清单的可用性受读数量和数据源稳定性牵连 |
+| 平台网关 | 网关是公开会话和路由入口，不应变成业务数据库和推送负责方 |
+| IAM | 管权限，不管读数 |
+| ThingsBoard | 只是上游集成和历史存储，它的编号和活动属性不是平台的身份或含义 |
+| Redis 或 Centrifugo | 只是存储和传输，它们的状态和推送位置不能定义快照或状态版本号 |
 
-A dedicated owner creates one deep module: callers learn one Snapshot/ingest/subscription interface while source mapping, ordering, quality, Presence, persistence and publication complexity remain local.
+### 2. 说了算的数据在 PostgreSQL 的 `telemetry_runtime`
 
-### 3. Authoritative persistence is PostgreSQL Schema `telemetry_runtime`
+迁移角色 `s2_telemetry_migrator`、运行角色 `s2_telemetry_runtime`（都是 `NOLOGIN`、`NOBYPASSRLS`，不拥有表和策略）。应用查询和行级隔离都以租户、站点开头。主要的表：设备运行时的对照（登记数据的只读副本）、在线策略、新鲜度策略、策略分配、每台设备的状态头（状态版本号、能否判断、快照信息）、每个点位的最新读数、在线状态、有限的读数证据、接收回执（去重）、接收隔离、推送待发事件。
 
-The authoritative business store is PostgreSQL Schema `telemetry_runtime`.
+遥测是这个 schema 唯一的业务写入方。`outbox-relay` 最多只能领推送待发事件、记录尝试和投递信息，不能改最新值、在线状态、策略、对照、快照或状态版本号。接入服务、网关、登记、IAM、Redis 和 Centrifugo 都不能直接写。
 
-Ownership identities are:
+### 3. 几个「位置」不能混用
 
-```text
-migration role: s2_telemetry_migrator
-runtime role:   s2_telemetry_runtime
-owner service:  telemetry-runtime-service
-```
+- **设备状态版本号**：遥测给每台设备的单调递增的数。当前快照真的变了（最新值或质量、在线状态或最后上报时间、能否判断、生效的策略版本、改变当前含义的对照变化）才加；重复投递、不改当前状态的无效或乱序读数、推送重试、缓存刷新、Centrifugo 重连、读历史都不加。
+- **来源位置**：上游消息的编号或偏移，用来去重、留重放证据和对账；不作为页面的恢复游标，也不单独决定页面上的先后。
+- **推送位置**：Centrifugo 推送流的 `epoch` 和 `offset`，只用来在有限范围内断线补发；不能代替状态版本号，也不能证明补回来的一段是完整的当前快照。
+- **恢复游标**：遥测发的不透明凭据，绑定接口版本、范围、页面最后应用的状态版本号和底层的推送位置。它本身不带权限；每次重用都要重新授权，并且范围完全一致。无效、过期、不匹配或补发失败，一律回到重新取一次完整快照。
 
-Runtime roles are `NOLOGIN`, `NOBYPASSRLS` group identities and do not own tables or RLS policies. Organization- and Site-leading predicates are mandatory in application queries and PostgreSQL RLS.
+### 4. 读数怎么对到设备
 
-The initial logical tables are:
+设备身份、登记状态和对照关系由登记服务负责。现在读数经接入服务进来：接入服务在网关所属的租户里，按网关里的设备名找到设备、按点位代码找到点位（见 `modules/connectivity/README.md`），再把租户、站点、设备和点位连同读数交给遥测。
 
-| Logical table | Purpose |
+规则：
+
+1. 对不上设备或点位的读数进接收隔离，不改当前状态。
+2. 读数从不新建设备、对照或站点分配。
+3. 对不上时不透露别的租户或站点有没有这台设备。
+4. 对外的快照和推送只用平台的编号。
+
+### 5. 接收和推送的顺序
+
+所有来源（实时推送、重放、对账读回）都进同一个接收流程：验证来源 → 找到设备和点位 → 校验时间、点位、类型、单位、范围 → 开事务并锁住这台设备的状态头 → 按来源位置去重 → 判断质量、是否替换最新值、在线状态 → 当前快照变了，就加状态版本号并写证据、最新值、在线状态、快照和推送待发事件；否则只写有限的证据和回执 → 提交 → 返回接收、隔离或拒绝。之后投递程序领已提交的待发事件，用同一个状态版本号推送出去。
+
+- 事务提交之前不推送；事务失败就没有新的状态版本号，也不推送。
+- 推送至少一次，重试用同一个事件编号和状态版本号；页面按状态版本号处理，重复推送无害。
+- 来源适配器可以重试或缓存传输，但不能在遥测提交之前就把读数当作平台的当前状态确认。
+
+### 6. 读快照
+
+说了算的顺序：PostgreSQL `telemetry_runtime` > 可选的、由遥测写的带版本缓存副本。
+
+1. 每次请求先按当前的权限授权；授权失败或 IAM 不可用，一律拒绝，缓存不能给自己授权。
+2. 正常的快照来自 PostgreSQL。
+3. PostgreSQL 不可用时，缓存只能作为「上次的值」提供，并且明确标「无法判断」、保留旧的时间、标为非当前值；不能盖上当前请求时间冒充新鲜。
+4. 公开的读取从不去上游补数，读取也不会引起隐藏的写入。
+5. 一台设备的快照在一个状态版本号上是完整一致的。多台设备的批量读取是逐台的结果，不是一个全局事务：没有、无权或不可用的要明确标出来，不能变成空对象，也不能把无关的项标成成功。
+6. 点位的 `MISSING`、`STALE` 和质量不好，都是快照里明确的内容，不能悄悄省略。
+
+### 7. 授权和订阅
+
+平台网关负责公开会话，IAM 负责权限、明确禁止和策略版本。
+
+- 取快照：浏览器带会话请求 → 网关请 IAM 按人、租户 / 站点、设备 / 点位和动作授权 → IAM 签一张有范围的授权 → 网关带着授权请求遥测 → 遥测验证授权、接口、设备对照和点位，返回快照或不透露存在与否的 404。网关不自己拼读数，不缓存快照，也不信浏览器带的身份头。
+- 实时订阅：网关为当前登录发一个短时的订阅准备 → 浏览器请求某台设备、某些点位的频道 → Centrifugo 调遥测的订阅授权 → 遥测检查当前的范围授权、对照和点位，拒绝时不透露是否存在。遥测接收 IAM 的撤销事件，记下撤销位置，并让 Centrifugo 在服务端取消受影响的订阅；重新订阅会重新判断并被拒绝。Centrifugo 只负责执行取消，不保存撤销事实。
+
+### 8. 推送用单独的 Redis
+
+Centrifugo 用单独的 Redis 做节点间的推送分发、推送位置、有限的补发历史和连接协调。里面没有说了算的最新值。Redis 的历史丢了，页面就重新取快照，不会从上游补数。
+
+### 9. 历史读数不归遥测的当前状态管
+
+遥测的当前状态只管「现在」。历史读数先写进历史（`telemetry_history.observations`，ClickHouse），再由能源模块算成用电量；查询走查询服务和 Cube（ADR 0008、0023）。历史查询不会改最新值或在线状态，当前快照的接口也从不退回历史查询。
+
+### 10. 出故障时
+
+| 故障 | 怎么处理 |
 |---|---|
-| `device_runtime_bindings` | Read-only projection of Core-owned Device, Organization, Site, integration instance and active ExternalBinding facts, including the Core revision used. |
-| `presence_policies` | Versioned Presence Policy definitions. |
-| `freshness_policies` | Versioned key Freshness and Quality Policy definitions. |
-| `device_policy_assignments` | Device or Device-class policy assignment with effective revision. |
-| `device_runtime_heads` | Per-Device Business Revision, current Evaluation Availability and Snapshot metadata. |
-| `latest_observations` | Latest accepted observation per Device/key with value, type, unit, Quality, reason codes, `sampledAt`, `receivedAt` and source identity. |
-| `device_presence` | Current Presence conclusion, Last Seen, policy revision, evidence basis and evaluation time. |
-| `observation_evidence` | Bounded accepted/rejected candidate evidence used for audit, ordering diagnosis and reconciliation; not a public long-term timeseries store. |
-| `ingest_receipts` | Source Position deduplication and replay evidence. |
-| `ingest_quarantine` | Candidates whose source, mapping or validation prevents them from becoming current state. |
-| `telemetry_publication_outbox` | Transactional publication intent for committed Device Snapshot changes. |
-
-Exact DDL and retention are implementation-ticket decisions, but the ownership and transaction grouping are fixed by this ADR.
-
-### 4. One business writer, one restricted relay
-
-`telemetry-runtime-service` is the only business writer to Schema `telemetry_runtime`.
-
-`outbox-relay` may have restricted relay access only to `telemetry_publication_outbox`. It may lease rows, record attempts and mark delivery metadata. It cannot mutate latest values, Presence, policy, mapping, Snapshot or Business Revision.
-
-A source adapter, Gateway, Core, IAM, Legacy backend, ThingsBoard, Redis and Centrifugo have no direct write access to the Schema.
-
-### 5. Three position concepts remain distinct
-
-S2 preserves three non-interchangeable position concepts.
-
-#### Business Revision
-
-A monotonic integer owned by `telemetry-runtime-service`, scoped to one Device Observation Snapshot.
-
-It advances exactly once when a committed current Snapshot changes, including a change to:
-
-- latest accepted values or Quality;
-- Device Presence or Last Seen;
-- Evaluation Availability;
-- the effective policy revision represented by the Snapshot;
-- mapping applicability that changes current runtime interpretation.
-
-It does not advance for:
-
-- duplicate delivery;
-- rejected or out-of-order candidates that do not alter current state;
-- outbox retry or duplicate publication;
-- cache refresh;
-- Centrifugo reconnect;
-- a historical read.
-
-#### Source Position
-
-An upstream event identity or offset owned by the source adapter contract, for example an integration-instance/event ID or partition/offset pair. It supports deduplication, replay evidence and reconciliation.
-
-A Source Position is never exposed as a public Cursor and never determines client application order by itself.
-
-#### Transport Position
-
-Centrifugo stream `epoch` and `offset`, used only for bounded reconnect recovery. It does not replace Business Revision and does not prove that a recovered suffix is a coherent current Snapshot.
-
-#### Recovery Cursor
-
-An opaque platform contract owned by `telemetry-runtime-service` that binds the recovery request to contract version, route/scope, the client's last applied Business Revision and the underlying Transport Position.
-
-A Recovery Cursor has no business authority. Reuse requires current authorization and an exact route, Organization, Site, Device and key-scope match. Invalid, expired, mismatched or unsuccessful recovery always falls back to an authoritative Device Observation Snapshot. Issue #51 defines whether the wire form is an explicit token, SDK-managed state or a subscription descriptor, but it cannot transfer ownership to Gateway or Centrifugo.
-
-### 6. Registry identity and ThingsBoard mapping
-
-`platform-core-service` remains the unique owner of:
-
-- immutable Registry Device UUIDv7 identity;
-- Registry Lifecycle;
-- ExternalBinding identity and active uniqueness;
-- binding migration, quarantine and retirement.
-
-Telemetry Runtime consumes Core-owned binding changes through event family `hvac.registry.external-binding.v1` and maintains a local projection. It also has a reconciliation interface to Core so missed events cannot permanently corrupt the projection.
-
-A source candidate resolves by:
-
-```text
-integrationInstanceId
-+ externalEntityType
-+ externalId
-→ exactly one active ExternalBinding
-→ Registry Device UUIDv7 + Organization + Site
-```
-
-Rules:
-
-1. Zero active bindings produces ingest quarantine reason `MAPPING_NOT_FOUND`.
-2. More than one active binding produces `MAPPING_CONFLICT` and an alert. Core uniqueness should make this impossible, but the ingest boundary still fails closed.
-3. A retired or quarantined mapping produces quarantine and no current-state mutation.
-4. An observation never creates a Device, ExternalBinding or Site assignment.
-5. A mapping failure does not reveal whether a matching Device exists in another Organization or Site.
-6. Public snapshots and publications contain only platform IDs. ThingsBoard IDs remain internal evidence.
-
-Core and Telemetry Runtime never write each other's Schema. Binding propagation is event plus reconciliation, not cross-schema mutation or reverse synchronization.
-
-### 7. Ingest transaction and publication sequence
-
-Every source path, including live push, webhook, replay and ThingsBoard reconciliation readback, enters the same acceptance module.
-
-```mermaid
-sequenceDiagram
-    participant Source as Source adapter
-    participant Runtime as Telemetry Runtime
-    participant DB as telemetry_runtime PostgreSQL
-    participant Relay as Outbox relay
-    participant Transport as Centrifugo
-
-    Source->>Runtime: authenticated candidate + Source Position
-    Runtime->>Runtime: resolve projected ExternalBinding
-    Runtime->>Runtime: validate time/key/type/unit/range
-    Runtime->>DB: begin transaction and lock Device runtime head
-    Runtime->>DB: dedupe Source Position
-    Runtime->>Runtime: evaluate Quality, latest replacement and Presence
-    alt current Snapshot changes
-        Runtime->>DB: increment Business Revision
-        Runtime->>DB: write evidence/latest/Presence/Snapshot/outbox
-    else duplicate, rejected or no current change
-        Runtime->>DB: write bounded evidence/receipt only
-    end
-    Runtime->>DB: commit
-    Runtime-->>Source: accepted, quarantined or typed rejection
-    Relay->>DB: lease committed outbox row
-    Relay->>Transport: publish same Business Revision
-    Relay->>DB: mark relay delivery metadata
-```
-
-Atomicity rules:
-
-- No publication occurs before the authoritative transaction commits.
-- A failed transaction produces no new Business Revision and no publication.
-- Publication is at-least-once. Retries use the same event ID and Business Revision.
-- A duplicate publication is harmless because clients apply Business Revision rules.
-- An adapter may retry or buffer transport delivery, but it cannot acknowledge a candidate as current platform truth before the owner commits it.
-
-### 8. Source readback is reconciliation, not read-through
-
-ThingsBoard readback is permitted only as an internal reconciliation source.
-
-The reconciler:
-
-1. authenticates as a workload;
-2. resolves the same Core-owned mapping projection;
-3. records a Source Position or deterministic reconciliation identity;
-4. submits candidates through the same acceptance module;
-5. preserves actual source timestamps;
-6. receives the same duplicate, ordering, Quality and quarantine treatment as every other source.
-
-Public Snapshot/latest reads never call ThingsBoard to fill a miss, repair Redis or overwrite latest state. A read cannot cause a hidden business write.
-
-### 9. Snapshot read order and partial-result rules
-
-The authority order is:
-
-```text
-PostgreSQL telemetry_runtime
-> optional owner-written revisioned cache replica
-> ThingsBoard as reconciliation input only
-```
-
-The optional cache is not required for the first implementation. When introduced, it must contain the complete Device Snapshot payload, Business Revision and original evaluation/sample/receipt timestamps.
-
-Read rules:
-
-1. Every request is authorized against current IAM facts before state is returned.
-2. Authorization failure or IAM unavailability fails closed; cached telemetry cannot authorize itself.
-3. A normal current Snapshot comes from the authoritative owner state.
-4. If PostgreSQL is unavailable, a cache may provide Last Known context only when the response explicitly reports Evaluation Availability `UNAVAILABLE`, preserves its old timestamps and marks the value non-current.
-5. No cache value may be stamped with the current request time to simulate freshness.
-6. ThingsBoard is never queried on the public read path.
-7. One Device Snapshot is coherent at one Business Revision.
-8. A multi-Device batch is a collection of per-Device results, not one global transaction. Missing, unauthorized or unavailable items must be typed explicitly; they cannot become silent empty objects or cause unrelated items to be relabelled successful.
-9. Per-key `MISSING`, `STALE` and `SUSPECT` states are valid explicit Snapshot content. Silent omission is not a partial-result contract.
-
-The exact wire representation is deferred to Issue #51, but the ownership and truth semantics are fixed here.
-
-### 10. Public request and subscription authorization
-
-`platform-gateway` remains the public Session boundary. `iam-service` remains the owner of authorization facts, explicit denies and IAM Policy Revision.
-
-For a Snapshot request:
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant Gateway
-    participant IAM
-    participant Runtime as Telemetry Runtime
-
-    Browser->>Gateway: Session-authenticated telemetry request
-    Gateway->>IAM: authorize Principal + Organization/Site + Device/key action
-    IAM-->>Gateway: signed scoped delegation + Policy Revision
-    Gateway->>Runtime: request + verified delegation
-    Runtime->>Runtime: verify grant, route, Device binding and exact keys
-    Runtime-->>Gateway: authorized Device Snapshot or nondiscoverable 404
-    Gateway-->>Browser: public response
-```
-
-The Gateway does not construct business telemetry, cache Snapshot state or trust browser-supplied identity headers.
-
-For live subscription:
-
-1. Gateway authenticates the Session and issues a short-lived transport bootstrap derived from current platform identity.
-2. The browser requests an internal Device/key channel.
-3. Centrifugo calls the Telemetry Runtime subscribe proxy.
-4. Telemetry Runtime verifies current scoped authorization, current mapping and requested keys.
-5. Denial is nondiscoverable and fails closed.
-6. IAM revocation event family `hvac.iam.authorization-revoked.v1` is consumed by Telemetry Runtime.
-7. Telemetry Runtime records the revocation watermark and invokes Centrifugo server unsubscribe for affected live subscriptions.
-8. Resubscribe is re-evaluated and denied.
-
-Centrifugo performs unsubscribe delivery but does not own the revocation fact or audit record.
-
-### 11. Transport persistence uses dedicated Redis
-
-The production Centrifugo candidate uses a dedicated Redis deployment/namespace for transport broker and short-window history.
-
-It is not shared with Legacy Redis and contains no authoritative latest-value keys.
-
-Its responsibility is limited to:
-
-- node-to-node publication fan-out;
-- epoch/offset stream position;
-- bounded recovery history;
-- connection and queue coordination required by the selected Centrifugo engine.
-
-Loss or expiry of Redis history causes Snapshot fallback. It does not cause data reconstruction from ThingsBoard on the public path.
-
-The Redis topology, retention duration and capacity values remain rollout-gate decisions, but the separation from Legacy Redis and PostgreSQL business authority is fixed.
-
-### 12. Historical timeseries remains outside S2
-
-Long-range historical timeseries is not owned by Telemetry Runtime in this slice.
-
-During compatibility:
-
-- `legacy-hvac-backend` owns the historical public route;
-- ThingsBoard remains its source;
-- Gateway and IAM still enforce current Organization/Site/Device authorization;
-- the route is separately registered and observable;
-- its response cannot update Telemetry Runtime latest state;
-- S2 Snapshot/latest routes never fall back to it;
-- no reverse write from S2 to ThingsBoard is introduced.
-
-A future historical-data owner requires a separate ADR and migration plan.
-
-### 13. Failure behavior
-
-| Failure | Required behavior |
-|---|---|
-| Source authentication fails | Reject before mapping lookup; record bounded security evidence. |
-| Mapping missing/conflicting/quarantined | Put candidate in Ingest Quarantine; do not create a Device or current state. |
-| PostgreSQL owner unavailable | Do not acknowledge a current-state commit or publish a new Revision. Public reads return typed unavailability; Last Known cache context is non-current only. |
-| Optional cache unavailable | Read PostgreSQL directly; no business degradation when authority is healthy. |
-| IAM unavailable | Fail closed for new reads and subscriptions. Existing subscriptions are bounded by short lifetime and explicit revocation state; no cache bypass. |
-| Core binding event delayed | Continue using the last reconciled projection with its Core revision; quarantine candidates that cannot be resolved; alert projection lag. |
-| Outbox relay unavailable | Authoritative state commits remain durable; publication lags and is retried with the same Revision. Snapshot reads still return current committed state. |
-| Centrifugo unavailable | Snapshot remains available; realtime delivery is explicitly unavailable. |
-| Redis transport history lost | Recovery fails and the client loads a new authoritative Snapshot. |
-| ThingsBoard unavailable | New source observations may stop; Evaluation Availability follows ADR 0002 coverage rules. No public read-through fallback. |
-| Legacy backend unavailable | S2 current Snapshot and Presence are unaffected; only historical compatibility may fail. |
-| Duplicate or delayed source event | Record/deduplicate; do not replace newer current state or advance Revision. |
-| Revocation stream unhealthy | New subscriptions fail closed; operators are alerted; no authorization bypass. |
-
-### 14. Forbidden data flows
-
-The following paths are prohibited:
-
-```text
-browser -> ThingsBoard
-public latest read -> ThingsBoard read-through -> latest write
-ThingsBoard -> latest projection direct write
-Legacy backend -> telemetry_runtime business write
-Legacy Redis -> S2 current state
-cache -> subscription authorization
-Centrifugo history -> Snapshot authority
-S2 latest -> ThingsBoard reverse sync
-Core <-> Telemetry Runtime cross-schema business writes
-shadow/fallback comparison -> side effects
-```
-
-Migration comparisons are read-only. A shadow path may compare Legacy and S2 results and record bounded evidence, but cannot publish, repair either side or change authorization.
-
-### 15. Ownership table
-
-| Resource or decision | Unique owner | Permitted consumers/adapters | Explicitly not owner |
-|---|---|---|---|
-| Registry Device and Lifecycle | `platform-core-service` | Gateway, IAM, Telemetry Runtime projection | ThingsBoard, Legacy Redis, Centrifugo |
-| ExternalBinding and mapping quarantine | `platform-core-service` | Telemetry Runtime projection/reconciler | source observation, Telemetry Runtime ingest |
-| IAM authorization and Policy Revision | `iam-service` | Gateway and Telemetry Runtime through signed delegation/events | Gateway cache, Centrifugo channel name |
-| Presence/Freshness policy | `telemetry-runtime-service` | Snapshot evaluation, UI/FDD consumers through contract | Core lifecycle, ThingsBoard attributes |
-| Latest accepted telemetry | `telemetry-runtime-service` | Snapshot, publication, bounded cache replica | ThingsBoard, Legacy Redis, REST read-through |
-| Device Presence | `telemetry-runtime-service` | Snapshot and publication | Registry Lifecycle, Centrifugo presence |
-| Device Observation Snapshot | `telemetry-runtime-service` | Gateway, browser, FDD and future control contracts | cache, ThingsBoard, Gateway |
-| Business Revision | `telemetry-runtime-service` | client reconciliation, outbox publication | Source Position, Centrifugo offset |
-| Source Position | source adapter contract; persisted by Telemetry Runtime | ingest dedupe and reconciliation | browser recovery |
-| Transport Position | Centrifugo | client SDK reconnect logic | business ordering and Snapshot authority |
-| Recovery Cursor | `telemetry-runtime-service` | Gateway/Centrifugo adapters and authorized clients | Gateway, Centrifugo history, cache |
-| Publication intent | `telemetry-runtime-service` | restricted `outbox-relay` | direct source publisher |
-| Realtime transport | Centrifugo | browser transport adapter | business state owner |
-| Transport history | dedicated Redis through Centrifugo | bounded recovery only | latest/Persistence authority |
-| Historical timeseries compatibility | `legacy-hvac-backend` | authorized compatibility callers | S2 latest and Presence |
-
-## Consequences
-
-### Positive
-
-- S2 has one business writer and one monotonic Revision rule.
-- Registry identity, authorization, runtime state and transport each have separate owners.
-- Public reads cannot mutate state or hide upstream failure through read-through.
-- Multi-replica publication uses a durable outbox instead of process-local subscription authority.
-- Centrifugo remains replaceable because no authoritative contract uses its epoch/offset as business state.
-- Historical timeseries can remain available without contaminating the S2 current-state model.
-
-### Costs
-
-- A new service, PostgreSQL Schema, runtime identity, migrations, event consumers and operational SLO are required.
-- Core binding and IAM revocation propagation need event plus reconciliation mechanisms.
-- The platform must operate dedicated Redis for production Centrifugo transport.
-- Legacy and S2 comparison requires explicit migration evidence rather than hidden fallback.
-
-### Deferred to later tickets
-
-`contracts/ownership/s2-telemetry-ownership.v1.json` is a planned ownership lock, not activation of an unimplemented production service. The implementation tickets must add the service, Schema and identities to the active Data Ownership Registry only when their migrations and enforcement exist.
-
-Issue #51 defines the public Snapshot, batch, subscription, publication and recovery wire contracts.
-
-Issue #52 defines metrics, capacity targets, Redis/Centrifugo retention, publication lag SLO, projection-lag SLO, canary and rollback gates.
-
-Issue #53 splits implementation into ordered tracer-bullet tickets.
-
-## Architecture Decision Trace
-
-| Issue #50 requirement | Decision location | Machine-readable asset |
-|---|---|---|
-| Unique Presence/latest/Revision/subscription owner | Sections 1–5 | `ownerService`, `ownedResources`, `positions` |
-| Core, Gateway, IAM, Legacy, ThingsBoard and transport responsibility | Sections 2, 6, 10–15 | `serviceResponsibilities` |
-| ThingsBoard ID to Device UUIDv7 mapping | Section 6 | `mappingRules` |
-| Cache, persistence and readback authority | Sections 3, 8–9, 11 | `stores`, `snapshotReadOrder` |
-| Schema, event family, projection and runtime identity | Sections 3–4, 6–7, 10 | `authoritativeStore`, `ownedResources`, `inputEvents`, `databaseAccess` |
-| Single-writer transaction and publication | Sections 4 and 7 | `ingestTransaction` |
-| Historical timeseries boundary | Section 12 | `historicalTimeseries` |
-| Prohibited dual-write and reverse-sync paths | Section 14 | `forbiddenFlows` |
-
-Changing the unique owner, authoritative store, Business Revision scope, mapping authority, Redis/TB authority order, historical compatibility ownership or any forbidden-flow rule requires a new ADR and a compatible ownership-contract revision.
+| 来源认证失败 | 在查对照之前拒绝，留下有限的安全记录 |
+| 对不上设备 / 点位 | 进接收隔离，不新建设备，不改当前状态 |
+| PostgreSQL 不可用 | 不确认任何当前状态的提交，不推送新版本号；公开读取返回明确的不可用，缓存只能给非当前的上次的值 |
+| 可选缓存不可用 | 直接读 PostgreSQL，没有业务降级 |
+| IAM 不可用 | 新的读取和订阅一律拒绝；已有订阅受短有效期和明确撤销的约束，不绕过缓存 |
+| 投递程序不可用 | 当前状态照样持久提交，推送延后并用同一个版本号重试；快照读取仍返回已提交的当前状态 |
+| Centrifugo 不可用 | 快照仍可用，实时推送明确不可用 |
+| Redis 推送历史丢失 | 补发失败，页面重新取快照 |
+| 上游数据源不可用 | 新读数可能停，能否判断按 ADR 0002 的覆盖规则；没有公开读取的回退 |
+| 重复或晚到的来源事件 | 记录并去重；不替换更新的当前状态，不加版本号 |
+| 撤销事件流不正常 | 新订阅一律拒绝，告警通知运维；不绕过授权 |
+
+### 11. 禁止的数据流
+
+浏览器直连上游数据源；公开读取去上游补数并写最新值；上游直接写最新值；旧后端或旧 Redis 写当前状态；用缓存给订阅授权；拿 Centrifugo 的历史当快照依据；把最新值反向同步回上游；登记和遥测跨 schema 写对方的业务数据；任何对比、兜底路径产生副作用。
+
+## 后果
+
+- 当前状态只有一个写入方、一条版本号规则；登记身份、权限、运行状态和传输各有负责方。
+- 公开读取不会改状态，也不会靠读穿掩盖上游故障。
+- 多副本的推送用持久的待发事件，不靠进程内的订阅状态；Centrifugo 可以替换，因为没有哪个说了算的约定用它的推送位置当业务状态。
+- 代价：多一个服务、一套 schema、运行身份、迁移、事件消费和服务目标；登记对照和权限撤销需要「事件 + 对账」两条路；正式环境要单独运维给 Centrifugo 用的 Redis。
+
+改唯一负责方、说了算的存储、状态版本号的范围、对照的负责方、缓存的先后顺序或任何一条禁止的数据流，要写新的 ADR，并同步修订 `contracts/ownership/` 里的归属定义。
