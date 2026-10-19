@@ -86,7 +86,7 @@ const completion = Object.freeze({
       resourceType: 'period-comparison',
       resourceId: 'comparison-001',
       revision: 'rev-1',
-      toolExecutionId: 'read-site-context',
+      toolExecutionId: 'E1',
     }),
   ]),
   limitations: Object.freeze([]),

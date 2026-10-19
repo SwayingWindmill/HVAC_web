@@ -1,5 +1,5 @@
 import type { AgentTool as PiAgentTool } from '@earendil-works/pi-agent-core';
-import { Type, type TSchema } from '@earendil-works/pi-ai';
+import { Type, type Static, type TSchema } from '@earendil-works/pi-ai';
 
 import {
   AgentToolError,
@@ -72,11 +72,10 @@ export const terminalSchemaRefusal = (toolName: string, result: unknown): Termin
   if (errors.some(({ message }) => /additional properties|schema is false/u.test(message))) return 'FINDING_EXTRA_FIELD';
   const first = errors[0];
   if (first === undefined) return 'FINDING_CONTENT_INVALID';
-  // A missing field is reported on the object that should hold it: "limitations: must have required properties limitations".
-  const missing = /required propert(?:y|ies) (\w+)/u.exec(first.message)?.[1];
-  const field = SCHEMA_FIELDS[missing ?? first.path.split('.')[0]!];
+  // The path ends with a missing field's name: "keyFigures.0.value: must have required properties value".
+  const field = SCHEMA_FIELDS[first.path.split('.')[0]!];
   if (field === undefined) return 'FINDING_CONTENT_INVALID';
-  const how = missing !== undefined ? 'MISSING'
+  const how = /required propert(?:y|ies)/u.test(first.message) ? 'MISSING'
     : /more than \d+ characters/u.test(first.message) ? 'TOO_LONG'
       : /more than \d+ items/u.test(first.message) ? 'TOO_MANY'
         : 'INVALID';
@@ -102,13 +101,8 @@ const toolFailureCodes = new Set<AgentToolErrorCode>([
 
 interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
-  readonly completedToolIds: Set<string>;
-  /**
-   * Each successful read by the short id the model cites ("E1" → the provider's call id). The
-   * model mis-copied the provider's long random ids, refusing its own cards (#624).
-   */
+  /** Each successful read by the short id the model cites in a card ("E1" → the provider's call id). */
   readonly evidenceIds: Map<string, string>;
-  reads: number;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
   calls: number;
@@ -218,8 +212,7 @@ const adaptProjectTool = (
   execute: async (toolCallId, parameters, signal) => {
     state.calls += 1;
     // Numbered in call order, so reads started together get their ids in the order they were asked.
-    state.reads += 1;
-    const evidenceId = `E${state.reads}`;
+    const evidenceId = `E${state.calls}`;
     if (state.calls > state.budget.maxToolCalls) {
       state.onBudgetExhausted('TOOL_CALL_LIMIT');
       throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
@@ -240,7 +233,6 @@ const adaptProjectTool = (
         state.onBudgetExhausted('TOOL_RESULT_TOO_LARGE');
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
-      state.completedToolIds.add(toolCallId);
       state.evidenceIds.set(evidenceId, toolCallId);
       // The model cites a read in investigation_complete by this id.
       return {
@@ -281,19 +273,12 @@ const withoutRestatedLimitations = <T extends { readonly limitations: readonly s
 };
 
 // An empty unit means the figure has none (能效); the card leaves it out rather than refusing.
-const withoutEmptyUnits = (parameters: unknown): unknown => {
-  if (typeof parameters !== 'object' || parameters === null || !('keyFigures' in parameters)) return parameters;
-  const { keyFigures } = parameters as { readonly keyFigures?: unknown };
-  if (!Array.isArray(keyFigures)) return parameters;
-  return {
+type InvestigationCompleteArguments = Static<typeof investigationCompleteParameters>;
+const withoutEmptyUnits = (parameters: InvestigationCompleteArguments): InvestigationCompleteArguments =>
+  parameters.keyFigures === undefined ? parameters : {
     ...parameters,
-    keyFigures: keyFigures.map((figure: unknown) => {
-      if (typeof figure !== 'object' || figure === null || (figure as { unit?: unknown }).unit !== '') return figure;
-      const { unit: _empty, ...rest } = figure as Record<string, unknown>;
-      return rest;
-    }),
+    keyFigures: parameters.keyFigures.map(({ unit, ...figure }) => (unit === '' || unit === undefined ? figure : { ...figure, unit })),
   };
-};
 
 const createInvestigationCompleteTool = ({
   sessionId,
@@ -312,14 +297,14 @@ const createInvestigationCompleteTool = ({
     const refuse = refuser(onRefused, toolCallId);
     let parsed: ReturnType<typeof parseInvestigationComplete>;
     try {
-      parsed = parseInvestigationComplete(withoutEmptyUnits(parameters));
+      // Pi has checked the arguments against investigationCompleteParameters before this runs.
+      parsed = parseInvestigationComplete(withoutEmptyUnits(parameters as InvestigationCompleteArguments));
     } catch (error) {
       return refuse('FINDING_CONTENT_INVALID', error instanceof Error ? error.message : String(error));
     }
     if (needsExecutionCorrection(answers())) refuse('FINDING_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
-    // A ref names a read by its short id (or, as before, by its call id); the card keeps the call id.
-    const readOf = (id: string): string | undefined => state.evidenceIds.get(id) ?? (state.completedToolIds.has(id) ? id : undefined);
-    if (parsed.evidenceRefs.some(({ toolExecutionId }) => readOf(toolExecutionId) === undefined)) {
+    // A ref names a read by its short id; the card keeps the read's call id.
+    if (parsed.evidenceRefs.some(({ toolExecutionId }) => !state.evidenceIds.has(toolExecutionId))) {
       // The model reads this refusal, so it says which ids it may cite.
       const cited = [...state.evidenceIds.keys()];
       refuse('FINDING_EVIDENCE_NOT_READ', cited.length === 0
@@ -328,7 +313,7 @@ const createInvestigationCompleteTool = ({
     }
     const finding = Object.freeze({
       ...parsed,
-      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: readOf(ref.toolExecutionId)! }))),
+      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: state.evidenceIds.get(ref.toolExecutionId)! }))),
     });
     claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
@@ -390,9 +375,7 @@ const createInvestigationRequestInputTool = ({
 export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
   const state: ProjectToolBudgetState = {
     budget: input.budget,
-    completedToolIds: new Set<string>(),
     evidenceIds: new Map<string, string>(),
-    reads: 0,
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
     calls: 0,

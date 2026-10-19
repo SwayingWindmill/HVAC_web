@@ -38,27 +38,27 @@ func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string, time.Du
 }
 
 type operationsGatewayFixture struct {
-	handler          http.Handler
-	tenantID         string
-	siteID           string
-	deviceID         string
-	sessionID        string
-	gatewaySigner    *ecdsa.PrivateKey
-	counter          *fakeOperationsRateLimiter
-	limiter          *limitpolicy.Limiter
-	iamCalls         atomic.Int32
-	operationsCalls  atomic.Int32
-	denySite         atomic.Bool
-	invalidStream    atomic.Bool
-	invalidIdentity  atomic.Bool
-	rejectUnsafe     atomic.Bool
-	auditRead        atomic.Bool
-	usageExtraField  atomic.Bool
+	handler              http.Handler
+	tenantID             string
+	siteID               string
+	deviceID             string
+	sessionID            string
+	gatewaySigner        *ecdsa.PrivateKey
+	counter              *fakeOperationsRateLimiter
+	limiter              *limitpolicy.Limiter
+	iamCalls             atomic.Int32
+	operationsCalls      atomic.Int32
+	denySite             atomic.Bool
+	invalidStream        atomic.Bool
+	invalidIdentity      atomic.Bool
+	rejectUnsafe         atomic.Bool
+	auditRead            atomic.Bool
+	usageExtraField      atomic.Bool
 	usageTooManyFailures atomic.Bool
-	lastUpstream     atomic.Pointer[http.Request]
-	lastUpstreamBody atomic.Pointer[string]
-	lastOwner        atomic.Pointer[http.Request]
-	registryActions  []registryauth.Action
+	lastUpstream         atomic.Pointer[http.Request]
+	lastUpstreamBody     atomic.Pointer[string]
+	lastOwner            atomic.Pointer[http.Request]
+	registryActions      []registryauth.Action
 }
 
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {

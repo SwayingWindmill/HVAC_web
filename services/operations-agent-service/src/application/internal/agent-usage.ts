@@ -1,10 +1,10 @@
-/** How often each Tool was called on a day, and how often it failed. */
 /** Why calls of a Tool failed, as the code the record keeps (#624), with how many times. */
 export interface AgentToolFailureReason {
   readonly code: string;
   readonly count: number;
 }
 
+/** How often each Tool was called on a day, and how often it failed. */
 export interface AgentToolUsage {
   readonly toolName: string;
   readonly calls: number;

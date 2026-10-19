@@ -1,6 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 
-import type { AgentToolUsage, AgentUsage, AgentUsageReader } from '../../application/index.js';
+import type { AgentToolFailureReason, AgentToolUsage, AgentUsage, AgentUsageReader } from '../../application/index.js';
 
 interface RunDayRow extends QueryResultRow {
   readonly day: string;
@@ -76,9 +76,10 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
         values,
       ),
     ]);
-    const reasonsByTool = new Map<string, { code: string; count: number }[]>();
+    const toolKey = (row: { day: string; tool_name: string }): string => `${row.day}|${row.tool_name}`;
+    const reasonsByTool = new Map<string, AgentToolFailureReason[]>();
     for (const row of reasons.rows) {
-      const key = `${row.day}|${row.tool_name}`;
+      const key = toolKey(row);
       reasonsByTool.set(key, [...(reasonsByTool.get(key) ?? []), Object.freeze({ code: row.failure_code, count: Number(row.failed) })]);
     }
     const runsByDay = new Map(runs.rows.map((row) => [row.day, row]));
@@ -89,7 +90,7 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
         toolName: row.tool_name,
         calls: Number(row.calls),
         failed: Number(row.failed),
-        failureReasons: Object.freeze(reasonsByTool.get(`${row.day}|${row.tool_name}`) ?? []),
+        failureReasons: Object.freeze(reasonsByTool.get(toolKey(row)) ?? []),
       }));
       toolsByDay.set(row.day, list);
     }
