@@ -140,7 +140,7 @@ POST /api/v1/telemetry/recovery-cursors:checkpoint
 
 接口代码由生成器产出：Go 网关的服务端接口、网页的 TypeScript 请求函数和类型、推送的 TypeScript 类型，以及一个 `TelemetryLiveClient` 适配器，把 Centrifugo 的令牌、频道、订阅授权事件、推送位置和游标兑换都藏起来。页面代码只用生成的请求函数和 `TelemetryLiveClient`，不直接引用 Centrifugo SDK、不解析频道、不看连接令牌，也不手写重复的快照或推送类型。页面看到的只是「快照 / 实时 / 不可用 / 已撤销」这几种状态。
 
-后来又加了设备历史的两个接口（`device-series:query` 原始读数、`device-series:aggregate` 按时间段统计），规则见 `modules/telemetry/README.md`。
+设备历史另有两个接口（`device-series:query` 原始读数、`device-series:aggregate` 按时间段统计），规则见 `modules/telemetry/README.md`。
 
 ### 15. 版本和兼容
 

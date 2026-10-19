@@ -1,6 +1,6 @@
 # ADR 0009：AI 助手拥有自己的问答记录，不拥有业务数据；评测看过程不只看答案
 
-状态：已采纳（2026-07-30）。当初写的「调查任务、检查点、调查协调者」是 LangGraph 时期的说法；运行方式后来换成了 pi（ADR 0014），记录变成了会话、回答和产出，评测变成了 `services/operations-agent-service/evals/` 的题库。下面按现状写仍然有效的决定。
+状态：已采纳（2026-07-30）。运行方式见 ADR 0014，评测题库在 `services/operations-agent-service/evals/`。
 
 ## 背景
 
