@@ -2,7 +2,7 @@
 
 - 版本：MyEMS tag `v6.9.0`，commit `b360f5b`（"Merge branch 'develop'"），本地浅克隆，只读。
 - 依据：只看源码、安装 SQL 和仓库内 README；文中路径都相对于 MyEMS 仓库根，`:N` 表示行号。
-- 目的：给本平台（Go + TypeScript，PostgreSQL + ClickHouse，冷站优先，第一阶段单机 Compose）的架构评审提供一手对照，重点是能耗核算和报表。
+- 目的：给本平台（Go + TypeScript，PostgreSQL + ClickHouse，冷站优先，第一阶段单机 Compose）的架构评审提供一手对照，重点是能耗统计和报表。
 - 说明：标为"推断"的是从代码结构推出来的结论，没有运行验证。
 
 ---
@@ -117,7 +117,7 @@
 - **成本中心与电价**：`tbl_cost_centers`（带 `external_id` 对接 ERP）通过 `tbl_cost_centers_tariffs` 绑定 tariff（`:223-247`）。电价跟着成本中心走，不跟表走。
 - 其他：`tbl_working_calendars` 加非工作日（与 space、tenant 等关联，`:2849-2861`），`tbl_energy_flow_diagrams`（能流图节点和连线），`tbl_distribution_systems/circuits`（配电系统图）。
 
-**对 HVAC 能耗核算有价值的部分**：实体表、虚拟表、离线表三类统一进入小时表；category/item 双维度；`is_counted` 防止重复计入；输入/输出分离并且可以用比值表达效率；电价挂在成本中心上并带有效期；kgce 和 kgco2e 换算放在 category 上。
+**对 HVAC 能耗统计有价值的部分**：实体表、虚拟表、离线表三类统一进入小时表；category/item 双维度；`is_counted` 防止重复计入；输入/输出分离并且可以用比值表达效率；电价挂在成本中心上并带有效期；kgce 和 kgco2e 换算放在 category 上。
 
 ---
 
@@ -138,7 +138,7 @@
 
 ## 6. 控制、告警、工单
 
-- **控制**：只有"命令"这一种形态。`tbl_commands` 存 MQTT `topic` 和 `payload` 模板，`$s1` 会被替换成 `set_value`（`myems_system_db.sql:162-178`）。`CommandSend.on_put` 要求管理员权限，执行时先把 set_value 写回命令表，然后**每次请求都新建一个 MQTT 客户端，publish 后立即返回 `success`**（`myems-api/core/command.py:462-570`）。没有设备回执，没有执行结果，没有单独的审计表（只有通用的 user log），也没有互锁、限值或回滚。另有 `tbl_points_set_values`（point_id、set_value、is_set）（`myems_system_db.sql:1793-1807`），但社区版的采集服务不写点。
+- **控制**：只有"命令"这一种形态。`tbl_commands` 存 MQTT `topic` 和 `payload` 模板，`$s1` 会被替换成 `set_value`（`myems_system_db.sql:162-178`）。`CommandSend.on_put` 要求管理员权限，执行时先把 set_value 写回命令表，然后**每次请求都新建一个 MQTT 客户端，publish 后立即返回 `success`**（`myems-api/core/command.py:462-570`）。设备不确认收到，没有执行结果，没有单独的审计表（只有通用的 user log），也没有互锁、限值或回滚。另有 `tbl_points_set_values`（point_id、set_value、is_set）（`myems_system_db.sql:1793-1807`），但社区版的采集服务不写点。
 - **告警 / FDD**：`myems_fdd_db.tbl_rules` 定义了 category、fdd_code、priority、channel（WEB、EMAIL、SMS、WECHAT、CALL）、expression（JSON）、message_template（`database/install/myems_fdd_db.sql:35-56`），API 只提供规则的增删改查和"立即运行"标记（`myems-api/core/rule.py:490-520`）。**社区版没有执行规则的服务**。消息发件箱表都在（email、text、wechat、web message）。
 - **工单**：`myems-api/core/ticket.py` 用 md5 签名代理外部工作流服务（`config.myems_workflow`，`myems-api/config.py:115`），本身没有工单模型。
 
@@ -150,7 +150,7 @@
 - **用户**：`myems_user_db.tbl_users`（`database/install/myems_user_db.sql:61-80`），字段有 `is_admin`、`is_read_only`、`privilege_id`、账号和密码有效期、`failed_login_count`。密码用 `sha512(salt + password)` 单轮哈希（`myems-api/core/user.py:368-370`、`:910`），不是 bcrypt 或 argon2 这类慢哈希。会话 token = `sha512(os.urandom(24))`，存在 `tbl_sessions`，默认 8 小时过期（`user.py:941-947`、`myems-api/config.py:154`）。默认管理员密码 `!MyEMS1` 写在 README 里（`README.md:172-185`）。
 - **鉴权**：每个请求都带 `USER-UUID` 和 `TOKEN` 请求头，或者 `API-KEY`。`access_control` 只检查会话是否存在、是否过期，以及用户是否存在，**源码里留着 `# todo: check user privilege`**（`myems-api/core/useractivity.py:85-147`，TODO 在约 `:131`）。`admin_control` 额外要求 `is_admin=1 AND is_read_only=0`（`:10-82`）。
 - **数据范围**：`tbl_privileges.data` 是一段 JSON，形如 `{"spaces":[...]}`，只在 `SpaceTreeCollection` 里用来决定前端树的根节点（`myems-api/core/space.py:3667-3720`）。报表接口只做 `access_control` 或 `api_key_control`（例如 `equipmentefficiency.py:71-76`），**不校验请求的对象 id 是否在用户的空间范围内**。**推断**：任何已登录用户只要改 id，就能读到别的空间或租户的报表。
-- **API 风格**：Falcon 资源类，每个类配 `on_get/on_post/on_put/on_delete`；`app.py` 有 1598 行、649 条 `add_route`。CORS 设置为 `allow_origins='*', allow_credentials='*'`（`myems-api/app.py:209-210`）。错误响应统一成 `falcon.HTTPError(title='API.XXX', description='API.YYY')`，前端拿这两个字段做多语言。没有 OpenAPI 契约，只有 Postman 和 Apipost 集合文件（`myems-api/MyEMS.postman_collection.json`）。
+- **API 风格**：Falcon 资源类，每个类配 `on_get/on_post/on_put/on_delete`；`app.py` 有 1598 行、649 条 `add_route`。CORS 设置为 `allow_origins='*', allow_credentials='*'`（`myems-api/app.py:209-210`）。错误响应统一成 `falcon.HTTPError(title='API.XXX', description='API.YYY')`，前端拿这两个字段做多语言。没有 OpenAPI 接口定义，只有 Postman 和 Apipost 集合文件（`myems-api/MyEMS.postman_collection.json`）。
 
 ---
 
@@ -163,16 +163,16 @@
 5. **表结构缺少约束**：12 个业务库里**没有一条外键或唯一约束**，`grep FOREIGN KEY|UNIQUE` 只在 user 库的 phone 列命中一次。小时表只有非唯一索引（`database/install/myems_energy_db.sql:7-17`），并发或重复运行会写出重复行。historical 库没有分区，`tbl_energy_value` 永久保留。
 6. **SQL 用字符串拼接**：采集端插入（`acquisition.py:423-433`）、`IN (...)` 列表（`tariff.py:104-106`）都直接拼值。来源虽然是内部数据，但写法本身不安全，也用不上预编译语句。
 7. **大面积复制粘贴**：报表 103k 行、导出器 91k 行、core 85k 行；tenant 和 store 的分类能耗报表把名字替换掉以后只差 125 行（各约 800 行）。aggregation 的 42 个进程文件结构相同，公共区间那段代码在同一个文件里就复制了 9 次（`space_energy_input_category.py:911-1000+`）。效率报表里有 `for i in range(len(list)): ... del list[i]` 这样的越界和跳项 bug（`equipmentefficiency.py:388-415`）。
-8. **安全**：权限只控制前端树根，接口层没有对象级授权；单轮 SHA-512 存密码；`CORS *`；默认口令；gateway token 明文比对（`myems-modbus-tcp/gateway.py:60-66`，源码 TODO 写着"Choose a more secure method"）；MQTT 下发没有回执，也没有安全约束。
+8. **安全**：权限只控制前端树根，接口层没有对象级授权；单轮 SHA-512 存密码；`CORS *`；默认口令；gateway token 明文比对（`myems-modbus-tcp/gateway.py:60-66`，源码 TODO 写着"Choose a more secure method"）；MQTT 下发没有设备确认，也没有安全约束。
 9. **运维可观测性差**：日志级别是 ERROR，写 1 MB 的轮转文件（`myems-modbus-tcp/main.py:45-49`）；子进程挂了不会被拉起，源码自己写了 TODO（`main.py:169`）；配置变更要重启进程才生效。
 10. **几乎没有测试**：仓库里的 `test*.py` 都是手工脚本，例如 `myems-aggregation/test_tariff.py` 只打印结果，没有断言；CI 只有 CodeQL（`.github/workflows/codeql.yml`）。
-11. **社区版和企业版的边界**：baseline、plan、prediction 库，FDD 规则执行，工单，设备控制闭环，在社区版里都只有表或接口外壳。能拿来参考的是数据模型，不是实现。
+11. **社区版和企业版的边界**：baseline、plan、prediction 库，FDD 规则执行，工单，从下发到确认结果的设备控制，在社区版里都只有表或接口外壳。能拿来参考的是数据模型，不是实现。
 
 ---
 
 ## 结论清单
 
-### 值得吸收（尤其是能耗核算和报表）
+### 值得吸收（尤其是能耗统计和报表）
 
 1. **计量对象三分法（实体表、虚拟表、离线表）统一进入小时增量表**，下游不区分来源。冷站常见的"总表减分表""冷量 = 流量 × 温差积分""人工抄表"都能套进来。证据：`tbl_meters/tbl_virtual_meters/tbl_offline_meters` 和 `tbl_variables`（`database/install/myems_system_db.sql:1082`、`:2738-2774`）。
 2. **能源分类加分项的双维度，并把 `kgce` 和 `kgco2e` 换算系数挂在分类上**，正好对应国内分类分项计量和折标煤、碳排报表。证据：`myems_system_db.sql:316-343`。
@@ -187,7 +187,7 @@
 
 ### 不应照搬
 
-1. **用共享 MySQL 加睡眠轮询串联服务**。各服务直接读写对方的表，还跨库 JOIN，表结构就成了隐式接口；应改为 owner 模块加显式契约或事件。证据：`others/docker-compose-on-linux.yml`，`myems-api/reports/pointrealtime.py:116-121`。
+1. **用共享 MySQL 加睡眠轮询串联服务**。各服务直接读写对方的表，还跨库 JOIN，表结构就成了隐式接口；应改为每类数据由一个模块负责，通过明确的接口或事件交换。证据：`others/docker-compose-on-linux.yml`，`myems-api/reports/pointrealtime.py:116-121`。
 2. **只进不退的水位线，又没有重算机制**。迟到数据、修补、改公式、改电价都要人工删表重跑；应改为按时间窗幂等重算（upsert 加脏区间队列）。证据：`myems-normalization/meter.py:186-209`，`database/recalculate/batch-delete.sql:1-8`。
 3. **"所有输入的公共区间"阻塞策略**：一块表滞后会冻结整棵树；应允许部分完成，并显式记录完整度。证据：`myems-aggregation/space_energy_input_category.py:911-1000`。
 4. **缺数写 0，超限整小时置 0，分母为 0 时效率返回 0**。这会让节能验证和 COP 统计失真；应保留空值、质量码和覆盖率。证据：`myems-normalization/meter.py:398-405`、`:455-459`，`equipmentefficiency.py:732-743`。
@@ -196,6 +196,6 @@
 7. **没有唯一约束和外键的表结构，以及永不分区的原始值表**。小时表应该用 `(entity, category, hour)` 做唯一键；原始时序数据放 ClickHouse，或者放 PG 分区表。证据：`database/install/myems_energy_db.sql:7-17`，`myems_historical_db.sql:15-24`。
 8. **每个"对象 × 报表"写一份复制粘贴的接口和导出器**（约 20 万行）。应该用统一的度量查询层，加上声明式报表定义。证据：`myems-api/reports/tenantenergycategory.py` 与 `storeenergycategory.py` 只差 125 行。
 9. **只控制前端树根的权限模型，接口层没有对象级授权（源码里有 `todo: check user privilege`），单轮 SHA-512 存密码，CORS `*`，默认口令写进 README**。证据：`myems-api/core/useractivity.py:85-147`，`myems-api/core/user.py:370`，`myems-api/app.py:209`，`README.md:172-185`。
-10. **fire-and-forget 的 MQTT 控制下发**：没有回执、限值、互锁和审计。冷站控制必须要有命令状态机和安全边界。证据：`myems-api/core/command.py:462-570`。
+10. **fire-and-forget 的 MQTT 控制下发**：没有设备确认、限值、互锁和审计。冷站控制必须有指令状态的完整记录和安全边界。证据：`myems-api/core/command.py:462-570`。
 11. **配置变更要重启进程，子进程崩溃不会被拉起，日志只记 ERROR 级**。证据：`myems-modbus-tcp/main.py:45-49`、`:69`、`:169`，`acquisition.py:243`。
 12. **把"有表没实现"的企业版能力（baseline、plan、prediction、FDD 执行）当成可参考的实现**。社区版只能借鉴它们的表结构。证据：社区版里写这些库的代码只有 `myems-api/config.py` 中的连接配置，读取方在 `myems-api/reports/*saving.py`、`*plan.py`。
