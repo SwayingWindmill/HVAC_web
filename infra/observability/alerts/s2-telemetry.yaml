@@ -11,7 +11,7 @@ groups:
           secondary_owner: telemetry-platform
         annotations:
           summary: S2 security zero invariant is non-zero
-          runbook: docs/operations/s2-security-observability.md#security-zero-invariant
+          runbook: docs/operations/alerts.md#安全计数不为零
       - alert: S2RequestFallbackDetected
         expr: sum(hvac_s2_security_zero_invariant_total{invariant="request_fallback"}) > 0
         for: 0m
@@ -21,7 +21,7 @@ groups:
           secondary_owner: gateway-platform
         annotations:
           summary: Legacy or Mock request-level fallback was detected
-          runbook: docs/operations/s2-security-observability.md#security-zero-invariant
+          runbook: docs/operations/alerts.md#安全计数不为零
       - alert: S2PostRevocationDelivery
         expr: sum(hvac_s2_revocation_events_total{phase="post_revocation",outcome!="blocked"}) > 0
         for: 0m
@@ -31,7 +31,7 @@ groups:
           secondary_owner: realtime-platform
         annotations:
           summary: Delivery occurred after revocation
-          runbook: docs/operations/s2-security-observability.md#revocation
+          runbook: docs/operations/alerts.md#撤销授权后仍有推送
   - name: s2-telemetry-slo
     interval: 30s
     rules:
@@ -44,7 +44,7 @@ groups:
           secondary_owner: gateway-platform
         annotations:
           summary: Snapshot errors are burning the S2 error budget
-          runbook: docs/operations/s2-security-observability.md#snapshot-slo
+          runbook: docs/operations/alerts.md#快照接口出错
       - alert: S2SnapshotAgeHigh
         expr: max(hvac_s2_snapshot_age_seconds) > 180
         for: 5m
@@ -54,7 +54,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Authoritative Snapshot age exceeds the release envelope
-          runbook: docs/operations/s2-security-observability.md#snapshot-age
+          runbook: docs/operations/alerts.md#快照数据过旧
       - alert: S2IngestSourceLagHigh
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_source_lag_seconds_bucket[5m]))) > 30
         for: 5m
@@ -64,7 +64,7 @@ groups:
           secondary_owner: connector-platform
         annotations:
           summary: Source ingest lag is high
-          runbook: docs/operations/s2-security-observability.md#ingest-lag
+          runbook: docs/operations/alerts.md#读数接收延迟
       - alert: S2DataGoodRateLow
         expr: sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / clamp_min(sum(rate(hvac_s2_data_quality_records_total[10m])), 1) < 0.95
         for: 10m
@@ -74,7 +74,7 @@ groups:
           secondary_owner: energy-data
         annotations:
           summary: Telemetry data good rate is below 95 percent
-          runbook: docs/operations/observability-phase1.md#data-quality
+          runbook: docs/operations/alerts.md#读数合格率低
       - alert: S2OutboxLagHigh
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m]))) > 5
         for: 5m
@@ -84,7 +84,7 @@ groups:
           secondary_owner: telemetry-platform
         annotations:
           summary: Telemetry outbox lag is high
-          runbook: docs/operations/s2-security-observability.md#outbox-lag
+          runbook: docs/operations/alerts.md#推送待发队列延迟
       - alert: S2PublicationLagHigh
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_publication_lag_seconds_bucket[5m]))) > 5
         for: 5m
@@ -94,7 +94,7 @@ groups:
           secondary_owner: telemetry-platform
         annotations:
           summary: Realtime publication lag is high
-          runbook: docs/operations/s2-security-observability.md#publication-lag
+          runbook: docs/operations/alerts.md#推送延迟
       - alert: S2PresenceLate
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_presence_lateness_seconds_bucket[5m]))) > 60
         for: 5m
@@ -104,7 +104,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Presence evaluation is late
-          runbook: docs/operations/s2-security-observability.md#presence-lateness
+          runbook: docs/operations/alerts.md#在线状态判断延迟
       - alert: S2RecoveryFailureRateHigh
         expr: sum(rate(hvac_s2_recovery_attempts_total{outcome!="success"}[5m])) / clamp_min(sum(rate(hvac_s2_recovery_attempts_total[5m])), 1) > 0.005
         for: 5m
@@ -114,7 +114,7 @@ groups:
           secondary_owner: frontend-platform
         annotations:
           summary: Recovery or Snapshot fallback failures are high
-          runbook: docs/operations/s2-security-observability.md#recovery
+          runbook: docs/operations/alerts.md#断线补发失败
       - alert: S2SubscriptionFailure
         expr: sum(rate(hvac_s2_subscription_events_total{outcome!="success"}[5m])) > 0
         for: 2m
@@ -124,7 +124,7 @@ groups:
           secondary_owner: platform-security
         annotations:
           summary: Subscription operations are failing
-          runbook: docs/operations/s2-security-observability.md#subscription
+          runbook: docs/operations/alerts.md#订阅失败
       - alert: S2SlowConsumerDisconnects
         expr: sum(rate(hvac_s2_slow_consumer_disconnects_total[5m])) > 0
         for: 5m
@@ -134,7 +134,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Slow consumers are being disconnected
-          runbook: docs/operations/s2-security-observability.md#slow-consumers
+          runbook: docs/operations/alerts.md#页面接收太慢被断开
   - name: s2-telemetry-dependencies
     interval: 30s
     rules:
@@ -147,7 +147,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Redis dependency is failing
-          runbook: docs/operations/s2-security-observability.md#redis
+          runbook: docs/operations/alerts.md#redis-不可用
       - alert: S2PostgresUnavailable
         expr: sum(rate(hvac_s2_upstream_requests_total{dependency="postgres",outcome!="success"}[5m])) > 0
         for: 2m
@@ -157,7 +157,7 @@ groups:
           secondary_owner: database-platform
         annotations:
           summary: PostgreSQL dependency is failing
-          runbook: docs/operations/s2-security-observability.md#postgres
+          runbook: docs/operations/alerts.md#postgresql-不可用
       - alert: S2UpstreamUnavailable
         expr: sum(rate(hvac_s2_upstream_requests_total{outcome!="success"}[5m])) > 0
         for: 5m
@@ -167,7 +167,7 @@ groups:
           secondary_owner: connector-platform
         annotations:
           summary: S2 upstream dependency is failing
-          runbook: docs/operations/s2-security-observability.md#upstream
+          runbook: docs/operations/alerts.md#上游数据源不可用
       - alert: S2ExporterFailure
         expr: sum(rate(hvac_s2_exporter_events_total{outcome=~"failed|dropped"}[5m])) > 0
         for: 2m
@@ -177,7 +177,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Observability exporter is failing or dropping signals
-          runbook: docs/operations/s2-security-observability.md#exporter
+          runbook: docs/operations/alerts.md#指标导出失败
   - name: platform-data-freshness
     interval: 1m
     rules:
@@ -190,7 +190,7 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: Energy projection keeps failing, so energy pages stop at the last projected interval
-          runbook: docs/operations/observability-phase1.md#energy-projection-failing
+          runbook: docs/operations/alerts.md#用电量计算停住
       - alert: TelemetryIngestStopped
         expr: (sum(rate(hvac_s2_ingest_records_total{outcome="success"}[15m])) or vector(0)) == 0
         for: 15m
@@ -200,4 +200,4 @@ groups:
           secondary_owner: platform-operations
         annotations:
           summary: No telemetry accepted for 15 minutes; gateways, the broker or connectivity are down
-          runbook: docs/operations/observability-phase1.md#telemetry-ingest-stopped
+          runbook: docs/operations/alerts.md#收不到任何读数
