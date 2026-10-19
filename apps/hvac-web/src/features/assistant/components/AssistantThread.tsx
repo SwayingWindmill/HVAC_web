@@ -54,7 +54,6 @@ export function AssistantThread(surface: ThreadSurface) {
                 <ArrowDown />
               </TooltipIconButton>
             </ThreadPrimitive.ScrollToBottom>
-            <FollowUps />
             <Composer />
             <p className="m-0 text-center text-[11px] text-muted-foreground">根据平台数据回答，只读取，不会操作设备</p>
           </ThreadPrimitive.ViewportFooter>
@@ -114,10 +113,12 @@ const AssistantMessage: FC = () => {
       </MessagePrimitive.GroupedParts>
       {failed ? <p className="m-0 text-xs text-destructive-text">这次没有答完，可以换个问法再问一次。</p> : null}
       {cancelled ? <p className="m-0 text-xs text-muted-foreground">已停止。</p> : null}
+      {isLast ? <FollowUps /> : null}
     </MessagePrimitive.Root>
   );
 };
 
+// The last answer's follow-ups, under its card, scrolling with the conversation (#638).
 const FollowUps: FC = () => (
   <AuiIf condition={(state) => !state.thread.isRunning && state.thread.suggestions.length > 0}>
     <div className="flex flex-col gap-1.5" data-testid="assistant-follow-ups">
