@@ -186,7 +186,7 @@ export function assetsSpaceTypeLabel(value: string): string {
 }
 
 export function assetsAssetTypeLabel(value: string): string {
-  return localizedType(value, ASSET_TYPE_LABELS, '设备资产');
+  return localizedType(value, ASSET_TYPE_LABELS, '资产');
 }
 
 export function assetsDeviceTypeLabel(value: string): string {

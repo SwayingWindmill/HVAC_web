@@ -148,7 +148,7 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
           </div>
         ) : null}
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-          {model ? <span className="tabular-nums">{model.counts.spaces} 个空间 · {model.counts.assets} 项设备资产 · {model.counts.deviceEndpoints} 个设备端点 · {model.counts.points} 个测点</span> : null}
+          {model ? <span className="tabular-nums">{model.counts.spaces} 个空间 · {model.counts.assets} 项资产 · {model.counts.deviceEndpoints} 个设备 · {model.counts.points} 个点位</span> : null}
           {dirty ? <span className="inline-flex h-5.5 items-center gap-1.5 rounded-md bg-warning-soft px-1.5 font-medium text-warning-text"><span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />有未保存修改</span> : null}
         </span>
       </Panel>
