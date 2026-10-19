@@ -655,3 +655,27 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
   // Another Site's records stay out.
   assert.deepEqual((await persistence.agentUsageReader.daily('tenant-usage', 'site-other', 'Asia/Shanghai', '2026-10-17', '2026-10-17')).days[0].completed, 0);
 });
+
+// #639: the assistant panel's history lists the asker's own conversations, newest first.
+test('PostgreSQL lists a Site\'s Sessions started by one person, newest first, at most the limit', async (t) => {
+  const persistence = createPersistence();
+  t.after(() => persistence.close());
+  const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+  const startAs = (index, createdBy, siteId = 'site-history') => {
+    const session = Object.freeze({ ...sessionDescriptor, id: `history-session-${index}`, tenantId: 'tenant-history', siteId, createdBy, createdAt: 1_000 + index });
+    const question = Object.freeze({ ...run(`history-run-${index}`, 2_000 + index), sessionId: session.id });
+    return lifecycle.start({
+      session, expectedSessionRevision: null, run: question,
+      operatorMessage: Object.freeze({ ...operatorMessage(`history-message-${index}`, `问题 ${index}`, question.startedAt - 1), sessionId: session.id }),
+    });
+  };
+  await startAs(1, 'principal-me');
+  await startAs(2, 'principal-other');
+  await startAs(3, 'principal-me');
+  await startAs(4, 'principal-me', 'site-elsewhere');
+  await startAs(5, 'principal-me');
+
+  const mine = await lifecycle.list('tenant-history', 'site-history', 'principal-me', 2);
+  assert.deepEqual(mine.map((state) => state.session.id), ['history-session-5', 'history-session-3']);
+  assert.deepEqual((await lifecycle.list('tenant-history', 'site-history', 'principal-other', 50)).map((state) => state.session.id), ['history-session-2']);
+});

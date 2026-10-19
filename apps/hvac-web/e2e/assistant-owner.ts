@@ -50,11 +50,12 @@ export class AssistantOwner {
     if (this.unavailable) {
       return { status: 503, body: { type: 'about:blank', title: 'Operations Agent unavailable', status: 503, detail: 'The Operations Agent is not configured.', instance: path, code: 'OPERATIONS_AGENT_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
     }
+    // The Agent lists the asker's conversations, the newest started first.
     if (path === base && method === 'GET') return { body: this.sessions.map((session) => session.settled) };
     if (path === base && method === 'POST') {
       const now = Date.now();
       const sessionId = this.id('session');
-      const session: Json = { siteId, sessionId, revision: 0, runs: [], messages: [], toolExecutions: [], artifacts: [], settled: null };
+      const session: Json = { siteId, sessionId, createdAt: now, revision: 0, runs: [], messages: [], toolExecutions: [], artifacts: [], settled: null };
       this.sessions.unshift(session);
       return { status: 201, body: this.startRun(session, body!.message, now) };
     }
@@ -75,7 +76,7 @@ export class AssistantOwner {
     return {
       session: {
         id: session.sessionId, tenantId: 'tenant-e2e', siteId: session.siteId, agentDefinitionId: 'operations-investigation.v1',
-        createdBy: 'principal-e2e', revision: session.revision, createdAt: 1_000, updatedAt: Date.now(), status, activeRunId,
+        createdBy: 'principal-e2e', revision: session.revision, createdAt: session.createdAt, updatedAt: Date.now(), status, activeRunId,
       },
       runs: session.runs,
       messages: session.messages,

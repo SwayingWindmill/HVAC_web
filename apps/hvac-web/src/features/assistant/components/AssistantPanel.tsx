@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from '@assistant-ui/react';
-import { SquarePen, Sparkles, X } from 'lucide-react';
+import { History, SquarePen, Sparkles, X } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useSidebar } from '@/components/ui/sidebar';
@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAssistantPanel } from '../assistant-panel-store';
 import type { AssistantMessage } from '../thread-model';
 import { useAssistantSession } from '../use-assistant-session';
+import { AssistantHistory } from './AssistantHistory';
 import { AssistantThread } from './AssistantThread';
 
 const asThreadMessage = (message: AssistantMessage): ThreadMessageLike => message;
@@ -35,11 +36,19 @@ function useFoldedNavigation() {
 }
 
 /** The right-hand assistant panel for the current Site; it pushes the page over rather than covering it. */
-export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteId: string; readonly siteName: string; readonly csrfToken: string }) {
+export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
+  readonly siteId: string;
+  readonly siteName: string;
+  readonly timezone: string;
+  readonly csrfToken: string;
+}) {
   const close = useAssistantPanel((state) => state.close);
-  const { thread, loading, error, ask, answer, cancel, startNew } = useAssistantSession(siteId, csrfToken);
+  const { thread, history, loading, error, ask, answer, cancel, startNew, open } = useAssistantSession(siteId, csrfToken);
   useFoldedNavigation();
   const pending = thread.pendingInput;
+  // 历史 shows my conversations in place of the open one; choosing one opens it (#639).
+  const [showingHistory, setShowingHistory] = useState(false);
+  const threads = useMemo(() => history.map(({ id, question }) => ({ id, status: 'regular' as const, title: question })), [history]);
 
   const runtime = useExternalStoreRuntime<AssistantMessage>({
     messages: thread.messages,
@@ -55,6 +64,13 @@ export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteI
       else await ask(text);
     },
     onCancel: cancel,
+    adapters: {
+      threadList: {
+        threadId: thread.sessionId ?? undefined,
+        threads,
+        onSwitchToThread: open,
+      },
+    },
   });
 
   return (
@@ -69,7 +85,27 @@ export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteI
         </span>
         <span className="text-sm font-semibold">AI 助手</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="icon" className="size-[30px] text-muted-foreground" aria-label="新对话" onClick={startNew} disabled={thread.isRunning}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-[30px] text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+          aria-label="历史对话"
+          aria-pressed={showingHistory}
+          onClick={() => setShowingHistory((shown) => !shown)}
+        >
+          <History className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-[30px] text-muted-foreground"
+          aria-label="新对话"
+          onClick={() => {
+            startNew();
+            setShowingHistory(false);
+          }}
+          disabled={thread.isRunning}
+        >
           <SquarePen className="size-4" />
         </Button>
         <Button variant="ghost" size="icon" className="size-[30px] text-muted-foreground" aria-label="收起助手" onClick={close}>
@@ -88,12 +124,16 @@ export function AssistantPanel({ siteId, siteName, csrfToken }: { readonly siteI
         </div>
       ) : (
         <AssistantRuntimeProvider runtime={runtime}>
-          <AssistantThread
-            siteId={siteId}
-            siteName={siteName}
-            answering={pending !== null}
-            onAnswer={(value) => { void answer(value); }}
-          />
+          {showingHistory ? (
+            <AssistantHistory conversations={history} timezone={timezone} onChosen={() => setShowingHistory(false)} />
+          ) : (
+            <AssistantThread
+              siteId={siteId}
+              siteName={siteName}
+              answering={pending !== null}
+              onAnswer={(value) => { void answer(value); }}
+            />
+          )}
         </AssistantRuntimeProvider>
       )}
     </aside>

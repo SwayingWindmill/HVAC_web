@@ -7,7 +7,7 @@
   },
   "paths": {
     "/api/v1/sites/{siteId}/operations/agent-sessions": {
-      "get": { "operationId": "listAgentSessions", "responses": { "200": { "description": "Site Agent Sessions", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionList" } } } } } },
+      "get": { "operationId": "listAgentSessions", "description": "The caller's own Agent Sessions on the Site, the newest started first, at most 50. A Session is opened and continued only by the person who started it.", "responses": { "200": { "description": "My Agent Sessions on the Site", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionList" } } } } } },
       "post": { "operationId": "createAgentSession", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionMessageRequest" } } } }, "responses": { "201": { "description": "Created Session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentSessionSnapshot" } } } } } }
     },
     "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}": {

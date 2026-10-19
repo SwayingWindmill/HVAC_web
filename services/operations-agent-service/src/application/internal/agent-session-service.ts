@@ -163,6 +163,10 @@ const requireScopedState = (
   if (state.session.tenantId !== context.tenantId || state.session.siteId !== context.siteId) {
     throw new AgentSessionServiceError('SESSION_SCOPE_MISMATCH', 'Agent Session was not found in this Site scope.');
   }
+  // A conversation belongs to the person who started it: others cannot open or continue it (#639).
+  if (state.session.createdBy !== context.principalId) {
+    throw new AgentSessionServiceError('SESSION_NOT_FOUND', 'Agent Session was not found.');
+  }
   return state;
 };
 
@@ -333,7 +337,7 @@ export const createAgentSessionService = ({
 
     async list(rawContext: AgentSessionAccessContext) {
       const context = requireContext(rawContext);
-      return Object.freeze((await lifecycle.list(context.tenantId, context.siteId)).slice(0, MAXIMUM_LISTED_SESSIONS));
+      return lifecycle.list(context.tenantId, context.siteId, context.principalId, MAXIMUM_LISTED_SESSIONS);
     },
 
     async get(rawContext: AgentSessionAccessContext, sessionId: string) {

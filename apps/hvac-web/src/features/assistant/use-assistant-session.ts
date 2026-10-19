@@ -20,14 +20,25 @@ const latest = (sessions: readonly AgentSessionSnapshot[]): AgentSessionSnapshot
   ), null)
 );
 
+/** One of my conversations on the Site, as the history lists it (#639). */
+export interface AssistantConversation {
+  readonly id: string;
+  readonly question: string;
+  readonly startedAt: number;
+  readonly status: AgentSessionSnapshot['session']['status'];
+}
+
 export interface AssistantSession {
   readonly thread: AssistantThread;
+  /** My conversations on the Site, the newest started first, as the Agent lists them. */
+  readonly history: readonly AssistantConversation[];
   readonly loading: boolean;
   readonly error: string | null;
   readonly ask: (text: string) => Promise<void>;
   readonly answer: (value: string) => Promise<void>;
   readonly cancel: () => Promise<void>;
   readonly startNew: () => void;
+  readonly open: (sessionId: string) => void;
 }
 
 /**
@@ -127,12 +138,22 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
     return run(() => cancelAssistantRun(siteId, csrfToken, thread.sessionId!, thread.revision!));
   }, [csrfToken, run, siteId, thread.revision, thread.sessionId]);
 
-  const startNew = useCallback(() => {
+  // null starts a new conversation; an id opens one from the history.
+  const select = useCallback((sessionId: string | null) => {
     stopFollowing();
     setLive(null);
     setError(null);
-    setSelected({ siteId, sessionId: null });
+    setSelected({ siteId, sessionId });
   }, [siteId, stopFollowing]);
+  const startNew = useCallback(() => select(null), [select]);
+
+  // A conversation always starts with a question, so the first message is the operator's.
+  const history = useMemo(() => (sessions.data ?? []).map(({ session, messages }) => ({
+    id: session.id,
+    question: messages.find((message) => message.role === 'OPERATOR')!.content,
+    startedAt: session.createdAt,
+    status: session.status,
+  })), [sessions.data]);
 
   return {
     thread,
@@ -142,5 +163,7 @@ export function useAssistantSession(siteId: string, csrfToken: string): Assistan
     answer,
     cancel,
     startNew,
+    open: select,
+    history,
   };
 }

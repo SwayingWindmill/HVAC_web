@@ -372,13 +372,14 @@ export const createPostgresAgentSessionStateStore = (
   get(sessionId: string) {
     return loadAgentSessionState(operationsPool, sessionId, false);
   },
-  async list(tenantId: string, siteId: string) {
+  async list(tenantId: string, siteId: string, createdBy: string, limit: number) {
     const sessions = await operationsPool.query<SessionIdentityRow>(
       `SELECT session_id
        FROM agent_operations.agent_sessions
-       WHERE tenant_id = $1 AND site_id = $2
-       ORDER BY updated_at_ms DESC, session_id`,
-      [tenantId, siteId],
+       WHERE tenant_id = $1 AND site_id = $2 AND created_by = $3
+       ORDER BY created_at_ms DESC, session_id
+       LIMIT $4`,
+      [tenantId, siteId, createdBy, limit],
     );
     const states: AgentSessionState[] = [];
     for (const { session_id: sessionId } of sessions.rows) {
