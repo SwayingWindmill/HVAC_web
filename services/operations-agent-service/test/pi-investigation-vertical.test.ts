@@ -269,8 +269,10 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
   return { tools, toolContext, registryInputs, telemetryInputs, energyInputs, semanticInputs };
 };
 
+const songyaxuan = Object.freeze({ name: '松雅轩', timezone: 'Asia/Shanghai' });
+
 const runScript = async (responses, tools = [], runBudget = budget, runtimeOptions = {}, runContext = context) => {
-  const { startedAt = Date.now(), ...engineOptions } = runtimeOptions;
+  const { startedAt = Date.now(), site = async () => songyaxuan, ...engineOptions } = runtimeOptions;
   const runtime = createScriptedPiAgentEngine({ responses, ...engineOptions });
   const events = [];
   const result = await runtime.engine({
@@ -288,6 +290,7 @@ const runScript = async (responses, tools = [], runBudget = budget, runtimeOptio
     messages: [operatorMessage],
     tools,
     context: runContext,
+    site,
     budget: runBudget,
     signal: new AbortController().signal,
     emit: (event) => events.push(event),
@@ -459,10 +462,10 @@ test('SUPPORTED_FINDING evidence must reference a successful Tool execution from
 });
 
 test('model-call budget exhaustion stops the run before another model turn', async () => {
-  const siteTool = projectTool('site_get_context', async () => ({ siteId: context.siteId }));
+  const siteTool = projectTool('site.read', async () => ({ siteId: context.siteId }));
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'site-read-1', name: 'site_get_context', arguments: {} }],
+      parts: [{ type: 'tool-call', id: 'site-read-1', name: 'site.read', arguments: {} }],
       stopReason: 'toolUse',
     },
     {
@@ -572,10 +575,6 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
   const harness = createHvacToolHarness();
   const { result } = await runScript([
     {
-      parts: [{ type: 'tool-call', id: 'site-context-vertical', name: 'site_get_context', arguments: {} }],
-      stopReason: 'toolUse',
-    },
-    {
       parts: [{
         type: 'tool-call',
         id: 'energy-compare-vertical',
@@ -611,7 +610,6 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
   assert.deepEqual(
     result.toolExecutions.map(({ toolName, status }) => [toolName, status]),
     [
-      ['site_get_context', 'COMPLETED'],
       ['energy_compare_periods', 'COMPLETED'],
       [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED'],
     ],
@@ -652,11 +650,13 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
 
   const system = requests[0][0];
   assert.equal(system.role, 'system');
-  // Dates come from the Site's own clock (site_get_context), not a UTC start time.
+  // The Site and its own clock at the start of the Run are in the prompt: 02:30Z is 10:30 on a
+  // Friday in Shanghai. The model reads no Tool for them (#593).
   assert.doesNotMatch(system.text, /2026-10-16T02:30/u);
-  assert.match(system.text, /localNow/u);
+  assert.match(system.text, /当前站点：松雅轩/u);
+  assert.match(system.text, /2026-10-16 10:30（星期五）/u);
   assert.match(system.text, /站点本地日期/u);
-  assert.match(system.text, /site_get_context/u);
+  assert.doesNotMatch(system.text, /site_get_context|localNow/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
   // Each read tells the model the id its evidence cites.
@@ -856,7 +856,7 @@ test('a semantic query naming a cube member, an unlisted member, two views, a Si
   const refused = {
     'cube-member': { ...range, measures: ['site_energy_facts.electricity_valid_kwh'] },
     unlisted: { ...range, measures: ['site_energy.electricity_kwh'] },
-    'two-views': { ...range, measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'] },
+    'two-views': { ...range, measures: ['site_energy.electricity_valid_kwh', 'equipment_energy.energy_valid_kwh'] },
     'another-site': { ...range, measures: ['site_energy.cop'], siteId: '0198a36e-0000-7000-8000-0000000000ff' },
     'too-long': { measures: ['site_energy.cop'], granularity: 'hour', startDate: '2026-09-01', endDate: '2026-10-15' },
   };
@@ -1074,4 +1074,16 @@ test('the card drops a refusal the answer already gave in other words', async ()
 
   assert.equal(result.runStatus, 'COMPLETED');
   assert.deepEqual(result.artifacts.at(-1).finding.limitations, []);
+});
+
+// The prompt names the Site and its clock; without them the model would guess dates, so a Site that
+// cannot be read ends the Run before any model call, with a code the 运行情况 page can count.
+test('a Run whose Site cannot be read fails before any model call', async () => {
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'text', text: '不会被调用。' }], stopReason: 'stop' },
+  ], [], budget, { site: async () => { throw new Error('registry unavailable'); } });
+  assert.equal(result.runStatus, 'FAILED');
+  assert.equal(result.failureCode, 'SITE_CONTEXT_UNAVAILABLE');
+  assert.equal(result.usage.modelCalls, 0);
+  assert.equal(requests.length, 0);
 });

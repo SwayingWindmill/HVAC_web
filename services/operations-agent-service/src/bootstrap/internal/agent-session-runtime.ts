@@ -26,6 +26,7 @@ import {
   createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
+  createSiteDescriber,
   createRegistryOwnerReader,
   type AlarmOwnerReaderConfig,
   type FddOwnerReaderConfig,
@@ -123,8 +124,12 @@ export const createProductionAgentSessionRuntime = async (
         fddReader,
         workOrderReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
-        now: options.now ?? Date.now,
       }),
+      describeSite: (context, run) => createSiteDescriber({
+        authorization: context.authorization,
+        toolAuthorizationReader,
+        registryReader,
+      })(run),
     });
     const handler = createAgentSessionHttpHandler({
       usage: persistence.agentUsageReader,

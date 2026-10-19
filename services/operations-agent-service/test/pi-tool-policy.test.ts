@@ -88,6 +88,7 @@ const run = async ({ responses, tools, runBudget = budget, runContext = context 
     messages: [message],
     tools,
     context: runContext,
+    site: async () => ({ name: 'Plant', timezone: 'Asia/Shanghai' }),
     budget: runBudget,
     signal: new AbortController().signal,
     emit: (event) => events.push(event),

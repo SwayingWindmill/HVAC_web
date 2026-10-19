@@ -14,6 +14,7 @@ import {
   NOOP_AGENT_RUNTIME_TELEMETRY,
   type AgentArtifact,
   type AgentEngine,
+  type AgentRunSite,
   type AgentRuntimeBudgetDimension,
   type AgentRuntimeOwnerErrorClass,
   type AgentRuntimeTelemetrySink,
@@ -35,7 +36,7 @@ type PiStreamFn = ConstructorParameters<typeof Agent>[0]['streamFn'];
 export interface PiAgentEngineDependencies {
   readonly model: Model<any>;
   readonly streamFn: PiStreamFn;
-  readonly systemPromptFor: (runStartedAt: number) => string;
+  readonly systemPromptFor: (runStartedAt: number, site: AgentRunSite) => string;
   readonly thinkingLevel: ModelThinkingLevel;
   readonly telemetry?: AgentRuntimeTelemetrySink;
 }
@@ -277,12 +278,32 @@ export const createPiAgentEngine = ({
     keptAnswer: () => spokenMessages().map(({ content }) => content).join('\n'),
   });
 
+  // The Site and its clock go into the prompt; without them the model would guess dates, so a Site
+  // that cannot be read ends the Run before any model call.
+  let site: AgentRunSite;
+  try {
+    site = await input.site();
+  } catch {
+    const failedRun = terminalRun(input.run, 'FAILED', usage(), 'SITE_CONTEXT_UNAVAILABLE');
+    emit('run.failed', { run: failedRun });
+    recordRunCompleted('FAILED', 'SITE_CONTEXT_UNAVAILABLE');
+    return Object.freeze({
+      runStatus: 'FAILED',
+      sessionStatus: 'FAILED',
+      failureCode: 'SITE_CONTEXT_UNAVAILABLE',
+      usage: usage(),
+      finalizedMessages: [],
+      toolExecutions,
+      artifacts,
+    });
+  }
+
   // A turn that ends in text without a terminal Tool (most often a refusal) gets one reminder, so
   // the operator keeps the answer and gets its card instead of a failed Run. Not repeated.
   let reminded = false;
   const agent = new Agent({
     initialState: {
-      systemPrompt: systemPromptFor(input.run.startedAt),
+      systemPrompt: systemPromptFor(input.run.startedAt, site),
       model,
       thinkingLevel,
       tools: piTools,

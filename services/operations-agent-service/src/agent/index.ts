@@ -42,6 +42,7 @@ export {
   type AgentEngine,
   type AgentEngineInput,
   type AgentEngineResult,
+  type AgentRunSite,
 } from './internal/engine.js';
 
 export {

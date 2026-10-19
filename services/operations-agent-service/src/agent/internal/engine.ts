@@ -15,12 +15,20 @@ import type {
   AgentToolExecution,
 } from './session.js';
 
+/** The Site a Run answers for, as the prompt names it and reads its clock. */
+export interface AgentRunSite {
+  readonly name: string;
+  readonly timezone: string;
+}
+
 export interface AgentEngineInput {
   readonly session: AgentSession;
   readonly run: AgentRun;
   readonly messages: readonly AgentMessage[];
   readonly tools: readonly AgentTool[];
   readonly context: AgentRunContext;
+  /** Read once when the Run starts; the prompt names the Site and its local time (#593). */
+  readonly site: () => Promise<AgentRunSite>;
   readonly budget: AgentRunBudget;
   readonly signal: AbortSignal;
   readonly emit: AgentEventSink;
