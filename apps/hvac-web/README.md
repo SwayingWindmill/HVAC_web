@@ -39,4 +39,15 @@ npm run ui:shadcn -- add <注册表里的组件>
 
 网页通过受保护的应用框架和平台网关拿身份、站点范围、设备登记、遥测、能耗、指令、告警和 AI 助手的数据，只有一个入口、一种构建，没有演示版或假数据模式。浏览器不直接连内部服务、大模型、数据库或设备。
 
-组件不直接发请求：数据依次经过生成的接口客户端、feature 里的查询（TanStack Query）或实时状态层，再显示到界面上。
+
+## 约定
+
+- 技术栈：React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui（`radix-nova`，组件用 Radix 的 `asChild` 组合）、TanStack Router / Query / Table、React Hook Form + Zod、date-fns、Lucide 图标；图表用 shadcn Chart + Recharts，数字孪生的 3D 用 React Three Fiber。
+- 状态各归其位：URL 状态归 Router，服务端数据归 Query，表单归 React Hook Form，组件自己的状态用 `useState` / `useReducer`；多个组件真正共享的纯前端状态才用 Zustand。同一个事实只放在一套状态里。
+- 站点范围的页面放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读）；对象详情在页面内的侧栏里打开，由 `?inspect=<id>` 指定。
+- 路由文件只解析 URL、做权限跳转、组合加载和出错状态；业务逻辑、查询、表单 schema 和领域组件放在 `features/<领域>`。
+- 页面调接口统一走 OpenAPI 生成的客户端加 feature 里的 query / mutation。实时页面先取快照再接推送。
+- 组件来自 shadcn/ui 和 `src/blocks` 里的组合（`Main`、`PageHeader`、`Panel`、`StateCard`、`DataTableBlock` 等，见 `DESIGN.md`）；普通列表用 `DataTableBlock`（`npm run design:check` 会检查）。
+- 页面只显示真实来源的数据；还没接上的，明确显示「未接入」。示例数据只出现在 `HVAC_WEB_FRONTEND_REVIEW=true` 的评审构建里。
+- 面向值班人员的界面只显示业务事实：状态、影响、时间、原因、谁负责、能做什么；用 `GLOSSARY.md` 里的词。内部值（UUID、trace ID、枚举、版本号）翻成日常说法，或者不显示。
+- 只做桌面端。界面改动要在 1440px 宽度下用真实数据实际看过（本地 8443 或服务器）；发现的问题一次改完，再看一遍确认。
