@@ -11,7 +11,6 @@ const javascriptToolingBaselinePath = 'scripts/javascript-tooling-baseline.json'
 const requiredLinguistExclusions = Object.freeze([
   'scripts/** -linguist-detectable',
   'benchmarks/** -linguist-detectable',
-  'pocs/** -linguist-detectable',
   'services/operations-agent-service/test/** -linguist-detectable',
   '.agents/** -linguist-detectable',
 ]);

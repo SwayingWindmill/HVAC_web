@@ -11,10 +11,6 @@
       "fileCount": 4,
       "maxBytes": 71459
     },
-    "pocs/": {
-      "fileCount": 2,
-      "maxBytes": 6890
-    },
     ".agents/": {
       "fileCount": 1,
       "maxBytes": 3827

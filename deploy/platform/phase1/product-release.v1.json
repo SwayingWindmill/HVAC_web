@@ -47,11 +47,6 @@
     "limitPolicy": "deploy/platform/phase1/limit-policy.v1.json",
     "limitPolicySha256": "1d1f2fe34727a0484ca1bf08b3993338c2fe0be1de43c19a972f2ce9194963c4"
   },
-  "retirement": {
-    "evidence": "deploy/acceptance/s24-production-retirement.v1.json",
-    "evidenceSha256": "5793936f69ed6ad06b0c24b189d342285fb9ecd7f70fdcabeb8ce84be661c308",
-    "runtimeFallbackAllowed": false
-  },
   "projectionRecovery": {
     "postgresAuthority": "backup-and-restore",
     "redisAuthority": "rebuild-from-authoritative-postgres-and-owner-events",

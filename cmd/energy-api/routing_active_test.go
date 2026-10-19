@@ -22,10 +22,3 @@ func TestParseActiveRouteRegistryAcceptsGoOnlyRegistry(t *testing.T) {
 		t.Fatalf("active Go-only registry was rejected: %v", err)
 	}
 }
-
-func TestParseActiveRouteRegistryRejectsHistoricalMigrationContract(t *testing.T) {
-	contents := readRepositoryFixture(t, "contracts/ownership/s1-registry-phases/01-legacy-primary-go-shadow.json")
-	if _, err := parseActiveRouteRegistry(contents); err == nil {
-		t.Fatal("historical migration contract was accepted as active ownership")
-	}
-}
