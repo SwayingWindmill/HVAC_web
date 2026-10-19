@@ -1,87 +1,68 @@
-# Energy Processing Domain Module
+# 能源模块（energy）
 
-`modules/energy` owns the Energy Processing write boundary for the current
-Energy slice. Phase 1 composes its projector package into `cmd/telemetry-worker`; `cmd/energy-projector` is an explicit standalone build/integration entrypoint, not an additional default deployable:
+把电表、冷量计的累计读数算成每段时间的用电量（或冷量），并同步电价窗口。第一阶段它在 `cmd/telemetry-worker` 里运行；`modules/energy/cmd/energy-projector` 是单独构建和集成测试用的入口，默认不部署。
+
+## 把累计读数算成用电量
 
 ```text
-telemetry_history.counter_arrivals        (after the checkpoint, History order)
-    -> telemetry_history.counter_deltas_from (per hour of the arrivals' samples: their Points, that hour)
-    -> Core MeterBinding resolver
-    -> analytics.energy_interval_facts
-    -> analytics.energy_projection_checkpoints
+telemetry_history.counter_arrivals        （检查点之后、按历史批次号顺序新到的累计读数）
+    -> telemetry_history.counter_deltas_from（按读数所在的小时：这些点位、这一小时的差值）
+    -> 登记服务的计量绑定查询
+    -> analytics.energy_interval_facts       （每段用电记录）
+    -> analytics.energy_projection_checkpoints（处理到哪了）
 ```
 
-The projector does not calculate counter lag, reset, rollover or recovery
-semantics in Go. Those rules belong to the canonical ClickHouse view. It
-accepts only a uniquely resolved RELEASED/ACTIVE PRIMARY COUNTER binding of
-any energy type; a counter without such a binding stops projection with an
-explicit error.
+- 读数之间的差值、表计清零、走满回到 0、中断后恢复，这些规则都写在 ClickHouse 的视图里，Go 代码不重算。
+- 一个累计读数点位必须有唯一一条已发布、启用中的主计量绑定（任何能源类型都可以）；没有的话，程序明确报错并停下。
+- 每个差值写成一段记录，电量正好等于这个差值。读数质量 `GOOD` 记为有效（`VALID`）；`PARTIAL`/`ESTIMATED`/`MANUAL` 记为可疑（`SUSPECT`）；`STALE`/`INVALID`/未知记为无效（`INVALID`）。空的差值和不合理的减少由视图排除，不写成 0。
+- 每段记录按当前读数的编号识别，用（租户、站点、计量绑定、当前读数编号）去重。第一次写入版本号为 0；读数晚到需要更正时，版本号加一，记下这次重算的编号，并写下重算开始、写入一批、完成或失败的记录。
+- 每次最多读一批（默认 256 条）检查点之后新到的累计读数，按 `history_sequence` 排序。对每条读数算它自己的差值；如果它是晚到的，再更正它后面那条读数的差值。读取范围只限于这批读数涉及的点位和最早的采样时间，不扫全部历史（#441）。记录写好之后才前移检查点；前移丢了，最多重放一批，已经写过、前一条读数也相同的差值会跳过。
+- 累计读数的视图用 ClickHouse 的 `SQL SECURITY DEFINER`，读取账号只能查这些视图，碰不到原始读数表。
 
-For each accepted canonical delta, the projector writes one interval whose
-energy is exactly `delta_value`. `GOOD`, `PARTIAL`/`ESTIMATED`/`MANUAL`, and
-`STALE`/`INVALID`/unknown raw qualities map to `VALID`, `SUSPECT`, and
-`INVALID`. NULL deltas and invalid decreases are excluded by the canonical
-view; they are never written as zero-energy facts.
+计量绑定的查询是登记服务的内部接口（双向 TLS），要一张带 `meter-binding.resolve` 权限的短时授权。这个程序以自己的后台服务身份（ADR 0017）向 IAM 每个租户申请一张，快到期前续签。
 
-Facts are identified by the current observation ID. The logical idempotency
-key is `(tenant_id, site_id, meter_binding_id, source_current_observation_id)`.
-Initial facts use `fact_revision=0`. Late-arrival corrections increment the prior revision, attach a `rebuild_run_id`, and persist
-RUN_STARTED/RUN_PERSISTED_CHUNK/RUN_COMPLETED or RUN_FAILED rebuild evidence.
+## 同步电价窗口
 
-The Core resolver is a private mTLS route and requires a short-lived Registry
-grant with the dedicated `meter-binding.resolve` permission. The projector is
-its own Workload Principal (ADR 0017): it asks IAM for one grant per Tenant over
-mTLS and renews it before it expires.
+把每个站点的进线电价展开成按 UTC 的价格窗口，写进 `analytics.tariff_price_windows`，Cube 用它给每段用电计价（`internal/energy/price_window_projector.go`，规则见 `docs/specs/estimated-energy-cost.md`）。
 
-Each poll reads at most the batch size of Counter observations that Telemetry History made
-visible after the checkpoint, ordered by `history_sequence`. For each it projects its own delta
-and, when it arrived late, its successor's corrected delta. Reads are bounded by the arrivals'
-Points and earliest sample, not by all history (#441). The checkpoint advances only after the
-facts are written; a lost advance replays one batch, and deltas whose fact already has the same
-predecessor are skipped.
+## 谁能读写哪些数据
 
-The Counter views use ClickHouse `SQL SECURITY DEFINER`; the projector reader can
-query the bounded views without receiving direct raw-observation access.
-
-## Data ownership
-
-| Dataset | Access |
+| 数据 | 权限 |
 |---|---|
-| `telemetry_history.counter_arrivals`, `counter_deltas_from` | Projector read only |
-| `analytics.energy_interval_facts` | Projector insert and idempotency read |
-| `analytics.energy_projection_checkpoints` | Projector read and advance |
-| Core `meter_bindings` | Core-owned resolver read |
+| `telemetry_history.counter_arrivals`、`counter_deltas_from` | 只读 |
+| `analytics.energy_interval_facts` | 写入，以及去重时读 |
+| `analytics.energy_projection_checkpoints` | 读和前移 |
+| `analytics.tariff_price_windows` | 写入 |
+| 登记服务的 `meter_bindings` | 由登记服务的接口读 |
 
-## Environment
+## 环境变量
 
-Required:
+必填：
 
-| Variable | Purpose |
+| 变量 | 用途 |
 |---|---|
-| `ANALYTICS_CLICKHOUSE_HTTP_URL` | ClickHouse HTTP origin |
-| `ANALYTICS_CORE_REGISTRY_URL` | Platform Core HTTP origin |
-| `ANALYTICS_IAM_URL` | IAM HTTP origin that issues the projector's Registry grants |
-| `ANALYTICS_INTERNAL_CA` | Internal CA bundle for Core and IAM |
-| `ANALYTICS_INTERNAL_TLS_CERT` | Projector mTLS certificate (its Workload Principal identity) |
-| `ANALYTICS_INTERNAL_TLS_KEY` | Projector mTLS private key |
+| `ANALYTICS_CLICKHOUSE_HTTP_URL` | ClickHouse 的 HTTP 地址 |
+| `ANALYTICS_CORE_REGISTRY_URL` | 登记服务的 HTTP 地址 |
+| `ANALYTICS_IAM_URL` | 签发登记授权的 IAM 地址 |
+| `ANALYTICS_INTERNAL_CA` | 登记服务和 IAM 的内部 CA |
+| `ANALYTICS_INTERNAL_TLS_CERT` | 这个程序的双向 TLS 证书（它的后台服务身份） |
+| `ANALYTICS_INTERNAL_TLS_KEY` | 对应的私钥 |
 
-Optional defaults:
+可选，括号里是默认值：
 
-| Variable | Default |
+| 变量 | 默认值 |
 |---|---|
 | `ANALYTICS_SOURCE_DATABASE` | `telemetry_history` |
 | `ANALYTICS_DATABASE` | `analytics` |
 | `ANALYTICS_ENERGY_TABLE` | `energy_interval_facts` |
-| `ANALYTICS_CLICKHOUSE_READER_USERNAME` | Empty |
-| `ANALYTICS_CLICKHOUSE_READER_PASSWORD` | Empty |
-| `ANALYTICS_CLICKHOUSE_WRITER_USERNAME` | Empty |
-| `ANALYTICS_CLICKHOUSE_WRITER_PASSWORD` | Empty |
-| `ANALYTICS_CLICKHOUSE_CA` | System trust store |
+| `ANALYTICS_CLICKHOUSE_READER_USERNAME` / `_PASSWORD` | 空 |
+| `ANALYTICS_CLICKHOUSE_WRITER_USERNAME` / `_PASSWORD` | 空 |
+| `ANALYTICS_CLICKHOUSE_CA` | 系统信任的证书 |
 | `ANALYTICS_PROJECTOR_BATCH_SIZE` | `256` |
 | `ANALYTICS_PROJECTOR_POLL_INTERVAL` | `500ms` |
 | `ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR` | `127.0.0.1:19089` |
 
-## Verification
+## 测试
 
 ```bash
 npm run test:analytics
@@ -90,16 +71,9 @@ npm run analytics:history:integration
 npm run build:analytics-read-model-projector
 ```
 
-The integration test inserts accepted and out-of-order counter observations,
-resolves a test binding, checks increase/reset output and confirms a second
-projection pass is idempotent.
+集成测试写入正常的和乱序到达的累计读数，用一条测试绑定，检查读数增加和清零时算出的结果，并确认再算一遍不会重复写入。
 
-## Current limitations
+## 现在的限制
 
-- Energy Series queries read electricity facts only; other energy types are projected but not queried;
-- late-arrival predecessor corrections and rebuild evidence are implemented; arbitrary operator-selected historical backfill/rebuild scopes are not;
-- each poll still scans the affected Points' history before the earliest arrival once, for
-  their last observation and per-revision maximum; memory stays bounded, time grows with that
-  history (#441);
-- tariff, cost, carbon, baseline, reporting and optimization slices remain on
-  the Wayfinder frontier.
+- 读数晚到时的更正和重算记录已经有了；但运维人员还不能任选一段历史让它重算。
+- 每一批仍要把相关点位在最早到达时间之前的历史扫一遍（取最后一条读数和每个版本的最大值）。内存不会涨，但耗时随历史增长（#441）。
