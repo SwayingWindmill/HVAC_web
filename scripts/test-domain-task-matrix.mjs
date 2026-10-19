@@ -54,7 +54,6 @@ test('domain matrix exposes stable product domains and standard layers', () => {
     'workorder',
     'analytics',
     'operations-agent',
-    'pocs',
   ]);
   for (const profiles of Object.values(domainTaskProfiles)) {
     assert.deepEqual(Object.keys(profiles), ['contracts', 'unit', 'integration', 'browser']);
@@ -69,7 +68,6 @@ test('gate profiles use product domains rather than implementation stage numbers
     'command',
     'operations-agent',
     'platform',
-    'pocs',
     'registry',
     'telemetry',
     'web',

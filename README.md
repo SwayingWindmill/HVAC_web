@@ -106,7 +106,7 @@ npm run deployment:phase1:check
 npm run domain:plan -- --domain=operations-agent --layers=unit,integration
 ```
 
-CI 只运行 `scripts/domain-task-matrix.mjs` 里登记的命令，按改动的领域挑着跑。`domain:plan` 先看会跑哪些，`domain:run` 实际执行；支持的领域有 `web`、`platform`、`registry`、`telemetry`、`command`、`alarm`、`workorder`、`analytics`、`operations-agent` 和 `pocs`。
+CI 只运行 `scripts/domain-task-matrix.mjs` 里登记的命令，按改动的领域挑着跑。`domain:plan` 先看会跑哪些，`domain:run` 实际执行；支持的领域有 `web`、`platform`、`registry`、`telemetry`、`command`、`alarm`、`workorder`、`analytics` 和 `operations-agent`。
 
 `repo:check` 防止日志、生成产物和临时检出被提交，并核对本文的目录清单和 `cmd/`、`modules/`、`services/` 里实际的目录一致。
 
