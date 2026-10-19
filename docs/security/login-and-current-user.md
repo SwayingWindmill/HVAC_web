@@ -68,7 +68,6 @@ npm run build:iam-owner
 npm run build:oidc-fixture
 npm run lint
 npm run build
-npm run audit:auth-principal
 ```
 
-接口测试走真实的跳转和回调，覆盖 PKCE、nonce、签发方、对象、签名、过期、生效时间、令牌类型、双向 TLS、授权的限制、CSRF、Origin、退出和管理员吊销。浏览器检查验证登录流程、cookie 的属性、生成的客户端、浏览器存储里没有敏感数据，以及浏览器访问不到 IAM。测试用的 OIDC 服务（`build:oidc-fixture`）支持成功、管理员登录、JWKS 轮换，以及只在自动化测试里用的、按 `login_hint` 触发的拒绝情况。
+接口测试走真实的跳转和回调，覆盖 PKCE、nonce、签发方、对象、签名、过期、生效时间、令牌类型、双向 TLS、授权的限制、CSRF、Origin、退出和管理员吊销。测试用的 OIDC 服务（`build:oidc-fixture`）支持成功、管理员登录、JWKS 轮换，以及只在自动化测试里用的、按 `login_hint` 触发的拒绝情况。

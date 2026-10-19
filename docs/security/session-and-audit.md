@@ -128,7 +128,7 @@ npm run build:audit-owner
 npm run build:outbox-relay
 npm run lint
 npm run build
-npm run audit:durable-session
+npm run audit:security-failure
 ```
 
 浏览器检查（需要 Docker）验证：生成的客户端里的操作记录界面状态；持久会话的创建和公开查询；完整的操作人和租户信息；内容和哈希链正确；投递程序和操作记录服务重启；重复的 Protobuf 重放最后只有一条记录；别的租户查不到；消息总线中断时会话事务仍能提交；中断期间看得到待发事件；Kafka 恢复后只有一条记录；浏览器直接访问操作记录服务失败。

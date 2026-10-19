@@ -10,7 +10,6 @@ const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
 const javascriptToolingBaselinePath = 'scripts/javascript-tooling-baseline.json';
 const requiredLinguistExclusions = Object.freeze([
   'scripts/** -linguist-detectable',
-  'benchmarks/** -linguist-detectable',
   'services/operations-agent-service/test/** -linguist-detectable',
   '.agents/** -linguist-detectable',
 ]);
@@ -210,13 +209,6 @@ const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFile
   ];
 };
 
-export const checkJavascriptToolingGovernance = (root = repositoryRoot) => {
-  const violations = collectJavascriptToolingViolations(root);
-  if (violations.length > 0) {
-    throw new Error(`JavaScript tooling governance check failed:\n- ${violations.join('\n- ')}`);
-  }
-};
-
 // Go sources are formatted by gofmt, so diffs carry only real changes.
 const findGoFormatViolations = (root, trackedFiles) => {
   const goFiles = trackedFiles.map(normalizePath).filter((path) => path.endsWith('.go') && existsSync(join(root, path)));
@@ -249,11 +241,9 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
 if (invokedPath === import.meta.url) {
-  const javascriptOnly = process.argv.includes('--javascript-only');
   try {
-    if (javascriptOnly) checkJavascriptToolingGovernance();
-    else checkRepositoryGovernance();
-    console.log(javascriptOnly ? 'JavaScript tooling governance check passed.' : 'Repository governance check passed.');
+    checkRepositoryGovernance();
+    console.log('Repository governance check passed.');
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

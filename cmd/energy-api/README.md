@@ -54,7 +54,6 @@ npm run ownership:check
 npm run test:gateway
 npm run test:identity
 npm run test:durable-unit
-npm run test:ownership
 npm run test:durable-postgres
 npm run build:energy-api
 npm run build:iam-owner
@@ -63,13 +62,10 @@ npm run build:outbox-relay
 npm run build:oidc-fixture
 npm run lint
 npm run build
-npm run audit:platform-gateway
-npm run audit:auth-principal
-npm run audit:durable-session
-npm run audit:route-ownership
+npm run audit:security-failure
 ```
 
-`audit:*` 是浏览器检查，需要 Docker 和支持 CDP 的 Edge、Chrome 或 Chromium；每个都用独立的进程和系统临时目录。
+`audit:security-failure` 是浏览器检查，需要 Docker 和支持 CDP 的 Edge、Chrome 或 Chromium；它用独立的进程和系统临时目录。
 
 ## 构建信息
 
