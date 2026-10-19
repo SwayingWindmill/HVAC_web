@@ -40,7 +40,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .cursor/
-.claude/
+.claude/*
+!.claude/skills/
 .opencode/
 opencode.json
 .codex/
