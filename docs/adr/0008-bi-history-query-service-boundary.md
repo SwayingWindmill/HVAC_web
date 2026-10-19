@@ -1,246 +1,68 @@
-# ADR 0008: Modular BI history pipeline and query boundary
+# ADR 0008：历史读数、用电量和统计查询分成几段
 
-## Status
+状态：已采纳，已实现。ADR 0023（2026-10-16）定下所有能耗读取都经过 Cube 的视图。最初只支持电表、累计读数的差值在 Go 里算；现在任何能源类型都可以，差值规则写在 ClickHouse 视图里，这些按现状写在下面。
 
-Accepted and implemented for the first electricity Energy Series vertical slice. ADR 0023 (2026-10-16) makes Cube the place every energy read goes through.
+## 背景
 
-## Context
+遥测负责当前状态（ADR 0003）。历史存储、把读数加工成统计数据、长时间范围的统计查询，在资源、故障和发布节奏上都不一样：历史投递要在重试中不丢已接收的读数；电表的累计读数要先按业务规则换算，才能变成可以相加的用电量；统计查询可能扫很长的时间范围，不能占用实时接收的时间预算；指标的定义要有版本，能在总览、能耗、电费等页面之间复用。全放进遥测，会把当前状态、异步加工、统计数据和面向用户的查询混在一个故障范围里。
 
-`telemetry-runtime-service` is the current-state authority for accepted telemetry,
-quality, freshness, presence and snapshot revision. Historical persistence,
-analytical read-model construction and BI queries have different resource,
-failure and release profiles:
+## 决定
 
-- history delivery must survive retries without losing accepted observations;
-- cumulative meter readings require domain conversion before they become
-  additive energy facts;
-- BI queries can scan long ranges and must not consume the latency budget of
-  real-time telemetry ingestion;
-- semantic metric definitions must remain versioned and reusable across
-  Dashboard, Energy and future Cost products.
-
-Putting all of these responsibilities into Telemetry Runtime would mix
-current-state authority, asynchronous projection, analytical fact ownership and
-user-facing queries in one failure domain.
-
-## Decision
-
-Use one BI history functional domain with separate modules and runtime units:
+一条链，分成几段，各自是独立的模块和运行单位：
 
 ```text
-Telemetry Runtime
-    -> PostgreSQL telemetry history outbox
-        -> telemetry-history-projector
-            -> ClickHouse telemetry_history.observations
-                -> analytics-read-model-projector
+遥测（当前状态）
+    -> PostgreSQL 的历史待发事件（和当前状态在同一个事务里写）
+        -> 历史写入程序（telemetry-history-projector）
+            -> ClickHouse telemetry_history.observations（原始历史）
+                -> 能源模块：把累计读数算成每段的用电量 / 冷量（modules/energy）
                     -> ClickHouse analytics.energy_interval_facts
-                        -> Cube Core
-                            -> telemetry-query-service
-                                -> Platform Gateway
-                                    -> Dashboard / Energy
+                        -> Cube 的视图（ADR 0023）
+                            -> 查询服务（telemetry-query-service）
+                                -> 平台网关（网页）、AI 助手、报告 / 优化 / 节能验证服务
 ```
 
-### Telemetry Runtime
+- **遥测**负责接收、校验、排序、质量、当前状态，以及在同一个事务里写历史待发事件。它不直接写 ClickHouse，也不执行统计查询。
+- **历史写入程序**领取历史待发事件，把已接收和被拒收的读数证据写进 `telemetry_history.observations`（写入后不改）。它只管原始历史，不解读累计读数。
+- **能源模块**读累计读数，按登记的计量绑定把差值写成每段的用电量（或冷量），任何能源类型都可以。差值、清零、走满回到 0 的规则在 ClickHouse 视图里，读数质量传到每段记录上；按检查点一批一批处理，晚到的读数会更正后一段（规则见 `modules/energy/README.md`）。它和遥测一起跑在 `telemetry-worker` 里。
+- **查询服务**负责面向产品的查询约定、校验、把授权和查询绑定、查询预算，以及调 Cube。内部接口有能耗序列、语义查询和设备历史（见 `modules/telemetry/README.md`）。它只接受固定的查询格式，从不接受任意的 Cube 字段、SQL、库名或表名。
+- 每段记录归入它结束时刻所在的小时 / 天 / 月；跨边界按比例分摊，等计费真的需要时再做。
 
-Telemetry Runtime owns telemetry acceptance, validation, ordering, quality,
-current state and the transactionally written history outbox. It does not write
-ClickHouse directly and does not execute BI queries.
+共用的请求格式和校验在一个小的 Go 库 `libs/analyticsmodel` 里；查询服务不引用别的服务的实现代码。
 
-### Telemetry History Projector
-
-`telemetry-history-projector` is an independent process and image, currently
-built from the `telemetry-runtime-service` Go module. It claims the PostgreSQL
-history outbox and writes immutable accepted/rejected observation evidence to
-`telemetry_history.observations`.
-
-It owns the raw historical projection but does not interpret cumulative meters
-or write analytical facts.
-
-### Analytics Read Model Projector
-
-`analytics-read-model-projector` is an independent Go module, process and image.
-It reads accepted cumulative electricity-meter observations and writes additive
-interval facts to `analytics.energy_interval_facts`.
-
-The first supported source contract is deliberately narrow:
-
-```text
-telemetry_key = hvac_meter.energy
-unit          = kWh
-energy_type   = electricity
-```
-
-For adjacent readings on the same Tenant, Organization, Site, Point, Sensor, Device and telemetry key:
-
-- a non-negative difference becomes interval `energy_kwh`;
-- source `SUSPECT` quality propagates to the interval;
-- a meter rollback or reset produces a zero-energy `SUSPECT` interval with
-  reason `METER_RESET_OR_ROLLBACK`, never a negative energy value;
-- a negative cumulative reading produces an `INVALID` zero-energy interval;
-- the current observation ID is the fact identity;
-- the source offset is the dataset revision;
-- the current sampled time is the authoritative data watermark.
-
-The reader uses a fixed ClickHouse window query and an anti-join against the
-fact table. The writer inserts JSONEachRow batches with a deterministic
-ClickHouse deduplication token. Re-running the projector therefore does not
-create a second fact for the same current observation.
-
-Intervals are attributed to the business bucket containing `period_end`.
-Prorating an interval across an hour/day/month boundary is deferred until a
-product requirement needs that additional complexity.
-
-### Telemetry Query Service
-
-`telemetry-query-service` owns product-level historical query contracts, query
-validation, authorization scope binding, query budgets, the repository-managed
-Cube semantic model and semantic-engine adaptation.
-
-The first internal contracts are:
-
-```text
-POST /internal/v1/analytics/energy-series
-POST /internal/v1/telemetry/device-history
-```
-
-Each complete normalized request is bound to a short-lived Platform Gateway
-delegation grant by a SHA-256 scope digest. The service accepts only fixed
-product contracts and never accepts arbitrary Cube members, SQL, database names
-or table names. Energy Series uses Cube Core. Device History uses a dedicated
-least-privilege ClickHouse reader restricted to `telemetry_history.observations`.
-
-The service translates the product request to a fixed Cube query. Cube receives
-a separate 30-second JWT containing Organization, Site, Principal and policy
-revision. Cube applies a second deny-by-default Organization/Site access policy.
-
-Energy Series executes two fixed Cube queries under one 16-second budget:
-
-1. a time-series query using the requested inclusive `from` and exclusive `to`;
-   because ClickHouse facts use millisecond precision while Cube date ranges are
-   inclusive, the adapter sends `to - 1ms`;
-2. a metadata query without a time range but with the same Organization, Site
-   and energy-type filters.
-
-Responses expose authoritative read-model metadata:
-
-- `dataWatermark` and `aggregateWatermark` come from the metadata query's maximum
-  fact watermark, not from Cube cache refresh time or only the requested rows;
-- `datasetRevision` combines the configured model revision prefix with the
-  maximum numeric fact revision;
-- `partial` is true when the global fact watermark does not cover the requested
-  exclusive end or any requested local hour/day/month bucket has no returned
-  fact row;
-- a site with no analytical facts remains explicitly partial, and a covered
-  watermark never masks a gap in the requested bucket sequence.
-
-A small shared Go module, `libs/analyticsmodel`, owns the cross-process product
-DTOs and validation semantics. The Query Service does not import another
-service implementation module.
-
-### Platform Gateway Energy API
-
-The browser-facing product route is:
+### 网页的能耗接口
 
 ```text
 POST /api/v1/analytics/energy-series
 ```
 
-The route requires an authenticated BFF Session, matching Origin and CSRF token.
-The requested Organization must equal the Session acting Organization. Gateway
-requests a dedicated IAM Analytics decision for the exact Site and action,
-`analytics.energy-series.read`. IAM requires an active Organization membership
-plus a same-Organization, exact Site Binding; an Organization-level Role alone
-is not Site ownership proof. Explicit deny takes precedence. After an allow
-decision, Gateway signs a short-lived delegation grant whose scope is the
-normalized query SHA-256 digest and whose `principalId` is the immutable IAM
-Principal ID, then calls Telemetry
-Query Service over the existing workload mTLS identity.
-Browser cookies, CSRF tokens and caller-supplied business-scope headers are never
-forwarded to IAM or Query Service.
+要求有效的登录会话、`Origin` 一致和 CSRF 令牌；请求的租户必须是会话的当前租户。网关请 IAM 对这个站点、动作 `analytics.energy-series.read` 做判定（按角色指派，范围是整个租户或这个站点，ADR 0022；明确禁止优先）。允许后，网关签一张短时授权，范围是规范化查询的 SHA-256 摘要、`principalId` 是 IAM 里不变的人员编号，再用服务身份经双向 TLS 调查询服务。浏览器的 cookie、CSRF 令牌和自己带的范围头从不转发给 IAM 或查询服务。
 
-The public Device History route is `POST /api/v1/telemetry/device-series:query`.
-Browser requests contain only Device ID, keys, UTC range and per-key point limit.
-Gateway first requests the exact S2 `telemetry.history.read` Device/key decision,
-then builds an internal query from the Session Acting Organization and IAM
-Owning Organization/Site facts. A second grant binds the full query, including
-the maximum 24-hour range and point limit, before Query Service reads history.
-Each returned history sample carries the Registry Point ID and nullable Sensor ID
-frozen for that sample at `sampledAt`; Device/key scope remains the authorization boundary.
+设备历史的公开接口是 `POST /api/v1/telemetry/device-series:query`（原始读数）和 `device-series:aggregate`（按时间段统计）：网关先做遥测的 `telemetry.history.read` 判定，再按会话的当前租户和 IAM 给出的设备所属租户 / 站点拼出内部查询，另签一张绑定整个查询的授权，查询服务才去读历史。返回的每个历史读数带着它采样时那一刻的点位编号。
 
-Gateway validates internal responses before returning them, preserves Dataset
-Revision, Watermark, Partial and Quality metadata, applies `private, no-store`,
-and maps timeout/unavailable/invalid-upstream states to bounded product errors.
-Cube, ClickHouse and Telemetry Query Service remain private.
+网关返回之前校验内部的响应，保留数据版本、截至时间、是否不完整和质量信息，加 `private, no-store`，并把超时、不可用和上游无效映射成有限的错误。Cube、ClickHouse 和查询服务都不对外。
 
-## Data ownership and identities
+### 谁写哪些数据
 
-| Resource | Writer / owner |
+| 数据 | 写入方 / 负责方 |
 |---|---|
-| PostgreSQL telemetry history outbox | `telemetry-runtime-service` |
-| `telemetry_history.observations` | `telemetry-history-projector` |
-| `analytics.energy_interval_facts` | `analytics-read-model-projector` |
-| Cube Energy Usage semantic model | `telemetry-query-service` boundary |
-| Energy Series product contract | `telemetry-query-service` |
-| Public Energy Series business ownership | `telemetry-query-service` |
-| Public Energy Series ingress and BFF enforcement | `platform-gateway` |
+| PostgreSQL 的历史待发事件 | 遥测 |
+| `telemetry_history.observations` | 历史写入程序 |
+| `analytics.energy_interval_facts`、`analytics.tariff_price_windows` | 能源模块（用电量计算程序） |
+| Cube 的语义模型、能耗序列的查询约定 | 查询服务 |
+| 公开能耗接口的入口和会话检查 | 平台网关 |
 
-ClickHouse access is separated by runtime identity:
+ClickHouse 按运行身份分开：`analytics_projector_reader` 读原始历史和已有记录，`analytics_projector_writer` 只能写用电记录，`cube_analytics_reader` 只能读统计数据。本地初始化里的无密码账号只用于开发；正式部署要在仓库之外提供带认证的账号和 TLS。
 
-- `analytics_projector_reader`: reads raw history and fact identities;
-- `analytics_projector_writer`: inserts energy facts only;
-- `cube_analytics_reader`: reads analytical facts only.
+## 为什么选 Cube
 
-The no-password users in the local ClickHouse initialization are development
-fixtures. Production deployment must provision authenticated identities and TLS
-outside this repository fixture.
+考虑过三种：自己写一层 Go 到 ClickHouse 的查询（随着总览、能耗、电费变多，会重复写指标、时间维度和权限规则）；一个面向界面的 BI 服务（会多出第二个对外的应用，绕过网关）；Cube Core（无界面的语义层，支持 ClickHouse，通过接口查询，权限规则写成声明）。
 
-## Reuse evaluation
+选了 Cube，作为可以替换的内部引擎：固定版本 `cubejs/cube:v1.6.51`（按不可变的镜像摘要），浏览器访问不到；Go 的查询服务仍是平台的安全和产品约定边界。项目自己写的只有：用电量的换算、授权绑定和 Cube 的适配。
 
-The implementation considered three shapes:
+## 后果
 
-- a custom Go-to-ClickHouse query layer, which would duplicate semantic metrics,
-  time dimensions and access policies as Dashboard, Energy and Cost expand;
-- a UI-oriented BI server, which would introduce a second public application and
-  bypass the platform Gateway/BFF contract;
-- Cube Core, a headless semantic layer with ClickHouse support, API-based query
-  execution and declarative access policies.
-
-Cube Core was selected as the replaceable internal semantic engine. The local
-scaffold pins `cubejs/cube:v1.6.51` by immutable image digest, keeps Cube
-inaccessible to browsers, and
-retains the Go Query Service as the platform security and product-contract
-boundary. Project-specific code is limited to HVAC interval construction,
-delegation binding and the Cube adapter.
-
-## Consequences
-
-Positive:
-
-- raw history delivery, analytical transformation and BI query failures are
-  isolated from current-state telemetry;
-- every durable dataset has one writer;
-- cumulative meter semantics are centralized before Cube aggregation;
-- Dashboard and Energy can share versioned metric definitions;
-- authorization is enforced at service and semantic layers;
-- the semantic engine can be replaced behind `EnergySeriesEngine`.
-
-Costs:
-
-- three runtime units plus Cube must be operated and observed;
-- the initial projector scans for unprojected candidates rather than maintaining
-  a separate checkpoint table;
-- the first model supports only the canonical cumulative HVAC electricity meter;
-- distributed tracing and timeout budgets span additional network hops.
-
-## Deferred work
-
-The public Energy Series Gateway route is active. Follow-up work must add:
-
-1. Dashboard/Energy frontend integration and mock-data retirement;
-2. tariff, cost, baseline and comparison facts;
-3. water, gas and cooling-energy read models;
-4. correction/rebuild workflows for late historical amendments;
-5. optional durable projector checkpoints when source volume makes anti-join
-   discovery insufficient;
-6. production ClickHouse identities, TLS and deployment manifests;
-7. cross-boundary interval prorating when required by billing semantics.
+- 原始历史投递、统计加工和统计查询的故障都和当前状态隔开；每份持久数据只有一个写入方。
+- 累计读数的规则集中在 Cube 汇总之前；各页面共用有版本的指标定义；权限在服务和语义层两处执行；语义引擎可以在 `EnergySeriesEngine` 后面替换。
+- 代价：要运维和观测几个运行单位加 Cube；分布式追踪和超时预算要跨更多网络跳。
+- 还没做：水、燃气的统计；运维人员任选一段历史重算；跨时间边界的按比例分摊。
