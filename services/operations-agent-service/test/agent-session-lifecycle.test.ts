@@ -13,8 +13,8 @@ class MemoryAgentSessionStateStore {
     return this.state?.session.id === sessionId ? this.state : null;
   }
 
-  async list(tenantId, siteId) {
-    return this.state?.session.tenantId === tenantId && this.state.session.siteId === siteId
+  async list(tenantId, siteId, createdBy) {
+    return this.state?.session.tenantId === tenantId && this.state.session.siteId === siteId && this.state.session.createdBy === createdBy
       ? [this.state]
       : [];
   }

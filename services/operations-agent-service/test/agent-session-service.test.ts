@@ -14,10 +14,11 @@ class MemoryAgentSessionStateStore {
     return this.states.get(sessionId) ?? null;
   }
 
-  async list(tenantId, siteId) {
+  async list(tenantId, siteId, createdBy, limit) {
     return [...this.states.values()]
-      .filter((state) => state.session.tenantId === tenantId && state.session.siteId === siteId)
-      .sort((left, right) => right.session.updatedAt - left.session.updatedAt);
+      .filter((state) => state.session.tenantId === tenantId && state.session.siteId === siteId && state.session.createdBy === createdBy)
+      .sort((left, right) => right.session.createdAt - left.session.createdAt)
+      .slice(0, limit);
   }
 
   async transact(sessionId, update) {
@@ -248,10 +249,11 @@ test('Session list stays within the generated public contract bound', async () =
     artifacts: Object.freeze([]),
   }));
   const lifecycle = Object.freeze({
-    async list(tenantId, siteId) {
+    async list(tenantId, siteId, createdBy, limit) {
       assert.equal(tenantId, context.tenantId);
       assert.equal(siteId, context.siteId);
-      return states;
+      assert.equal(createdBy, context.principalId);
+      return states.slice(0, limit);
     },
   });
   const service = createAgentSessionService({
@@ -438,4 +440,18 @@ test('an answered or stopped Session takes the next question and the model reads
   const resumed = await service.start(context, { sessionId: stopping.session.id, expectedRevision: stopped.session.revision, message: '10月15日用了多少电？' });
   assert.equal(resumed.session.status, 'ACTIVE');
   assert.equal((await settled(stopping.session.id, 2)).session.status, 'COMPLETED');
+});
+
+// #639: each person sees, opens and continues only the conversations they started on the Site.
+test('a Session is listed, opened and continued only by the person who started it', async () => {
+  const { service } = createService(async (input) => completedResult(input));
+  const someoneElse = Object.freeze({ ...context, principalId: 'principal-2' });
+  const mine = await service.create(context, { message: '10月15日用了多少电？' });
+  const theirs = await service.create(someoneElse, { message: '10月16日用了多少电？' });
+  await waitFor(async () => (await service.get(context, mine.session.id)).session.status === 'COMPLETED');
+
+  assert.deepEqual((await service.list(context)).map((state) => state.session.id), [mine.session.id]);
+  assert.deepEqual((await service.list(someoneElse)).map((state) => state.session.id), [theirs.session.id]);
+  await assert.rejects(service.get(context, theirs.session.id), { code: 'SESSION_NOT_FOUND' });
+  await assert.rejects(service.start(context, { sessionId: theirs.session.id, expectedRevision: 2, message: '那 C 机组呢？' }), { code: 'SESSION_NOT_FOUND' });
 });

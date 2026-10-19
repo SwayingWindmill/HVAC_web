@@ -47,7 +47,8 @@ export interface AgentSessionState {
 
 export interface AgentSessionStateStore {
   get(sessionId: string): Promise<AgentSessionState | null>;
-  list(tenantId: string, siteId: string): Promise<readonly AgentSessionState[]>;
+  /** The Sessions one person started on a Site, newest first, at most `limit` (#639). */
+  list(tenantId: string, siteId: string, createdBy: string, limit: number): Promise<readonly AgentSessionState[]>;
   transact(
     sessionId: string,
     update: (current: AgentSessionState | null) => AgentSessionState,
@@ -95,7 +96,7 @@ export interface CancelAgentSessionRunCommand {
 
 export interface AgentSessionLifecycle {
   get(sessionId: string): Promise<AgentSessionState | null>;
-  list(tenantId: string, siteId: string): Promise<readonly AgentSessionState[]>;
+  list(tenantId: string, siteId: string, createdBy: string, limit: number): Promise<readonly AgentSessionState[]>;
   start(command: StartAgentSessionRunCommand): Promise<AgentSessionState>;
   continueWithInput(command: ContinueAgentSessionWithInputCommand): Promise<AgentSessionState>;
   interrupt(command: InterruptAgentSessionRunCommand): Promise<AgentSessionState>;
@@ -562,10 +563,11 @@ export const createAgentSessionLifecycle = ({
     requireIdentity(sessionId, 'Session id');
     return store.get(sessionId);
   },
-  list(tenantId: string, siteId: string) {
+  list(tenantId: string, siteId: string, createdBy: string, limit: number) {
     requireIdentity(tenantId, 'Tenant id');
     requireIdentity(siteId, 'Site id');
-    return store.list(tenantId, siteId);
+    requireIdentity(createdBy, 'Creator id');
+    return store.list(tenantId, siteId, createdBy, limit);
   },
   start(command: StartAgentSessionRunCommand) {
     return store.transact(command.session.id, (current) => startState(current, command));
