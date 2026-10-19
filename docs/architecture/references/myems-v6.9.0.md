@@ -196,6 +196,6 @@
 7. **没有唯一约束和外键的表结构，以及永不分区的原始值表**。小时表应该用 `(entity, category, hour)` 做唯一键；原始时序数据放 ClickHouse，或者放 PG 分区表。证据：`database/install/myems_energy_db.sql:7-17`，`myems_historical_db.sql:15-24`。
 8. **每个"对象 × 报表"写一份复制粘贴的接口和导出器**（约 20 万行）。应该用统一的度量查询层，加上声明式报表定义。证据：`myems-api/reports/tenantenergycategory.py` 与 `storeenergycategory.py` 只差 125 行。
 9. **只控制前端树根的权限模型，接口层没有对象级授权（源码里有 `todo: check user privilege`），单轮 SHA-512 存密码，CORS `*`，默认口令写进 README**。证据：`myems-api/core/useractivity.py:85-147`，`myems-api/core/user.py:370`，`myems-api/app.py:209`，`README.md:172-185`。
-10. **fire-and-forget 的 MQTT 控制下发**：没有设备确认、限值、互锁和审计。冷站控制必须有指令状态的完整记录和安全边界。证据：`myems-api/core/command.py:462-570`。
+10. **发出去就不管的 MQTT 控制下发**：没有设备确认、限值、互锁和审计。冷站控制必须有指令状态的完整记录和安全边界。证据：`myems-api/core/command.py:462-570`。
 11. **配置变更要重启进程，子进程崩溃不会被拉起，日志只记 ERROR 级**。证据：`myems-modbus-tcp/main.py:45-49`、`:69`、`:169`，`acquisition.py:243`。
 12. **把"有表没实现"的企业版能力（baseline、plan、prediction、FDD 执行）当成可参考的实现**。社区版只能借鉴它们的表结构。证据：社区版里写这些库的代码只有 `myems-api/config.py` 中的连接配置，读取方在 `myems-api/reports/*saving.py`、`*plan.py`。

@@ -1,6 +1,6 @@
 # ADR 0014：AI 助手用 pi 跑模型和工具的循环
 
-状态：已采纳（2026-09-03；2026-10-16 升级 pi 1.3.0、删掉旧的 LangGraph 路径）
+状态：已采纳（2026-09-03）
 
 参照：`docs/architecture/pi-agent-source-review.md`
 
@@ -28,7 +28,7 @@ pi 的 `Agent` 接口只做一件事：一个带状态的「模型 → 工具 �
 @earendil-works/pi-ai         1.3.0
 ```
 
-都来自上游 `v1.3.0`（提交 `71023aec1546d6d677a65669c5665c0927ce0dd0`）。最初固定在 `0.84.4`，2026-10-16 升到 1.3.0 时改了三处：去掉的 `shouldStopAfterTurn` 换成 `finishTurn` 返回 `{ action: 'end' }`；提示词改成对话里的第一条消息发给模型；pi 的 DeepSeek 模型名从 `deepseek-v4-flash` 改成 `deepseek-flash`。
+都来自上游 `v1.3.0`（提交 `71023aec1546d6d677a65669c5665c0927ce0dd0`）。升级时要看什么、上次升级改了哪些，见 `docs/architecture/pi-agent-source-review.md`。
 
 pi 的类型不出现在数据库、接口、网关、网页和业务约定里，只在 `src/runtime-pi/` 里用。pi 只管一次回答从开始到结束：
 
@@ -108,7 +108,7 @@ pi 的事件在离开服务前转成 `hvac.agent.event/v1`：`session.snapshot`�
 
 ## 现状
 
-- 2026-10-16 提前删掉了 LangGraph 的旧路径（它从没接进服务入口）：断点数据库、旧的调查接口和约定、审计发件箱、OpenAI 结论生成、旧的工具清单生成脚本、旧的评测和安全认证。现在只有 pi 会话一种。
+- LangGraph 的旧路径（它从没接进服务入口）连同它的断点数据库、调查接口、审计发件箱和评测都已删掉，现在只有 pi 会话一种。
 - 已有：服务和网关之间的会话接口、12 个只读工具、两个收尾工具、预算、SSE 事件、网页的 AI 助手面板、评测题库（`services/operations-agent-service/evals/`）。
 - 还没有：会话的业务审计、「建议」类工具。
 

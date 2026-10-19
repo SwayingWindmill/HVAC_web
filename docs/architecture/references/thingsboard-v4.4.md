@@ -15,7 +15,7 @@
 
 ### 1.1 一个可执行包，多种角色
 - `application/` 是一个 Spring Boot 进程，用 `service.type` 决定角色：`monolith | tb-core | tb-rule-engine`（`application/src/main/resources/thingsboard.yml:2644-2645`）。
-- 独立 workload：`transport/{mqtt,http,coap,lwm2m,snmp}`（各自是独立 Spring Boot 应用，例如 `transport/mqtt/src/main/java/org/thingsboard/server/mqtt/ThingsboardMqttTransportApplication.java`，`service.type` 默认 `tb-transport`，见 `transport/mqtt/src/main/resources/tb-mqtt-transport.yml:412-413`），`msa/js-executor`（Node.js，`msa/js-executor/server.ts`），`edqs/`（实体查询服务，`edqs/src/main/java/org/thingsboard/server/edqs/ThingsboardEdqsApplication.java`），`msa/vc-executor`（版本控制），以及 integration executor 和 web-report。
+- 单独部署的进程：`transport/{mqtt,http,coap,lwm2m,snmp}`（各自是独立 Spring Boot 应用，例如 `transport/mqtt/src/main/java/org/thingsboard/server/mqtt/ThingsboardMqttTransportApplication.java`，`service.type` 默认 `tb-transport`，见 `transport/mqtt/src/main/resources/tb-mqtt-transport.yml:412-413`），`msa/js-executor`（Node.js，`msa/js-executor/server.ts`），`edqs/`（实体查询服务，`edqs/src/main/java/org/thingsboard/server/edqs/ThingsboardEdqsApplication.java`），`msa/vc-executor`（版本控制），以及 integration executor 和 web-report。
 - 单机 monolith 内嵌所有 transport，用开关控制：`HTTP_ENABLED/MQTT_ENABLED/COAP_ENABLED/LWM2M_ENABLED/SNMP_ENABLED`（`thingsboard.yml:1483,1493,1558,1570,1708`）。
 - 仓库内不再附带生产 compose 文件。black-box 测试从外部仓库拉取 compose：`msa/black-box-tests/src/test/java/org/thingsboard/server/msa/ComposeRepository.java:44`（`thingsboard-pe-docker-compose`）。一套集群要组合的文件可以从 `ContainerTestSuite.java:112-146` 看出：`docker-compose.yml + edqs + kafka + postgres|hybrid(cassandra) + citus + valkey + trendz ...`。
 
@@ -137,7 +137,7 @@
 - 存储上，同一 originator 同一 type 只能有一条活动告警，由 DB 函数 `create_or_update_active_alarm` 保证（`dao/src/main/resources/sql/schema-functions.sql:7`；索引 `schema-entities-idx.sql:7-20`）。
 
 ### 5.4 Calculated Fields（v4.4 的重点）
-- 类型：`SIMPLE, SCRIPT, GEOFENCING, ALARM, PROPAGATION, RELATED_ENTITIES_AGGREGATION, ENTITY_AGGREGATION`（`common/data/src/main/java/org/thingsboard/server/common/data/cf/CalculatedFieldType.java`）。参数可以来自本实体、按关系路径动态解析的实体，或当前 owner（`cf/configuration/RelationPathQueryDynamicSourceConfiguration.java`、`CurrentOwnerDynamicSourceConfiguration.java`）。输出可以直接写入，也可以先经过 rule chain（`TimeSeriesImmediateOutputStrategy` / `TimeSeriesRuleChainOutputStrategy`）。
+- 类型：`SIMPLE, SCRIPT, GEOFENCING, ALARM, PROPAGATION, RELATED_ENTITIES_AGGREGATION, ENTITY_AGGREGATION`（`common/data/src/main/java/org/thingsboard/server/common/data/cf/CalculatedFieldType.java`）。参数可以来自本实体、按关系路径动态解析的实体，或实体当前的所有者（`cf/configuration/RelationPathQueryDynamicSourceConfiguration.java`、`CurrentOwnerDynamicSourceConfiguration.java`）。输出可以直接写入，也可以先经过 rule chain（`TimeSeriesImmediateOutputStrategy` / `TimeSeriesRuleChainOutputStrategy`）。
 - 运行时：每个实体一个 `CalculatedFieldEntityActor`，由 `CalculatedFieldManagerActor` 管理（`application/.../actors/calculatedField/`）。CF 状态持久化有两种：in-memory 模式用 RocksDB（`RocksDBCalculatedFieldStateService.java:26`），Kafka 模式用 compacted topic（`KafkaCalculatedFieldStateService.java:45`；`thingsboard.yml:2497-2519`）。
 - 意义：派生指标（例如冷站 COP = 制冷量 / 功率）和告警从"写在规则链脚本里"变成了"挂在实体上、有类型的声明式配置"。这是 v4.4 最值得参考的方向。
 
@@ -181,7 +181,7 @@
 3. **分区靠取模，不是一致性哈希**：节点数变化时所有分区重算，actor 冷启动成本高，所以需要 `recalculate_delay` 这类补丁（§1.3）。
 4. **默认至少一次、允许跳过失败**：Main 队列默认 `SKIP_ALL_FAILURES + BURST`，失败的消息会静默丢弃，同一设备的消息也可能乱序（§5.2）。in-memory 模式下宕机会丢失已 ack 的消息。
 5. **TTL 语义因后端而异**：同一个 TTL 配置在 Cassandra 上按行生效，在 PG/Timescale 上被忽略，只剩系统和租户级 DELETE（§3.3）。
-6. **聚合在普通 PG 上按区间逐条查询**，也没有持久化的 rollup（§3.4）。
+6. **聚合在普通 PG 上按区间逐条查询**，也没有提前算好存下来的按时间段汇总（§3.4）。
 7. **数据模型约束弱**：relation 没有 tenant 列和外键；profile 可以被字符串隐式创建；子设备身份只是设备名；一张 relation 表承担业务拓扑、规则链结构和分组成员等多种用途（§4）。
 8. **单节点锁和最终一致**：网关建设备的去重只用 JVM 内的锁（`DefaultTransportApiService.java:141,334`），多 core 节点时依赖 DB 唯一约束兜底；edge 游标回退 60s 后重放（§7）。
 9. **职责不断叠加**：设备 profile 里的告警、rule chain 里的告警、CF 里的告警三套机制并存，处在迁移期（§5.3）；EDQS 又多出一份查询副本（§1.4）。
@@ -207,7 +207,7 @@
 ## 不应照搬
 
 1. **一期不要引入 Kafka、ZooKeeper、Redis、Cassandra、EDQS 这一整套**：ThingsBoard 自己的单机形态就是 monolith 加 PG，分布式组件只在多节点时才需要。证据：`thingsboard.yml:2133-2134,127-129,856-858`，`InMemoryMonolithQueueFactory.java:53`。
-2. **不要用不持久的内存队列，再在入队后就回 ack**：宕机会丢掉已确认的数据。单机方案应直接写 PG（或者用 PG 做 outbox），再 ack。证据：`DefaultInMemoryStorage.java:21,46`，`DefaultTransportService.java:1142`。
+2. **不要用不持久的内存队列，再在入队后就回 ack**：宕机会丢掉已确认的数据。单机方案应直接写 PG（或者先写进 PG 的待发事件表），再确认收到。证据：`DefaultInMemoryStorage.java:21,46`，`DefaultTransportService.java:1142`。
 3. **不要默认"失败即跳过"并且 BURST 乱序**：失败要显式暴露（死信或错误计数），同一设备内的处理要保序。证据：`DefaultSystemDataLoaderService.java:257-275`。
 4. **不要做通用的可视化 rule chain 引擎加脚本节点**：约 100 种节点、JS/TBEL 双引擎、远程 js-executor，加上 debug 事件存储，对一个小团队维护成本太高。冷站的业务规则应当写成有类型的领域代码或计算字段。证据：`rule-engine/rule-engine-components`（约 100 个 `Tb*Node`），`thingsboard.yml:1388-1430`，`msa/js-executor/`。
 5. **不要用无类型、无租户列、无外键的自由关系表承载业务拓扑**：冷站、冷机、水泵、表计之间的归属应该是有约束的领域表。证据：`schema-entities.sql:521-531`，`RelationTypeGroup.java:7-13`。

@@ -40,7 +40,7 @@ PREPARED、REQUEST_COMMITTED、ACKNOWLEDGED、VERIFIED、NOT_SENT、FAILED、OUT
 
 ### 只用规范的能力
 
-不允许任意的协议方法名和参数，只能用平台定义的能力，例如启动 `START`、停止 `STOP`、复位故障 `RESET_FAULT`、设定温度 `SET_TEMPERATURE_SETPOINT`、冷冻水出水温度设定 `SET_CHILLED_WATER_TEMPERATURE_SETPOINT`、频率 `SET_FREQUENCY`、风机转速 `SET_FAN_SPEED`、阀门开度 `SET_OPENING`、负荷限制 `SET_LOAD_LIMIT`。每种能力有单位、绝对范围、相对当前值的最大变化、风险等级（低 / 中 / 高 / 紧急）、审批要求和重试规则。中、高风险的指令要审批；谁能下发、谁能审批到哪个风险等级，由角色决定（ADR 0022）。
+不允许任意的协议方法名和参数，只能用平台定义的能力，例如启动 `START`、停止 `STOP`、复位故障 `RESET_FAULT`、设定温度 `SET_TEMPERATURE_SETPOINT`、冷冻水出水温度设定 `SET_CHILLED_WATER_TEMPERATURE_SETPOINT`、频率 `SET_FREQUENCY`、风机转速 `SET_FAN_SPEED`、阀门开度 `SET_OPENING`、负荷限制 `SET_LOAD_LIMIT`。每种能力有单位、绝对范围、相对当前值的最大变化、风险等级（低 / 中 / 高 / 严重）、审批要求和重试规则。例如设定温度只能在 16–30 ℃ 之间，一次最多改 3 ℃（`libs/commandmodel/model.go` 里每种能力各有一组）。低风险不用审批，中风险要一个人审批，高风险和严重要两个人审批；谁能下发、谁能审批到哪个风险等级，由角色决定（ADR 0022）。
 
 ### 下发前要有当前的证据
 
