@@ -36,7 +36,7 @@ GET /internal/v1/audit/session-events/{messageId}
 npm run build:audit-owner
 npm run test:durable-unit
 npm run test:durable-postgres
-npm run audit:durable-session
+npm run audit:security-failure
 ```
 
 完整的事务、投递、行级隔离和哈希链设计见 `docs/security/session-and-audit.md`。

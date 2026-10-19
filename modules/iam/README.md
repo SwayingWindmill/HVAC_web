@@ -110,6 +110,5 @@ IAM 拒绝客户端自己带的人员、角色、租户、站点、管理员或�
 ```bash
 npm run test:identity
 npm run registry:integration
-npm run test:security-negative
 npm run build:iam-owner
 ```

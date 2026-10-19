@@ -66,6 +66,15 @@ test('domain module changes stay scoped to product domains', () => {
   }
 });
 
+test('Phase 1 migration changes rerun the migration integration test', () => {
+  for (const file of ['deploy/platform/phase1/migrations/manifest.v1.json', 'modules/alarm/migrations/001_s4_alarm_runtime.sql']) {
+    const classification = runClassification([file]);
+    assert.ok(classification.integrationProfiles.includes('platform'), file);
+  }
+  const plan = runPlan('integration', ['platform']);
+  assert.ok(plan.commands.includes('npm run deployment:phase1:migration:test'));
+});
+
 test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
   for (const file of [
     'package.json',

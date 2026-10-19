@@ -31,7 +31,7 @@
 ```bash
 npm run build:outbox-relay
 npm run test:durable-unit
-npm run audit:durable-session
+npm run audit:security-failure
 ```
 
 故障和恢复的测试见 `docs/security/session-and-audit.md`。
