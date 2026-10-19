@@ -189,7 +189,7 @@
 
 ---
 
-## 值得吸收（Worth absorbing）
+## 值得吸收
 
 1. **transport 无状态，通过 API 向 core 校验凭据**：transport 进程不连数据库，凭据校验走请求/响应，并在 core 侧缓存。这样可以单独扩展接入层。证据：`DefaultTransportService.java:341-395`，`DefaultTransportApiService.java:217-300`，`DeviceCredentialsServiceImpl.java:47-72`。
 2. **topic 不带设备 ID，身份来自认证会话**（`v1/devices/me/*`），消除了"冒用别的设备 topic"这一整类问题。证据：`MqttTopics.java:44-56`。
@@ -204,7 +204,7 @@
 11. **边缘同步用的协议形态**：一条 gRPC 双向流，每条消息带 ID 并逐条 ack，云端事件表加上持久游标，可请求全量同步作为兜底。证据：`edge.proto:15-19,85-107,549-600`，`PostgresGeneralEdgeEventsDispatcher.java:37-38,147-171`。
 12. **预置设备 provision 用状态位防止重复领取**：`provisionState` 保证一次性领取，适合现场批量安装网关。证据：`DeviceProvisionServiceImpl.java:66,156-189`。
 
-## 不应照搬（Should NOT be copied）
+## 不应照搬
 
 1. **一期不要引入 Kafka、ZooKeeper、Redis、Cassandra、EDQS 这一整套**：ThingsBoard 自己的单机形态就是 monolith 加 PG，分布式组件只在多节点时才需要。证据：`thingsboard.yml:2133-2134,127-129,856-858`，`InMemoryMonolithQueueFactory.java:53`。
 2. **不要用不持久的内存队列，再在入队后就回 ack**：宕机会丢掉已确认的数据。单机方案应直接写 PG（或者用 PG 做 outbox），再 ack。证据：`DefaultInMemoryStorage.java:21,46`，`DefaultTransportService.java:1142`。
@@ -212,7 +212,7 @@
 4. **不要做通用的可视化 rule chain 引擎加脚本节点**：约 100 种节点、JS/TBEL 双引擎、远程 js-executor，加上 debug 事件存储，对一个小团队维护成本太高。冷站的业务规则应当写成有类型的领域代码或计算字段。证据：`rule-engine/rule-engine-components`（约 100 个 `Tb*Node`），`thingsboard.yml:1388-1430`，`msa/js-executor/`。
 5. **不要用无类型、无租户列、无外键的自由关系表承载业务拓扑**：冷站、冷机、水泵、表计之间的归属应该是有约束的领域表。证据：`schema-entities.sql:521-531`，`RelationTypeGroup.java:7-13`。
 6. **不要让网关上报的字符串隐式创建设备类型或模型，也不要只用设备名作为身份**：模型应当预先登记并有版本，子设备身份用网关作用域内的稳定点位 ID。证据：`DefaultTransportApiService.java:430-447`。
-7. **不要让 TTL 语义随存储后端变化，也不要用大表逐行 DELETE 做保留期清理**：保留策略应按分区或 chunk 整块删除（例如 Timescale 的 retention policy），并在契约里写明。证据：`JpaSqlTimeseriesDao.java:72-87`，`schema-ts-psql.sql:214-275`。
-8. **不要在普通 PG 上逐区间循环做聚合**，也不要把"日、月能耗"留到查询时现算。能耗统计应由 owner 持久化 rollup。证据：`AbstractChunkedAggregationTimeseriesDao.java:116-151`，`thingsboard.yml:306`。
-9. **不要让三套告警机制并存**（profile 告警、rule node 告警、CF 告警）。一个不变量只保留一个 owner。证据：`TbDeviceProfileNode.java:41-53`，`TbCreateAlarmNode.java`，`AlarmCalculatedFieldConfiguration.java`。
+7. **不要让 TTL 语义随存储后端变化，也不要用大表逐行 DELETE 做保留期清理**：保留策略应按分区或 chunk 整块删除（例如 Timescale 的 retention policy），并在接口约定里写明。证据：`JpaSqlTimeseriesDao.java:72-87`，`schema-ts-psql.sql:214-275`。
+8. **不要在普通 PG 上逐区间循环做聚合**，也不要把"日、月能耗"留到查询时现算。能耗统计应由负责的模块按时间段算好存下来。证据：`AbstractChunkedAggregationTimeseriesDao.java:116-151`，`thingsboard.yml:306`。
+9. **不要让三套告警机制并存**（profile 告警、rule node 告警、CF 告警）。同一条规则只由一个地方负责。证据：`TbDeviceProfileNode.java:41-53`，`TbCreateAlarmNode.java`，`AlarmCalculatedFieldConfiguration.java`。
 10. **不要复制代码或 UI**：4.4 起采用 BUSL-1.1，商业免费只覆盖 ≤100 设备、单服务器，并要求保留品牌和 license key。只能吸收设计思想，需要代码级参考时用 4.3 及以前的 Apache 版本，并固定 tag。证据：`LICENSE:13-43`，`README.md:147-151`。
