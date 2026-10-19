@@ -1,351 +1,357 @@
-# Platform Domain Glossary
+# 业务名词
 
-## Tenant
+平台里的业务名词，和代码、接口里的英文名一一对应。标题是「中文名（代码里的英文名）」；「不要说」列出容易混淆、不该用的说法。
 
-The top-level data-isolation and ownership boundary. Sites belong directly to one Tenant.
+## 站点、空间和设备
 
-## Site
+### 租户（Tenant）
 
-An operational location within one Tenant. A Site is the primary business scope in which Spaces, Assets, Devices, Points, telemetry and operating decisions are observed.
+数据隔离的最上层。一家客户就是一个租户，站点都直接属于某个租户，不同租户之间互相看不到数据。
 
-## Space
+### 站点（Site）
 
-A recursive spatial scope below one Site, such as a Building, Floor, Zone, Room, Plant Room or Rooftop. Space expresses where something is installed or observed; it is not an Asset and it does not own Device identity.
+租户下的一个运营地点，例如松雅轩。看数据、做决定基本都以站点为范围：空间、资产、设备、点位、读数都挂在某个站点下面。
 
-## Asset
+### 空间（Space）
 
-A maintainable physical business asset. Asset is not interchangeable with a Device. Asset placement in a Space is an effective-dated binding so relocation does not erase installation history.
+站点下的位置，可以一层套一层：楼栋、楼层、区域、房间、机房、屋面。它只说明东西装在哪里，本身不是资产，也不决定设备是谁。
 
-## Device
+### 资产（Asset）
 
-An addressable controller, gateway, meter or other independently communicating endpoint with an immutable platform identity. External-system identifiers are mappings, not Device identity.
+需要维护的实物，例如「A 机组」「冷冻水泵」。资产不等于设备：一台机组可以有好几块电表和传感器。资产放在哪个空间按生效日期记录，挪过位置也不会丢掉以前的安装历史。
 
-## Physical Sensor
+### 设备（Device）
 
-An optional, independently identifiable physical probe or sensing element that exists only when its own installation, replacement, calibration or traceability lifecycle must be managed. A Physical Sensor is not a canonical data point and is not required between Device and Point.
+能单独通信的东西：控制器、网关、电表、温度采集模块。每台设备在平台里有一个不变的身份；外部系统里的编号只是对照关系，不是设备的身份。
 
-## Point
+### 物理传感器（Physical Sensor）
 
-The canonical typed data or control point owned by a Device. Device-to-Point is the canonical data-model relationship. A Point may optionally reference a Physical Sensor when a real probe requires independent lifecycle traceability; most Points do not require one.
+只有当一个探头本身需要单独管理安装、更换、校准时才登记它。大多数点位不需要它，设备和点位之间也不要求有它。
 
-## Measured Subject
+### 点位（Point）
 
-The Site, Space or Asset that a Point describes. A Physical Sensor may carry installation or traceability context, but Point remains the canonical measurement identity used by telemetry and downstream data products.
+设备上的一个数据点或控制点，有固定的类型，例如「冷冻水出水温度」「有功功率」。设备和点位是数据模型的主关系；个别点位需要追溯到具体探头时，才关联一个物理传感器。
 
-## Independent Point Observation
+### 测量对象（Measured Subject）
 
-One point value sampled at its own observed time and published according to its own schedule. Independent reporting does not require the Sensor to be a separate Device Endpoint.
+一个点位描述的是哪个站点、空间或资产。例如室外温度点位描述的是站点，机组电表的功率点位描述的是那台机组。
 
-## Registry Lifecycle
+### 独立上报的点位读数（Independent Point Observation）
 
-The administrative state of a registered resource, such as `ACTIVE`, `INACTIVE` or `RETIRED`. Registry Lifecycle says whether the resource participates in the managed inventory; it does not say whether a Device is currently connected or producing usable data.
+一个点位按自己的采样时间和上报节奏发出的一个值。点位各报各的，不要求它是一台单独的设备。
 
-## Presence Applicability
+### 登记状态（Registry Lifecycle）
 
-Whether the platform is expected to evaluate Presence for a Device under an explicit policy. It is `APPLICABLE` or `NOT_APPLICABLE` and is separate from Registry Lifecycle. A non-applicable Device has no current Presence or Device Display State; it is not `UNKNOWN`.
+一条登记记录在台面上的管理状态：启用（`ACTIVE`）、停用（`INACTIVE`）、退役（`RETIRED`）。它只说明这台设备算不算在管理范围里，不说明它现在连没连上、有没有数据。
 
-## Presence Signal
+### 模板版本（Template Revision）
 
-A trusted observation that a Device or its authoritative upstream source was active at a specific `observedAt` instant.
+一类资产或设备的固定描述：分类、需要的能力、应该有哪些点位，以及引用的其他领域的版本。发布后不再修改；不包含密钥、运行状态、告警状态或规则执行状态。
 
-## Device Presence
+### 版本引用（Release Reference）
 
-The platform's current conclusion about Device reachability from accepted Presence Signals and a versioned Presence Policy. Device Presence is `ONLINE`, `OFFLINE` or `UNKNOWN`.
+一个已发布的东西指向另一个领域某个确切版本的引用。它只用来保证两边版本对得上，不把对方的配置复制过来，也不改变谁负责那份数据。
 
-## Presence Policy
+### 产品发布清单（Product Release Manifest）
 
-The versioned rules that define accepted Presence Signals, the online window, the offline threshold and required observation coverage for a Device or Device class.
+一次产品发布打算一起运行的各领域版本的清单，发布后不变。用于发布前的校验、部署和回滚，但清单本身不负责里面引用的业务数据。
 
-## Last Seen
+## 在线状态和读数
 
-The greatest `observedAt` among accepted Presence Signals. Last Seen is not the time the platform happened to receive or read an old record.
+### 是否判断在线（Presence Applicability）
 
-## Evaluation Availability
+平台要不要按策略判断一台设备在不在线：要判断（`APPLICABLE`）或不判断（`NOT_APPLICABLE`）。不判断的设备没有在线状态，页面上不显示「未知」，而是不显示在线这一项。
 
-Whether the platform can make a trustworthy current Presence and Telemetry evaluation. It is `AVAILABLE` or `UNAVAILABLE`; unavailability is a platform observation failure, not evidence that a Device is offline.
+### 在线信号（Presence Signal）
 
-## Telemetry Observation
+一条可信的记录，说明设备或它的上游在某个时刻（`observedAt`）是活动的。
 
-A value for one Device key, with the time it was sampled and the time it was accepted by the platform.
+### 在线状态（Device Presence）
 
-## Sampled At
+平台根据在线信号和在线策略得出的结论：在线（`ONLINE`）、离线（`OFFLINE`）、未知（`UNKNOWN`）。
 
-The instant represented by a Telemetry Observation according to the trusted source contract.
+### 在线策略（Presence Policy）
 
-## Received At
+有版本的规则：哪些信号算数、多久内收到信号算在线、多久没收到算离线，以及要覆盖哪些读数。每类设备可以有自己的策略。
 
-The instant the platform accepted a Telemetry Observation. Received At measures transport and ingest delay; it does not replace Sampled At.
+### 最后上报时间（Last Seen）
 
-## Evaluated At
+在线信号里最晚的那个 `observedAt`。不是平台读到一条旧记录的时间。
 
-The instant at which Presence, Freshness and derived states were calculated.
+### 能否判断（Evaluation Availability）
 
-## Telemetry Freshness
+平台现在能不能可靠地判断在线和读数：能（`AVAILABLE`）或不能（`UNAVAILABLE`）。不能判断是平台自己的问题（例如遥测服务停了），不代表设备离线。
 
-The age classification of the latest accepted Telemetry Observation under a versioned key policy. It is `FRESH`, `STALE` or `MISSING`.
+### 读数（Telemetry Observation）
 
-## Telemetry Quality
+设备某个点位的一个值，带着它的采样时间和平台收到的时间。
 
-The V2 quality classification of a Telemetry Observation after validation and governance. It is `GOOD`, `PARTIAL`, `ESTIMATED`, `MANUAL`, `STALE` or `INVALID`. Quality is independent of ingest acceptance; rejection, quarantine, duplicate and out-of-order handling are ingest decisions or evidence, not quality values.
+### 采样时间（Sampled At）
 
-## Required Telemetry Set
+这个读数代表的时刻，以数据来源说的为准。
 
-The versioned set of keys that must be current and usable for a specific Device view, diagnostic rule or future action. Optional keys do not degrade that consumer's readiness.
+### 收到时间（Received At）
 
-## Telemetry Readiness
+平台收到这个读数的时刻。它和采样时间的差就是传输和接收的延迟；它不能代替采样时间。
 
-The aggregate usability of a Required Telemetry Set. It is `CURRENT`, `DEGRADED`, `INCOMPLETE` or `NOT_APPLICABLE`.
+### 计算时间（Evaluated At）
 
-## Device Display State
+平台算出在线状态、新鲜度这些结论的时刻。
 
-A mutually exclusive user-interface summary derived from Evaluation Availability, Device Presence and Telemetry Readiness. It is `ONLINE`, `OFFLINE`, `STALE`, `UNKNOWN` or `UNAVAILABLE`; it is not an authoritative stored fact.
+### 读数新鲜度（Telemetry Freshness）
 
-## Last Known Value
+最新读数有多旧：新鲜（`FRESH`）、过期（`STALE`）、没有（`MISSING`）。每个点位按自己的时限判断，时限写在有版本的点位规则里。
 
-The most recent accepted value retained for historical context. A Last Known Value may be shown with its timestamp when current evaluation is stale or unavailable, but it must never be presented as a current value.
+### 读数质量（Telemetry Quality）
 
-## Site Observation Summary
+读数经过校验后的质量：好（`GOOD`）、部分（`PARTIAL`）、估算（`ESTIMATED`）、手工录入（`MANUAL`）、过期（`STALE`）、无效（`INVALID`）。被拒收、隔离、重复或乱序是接收时的处理结果，不是质量等级。
 
-A count-and-coverage summary of authorized Devices by Device Display State. A Site does not have a single inherited online/offline boolean.
+### 必需读数（Required Telemetry Set）
 
-## Telemetry Runtime
+某个页面、诊断规则或操作必须要有的点位清单，有版本。例如低温差诊断必需冷冻水供水和回水温度；可选点位缺了不影响它。
 
-The platform domain that accepts source observations and owns current Device runtime truth, including Presence, latest accepted telemetry, policy evaluation and publication intent. Telemetry Runtime is distinct from Registry identity, authorization and transport.
+### 读数就绪（Telemetry Readiness）
 
-## Device Observation Snapshot
+必需读数整体能不能用：齐全（`CURRENT`）、部分可用（`DEGRADED`）、不全（`INCOMPLETE`）、不适用（`NOT_APPLICABLE`）。
 
-A coherent current evaluation of one Device at one Business Revision. It combines the canonical Presence, Availability and telemetry dimensions without exposing source-system identifiers.
+### 设备显示状态（Device Display State）
 
-## Business Revision
+页面上给设备显示的一个状态，由能否判断、在线状态和读数就绪合起来得出：在线、离线、读数过期、未知、无法判断。它只是给人看的概括，不单独存储。
 
-A monotonic owner-authored revision for one Device Observation Snapshot. It advances only when committed current runtime state changes; source replay, cache refresh and transport retry do not advance it.
+### 上次的值（Last Known Value）
 
-## Source Position
+最近一次收到的值，留作参考。读数过期或无法判断时可以连同时间一起显示，但不能当成现在的值显示。
 
-The upstream event identity or offset used to detect duplicate, replayed and out-of-order source delivery. Source Position is evidence about ingest order, not a public recovery cursor or Business Revision.
+### 遥测（Telemetry Runtime）
 
-## History Sequence
+负责接收设备读数、维护每台设备当前状态的那部分平台：在线状态、最新读数、按策略判断、推送给页面。它和设备登记、权限、MQTT 传输是分开的。
 
-The number Telemetry assigns to a history batch when it claims it, stored on every history observation the batch writes. Batches become visible one at a time, so History Sequence orders history by visibility, which downstream projections use as a durable cursor. It is not Source Position, Sampled At or Business Revision.
+### 设备当前快照（Device Observation Snapshot）
 
-## Plant Efficiency
+某一时刻一台设备的完整当前状态：在线、能否判断、选中点位的最新读数。不带外部系统的编号。
 
-Cooling energy delivered divided by HVAC electricity over the same Site-local period (shown as COP, 冷站综合能效). Both come from projected meter energy; a period missing either has no Plant Efficiency, never zero.
+### 设备状态版本号（Business Revision）
 
-## Transport Position
+每台设备当前状态的版本号，只增不减。只有设备的当前状态真的变了才加一；重复收到同一条数据、缓存刷新、重发都不会让它变。
 
-The delivery position used by a realtime transport for bounded reconnect recovery. A Transport Position does not establish business ordering or Snapshot authority.
+### 来源位置（Source Position）
 
-## Recovery Cursor
+上游消息的编号或偏移，用来识别重复、重放和乱序的数据。它只说明接收的顺序，不能当作给页面的恢复位置，也不是设备状态版本号。
 
-An opaque, scope-bound request to attempt incremental recovery from a previously applied Business Revision and Transport Position. A Recovery Cursor has no authority of its own and must be reauthorized; failure returns the consumer to an authoritative Device Observation Snapshot.
+### 历史批次号（History Sequence）
 
-## Ingest Quarantine
+遥测把一批历史读数写入时给这一批编的号，存在这批的每条历史读数上。批次一批一批地变得可见，所以下游（例如能耗计算）可以按这个号记住自己处理到哪了。它不是来源位置、采样时间或设备状态版本号。
 
-The evidence state for a source candidate that cannot become current runtime truth because its source, mapping or validation is not acceptable. Quarantined candidates never create Devices or replace accepted values.
+### 推送位置（Transport Position）
 
-## Telemetry Key Selection
+实时推送通道用来断线重连后补发消息的位置。它不决定业务上的先后，也不能代替快照。
 
-The exact ordered set of Device keys requested and authorized for one Snapshot or live subscription. The owner never adds unselected keys, and an empty selection means Presence-only observation.
+### 恢复游标（Recovery Cursor）
 
-## Subscription Bootstrap
+页面断线后请求「从我上次收到的版本接着补」的凭据，只对原来的范围有效。它本身不带权限，每次都要重新授权；补不上时页面重新取一次完整快照。
 
-A short-lived setup result that lets a caller establish an exact authorized live subscription. Bootstrap capabilities do not become authorization facts and do not enlarge the caller's Scope.
+### 接收隔离（Ingest Quarantine）
 
-## Observation Delta
+来源、点位对照或校验不合格的数据被放到一边，不会成为设备的当前状态，也不会新建设备或覆盖已收的值。
 
-A subscription-scoped transition from one Device Business Revision to the next. It carries the current canonical Device state and only selected key changes; it may contain no key changes while still advancing the Device revision.
+### 选中的点位（Telemetry Key Selection）
 
-## Release Envelope
+一次取快照或订阅推送时要的、并且有权看的点位，按顺序排好。平台不会多给没选的点位；什么都不选，就只看在线状态。
 
-A versioned, measured upper bound for the workload a release is certified to serve while meeting its security, correctness, latency and resource-headroom gates. A Release Envelope is not a permanent platform limit and cannot be increased without new evidence.
+### 订阅准备（Subscription Bootstrap）
 
-## Shadow Comparison
+建立实时推送前的一步，返回一个短时有效的结果，让页面订阅到它有权看的那些设备和点位。它不是权限，也不会扩大能看的范围。
 
-A side-effect-free comparison of Legacy and S2 read results used only to produce migration evidence. Shadow Comparison cannot write, publish, authorize, repair mappings or influence current state.
+### 推送变化（Observation Delta）
 
-## Rollout Cohort
+推送给页面的一条变化：某台设备从一个状态版本到下一个版本。带着设备的当前状态和选中点位里变了的值；也可能点位都没变，只是版本加了一。
 
-A deterministic set of authorized callers or resources assigned to one route-owner revision during a phased release. A Cohort changes owner only through an explicit promotion or rollback decision; it never chooses a per-request fallback.
+## 能耗和对标
 
-## Real Mode
+### 冷站综合能效（Plant Efficiency）
 
-The HVAC Web operating mode in which every displayed business fact comes from an authoritative platform API or an explicitly defined derived read model. Missing, unavailable or unauthorized capabilities remain visibly unavailable; Real Mode never substitutes Mock, Legacy or fabricated values.
+同一段站点本地时间里，冷站送出的冷量除以冷站用的电，页面上显示为能效（COP）。两者都来自电表和冷量计；任何一个缺了，这段就没有能效，不当作 0。
 
-## Demo Mode
+### 指标（Metric）
 
-A separately identified, non-authoritative presentation mode that may use deterministic fixture data for product demonstration. Demo Mode must be visibly distinguishable from Real Mode and its values, actions and state transitions must never be presented as production facts or silently mixed into Real Mode.
+按明确的定义、单位和质量规则，从原始读数算出来的数，有版本，例如每 15 分钟的平均负荷。指标不是设备点位，也不会覆盖原始读数。
 
-## Agent Session
+### 分表（Sub-meter）
 
-One operator's question to the Operations Agent about one Site and the conversation that follows it. A Session owns its Runs, the finalized messages, Tool Executions and Agent Artifacts; it is a product record independent of the model or the pi runtime that answered it.
+装在某台设备进线上的电表，和站点的总表相对。分表的电已经算在总表里：从非电网节点到设备负载节点的那段计量算分项（`BRANCH`），其余的算站点总量（`SITE`），站点总量只加 `SITE`。总表比各分表之和多出来的部分显示为「未分项」，是负数也照实显示。
 
-## Agent Run
+不要说：支路表、子表
 
-One bounded attempt at answering within an Agent Session: the model and Tool loop from the latest operator message to a terminal outcome. A Session has at most one running Run; an interrupted Run is recorded as failed and the next Run starts from the committed Session, never from runtime state.
+### 站点档案（Site Profile）
 
-## Agent Tool
+站点除了名字以外、用来和别的站点比较的信息：建筑面积（m²，按 GB/T 51161 算单位面积用电）和 GB 50176 的气候区。两项都可以不填；没填面积的站点不参加单位面积用电的排名。
 
-A server-defined, read-only capability the model may call within a Run, such as reading the Site's energy series. Each call is authorized again by the Gateway for the signed-in operator before the owner answers; there is no Tool that changes equipment or submits commands.
+不要说：站点元数据、站点属性
 
-## Semantic Query
+### 冷却度日（Cooling Degree Days）
 
-An Agent Tool's request for up to four measures of one Cube view, optionally grouped by up to two of its dimensions, per hour, day or month. Only members in the Semantic Catalog can be named; the Site is never a parameter but comes from the Session's grant, and the query service checks the catalog again before it reads.
+CDD26：一段时间里，每天室外平均干球温度超过 26 °C 的部分加起来，用站点自己的气象站读数算。例如某天平均 29 °C，这天就算 3 度日。站点对标用单位面积用电除以它（kWh/m²·℃·d），比较天气不同的站点，只算用电和平均温度都有的那些天。没有气象站的站点没有这个数。
 
-## Semantic Catalog
+不要说：天气归一化、气候修正能耗
 
-The list of view members a Semantic Query may name, with their Chinese titles and descriptions, generated from the Cube model (`npm run semantic:catalog:generate`). It leaves out the Site, the time dimension and freshness measures; a member the catalog does not list cannot be asked for.
+### 报告快照（Report Snapshot）
 
-## Agent Artifact
+一个站点某个月结束后，report-service 按能源报告的样子存下来的那个月，存下后不再修改。重新生成会存一个新版本，报告显示最新的。需量、告警和工单不在快照里，打开报告时现算。
 
-A typed, inspectable result of a Run: an Evidence Reference to an owner fact a Tool returned, a Finding, a Proposal, an Input Request to the operator, the operator's Input Response, or a Limitation. An Artifact cites platform facts but never becomes their owner; a Proposal is not an approval, Command Intent or proof that anything changed.
+不要说：归档报告、冻结报告
 
-## Operator-Provided Information
+## 节能验证
 
-Information explicitly supplied by an authorized operator to an Agent Session. It may guide planning and may be cited as operator testimony, but it is not automatically an authoritative Device, Telemetry, Analytics or Command fact.
+### 节能措施（Energy Conservation Measure）
 
-## Requested Operational Scope
+对冷站运行方式或设备的一项改动，登记下来是为了验证它省了多少电（ADR 0021）。状态从计划中、已实施到已结束。同一段时间里，只有装在不同机组分表上的措施才能同时出结果（见测量边界）。
 
-The exact Tenant, Site, Asset, Device and time boundary that a caller attempted to access but that is not part of the caller's authorized operational Scope. Requested Operational Scope may appear only in authorization decisions and their Evidence; it never authorizes Registry, Telemetry, Analytics or Command reads and must not disclose whether the requested resource exists.
+不要说：项目、ECM 记录
 
-## Workload Principal
+### 测量边界（Measurement Boundary）
 
-An IAM principal that is one of the platform's own unattended workloads, identified by its workload identity rather than by a person. It is authorized by the same Tenant memberships and role bindings as a person and acts only on its own behalf, never through a user session. It is not a tenant-created integration account.
-_Avoid_: service account, system user, robot user
+一项措施的用电在哪里量：冷站总表（IPMVP 方法 C）或某台机组的分表（方法 B）。登记时选定，之后不改。两项措施只有在不同机组上才能同时出结果；用总表的措施只能单独出结果，因为总表包含了所有分表。
 
-## Role
+不要说：范围、测量点
 
-A named set of IAM capabilities. Built-in Roles (`viewer`, `operator`, `site-manager`, `admin`; 只读、运维人员、运维主管、管理员) are shipped by the platform and cannot be edited by a Tenant; Tenant-owned roles exist only for Workload Principals.
-_Avoid_: permission group, profile
+### 基线（Baseline）
 
-## Role Assignment
+用措施实施前一段时间的数据拟合的一条线：根据冷站送出的冷量，预测测量边界上每小时的用电。实施时固定下来，通过 ASHRAE Guideline 14 的检验才可信；在第一个已验证日发布之前，可以换一段时间重新拟合。
 
-The only authorization fact: one Principal holds one Role in one Tenant, scoped to the whole Tenant (including Sites added later) or to one Site. Access is the union of a Principal's active Role Assignments minus explicit denies (ADR 0022). Stored in `iam.role_bindings`.
-_Avoid_: site binding, permission row, grant (a grant is the short-lived signed delegation IAM issues per decision)
+### 调整后基线（Adjusted Baseline）
 
-## Domain Owner
+按实施后实际的工况，基线预测的「如果没改会用多少电」。省下的电 = 调整后基线 − 实际用电。
 
-The single bounded context that is authoritative for creating and changing one class of business fact. Physical co-location with another module never transfers Domain Ownership; other contexts interact through governed commands, queries, owner-authored events or rebuildable projections.
+不要说：预期用电、参考用电
 
-## Template Revision
+### 已验证日（Verified Day）
 
-An immutable released description of stable Asset or Device classification, required capabilities, expected Point shape and references to other domain releases. A Template Revision does not contain live credentials, runtime state, Alarm state, Rule execution state or secrets.
+措施报告期里的一个站点本地日，按基线验证一次，之后不再改。缺数据的小时算进覆盖率的缺口，不补。
 
-## Release Reference
+## 告警、诊断、工单和控制
 
-A stable reference from one released or assigned artifact to the exact immutable revision owned by another domain. A Release Reference coordinates compatibility without transferring ownership or copying the referenced domain configuration into a mutable cross-domain profile.
+### 告警事件（Alarm Incident）
 
-## Product Release Manifest
+某个告警条件按同一个指纹的一次发生。条件是否还在、是否确认、是否屏蔽、派给谁、关联的工单和通知结果都是分开记录的；恢复后再次出现算新的一次，不重新打开旧的。
 
-An immutable coordination record that locks the exact released revisions intended to operate together for one product rollout. It coordinates validation, deployment, rollback evidence and compatibility, but it does not become the owner of the referenced domain facts.
+### 告警条件状态（Alarm Condition State）
 
-## Metric
+告警代表的情况现在还在（`ACTIVE`）还是已恢复（`CLEARED`）。确认、屏蔽、通知送达或工单完成都不会改变它。
 
-A versioned derived fact computed from authoritative inputs under an explicit definition, unit, quality policy and provenance. A Metric is not a synthetic Device Point and never overwrites raw Telemetry Observations.
+### 诊断规则版本（Rule Revision）
 
-## Command Intent
+FDD 为一个租户保存的诊断规则的一个版本，发布后不变。例如冷冻水低温差规则的门槛和读数时间窗口。诊断用当时生效的版本，结论里写明用的是哪个版本；改门槛就发布一个新版本。
 
-A governed request for a physical or logical control change after authorization and before execution. A Command Intent remains distinct from approval, transport delivery, Edge arbitration, device acknowledgment, readback and verified physical outcome.
+不要说：规则配置、门槛设置
 
-## Outcome Reconciliation
+### 控制指令（Command Intent）
 
-A person with control authority over a Device stating whether a Command whose outcome is unknown took effect (APPLIED or NOT_APPLIED). It settles the Command Intent and releases the Device's hold, while its Attempt keeps the unknown outcome as evidence. It is a recorded statement, not a verified physical outcome (ADR 0018).
+经过授权、还没执行的一次控制请求，例如把水泵频率调到 40 Hz。它和审批、下发、站点网关的仲裁、设备的确认、读回的值、实际生效都是分开的事。
 
-## Alarm Incident
+### 人工确认结果（Outcome Reconciliation）
 
-One durable occurrence of an Alarm condition for a stable fingerprint. Its condition state, acknowledgment, suppression, assignment, Work Order links and Notification disposition are separate facts; recurrence after recovery creates a new Incident rather than reopening the historical occurrence.
+一条指令结果不明时（平台证明不了它到底生效没有），有这台设备控制权限的人确认它生效了（`APPLIED`）还是没生效（`NOT_APPLIED`）。确认后这条指令结束，设备解除锁定，下一条指令可以下发；那次下发尝试仍保留「结果不明」作为记录。这是一个人的陈述，不是平台核实的结果（ADR 0018）。
 
-## Alarm Condition State
+### 外发请求（Delivery Intent）
 
-Whether the physical or logical condition represented by an Alarm Incident is currently `ACTIVE` or `CLEARED`. Acknowledgment, suppression, Notification delivery and Work Order completion do not change Alarm Condition State.
+把一份内容发到外部系统（例如短信、邮件网关）的持久请求，带着不变的业务编号和目标策略。每次发送尝试、对方回执、重试和失败记录都只是发送过程的记录，不会变成发起方的业务数据。
 
-## Delivery Intent
+## 权限
 
-A durable request to submit one governed payload to an external destination under an immutable business identity and destination policy. Delivery attempts, provider receipts, retries, dead-letter handling and replay are evidence about delivery; they never become the originating domain's business fact.
+### 角色（Role）
 
-## Virtual Central Plant
+一组权限的名字。平台自带四个角色：只读（`viewer`）、运维人员（`operator`）、运维主管（`site-manager`）、管理员（`admin`），租户不能修改；租户自建的角色只给平台自己的后台服务用。
 
-A non-production-authoritative physical, environmental and field-protocol simulator used for development and acceptance. It may simulate exogenous conditions, equipment behavior, sensors and actuators, but it never authors Telemetry, Alarm, FDD, Forecast, Optimization, Notification or Work Order business facts.
+不要说：权限组、配置档
 
-## Virtual Plant Scenario
+### 角色指派（Role Assignment）
 
-A non-business configuration that supplies explicit exogenous physical inputs to a Virtual Central Plant over time. A Virtual Plant Scenario is not Registry identity, Telemetry, runtime state or another business-domain fact.
+唯一的授权记录：某个人或服务在某个租户里担任某个角色，范围是整个租户（包括以后新加的站点）或某一个站点。一个人能做什么，是他所有有效角色指派的并集，再去掉明确禁止的（ADR 0022）。存在 `iam.role_bindings` 表里。
 
-## Historical Replay
+不要说：站点绑定、权限行、授权（「授权」指 IAM 每次判断后签发的短时凭据）
 
-A controlled historical runner that reuses authoritative physical/scenario logic to produce past-time observations for Telemetry-owned history. Historical Replay preserves historical Sampled At and truthful current Received At, and it never mutates current latest telemetry, Presence or Business Revision.
+### 后台服务身份（Workload Principal）
 
-## Historical Replay Dataset
+平台自己的后台服务在 IAM 里的身份，按服务的证书识别，不是某个人。它和人一样通过租户成员关系和角色指派获得权限，只以自己的名义做事，不借用任何人的登录会话。它不是租户创建的集成账号。
 
-A stable non-business provenance scope for one deterministic Historical Replay sequence across retries or runner restarts. Its identity exists only to preserve replay ordering and idempotency; it is not Registry, Telemetry current state, Forecast, Optimization or another business-domain fact.
+不要说：服务账号、系统用户、机器人用户
 
-## Vendor Template Certification
+### 请求的范围（Requested Operational Scope）
 
-Acceptance evidence that one immutable released Device Template revision has been validated against real vendor hardware and its authoritative protocol specification. Certification verifies the released mapping and behavior; it is not a mutable Template status and does not replace the released revision itself.
+调用方想访问、但不在它权限范围内的租户、站点、资产、设备和时间。它只出现在拒绝的判断和记录里，不能用来读任何数据，也不能透露请求的东西存不存在。
 
-## Gateway
+### 业务负责方（Domain Owner）
 
-A Device that holds a Gateway Credential and carries telemetry, events and commands for the Devices behind it. A Gateway's Tenant and Site come from Registry, never from what the Gateway sends.
-_Avoid_: integration instance, edge node, connector
+唯一有权创建和修改某类业务数据的那个模块。例如告警只能由告警模块改；别的模块即使跑在同一个进程里，也只能通过它的接口、事件或可以重建的副本来用这些数据。
 
-## Gateway Credential
+## 站点网关
 
-The certificate the platform issues to one Gateway; its subject is the Gateway's Device identity. A Gateway without an active credential may still connect, but none of its messages are accepted and no commands are sent to it.
+### 站点网关（Gateway）
 
-## Enrollment Code
+持有网关证书、替它后面的设备转发读数、事件和指令的设备，例如松雅轩的 Node-RED 网关。网关属于哪个租户和站点以登记为准，不以它自己发来的内容为准。
 
-A one-time, short-lived code an operator issues for one registered Gateway, which the Gateway exchanges once for its first Gateway Credential.
-_Avoid_: provisioning key, activation token
+不要说：集成实例、边缘节点、连接器
 
-## Device Source Key
+### 网关证书（Gateway Credential）
 
-The name a Gateway uses in its messages for one Device behind it. It is a Registry mapping scoped to that Gateway, not Device identity.
-_Avoid_: external device id, child id
+平台发给一个网关的证书，证书主体就是这台网关的设备身份。没有有效证书的网关仍然连得上，但它发的消息都不收，也不给它下发指令。
 
-## Site Profile
+### 接入码（Enrollment Code）
 
-What the Registry records about a Site beyond its identity, to compare it with others: its building floor area (建筑面积, m²), which energy per square metre is taken on (GB/T 51161), and its GB 50176 thermal design zone (气候区). Both are optional; a Site without a floor area is not ranked on energy per square metre.
-_Avoid_: site metadata, site attributes
+运维人员给一台已登记网关生成的一次性、短时有效的码，网关用它换取第一张网关证书，用过即失效。
 
-## Cooling Degree Days
+不要说：开通密钥、激活令牌
 
-CDD26 (冷却度日): over a period, the sum of each day's mean outdoor dry-bulb temperature above 26 °C, read from the Site's own weather station. Benchmarking divides electricity per square metre by it (单位度日用电, kWh/m²·℃·d) to compare Sites in different weather, over the days that have both electricity and a mean temperature. A Site without a weather station has none.
-_Avoid_: weather normalization, climate-adjusted energy
+### 网关里的设备名（Device Source Key）
 
-## Sub-meter
+网关在消息里给它后面某台设备起的名字。它是登记里只对这台网关有效的对照关系，不是设备的身份。
 
-A meter on the feed into one piece of equipment (分表), as opposed to the Site's total meter. Its energy is already inside the Site total: a Meter Binding on an edge from a non-grid node into a device's load node has accounting scope BRANCH, every other one SITE, and a Site's total counts only SITE energy. What the total meter reads beyond the sub-meters is 未分项 (unallocated), shown as it is even when negative.
-_Avoid_: branch meter, child meter
+不要说：外部设备 ID、子设备 ID
 
-## Energy Conservation Measure
+## 模拟器和历史导入
 
-One change to how a Site's plant runs or what it is made of, registered so its savings can be verified (ADR 0021). It moves from planned to implemented to ended. Measures report at the same time only on different machines' sub-meters (see Measurement Boundary).
-_Avoid_: project, ECM record
+### 模拟冷站（Virtual Central Plant）
 
-## Measurement Boundary
+开发和验收用的冷站模拟器（`tools/eg8200-simulator`），模拟天气、设备运转、传感器和执行器，并按真实网关的协议发数据。它只产生「设备读数」，不直接写告警、诊断、预测、优化、通知或工单。
 
-Where a measure's electricity is measured (测量边界): the plant's total meter (IPMVP Option C) or one machine's Sub-meter (Option B). It is chosen at registration and never changes. Two measures may report over the same period only on different machines; a measure on the total meter reports alone, since the total holds every sub-meter.
-_Avoid_: scope, measurement point
+### 模拟场景（Virtual Plant Scenario）
 
-## Baseline
+按时间给模拟冷站的外部条件，例如室外温度怎么变、哪台设备什么时候坏。它只是模拟器的配置，不是登记数据或业务数据。
 
-The line fitted over a period before a measure was implemented that predicts the hourly electricity on its Measurement Boundary from the cooling the plant delivered. It is frozen at implementation and trusted only when it passes ASHRAE Guideline 14; it can be refitted on another period until the first Verified Day is published.
+### 历史导入（Historical Replay）
 
-## Adjusted Baseline
+把过去时间的读数写进遥测历史，例如把松雅轩在 ThingsBoard 里的历史导进来。导入的读数保留原来的采样时间，收到时间是真实的导入时间；它不改设备的当前最新读数、在线状态或状态版本号。
 
-What the Baseline predicts the plant would have used under the conditions actually seen after implementation. Avoided energy is the adjusted baseline minus the electricity actually used.
-_Avoid_: expected consumption, reference consumption
+### 导入批次（Historical Replay Dataset）
 
-## Report Snapshot
+一次历史导入的编号，例如 `01a14000-7000-7000-8000-000000000001`。只用来保证中途重试或重启后顺序不乱、不重复写入，本身不是业务数据。
 
-A Site's closed month as its energy report shows it, taken once by report-service after the month ends and never changed. Taking it again keeps a new version; the report shows the latest. Demand, alarms and work orders are not in it and are worked out live beside it.
-_Avoid_: archived report, frozen report
+## AI 助手
 
-## Rule Revision
+### 助手会话（Agent Session）
 
-One immutable version of a diagnosis rule FDD holds for a Tenant (诊断规则版本): for chilled-water low delta-T, the threshold and the window of minutes it is read over. An evaluation uses the revision in effect at its time and its finding cites it; changing the threshold publishes a new revision.
-_Avoid_: rule config, threshold setting
+值班人员就一个站点向 AI 助手提的问题和接下来的对话。会话保存每次回答（Run）、显示给人看的文字、读数据的记录和结论卡片；它是产品里的记录，不依赖回答它的是哪个模型。
 
-## Verified Day
+### 一次回答（Agent Run）
 
-One Site-local day of a measure's reporting period, verified once against its Baseline and never changed afterwards. Hours missing data count against its coverage; they are not filled in.
+会话里回答一个问题的一次尝试：从值班人员最新的问题开始，模型反复读数据，直到给出结论或失败。一个会话同时最多有一次回答在进行；中途断掉的回答记为失败，下一次从会话里已保存的内容重新开始。
+
+### 助手工具（Agent Tool）
+
+服务端定义的、模型在回答时可以调用的只读能力，例如「读站点的用电量」。每次调用前，网关都按提问人的权限重新授权，数据负责方才会返回；没有任何工具能操作设备或下发指令。
+
+### 语义查询（Semantic Query）
+
+助手工具的一种请求：在 Cube 的一个视图上，按小时、天或月，一次查最多四个数（例如用电、供冷、能效、电费），可以再按最多两个维度分组。只能用语义清单里列出的名字；站点不是参数，由会话的授权决定，查询服务读数据前会再按清单检查一次。
+
+### 语义清单（Semantic Catalog）
+
+语义查询能用的名字清单，带中文标题和说明，由 Cube 模型生成（`npm run semantic:catalog:generate`）。站点、时间和数据新鲜度不在清单里；清单里没有的名字查不了。
+
+### 助手产出（Agent Artifact）
+
+一次回答留下的、可以查看的结果：结论卡片（`FINDING`）、向值班人员提的问题（`INPUT_REQUEST`）和他的回答（`INPUT_RESPONSE`）、方案（`PROPOSAL`）、局限说明（`LIMITATION`）。它可以引用平台的数据，但不会因此负责那些数据；方案不是审批，也不是控制指令。
+
+### 值班人员提供的信息（Operator-Provided Information）
+
+值班人员在会话里亲口说的情况，例如「B 机组昨天检修过」。助手可以参考，也可以引用为「值班人员说」，但它不会自动变成设备、读数、能耗或指令方面的事实。
