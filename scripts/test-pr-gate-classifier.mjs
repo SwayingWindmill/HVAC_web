@@ -66,15 +66,6 @@ test('domain module changes stay scoped to product domains', () => {
   }
 });
 
-test('retired migration evidence does not trigger product gates', () => {
-  for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go']) {
-    const classification = runClassification([file]);
-    assert.deepEqual(classification.unitProfiles, []);
-    assert.deepEqual(classification.integrationProfiles, []);
-    assert.equal(classification.broad, false);
-  }
-});
-
 test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
   for (const file of [
     'package.json',

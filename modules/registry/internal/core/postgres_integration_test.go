@@ -260,9 +260,7 @@ func TestCoreServiceDatabaseIdentityCannotReadIAMOrMigrationDatasets(t *testing.
 	defer connection.Close(ctx)
 
 	queries := map[string]string{
-		"IAM principals":       `SELECT count(*) FROM iam.principals`,
-		"migration provenance": `SELECT count(*) FROM core_registry.migration_provenance`,
-		"migration quarantine": `SELECT count(*) FROM core_registry.migration_quarantine`,
+		"IAM principals": `SELECT count(*) FROM iam.principals`,
 	}
 	for name, query := range queries {
 		t.Run(name, func(t *testing.T) {

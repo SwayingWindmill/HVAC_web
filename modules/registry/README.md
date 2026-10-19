@@ -27,7 +27,7 @@ Before a database query, Core calls IAM's mTLS-only `/internal/v1/registry-read/
 3. Query a forced-RLS Core table.
 4. Commit the read snapshot.
 
-Tenant is the root isolation boundary and explicit Site scope narrows access within that Tenant. Missing and unauthorized detail records both return `RESOURCE_NOT_FOUND`. The runtime cannot read IAM facts, migration provenance or migration quarantine.
+Tenant is the root isolation boundary and explicit Site scope narrows access within that Tenant. Missing and unauthorized detail records both return `RESOURCE_NOT_FOUND`. The runtime cannot read IAM facts.
 
 Collections use bounded `(display_name COLLATE "C", id)` keyset pagination. Cursors are HMAC-SHA256 protected and bound to route resource, parent, concrete action, policy revision and effective Tenant/Site scope. Authorization is rechecked on every page.
 

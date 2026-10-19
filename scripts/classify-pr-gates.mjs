@@ -209,10 +209,6 @@ for (const file of files) {
     () => selectOperationsAgent(file, 'Operations Gateway boundary changed', { integration: false }),
   );
 
-  match(file.startsWith('tools/legacy-registry-migrator/'), () => {
-    addReason(file, 'retired migration or cutover evidence changed');
-  });
-
   match(file.startsWith('scripts/'), () => {
     const lower = file.toLowerCase();
     let scriptMatched = false;
