@@ -26,6 +26,8 @@ interface CreatePiToolsInput {
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   /** The answer text this Run has shown the operator so far, one entry per message. */
   readonly answers: () => readonly string[];
+  /** The part of it the Session keeps: the answer without the process talk (#607). */
+  readonly keptAnswer: () => string;
 }
 
 // The answer has already reached the operator, so a claim of operating equipment is corrected in
@@ -191,12 +193,37 @@ const adaptProjectTool = (
   },
 });
 
+// A card limitation restates the answer when it names no number the answer does not, and most of
+// its neighbouring word pairs are in the answer; the card shows only what the answer does not
+// already say (#607). A word is one Chinese character or one number, so the same words about
+// another day are new, while a refusal said again in other words is not.
+const words = (text: string): string[] => [...text.matchAll(/\p{Script=Han}|\d+/gu)].map(([word]) => word);
+const wordPairs = (text: string): Set<string> => {
+  const all = words(text);
+  const pairs = new Set<string>();
+  for (let index = 0; index < all.length - 1; index += 1) pairs.add(`${all[index]} ${all[index + 1]}`);
+  return pairs;
+};
+const RESTATED_SHARE = 0.6;
+const withoutRestatedLimitations = <T extends { readonly limitations: readonly string[] }>(finding: T, answer: string): T => {
+  const answerWords = new Set(words(answer));
+  const answerPairs = wordPairs(answer);
+  const limitations = finding.limitations.filter((limitation) => {
+    if (words(limitation).some((word) => /\d/u.test(word) && !answerWords.has(word))) return true;
+    const own = wordPairs(limitation);
+    const shared = [...own].filter((pair) => answerPairs.has(pair)).length;
+    return own.size === 0 || shared / own.size < RESTATED_SHARE;
+  });
+  return limitations.length === finding.limitations.length ? finding : Object.freeze({ ...finding, limitations: Object.freeze(limitations) });
+};
+
 const createInvestigationCompleteTool = ({
   sessionId,
   runId,
   onArtifact,
   answers,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  keptAnswer,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'keptAnswer'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
   description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
@@ -218,7 +245,7 @@ const createInvestigationCompleteTool = ({
       sessionId,
       runId,
       kind: 'FINDING',
-      finding,
+      finding: withoutRestatedLimitations(finding, keptAnswer()),
       createdAt: Date.now(),
     } as const);
     onArtifact(artifact);

@@ -138,3 +138,25 @@ test('a question from the assistant waits for an answer, and the answer reads as
     ['assistant', undefined],
   ]);
 });
+
+// #607: words streamed before the Run reads data are process talk ("I'll start by reading…"); once
+// the read starts they are put away, and only the answer that follows is shown.
+test('process talk streamed before a read is put away when the read starts', () => {
+  const snapshot = {
+    session: session('ACTIVE', 'run-1', 2),
+    runs: [run('run-1', 'RUNNING', 1_100)],
+    messages: [message('m-0', 'OPERATOR', '昨天用电正常吗？', 1_050)],
+    toolExecutions: [],
+    artifacts: [],
+  };
+  const talk = [
+    event('session.snapshot', 0, { snapshot }),
+    event('assistant.delta', 1, { messageId: 'm-1', delta: "I'll start by reading the site." }),
+    event('tool.started', 2, { toolExecutionId: 'tool-1', toolName: 'site_get_context' }),
+  ];
+  const reading = assistantThreadFrom(snapshot, talk);
+  assert.deepEqual(reading.messages[1].content, [{ type: 'tool-call', toolCallId: 'tool-1', toolName: 'site_get_context', args: {} }]);
+
+  const answering = assistantThreadFrom(snapshot, [...talk, event('assistant.delta', 3, { messageId: 'm-2', delta: '昨天用电偏高。' })]);
+  assert.deepEqual(answering.messages[1].content.at(-1), { type: 'text', text: '昨天用电偏高。' });
+});

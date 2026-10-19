@@ -9,6 +9,8 @@ import type { Model, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import {
   HVAC_AGENT_EVENT_VERSION,
+  INVESTIGATION_COMPLETE_TOOL_NAME,
+  INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   NOOP_AGENT_RUNTIME_TELEMETRY,
   type AgentArtifact,
   type AgentEngine,
@@ -109,6 +111,15 @@ const textFromAssistantMessage = (message: Extract<PiAgentEvent, { type: 'messag
     .join('\n');
 };
 
+// Words written in a turn that also reads data are process talk ("I'll start by reading…"), not
+// the answer, and are not kept (#607). The Run's last words are its answer and always stay: a model
+// may write the answer beside one more read.
+const readsData = (message: Extract<PiAgentEvent, { type: 'message_end' }>['message']): boolean => (
+  message.role === 'assistant'
+  && message.content.some((block) => block.type === 'toolCall'
+    && block.name !== INVESTIGATION_COMPLETE_TOOL_NAME && block.name !== INVESTIGATION_REQUEST_INPUT_TOOL_NAME)
+);
+
 const EMPTY_PI_USAGE = Object.freeze({
   input: 0,
   output: 0,
@@ -166,6 +177,10 @@ export const createPiAgentEngine = ({
   const toolExecutions: AgentToolExecution[] = [];
   const pendingTools = new Map<string, PendingToolExecution>();
   const finalizedMessages: AgentMessage[] = [];
+  const processTalk = new Set<string>();
+  const spokenMessages = (): AgentMessage[] => finalizedMessages.filter(
+    (message, index) => !processTalk.has(message.id) || index === finalizedMessages.length - 1,
+  );
   let sequence = 0;
   let assistantMessageIndex = 0;
   let activeAssistantMessageId: string | null = null;
@@ -259,6 +274,7 @@ export const createPiAgentEngine = ({
     onArtifact: (artifact) => artifacts.push(artifact),
     onBudgetExhausted: (code) => markBudgetFailure(code),
     answers: () => finalizedMessages.map(({ content }) => content),
+    keptAnswer: () => spokenMessages().map(({ content }) => content).join('\n'),
   });
 
   // A turn that ends in text without a terminal Tool (most often a refusal) gets one reminder, so
@@ -363,6 +379,8 @@ export const createPiAgentEngine = ({
           if (!input.signal.aborted && activeAssistantMessageId !== null) {
             const content = textFromAssistantMessage(event.message);
             if (content.length > 0) {
+              // A correction of an execution claim (#592) stays wherever it is written.
+              if (readsData(event.message) && !/更正[：:]/u.test(content)) processTalk.add(activeAssistantMessageId);
               finalizedMessages.push(Object.freeze({
                 id: activeAssistantMessageId,
                 sessionId: input.session.id,
@@ -468,7 +486,7 @@ export const createPiAgentEngine = ({
       sessionStatus: 'FAILED',
       failureCode: 'OPERATOR_PROMPT_REQUIRED',
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -498,7 +516,7 @@ export const createPiAgentEngine = ({
         sessionStatus: 'FAILED',
         failureCode: 'PI_RUNTIME_FAILED',
         usage: usage(),
-        finalizedMessages,
+        finalizedMessages: spokenMessages(),
         toolExecutions,
         artifacts,
       });
@@ -534,7 +552,7 @@ export const createPiAgentEngine = ({
       sessionStatus: 'FAILED',
       failureCode: budgetFailureCode,
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -548,7 +566,7 @@ export const createPiAgentEngine = ({
       sessionStatus: terminalArtifact.kind === 'INPUT_REQUEST' ? 'WAITING_FOR_INPUT' : 'COMPLETED',
       failureCode: null,
       usage: usage(),
-      finalizedMessages,
+      finalizedMessages: spokenMessages(),
       toolExecutions,
       artifacts,
     });
@@ -562,7 +580,7 @@ export const createPiAgentEngine = ({
     sessionStatus: 'FAILED',
     failureCode: 'TERMINAL_ARTIFACT_REQUIRED',
     usage: usage(),
-    finalizedMessages,
+    finalizedMessages: spokenMessages(),
     toolExecutions,
     artifacts,
   } satisfies AgentEngineResult);

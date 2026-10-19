@@ -103,6 +103,8 @@ const apply = (working: Working, event: AgentSessionEvent): Working => {
       }
       return working;
     case 'tool.started':
+      // Words streamed before a read are process talk, not the answer, and the service does not keep them (#607).
+      if (event.runId !== null && !TERMINAL_TOOLS.has(event.payload.toolName)) working.streamed.delete(event.runId);
       if (event.runId !== null && !working.tools.has(event.payload.toolExecutionId)) {
         working.tools.set(event.payload.toolExecutionId, {
           id: event.payload.toolExecutionId,

@@ -999,3 +999,79 @@ test('asking the operator a question does not let a claim of operating equipment
   assert.equal(result.runStatus, 'COMPLETED');
   assert.equal(result.artifacts.at(-1).kind, 'INPUT_REQUEST');
 });
+
+// #607: words a model writes in a turn that also reads data are process talk ("I'll start by
+// reading…"), not the answer; they are not kept. A card limitation that restates the answer is
+// dropped; one that adds something stays.
+test('process talk beside a read is not kept, and the card drops a limitation the answer already says', async () => {
+  const siteTool = projectTool('site_get_context', async () => ({ site: { name: '松雅轩', localNow: '2026-10-18 10:00' } }));
+  const answer = '10 月 14 日 14–16 点、20 点没有读数，这天的综合能效不完整，没法判断原因。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: "I'll start by reading the site context." }, { type: 'tool-call', id: 'site-1', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
+    {
+      parts: [{ type: 'text', text: answer }, {
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], recommendedNext: [],
+          limitations: [
+            '10 月 14 日 14–16 点和 20 点没有读数，这天的综合能效不完整。',
+            // Another day in the same words is not a restatement.
+            '10 月 13 日 14–16 点也没有读数。',
+            '没有室外温度数据，不能判断负荷变化是不是天气原因。',
+          ],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], [siteTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
+  assert.deepEqual(result.artifacts.at(-1).finding.limitations, ['10 月 13 日 14–16 点也没有读数。', '没有室外温度数据，不能判断负荷变化是不是天气原因。']);
+});
+
+// #607: on the server a model wrote its answer in the same turn as one more read; that answer is
+// the Run's last words and stays, even though the turn reads data.
+test('the last words of a Run stay even when the model wrote them beside a read', async () => {
+  const seriesTool = projectTool('energy_query_series', async () => ({ totalKWh: 6264 }));
+  const answer = '10 月 13 日到 16 日用电 6264 kWh，比 10 月 6 日到 9 日多 2478 kWh。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: '先查一下两段时间的用电。' }, { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: answer }, { type: 'tool-call', id: 'series-2', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [] } }], stopReason: 'toolUse' },
+  ], [seriesTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [answer]);
+});
+
+// #607 review: a correction of an execution claim (#592) stays even when written beside a read, so
+// the kept answer never shows the claim without it.
+test('a correction written beside a read stays with the claim it corrects', async () => {
+  const siteTool = projectTool('site_get_context', async () => ({ site: { name: '松雅轩' } }));
+  const correction = '更正：我只能读取数据，没有也不能关闭 B 机组。';
+  const { result } = await runScript([
+    { parts: [{ type: 'text', text: '好的，已为你关闭 B 机组。' }, { type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: correction }, { type: 'tool-call', id: 'site-1', name: 'site_get_context', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'text', text: '需要的话，我可以帮你看 B 机组现在的读数。' }, { type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: declineCard }], stopReason: 'toolUse' },
+  ], [siteTool]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.ok(result.finalizedMessages.some(({ content }) => content === correction));
+});
+
+// #607 final suite: a decline said its reason in the answer and again on the card in other words.
+test('the card drops a refusal the answer already gave in other words', async () => {
+  const { result } = await runScript([
+    {
+      parts: [{ type: 'text', text: '我只能读取数据，不能调整设定值，也不能给设备下命令。需要的话，我可以帮你查看当前冷冻水出水温度和各台机组的运行读数。' }, {
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: { ...declineCard, limitations: ['我只能读取数据，不能修改设定值或操作设备。'] },
+      }],
+      stopReason: 'toolUse',
+    },
+  ]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.artifacts.at(-1).finding.limitations, []);
+});
