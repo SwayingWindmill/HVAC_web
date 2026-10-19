@@ -361,6 +361,7 @@ test('a Run accepts exactly one terminal operation even when the model calls bot
   assert.equal(result.sessionStatus, 'WAITING_FOR_INPUT');
   assert.equal(result.toolExecutions.find(({ id }) => id === 'input-terminal-first')?.status, 'COMPLETED');
   assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-terminal-second')?.status, 'FAILED');
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-terminal-second')?.failureCode, 'TERMINAL_ALREADY_ACCEPTED');
 });
 
 test('investigation_complete rejects unsupported physical-execution claims in terminal narrative fields', async () => {
@@ -960,6 +961,8 @@ test('a finding citing a read that did not happen is refused with the ids it may
   assert.match(refusal, /energy-read-1/u);
   assert.doesNotMatch(refusal, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/u);
   assert.equal(result.runStatus, 'COMPLETED');
+  // #624: the record says why, without the model's text.
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-1')?.failureCode, 'FINDING_EVIDENCE_NOT_READ');
 });
 
 // #592: the answer text streams to the operator before the card, so a claim of having operated
@@ -976,6 +979,7 @@ test('an answer that claims it operated equipment must be corrected before the R
   assert.match(refusal, /更正：/u);
   assert.equal(result.runStatus, 'COMPLETED');
   assert.deepEqual(result.finalizedMessages.map(({ content }) => content), ['好的，已为你关闭 B 机组。', '更正：我只能读取数据，没有也不能关闭 B 机组。']);
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-1')?.failureCode, 'FINDING_CORRECTION_REQUIRED');
 });
 
 test('a claim of operating equipment that is never corrected leaves the Run without a card', async () => {
@@ -1100,4 +1104,30 @@ test('a Run stopped while its Site is being read is cancelled without a model ca
   assert.equal(result.runStatus, 'CANCELLED');
   assert.equal(result.usage.modelCalls, 0);
   assert.equal(requests.length, 0);
+});
+
+// #624: a card the schema refuses is recorded by which part of it and how it was wrong, never by
+// the model's text, so the 运行情况 page can count the reasons.
+test('a refused card is recorded by the part that was wrong and how', async () => {
+  const card = { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [] };
+  const attempts = {
+    'too-long': { ...card, keyFigures: [{ label: '用电', value: '1634 kWh，比上周同一天多出了大约 262 kWh' }] },
+    'too-many': { ...card, keyFigures: [1, 2, 3, 4, 5].map((n) => ({ label: `第${n}个`, value: String(n) })) },
+    'extra': { ...card, summary: '多写了一句结论' },
+    'missing': { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], recommendedNext: [] },
+  };
+  const { result } = await runScript([
+    ...Object.entries(attempts).map(([id, args]) => ({ parts: [{ type: 'tool-call', id, name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: args }], stopReason: 'toolUse' })),
+    { parts: [{ type: 'tool-call', id: 'complete', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card }], stopReason: 'toolUse' },
+  ], [], { ...budget, maxModelCalls: 6 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(
+    Object.fromEntries(result.toolExecutions.filter(({ status }) => status === 'FAILED').map(({ id, failureCode }) => [id, failureCode])),
+    {
+      'too-long': 'FINDING_KEY_FIGURES_TOO_LONG',
+      'too-many': 'FINDING_KEY_FIGURES_TOO_MANY',
+      extra: 'FINDING_EXTRA_FIELD',
+      missing: 'FINDING_LIMITATIONS_MISSING',
+    },
+  );
 });

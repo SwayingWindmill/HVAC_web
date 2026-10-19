@@ -28,14 +28,59 @@ interface CreatePiToolsInput {
   readonly answers: () => readonly string[];
   /** The part of it the Session keeps: the answer without the process talk (#607). */
   readonly keptAnswer: () => string;
+  /** Why a terminal Tool refused a call, as a code without the model's text (#624). */
+  readonly onRefused: (toolCallId: string, reason: TerminalRefusalReason) => void;
 }
+
+/**
+ * Why a card or a question to the operator was refused (#624). The model reads the refusal in
+ * words; the record keeps only this, so the 运行情况 page can count reasons.
+ */
+export type TerminalRefusalReason =
+  | 'TERMINAL_ALREADY_ACCEPTED'
+  | 'FINDING_EVIDENCE_NOT_READ'
+  | 'FINDING_CORRECTION_REQUIRED'
+  | 'FINDING_CONTENT_INVALID'
+  | 'INPUT_REQUEST_CORRECTION_REQUIRED'
+  | 'INPUT_REQUEST_INVALID'
+  | `FINDING_${'KEY_FIGURES' | 'EVIDENCE_REFS' | 'LIMITATIONS' | 'FOLLOW_UPS' | 'OUTCOME'}_${'TOO_LONG' | 'TOO_MANY' | 'MISSING' | 'INVALID'}`
+  | 'FINDING_EXTRA_FIELD'
+  | 'FINDING_UNREADABLE';
 
 // The answer has already reached the operator, so a claim of operating equipment is corrected in
 // writing rather than withdrawn; both ways of ending a Run check it (#592).
-const assertAnswerCorrected = (answers: readonly string[]): void => {
-  if (needsExecutionCorrection(answers)) {
-    throw new Error('回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。');
+const CORRECTION_REQUIRED = '回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。';
+
+const SCHEMA_FIELDS: Readonly<Record<string, string>> = Object.freeze({
+  keyFigures: 'KEY_FIGURES', evidenceRefs: 'EVIDENCE_REFS', limitations: 'LIMITATIONS', recommendedNext: 'FOLLOW_UPS', outcome: 'OUTCOME',
+});
+
+/**
+ * The reason a card the schema refused before it ran, from pi's message: the first wrong field
+ * and how it was wrong ("keyFigures.0.value: must not have more than 24 characters").
+ */
+export const terminalSchemaRefusal = (toolName: string, result: unknown): TerminalRefusalReason | null => {
+  const text = toolFailureText(result);
+  if (text === null) return null;
+  if (toolName === INVESTIGATION_REQUEST_INPUT_TOOL_NAME) {
+    return text.startsWith('Validation failed for tool ') || text.startsWith('Invalid arguments for tool ') ? 'INPUT_REQUEST_INVALID' : null;
   }
+  if (toolName !== INVESTIGATION_COMPLETE_TOOL_NAME) return null;
+  if (text.startsWith('Invalid arguments for tool ')) return 'FINDING_UNREADABLE';
+  if (!text.startsWith('Validation failed for tool ')) return null;
+  const errors = [...text.split('\n\nReceived arguments:')[0]!.matchAll(/^ {2}- ([^:]+): (.*)$/gmu)].map(([, path, message]) => ({ path: path!, message: message! }));
+  if (errors.some(({ message }) => /additional properties|schema is false/u.test(message))) return 'FINDING_EXTRA_FIELD';
+  const first = errors[0];
+  if (first === undefined) return 'FINDING_CONTENT_INVALID';
+  // A missing field is reported on the object that should hold it: "limitations: must have required properties limitations".
+  const missing = /required propert(?:y|ies) (\w+)/u.exec(first.message)?.[1];
+  const field = SCHEMA_FIELDS[missing ?? first.path.split('.')[0]!];
+  if (field === undefined) return 'FINDING_CONTENT_INVALID';
+  const how = missing !== undefined ? 'MISSING'
+    : /more than \d+ characters/u.test(first.message) ? 'TOO_LONG'
+      : /more than \d+ items/u.test(first.message) ? 'TOO_MANY'
+        : 'INVALID';
+  return `FINDING_${field}_${how}` as TerminalRefusalReason;
 };
 
 const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
@@ -73,11 +118,18 @@ const safeToolFailure = (error: unknown): Error => {
   return new Error(`${toolFailurePrefix}${code}${hint === undefined ? '' : `\n${hint}`}`);
 };
 
-const claimTerminalOperation = (state: ProjectToolBudgetState, toolCallId: string): void => {
+const claimTerminalOperation = (state: ProjectToolBudgetState, toolCallId: string, refuse: Refuse): void => {
   if (state.terminalToolCallId !== null) {
-    throw new Error('Only one terminal investigation operation may be accepted per Run.');
+    refuse('TERMINAL_ALREADY_ACCEPTED', '这次回答已经收尾，不能再收尾一次。');
   }
   state.terminalToolCallId = toolCallId;
+};
+
+type Refuse = (reason: TerminalRefusalReason, message: string) => never;
+
+const refuser = (onRefused: CreatePiToolsInput['onRefused'], toolCallId: string): Refuse => (reason, message) => {
+  onRefused(toolCallId, reason);
+  throw new Error(message);
 };
 
 const toolFailureText = (result: unknown): string | null => {
@@ -223,23 +275,30 @@ const createInvestigationCompleteTool = ({
   onArtifact,
   answers,
   keptAnswer,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'keptAnswer'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  onRefused,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'keptAnswer' | 'onRefused'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
   description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
   parameters: investigationCompleteParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
-    const finding = parseInvestigationComplete(parameters);
-    assertAnswerCorrected(answers());
+    const refuse = refuser(onRefused, toolCallId);
+    let finding: ReturnType<typeof parseInvestigationComplete>;
+    try {
+      finding = parseInvestigationComplete(parameters);
+    } catch (error) {
+      return refuse('FINDING_CONTENT_INVALID', error instanceof Error ? error.message : String(error));
+    }
+    if (needsExecutionCorrection(answers())) refuse('FINDING_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
     if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
       // The model reads this refusal, so it says which ids it may cite.
       const cited = [...state.completedToolIds];
-      throw new Error(cited.length === 0
+      refuse('FINDING_EVIDENCE_NOT_READ', cited.length === 0
         ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
         : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
-    claimTerminalOperation(state, toolCallId);
+    claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,
       sessionId,
@@ -262,16 +321,23 @@ const createInvestigationRequestInputTool = ({
   runId,
   onArtifact,
   answers,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  onRefused,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'onRefused'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   label: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   description: '缺少关键信息、没法继续时，向值班人员提一个问题，并结束这次回答。',
   parameters: investigationRequestInputParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
-    const request = parseInvestigationRequestInput(parameters);
-    assertAnswerCorrected(answers());
-    claimTerminalOperation(state, toolCallId);
+    const refuse = refuser(onRefused, toolCallId);
+    let request: ReturnType<typeof parseInvestigationRequestInput>;
+    try {
+      request = parseInvestigationRequestInput(parameters);
+    } catch (error) {
+      return refuse('INPUT_REQUEST_INVALID', error instanceof Error ? error.message : String(error));
+    }
+    if (needsExecutionCorrection(answers())) refuse('INPUT_REQUEST_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
+    claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,
       sessionId,

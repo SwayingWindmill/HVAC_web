@@ -29,6 +29,7 @@ import {
 import {
   createPiTools,
   projectToolFailureCodeFromPiResult,
+  terminalSchemaRefusal,
 } from './pi-tools.js';
 
 type PiStreamFn = ConstructorParameters<typeof Agent>[0]['streamFn'];
@@ -177,6 +178,8 @@ export const createPiAgentEngine = ({
   const emittedArtifactIds = new Set<string>();
   const toolExecutions: AgentToolExecution[] = [];
   const pendingTools = new Map<string, PendingToolExecution>();
+  // Why a terminal Tool refused a call, by call id (#624).
+  const refusals = new Map<string, string>();
   const finalizedMessages: AgentMessage[] = [];
   const processTalk = new Set<string>();
   const spokenMessages = (): AgentMessage[] => finalizedMessages.filter(
@@ -275,6 +278,7 @@ export const createPiAgentEngine = ({
     onArtifact: (artifact) => artifacts.push(artifact),
     onBudgetExhausted: (code) => markBudgetFailure(code),
     answers: () => finalizedMessages.map(({ content }) => content),
+    onRefused: (toolCallId, reason) => refusals.set(toolCallId, reason),
     keptAnswer: () => spokenMessages().map(({ content }) => content).join('\n'),
   });
 
@@ -471,7 +475,10 @@ export const createPiAgentEngine = ({
           : [];
         const finishedAt = Date.now();
         const failureCode = event.isError
-          ? projectToolFailureCodeFromPiResult(event.result) ?? 'TOOL_EXECUTION_FAILED'
+          ? refusals.get(event.toolCallId)
+            ?? terminalSchemaRefusal(pending.toolName, event.result)
+            ?? projectToolFailureCodeFromPiResult(event.result)
+            ?? 'TOOL_EXECUTION_FAILED'
           : null;
         const execution = Object.freeze({
           id: pending.id,
