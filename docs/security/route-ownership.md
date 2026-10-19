@@ -50,11 +50,10 @@
 ```bash
 npm run ownership:check
 npm run contracts:check
-npm run test:ownership
+npm run test:registry-routing
 npm run test:durable-postgres
 npm run build:energy-api
 npm run lint
 npm run build
-npm run audit:platform-gateway
-npm run audit:route-ownership
+npm run audit:security-failure
 ```
