@@ -122,9 +122,9 @@ const WRITE_CAPABILITY: Record<RegistryAdminResourceType, Capability> = {
 const RESOURCE_LABEL: Record<RegistryAdminResourceType, string> = {
   SITE: '站点',
   SPACE: '空间',
-  ASSET: '设备资产',
-  DEVICE: '设备端点',
-  POINT: '测点',
+  ASSET: '资产',
+  DEVICE: '设备',
+  POINT: '点位',
 };
 
 const SPACE_TYPES = ['CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER'];
@@ -151,7 +151,7 @@ function pointTypeLabel(value: string): string {
     COUNTER: '累计量',
     STATE: '状态',
     SETTING: '设定值',
-    COMMAND: '控制命令',
+    COMMAND: '控制点',
   };
   return labels[value] ?? value;
 }
@@ -535,7 +535,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
           </Button>
           {row.original.type === 'DEVICE' ? (
             <Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(row.original.id)}>
-              查看测点
+              查看点位
             </Button>
           ) : null}
         </div>
@@ -556,7 +556,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
   const pointColumns = useMemo<Array<ColumnDef<DataTableFeatures, TelemetryPoint>>>(() => [
     {
       id: 'point',
-      header: '测点',
+      header: '点位',
       cell: ({ row }) => (
         <div>
           <strong className="block text-sm">{row.original.displayName}</strong>
@@ -646,15 +646,15 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
       {selectedDeviceId ? (
         <DataTableBlock
-          title={`${selectedDevice?.displayName ?? '设备'} · 测点`}
+          title={`${selectedDevice?.displayName ?? '设备'} · 点位`}
           actions={<Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(null)}><X />关闭</Button>}
         >
           {pointListError ? <Alert variant="destructive"><AlertTitle>{pointListError.title}</AlertTitle><AlertDescription>{pointListError.description}</AlertDescription></Alert> : null}
-          {pointsQuery.isLoading ? <div className="grid min-h-24 place-items-center rounded-md border text-sm text-muted-foreground">正在读取测点…</div> : (
+          {pointsQuery.isLoading ? <div className="grid min-h-24 place-items-center rounded-md border text-sm text-muted-foreground">正在读取点位…</div> : (
             <DataTable
               table={pointTable}
-              tableAriaLabel={`${selectedDevice?.displayName ?? '设备'}测点登记`}
-              empty="当前设备没有测点登记"
+              tableAriaLabel={`${selectedDevice?.displayName ?? '设备'}点位登记`}
+              empty="当前设备没有点位登记"
               footer={<DataTablePagination table={pointTable} totalRows={devicePoints.length} />}
             />
           )}
@@ -701,9 +701,9 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
               {editTarget.type === 'POINT' ? <>
                 <label className="grid gap-1.5 text-sm"><span>上报设备</span><Select value={editDraft.reportingDeviceId || undefined} onValueChange={(value) => updateEdit('reportingDeviceId', value)}><SelectTrigger><SelectValue placeholder="选择设备" /></SelectTrigger><SelectContent><SelectGroup>{model.devices.map((device) => <SelectItem key={device.id} value={device.id}>{device.displayName} · {device.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <label className="grid gap-1.5 text-sm"><span>物理传感器（可选）</span><Select value={editDraft.sensorId || '__none__'} onValueChange={(value) => updateEdit('sensorId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">未绑定传感器</SelectItem>{model.sensors.map((sensor) => <SelectItem key={sensor.id} value={sensor.id}>{sensor.displayName} · {sensor.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
-                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>测点编码</span><Input value={editDraft.pointCode} onChange={(event) => updateEdit('pointCode', event.target.value)} /></label><label className="grid gap-1.5 text-sm"><span>来源键</span><Input value={editDraft.sourceKey} onChange={(event) => updateEdit('sourceKey', event.target.value)} /></label></div>
+                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位编码</span><Input value={editDraft.pointCode} onChange={(event) => updateEdit('pointCode', event.target.value)} /></label><label className="grid gap-1.5 text-sm"><span>来源键</span><Input value={editDraft.sourceKey} onChange={(event) => updateEdit('sourceKey', event.target.value)} /></label></div>
                 <label className="grid gap-1.5 text-sm"><span>名称</span><Input value={editDraft.displayName} onChange={(event) => updateEdit('displayName', event.target.value)} /></label>
-                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>测点类型</span><Select value={editDraft.pointType} onValueChange={(value) => updateEdit('pointType', value as TelemetryPoint['pointType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => updateEdit('valueType', value as TelemetryPoint['valueType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
+                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位类型</span><Select value={editDraft.pointType} onValueChange={(value) => updateEdit('pointType', value as TelemetryPoint['pointType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => updateEdit('valueType', value as TelemetryPoint['valueType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
                 {editDraft.pointType === 'COUNTER' ? <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>累计量下降处理</span><Select value={editDraft.counterDecreaseMode} onValueChange={(value) => updateEdit('counterDecreaseMode', value as NonNullable<TelemetryPoint['counterDecreaseMode']>)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="RESET_TO_ZERO">复位归零</SelectItem><SelectItem value="ROLLOVER">量程回绕</SelectItem><SelectItem value="INVALID">视为无效</SelectItem></SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>回绕模数</span><Input type="number" disabled={editDraft.counterDecreaseMode !== 'ROLLOVER'} min={0} value={editDraft.counterRolloverModulus ?? ''} onChange={(event) => updateEdit('counterRolloverModulus', event.target.value === '' ? null : Number(event.target.value))} /></label></div> : null}
                 <label className="grid gap-1.5 text-sm"><span>单位（可选）</span><Input value={editDraft.unit} onChange={(event) => updateEdit('unit', event.target.value)} /></label>
                 <div className="grid gap-4 sm:grid-cols-3"><label className="grid gap-1.5 text-sm"><span>采样间隔 ms</span><Input type="number" min={100} value={editDraft.sampleIntervalMs} onChange={(event) => updateEdit('sampleIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>发布间隔 ms</span><Input type="number" min={100} value={editDraft.publishIntervalMs} onChange={(event) => updateEdit('publishIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>陈旧阈值 ms</span><Input type="number" min={100} value={editDraft.staleAfterMs} onChange={(event) => updateEdit('staleAfterMs', Number(event.target.value))} /></label></div>
@@ -731,8 +731,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         <DialogContent className="sm:max-w-xl">
           <DialogHeader><DialogTitle>调整登记关系</DialogTitle><DialogDescription>选择已有登记对象建立新的有效关系，不需要手工填写内部标识。</DialogDescription></DialogHeader>
           <div className="grid gap-4">
-            <label className="grid gap-1.5 text-sm"><span>关系类型</span><Select value={rebindDraft.kind} onValueChange={(value) => updateRebind('kind', value as RebindKind)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="DEVICE_ASSET">设备端点 → 设备资产</SelectItem><SelectItem value="ASSET_SPACE">设备资产 → 空间</SelectItem><SelectItem value="DEVICE_SPACE">设备端点 → 空间</SelectItem><SelectItem value="POINT_SUBJECT">测点 → 业务对象</SelectItem></SelectGroup></SelectContent></Select></label>
-            {rebindDraft.kind === 'POINT_SUBJECT' ? <label className="grid gap-1.5 text-sm"><span>目标对象类型</span><Select value={rebindDraft.targetType} onValueChange={(value) => updateRebind('targetType', value as RebindDraft['targetType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="SITE">站点</SelectItem><SelectItem value="SPACE">空间</SelectItem><SelectItem value="ASSET">设备资产</SelectItem></SelectGroup></SelectContent></Select></label> : null}
+            <label className="grid gap-1.5 text-sm"><span>关系类型</span><Select value={rebindDraft.kind} onValueChange={(value) => updateRebind('kind', value as RebindKind)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="DEVICE_ASSET">设备 → 资产</SelectItem><SelectItem value="ASSET_SPACE">资产 → 空间</SelectItem><SelectItem value="DEVICE_SPACE">设备 → 空间</SelectItem><SelectItem value="POINT_SUBJECT">点位 → 测量对象</SelectItem></SelectGroup></SelectContent></Select></label>
+            {rebindDraft.kind === 'POINT_SUBJECT' ? <label className="grid gap-1.5 text-sm"><span>目标对象类型</span><Select value={rebindDraft.targetType} onValueChange={(value) => updateRebind('targetType', value as RebindDraft['targetType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="SITE">站点</SelectItem><SelectItem value="SPACE">空间</SelectItem><SelectItem value="ASSET">资产</SelectItem></SelectGroup></SelectContent></Select></label> : null}
             <label className="grid gap-1.5 text-sm"><span>来源对象</span><Select value={rebindDraft.sourceId || undefined} onValueChange={(value) => updateRebind('sourceId', value)}><SelectTrigger><SelectValue placeholder="选择来源对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.sources.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>目标对象</span><Select value={rebindDraft.targetId || undefined} onValueChange={(value) => updateRebind('targetId', value)}><SelectTrigger><SelectValue placeholder="选择目标对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.targets.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>关系角色</span><Select value={rebindDraft.role} onValueChange={(value) => updateRebind('role', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{rebindRoles.map((role) => <SelectItem key={role} value={role}>{role}</SelectItem>)}</SelectGroup></SelectContent></Select></label>

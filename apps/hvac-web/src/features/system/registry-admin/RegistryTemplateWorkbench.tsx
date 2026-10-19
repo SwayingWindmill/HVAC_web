@@ -53,9 +53,9 @@ function parseStringMap(source: string): Record<string, string> {
 }
 
 function kindLabel(kind: TemplateKind): string {
-  if (kind === 'ASSET') return '设备资产';
-  if (kind === 'DEVICE') return '设备端点';
-  return '测点';
+  if (kind === 'ASSET') return '资产';
+  if (kind === 'DEVICE') return '设备';
+  return '点位';
 }
 
 export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyChange }: Props) {

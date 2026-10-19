@@ -164,7 +164,7 @@ const POINT_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   COUNTER: '累计量',
   STATE: '状态',
   SETTING: '设定',
-  COMMAND: '命令',
+  COMMAND: '控制点',
 });
 
 const REGISTRY_STATUS_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -186,7 +186,7 @@ export function assetsSpaceTypeLabel(value: string): string {
 }
 
 export function assetsAssetTypeLabel(value: string): string {
-  return localizedType(value, ASSET_TYPE_LABELS, '设备资产');
+  return localizedType(value, ASSET_TYPE_LABELS, '资产');
 }
 
 export function assetsDeviceTypeLabel(value: string): string {

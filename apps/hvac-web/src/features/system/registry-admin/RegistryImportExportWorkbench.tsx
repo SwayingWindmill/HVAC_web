@@ -177,9 +177,9 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
             <dl className="grid gap-2 text-sm">
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">站点</dt><dd className="font-medium">{site.displayName}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-muted-foreground">空间</dt><dd className="font-medium">{model.counts.spaces}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">设备资产</dt><dd className="font-medium">{model.counts.assets}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">设备端点</dt><dd className="font-medium">{model.counts.deviceEndpoints}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">测点</dt><dd className="font-medium">{model.counts.points}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">资产</dt><dd className="font-medium">{model.counts.assets}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">设备</dt><dd className="font-medium">{model.counts.deviceEndpoints}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted-foreground">点位</dt><dd className="font-medium">{model.counts.points}</dd></div>
             </dl>
             <Button variant="outline" className="w-full" onClick={exportRegistry}><Download />导出登记数据</Button>
           </CardContent>

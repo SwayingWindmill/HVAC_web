@@ -2,7 +2,7 @@
 
 `deploy/platform/phase1` 是第一阶段唯一的部署入口，依据《智慧能源系统总体部署架构设计 V1（单服务器基线）》（`SE-ARCH-DEPLOY-001 V1.0`）：一台 Linux 服务器 + Docker Compose。仓库里没有 Kubernetes 清单，第一阶段也不需要。
 
-本地开发平时只用 `npm run local:up` / `local:down` / `local:reset`（见 `CLAUDE.md`），它按顺序做完下面的迁移、身份初始化、种子数据和启动。服务器的部署方式见 `docs/HANDOFF.md`。本文讲这些步骤各自是什么。
+本地开发平时只用 `npm run local:up` / `local:down` / `local:reset`（见 `docs/agents/local-environment.md`），它按顺序做完下面的迁移、身份初始化、种子数据和启动。服务器的部署方式见 `docs/HANDOFF.md`。本文讲这些步骤各自是什么。
 
 ## 对外的边界
 
@@ -127,7 +127,9 @@ PostgreSQL（本机或外部）上有身份库 `hvac_identity`，以及各业务
 - 只执行 `manifest.v1.json` 里精确列出的、审核过的迁移，按原样执行 SQL，不在运行时改写；
 - 测试数据和凭据不在正式的迁移里；
 - 在每个库里记下迁移状态和源文件哈希，发现被改过或恢复不完整就停下；
-- 新增迁移要同时登记到 `manifest.v1.json`、`migration-list.tsv` 和 `Dockerfile`（见 `CLAUDE.md`）。
+- 新增迁移文件（在 `infra/*/postgres/init/` 或各模块的 `migrations/` 下）要同时登记到 `manifest.v1.json`、`migration-list.tsv` 和 `Dockerfile`。
+
+正式上线前，迁移文件可以直接改；开发库出现迁移漂移就重建，数据由模拟器重新产生（已有库遇到改过的迁移，迁移器会按哈希中止）。正式上线时冻结迁移：之后已执行的迁移保持原样，改表结构只能新增迁移，那时再加一条检查。
 
 服务正常启动前先跑一次性的产品 / 表结构预检，要求产品版本和迁移清单的摘要完全一致；正式环境没有跳过的开关。
 
