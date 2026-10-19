@@ -33,7 +33,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 
 > **Redesign done (2026-10-13 → 10-14).** The approved design is the Claude Design canvas
 > https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm (pages 定稿, 设计系统, 页面 · 批次 1–5) and
-> `docs/design-redesign/` (`DESIGN-SYSTEM.md` + `design-tokens.css`). It is implemented in phases,
+> `DESIGN.md` (design system 1.0; its tokens live in `apps/hvac-web/src/global.css`). It was implemented in phases,
 > one PR each; existing features stay, missing ones get the new visual language:
 >
 > 1. Tokens + app shell (top bar, grouped sidebar, page header, Button/Badge/Card/Status) — done (#529).
@@ -46,7 +46,7 @@ Costs are estimates at the Site's time-of-use tariff and are labelled as such; S
 >
 > Visual checks against recorded data: run a Vite dev server on 5190 (`npm -w @hvac/web run dev -- --host localhost --port 5190`); the e2e config reuses it, so `npm run web:e2e -- e2e/<spec>` runs in seconds and a throwaway spec can screenshot pages with fixtures.
 >
-> Rules that come with it: each fact has one home page (table in `DESIGN-SYSTEM.md` §1); plain
+> Rules that come with it: each fact has one home page (table in `DESIGN.md` §1); plain
 > operator wording (same section); charts and tables together on analysis pages only when the
 > table adds dimensions. Until a page's phase lands, the notes below still describe it.
 
