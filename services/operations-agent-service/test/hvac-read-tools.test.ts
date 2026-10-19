@@ -942,3 +942,34 @@ test('work_order_list reads the Site’s unfinished work orders in the 工单 pa
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
 });
+
+// #640: a card may show a chart of one read; the read's own Tool draws it from what the model read.
+test('energy_query_series draws hours as a line and days as bars, and nothing without points', async () => {
+  const hour = (start, end, energyKWh) => ({ periodStart: start, periodEnd: end, energyKWh });
+  const seriesHarness = (points, granularity) => createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'energy-chart-1', 'GOOD', 'telemetry-query-service:energy-series/v1', {
+      ...energyPayload({ from: points[0]?.periodStart ?? '2026-08-01T07:00:00.000Z', to: points.at(-1)?.periodEnd ?? '2026-08-01T08:00:00.000Z' }),
+      points,
+      metadata: { ...energyPayload({ from: '2026-08-01T07:00:00.000Z', to: '2026-08-03T07:00:00.000Z' }).metadata, requestedGranularity: granularity, actualGranularity: granularity },
+    }),
+  });
+
+  // 07:00 UTC is midnight in America/Phoenix.
+  const hourly = seriesHarness([hour('2026-08-01T07:00:00.000Z', '2026-08-01T08:00:00.000Z', 12), hour('2026-08-01T08:00:00.000Z', '2026-08-01T09:00:00.000Z', 15.5)], 'hour');
+  const hours = byName(hourly.tools, 'energy_query_series');
+  const hoursRead = await execute(hours, { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
+  assert.deepEqual(hours.chart(hoursRead), {
+    kind: 'LINE', title: '8月1日每小时用电', unit: 'kWh', categories: ['00:00', '01:00'], series: [{ name: '用电', values: [12, 15.5] }],
+  });
+
+  const daily = seriesHarness([hour('2026-08-01T07:00:00.000Z', '2026-08-02T07:00:00.000Z', 300), hour('2026-08-02T07:00:00.000Z', '2026-08-03T07:00:00.000Z', 280.25)], 'day');
+  const days = byName(daily.tools, 'energy_query_series');
+  const daysRead = await execute(days, { energyType: 'cooling', startDate: '2026-08-01', endDate: '2026-08-02', granularity: 'day', qualityPolicy: 'VALID_ONLY' });
+  assert.deepEqual(days.chart(daysRead), {
+    kind: 'BAR', title: '8月1日–8月2日每天供冷', unit: 'kWh', categories: ['8/1', '8/2'], series: [{ name: '供冷', values: [300, 280.25] }],
+  });
+
+  const empty = seriesHarness([], 'hour');
+  const nothing = byName(empty.tools, 'energy_query_series');
+  assert.equal(nothing.chart(await execute(nothing, { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' })), null);
+});

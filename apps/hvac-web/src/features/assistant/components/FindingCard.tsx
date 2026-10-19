@@ -3,6 +3,7 @@ import { ArrowUpRight, Info } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { AssistantPart } from '../thread-model';
 import { toolPresentation } from '../tool-labels';
+import { FindingChart } from './FindingChart';
 
 type FindingData = Extract<AssistantPart, { type: 'data-finding' }>['data'];
 
@@ -19,6 +20,7 @@ export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { 
       <div className="flex items-center gap-2">
         <Badge variant={supported ? 'secondary' : 'outline'}>{supported ? '有数据依据' : '数据不足以下结论'}</Badge>
       </div>
+      {finding.chart === undefined ? null : <FindingChart chart={finding.chart} />}
       {finding.keyFigures !== undefined && finding.keyFigures.length > 0 ? (
         <dl className="m-0 grid grid-cols-2 gap-2">
           {finding.keyFigures.map((figure) => (

@@ -50,12 +50,30 @@ export interface InvestigationKeyFigure {
 }
 
 /**
+ * A small chart on the finding card, drawn by a read Tool from one of its results: the model only
+ * names the read, so every number on it is one the model read (#640).
+ */
+export interface FindingChart {
+  readonly kind: 'LINE' | 'BAR' | 'HORIZONTAL_BAR';
+  readonly title: string;
+  readonly unit: string;
+  readonly categories: readonly string[];
+  /** Each series has one value per category; null where the read had none. */
+  readonly series: readonly { readonly name: string; readonly values: readonly (number | null)[] }[];
+}
+
+/** The public contract's bounds; a read with more is not charted. */
+export const MAX_CHART_CATEGORIES = 200;
+export const MAX_CHART_SERIES = 4;
+
+/**
  * What the finding card shows under the answer. The conclusion itself is the answer text, so the
  * card carries only the figures, what the data could not tell and what to ask next.
  */
 export interface InvestigationComplete {
   readonly outcome: InvestigationOutcome;
   readonly keyFigures?: readonly InvestigationKeyFigure[];
+  readonly chart?: FindingChart;
   readonly evidenceRefs: readonly AgentEvidenceRef[];
   readonly limitations: readonly string[];
   readonly recommendedNext: readonly string[];

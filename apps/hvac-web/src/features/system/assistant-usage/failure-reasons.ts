@@ -7,6 +7,7 @@ const FINDING_PARTS: Readonly<Record<string, string>> = Object.freeze({
   LIMITATIONS: '局限说明',
   FOLLOW_UPS: '接着问',
   OUTCOME: '结论类型',
+  CHART: '图',
 });
 const FINDING_FAULTS: Readonly<Record<string, string>> = Object.freeze({
   TOO_LONG: '太长',
@@ -17,6 +18,8 @@ const FINDING_FAULTS: Readonly<Record<string, string>> = Object.freeze({
 
 const REASONS: Readonly<Record<string, string>> = Object.freeze({
   FINDING_EVIDENCE_NOT_READ: '引用了没读到的数据',
+  FINDING_CHART_NOT_READ: '图用了没读到的数据',
+  FINDING_CHART_UNAVAILABLE: '那次的数据画不了图',
   FINDING_CORRECTION_REQUIRED: '要先更正「操作过设备」',
   INPUT_REQUEST_CORRECTION_REQUIRED: '要先更正「操作过设备」',
   TERMINAL_ALREADY_ACCEPTED: '重复收尾',
@@ -40,7 +43,7 @@ const REASONS: Readonly<Record<string, string>> = Object.freeze({
 
 /** A failure code in words: 「关键数字太长」「数据暂时读不到」; a code the page does not know reads as 「其他」. */
 export const failureReasonWords = (code: string): string => {
-  const finding = /^FINDING_(KEY_FIGURES|EVIDENCE_REFS|LIMITATIONS|FOLLOW_UPS|OUTCOME)_(TOO_LONG|TOO_MANY|MISSING|INVALID)$/u.exec(code);
+  const finding = /^FINDING_(KEY_FIGURES|EVIDENCE_REFS|LIMITATIONS|FOLLOW_UPS|OUTCOME|CHART)_(TOO_LONG|TOO_MANY|MISSING|INVALID)$/u.exec(code);
   if (finding) return `${FINDING_PARTS[finding[1]!]}${FINDING_FAULTS[finding[2]!]}`;
   return REASONS[code] ?? '其他';
 };

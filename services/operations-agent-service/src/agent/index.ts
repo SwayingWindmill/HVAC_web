@@ -8,6 +8,8 @@ export {
 export {
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
+  MAX_CHART_CATEGORIES,
+  MAX_CHART_SERIES,
   claimsPhysicalExecution,
   needsExecutionCorrection,
   parseInvestigationComplete,
@@ -23,6 +25,7 @@ export {
   type AgentProposalArtifact,
   type AgentTerminalArtifact,
   type AgentTerminalToolName,
+  type FindingChart,
   type InvestigationComplete,
   type InvestigationInputChoice,
   type InvestigationInputResponse,

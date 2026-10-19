@@ -1162,3 +1162,37 @@ test('a card cites a read by its short id and a figure with no unit may leave th
   assert.equal(finding.evidenceRefs[0].toolExecutionId, 'call_00_WWrWol5aIwvRmb1pQXdy7410');
   assert.deepEqual(finding.keyFigures, [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42' }]);
 });
+
+// #640: the card names which read to chart; the read's Tool draws it, so no number on the chart
+// comes from the model. A read that cannot be charted, or one that did not happen, is refused.
+test('a card charts the read it names, drawn by that read\'s Tool, and refuses one it cannot chart', async () => {
+  const hourly = Object.freeze({ kind: 'LINE', title: '10月15日每小时用电', unit: 'kWh', categories: ['08:00', '09:00'], series: [{ name: '用电', values: [120, 135.5] }] });
+  const series = Object.freeze({ ...projectTool('energy_query_series', async () => ({ points: [120, 135.5] })), chart: () => hourly });
+  const alarms = projectTool('alarm_list', async () => ({ alarms: [] }));
+  const card = (chartFrom) => ({
+    outcome: 'SUPPORTED_FINDING',
+    evidenceRefs: [{ owner: 'ENERGY', resourceType: 'energy-series', resourceId: 'hourly', toolExecutionId: 'E1' }],
+    limitations: [],
+    recommendedNext: [],
+    chartFrom,
+  });
+  const { result } = await runScript([
+    {
+      parts: [
+        { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} },
+        { type: 'tool-call', id: 'alarms-1', name: 'alarm_list', arguments: {} },
+      ],
+      stopReason: 'toolUse',
+    },
+    { parts: [{ type: 'tool-call', id: 'not-read', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E9') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'no-chart', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E2') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'charted', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E1') }], stopReason: 'toolUse' },
+  ], [series, alarms], { ...budget, maxModelCalls: 6 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(
+    Object.fromEntries(result.toolExecutions.filter(({ status }) => status === 'FAILED').map(({ id, failureCode }) => [id, failureCode])),
+    { 'not-read': 'FINDING_CHART_NOT_READ', 'no-chart': 'FINDING_CHART_UNAVAILABLE' },
+  );
+  assert.deepEqual(result.artifacts[0].finding.chart, hourly);
+  assert.equal('chartFrom' in result.artifacts[0].finding, false);
+});
