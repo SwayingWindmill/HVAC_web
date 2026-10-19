@@ -587,10 +587,10 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
   const usageSession = Object.freeze({ ...sessionDescriptor, id: 'usage-session-1', tenantId: 'tenant-usage', siteId: 'site-usage' });
   // 2026-10-17 23:59 and 2026-10-18 00:01 in Asia/Shanghai: two Site-local days, one UTC day.
   const lateRun = Object.freeze({ ...run('usage-run-1', Date.parse('2026-10-17T15:59:00Z')), sessionId: usageSession.id });
-  const tool = (id, runId, toolName, status, startedAt) => Object.freeze({
+  const tool = (id, runId, toolName, status, startedAt, failureCode = 'TOOL_OWNER_UNAVAILABLE') => Object.freeze({
     id, sessionId: usageSession.id, runId, toolName, argumentsDigest: `digest-${id}`, status, startedAt,
     finishedAt: startedAt + 100, resultSummary: status === 'COMPLETED' ? 'Tool completed.' : null,
-    provenance: Object.freeze([]), failureCode: status === 'COMPLETED' ? null : 'TOOL_OWNER_UNAVAILABLE',
+    provenance: Object.freeze([]), failureCode: status === 'COMPLETED' ? null : failureCode,
   });
 
   const started = await lifecycle.start({
@@ -605,6 +605,10 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
     toolExecutions: [
       tool('usage-tool-1', lateRun.id, 'energy_query_series', 'COMPLETED', lateRun.startedAt + 1_000),
       tool('usage-tool-2', lateRun.id, 'alarm_list', 'FAILED', lateRun.startedAt + 2_000),
+      tool('usage-tool-4', lateRun.id, 'investigation_complete', 'FAILED', lateRun.startedAt + 6_000, 'FINDING_KEY_FIGURES_TOO_LONG'),
+      tool('usage-tool-5', lateRun.id, 'investigation_complete', 'FAILED', lateRun.startedAt + 6_200, 'FINDING_KEY_FIGURES_TOO_LONG'),
+      tool('usage-tool-6', lateRun.id, 'investigation_complete', 'FAILED', lateRun.startedAt + 6_400, 'FINDING_EVIDENCE_NOT_READ'),
+      tool('usage-tool-7', lateRun.id, 'investigation_complete', 'COMPLETED', lateRun.startedAt + 6_600),
     ],
     artifacts: [],
   });
@@ -631,11 +635,19 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
       { date: '2026-10-16', completed: 0, failed: 0, cancelled: 0, averageDurationMs: null, inputTokens: 0, outputTokens: 0, tools: [] },
       {
         date: '2026-10-17', completed: 1, failed: 0, cancelled: 0, averageDurationMs: 7_000, inputTokens: 1_200, outputTokens: 300,
-        tools: [{ toolName: 'alarm_list', calls: 1, failed: 1 }, { toolName: 'energy_query_series', calls: 1, failed: 0 }],
+        tools: [
+          { toolName: 'alarm_list', calls: 1, failed: 1, failureReasons: [{ code: 'TOOL_OWNER_UNAVAILABLE', count: 1 }] },
+          { toolName: 'energy_query_series', calls: 1, failed: 0, failureReasons: [] },
+          // #624: why each refused card was refused, the commonest first.
+          {
+            toolName: 'investigation_complete', calls: 4, failed: 3,
+            failureReasons: [{ code: 'FINDING_KEY_FIGURES_TOO_LONG', count: 2 }, { code: 'FINDING_EVIDENCE_NOT_READ', count: 1 }],
+          },
+        ],
       },
       {
         date: '2026-10-18', completed: 0, failed: 1, cancelled: 0, averageDurationMs: 3_000, inputTokens: 800, outputTokens: 0,
-        tools: [{ toolName: 'energy_query_series', calls: 1, failed: 1 }],
+        tools: [{ toolName: 'energy_query_series', calls: 1, failed: 1, failureReasons: [{ code: 'TOOL_OWNER_UNAVAILABLE', count: 1 }] }],
       },
     ],
   });

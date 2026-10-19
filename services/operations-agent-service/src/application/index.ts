@@ -14,6 +14,7 @@ export {
   type StartAgentSessionRunCommand,
 } from './internal/agent-session-lifecycle.js';
 export type {
+  AgentToolFailureReason,
   AgentToolUsage,
   AgentUsage,
   AgentUsageDay,

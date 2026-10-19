@@ -361,6 +361,7 @@ test('a Run accepts exactly one terminal operation even when the model calls bot
   assert.equal(result.sessionStatus, 'WAITING_FOR_INPUT');
   assert.equal(result.toolExecutions.find(({ id }) => id === 'input-terminal-first')?.status, 'COMPLETED');
   assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-terminal-second')?.status, 'FAILED');
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-terminal-second')?.failureCode, 'TERMINAL_ALREADY_ACCEPTED');
 });
 
 test('investigation_complete rejects unsupported physical-execution claims in terminal narrative fields', async () => {
@@ -593,7 +594,7 @@ test('complete Site/Energy Pi investigation produces a supported evidence-backed
             owner: 'ENERGY',
             resourceType: 'period-comparison',
             resourceId: 'overnight-energy-comparison',
-            toolExecutionId: 'energy-compare-vertical',
+            toolExecutionId: 'E1',
           }],
           limitations: [],
           recommendedNext: ['Inspect the overnight operating schedule before proposing any control change.'],
@@ -636,8 +637,8 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
         arguments: {
           outcome: 'SUPPORTED_FINDING',
           evidenceRefs: [
-            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'power', toolExecutionId: 'power-compare' },
-            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'cooling', toolExecutionId: 'cooling-compare' },
+            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'power', toolExecutionId: 'E1' },
+            { owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'cooling', toolExecutionId: 'E2' },
           ],
           keyFigures: [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }],
           limitations: ['没有室外温度数据，无法判断负荷增加是否来自天气。'],
@@ -659,10 +660,10 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
   assert.doesNotMatch(system.text, /site_get_context|localNow/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
-  // Each read tells the model the id its evidence cites.
+  // Each read tells the model the short id its evidence cites.
   const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
-  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
-  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, '可以比较');
+  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['E1', 'E2']);
+  assert.equal(toolResults[0].result.comparison.status, '可以比较');
   assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
@@ -695,7 +696,7 @@ test('incomplete Energy evidence produces unable-to-conclude instead of a confir
             owner: 'ENERGY',
             resourceType: 'period-comparison',
             resourceId: 'incomplete-overnight-comparison',
-            toolExecutionId: 'energy-incomplete-vertical',
+            toolExecutionId: 'E1',
           }],
           limitations: ['The current period contains incomplete Energy data.'],
           recommendedNext: ['Retry after the Energy dataset is complete.'],
@@ -737,7 +738,7 @@ test('stale current Telemetry remains partial evidence and produces unable-to-co
             resourceType: 'device-observation-snapshot',
             resourceId: telemetryDeviceId,
             revision: 'telemetry-device:73',
-            toolExecutionId: 'telemetry-stale-vertical',
+            toolExecutionId: 'E1',
           }],
           limitations: ['One requested point is stale and another has never been observed.'],
           recommendedNext: ['Retry after fresh telemetry is available before drawing an operating conclusion.'],
@@ -785,7 +786,7 @@ test('malicious Owner text cannot grant a forbidden Tool or widen the trusted Si
             owner: 'REGISTRY',
             resourceType: 'site-assets',
             resourceId: context.siteId,
-            toolExecutionId: 'assets-malicious-vertical',
+            toolExecutionId: 'E1',
           }],
           limitations: ['Owner-provided text is treated as untrusted data.'],
           recommendedNext: ['Continue the investigation using authorized READ Tools only.'],
@@ -820,7 +821,7 @@ test('a multi-measure question is answered from one semantic query over the Site
         name: INVESTIGATION_COMPLETE_TOOL_NAME,
         arguments: {
           outcome: 'SUPPORTED_FINDING',
-          evidenceRefs: [{ owner: 'ENERGY', resourceType: 'semantic-query', resourceId: 'site_energy', toolExecutionId: 'two-days' }],
+          evidenceRefs: [{ owner: 'ENERGY', resourceType: 'semantic-query', resourceId: 'site_energy', toolExecutionId: 'E1' }],
           keyFigures: [{ label: '用电', value: '3200', unit: 'kWh' }, { label: '能效', value: '4.4' }],
           limitations: [],
           recommendedNext: [],
@@ -841,7 +842,7 @@ test('a multi-measure question is answered from one semantic query over the Site
   });
   assert.equal(result.runStatus, 'COMPLETED');
   const answer = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text))[0];
-  assert.equal(answer.evidenceId, 'two-days');
+  assert.equal(answer.evidenceId, 'E1');
   assert.deepEqual(answer.result.columns, ['时段', '用电量', '供冷量', '综合能效']);
   assert.deepEqual(answer.result.rows, [
     { siteTime: '2026-10-14 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
@@ -952,14 +953,16 @@ test('a finding citing a read that did not happen is refused with the ids it may
   const { result, requests } = await runScript([
     { parts: [{ type: 'tool-call', id: 'energy-read-1', name: 'energy_compare_periods', arguments: {} }], stopReason: 'toolUse' },
     { parts: [{ type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: finding('device-7') }], stopReason: 'toolUse' },
-    { parts: [{ type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: finding('energy-read-1') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'complete-2', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: finding('E1') }], stopReason: 'toolUse' },
   ], [energyTool]);
 
   const refusal = requests[2].findLast((message) => message.role === 'toolResult').text;
   assert.match(refusal, /evidenceId/u);
-  assert.match(refusal, /energy-read-1/u);
+  assert.match(refusal, /E1/u);
   assert.doesNotMatch(refusal, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/u);
   assert.equal(result.runStatus, 'COMPLETED');
+  // #624: the record says why, without the model's text.
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-1')?.failureCode, 'FINDING_EVIDENCE_NOT_READ');
 });
 
 // #592: the answer text streams to the operator before the card, so a claim of having operated
@@ -976,6 +979,7 @@ test('an answer that claims it operated equipment must be corrected before the R
   assert.match(refusal, /更正：/u);
   assert.equal(result.runStatus, 'COMPLETED');
   assert.deepEqual(result.finalizedMessages.map(({ content }) => content), ['好的，已为你关闭 B 机组。', '更正：我只能读取数据，没有也不能关闭 B 机组。']);
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'complete-1')?.failureCode, 'FINDING_CORRECTION_REQUIRED');
 });
 
 test('a claim of operating equipment that is never corrected leaves the Run without a card', async () => {
@@ -1100,4 +1104,61 @@ test('a Run stopped while its Site is being read is cancelled without a model ca
   assert.equal(result.runStatus, 'CANCELLED');
   assert.equal(result.usage.modelCalls, 0);
   assert.equal(requests.length, 0);
+});
+
+// #624: a card the schema refuses is recorded by which part of it and how it was wrong, never by
+// the model's text, so the 运行情况 page can count the reasons.
+test('a refused card is recorded by the part that was wrong and how', async () => {
+  const card = { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [] };
+  const attempts = {
+    'too-long': { ...card, keyFigures: [{ label: '用电', value: '1634 kWh，比上周同一天多出了大约 262 kWh' }] },
+    'too-many': { ...card, keyFigures: [1, 2, 3, 4, 5].map((n) => ({ label: `第${n}个`, value: String(n) })) },
+    'extra': { ...card, summary: '多写了一句结论' },
+    'missing': { outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], recommendedNext: [] },
+    'missing-inside': { ...card, keyFigures: [{ label: '用电' }] },
+  };
+  const { result } = await runScript([
+    ...Object.entries(attempts).map(([id, args]) => ({ parts: [{ type: 'tool-call', id, name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: args }], stopReason: 'toolUse' })),
+    { parts: [{ type: 'tool-call', id: 'complete', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card }], stopReason: 'toolUse' },
+  ], [], { ...budget, maxModelCalls: 7 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(
+    Object.fromEntries(result.toolExecutions.filter(({ status }) => status === 'FAILED').map(({ id, failureCode }) => [id, failureCode])),
+    {
+      'too-long': 'FINDING_KEY_FIGURES_TOO_LONG',
+      'too-many': 'FINDING_KEY_FIGURES_TOO_MANY',
+      extra: 'FINDING_EXTRA_FIELD',
+      missing: 'FINDING_LIMITATIONS_MISSING',
+      'missing-inside': 'FINDING_KEY_FIGURES_MISSING',
+    },
+  );
+});
+
+// The model cites a read by its short id and the card keeps the read's call id; a figure without
+// a unit (能效) may leave the unit empty (#624).
+test('a card cites a read by its short id and a figure with no unit may leave the unit empty', async () => {
+  const energyTool = projectTool('energy_compare_periods', async () => ({
+    comparison: { status: '可以比较', absoluteChangeKWh: 5, percentChange: 25 },
+  }));
+  const { result } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'call_00_WWrWol5aIwvRmb1pQXdy7410', name: 'energy_compare_periods', arguments: {} }], stopReason: 'toolUse' },
+    {
+      parts: [{
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'SUPPORTED_FINDING',
+          evidenceRefs: [{ owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'comparison-1', toolExecutionId: 'E1' }],
+          keyFigures: [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42', unit: '' }],
+          limitations: [],
+          recommendedNext: [],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], [energyTool]);
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.equal(result.toolExecutions.filter(({ status }) => status === 'FAILED').length, 0);
+  const finding = result.artifacts[0].finding;
+  assert.equal(finding.evidenceRefs[0].toolExecutionId, 'call_00_WWrWol5aIwvRmb1pQXdy7410');
+  assert.deepEqual(finding.keyFigures, [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42' }]);
 });

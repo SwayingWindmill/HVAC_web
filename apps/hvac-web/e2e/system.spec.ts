@@ -82,7 +82,9 @@ test('the AI 助手 tab shows each day of answers and that day\'s failed steps i
   await expect(steps.getByRole('row', { name: /读取告警/ })).toHaveText(/读取告警\s*8\s*0/);
   await days.getByRole('button', { name: '10月18日' }).click();
   await expect(steps.getByRole('row', { name: /读取告警/ })).toHaveText(/读取告警\s*7\s*1/);
-  await expect(usage).not.toContainText(/alarm_list|telemetry_get_current|investigation_complete/);
+  // #624: why steps failed, in words; never the codes.
+  await expect(steps.getByRole('row', { name: /读取告警/ })).toContainText('数据暂时读不到 1');
+  await expect(usage).not.toContainText(/alarm_list|telemetry_get_current|investigation_complete|TOOL_|FINDING_/);
 });
 
 test('the AI 助手 tab says so when the account cannot read records', async ({ page }) => {

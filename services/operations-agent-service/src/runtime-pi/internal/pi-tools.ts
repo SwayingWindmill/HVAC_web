@@ -1,5 +1,5 @@
 import type { AgentTool as PiAgentTool } from '@earendil-works/pi-agent-core';
-import { Type, type TSchema } from '@earendil-works/pi-ai';
+import { Type, type Static, type TSchema } from '@earendil-works/pi-ai';
 
 import {
   AgentToolError,
@@ -28,14 +28,58 @@ interface CreatePiToolsInput {
   readonly answers: () => readonly string[];
   /** The part of it the Session keeps: the answer without the process talk (#607). */
   readonly keptAnswer: () => string;
+  /** Why a terminal Tool refused a call, as a code without the model's text (#624). */
+  readonly onRefused: (toolCallId: string, reason: TerminalRefusalReason) => void;
 }
+
+/**
+ * Why a card or a question to the operator was refused (#624). The model reads the refusal in
+ * words; the record keeps only this, so the 运行情况 page can count reasons.
+ */
+export type TerminalRefusalReason =
+  | 'TERMINAL_ALREADY_ACCEPTED'
+  | 'FINDING_EVIDENCE_NOT_READ'
+  | 'FINDING_CORRECTION_REQUIRED'
+  | 'FINDING_CONTENT_INVALID'
+  | 'INPUT_REQUEST_CORRECTION_REQUIRED'
+  | 'INPUT_REQUEST_INVALID'
+  | `FINDING_${'KEY_FIGURES' | 'EVIDENCE_REFS' | 'LIMITATIONS' | 'FOLLOW_UPS' | 'OUTCOME'}_${'TOO_LONG' | 'TOO_MANY' | 'MISSING' | 'INVALID'}`
+  | 'FINDING_EXTRA_FIELD'
+  | 'FINDING_UNREADABLE';
 
 // The answer has already reached the operator, so a claim of operating equipment is corrected in
 // writing rather than withdrawn; both ways of ending a Run check it (#592).
-const assertAnswerCorrected = (answers: readonly string[]): void => {
-  if (needsExecutionCorrection(answers)) {
-    throw new Error('回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。');
+const CORRECTION_REQUIRED = '回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。';
+
+const SCHEMA_FIELDS: Readonly<Record<string, string>> = Object.freeze({
+  keyFigures: 'KEY_FIGURES', evidenceRefs: 'EVIDENCE_REFS', limitations: 'LIMITATIONS', recommendedNext: 'FOLLOW_UPS', outcome: 'OUTCOME',
+});
+
+/**
+ * The reason a card the schema refused before it ran, from pi's message: the first wrong field
+ * and how it was wrong ("keyFigures.0.value: must not have more than 24 characters").
+ */
+export const terminalSchemaRefusal = (toolName: string, result: unknown): TerminalRefusalReason | null => {
+  const text = toolFailureText(result);
+  if (text === null) return null;
+  if (toolName === INVESTIGATION_REQUEST_INPUT_TOOL_NAME) {
+    return text.startsWith('Validation failed for tool ') || text.startsWith('Invalid arguments for tool ') ? 'INPUT_REQUEST_INVALID' : null;
   }
+  if (toolName !== INVESTIGATION_COMPLETE_TOOL_NAME) return null;
+  if (text.startsWith('Invalid arguments for tool ')) return 'FINDING_UNREADABLE';
+  if (!text.startsWith('Validation failed for tool ')) return null;
+  const errors = [...text.split('\n\nReceived arguments:')[0]!.matchAll(/^ {2}- ([^:]+): (.*)$/gmu)].map(([, path, message]) => ({ path: path!, message: message! }));
+  if (errors.some(({ message }) => /additional properties|schema is false/u.test(message))) return 'FINDING_EXTRA_FIELD';
+  const first = errors[0];
+  if (first === undefined) return 'FINDING_CONTENT_INVALID';
+  // The path ends with a missing field's name: "keyFigures.0.value: must have required properties value".
+  const field = SCHEMA_FIELDS[first.path.split('.')[0]!];
+  if (field === undefined) return 'FINDING_CONTENT_INVALID';
+  const how = /required propert(?:y|ies)/u.test(first.message) ? 'MISSING'
+    : /more than \d+ characters/u.test(first.message) ? 'TOO_LONG'
+      : /more than \d+ items/u.test(first.message) ? 'TOO_MANY'
+        : 'INVALID';
+  return `FINDING_${field}_${how}` as TerminalRefusalReason;
 };
 
 const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
@@ -57,7 +101,8 @@ const toolFailureCodes = new Set<AgentToolErrorCode>([
 
 interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
-  readonly completedToolIds: Set<string>;
+  /** Each successful read by the short id the model cites in a card ("E1" → the provider's call id). */
+  readonly evidenceIds: Map<string, string>;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
   calls: number;
@@ -73,11 +118,18 @@ const safeToolFailure = (error: unknown): Error => {
   return new Error(`${toolFailurePrefix}${code}${hint === undefined ? '' : `\n${hint}`}`);
 };
 
-const claimTerminalOperation = (state: ProjectToolBudgetState, toolCallId: string): void => {
+const claimTerminalOperation = (state: ProjectToolBudgetState, toolCallId: string, refuse: Refuse): void => {
   if (state.terminalToolCallId !== null) {
-    throw new Error('Only one terminal investigation operation may be accepted per Run.');
+    refuse('TERMINAL_ALREADY_ACCEPTED', '这次回答已经收尾，不能再收尾一次。');
   }
   state.terminalToolCallId = toolCallId;
+};
+
+type Refuse = (reason: TerminalRefusalReason, message: string) => never;
+
+const refuser = (onRefused: CreatePiToolsInput['onRefused'], toolCallId: string): Refuse => (reason, message) => {
+  onRefused(toolCallId, reason);
+  throw new Error(message);
 };
 
 const toolFailureText = (result: unknown): string | null => {
@@ -122,7 +174,8 @@ const investigationCompleteParameters = Type.Object({
   keyFigures: Type.Optional(Type.Array(Type.Object({
     label: Type.String({ minLength: 1, maxLength: 32 }),
     value: Type.String({ minLength: 1, maxLength: 24 }),
-    unit: Type.Optional(Type.String({ minLength: 1, maxLength: 16 })),
+    // A figure without a unit (能效) may leave it empty; the card shows no unit then (#624).
+    unit: Type.Optional(Type.String({ maxLength: 16, description: '单位，例如 kWh、元；能效没有单位，不写或留空。' })),
   }, { additionalProperties: false }), { maxItems: 4 })),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
   recommendedNext: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
@@ -158,6 +211,8 @@ const adaptProjectTool = (
   executionMode: tool.definition.executionMode,
   execute: async (toolCallId, parameters, signal) => {
     state.calls += 1;
+    // Numbered in call order, so reads started together get their ids in the order they were asked.
+    const evidenceId = `E${state.calls}`;
     if (state.calls > state.budget.maxToolCalls) {
       state.onBudgetExhausted('TOOL_CALL_LIMIT');
       throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
@@ -178,10 +233,10 @@ const adaptProjectTool = (
         state.onBudgetExhausted('TOOL_RESULT_TOO_LARGE');
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
-      state.completedToolIds.add(toolCallId);
+      state.evidenceIds.set(evidenceId, toolCallId);
       // The model cites a read in investigation_complete by this id.
       return {
-        content: [{ type: 'text', text: JSON.stringify({ evidenceId: toolCallId, result }) }],
+        content: [{ type: 'text', text: JSON.stringify({ evidenceId, result }) }],
         details: { kind: 'project-tool', result },
       };
     } catch (error) {
@@ -217,29 +272,50 @@ const withoutRestatedLimitations = <T extends { readonly limitations: readonly s
   return limitations.length === finding.limitations.length ? finding : Object.freeze({ ...finding, limitations: Object.freeze(limitations) });
 };
 
+// An empty unit means the figure has none (能效); the card leaves it out rather than refusing.
+type InvestigationCompleteArguments = Static<typeof investigationCompleteParameters>;
+const withoutEmptyUnits = (parameters: InvestigationCompleteArguments): InvestigationCompleteArguments =>
+  parameters.keyFigures === undefined ? parameters : {
+    ...parameters,
+    keyFigures: parameters.keyFigures.map(({ unit, ...figure }) => (unit === '' || unit === undefined ? figure : { ...figure, unit })),
+  };
+
 const createInvestigationCompleteTool = ({
   sessionId,
   runId,
   onArtifact,
   answers,
   keptAnswer,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'keptAnswer'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  onRefused,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'keptAnswer' | 'onRefused'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_COMPLETE_TOOL_NAME,
   label: INVESTIGATION_COMPLETE_TOOL_NAME,
   description: '写完回答正文后调用，给出正文下面卡片里的内容：是否有数据依据、关键数字、数据不足之处、依据和可以接着问的问题。每次回答都要调用。',
   parameters: investigationCompleteParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
-    const finding = parseInvestigationComplete(parameters);
-    assertAnswerCorrected(answers());
-    if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
+    const refuse = refuser(onRefused, toolCallId);
+    let parsed: ReturnType<typeof parseInvestigationComplete>;
+    try {
+      // Pi has checked the arguments against investigationCompleteParameters before this runs.
+      parsed = parseInvestigationComplete(withoutEmptyUnits(parameters as InvestigationCompleteArguments));
+    } catch (error) {
+      return refuse('FINDING_CONTENT_INVALID', error instanceof Error ? error.message : String(error));
+    }
+    if (needsExecutionCorrection(answers())) refuse('FINDING_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
+    // A ref names a read by its short id; the card keeps the read's call id.
+    if (parsed.evidenceRefs.some(({ toolExecutionId }) => !state.evidenceIds.has(toolExecutionId))) {
       // The model reads this refusal, so it says which ids it may cite.
-      const cited = [...state.completedToolIds];
-      throw new Error(cited.length === 0
+      const cited = [...state.evidenceIds.keys()];
+      refuse('FINDING_EVIDENCE_NOT_READ', cited.length === 0
         ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
         : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
-    claimTerminalOperation(state, toolCallId);
+    const finding = Object.freeze({
+      ...parsed,
+      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: state.evidenceIds.get(ref.toolExecutionId)! }))),
+    });
+    claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,
       sessionId,
@@ -262,16 +338,23 @@ const createInvestigationRequestInputTool = ({
   runId,
   onArtifact,
   answers,
-}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers'>, state: ProjectToolBudgetState): PiAgentTool => ({
+  onRefused,
+}: Pick<CreatePiToolsInput, 'sessionId' | 'runId' | 'onArtifact' | 'answers' | 'onRefused'>, state: ProjectToolBudgetState): PiAgentTool => ({
   name: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   label: INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
   description: '缺少关键信息、没法继续时，向值班人员提一个问题，并结束这次回答。',
   parameters: investigationRequestInputParameters,
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
-    const request = parseInvestigationRequestInput(parameters);
-    assertAnswerCorrected(answers());
-    claimTerminalOperation(state, toolCallId);
+    const refuse = refuser(onRefused, toolCallId);
+    let request: ReturnType<typeof parseInvestigationRequestInput>;
+    try {
+      request = parseInvestigationRequestInput(parameters);
+    } catch (error) {
+      return refuse('INPUT_REQUEST_INVALID', error instanceof Error ? error.message : String(error));
+    }
+    if (needsExecutionCorrection(answers())) refuse('INPUT_REQUEST_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
+    claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,
       sessionId,
@@ -292,7 +375,7 @@ const createInvestigationRequestInputTool = ({
 export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
   const state: ProjectToolBudgetState = {
     budget: input.budget,
-    completedToolIds: new Set<string>(),
+    evidenceIds: new Map<string, string>(),
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
     calls: 0,
