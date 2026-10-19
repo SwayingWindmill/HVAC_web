@@ -151,7 +151,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
       <div className="grid gap-4 xl:grid-cols-[1.5fr_.8fr]">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Upload className="size-4" />受控导入</CardTitle>
+            <CardTitle className="flex items-center gap-2"><Upload className="size-4" />导入</CardTitle>
             <CardDescription>先生成服务端校验计划，所有记录可提交后才能正式写入。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
