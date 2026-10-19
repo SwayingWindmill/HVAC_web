@@ -32,6 +32,13 @@ const NO_COMMAND = 'none';
 // The plant's total meter; any other boundary is a machine's device id.
 const PLANT_METER = 'plant';
 
+// A blank form planned for now. Built when the form mounts or is reset, never on render:
+// a `values` that changes each minute would wipe whatever the operator has typed.
+const blankMeasure = (timezone: string): MeasureForm => ({
+  name: '', kind: 'SETPOINT_RESET', plannedAt: siteInputValue(new Date(), timezone),
+  description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '', evidenceCommandId: NO_COMMAND, boundary: PLANT_METER,
+});
+
 const optionalNumber = (value: string) => (value.trim() === '' ? undefined : Number(value));
 const nonNegative = (value: string) => value.trim() === '' || (Number.isFinite(Number(value)) && Number(value) >= 0) || '请填写不小于 0 的数字';
 
@@ -43,12 +50,7 @@ export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegister
   readonly onRegistered: (measure: Measure) => void;
 }) {
   const { site, principal } = siteRoute.useRouteContext();
-  const form = useForm<MeasureForm>({
-    values: {
-      name: '', kind: 'SETPOINT_RESET', plannedAt: siteInputValue(new Date(), site.timezone),
-      description: '', investmentCny: '', expectedAnnualKWh: '', evidence: '', evidenceCommandId: NO_COMMAND, boundary: PLANT_METER,
-    },
-  });
+  const form = useForm<MeasureForm>({ defaultValues: blankMeasure(site.timezone) });
   const register = useMutation({
     mutationFn: (input: MeasureForm) => registerMeasure(site.id, principal.session.csrfToken, {
       name: input.name.trim(),
@@ -64,7 +66,7 @@ export function RegisterMeasureDialog({ open, machines, onOpenChange, onRegister
     onSuccess: (measure) => {
       onRegistered(measure);
       onOpenChange(false);
-      form.reset();
+      form.reset(blankMeasure(site.timezone));
     },
   });
   const errors = form.formState.errors;

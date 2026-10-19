@@ -65,6 +65,19 @@ test('a measure on the plant meter reports alone, and the owner says so', async 
   expect(gateway.measures.filter((measure) => measure.status === 'IMPLEMENTED')).toHaveLength(1);
 });
 
+// The planned time defaults to now; the clock passing a minute must not wipe what the operator typed.
+test('a half-filled measure keeps what was typed when the clock passes a minute', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-20T10:00:30+08:00') });
+  await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
+  await page.getByRole('button', { name: '登记措施' }).first().click();
+  await page.getByLabel('名称').fill('冷冻泵降频');
+  await page.clock.fastForward('01:00');
+  await page.getByLabel('计量电表').click();
+  await page.getByRole('option', { name: 'CT-01 电表（IPMVP 选项 B）' }).click();
+  await expect(page.getByLabel('名称')).toHaveValue('冷冻泵降频');
+  await expect(page.getByLabel('计量电表')).toHaveText('CT-01 电表（IPMVP 选项 B）');
+});
+
 // Each machine's sub-meter is its own boundary: measures on two machines report at once.
 test("measures on two machines' sub-meters report side by side", async ({ page, gateway }) => {
   await page.goto(`/energy-analysis/savings?site=${SITE_ID}`);
