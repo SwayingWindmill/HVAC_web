@@ -12,7 +12,7 @@ Phase 1 总体和部署架构以 `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能�
 仅内部实现更可靠     -> KEEP，但不得上升为一级架构
 ```
 
-完整矩阵位于 `deploy/platform/phase1/alignment-matrix.v1.json`。文档作用域规则位于 `docs/architecture/document-scope-policy.md`；S0/S3 历史认证与 Local Fixture 文档必须显式声明 `CERTIFICATION_REFERENCE` 或 `LOCAL_FIXTURE`，不得覆盖本文件和总体架构基线。
+完整矩阵位于 `deploy/platform/phase1/alignment-matrix.v1.json`。
 
 ## Phase 1 canonical deployment
 
