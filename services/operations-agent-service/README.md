@@ -11,7 +11,9 @@
   -> persistence                  agent_operations：会话、回答、消息、工具调用、产出
 ```
 
-工具：站点信息 `site_get_context`、资产清单 `assets_list`、设备清单 `equipment_list`、当前读数 `telemetry_get_current`、历史读数 `telemetry_query_history`、能耗序列 `energy_query_series`、两段时间对比 `energy_compare_periods`、按设备拆分的用电 `energy_by_equipment`、语义查询 `energy_semantic_query`、告警列表 `alarm_list`、故障诊断结果 `fdd_findings`、未完成的工单 `work_order_list`。
+每次回答开始时，服务先按提问人的权限读一次站点名称和时区，提示里写明站点和站点本地的当前时间，模型不用为此调工具。
+
+工具：资产清单 `assets_list`、设备清单 `equipment_list`、当前读数 `telemetry_get_current`、历史读数 `telemetry_query_history`、能耗序列 `energy_query_series`、两段时间对比 `energy_compare_periods`、按设备拆分的用电 `energy_by_equipment`、语义查询 `energy_semantic_query`（不分组时可以同时要站点能耗和估算电费，工具分两个视图查、按时间段合成一张表）、告警列表 `alarm_list`、故障诊断结果 `fdd_findings`、未完成的工单 `work_order_list`。
 
 每次读数据之前，服务调网关只接受双向 TLS 的工具授权接口（`/internal/v1/operations/tool-authorization`），用会话里的服务授权换一张这次读取专用的授权，所以工具永远读不到提问人看不到的东西。工具只读各数据负责方的接口；边界检查拒绝直连 ClickHouse、Cube、ThingsBoard 和指令接口。没有任何工具能操作设备。
 

@@ -96,7 +96,7 @@ const historyPayload = (query) => ({
   siteId,
   deviceId: query.deviceId,
   buckets: [
-    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
+    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: 'Cel', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
     { telemetryKey: 'active_energy_total', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708212', pointRevision: 1, pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 0.5, counter: { deltaSum: 88.5, deltaCount: 59, resetCount: 0, rolloverCount: 0, excludedTransitionCount: 0 } },
   ],
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },

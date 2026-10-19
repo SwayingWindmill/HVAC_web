@@ -711,6 +711,9 @@ const HISTORY_GRANULARITY_WORDS = Object.freeze({ QUARTER_HOUR: '按15分钟', H
 const QUALITY_POLICY_WORDS = Object.freeze({ VALID_ONLY: '只算有效读数', VALID_AND_SUSPECT: '含可疑读数' } as const);
 const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({ TELEMETRY: '读数', COUNTER: '累计量', STATE: '状态' });
 const pointKind = (pointType: string): string => POINT_KIND_WORDS[pointType] ?? '读数';
+// Units as the device page writes them (formatTelemetryUnit in the Web): Registry stores UCUM codes.
+const UNIT_WORDS: Readonly<Record<string, string>> = Object.freeze({ Cel: '°C', 'm3/h': 'm³/h' });
+const unitWords = <T extends string | null | undefined>(unit: T): T | string => (unit ? UNIT_WORDS[unit] ?? unit : unit);
 
 /** 「完整」, or that it is not and how far the data reaches. */
 const dataStatus = (partial: boolean, watermark: string | null | undefined, timezone: string): string => {
@@ -781,7 +784,7 @@ const readHistory = async (
     if (first === undefined) return [];
     return [{
       key,
-      unit: first.unit,
+      unit: unitWords(first.unit),
       kind: pointKind(first.pointType),
       points: buckets.map((bucket) => ({
         siteTime: siteTime(bucket.periodStart, timezone),
@@ -874,7 +877,7 @@ const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_AS
       machine: asset === undefined ? null : asset.displayName,
       points: model.telemetryPoints
         .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
-        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: pointKind(point.pointType) })),
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: unitWords(point.unit), kind: pointKind(point.pointType) })),
     };
   });
 };
@@ -924,7 +927,7 @@ const readTelemetry = async (
       : {
         key: value.key,
         value: equipmentStateWord(value.value),
-        unit: value.unit,
+        unit: unitWords(value.unit),
         siteTime: siteTime(value.sampledAt, timezone),
         state: valueState(value),
       })),
