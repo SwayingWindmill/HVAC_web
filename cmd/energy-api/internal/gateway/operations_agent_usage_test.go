@@ -52,6 +52,15 @@ func TestAgentUsageNeedsAuditReadAndTheSite(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &usage); err != nil || len(usage["days"].([]any)) != 14 {
 		t.Fatalf("usage body: %s", response.Body.String())
 	}
+	// #624: why the failed reads failed reaches the page, as codes the page puts into words.
+	if !strings.Contains(response.Body.String(), `"failureReasons":[{"code":"TOOL_OWNER_UNAVAILABLE","count":1}]`) {
+		t.Fatalf("usage reasons: %s", response.Body.String())
+	}
+	fixture.usageTooManyFailures.Store(true)
+	if response := get(shanghai); response.Code != http.StatusBadGateway {
+		t.Fatalf("usage whose reasons count more failures than the step had: %d %s", response.Code, response.Body.String())
+	}
+	fixture.usageTooManyFailures.Store(false)
 
 	// A field the public shape does not have, such as a question, never reaches the browser.
 	fixture.usageExtraField.Store(true)

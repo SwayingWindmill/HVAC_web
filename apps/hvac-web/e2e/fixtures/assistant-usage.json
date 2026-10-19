@@ -34,17 +34,20 @@
         {
           "toolName": "alarm_list",
           "calls": 3,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 3,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 6,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -60,17 +63,20 @@
         {
           "toolName": "alarm_list",
           "calls": 5,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 5,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 10,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -86,17 +92,20 @@
         {
           "toolName": "alarm_list",
           "calls": 2,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 2,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 4,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -122,17 +131,20 @@
         {
           "toolName": "alarm_list",
           "calls": 4,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 4,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 8,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -148,17 +160,20 @@
         {
           "toolName": "alarm_list",
           "calls": 6,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 6,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 12,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -174,17 +189,20 @@
         {
           "toolName": "alarm_list",
           "calls": 1,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 1,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 2,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -210,17 +228,20 @@
         {
           "toolName": "alarm_list",
           "calls": 2,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 2,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 4,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -236,17 +257,25 @@
         {
           "toolName": "alarm_list",
           "calls": 8,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 8,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 16,
-          "failed": 2
+          "failed": 2,
+          "failureReasons": [
+            {
+              "code": "TOOL_OWNER_UNAVAILABLE",
+              "count": 2
+            }
+          ]
         }
       ]
     },
@@ -262,17 +291,20 @@
         {
           "toolName": "alarm_list",
           "calls": 12,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "investigation_complete",
           "calls": 12,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 24,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     },
@@ -288,17 +320,25 @@
         {
           "toolName": "alarm_list",
           "calls": 7,
-          "failed": 1
+          "failed": 1,
+          "failureReasons": [
+            {
+              "code": "TOOL_OWNER_UNAVAILABLE",
+              "count": 1
+            }
+          ]
         },
         {
           "toolName": "investigation_complete",
           "calls": 7,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         },
         {
           "toolName": "telemetry_get_current",
           "calls": 14,
-          "failed": 0
+          "failed": 0,
+          "failureReasons": []
         }
       ]
     }

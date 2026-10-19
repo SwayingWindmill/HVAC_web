@@ -179,9 +179,13 @@
         "type": "object", "additionalProperties": false, "required": ["id", "sessionId", "runId", "kind", "description", "createdAt"],
         "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "sessionId": { "type": "string", "minLength": 1, "maxLength": 256 }, "runId": { "type": "string", "minLength": 1, "maxLength": 256 }, "kind": { "const": "LIMITATION" }, "description": { "type": "string", "minLength": 1, "maxLength": 4000 }, "createdAt": { "type": "integer", "minimum": 0 } }
       },
+      "AgentToolFailureReason": {
+        "type": "object", "additionalProperties": false, "required": ["code", "count"],
+        "properties": { "code": { "type": "string", "minLength": 1, "maxLength": 64 }, "count": { "type": "integer", "minimum": 1 } }
+      },
       "AgentToolUsage": {
-        "type": "object", "additionalProperties": false, "required": ["toolName", "calls", "failed"],
-        "properties": { "toolName": { "type": "string", "minLength": 1, "maxLength": 512 }, "calls": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 } }
+        "type": "object", "additionalProperties": false, "required": ["toolName", "calls", "failed", "failureReasons"],
+        "properties": { "toolName": { "type": "string", "minLength": 1, "maxLength": 512 }, "calls": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 }, "failureReasons": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/AgentToolFailureReason" } } }
       },
       "AgentUsageDay": {
         "type": "object", "additionalProperties": false, "required": ["date", "completed", "failed", "cancelled", "averageDurationMs", "inputTokens", "outputTokens", "tools"],
