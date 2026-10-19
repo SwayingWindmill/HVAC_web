@@ -26,6 +26,7 @@ import {
   createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
+  createSiteDescriber,
   createRegistryOwnerReader,
   type AlarmOwnerReaderConfig,
   type FddOwnerReaderConfig,
@@ -101,6 +102,7 @@ export const createProductionAgentSessionRuntime = async (
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
+    const describeSite = createSiteDescriber({ toolAuthorizationReader, registryReader });
     const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
     const service = createAgentSessionService({
@@ -123,8 +125,8 @@ export const createProductionAgentSessionRuntime = async (
         fddReader,
         workOrderReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
-        now: options.now ?? Date.now,
       }),
+      describeSite: (context, runContext) => describeSite(context.authorization, runContext),
     });
     const handler = createAgentSessionHttpHandler({
       usage: persistence.agentUsageReader,

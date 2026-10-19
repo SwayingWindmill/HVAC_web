@@ -69,9 +69,9 @@ AGENT_MODEL_THINKING_LEVEL / AGENT_MODEL_TIMEOUT_MS / AGENT_MODEL_MAX_OUTPUT_TOK
 
 ### 6. 工具是我们自己定义的、讲业务的只读工具
 
-每个工具声明名字、说明、参数格式、能不能并行（`executionMode`）和能不能重复调用（`replayPolicy`）。租户、站点、提问人和授权不是模型能填的参数，由服务端在调用时传进去。
+每个工具声明名字、说明、参数格式、能不能并行（`executionMode`）和能不能重复调用（`replayPolicy`）。租户、站点、提问人和授权不是模型能填的参数，由服务端在调用时传进去。站点名称和站点本地的当前时间由服务在每次回答开始时按提问人的权限读一次，写进提示；读不到就让这次回答以 `SITE_CONTEXT_UNAVAILABLE` 失败，不让模型猜日期（#593）。
 
-现在的 12 个工具（`services/operations-agent-service/README.md`）都只读、可以并行、可以安全重复（`safe`）。工具只调各数据负责方的接口；模型拿不到 SQL、ClickHouse、Cube、ThingsBoard、任意 HTTP、文件或命令行。服务的边界检查会拒绝直连这些地方和指令接口。
+现在的 11 个工具（`services/operations-agent-service/README.md`）都只读、可以并行、可以安全重复（`safe`）。工具只调各数据负责方的接口；模型拿不到 SQL、ClickHouse、Cube、ThingsBoard、任意 HTTP、文件或命令行。服务的边界检查会拒绝直连这些地方和指令接口。
 
 ### 7. 授权查两次
 
@@ -109,7 +109,7 @@ pi 的事件在离开服务前转成 `hvac.agent.event/v1`：`session.snapshot`�
 ## 现状
 
 - LangGraph 的旧路径（它从没接进服务入口）连同它的断点数据库、调查接口、审计发件箱和评测都已删掉，现在只有 pi 会话一种。
-- 已有：服务和网关之间的会话接口、12 个只读工具、两个收尾工具、预算、SSE 事件、网页的 AI 助手面板、评测题库（`services/operations-agent-service/evals/`）。
+- 已有：服务和网关之间的会话接口、11 个只读工具、两个收尾工具、预算、SSE 事件、网页的 AI 助手面板、评测题库（`services/operations-agent-service/evals/`）。
 - 还没有：会话的业务审计、「建议」类工具。
 
 ## 结果

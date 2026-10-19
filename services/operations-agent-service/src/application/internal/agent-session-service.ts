@@ -6,6 +6,7 @@ import type {
   AgentRun,
   AgentRunBudget,
   AgentRunContext,
+  AgentRunSite,
   AgentTool,
 } from '../../agent/index.js';
 import type { AuthorizationDecision } from './owner-reads.js';
@@ -86,6 +87,8 @@ export interface CreateAgentSessionServiceInput {
   readonly engine: AgentEngine;
   readonly modelRef: AgentModelRef;
   readonly createTools: (context: AgentSessionAccessContext) => readonly AgentTool[];
+  /** The Site the prompt names, read under the asker's authorization when each Run starts. */
+  readonly describeSite: (context: AgentSessionAccessContext, runContext: AgentRunContext) => Promise<AgentRunSite>;
   readonly budget: AgentRunBudget;
   readonly now: () => number;
   readonly nextId: (kind: 'session' | 'run' | 'message' | 'artifact') => string;
@@ -178,6 +181,7 @@ export const createAgentSessionService = ({
   engine,
   modelRef,
   createTools,
+  describeSite,
   budget,
   now,
   nextId,
@@ -198,20 +202,22 @@ export const createAgentSessionService = ({
     run: AgentRun,
     controller: AbortController,
   ): Promise<void> => {
+    const runContext: AgentRunContext = Object.freeze({
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      principalId: context.principalId,
+      capabilities: context.capabilities,
+      sessionId: started.session.id,
+      runId: run.id,
+      correlationId: context.correlationId,
+    });
     const result = await engine({
       session: started.session,
       run,
       messages: started.messages,
       tools: createTools(context),
-      context: Object.freeze({
-        tenantId: context.tenantId,
-        siteId: context.siteId,
-        principalId: context.principalId,
-        capabilities: context.capabilities,
-        sessionId: started.session.id,
-        runId: run.id,
-        correlationId: context.correlationId,
-      } satisfies AgentRunContext),
+      context: runContext,
+      site: () => describeSite(context, runContext),
       budget,
       signal: controller.signal,
       emit: ((event) => publish(started.session.id, event)) satisfies AgentEventSink,

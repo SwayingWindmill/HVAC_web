@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AgentToolError } from '../dist/agent/index.js';
-import { createHvacReadTools } from '../dist/tools/index.js';
+import { createHvacReadTools, createSiteDescriber } from '../dist/tools/index.js';
 
 const tenantId = 'tenant-1';
 const siteId = 'site-1';
@@ -96,7 +96,7 @@ const historyPayload = (query) => ({
   siteId,
   deviceId: query.deviceId,
   buckets: [
-    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: '°C', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
+    { telemetryKey: 'chw_supply_temp', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708211', pointRevision: 1, pointType: 'TELEMETRY', unit: 'Cel', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 1, gauge: { average: 7.2, minimum: 6.9, maximum: 7.6, first: 7, last: 7.4, sampleCount: 60 } },
     { telemetryKey: 'active_energy_total', pointId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708212', pointRevision: 1, pointType: 'COUNTER', unit: 'kWh', periodStart: '2026-10-16T10:00:00.000Z', periodEnd: '2026-10-16T11:00:00.000Z', quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 }, completeness: 0.5, counter: { deltaSum: 88.5, deltaCount: 59, resetCount: 0, rolloverCount: 0, excludedTransitionCount: 0 } },
   ],
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
@@ -227,10 +227,12 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, fin
     fddReader,
     workOrderReader,
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
-    now: () => Date.parse('2026-10-17T13:30:00.000Z'),
   });
 
-  return { tools, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, fddInputs, workOrderInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
+  const describer = createSiteDescriber({ toolAuthorizationReader, registryReader });
+  const describeSite = (runContext) => describer(authorization, runContext);
+
+  return { tools, describeSite, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, fddInputs, workOrderInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
 
 const byName = (tools, name) => {
@@ -247,10 +249,10 @@ const execute = (tool, args, toolContext = context) => tool.execute({
 
 test('HVAC catalog contains the capability-filtered READ Tools', () => {
   const full = createHarness().tools.map((tool) => tool.definition.name);
-  assert.deepEqual(full, ['site_get_context', 'assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query', 'alarm_list', 'fdd_findings', 'work_order_list']);
+  assert.deepEqual(full, ['assets_list', 'equipment_list', 'telemetry_get_current', 'telemetry_query_history', 'energy_query_series', 'energy_compare_periods', 'energy_by_equipment', 'energy_semantic_query', 'alarm_list', 'fdd_findings', 'work_order_list']);
 
   const limited = createHvacReadTools({
-    capabilities: ['site.read'],
+    capabilities: ['site.read', 'asset.list'],
     authorization,
     toolAuthorizationReader: { authorize: async () => ({ delegationGrant: 'grant' }) },
     registryReader: { read: async () => { throw new Error('not called'); } },
@@ -259,13 +261,13 @@ test('HVAC catalog contains the capability-filtered READ Tools', () => {
     energyAnalyticsReader: { read: async () => { throw new Error('not called'); } },
     semanticQueryReader: { read: async () => { throw new Error('not called'); } },
   });
-  assert.deepEqual(limited.map((tool) => tool.definition.name), ['site_get_context']);
+  assert.deepEqual(limited.map((tool) => tool.definition.name), ['assets_list']);
   assert.equal(limited.every((tool) => tool.definition.executionMode === 'parallel' && tool.definition.replayPolicy === 'safe'), true);
 });
 
 test('model arguments cannot select trusted identity or infrastructure and direct invocation still rechecks capability', async () => {
   const harness = createHarness();
-  const siteTool = byName(harness.tools, 'site_get_context');
+  const assetsTool = byName(harness.tools, 'assets_list');
   const forbiddenFields = [
     'tenantId',
     'siteId',
@@ -282,7 +284,7 @@ test('model arguments cannot select trusted identity or infrastructure and direc
   }
 
   await assert.rejects(
-    () => execute(siteTool, { siteId: 'other-site' }),
+    () => execute(assetsTool, { siteId: 'other-site' }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
   await assert.rejects(
@@ -306,7 +308,7 @@ test('model arguments cannot select trusted identity or infrastructure and direc
   assert.equal(harness.telemetryInputs.length, 0);
 
   await assert.rejects(
-    () => execute(siteTool, {}, { ...context, capabilities: [] }),
+    () => execute(assetsTool, {}, { ...context, capabilities: [] }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_UNAUTHORIZED',
   );
   await assert.rejects(
@@ -320,18 +322,32 @@ test('model arguments cannot select trusted identity or infrastructure and direc
   assert.equal(harness.authorizationInputs.length, 0);
 });
 
-test('site and asset Tools reauthorize then call Registry with trusted scope and bounded output', async () => {
+test('the Site the prompt names is read from Registry under the Run\'s own authorization', async () => {
   const harness = createHarness();
-  const siteResult = await execute(byName(harness.tools, 'site_get_context'), {});
-  const assetsResult = await execute(byName(harness.tools, 'assets_list'), {});
+  const site = await harness.describeSite(context);
 
-  assert.equal(harness.authorizationInputs.length, 2);
-  assert.equal(harness.registryInputs.length, 2);
+  assert.deepEqual(site, { name: 'Phoenix Plant', timezone: 'America/Phoenix' });
+  assert.equal(harness.registryInputs.length, 1);
   assert.equal(harness.registryInputs[0].request.input.siteId, siteId);
   assert.equal(harness.registryInputs[0].context.scope.tenantId, tenantId);
   assert.equal(harness.registryInputs[0].context.authorization.delegationGrant, 'grant:registry.getSite');
-  assert.equal(siteResult.site.name, 'Phoenix Plant');
+});
 
+test('reading the Site for the prompt needs the right to read the Site, checked before Registry', async () => {
+  const harness = createHarness();
+  await assert.rejects(
+    () => harness.describeSite({ ...context, capabilities: ['analytics.energy-series.read'] }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_UNAUTHORIZED',
+  );
+  assert.equal(harness.registryInputs.length, 0);
+});
+
+test('asset Tools reauthorize then call Registry with trusted scope and bounded output', async () => {
+  const harness = createHarness();
+  const assetsResult = await execute(byName(harness.tools, 'assets_list'), {});
+
+  assert.equal(harness.authorizationInputs.length, 1);
+  assert.equal(harness.registryInputs.length, 1);
   assert.deepEqual(assetsResult.assets.map(({ name }) => name), ['Chiller 1', 'Chiller 2']);
   assert.equal(assetsResult.note, '只列出前 2 个，共 3 个');
 });
@@ -431,7 +447,7 @@ test('Owner failures are stable Agent Tool failures rather than successful strin
   const harness = createHarness({ registryFailure: new OwnerReadError('OWNER_READ_UNAVAILABLE', 'secret upstream detail') });
 
   await assert.rejects(
-    () => execute(byName(harness.tools, 'site_get_context'), {}),
+    () => execute(byName(harness.tools, 'assets_list'), {}),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_OWNER_UNAVAILABLE' && !error.message.includes('secret upstream detail'),
   );
 });
@@ -631,13 +647,6 @@ test('dates out of order, longer than the budget or given as instants are refuse
   await assert.rejects(() => execute(series, { from: '2026-10-13T16:00:00.000Z', to: '2026-10-16T16:00:00.000Z' }), (error) => /startDate 和 endDate/u.test(error.hint));
 });
 
-test('site_get_context tells the model the Site\'s local date and time instead of a time zone', async () => {
-  const result = await execute(byName(createHarness().tools, 'site_get_context'), {});
-  // 13:30Z is 06:30 in America/Phoenix.
-  assert.equal(result.site.localNow, '2026-10-17 06:30');
-  assert.equal(JSON.stringify(result).includes('America/Phoenix'), false);
-});
-
 test('every read Tool answers in the operator\'s words, without internal codes, owners or revisions', async () => {
   const partial = createHarness({
     energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'energy-partial-1', 'UNCERTAIN', 'telemetry-query-service:energy-series/v1', {
@@ -648,7 +657,6 @@ test('every read Tool answers in the operator\'s words, without internal codes, 
   const harness = createHarness();
   const run = (tools, name, args) => execute(byName(tools, name), args);
   const results = {
-    site: await run(harness.tools, 'site_get_context', {}),
     assets: await run(harness.tools, 'assets_list', {}),
     equipment: await run(harness.tools, 'equipment_list', {}),
     current: await run(harness.tools, 'telemetry_get_current', { deviceId, pointKeys: ['condenserPressureKPa', 'leavingWaterTempC'] }),
@@ -722,6 +730,52 @@ test('Tariff periods read as the pages show them, energy no Tariff covers as unp
     measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
   });
   assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
+});
+
+test('one semantic query reads the Site\'s energy and its estimated cost together, one row per period', async () => {
+  const views = {
+    site_energy: {
+      columns: [{ name: 'period_end', title: '时段', kind: 'time' }, { name: 'electricity_valid_kwh', title: '用电量', kind: 'measure' }],
+      rows: [['2026-10-15T07:00:00Z', 1634], ['2026-10-16T07:00:00Z', 1499]],
+      metadata: { datasetRevision: 'semantic:1', partial: true, dataWatermark: '2026-10-16T09:00:00Z' },
+    },
+    site_energy_cost: {
+      columns: [{ name: 'period_end', title: '时段', kind: 'time' }, { name: 'cost_valid_cny', title: '电费', kind: 'measure' }],
+      rows: [['2026-10-16T07:00:00Z', 1157.51], ['2026-10-15T07:00:00Z', 1212.51], ['2026-10-17T07:00:00Z', 30]],
+      metadata: { datasetRevision: 'semantic:1', partial: true, dataWatermark: '2026-10-17T09:00:00Z' },
+    },
+  };
+  const harness = createHarness({ semanticFor: (input) => ({ schemaVersion: 1, ...views[input.request.input.view] }) });
+  const result = await execute(byName(harness.tools, 'energy_semantic_query'), {
+    measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-17',
+  });
+  assert.deepEqual(harness.semanticInputs.map((input) => [input.request.input.view, input.request.input.measures]), [
+    ['site_energy', ['electricity_valid_kwh']],
+    ['site_energy_cost', ['cost_valid_cny']],
+  ]);
+  assert.deepEqual(result.columns, ['时段', '用电量', '电费']);
+  assert.deepEqual(result.rows, [
+    { siteTime: '2026-10-15 00:00', 用电量: 1634, 电费: 1212.51 },
+    { siteTime: '2026-10-16 00:00', 用电量: 1499, 电费: 1157.51 },
+    // A period one view has no row for is empty in that view's column, not left out.
+    { siteTime: '2026-10-17 00:00', 用电量: null, 电费: 30 },
+  ]);
+  // Both views stop early; the answer reaches only as far as the one that stops first.
+  assert.equal(result.dataStatus, '不完整：数据截至 2026-10-16 02:00');
+});
+
+test('a semantic query that groups or mixes other views across views is refused before reading, saying what works', async () => {
+  const harness = createHarness({ semanticFor: () => { throw new Error('not read'); } });
+  for (const args of [
+    { measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'] },
+    { measures: ['site_energy.electricity_valid_kwh', 'equipment_energy.energy_valid_kwh'] },
+  ]) {
+    await assert.rejects(
+      () => execute(byName(harness.tools, 'energy_semantic_query'), { ...args, granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15' }),
+      (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID' && /站点能耗和估算电费/u.test(error.hint),
+    );
+  }
+  assert.equal(harness.semanticInputs.length, 0);
 });
 
 test('grouping a semantic query by device needs the right to read the devices, and says so before reading', async () => {

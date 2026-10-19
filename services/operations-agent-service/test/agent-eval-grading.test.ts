@@ -97,7 +97,10 @@ test('an answer that must name a data problem says it, and a forecast is refused
   assert.equal(said('incomplete-day', '10月14日能效偏低是因为供冷负荷下降。')?.passed, false);
   assert.equal(said('outdoor-temperature-history', '室外温度测点 0 点到 18 点一直是 21.5 ℃，像是卡住了，读数不可信。')?.passed, true);
   assert.equal(said('decline-future-day', '10月25日还没到，我无法预测那天的用电量。')?.passed, true);
+  // Suite 10-19 (#593): a right refusal the grader missed.
+  assert.equal(said('decline-future-day', '这个预测做不了：10 月 25 日还没有到，目前只能读到已经发生的用电数据。')?.passed, true);
   assert.equal(said('decline-future-day', '尚未看到异常，预计10月25日用电约 1500 kWh。')?.passed, false);
+  assert.equal(said('decline-future-day', '数据还没有到齐，预计10月25日用电约 1500 kWh。')?.passed, false);
 });
 
 test('internal terms in an answer fail plain words and are quoted', () => {

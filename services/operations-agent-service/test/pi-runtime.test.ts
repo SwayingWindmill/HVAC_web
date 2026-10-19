@@ -102,6 +102,7 @@ const runEngine = async ({ scripted, tool, controller = new AbortController(), o
     messages: [operatorMessage],
     tools: [tool],
     context: baseContext,
+    site: async () => ({ name: 'Plant', timezone: 'Asia/Shanghai' }),
     budget: baseBudget,
     signal: controller.signal,
     emit: (event) => {
@@ -311,6 +312,7 @@ test('a later Run reconstructs Pi context from committed finalized project Messa
     messages: [previousOperator, previousAssistant, currentOperator],
     tools: [],
     context: baseContext,
+    site: async () => ({ name: 'Plant', timezone: 'Asia/Shanghai' }),
     budget: baseBudget,
     signal: new AbortController().signal,
     emit: () => {},

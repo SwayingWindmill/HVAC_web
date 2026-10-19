@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   AgentToolError,
   type AgentRunContext,
+  type AgentRunSite,
   type AgentTool,
   type AgentToolErrorCode,
   type AgentToolExecutionRequest,
@@ -44,7 +45,6 @@ import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 import { semanticCatalog } from './semantic-catalog.gen.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
-  'site_get_context',
   'assets_list',
   'equipment_list',
   'telemetry_get_current',
@@ -83,8 +83,6 @@ export interface CreateHvacReadToolsInput {
   readonly fddReader: FddReader;
   readonly workOrderReader: WorkOrderReader;
   readonly limits?: Partial<HvacReadToolLimits>;
-  /** The clock site_get_context reads the Site's local date and time from. */
-  readonly now?: () => number;
 }
 
 const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
@@ -435,19 +433,29 @@ const parseEnergyWindow = (
   });
 };
 
-interface SemanticQueryArguments extends SiteDays {
+/** The part of a semantic query asked of one view. */
+interface SemanticViewQuery {
   readonly view: typeof semanticCatalog.views[number];
   readonly measures: readonly string[];
   readonly dimensions: readonly string[];
+}
+
+interface SemanticQueryArguments extends SiteDays {
+  /** One view, or the Site's energy and its estimated cost read side by side without grouping. */
+  readonly parts: readonly SemanticViewQuery[];
   readonly granularity: 'hour' | 'day' | 'month';
 }
+
+// The two views a question about the Site often needs at once (「用电和电费」): same Site, same
+// periods, so the Tool reads each and lines them up by period instead of refusing the model (#593).
+const SIDE_BY_SIDE_VIEWS: readonly string[] = Object.freeze(['site_energy', 'site_energy_cost']);
 
 const semanticBuckets = (days: number, granularity: SemanticQueryArguments['granularity']): number => (
   granularity === 'hour' ? days * 24 : granularity === 'day' ? days : Math.ceil(days / 28) + 1
 );
 
-// Refuses, before any read, members outside one catalog view and ranges beyond the Run's budget.
-// The owner checks the catalog again and forces the Site.
+// Refuses, before any read, members outside the catalog, views that cannot be read together and
+// ranges beyond the Run's budget. The owner checks the catalog again and forces the Site.
 const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): SemanticQueryArguments => {
   const invalid = '语义查询参数有误：需要 measures、granularity、startDate、endDate，dimensions 可选。';
   const record = requireRecord(value, invalid);
@@ -462,23 +470,33 @@ const parseSemanticQuery = (value: unknown, limits: HvacReadToolLimits): Semanti
   const measureParts = named(record.measures, SEMANTIC_MEASURE_LIMIT);
   const dimensionParts = record.dimensions === undefined ? [] : named(record.dimensions, SEMANTIC_DIMENSION_LIMIT);
   const all = [...measureParts, ...dimensionParts];
-  const view = semanticCatalog.views.find(({ name }) => name === measureParts[0]?.[0]);
-  if (view === undefined || all.some((parts) => parts.length !== 2 || parts[0] !== view.name)
-    || new Set(all.map((parts) => parts[1])).size !== all.length) {
-    return fail('TOOL_ARGUMENTS_INVALID', '指标和分组必须来自同一个视图，每个只写一次。');
+  if (measureParts.length === 0 || all.some((parts) => parts.length !== 2)
+    || new Set(all.map((parts) => parts.join('.'))).size !== all.length) {
+    fail('TOOL_ARGUMENTS_INVALID', '指标和分组写成「视图.名字」，每个只写一次。');
   }
-  const measures = measureParts.map((parts) => parts[1] ?? '');
-  const dimensions = dimensionParts.map((parts) => parts[1] ?? '');
-  if (!measures.every((name) => view.measures.some((member) => member.name === name))
-    || !dimensions.every((name) => view.dimensions.some((member) => member.name === name))) {
-    fail('TOOL_ARGUMENTS_INVALID', '有指标或分组不在这个视图的清单里，只能用工具说明里列出的写法。');
+  const viewNames = [...new Set(measureParts.map((parts) => parts[0] ?? ''))];
+  if (viewNames.length > 1 && (dimensionParts.length > 0 || !viewNames.every((name) => SIDE_BY_SIDE_VIEWS.includes(name)))) {
+    fail('TOOL_ARGUMENTS_INVALID', '指标和分组要来自同一个视图；只有不分组时，站点能耗和估算电费的指标可以一起查。设备能耗或要分组时，分开各查一次。');
   }
+  const parts = viewNames.map((viewName): SemanticViewQuery => {
+    const view = semanticCatalog.views.find(({ name }) => name === viewName);
+    const measures = measureParts.filter((parts) => parts[0] === viewName).map((parts) => parts[1] ?? '');
+    const dimensions = dimensionParts.map((parts) => (
+      parts[0] === viewName ? parts[1] ?? '' : fail('TOOL_ARGUMENTS_INVALID', '分组要和指标来自同一个视图。')
+    ));
+    if (view === undefined
+      || !measures.every((name) => view.measures.some((member) => member.name === name))
+      || !dimensions.every((name) => view.dimensions.some((member) => member.name === name))) {
+      return fail('TOOL_ARGUMENTS_INVALID', '有指标或分组不在这个视图的清单里，只能用工具说明里列出的写法。');
+    }
+    return Object.freeze({ view, measures, dimensions });
+  });
   const granularity = record.granularity as SemanticQueryArguments['granularity'];
   const days = parseSiteDays(record.startDate, record.endDate, limits);
   if (semanticBuckets(days.days, granularity) > Math.min(SEMANTIC_BUCKET_LIMIT, limits.maxEnergyPoints)) {
     fail('TOOL_ARGUMENTS_INVALID', '时间段太多：缩短日期范围或改用更粗的粒度。');
   }
-  return Object.freeze({ view, measures, dimensions, granularity, ...days });
+  return Object.freeze({ parts, granularity, ...days });
 };
 
 interface EnergyComparisonArguments {
@@ -566,11 +584,11 @@ const runBounded = async <T>(
 
 const requestIdFor = (
   context: AgentRunContext,
-  semanticTool: HvacReadToolName,
+  reader: HvacReadToolName | 'site',
   ownerRequest: Omit<ToolAuthorizableReadRequest, 'requestId'>,
 ): string => {
   const digest = createHash('sha256')
-    .update(JSON.stringify([context.runId, semanticTool, ownerRequest]))
+    .update(JSON.stringify([context.runId, reader, ownerRequest]))
     .digest('hex');
   return `agent-tool:${digest}`;
 };
@@ -694,6 +712,9 @@ const HISTORY_GRANULARITY_WORDS = Object.freeze({ QUARTER_HOUR: '按15分钟', H
 const QUALITY_POLICY_WORDS = Object.freeze({ VALID_ONLY: '只算有效读数', VALID_AND_SUSPECT: '含可疑读数' } as const);
 const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({ TELEMETRY: '读数', COUNTER: '累计量', STATE: '状态' });
 const pointKind = (pointType: string): string => POINT_KIND_WORDS[pointType] ?? '读数';
+// Units as the device page writes them (formatTelemetryUnit in the Web): Registry stores UCUM codes.
+const UNIT_WORDS: Readonly<Record<string, string>> = Object.freeze({ Cel: '°C', 'm3/h': 'm³/h' });
+const unitWords = <T extends string | null | undefined>(unit: T): T | string => (unit ? UNIT_WORDS[unit] ?? unit : unit);
 
 /** 「完整」, or that it is not and how far the data reaches. */
 const dataStatus = (partial: boolean, watermark: string | null | undefined, timezone: string): string => {
@@ -764,7 +785,7 @@ const readHistory = async (
     if (first === undefined) return [];
     return [{
       key,
-      unit: first.unit,
+      unit: unitWords(first.unit),
       kind: pointKind(first.pointType),
       points: buckets.map((bucket) => ({
         siteTime: siteTime(bucket.periodStart, timezone),
@@ -799,7 +820,7 @@ const readSite = async (
   };
   const request: RegistryReadRequest = {
     ...draft,
-    requestId: requestIdFor(context, 'site_get_context', draft),
+    requestId: requestIdFor(context, 'site', draft),
   };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
@@ -857,7 +878,7 @@ const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_AS
       machine: asset === undefined ? null : asset.displayName,
       points: model.telemetryPoints
         .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
-        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: point.unit, kind: pointKind(point.pointType) })),
+        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: unitWords(point.unit), kind: pointKind(point.pointType) })),
     };
   });
 };
@@ -907,7 +928,7 @@ const readTelemetry = async (
       : {
         key: value.key,
         value: equipmentStateWord(value.value),
-        unit: value.unit,
+        unit: unitWords(value.unit),
         siteTime: siteTime(value.sampledAt, timezone),
         state: valueState(value),
       })),
@@ -982,24 +1003,24 @@ const semanticPayloadFrom = (result: OwnerReadResult): SemanticQueryResult => {
 };
 
 // One semantic query; each row comes back keyed by the column's Chinese title, its period at Site time.
-const readSemantic = async (
+const readSemanticView = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
   authorizer: ToolAuthorizationReader,
   reader: SemanticQueryReader,
   timezone: string,
   query: SemanticQueryArguments,
+  part: SemanticViewQuery,
   limits: HvacReadToolLimits,
-  devices: ReadonlyMap<string, string>,
 ) => {
   const draft = {
     tool: 'analytics.semanticQuery' as const,
     input: {
       tenantId: context.tenantId,
       siteId: context.siteId,
-      view: query.view.name,
-      measures: query.measures,
-      ...(query.dimensions.length === 0 ? {} : { dimensions: query.dimensions }),
+      view: part.view.name,
+      measures: part.measures,
+      ...(part.dimensions.length === 0 ? {} : { dimensions: part.dimensions }),
       granularity: query.granularity,
       timezone,
       ...siteRange(query, timezone),
@@ -1011,20 +1032,51 @@ const readSemantic = async (
   }
   const request: SemanticQueryReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_semantic_query', draft) };
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
-  const result = await reader.read({ request, context: ownerContext });
-  const payload = semanticPayloadFrom(result);
+  const payload = semanticPayloadFrom(await reader.read({ request, context: ownerContext }));
   if (payload.rows.length > limits.maxResultRecords) fail('TOOL_RESULT_TOO_LARGE', '结果行数太多：缩短日期范围、改用更粗的粒度或少分一组。');
+  return payload;
+};
+
+const readSemantic = async (
+  context: AgentRunContext,
+  authorization: AuthorizationDecision,
+  authorizer: ToolAuthorizationReader,
+  reader: SemanticQueryReader,
+  timezone: string,
+  query: SemanticQueryArguments,
+  limits: HvacReadToolLimits,
+  devices: ReadonlyMap<string, string>,
+) => {
+  const payloads = await Promise.all(query.parts.map((part) => (
+    readSemanticView(context, authorization, authorizer, reader, timezone, query, part, limits)
+  )));
+  const asRows = (payload: typeof payloads[number]) => payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
+    column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)]
+      : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, devices)]
+        : [column.title, row[index]]
+  ))));
+  const columns = [...new Set(payloads.flatMap((payload) => payload.columns.map(({ title }) => title)))];
+  // Views read side by side are not grouped, so each has one row per period: line them up, and a
+  // period one view has no row for is empty (null) in that view's columns.
+  const byPeriod = new Map<string, Record<string, unknown>>();
+  for (const row of payloads.flatMap(asRows)) {
+    const period = String(row.siteTime);
+    byPeriod.set(period, { ...(byPeriod.get(period) ?? Object.fromEntries(columns.slice(1).map((title) => [title, null]))), ...row });
+  }
+  const rows = payloads.length === 1
+    ? asRows(payloads[0]!)
+    : [...byPeriod.values()].sort((a, b) => String(a.siteTime).localeCompare(String(b.siteTime)));
+  // The answer reaches only as far as the view that stops first.
+  const partial = payloads.filter((payload) => payload.metadata.partial);
+  const watermarks = partial.map((payload) => payload.metadata.dataWatermark);
+  const reach = watermarks.some((watermark) => watermark == null) ? null : watermarks.sort()[0];
   return {
-    view: query.view.title,
+    view: query.parts.map((part) => part.view.title).join(' + '),
     query: { granularity: ENERGY_GRANULARITY_WORDS[query.granularity], startDate: query.startDate, endDate: query.endDate },
-    columns: payload.columns.map(({ title }) => title),
-    rows: payload.rows.map((row) => Object.fromEntries(payload.columns.map((column, index) => (
-      column.kind === 'time' ? ['siteTime', siteTime(String(row[index]), timezone)]
-        : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, devices)]
-          : [column.title, row[index]]
-    )))),
-    rowCount: payload.rows.length,
-    dataStatus: dataStatus(payload.metadata.partial, payload.metadata.dataWatermark, timezone),
+    columns,
+    rows,
+    rowCount: rows.length,
+    dataStatus: dataStatus(partial.length > 0, reach, timezone),
   };
 };
 
@@ -1212,6 +1264,20 @@ const toolDefinition = (
   requiredCapabilities,
 });
 
+export interface CreateSiteDescriberInput {
+  readonly toolAuthorizationReader: ToolAuthorizationReader;
+  readonly registryReader: RegistryReader;
+}
+
+/** The Site's name and time zone for the prompt, read from Registry under the Run's own authorization. */
+export const createSiteDescriber = ({ toolAuthorizationReader, registryReader }: CreateSiteDescriberInput) => (
+  async (authorization: AuthorizationDecision, context: AgentRunContext): Promise<AgentRunSite> => {
+    assertExecutionCapability(context, SITE_CAPABILITIES);
+    const { payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+    return Object.freeze({ name: payload.site.displayName, timezone: payload.site.timezone });
+  }
+);
+
 export const createHvacReadTools = ({
   capabilities,
   authorization,
@@ -1225,32 +1291,8 @@ export const createHvacReadTools = ({
   fddReader,
   workOrderReader,
   limits: inputLimits,
-  now = Date.now,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
   const limits = normalizeLimits(inputLimits);
-
-  const siteTool: AgentTool = Object.freeze({
-    definition: toolDefinition(
-      'site_get_context',
-      '读当前站点的名称和站点本地的当前时间（localNow）。站点由服务端确定。',
-      emptyInputSchema,
-      SITE_CAPABILITIES,
-    ),
-    async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
-      exactEmptyArguments(argumentsValue);
-      assertExecutionCapability(context, SITE_CAPABILITIES);
-      return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-        return assertResultBytes({
-          site: {
-            name: payload.site.displayName,
-            // The Site's own date and time, to resolve 「昨天」「上周同日」 into dates.
-            localNow: siteTime(new Date(now()).toISOString(), payload.site.timezone),
-          },
-        }, limits);
-      });
-    },
-  });
 
   const assetsTool: AgentTool = Object.freeze({
     definition: toolDefinition(
@@ -1412,7 +1454,7 @@ export const createHvacReadTools = ({
   const equipmentEnergyTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_by_equipment',
-      '把当前站点一段日期的用电量按有分表的设备拆开，从多到少列出，每台设备带按所选粒度的明细。',
+      '把当前站点一段日期的用电量按有分表的设备拆开，从多到少列出，每台设备带名称和按所选粒度的明细，不用先读设备清单。',
       energyWindowInputSchema,
       EQUIPMENT_ENERGY_CAPABILITIES,
     ),
@@ -1566,15 +1608,16 @@ export const createHvacReadTools = ({
   const semanticQueryTool: AgentTool = Object.freeze({
     definition: toolDefinition(
       'energy_semantic_query',
-      '一次查当前站点的几个指标（站点能耗、设备能耗或估算电费里的同一个视图），按小时、天或月列出，'
-        + '可以再按最多两个维度分组。一个问题要同时看几个数时用它。能耗不按能源类型分组时会把用电和供冷加在一起；站点由服务端确定。',
+      '一次查当前站点的几个指标，按小时、天或月列出，可以再按最多两个维度分组。一个问题要同时看几个数时用它。'
+        + '指标和分组来自同一个视图；不分组时，站点能耗和估算电费的指标可以一起查（例如用电量和电费）。'
+        + '能耗不按能源类型分组时会把用电和供冷加在一起；站点由服务端确定。',
       semanticQueryInputSchema,
       ENERGY_CAPABILITIES,
     ),
     async execute({ context, arguments: argumentsValue, signal }: AgentToolExecutionRequest) {
       const query = parseSemanticQuery(argumentsValue, limits);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
-      const byDevice = query.dimensions.includes('equipment_id');
+      const byDevice = query.parts.some((part) => part.dimensions.includes('equipment_id'));
       if (byDevice && !hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)) {
         fail('TOOL_ARGUMENTS_INVALID', '按设备分组需要查看设备清单的权限，这次只能不按设备分组。');
       }
@@ -1600,7 +1643,6 @@ export const createHvacReadTools = ({
   });
 
   return Object.freeze([
-    siteTool,
     assetsTool,
     equipmentTool,
     telemetryTool,
