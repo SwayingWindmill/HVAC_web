@@ -43,12 +43,12 @@ const realtime = evaluate(
 const siteId = '01900000-0001-7000-8000-000000000001';
 
 const expected = [
-  ['idle', 'Idle — not subscribed'],
-  ['connecting', 'Connecting'],
-  ['live', 'Live'],
-  ['reconnecting', 'Reconnecting'],
-  ['resync-required', 'Resync required'],
-  ['unavailable', 'Unavailable'],
+  ['idle', '未连接'],
+  ['connecting', '正在连接'],
+  ['live', '已连接'],
+  ['reconnecting', '重连中'],
+  ['resync-required', '正在重新读取'],
+  ['unavailable', '已断开'],
 ];
 
 test('describes every subscription-scoped realtime state without global health claims', () => {
@@ -56,7 +56,7 @@ test('describes every subscription-scoped realtime state without global health c
     const status = realtime.createRealtimeStatus({ state, siteId });
     assert.equal(status.state, state);
     assert.equal(status.siteId, siteId);
-    assert.equal(realtime.realtimeStatusLabel(status), label);
+    assert.equal(realtime.realtimeStatusPresentation(status).label, label);
     assert.equal('platformStatus' in status, false);
     assert.equal('healthy' in status, false);
   }
@@ -66,7 +66,7 @@ test('idle without an active subscription remains explicitly unscoped', () => {
   const status = realtime.createIdleRealtimeStatus();
   assert.equal(status.state, 'idle');
   assert.equal(status.siteId, undefined);
-  assert.equal(realtime.realtimeStatusLabel(status), 'Idle — not subscribed');
+  assert.equal(realtime.realtimeStatusPresentation(status).label, '未连接');
 });
 
 test('maps transport states to the four user-visible operational states', () => {
