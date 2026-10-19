@@ -278,11 +278,32 @@ export const createPiAgentEngine = ({
     keptAnswer: () => spokenMessages().map(({ content }) => content).join('\n'),
   });
 
+  emit('run.started', { run: input.run });
+
   // The Site and its clock go into the prompt; without them the model would guess dates, so a Site
-  // that cannot be read ends the Run before any model call.
-  let site: AgentRunSite;
+  // that cannot be read ends the Run before any model call. Stopping the Run meanwhile cancels it.
+  const stopped = new Promise<'stopped'>((resolve) => {
+    if (input.signal.aborted) resolve('stopped');
+    input.signal.addEventListener('abort', () => resolve('stopped'), { once: true });
+  });
+  let systemPrompt: string;
   try {
-    site = await input.site();
+    const site = await Promise.race([input.site(), stopped]);
+    if (site === 'stopped') {
+      const cancelledRun = terminalRun(input.run, 'CANCELLED', usage(), 'RUN_CANCELLED');
+      emit('run.failed', { run: cancelledRun });
+      recordRunCompleted('CANCELLED', 'RUN_CANCELLED');
+      return Object.freeze({
+        runStatus: 'CANCELLED',
+        sessionStatus: 'CANCELLED',
+        failureCode: 'RUN_CANCELLED',
+        usage: usage(),
+        finalizedMessages: [],
+        toolExecutions,
+        artifacts,
+      });
+    }
+    systemPrompt = systemPromptFor(input.run.startedAt, site);
   } catch {
     const failedRun = terminalRun(input.run, 'FAILED', usage(), 'SITE_CONTEXT_UNAVAILABLE');
     emit('run.failed', { run: failedRun });
@@ -303,7 +324,7 @@ export const createPiAgentEngine = ({
   let reminded = false;
   const agent = new Agent({
     initialState: {
-      systemPrompt: systemPromptFor(input.run.startedAt, site),
+      systemPrompt,
       model,
       thinkingLevel,
       tools: piTools,
@@ -493,8 +514,6 @@ export const createPiAgentEngine = ({
         break;
     }
   });
-
-  emit('run.started', { run: input.run });
 
   const prompt = input.messages.at(-1);
   if (prompt === undefined || prompt.role !== 'OPERATOR') {

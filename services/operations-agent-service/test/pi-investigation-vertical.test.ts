@@ -272,7 +272,7 @@ const createHvacToolHarness = ({ partialEnergy = false, maliciousAssetText = nul
 const songyaxuan = Object.freeze({ name: '松雅轩', timezone: 'Asia/Shanghai' });
 
 const runScript = async (responses, tools = [], runBudget = budget, runtimeOptions = {}, runContext = context) => {
-  const { startedAt = Date.now(), site = async () => songyaxuan, ...engineOptions } = runtimeOptions;
+  const { startedAt = Date.now(), site = async () => songyaxuan, signal = new AbortController().signal, ...engineOptions } = runtimeOptions;
   const runtime = createScriptedPiAgentEngine({ responses, ...engineOptions });
   const events = [];
   const result = await runtime.engine({
@@ -292,7 +292,7 @@ const runScript = async (responses, tools = [], runBudget = budget, runtimeOptio
     context: runContext,
     site,
     budget: runBudget,
-    signal: new AbortController().signal,
+    signal,
     emit: (event) => events.push(event),
   });
   return { events, result, requests: runtime.requests };
@@ -1079,11 +1079,25 @@ test('the card drops a refusal the answer already gave in other words', async ()
 // The prompt names the Site and its clock; without them the model would guess dates, so a Site that
 // cannot be read ends the Run before any model call, with a code the 运行情况 page can count.
 test('a Run whose Site cannot be read fails before any model call', async () => {
-  const { result, requests } = await runScript([
+  const { result, requests, events } = await runScript([
     { parts: [{ type: 'text', text: '不会被调用。' }], stopReason: 'stop' },
   ], [], budget, { site: async () => { throw new Error('registry unavailable'); } });
   assert.equal(result.runStatus, 'FAILED');
   assert.equal(result.failureCode, 'SITE_CONTEXT_UNAVAILABLE');
+  assert.equal(result.usage.modelCalls, 0);
+  assert.equal(requests.length, 0);
+  assert.deepEqual(events.map(({ type }) => type), ['run.started', 'run.failed']);
+});
+
+test('a Run stopped while its Site is being read is cancelled without a model call', async () => {
+  const controller = new AbortController();
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'text', text: '不会被调用。' }], stopReason: 'stop' },
+  ], [], budget, {
+    signal: controller.signal,
+    site: () => new Promise((resolve) => { controller.abort(); setTimeout(() => resolve(songyaxuan), 20); }),
+  });
+  assert.equal(result.runStatus, 'CANCELLED');
   assert.equal(result.usage.modelCalls, 0);
   assert.equal(requests.length, 0);
 });

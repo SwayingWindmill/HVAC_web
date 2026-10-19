@@ -235,7 +235,7 @@ export const questions: readonly EvalQuestion[] = [
     figures: [],
     ceilings: CEILINGS,
     // Refused as a forecast, not merely mentioning that something has not happened.
-    mustSay: '(?:无法|不能|没法|做不了)[^。\\n]{0,12}(?:预测|预估)|(?:预测|预估)[^。\\n]{0,4}(?:不了|做不了)|还没(?:有)?到|尚未到|还没有发生|尚未发生',
+    mustSay: '(?:无法|不能|没法|做不了)[^。\\n]{0,12}(?:预测|预估)|(?:预测|预估)[^。\\n]{0,4}(?:不了|做不了)|还没(?:有)?到(?!齐)|尚未到(?!齐)|还没有发生|尚未发生',
   },
   // Alarm, diagnosis and work-order Tools (#594, #595), and the device page's 解释 (#596).
   {

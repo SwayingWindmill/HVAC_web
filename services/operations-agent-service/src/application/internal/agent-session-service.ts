@@ -88,7 +88,7 @@ export interface CreateAgentSessionServiceInput {
   readonly modelRef: AgentModelRef;
   readonly createTools: (context: AgentSessionAccessContext) => readonly AgentTool[];
   /** The Site the prompt names, read under the asker's authorization when each Run starts. */
-  readonly describeSite: (context: AgentSessionAccessContext, run: AgentRunContext) => Promise<AgentRunSite>;
+  readonly describeSite: (context: AgentSessionAccessContext, runContext: AgentRunContext) => Promise<AgentRunSite>;
   readonly budget: AgentRunBudget;
   readonly now: () => number;
   readonly nextId: (kind: 'session' | 'run' | 'message' | 'artifact') => string;

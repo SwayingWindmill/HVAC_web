@@ -229,7 +229,8 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, fin
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
   });
 
-  const describeSite = createSiteDescriber({ authorization, toolAuthorizationReader, registryReader });
+  const describer = createSiteDescriber({ toolAuthorizationReader, registryReader });
+  const describeSite = (runContext) => describer(authorization, runContext);
 
   return { tools, describeSite, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, fddInputs, workOrderInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
 };
@@ -330,6 +331,15 @@ test('the Site the prompt names is read from Registry under the Run\'s own autho
   assert.equal(harness.registryInputs[0].request.input.siteId, siteId);
   assert.equal(harness.registryInputs[0].context.scope.tenantId, tenantId);
   assert.equal(harness.registryInputs[0].context.authorization.delegationGrant, 'grant:registry.getSite');
+});
+
+test('reading the Site for the prompt needs the right to read the Site, checked before Registry', async () => {
+  const harness = createHarness();
+  await assert.rejects(
+    () => harness.describeSite({ ...context, capabilities: ['analytics.energy-series.read'] }),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_UNAUTHORIZED',
+  );
+  assert.equal(harness.registryInputs.length, 0);
 });
 
 test('asset Tools reauthorize then call Registry with trusted scope and bounded output', async () => {
@@ -727,17 +737,17 @@ test('one semantic query reads the Site\'s energy and its estimated cost togethe
     site_energy: {
       columns: [{ name: 'period_end', title: '时段', kind: 'time' }, { name: 'electricity_valid_kwh', title: '用电量', kind: 'measure' }],
       rows: [['2026-10-15T07:00:00Z', 1634], ['2026-10-16T07:00:00Z', 1499]],
-      metadata: { datasetRevision: 'semantic:1', partial: false },
+      metadata: { datasetRevision: 'semantic:1', partial: true, dataWatermark: '2026-10-16T09:00:00Z' },
     },
     site_energy_cost: {
       columns: [{ name: 'period_end', title: '时段', kind: 'time' }, { name: 'cost_valid_cny', title: '电费', kind: 'measure' }],
-      rows: [['2026-10-16T07:00:00Z', 1157.51], ['2026-10-15T07:00:00Z', 1212.51]],
-      metadata: { datasetRevision: 'semantic:1', partial: true, dataWatermark: '2026-10-16T09:00:00Z' },
+      rows: [['2026-10-16T07:00:00Z', 1157.51], ['2026-10-15T07:00:00Z', 1212.51], ['2026-10-17T07:00:00Z', 30]],
+      metadata: { datasetRevision: 'semantic:1', partial: true, dataWatermark: '2026-10-17T09:00:00Z' },
     },
   };
   const harness = createHarness({ semanticFor: (input) => ({ schemaVersion: 1, ...views[input.request.input.view] }) });
   const result = await execute(byName(harness.tools, 'energy_semantic_query'), {
-    measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-16',
+    measures: ['site_energy.electricity_valid_kwh', 'site_energy_cost.cost_valid_cny'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-17',
   });
   assert.deepEqual(harness.semanticInputs.map((input) => [input.request.input.view, input.request.input.measures]), [
     ['site_energy', ['electricity_valid_kwh']],
@@ -747,8 +757,11 @@ test('one semantic query reads the Site\'s energy and its estimated cost togethe
   assert.deepEqual(result.rows, [
     { siteTime: '2026-10-15 00:00', 用电量: 1634, 电费: 1212.51 },
     { siteTime: '2026-10-16 00:00', 用电量: 1499, 电费: 1157.51 },
+    // A period one view has no row for is empty in that view's column, not left out.
+    { siteTime: '2026-10-17 00:00', 用电量: null, 电费: 30 },
   ]);
-  assert.match(result.dataStatus, /^不完整/u);
+  // Both views stop early; the answer reaches only as far as the one that stops first.
+  assert.equal(result.dataStatus, '不完整：数据截至 2026-10-16 02:00');
 });
 
 test('a semantic query that groups or mixes other views across views is refused before reading, saying what works', async () => {

@@ -102,6 +102,7 @@ export const createProductionAgentSessionRuntime = async (
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
+    const describeSite = createSiteDescriber({ toolAuthorizationReader, registryReader });
     const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
     const service = createAgentSessionService({
@@ -125,11 +126,7 @@ export const createProductionAgentSessionRuntime = async (
         workOrderReader,
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
       }),
-      describeSite: (context, run) => createSiteDescriber({
-        authorization: context.authorization,
-        toolAuthorizationReader,
-        registryReader,
-      })(run),
+      describeSite: (context, runContext) => describeSite(context.authorization, runContext),
     });
     const handler = createAgentSessionHttpHandler({
       usage: persistence.agentUsageReader,

@@ -94,6 +94,7 @@ const DEFAULT_LIMITS: HvacReadToolLimits = Object.freeze({
   timeoutMs: 8_000,
 });
 
+const SITE_CAPABILITIES = Object.freeze(['site.read']);
 const ASSET_CAPABILITIES = Object.freeze(['site.read', 'asset.list']);
 const EQUIPMENT_CAPABILITIES = Object.freeze(['site.read', 'asset-model.read']);
 const TELEMETRY_CAPABILITIES = Object.freeze(['site.read', 'telemetry.snapshot.read']);
@@ -583,11 +584,11 @@ const runBounded = async <T>(
 
 const requestIdFor = (
   context: AgentRunContext,
-  semanticTool: HvacReadToolName | 'site',
+  reader: HvacReadToolName | 'site',
   ownerRequest: Omit<ToolAuthorizableReadRequest, 'requestId'>,
 ): string => {
   const digest = createHash('sha256')
-    .update(JSON.stringify([context.runId, semanticTool, ownerRequest]))
+    .update(JSON.stringify([context.runId, reader, ownerRequest]))
     .digest('hex');
   return `agent-tool:${digest}`;
 };
@@ -1054,23 +1055,28 @@ const readSemantic = async (
       : column.kind === 'dimension' ? [column.title, dimensionWords(column.name, row[index] ?? null, devices)]
         : [column.title, row[index]]
   ))));
-  // Views read side by side are not grouped, so each has one row per period: line them up.
+  const columns = [...new Set(payloads.flatMap((payload) => payload.columns.map(({ title }) => title)))];
+  // Views read side by side are not grouped, so each has one row per period: line them up, and a
+  // period one view has no row for is empty (null) in that view's columns.
   const byPeriod = new Map<string, Record<string, unknown>>();
   for (const row of payloads.flatMap(asRows)) {
     const period = String(row.siteTime);
-    byPeriod.set(period, { ...byPeriod.get(period), ...row });
+    byPeriod.set(period, { ...(byPeriod.get(period) ?? Object.fromEntries(columns.slice(1).map((title) => [title, null]))), ...row });
   }
   const rows = payloads.length === 1
     ? asRows(payloads[0]!)
     : [...byPeriod.values()].sort((a, b) => String(a.siteTime).localeCompare(String(b.siteTime)));
-  const partial = payloads.find((payload) => payload.metadata.partial);
+  // The answer reaches only as far as the view that stops first.
+  const partial = payloads.filter((payload) => payload.metadata.partial);
+  const watermarks = partial.map((payload) => payload.metadata.dataWatermark);
+  const reach = watermarks.some((watermark) => watermark == null) ? null : watermarks.sort()[0];
   return {
     view: query.parts.map((part) => part.view.title).join(' + '),
     query: { granularity: ENERGY_GRANULARITY_WORDS[query.granularity], startDate: query.startDate, endDate: query.endDate },
-    columns: [...new Set(payloads.flatMap((payload) => payload.columns.map(({ title }) => title)))],
+    columns,
     rows,
     rowCount: rows.length,
-    dataStatus: dataStatus(partial !== undefined, partial?.metadata.dataWatermark, timezone),
+    dataStatus: dataStatus(partial.length > 0, reach, timezone),
   };
 };
 
@@ -1259,14 +1265,14 @@ const toolDefinition = (
 });
 
 export interface CreateSiteDescriberInput {
-  readonly authorization: AuthorizationDecision;
   readonly toolAuthorizationReader: ToolAuthorizationReader;
   readonly registryReader: RegistryReader;
 }
 
 /** The Site's name and time zone for the prompt, read from Registry under the Run's own authorization. */
-export const createSiteDescriber = ({ authorization, toolAuthorizationReader, registryReader }: CreateSiteDescriberInput) => (
-  async (context: AgentRunContext): Promise<AgentRunSite> => {
+export const createSiteDescriber = ({ toolAuthorizationReader, registryReader }: CreateSiteDescriberInput) => (
+  async (authorization: AuthorizationDecision, context: AgentRunContext): Promise<AgentRunSite> => {
+    assertExecutionCapability(context, SITE_CAPABILITIES);
     const { payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
     return Object.freeze({ name: payload.site.displayName, timezone: payload.site.timezone });
   }
