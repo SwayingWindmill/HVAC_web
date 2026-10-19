@@ -2,7 +2,7 @@
 
 规格见 `docs/specs/tou-energy-cost.md`。问题是：一天的电度电费怎样按分时电价计算。
 
-固定版本沿用 `centralized-energy-source-review-2026-09-07.md`：MyEMS v6.7.0（be6e6ce8ddeac57afb04bddb9621501fb555cab0），在固定提交上用 raw 源码读取。
+固定版本：MyEMS v6.7.0（be6e6ce8ddeac57afb04bddb9621501fb555cab0），在固定提交上用 raw 源码读取。
 
 ## 读到的做法
 

@@ -2,7 +2,7 @@
 
 Issue #481 第二阶段，规格见 `docs/specs/metered-breakdown.md`。问题只有一个：设备加了分表后，站点总量怎样不把分表重复计入、又能按设备拆分。
 
-固定版本沿用 `centralized-energy-source-review-2026-09-07.md`，本次在固定提交上用 raw 源码读取：
+在下面的固定提交上读原始源码：
 
 | 参考 | Release | Commit |
 | --- | --- | --- |

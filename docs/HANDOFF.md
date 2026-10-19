@@ -18,8 +18,8 @@
 | 能源 | 节能项目（`/energy-analysis/savings`） | mv-service：节能措施、固定的基线、已验证日（ADR 0021） |
 | 能源 | 能源报告（`/reports`） | 已结束的月份读 report-service 的快照（每月 1 日 03:00 生成），本月和没存快照的月份现算；有年度视图，可打印 A4 |
 | 能源 | 站点对标（`/benchmark`） | 每个有权限的站点的能耗序列；没有能耗权限的站点列出来但不参加比较 |
-| 运维 | 告警、故障诊断、工单、控制指令 | 告警、FDD（每 15 分钟跑一次）、工单、控制指令审批 |
-| 平台 | 通知、集成管理、系统管理（含用户与角色、修改密码、AI 助手用量） | 通知收件箱、网关证书、IAM 角色指派（ADR 0022）、登记、规则、操作记录 |
+| 运维 | 告警、故障诊断、工单、控制指令 | 告警、故障诊断服务 FDD（每 15 分钟跑一次）、工单、控制指令审批 |
+| 平台 | 通知、集成管理、系统管理（含用户与角色、修改密码、AI 助手用量） | 通知收件箱、网关证书、权限服务 IAM 的角色指派（ADR 0022）、登记、规则、操作记录 |
 | 全站 | AI 助手（页头按钮，右侧 420px 面板；能耗分析、告警、设备详情上的「解释」） | Operations Agent 的会话，经平台网关；服务没配 `DEEPSEEK_API_KEY` 时面板显示「未接入」 |
 
 电费都是按站点分时电价算的估算值，页面上标明「估算」；账单以结算（`services/settlement-service`，命令行工具，没有网页接口）为准。
@@ -42,11 +42,11 @@
 
 ## 服务器（139.199.58.47）
 
-- 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、FDD、M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
+- 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、故障诊断 FDD、节能验证 M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
 - 部署方式：本地从 main 构建镜像，`docker save | ssh docker load` 传过去；代码用 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`；`/opt/hvac-platform-tools/deploy.sh` 在服务器上重放 `local:up` 的步骤。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
-- Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（运维手册「Alert delivery」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
+- Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/observability-phase1.md` 的「Alert delivery」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 通知还没有配接收人、策略和模板，告警只出现在告警页。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
 - 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB。
@@ -80,7 +80,7 @@
 
 ## 能耗和 Cube
 
-- 所有能耗读取都经过 Cube（ADR 0023）。对外只有两个视图：`site_energy`（站点总量：用电、供冷、能效）和 `equipment_energy`（按设备的分表），每个字段都有中文标题和说明（`semantic/cube/README.md`）。
+- 所有能耗读取都经过 Cube（ADR 0023）。对外只有两个视图：`site_energy`（站点总量：用电、供冷、能效）和 `equipment_energy`（按设备的分表），每个字段都有中文标题和说明（`semantic/cube/README.md`；为什么这样分，见 `docs/architecture/cube-views-source-review-2026-10-17.md`）。
 - 电费也由 Cube 算：遥测把每个站点的电价排成按 UTC 的价格窗口（`analytics.tariff_price_windows`），`site_energy_cost` 视图按每段电量结束时所在的窗口计价（规格 `docs/specs/estimated-energy-cost.md`）。网页、报告、优化、M&V 和 AI 助手都读这个电费，自己不再算。
 - report-service、优化服务和 M&V 以各自的后台服务身份（ADR 0017）读能耗，IAM 给它们签 30 秒的授权；它们没有 ClickHouse 账号。证书由 `scripts/issue-workload-identities.mjs` 签发，`local:up` 和服务器的 `deploy.sh` 都会跑。
 - 网页仍然自己用供冷除以用电算能效。
@@ -104,7 +104,7 @@
 
 - 改 FDD 低温差的门槛或时间窗口时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>]`。
 - 指标计算里的电量差值不会在点位改版或换单位时断开，能耗计算（`counter_deltas_from`）会断开。第一次原地改点位配置之前要补上。
-- 能耗序列算电费时每读一条事实约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。
+- 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。
 - 每次能耗差值查询都会把相关点位的整个累计读数历史扫一遍（每个窗口约 700 万行，约 0.5 秒，随历史增长）；`has(points, point_id)` 用不上 `observations` 的排序键（它把 `point_id` 包在 `ifNull` 里）。
 - 设备详情侧栏和工单侧栏还要按新设计打磨。
 
@@ -116,8 +116,10 @@
 - `infra/telemetry/clickhouse/init/014-tariff-price-windows.sql` 只在空数据卷上执行：已有的 ClickHouse 要手动 `docker exec -i <clickhouse> clickhouse-client --multiquery < …`，再跑一次基础身份初始化，让 `energy-projection` 角色拿到 `tariff.read`。
 - 两个模拟站点都有重放的历史：电表（含分表）2026-08-25 到 10-06，气象站的室外温度 2026-08-25 到 10-06（站点时间）。实时历史从 2026-10-12 22:06 开始。A 站点 09-29 09:00 把供水温度设定提高到 8 ℃；B 站点冷冻水泵 09-08 09:00 起从 50 Hz 降到 45 Hz。
 - 08-25 到 09-14 这段只重算了 B 站点的 `hourly_energy`、`hourly_cooling` 和 CHWP-01 的 `device_hourly_energy`，A 站点这段的小时和日指标没有。
-- 节能台账里有 B 站点的方法 B 验收措施（CHWP-01，09-08 到 09-15）和 A 站点的方法 C 措施（8 ℃ 设定，09-29 09:00 到 10-06）；验收结果也存成了 `e2e/fixtures/savings-measure-*.json`。
-- 2026-10-12 修复按到达顺序分页之前写的能耗事实缺了一些时段。要补：停 `telemetry-worker`，清空 `analytics.energy_projection_checkpoints`，再启动（运行中清空没用，正在跑的那批会把进度写回去）；已有事实的时段会跳过。
+- 节能项目里有 B 站点的方法 B 验收措施（CHWP-01，09-08 到 09-15）和 A 站点的方法 C 措施（8 ℃ 设定，09-29 09:00 到 10-06）；验收结果也存成了 `e2e/fixtures/savings-measure-*.json`。
+- 2026 年 9 月的报告快照是手工排队生成的，只覆盖 30 天里的 16 天（来自重放的历史）。
+- 2026-10-13 删掉了两段重放交界处重复写入的 12 条电表读数（导入批次 `01a03480-0400-7000-8000-00000000000{1,2}`）；9-15 00:00（站点时间）那个小时的小时指标是在删除之前算的，还包含这两条读数。
+- 2026-10-12 修复分页问题之前算出的用电量缺了一些时段。要补：停 `telemetry-worker`，清空 `analytics.energy_projection_checkpoints`，再启动（运行中清空没用，正在跑的那批会把进度写回去）；已有事实的时段会跳过。
 - 几处是手工改的，重置后由初始化脚本恢复：`analytics.energy_interval_facts_visible`（按 `009-energy-fact-rebuild-v1.sql`）、`telemetry_history.counter_deltas_from` 和 `counter_deltas`（按 `004-counter-semantics.sql`）；ClickHouse 用户 `report_service_reader` 已经不用了。
 - 没有模拟器也能造几周的历史：`node scripts/local-history-replay.mjs --from … --to … [--commands <站点代码>=<文件>] [--metrics-only | --weather-only]`，经遥测的历史导入写入电表和气象站读数，再重算小时和日指标。三周约 10 分钟一个站点；只重放实时历史开始之前的时间段（累计读数会从头开始）。
 
