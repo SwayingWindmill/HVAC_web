@@ -8,7 +8,7 @@
 
 ### 网关证书
 
-接入服务（Connectivity）持有网关 CA，并在内部 8448 端口提供 HTTPS 的证书服务。每个部署用 Connectivity 的 `--initialize-gateway-ca` 命令初始化一次 `GATEWAY_CA_DIR`（用 `CONNECTIVITY_CA_FILE` 提供服务 CA）：它只新建文件，从不覆盖已有的密钥，并给 Connectivity 另签一张服务端证书。平时运行时这个目录只读挂载。只有公开的信任证书给 nginx、Mosquitto 和网页后端，CA 私钥只留在 Connectivity。`npm run local:up` 会自动做第一次初始化。
+接入服务（Connectivity）持有网关 CA，并在内部 8448 端口提供 HTTPS 的证书服务。每个部署用 Connectivity 的 `--initialize-gateway-ca` 命令初始化一次 `GATEWAY_CA_DIR`（用 `CONNECTIVITY_CA` 提供服务 CA）：它只新建文件，从不覆盖已有的密钥，并给 Connectivity 另签一张服务端证书。平时运行时这个目录只读挂载。只有公开的信任证书给 nginx、Mosquitto 和网页后端，CA 私钥只留在 Connectivity。`npm run local:up` 会自动做第一次初始化。
 
 nginx 通过 HTTPS 对外提供 `/gateway/v1/enroll` 和 `/gateway/v1/renew`，并以平台网关的服务身份向 Connectivity 认证；续期时只转发验证过的客户端证书。运维人员在网页「集成管理」登记网关、生成 24 小时有效的一次性接入码；模拟器用同样的网页接口自动申请证书，不再手工签发或写种子。吊销对一台网关是永久的。证书的签发、续期、吊销记录写在 `connectivity.gateway_credential_audit` 里，还没有在操作记录页面显示。
 
@@ -28,7 +28,7 @@ nginx 通过 HTTPS 对外提供 `/gateway/v1/enroll` 和 `/gateway/v1/renew`，�
 `runtime-inventory.v1.json` 给 Compose 里的每个服务分了类：
 
 - 默认的业务服务：`energy-api`、`telemetry-worker`、`metric-worker`；
-- 默认的支撑服务：`scheduler`、`maintenance-worker`；身份服务 `identity-service` 是基础设施；
+- 默认的支撑服务：`scheduler`、`maintenance`（运行 `cmd/maintenance-worker`）；身份服务 `identity-service` 是基础设施；
 - 可选：`connectivity` + `mqtt-broker`（`integration`），预测、优化、故障诊断、节能验证、报告（`intelligence`）；
 - 一次性的运维动作：迁移、表结构预检、身份初始化 / 管理 / 同步、备份。
 

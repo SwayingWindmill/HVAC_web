@@ -4,7 +4,7 @@
 
 ## PostgreSQL
 
-`PHASE1_POSTGRES_MODE=local` 时，Compose 里的 PostgreSQL 支持把 WAL 持续归档到 `POSTGRES_WAL_ARCHIVE_DIR`，但只有 `POSTGRES_ARCHIVE_MODE=on` 才真的开。开发和测试默认关；预发和正式环境只有在归档目录可写、有容量管理、并且和 PostgreSQL 数据卷分开时才开。做一次基础备份：
+`PHASE1_POSTGRES_MODE=local` 时，Compose 里的 PostgreSQL 支持把 WAL（预写日志：数据库每次改动先写的记录，用它可以把数据恢复到任意时间点）持续归档到 `POSTGRES_WAL_ARCHIVE_DIR`，但只有 `POSTGRES_ARCHIVE_MODE=on` 才真的开。开发和测试默认关；预发和正式环境只有在归档目录可写、有容量管理、并且和 PostgreSQL 数据卷分开时才开。做一次基础备份：
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres --profile backup run --rm postgres-backup
@@ -14,7 +14,7 @@ PostgreSQL 在外部时，备份由那边负责。只有外部数据库允许 `p
 
 本机 PostgreSQL：正式环境的 `POSTGRES_WAL_ARCHIVE_DIR` 和 `POSTGRES_BASE_BACKUP_DIR` 都要放在和数据卷分开的存储上。外部 PostgreSQL：对应的备份位置要和应用主机分开。和出故障的盘在同一块盘上的本地目录，不算灾难恢复的备份。
 
-基础备份用带流式 WAL 的 `pg_basebackup`，并写 `SHA256SUMS`。持续归档加上一份合适的基础备份，才能做时间点恢复。在带时间记录的恢复演练实际测过之前，仓库不声明任何 RPO。
+基础备份用带流式 WAL 的 `pg_basebackup`，并写 `SHA256SUMS`。持续归档加上一份合适的基础备份，才能做时间点恢复。在带时间记录的恢复演练实际测过之前，仓库不声明任何 RPO（出故障时最多丢多少时间的数据）。
 
 ## ClickHouse
 

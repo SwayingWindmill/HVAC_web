@@ -27,8 +27,10 @@
 | --- | --- |
 | `POST /internal/v1/analytics/energy-series` | 能耗序列：一个站点一段时间的用电或供冷，按小时 / 天 / 月；用电的每个点带估算电费；可以按设备拆分（`breakdown: device`）。网页的入口是 `POST /api/v1/analytics/energy-series` |
 | `POST /internal/v1/analytics/semantic-query` | AI 助手的语义查询（见 `docs/specs/agent-semantic-query.md`） |
-| `POST /internal/v1/telemetry/device-history` | 设备历史：原始读数，或按刻钟 / 小时 / 天 / 周 / 月的平均、最小、最大值 |
-| `POST /internal/v1/telemetry/centrifugo/subscribe` | 实时推送的订阅授权 |
+| `POST /internal/v1/telemetry/device-history` | 设备历史：原始读数 |
+| `POST /internal/v1/telemetry/device-history:aggregate` | 设备历史：按刻钟 / 小时 / 天 / 周 / 月的平均、最小、最大值 |
+
+实时推送的订阅授权（`POST /internal/v1/telemetry/centrifugo/subscribe`）不在查询服务里，在 `telemetry-worker` 的遥测部分（`pkg/telemetry/server.go`）。
 
 能耗序列：
 
@@ -74,7 +76,7 @@ Cube 的缓存刷新时间不会被当作数据截至时间。
 
 查询服务检查：
 
-1. 调用方的双向 TLS 证书在允许名单里（平台网关、AI 助手、故障诊断服务）；
+1. 调用方的双向 TLS 证书在允许名单里（平台网关、AI 助手、故障诊断服务，以及报告、优化、节能验证服务）；
 2. 网关签的短时授权（后台服务则是 IAM 签的授权，ADR 0017）；
 3. 授权的签发方是网关，`executingService` 等于实际出示证书的服务；
 4. 动作是固定的那一个；
@@ -106,6 +108,7 @@ Cube 的缓存刷新时间不会被当作数据截至时间。
 | `QUERY_ALLOWED_WORKLOAD_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
 | `QUERY_OPERATIONS_AGENT_SPIFFE` | `spiffe://hvac.local/operations-agent-service` |
 | `QUERY_FDD_SERVICE_SPIFFE` | 故障诊断服务的身份 |
+| `QUERY_REPORT_SERVICE_SPIFFE`、`QUERY_OPTIMIZATION_SERVICE_SPIFFE`、`QUERY_MV_SERVICE_SPIFFE` | 报告、优化、节能验证服务的身份（嵌在 `energy-api` 里时由 `cmd/energy-api/embedded_energy.go` 读取） |
 | `QUERY_AUDIENCE` | `telemetry-query-service` |
 | `QUERY_CUBE_CA` | 不设时用系统信任的证书 |
 | `QUERY_HISTORY_CLICKHOUSE_CA` | 不设时用系统信任的证书 |

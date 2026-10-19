@@ -107,7 +107,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 3. 用操作记录和受控的数据库查询找出受影响的站点、设备、点位。
 4. 先查点位对照和绑定版本，再当作传输丢失。
 
-2026-10-15 松雅轩合格率降到约 33%，原因是网关的待发队列把没确认的记录反复重发、平台把重复的算作不合格（规格 `docs/specs/site-gateway-onboarding.md`「已知问题」）。
+2026-10-15 松雅轩合格率降到约 33%，原因是网关的待发队列把没确认的记录反复重发、平台把重复的算作不合格；2026-10-16 网关改成一次采样只发一个信封后已经恢复（规格 `docs/specs/site-gateway-onboarding.md`「已知问题」）。
 
 ### 上游数据源不可用
 
@@ -157,7 +157,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 安全计数不为零
 
-告警：`S2SecurityZeroInvariantViolation`、`S2RequestFallbackDetected`。告警等待时间为 0，一出现就报，主负责是平台安全，次负责是遥测。
+告警：`S2SecurityZeroInvariantViolation`、`S2RequestFallbackDetected`。告警等待时间为 0，一出现就报，主负责是平台安全；次负责分别是遥测和网关。
 
 下面这些计数必须一直是 0：跨租户或跨站点推送、泄露隐藏的设备、伪造的范围或频道、无权的点位、撤销后仍推送、推送游标被重放或扩大范围、不是负责方的写入、按请求退回旧系统或假数据、没发现的状态版本号缺口。任何一个不是 0，立刻查是哪条推送或请求、哪个范围，修好之前不要恢复相关的推送路径。
 
@@ -173,7 +173,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 指标导出失败
 
-告警：`S2ExporterFailure`、`S0TelemetryExportFailures`。
+告警：`S2ExporterFailure`。
 
 指标和追踪的导出用有上限的异步队列。收集器不可用、导出超时或队列满时，业务事务照常完成，只是导出失败或丢弃的计数增加；不同步重试，不阻塞数据库事务，最后的错误只记一个代码。
 
@@ -184,7 +184,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 追踪收集器不可用
 
-处理方法同「指标导出失败」。
+告警：`S0TelemetryExportFailures`（只在单独运行操作记录的投递时有）。处理方法同「指标导出失败」。
 
 ## 能耗
 
@@ -249,7 +249,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 2. 检查 Kafka（Redpanda）是否可用、认证是否正常，不要打印它的凭据。
 3. 看 `outbox_publish_failed` 日志里的 `error_code=BROKER_PUBLISH_FAILED`，不要去搜消息内容或授权。
 4. 恢复消息服务或网络。不要删待发事件，也不要手工改聚合版本。
-5. 确认最老的积压回到 30 秒以内，同样的消息经收件表去重后只记一次。
+5. 确认最老的积压回到告警门槛（60 秒）以内，同样的消息经收件表去重后只记一次。
 
 ### 操作记录写入慢或失败
 
