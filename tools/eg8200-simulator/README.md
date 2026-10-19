@@ -1,68 +1,51 @@
-# EG8200 Central Plant Simulator
+# EG8200 模拟冷站
 
-A deterministic virtual edge gateway for validating the HVAC platform before a physical EG8200 is connected. The simulator models a small commercial central plant, publishes device telemetry to ThingsBoard through the Device HTTP API, polls server-side RPC, applies commands to the physical model, and reports subsequent state through normal telemetry.
+在没有真实网关和设备的时候，用来验证整个平台的确定性模拟器：模拟一个小型商用冷站，像真的网关一样把设备读数发给平台、接收控制指令、按物理模型做出反应，再通过后续的读数报告结果。规格和规则见 `docs/specs/virtual-central-plant.md`。
 
-## MVP topology
+本地环境（`npm run local:up`）跑两个实例，A、B 两个模拟站点各一个（`deploy/acceptance/phase1-simulator.compose.yaml`，场景分别是 `configs/scenario-daily-a.json` 和 `scenario-daily-b.json`），程序是 `cmd/eg8200-mqtt-publisher`。
 
-- `CHILLER-01`: water-cooled chiller
-- `CHWP-01`: chilled-water pump
-- `CWP-01`: cooling-water pump
-- `CT-01`: cooling tower
-- `METER-HVAC-TOTAL`: aggregate HVAC power meter
-- `BTU-METER-01`: chilled-water thermal energy meter
+## 模拟的设备
 
-The model includes chiller COP, cooling capacity, auxiliary power, accumulated electrical energy, accumulated cooling energy, pump affinity laws, cooling-tower approach temperature, and basic plant interlocks. Chilled-water telemetry is kept on one water-side energy balance (`Q ≈ 1.163 × flow(m³/h) × ΔT(°C)`). Pump frequency, cooling-tower fan speed, chiller capacity, and water temperatures evolve over elapsed plant time; a successful command applies a target, while actual device readback changes on later plant ticks.
+- `CHILLER-01`：水冷冷水机组
+- `CHWP-01`：冷冻水泵
+- `CWP-01`：冷却水泵
+- `CT-01`：冷却塔
+- `METER-HVAC-TOTAL`：空调总电表
+- `BTU-METER-01`：冷冻水冷量计
 
-## Supported commands
+模型包含：机组 COP、制冷量、辅机功率、累计电量和累计冷量、水泵的相似定律、冷却塔的逼近温度和基本的联锁。冷冻水侧始终保持一个能量平衡（`Q ≈ 1.163 × 流量(m³/h) × 温差(°C)`）。水泵频率、冷却塔风机转速、机组负荷和水温都随时间变化：指令成功只是设定了目标，设备的实际读数要在之后的几个周期里慢慢变过去。
 
-| Device | RPC method | Parameters | Validation |
+## 能接收的指令
+
+| 设备 | 指令 | 参数 | 允许范围 |
 | --- | --- | --- | --- |
-| Chiller | `start`, `stop`, `resetFault` | none | — |
-| Chiller | `setChilledWaterTemperatureSetpoint` | `setpointC` | 5–12 °C |
-| Chiller | `setLoadLimit` | `loadLimitPct` | 20–100% |
-| Pumps | `start`, `stop`, `resetFault` | none | — |
-| Pumps | `setFrequency` | `frequencyHz` | 20–50 Hz |
-| Cooling tower | `start`, `stop`, `resetFault` | none | — |
-| Cooling tower | `setFanSpeed` | `fanSpeedPct` | 20–100% |
+| 机组 | `start`、`stop`、`resetFault` | 无 | — |
+| 机组 | `setChilledWaterTemperatureSetpoint` | `setpointC` | 5–12 °C |
+| 机组 | `setLoadLimit` | `loadLimitPct` | 20–100% |
+| 水泵 | `start`、`stop`、`resetFault` | 无 | — |
+| 水泵 | `setFrequency` | `frequencyHz` | 20–50 Hz |
+| 冷却塔 | `start`、`stop`、`resetFault` | 无 | — |
+| 冷却塔 | `setFanSpeed` | `fanSpeedPct` | 20–100% |
 
-Each simulator command result contains `success`, a stable result `code`, and the applied value when relevant. Invalid commands do not mutate reported equipment state. Telemetry Business Revision is owned by the platform telemetry runtime, not by the simulator.
+每条指令的结果带 `success`、固定的结果代码 `code`，必要时带实际设定的值。无效的指令不改变设备状态。设备状态版本号由平台的遥测给出，不由模拟器给。
 
-## ThingsBoard preparation
+## 经 MQTT 接入平台
 
-Create six ThingsBoard devices matching the IDs in `configs/central-plant.local.json`, using access-token credentials. Export the tokens through environment variables; do not put credentials in the config file:
+用 MQTT 配置格式 6（`configs/central-plant.mqtt.local.example.json`）。
 
-```bash
-export TB_TOKEN_CHILLER_01='...'
-export TB_TOKEN_CHWP_01='...'
-export TB_TOKEN_CWP_01='...'
-export TB_TOKEN_CT_01='...'
-export TB_TOKEN_HVAC_METER='...'
-export TB_TOKEN_BTU_METER_01='...'
-```
+1. 在网页「集成管理」里登记一台网关，生成一次性接入码。
+2. 只在第一次启动时设置 `EG8200_ENROLLMENT_CODE`。`enrollmentUrl` 必须是 HTTPS 地址；`enrollmentCaFile` 用来信任入口，`enrollmentServerName` 是入口的名字；`caFile` 另外用来信任 MQTT 服务器；`certFile` 和 `keyFile` 指向一个可写的证书文件位置。
+3. 模拟器自己生成私钥和证书请求，用接入码换一张 90 天的证书和 MQTT 地址，并原子地写好自己的证书文件。不需要手工签证书，也不用写凭据的 SQL；私钥一直留在模拟器（网关）这边。
 
-The default config targets `http://localhost:8080`. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `host.docker.internal`; non-local ThingsBoard origins must use HTTPS. When the simulator runs in Docker and ThingsBoard runs on the host, use `http://host.docker.internal:8080`.
+之后启动不用接入码，直接用证书文件。它每小时检查一次，在最后 14 天内用当前证书续期；旧证书到原来的到期时间才失效。证书过期或被永久吊销后，要重新登记一台网关，并明确地把设备转过去。接入服务按网关隔离数据和指令；某张证书到期时，已经建立的 MQTT 连接不保证立刻断开。
 
-## Run
+一个模拟器进程就是一台 EG8200 网关。MQTT 配置里用它在登记里的设备 id（`gatewayId`）指定这台网关，这也是证书的 CN 和 MQTT 客户端 id。它把读数发到 `hvac/v1/{gatewayId}/up/telemetry`，每台设备用模拟器里的设备名作为网关里的设备名，接入服务再从登记里找到租户、站点、设备和点位。指令从 `hvac/v1/{gatewayId}/down/command` 收，回复发到 `hvac/v1/{gatewayId}/up/reply`。
 
-From the repository root:
+## 历史导入
 
-```bash
-go run ./tools/eg8200-simulator/cmd/eg8200-simulator \
-  -config ./tools/eg8200-simulator/configs/central-plant.local.json
-```
+历史导入是手工或开发时用的，不属于实时的 MQTT 链路，也不在正式部署里。它用同一套冷站模型和场景、点位信息，以及「模拟器设备 → 平台设备 id」的对照（`configs/central-plant.device-ids.local.json`），把读数一条条提交给遥测的「只写历史」接口。本地平时用 `scripts/local-history-replay.mjs` 调它。
 
-Or set:
-
-```bash
-export EG8200_SIMULATOR_CONFIG="$PWD/tools/eg8200-simulator/configs/central-plant.local.json"
-go run ./tools/eg8200-simulator/cmd/eg8200-simulator
-```
-
-## Historical Replay
-
-Historical Replay is an explicit operator/development path and is not part of the live MQTT loop or the production compose topology. The runner reuses the canonical Plant/Scenario, Point metadata, and a mapping from each simulator device to its platform Device id (`configs/central-plant.device-ids.local.json`), then submits observations sequentially to the Telemetry-owned history-only admission route.
-
-`TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE` must name the dedicated replay workload (default `spiffe://hvac.local/historical-replay-runner`). Telemetry resolves each replayed Point from the Point it last accepted live for that Device and key, so replay a Device only after live data has reached it. Do not reuse the MQTT adapter identity. A replay also requires a stable UUIDv7 `dataset-id`, historical start instant, and finite duration:
+`TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE` 指定专门的导入程序身份（默认 `spiffe://hvac.local/historical-replay-runner`），不要用 MQTT 接入的身份。遥测按这台设备、这个点位最近一次实时收到的点位来对应导入的读数，所以要等实时数据到过之后再导入这台设备。每次导入还要一个固定的 UUIDv7 批次号、历史的开始时刻和一段有限的时长：
 
 ```bash
 go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
@@ -77,57 +60,31 @@ go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
   -server-ca /path/to/ca.crt
 ```
 
-Telemetry Runtime owns `HISTORY_REPLAY` provenance, receipt time, source partition, source event identity, Point resolution, validation, idempotency, and History outbox publication. Replay observations can become authoritative History facts but cannot update Latest, Presence, Device Snapshot, or Business Revision. Re-running the same dataset produces the same per-Device offset sequence, so retry/restart is idempotent at the Telemetry owner boundary.
+导入来源（`HISTORY_REPLAY`）、收到时间、来源分区和事件编号、点位对应、校验、去重和写历史都由遥测负责。导入的读数可以成为正式的历史，但不会改最新读数、在线状态、设备快照或状态版本号。同一批次重导会得到同样的顺序号，所以中途重试或重启不会重复写入。数据库和历史的集成测试：`node scripts/run-historical-replay-integration.mjs`。
 
-The focused database/History acceptance is:
+## ATV630 变频器
 
-```bash
-npm run historical-replay:integration
-```
+- `cmd/eg8200-virtual-atv630`：ATV630 的 Modbus/TCP 模拟从站。
+- `cmd/eg8200-atv630-edge`：用平台的 ATV630 驱动（`libs/edgecontrol`）通过真实 TCP 连接去读写它。
 
-Diagnostics default to port `19092`:
+协议验收：`node scripts/run-atv630-protocol-acceptance.mjs`。
 
-```text
-GET /health/live
-GET /health/ready
-```
+## 读数之间的关系
 
-Readiness becomes successful only after all six device telemetry publications complete in one simulation cycle.
+- 水泵流量和转速成正比；
+- 水泵和冷却塔风机的功率和转速的三次方成正比；
+- 机组功率 = 制冷量 ÷ COP；
+- COP 受冷冻水设定温度、冷却水温度和低负荷运行的影响；
+- 冷却水流量、冷冻水流量或冷却塔不够时，机组不制冷；
+- 空调总功率 = 机组 + 两台水泵 + 冷却塔风机；
+- 冷量计的制冷量和机组用同一个能量平衡。
 
-## Container image
+`cmd/eg8200-simulator`（旧的、经 ThingsBoard 发数据的程序）已经下线，运行时只提示改用 `eg8200-mqtt-publisher`。
 
-Build the non-root runtime image from the repository root:
-
-```bash
-npm run build:eg8200-simulator-image
-```
-
-Mount the config read-only and pass tokens through environment variables when running the image. The image does not contain credentials or a default production configuration.
-
-## Telemetry behavior
-
-The simulator publishes one timestamped ThingsBoard telemetry payload per device at the configured interval. Important relationships include:
-
-- pump flow proportional to speed;
-- pump and cooling-tower fan power proportional to the cube of speed;
-- chiller power derived from cooling capacity and COP;
-- COP affected by chilled-water setpoint, condenser-water temperature, and low-load operation;
-- chiller cooling disabled when condenser-water flow, chilled-water flow, or cooling-tower availability is insufficient;
-- total HVAC power includes chiller, both pumps, and cooling-tower fan power;
-- BTU-meter cooling capacity uses the same plant cooling balance as the chiller.
-
-## Tests
+## 测试
 
 ```bash
 go test ./tools/eg8200-simulator/...
 ```
 
-The current unit tests cover strict config and Scenario parsing, stepwise Scenario progression, energy balance, pump affinity behavior, command validation, plant interlocks, telemetry payloads, and simulator authority boundaries.
-
-## MQTT
-
-Use MQTT config schema 6 (`configs/central-plant.mqtt.local.example.json`). Register a Gateway in Web → 集成管理, then generate its one-time code. Set `EG8200_ENROLLMENT_CODE` only for first startup. `enrollmentUrl` must be an HTTPS origin; `enrollmentCaFile` trusts ingress and `enrollmentServerName` identifies it. `caFile` separately trusts the MQTT broker. `certFile` and `keyFile` name one writable identity-bundle path. The simulator generates its private key and CSR, exchanges the code for a 90-day certificate and broker URL, and atomically writes its own bundle; no manual signing or credential SQL seed. The private key stays on the Gateway.
-
-Subsequent starts use the bundle without a code. The publisher checks hourly and renews within the last 14 days using its current certificate; the older certificate retains its original expiry. Expired or terminally revoked identities require a newly registered Gateway and explicit source reassignment. Connectivity enforces Gateway-wide isolation for data and commands; existing broker connections are not guaranteed to disconnect at individual leaf expiry.
-
-One simulator process is one EG8200 Gateway. Its MQTT config names the Gateway by its Registry Device id (`gatewayId`), which is also the certificate CN and the MQTT client id. It publishes telemetry to `hvac/v1/{gatewayId}/up/telemetry` and names each device by its source key, the simulator device name; Connectivity resolves Tenant, Site, Device and Point from the Registry. It receives commands on `hvac/v1/{gatewayId}/down/command` and replies on `hvac/v1/{gatewayId}/up/reply`.
+单元测试覆盖：配置和场景的严格解析、场景按步推进、能量平衡、水泵相似定律、指令校验、联锁、读数内容，以及模拟器不越权写业务数据。

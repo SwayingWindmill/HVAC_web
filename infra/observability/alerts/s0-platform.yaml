@@ -10,7 +10,7 @@ groups:
           secondary_owner: data-platform
         annotations:
           summary: Outbox publishing is stuck
-          runbook: docs/operations/s0-observability.md#outbox-stuck
+          runbook: docs/operations/alerts.md#待发事件积压
       - alert: S0AuditIngestionFailing
         expr: increase(s0_audit_ingestion_total{result="error"}[5m]) > 0
         for: 1m
@@ -20,7 +20,7 @@ groups:
           secondary_owner: platform-runtime
         annotations:
           summary: Audit Ledger ingestion is failing
-          runbook: docs/operations/s0-observability.md#audit-ingestion-lag
+          runbook: docs/operations/alerts.md#操作记录写入慢或失败
       - alert: S0AuditIngestionLatencyHigh
         expr: histogram_quantile(0.95, sum by (le) (rate(s0_audit_ingestion_latency_seconds_bucket[5m]))) > 5
         for: 5m
@@ -30,7 +30,7 @@ groups:
           secondary_owner: data-platform
         annotations:
           summary: Audit ingestion p95 latency exceeds five seconds
-          runbook: docs/operations/s0-observability.md#audit-ingestion-lag
+          runbook: docs/operations/alerts.md#操作记录写入慢或失败
       - alert: S0TelemetryExportFailures
         expr: max(s0_telemetry_failed_exports) > 0
         for: 5m
@@ -40,4 +40,4 @@ groups:
           secondary_owner: developer-experience
         annotations:
           summary: OTLP exports are failing while business traffic remains available
-          runbook: docs/operations/s0-observability.md#collector-unavailable
+          runbook: docs/operations/alerts.md#追踪收集器不可用

@@ -1,26 +1,33 @@
-# Application Blocks
+# 应用组合块（blocks）
 
-`src/blocks` contains reusable application-level compositions built from the project's shadcn/ui primitives and domain components.
+`src/blocks` 是用 shadcn/ui 组件拼好的、各页面共用的组合。设计规则见根目录 `DESIGN.md`。
 
-## Layering
+## 分层
 
-- `components/ui`: shadcn/ui primitives.
-- `components/data-table`: reusable table capabilities and TanStack Table integration.
-- `blocks`: standardized application compositions. Blocks own layout grammar, not business data or feature state.
-- `features`: business-specific columns, filters, queries, actions and workflows.
+- `components/ui`：shadcn/ui 的基础组件。
+- `components/data-table`：表格能力和 TanStack Table 的接入。
+- `blocks`：标准的页面组合，只管版式，不管业务数据和状态。
+- `features`：业务相关的列、筛选、查询、操作和流程。
 
-## Data table block
+## 有哪些
 
-Use `DataTableBlock` for page-, tab- or workspace-level tables.
+| 组合 | 用途 |
+| --- | --- |
+| `Main` + `PageHeader` / `PageMeta`（`page-header`） | 每个页面的开头：一个 `h1`、可选的一行说明（范围、数据时间或任务），标题旁的 `meta` 和右边的操作。平铺的语义标签，没有卡片、边框和背景。页面不自己渲染 `<main>`，应用框架的 `SidebarInset` 就是页面的主区域 |
+| `Panel` / `PanelHeader` / `PanelLink` / `PanelCount`（`panel`） | 唯一的白色面板，标题栏高 48px；数字放在面板里作为一条分隔的数字条 |
+| `StateCard`（`state`） | 空、失败、无权限、未接入，以及路由级的状态页和 404 |
+| `MetricValue`（`metric-card`） | 显示一个数：没有数据时写「暂无数据」而不是 0，数据过期时变淡 |
+| `FactTile`（`fact-list`） | 一个「标签 + 值」的小格子。`className` 作用在值上；要跨列，外面包一层 `<div className="col-span-…">` |
+| `DataTableBlock`（`data-table`） | 页面、标签页级别的表格 |
 
-Canonical composition:
+不要再另做数字条、KPI 卡或状态胶囊；需要时扩展上面这些。
+
+## 表格
+
+页面、标签页级别的表格用 `DataTableBlock`：
 
 ```tsx
-<DataTableBlock
-  title="工单台账"
-  description="使用排序、高级筛选和列显示控制当前站点工单。"
-  actions={...}
->
+<DataTableBlock title="工单" description="当前站点的工单，可排序、筛选和选择显示的列。" actions={...}>
   <DataTable table={table} footer={...}>
     <DataTableAdvancedToolbar table={table}>
       ...
@@ -29,52 +36,15 @@ Canonical composition:
 </DataTableBlock>
 ```
 
-The block intentionally does not own columns, filters, pagination state, queries or row actions. Those stay in the feature.
+- 标题写业务对象（「工单」），不写「台账」「列表」「明细」这类容器名（`npm run design:check` 会检查）。
+- 它不管列、筛选、分页状态、查询和行操作，这些留在 feature 里。
+- 不要再在外面包一层卡片，页面级的表格本身就是一个完整的区域。
 
-Do not wrap `DataTableBlock` in a Card. A page-level DataTable is already the bounded surface.
+面板或侧栏里的小块数据，不要用第二种表格模式：
 
-## Page header block
+- 小的只读对比、参数、依据表：直接用 shadcn 的 `Table`。
+- 左边选对象、右边看详情：用 shadcn 的 `ItemGroup` / `Item`。
+- 按时间排的执行或变更记录：真是事件时用时间线。
+- 表格内编辑、大量数据的虚拟滚动、固定列、树形表格：先看 ReUI / tablecn 的 Data Grid，再考虑自己写。
 
-Every route page starts with `PageHeader` inside the `Main` container: one `h1`, an optional supporting line (scope, freshness or task), optional `meta` beside the title and local `actions`. It is flat semantic markup with no Card, border or background. Pages never render their own `<main>`; the shell's `SidebarInset` is the page landmark.
-
-```tsx
-<Main className="space-y-5">
-  <PageHeader title="能耗分析" description="中央机房 · 本期与昨日同时段对比" actions={...} />
-  ...
-</Main>
-```
-
-## Metric card block
-
-`MetricGrid` holds peer `MetricCard`s in the dashboard-01 grammar: label, value (`MetricValue` says 暂无数据 instead of zero and dims a stale figure), an optional badge, then a lead line that explains the value and a detail line for its time, source or a link onward. The grid reflows by the page container (`@container/main`), so put it inside a `Main` with that class.
-
-## Fact strip block
-
-Use `FactStrip` for a small set of genuinely peer-level operational facts that benefit from rapid horizontal scanning.
-
-```tsx
-<FactStrip
-  items={[
-    { label: '当前功率', value: '504', suffix: 'kW' },
-    { label: '系统 COP', value: '5.80' },
-  ]}
-/>
-```
-
-Rules:
-
-- the facts must be semantically peer-level; do not force unrelated scope, KPI, process and risk facts into one strip;
-- feature code owns labels, values, units, tones and truth;
-- the block owns only responsive layout and visual grammar;
-- do not recreate another metric/KPI strip in a feature CSS file.
-
-## Compact data inside existing surfaces
-
-Do not use a second DataTable mode for compact detail content.
-
-- Small read-only comparison / parameter / evidence matrices inside Card, Sheet, Drawer or `details`: use shadcn `Table` directly.
-- Master-detail object selectors: use shadcn `ItemGroup / Item`.
-- Chronological execution or change history: prefer a Timeline when the data is genuinely event-oriented.
-- Spreadsheet editing, heavy virtualization, pinned columns or tree/grid behavior: review ReUI / Tablecn Data Grid before adding custom behavior.
-
-A parent surface plus its compact child content must have one complete outer boundary. Do not add `Card → rounded border wrapper → Table` or `Card → DataTable` nesting.
+一个面板和它里面的小块内容只能有一层外框，不要「卡片 → 圆角边框 → 表格」或「卡片 → DataTable」这样嵌套。

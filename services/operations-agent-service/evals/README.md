@@ -1,51 +1,30 @@
-# Operations Agent evaluation suite
+# AI 助手评测
 
-Real questions an operator asks on 松雅轩, asked of the **deployed** assistant through the public
-Session API and graded by code (#587; guidance in
-`docs/architecture/agent-building-practices-source-review-2026-10-17.md`).
+值班人员在松雅轩真会问的问题，通过公开的会话接口去问**已部署的**助手，再用代码打分（#587；做法参考 `docs/architecture/agent-building-practices-source-review-2026-10-17.md`）。历次结果在 `BASELINE.md`。
 
-- `questions.ts` — the questions (v1: 23). Each has the operator's wording, the expected outcome
-  (supported finding, unable to conclude, or decline), the figures a correct answer states (read
-  from the Energy Series for the same period at grading time: each bucket, a total, the
-  lowest/highest few with their hours, each machine) and ceilings for reads and duration.
-  `regression` questions should always pass; `capability` questions (alarms, diagnosis, work
-  orders) are goals the assistant has no Tools for yet. Groups: energy figures, explaining a
-  difference, machines, device readings (graded on outcome and wording; see below), an
-  incomplete day (10/14 lost two hours of readings), and four requests to decline (operate
-  equipment, change a setpoint, another Site, a future day).
-- `grade.ts` — the graders, one function over a Session snapshot: Run completed with the expected
-  outcome, required figures stated (rounded to the decimals shown), Chinese only (units allowed),
-  plain words (no 区间/口径/… from the plain-copy rule), no repetition (the answer does not repeat
-  what the card under it says the data could not tell), reads and duration within the ceilings, and declines (no supported finding, no claim
-  of having changed equipment). CI tests them against real recorded Sessions
-  (`test/agent-eval-grading.test.ts`).
-- `run.ts` — the runner. It runs inside the signed-in Web app, so the operator's session authorizes
-  it and no cookie, password or model key passes through whoever runs it.
+- `questions.ts`：题目，现在 24 道。每道写着值班人员的原话、预期的结论（有结论、没法判断、拒绝）、正确答案必须说出的数字（打分时从同一段时间的能耗序列读出：每个时间段、合计、最低 / 最高的几个和它们的小时、每台机组），以及读数据次数和耗时的上限。
+  - 分组：能耗数字、解释差异、机组、设备读数（按结论和用词打分，见下）、数据不全的一天（10/14 缺了两个小时的读数）、四个该拒绝的请求（操作设备、改设定值、另一个站点、还没到的日子），以及告警、故障诊断、工单和设备「解释」四道能力题。
+  - `regression`（回归）题应该一直通过；`capability`（能力）题要求真的调用对应的工具（`reads` 字段），只靠猜「目前没有告警」不算过。
+- `grade.ts`：评分，对一个会话的快照打分，检查项见 `BASELINE.md` 开头。CI 用录下来的真实会话测试这些评分（`test/agent-eval-grading.test.ts`）。
+- `run.ts`：运行程序。它在登录后的网页里跑，所以用的是值班人员自己的登录会话，跑的人碰不到 cookie、密码或模型密钥。
 
-## What the graders do not check yet
+## 评分还没检查的
 
-- The direction of a comparison («多了还是少了»): only how much is graded.
-- Which machine: machine figures are matched by value; names need the asset model as a source.
-- Device readings' values: readings questions are graded on outcome and wording until the device
-  history is a reference source.
-- A capability question's content: an invented «目前没有告警» passes `completed`; figures come with
-  the Tools (#594, #595).
+- 对比的方向（「多了还是少了」）：只评差多少。
+- 是哪台机组：机组的数字按数值匹配；要核对名字，需要拿资产模型当参照。
+- 设备读数的具体值：读数类的题先按结论和用词打分，等设备历史能当参照再说。
 
-## Adding a question
+## 加题
 
-Use a closed past period so the reference figures do not move, phrase it as an operator would, and
-list only the figures a correct answer must state (`pick: { lowest: n }` for "which hours were
-least efficient"). Answers marked not useful by operators become questions.
+用一段已经结束的过去时间，这样参照的数字不会变；用值班人员的说法提问；只列正确答案必须说出的数字（「哪几个小时能效最低」用 `pick: { lowest: n }`）。
 
-## Running it
+## 怎么跑
 
 ```bash
 npm --prefix services/operations-agent-service run eval:build
 ```
 
-Sign in to the server's Web app as an operator of 松雅轩, then evaluate
-`out/operations-agent-eval/runner.js` in that page (browser console, or the agent's page tool) and
-start it:
+以松雅轩值班人员的身份登录服务器的网页，在那个页面里执行 `out/operations-agent-eval/runner.js`（浏览器控制台，或 agent 的页面工具），然后启动：
 
 ```js
 window.__evalLog = [];
@@ -53,9 +32,8 @@ operationsAgentEval.runSuite({ trials: 3, onProgress: (line) => window.__evalLog
   .then((report) => { window.__evalReport = report; });
 ```
 
-Each trial is a new Session in that operator's history (open it in the panel to read the
-transcript; the report keeps every Session id). The report gives, per question, the pass rate of
-each check, whether every trial passed (pass^k), and mean duration, tokens and reads. Record the
-headline numbers in `docs/HANDOFF.md` with each change to the assistant, and compare before and
-after. Three trials of the whole suite cost one DeepSeek call per model turn; do not run it on
-every commit.
+每次尝试都是那个值班人员的一个新会话（在面板里打开就能看原文；报告里记着每个会话的编号）。报告给出每道题每个检查项的通过率、是否 3 次全过（pass^k），以及平均耗时、令牌数和读取次数。整套 3 次约 10 分钟，每一轮模型调用花一次 DeepSeek 的钱，不要每次提交都跑。
+
+它每 5 秒查一次会话状态，遇到网关的限流（每个登录会话每分钟 30 次助手请求）会等一分钟再试。跑的过程中网页登录过期，页面会跳到登录页，这一轮就丢了，要重新登录再跑。
+
+改了助手之后，把主要数字记进 `BASELINE.md`，和上一版比较。

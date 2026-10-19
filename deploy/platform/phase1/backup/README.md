@@ -1,36 +1,36 @@
-# Phase 1 backup contract
+# 第一阶段的备份
 
-This directory implements the Phase 1 deployment-side backup contract from `SE-ARCH-DEPLOY-001 V1.0 CURRENT` and the recovery objectives from `SE-OPS-009 V1.0 CURRENT CANDIDATE` without introducing a database HA cluster.
+按《智慧能源系统总体部署架构设计 V1》（`SE-ARCH-DEPLOY-001 V1.0`）和《SE-OPS-009 V1.0》的恢复目标，在不引入数据库高可用集群的前提下做的备份。
 
 ## PostgreSQL
 
-When `PHASE1_POSTGRES_MODE=local`, the canonical Compose PostgreSQL service supports continuous WAL archiving to `POSTGRES_WAL_ARCHIVE_DIR`, but archiving is enabled only when `POSTGRES_ARCHIVE_MODE=on`. Development and test environments default to `off`; staging/production must opt in only after the archive destination is writable, capacity-managed and independent from the PostgreSQL data volume. A base backup is executed with:
+`PHASE1_POSTGRES_MODE=local` 时，Compose 里的 PostgreSQL 支持把 WAL（预写日志：数据库每次改动先写的记录，用它可以把数据恢复到任意时间点）持续归档到 `POSTGRES_WAL_ARCHIVE_DIR`，但只有 `POSTGRES_ARCHIVE_MODE=on` 才真的开。开发和测试默认关；预发和正式环境只有在归档目录可写、有容量管理、并且和 PostgreSQL 数据卷分开时才开。做一次基础备份：
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-postgres --profile backup run --rm postgres-backup
 ```
 
-When PostgreSQL is external, backup ownership follows that external deployment. The same `postgres-backup` container can target the configured external host only when the database permits `pg_basebackup`; managed-provider backup and PITR should otherwise be operated at the provider/data-plane layer rather than emulated on the application host.
+PostgreSQL 在外部时，备份由那边负责。只有外部数据库允许 `pg_basebackup` 时，才能用同一个 `postgres-backup` 容器对着它备份；否则托管服务的备份和时间点恢复应该在托管服务那一层做，不在应用主机上模拟。
 
-For local PostgreSQL, Production must point both `POSTGRES_WAL_ARCHIVE_DIR` and `POSTGRES_BASE_BACKUP_DIR` at storage that is independent from the PostgreSQL data volume. For external PostgreSQL, the equivalent provider/self-managed backup location must be independent from the application host. A local directory on the same failed disk is not a disaster-recovery backup.
+本机 PostgreSQL：正式环境的 `POSTGRES_WAL_ARCHIVE_DIR` 和 `POSTGRES_BASE_BACKUP_DIR` 都要放在和数据卷分开的存储上。外部 PostgreSQL：对应的备份位置要和应用主机分开。和出故障的盘在同一块盘上的本地目录，不算灾难恢复的备份。
 
-The base backup uses `pg_basebackup` with streamed WAL and writes `SHA256SUMS`. Continuous archive + a suitable base backup is the deployment prerequisite for PITR. This repository does not claim an RPO until a timestamped recovery drill measures it.
+基础备份用带流式 WAL 的 `pg_basebackup`，并写 `SHA256SUMS`。持续归档加上一份合适的基础备份，才能做时间点恢复。在带时间记录的恢复演练实际测过之前，仓库不声明任何 RPO（出故障时最多丢多少时间的数据）。
 
 ## ClickHouse
 
-When `PHASE1_CLICKHOUSE_MODE=local`, ClickHouse exposes a single-node native backup disk at `CLICKHOUSE_BACKUP_DIR`. Run:
+`PHASE1_CLICKHOUSE_MODE=local` 时，ClickHouse 在 `CLICKHOUSE_BACKUP_DIR` 有一个单机的原生备份盘：
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile local-clickhouse --profile backup run --rm clickhouse-backup
 ```
 
-Production must place `CLICKHOUSE_BACKUP_DIR` on protected backup storage rather than the ClickHouse data volume. When ClickHouse is external, backup and restore ownership follows that external data plane or managed provider; the application host does not emulate external ClickHouse durability.
+正式环境要把 `CLICKHOUSE_BACKUP_DIR` 放在受保护的备份存储上，不放在 ClickHouse 数据卷上。ClickHouse 在外部时，备份和恢复由那边或托管服务负责，应用主机不模拟。
 
-## Scheduling
+## 定时
 
-Phase 1 operators register backup invocations in one controlled deployment scheduler (for example one managed systemd timer set on the Linux application/data host). Do not add unrelated per-service cron loops.
+第一阶段在一个受控的调度器里登记备份（例如 Linux 主机上一组受管理的 systemd timer），不要给每个服务各加一个 cron。
 
-On a single server that timer set is `hvac-backup.service` + `hvac-backup.timer` (03:30 Asia/Shanghai), which run `run-scheduled-backups.sh`: a PostgreSQL base backup and a ClickHouse backup of `telemetry_history` and `analytics`, then only the newest `BACKUP_KEEP` (default 7) of each stay. Both run inside their database's container: the postgres image's `pg_hba.conf` accepts replication, and ClickHouse's default user logins, only from there. Install:
+单台服务器上就是 `hvac-backup.service` + `hvac-backup.timer`（每天 03:30，上海时间），执行 `run-scheduled-backups.sh`：一份 PostgreSQL 基础备份和一份 ClickHouse 备份（`telemetry_history` 和 `analytics`），然后每种只留最新的 `BACKUP_KEEP` 份（默认 7）。两个备份都在各自数据库的容器里跑：postgres 镜像的 `pg_hba.conf` 只允许从容器里做复制连接，ClickHouse 的默认用户也只能从那里登录。安装：
 
 ```bash
 sudo install -m 644 deploy/platform/phase1/backup/hvac-backup.{service,timer} /etc/systemd/system/
@@ -44,22 +44,22 @@ ENV
 sudo systemctl daemon-reload && sudo systemctl enable --now hvac-backup.timer
 ```
 
-The backups stay on the same disk until an off-server copy is configured, so they protect against mistakes and corruption, not against losing the server.
+在配置好拷到服务器以外之前，备份都和数据在同一块盘上：能防误操作和数据损坏，防不了整台服务器丢失。
 
-A baseline policy is:
+基本的节奏：
 
-- PostgreSQL base backup: daily.
-- PostgreSQL WAL archive: continuous, with archive timeout bounded by the deployment config.
-- ClickHouse backup: daily after the main ingestion window, or according to site data volume.
-- Restore test: periodic and mandatory; the existing standalone Destroy + Restore test may be run explicitly as software proof, but it is not an automatic release gate and does not replace a staging/production-like restore with real backup artifacts.
+- PostgreSQL 基础备份：每天。
+- PostgreSQL WAL 归档：持续，归档超时由部署配置限定。
+- ClickHouse 备份：每天在主要的写入时段之后，或者按站点的数据量定。
+- 恢复测试：定期、必须做。现有的「删除 + 恢复」测试可以单独跑来证明软件没问题，但它不是自动的发布检查，也不能代替在预发或类正式环境里用真实备份做的恢复。
 
-## Recovery objectives and verification
+## 恢复目标和检查
 
-`SE-OPS-009 V1.0 CURRENT CANDIDATE` freezes the Phase 1 PostgreSQL objective at `RPO <= 5 min / RTO <= 2 h`; Control Command/Audit is `RPO <= 5 min / RTO <= 1 h`. Whole-server replacement is `RTO <= 4 h` only when spare/cold-standby hardware, an off-server backup, versioned configuration and a documented recovery procedure are all available.
+《SE-OPS-009》定下：PostgreSQL 最多丢 5 分钟数据、2 小时内恢复；控制指令和指令记录最多丢 5 分钟、1 小时内恢复。整台服务器更换 4 小时内恢复，前提是有备用或冷备的硬件、服务器以外的备份、有版本的配置和写好的恢复步骤。
 
-The current PostgreSQL baseline uses `archive_timeout=60s`. Production WAL/base-backup paths must therefore be backed by protected storage outside the failed production server/data disk if those objectives are claimed. A same-server backup copy is not whole-server disaster recovery.
+现在 PostgreSQL 的 `archive_timeout=60s`。所以要声明达到这些目标，正式环境的 WAL 和基础备份目录必须放在出故障的服务器和数据盘以外的受保护存储上；同一台服务器上的备份不算整机的灾难恢复。
 
-Run the host-side readiness check daily after the external backup mount is available:
+外部备份挂好之后，每天在主机上跑一次准备情况检查：
 
 ```bash
 POSTGRES_WAL_ARCHIVE_DIR=/mnt/smart-energy-backup/postgres/wal \
@@ -67,6 +67,6 @@ POSTGRES_BASE_BACKUP_DIR=/mnt/smart-energy-backup/postgres/base \
 ./deploy/platform/phase1/backup/verify-recovery-readiness.sh
 ```
 
-It verifies that the newest archived WAL file is no older than the 5-minute readiness threshold and verifies the newest base-backup checksum manifest. This is backup-readiness evidence only.
+它检查最新归档的 WAL 不超过 5 分钟，并校验最新一份基础备份的校验和清单。这只证明备份准备好了。
 
-Backup configuration and readiness checks are not RPO/RTO attestation. Production attainment requires the timestamped drill defined in `../recovery/README.md`, recording the incident-confirmed time, latest recoverable PostgreSQL time, component/business restoration times and final business-validation time.
+配好备份、检查通过，都不等于证明达到了 RPO/RTO。达标要做 `../recovery/README.md` 里规定的带时间记录的演练，记下确认故障的时间、PostgreSQL 能恢复到的最新时间、各组件和业务恢复的时间，以及最后业务验证完成的时间。
