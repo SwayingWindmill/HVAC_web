@@ -1,23 +1,23 @@
-# assistant-ui Source Review — 2026-10-16
+# assistant-ui 调研（2026-10-16）
 
-## Scope
+## 看了什么
 
-The AI 运维助手 panel (#577) needs a chat thread: streamed text, the Tool steps of a Run, a finding, follow-up questions and stop. Reviewed:
+AI 运维助手面板（#577）需要一个对话界面：逐字显示的文字、一次回答里读数据的步骤、结论卡片、追问建议和「停止」按钮。看了：
 
-- `@assistant-ui/react` 0.15.29 and `@assistant-ui/react-markdown` 0.14.23 (with `remark-gfm` 4.0.1), pinned exactly in `apps/hvac-web/package.json`;
-- the shadcn registry item `https://r.assistant-ui.com/thread.json` and what it pulls in (`markdown-text`, `tool-fallback`, `tool-group`, `reasoning`, `attachment`, `image`, `file`, `follow-up-suggestions`, `tooltip-icon-button`), added with `npx shadcn add`, declining every overwrite of existing `components/ui/*`.
+- `@assistant-ui/react` 0.15.29 和 `@assistant-ui/react-markdown` 0.14.23（加 `remark-gfm` 4.0.1），在 `apps/hvac-web/package.json` 里固定确切版本；
+- shadcn 组件库条目 `https://r.assistant-ui.com/thread.json` 和它带进来的组件（`markdown-text`、`tool-fallback`、`tool-group`、`reasoning`、`attachment`、`image`、`file`、`follow-up-suggestions`、`tooltip-icon-button`），用 `npx shadcn add` 加入，所有覆盖现有 `components/ui/*` 的提示都选了「不覆盖」。
 
-ReUI's AI chat blocks were also looked at; they need a paid licence, so they were not used.
+也看了 ReUI 的 AI 对话组件，需要付费授权，没用。
 
-## Decision
+## 决定
 
-**ADAPT.** The runtime and primitives are adopted as a dependency; the registry UI is copied and owned.
+**改造后使用**：运行时和基础组件作为依赖引入；组件库里的界面代码复制过来，归我们自己维护。
 
-- **Runtime:** `useExternalStoreRuntime` over our own Agent Session state. The server keeps the conversation (`operations-agent-service`); the page folds the Session snapshot and its live events into messages (`features/assistant/thread-model.ts`) and hands them to assistant-ui. assistant-ui's own thread list, cloud, transport and model adapters are not used.
-- **Kept from the registry, restyled:** `markdown-text.tsx` (Chinese copy label), `tooltip-icon-button.tsx` and `hooks/use-copy-to-clipboard.ts`, under `components/assistant-ui/elements/`.
-- **Rewritten:** the thread itself, as `features/assistant/components/AssistantThread.tsx`, on assistant-ui primitives (`ThreadPrimitive`, `MessagePrimitive.GroupedParts`, `ComposerPrimitive`, `ThreadPrimitive.Suggestion`). Tool steps, the finding card and the input request are project components in the design system.
-- **Rejected:** attachments, images, files, media player, reasoning display, voice and dictation, message editing, branches, feedback and export. The panel answers from platform data only and the model's reasoning is not shown, so none of them has a use. `tw-shimmer` and the registry's `global.css` additions went with them.
+- **运行时**：在我们自己的助手会话状态上用 `useExternalStoreRuntime`。对话保存在服务端（`operations-agent-service`）；页面把会话快照和实时事件整理成消息（`features/assistant/thread-model.ts`），再交给 assistant-ui。assistant-ui 自带的会话列表、云服务、传输和模型适配都不用。
+- **保留并改了样式的**：`markdown-text.tsx`（「复制」按钮改成中文）、`tooltip-icon-button.tsx` 和 `hooks/use-copy-to-clipboard.ts`，放在 `components/assistant-ui/elements/`。
+- **重写的**：对话界面本身，即 `features/assistant/components/AssistantThread.tsx`，用 assistant-ui 的基础组件（`ThreadPrimitive`、`MessagePrimitive.GroupedParts`、`ComposerPrimitive`、`ThreadPrimitive.Suggestion`）搭。读数据的步骤、结论卡片和补充信息的提问是按设计系统写的项目组件。
+- **不要的**：附件、图片、文件、媒体播放、推理过程、语音和听写、编辑消息、分支、反馈和导出。面板只用平台数据回答，也不显示模型的推理，这些都用不上。`tw-shimmer` 和组件库加进 `global.css` 的样式也一起去掉了。
 
-## Upgrading
+## 升级时
 
-The copied files carry no registry version of their own; on an upgrade of `@assistant-ui/react`, compare `markdown-text.tsx` with the registry item and rerun `npm run web:e2e -- assistant.spec.ts`.
+复制过来的文件没有自己的版本号。升级 `@assistant-ui/react` 时，把 `markdown-text.tsx` 和组件库里的条目对比一下，再跑 `npm run web:e2e -- assistant.spec.ts`。
