@@ -86,7 +86,7 @@ export const gateCommandMatrix = Object.freeze({
     ]),
   }),
   integration: Object.freeze({
-    platform: Object.freeze([npmRun('test:durable-postgres')]),
+    platform: Object.freeze([npmRun('test:durable-postgres'), npmRun('deployment:phase1:migration:test')]),
     registry: Object.freeze([nodeRun('scripts/run-s1-registry-postgres-tests.mjs')]),
     telemetry: Object.freeze([
       nodeRun('scripts/run-s2-telemetry-postgres-tests.mjs'),

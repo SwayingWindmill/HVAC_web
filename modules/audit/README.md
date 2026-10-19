@@ -40,7 +40,7 @@ The consumer uses `audit_consumer_runtime`. The HTTP query seam uses `audit_quer
 npm run build:audit-owner
 npm run test:durable-unit
 npm run test:durable-postgres
-npm run audit:durable-session
+npm run audit:security-failure
 ```
 
 See `docs/security/s0-durable-session-audit.md` for the full transaction, delivery, RLS and hash-chain model.

@@ -117,9 +117,9 @@ Operations Agent 只通过 `energy-api`/Platform Gateway 暴露 Agent Session �
 npm run repo:check
 npm run architecture:phase1:check
 npm run docs:phase1:consistency:check
-npm run data:phase1:check
+npm run data:architecture:check
 npm run deployment:phase1:check
-npm run domain:matrix:test
+npm run pr:gates:test
 npm run operations-agent:contracts:check
 npm run contracts:check
 npm run events:check

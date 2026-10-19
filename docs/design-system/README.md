@@ -63,7 +63,6 @@ Any static previews under this directory are reference artifacts only. They are 
 
 ```bash
 npm run design:check
-npm run web:design:changed
 ```
 
 The design gate verifies current shadcn authority, architecture boundaries, the component contract and rejection of legacy Ant/Control Desk authority language. Browser review remains required for migrated surfaces because static checks cannot validate density, hierarchy or responsive composition.

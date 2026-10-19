@@ -133,7 +133,6 @@ The Registry delegation issuer is derived from the IAM TLS certificate SPIFFE UR
 
 ```bash
 npm run test:identity
-npm run s1:registry:postgres
-npm run test:security-negative
+npm run registry:integration
 npm run build:iam-owner
 ```

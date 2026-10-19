@@ -31,7 +31,7 @@ The Relay validates the stored Protobuf envelope hash before publishing.
 ```bash
 npm run build:outbox-relay
 npm run test:durable-unit
-npm run audit:durable-session
+npm run audit:security-failure
 ```
 
 See `docs/security/s0-durable-session-audit.md` for failure and recovery tests.

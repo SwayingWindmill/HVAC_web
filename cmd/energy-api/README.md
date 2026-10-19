@@ -52,29 +52,7 @@ Legacy routing adapters are not part of the active Gateway. Historical migration
 
 See `docs/security/s0-route-data-ownership.md` for Registry, Data Ownership, rollback, anti-corruption, timeout and circuit-breaker details.
 
-## Local S0 topologies
-
-Contract-only topology:
-
-```bash
-npm run dev:s0-gateway
-```
-
-Authenticated principal topology:
-
-```bash
-npm run dev:s0-auth
-```
-
-The authenticated topology generates a temporary test CA and starts only HTTPS HVAC Web, HTTPS OIDC fixture, Gateway and mTLS-only IAM. It uses explicit ticket-02 compatibility flags and does not start a database or broker.
-
-Durable Session and Audit topology:
-
-```bash
-npm run dev:s0-durable
-```
-
-This starts PostgreSQL, Redpanda, OIDC, IAM, Audit Ledger, Outbox Relay, the frozen private NestJS health adapter, Gateway and HTTPS HVAC Web in an isolated local topology.
+The local stack is `npm run local:up` (see the root README).
 
 ## Verification
 
@@ -86,7 +64,6 @@ npm run ownership:check
 npm run test:gateway
 npm run test:identity
 npm run test:durable-unit
-npm run test:ownership
 npm run test:durable-postgres
 npm run build:energy-api
 npm run build:iam-owner
@@ -95,13 +72,10 @@ npm run build:outbox-relay
 npm run build:oidc-fixture
 npm run lint
 npm run build
-npm run audit:platform-gateway
-npm run audit:auth-principal
-npm run audit:durable-session
-npm run audit:route-ownership
+npm run audit:security-failure
 ```
 
-The durable browser audit requires Docker plus a CDP-compatible Edge, Chrome or Chromium browser. All audit topologies use isolated processes and operating-system temporary directories.
+The durable browser audit requires Docker plus a CDP-compatible Edge, Chrome or Chromium browser. The audit topology uses isolated processes and operating-system temporary directories.
 
 ## Build identity
 

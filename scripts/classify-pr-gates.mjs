@@ -53,6 +53,13 @@ async function changedFiles() {
 }
 
 const files = [...new Set(await changedFiles())];
+// Every Phase 1 migration is listed here; a change to one reruns the migration integration test.
+const phase1Migrations = new Set(
+  (await readFile(resolve(root, 'deploy/platform/phase1/migrations/migration-list.tsv'), 'utf8'))
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => line.split('|')[1]),
+);
 const contractProfiles = new Set();
 const unitProfiles = new Set();
 const integrationProfiles = new Set();
@@ -156,6 +163,14 @@ for (const file of files) {
     addReason(file, 'repository documentation or metadata only');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
+  match(file.startsWith('deploy/platform/phase1/migrations/'), () => {
+    selectBroad(file, 'Phase 1 migration set changed');
+    add(integrationProfiles, ['platform']);
+  });
+  if (phase1Migrations.has(file)) {
+    add(integrationProfiles, ['platform']);
+    addReason(file, 'Phase 1 migration changed');
+  }
   match([
     'scripts/check-repository-governance.ts',
     'scripts/classify-pr-gates.mjs',
@@ -183,7 +198,7 @@ for (const file of files) {
   });
 
   match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('services/outbox-relay/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
-  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('tools/legacy-private-fixture/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
+  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
   match(file.startsWith('libs/telemetryauth/') || file.startsWith('modules/connectivity/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
     selectTelemetry(file, 'telemetry capability changed', {
@@ -233,7 +248,7 @@ for (const file of files) {
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
-    scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
+    scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {
       const integration = lower.includes('realtime') || lower.includes('history') || lower.includes('ingest') || lower.includes('postgres');
