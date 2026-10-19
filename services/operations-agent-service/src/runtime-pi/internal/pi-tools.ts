@@ -103,6 +103,12 @@ const toolFailureCodes = new Set<AgentToolErrorCode>([
 interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
   readonly completedToolIds: Set<string>;
+  /**
+   * Each successful read by the short id the model cites ("E1" → the provider's call id). The
+   * model mis-copied the provider's long random ids, refusing its own cards (#624).
+   */
+  readonly evidenceIds: Map<string, string>;
+  reads: number;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
   calls: number;
@@ -174,7 +180,8 @@ const investigationCompleteParameters = Type.Object({
   keyFigures: Type.Optional(Type.Array(Type.Object({
     label: Type.String({ minLength: 1, maxLength: 32 }),
     value: Type.String({ minLength: 1, maxLength: 24 }),
-    unit: Type.Optional(Type.String({ minLength: 1, maxLength: 16 })),
+    // A figure without a unit (能效) may leave it empty; the card shows no unit then (#624).
+    unit: Type.Optional(Type.String({ maxLength: 16, description: '单位，例如 kWh、元；能效没有单位，不写或留空。' })),
   }, { additionalProperties: false }), { maxItems: 4 })),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
   recommendedNext: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
@@ -210,6 +217,9 @@ const adaptProjectTool = (
   executionMode: tool.definition.executionMode,
   execute: async (toolCallId, parameters, signal) => {
     state.calls += 1;
+    // Numbered in call order, so reads started together get their ids in the order they were asked.
+    state.reads += 1;
+    const evidenceId = `E${state.reads}`;
     if (state.calls > state.budget.maxToolCalls) {
       state.onBudgetExhausted('TOOL_CALL_LIMIT');
       throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
@@ -231,9 +241,10 @@ const adaptProjectTool = (
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
       state.completedToolIds.add(toolCallId);
+      state.evidenceIds.set(evidenceId, toolCallId);
       // The model cites a read in investigation_complete by this id.
       return {
-        content: [{ type: 'text', text: JSON.stringify({ evidenceId: toolCallId, result }) }],
+        content: [{ type: 'text', text: JSON.stringify({ evidenceId, result }) }],
         details: { kind: 'project-tool', result },
       };
     } catch (error) {
@@ -269,6 +280,21 @@ const withoutRestatedLimitations = <T extends { readonly limitations: readonly s
   return limitations.length === finding.limitations.length ? finding : Object.freeze({ ...finding, limitations: Object.freeze(limitations) });
 };
 
+// An empty unit means the figure has none (能效); the card leaves it out rather than refusing.
+const withoutEmptyUnits = (parameters: unknown): unknown => {
+  if (typeof parameters !== 'object' || parameters === null || !('keyFigures' in parameters)) return parameters;
+  const { keyFigures } = parameters as { readonly keyFigures?: unknown };
+  if (!Array.isArray(keyFigures)) return parameters;
+  return {
+    ...parameters,
+    keyFigures: keyFigures.map((figure: unknown) => {
+      if (typeof figure !== 'object' || figure === null || (figure as { unit?: unknown }).unit !== '') return figure;
+      const { unit: _empty, ...rest } = figure as Record<string, unknown>;
+      return rest;
+    }),
+  };
+};
+
 const createInvestigationCompleteTool = ({
   sessionId,
   runId,
@@ -284,20 +310,26 @@ const createInvestigationCompleteTool = ({
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const refuse = refuser(onRefused, toolCallId);
-    let finding: ReturnType<typeof parseInvestigationComplete>;
+    let parsed: ReturnType<typeof parseInvestigationComplete>;
     try {
-      finding = parseInvestigationComplete(parameters);
+      parsed = parseInvestigationComplete(withoutEmptyUnits(parameters));
     } catch (error) {
       return refuse('FINDING_CONTENT_INVALID', error instanceof Error ? error.message : String(error));
     }
     if (needsExecutionCorrection(answers())) refuse('FINDING_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
-    if (finding.evidenceRefs.some(({ toolExecutionId }) => !state.completedToolIds.has(toolExecutionId))) {
+    // A ref names a read by its short id (or, as before, by its call id); the card keeps the call id.
+    const readOf = (id: string): string | undefined => state.evidenceIds.get(id) ?? (state.completedToolIds.has(id) ? id : undefined);
+    if (parsed.evidenceRefs.some(({ toolExecutionId }) => readOf(toolExecutionId) === undefined)) {
       // The model reads this refusal, so it says which ids it may cite.
-      const cited = [...state.completedToolIds];
+      const cited = [...state.evidenceIds.keys()];
       refuse('FINDING_EVIDENCE_NOT_READ', cited.length === 0
         ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
         : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
+    const finding = Object.freeze({
+      ...parsed,
+      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: readOf(ref.toolExecutionId)! }))),
+    });
     claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
       id: `artifact-${toolCallId}`,
@@ -359,6 +391,8 @@ export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
   const state: ProjectToolBudgetState = {
     budget: input.budget,
     completedToolIds: new Set<string>(),
+    evidenceIds: new Map<string, string>(),
+    reads: 0,
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
     calls: 0,

@@ -660,10 +660,10 @@ test('energy anomaly run: the model gets the run time and Site-calendar rules in
   assert.doesNotMatch(system.text, /site_get_context|localNow/u);
   assert.deepEqual(harness.energyInputs.map(({ request }) => request.input.energyType).sort(), ['cooling', 'cooling', 'electricity', 'electricity']);
   assert.equal(result.runStatus, 'COMPLETED');
-  // Each read tells the model the id its evidence cites.
+  // Each read tells the model a short id its evidence cites (#624): the model mis-copied long ones.
   const toolResults = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text));
-  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['cooling-compare', 'power-compare']);
-  assert.equal(toolResults.find((message) => message.evidenceId === 'power-compare').result.comparison.status, '可以比较');
+  assert.deepEqual(toolResults.map((message) => message.evidenceId).sort(), ['E1', 'E2']);
+  assert.equal(toolResults[0].result.comparison.status, '可以比较');
   assert.deepEqual(result.artifacts[0].finding.keyFigures, [{ label: '多用电', value: '+25', unit: 'kWh' }, { label: '能效', value: '4.4' }]);
   assert.equal(result.artifacts[0].finding.limitations.length, 1);
 });
@@ -842,7 +842,7 @@ test('a multi-measure question is answered from one semantic query over the Site
   });
   assert.equal(result.runStatus, 'COMPLETED');
   const answer = requests[1].filter((message) => message.role === 'toolResult').map((message) => JSON.parse(message.text))[0];
-  assert.equal(answer.evidenceId, 'two-days');
+  assert.equal(answer.evidenceId, 'E1');
   assert.deepEqual(answer.result.columns, ['时段', '用电量', '供冷量', '综合能效']);
   assert.deepEqual(answer.result.rows, [
     { siteTime: '2026-10-14 00:00', 用电量: 3200, 供冷量: 14080, 综合能效: 4.4 },
@@ -958,7 +958,7 @@ test('a finding citing a read that did not happen is refused with the ids it may
 
   const refusal = requests[2].findLast((message) => message.role === 'toolResult').text;
   assert.match(refusal, /evidenceId/u);
-  assert.match(refusal, /energy-read-1/u);
+  assert.match(refusal, /E1/u);
   assert.doesNotMatch(refusal, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/u);
   assert.equal(result.runStatus, 'COMPLETED');
   // #624: the record says why, without the model's text.
@@ -1130,4 +1130,33 @@ test('a refused card is recorded by the part that was wrong and how', async () =
       missing: 'FINDING_LIMITATIONS_MISSING',
     },
   );
+});
+
+// #624: the commonest refusals were a mis-copied long evidence id and a figure without a unit
+// written as an empty unit. The model cites the short id; the record keeps the real read.
+test('a card cites a read by its short id and a figure with no unit may leave the unit empty', async () => {
+  const energyTool = projectTool('energy_compare_periods', async () => ({
+    comparison: { status: '可以比较', absoluteChangeKWh: 5, percentChange: 25 },
+  }));
+  const { result } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'call_00_WWrWol5aIwvRmb1pQXdy7410', name: 'energy_compare_periods', arguments: {} }], stopReason: 'toolUse' },
+    {
+      parts: [{
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: {
+          outcome: 'SUPPORTED_FINDING',
+          evidenceRefs: [{ owner: 'ENERGY', resourceType: 'period-comparison', resourceId: 'comparison-1', toolExecutionId: 'E1' }],
+          keyFigures: [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42', unit: '' }],
+          limitations: [],
+          recommendedNext: [],
+        },
+      }],
+      stopReason: 'toolUse',
+    },
+  ], [energyTool]);
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.equal(result.toolExecutions.filter(({ status }) => status === 'FAILED').length, 0);
+  const finding = result.artifacts[0].finding;
+  assert.equal(finding.evidenceRefs[0].toolExecutionId, 'call_00_WWrWol5aIwvRmb1pQXdy7410');
+  assert.deepEqual(finding.keyFigures, [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42' }]);
 });
