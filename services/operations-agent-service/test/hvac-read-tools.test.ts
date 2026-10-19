@@ -547,7 +547,7 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   const to = '2026-10-17T07:00:00.000Z';
 
   const result = await execute(byName(harness.tools, 'telemetry_query_history'), {
-    deviceId: chillerDeviceId,
+    deviceId: meterDeviceId,
     pointKeys: ['chw_supply_temp', 'active_energy_total'],
     startDate: '2026-10-16',
     endDate: '2026-10-16',
@@ -556,7 +556,7 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   assert.deepEqual(harness.historyInputs[0].request.input, {
     tenantId,
     siteId,
-    deviceId: chillerDeviceId,
+    deviceId: meterDeviceId,
     keys: ['chw_supply_temp', 'active_energy_total'],
     from,
     to,
@@ -566,10 +566,19 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   });
   assert.deepEqual(result.series, [
     { key: 'chw_supply_temp', unit: '°C', kind: '读数', points: [{ siteTime: '2026-10-16 03:00', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
-    { key: 'active_energy_total', unit: 'kWh', kind: '累计量', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
+    // Named as the device's points are; a key the asset model does not list goes without a name.
+    { key: 'active_energy_total', name: '累计电量', unit: 'kWh', kind: '累计量', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
   ]);
   // The history owner rated it UNCERTAIN: one bucket is only half covered.
   assert.equal(result.dataStatus, '不完整');
+  // A card charts the readings that share the first one's unit as a line (#640).
+  assert.deepEqual(byName(harness.tools, 'telemetry_query_history').chart(result), {
+    kind: 'LINE', title: '10月16日每小时读数', unit: '°C', categories: ['03:00'], series: [{ name: '读数', values: [7.2] }],
+  });
+  const energy = await execute(byName(harness.tools, 'telemetry_query_history'), { deviceId: meterDeviceId, pointKeys: ['active_energy_total'], startDate: '2026-10-16', endDate: '2026-10-16' });
+  assert.deepEqual(byName(harness.tools, 'telemetry_query_history').chart(energy), {
+    kind: 'LINE', title: '10月16日每小时累计电量', unit: 'kWh', categories: ['03:00'], series: [{ name: '累计电量', values: [88.5] }],
+  });
 });
 
 test('telemetry_query_history refuses a range that would return more buckets than one result holds, before reading', async () => {

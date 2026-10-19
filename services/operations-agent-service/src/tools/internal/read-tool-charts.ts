@@ -6,7 +6,7 @@ import { semanticCatalog } from './semantic-catalog.gen.js';
 // chart is one the model read.
 
 // The words readEnergy puts in its query, one for each granularity.
-const EVERY: Readonly<Record<string, string>> = Object.freeze({ 按小时: '每小时', 按日: '每天', 按月: '每月' });
+const EVERY: Readonly<Record<string, string>> = Object.freeze({ 按15分钟: '每15分钟', 按小时: '每小时', 按日: '每天', 按月: '每月' });
 
 /** 2026-08-01 → 8月1日. */
 const dayWords = (date: string): string => {
@@ -146,6 +146,40 @@ export const semanticChart = (result: unknown): FindingChart | null => {
     series: values.map((value) => ({
       name: value.slice(0, 32),
       values: periods.map((period) => numberOrNull(read.rows.find((row) => String(row.siteTime) === period && String(row[grouping] ?? '') === value)?.[measure])),
+    })),
+  };
+};
+
+interface HistoryRead {
+  readonly query: { readonly startDate: string; readonly endDate: string; readonly granularity: string };
+  readonly series: readonly {
+    readonly name?: string;
+    readonly unit: string;
+    readonly points: readonly { readonly siteTime: string; readonly average?: number; readonly increase?: number }[];
+  }[];
+}
+
+/** telemetry_query_history: readings sharing the first one's unit as lines, averages for readings and increases for counters. */
+export const historyChart = (result: unknown): FindingChart | null => {
+  const read = result as HistoryRead;
+  const numeric = read.series.filter((series) => series.points.some((point) => point.average !== undefined || point.increase !== undefined));
+  const first = numeric[0];
+  if (first === undefined) return null;
+  const charted = numeric.filter((series) => series.unit === first.unit).slice(0, 4);
+  const names = charted.map((series) => series.name ?? '读数');
+  const { startDate, endDate, granularity } = read.query;
+  const periods = [...new Set(charted.flatMap((series) => series.points.map((point) => point.siteTime)))].sort();
+  return {
+    kind: 'LINE',
+    title: `${rangeWords(startDate, endDate)}${EVERY[granularity]}${names.join('、')}`.slice(0, 64),
+    unit: first.unit,
+    categories: periods.map((siteTime) => periodLabel(siteTime, granularity, startDate === endDate)),
+    series: charted.map((series, index) => ({
+      name: names[index]!.slice(0, 32),
+      values: periods.map((siteTime) => {
+        const point = series.points.find((candidate) => candidate.siteTime === siteTime);
+        return point?.average ?? point?.increase ?? null;
+      }),
     })),
   };
 };

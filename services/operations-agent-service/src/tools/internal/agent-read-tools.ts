@@ -42,7 +42,7 @@ import {
 import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
-import { energyComparisonChart, energySeriesChart, equipmentEnergyChart, semanticChart } from './read-tool-charts.js';
+import { energyComparisonChart, energySeriesChart, equipmentEnergyChart, historyChart, semanticChart } from './read-tool-charts.js';
 import { semanticCatalog } from './semantic-catalog.gen.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
@@ -762,6 +762,7 @@ const readHistory = async (
   history: TelemetryHistoryReader,
   timezone: string,
   query: HistoryArguments,
+  names: ReadonlyMap<string, string>,
 ) => {
   const draft = {
     tool: 'telemetry.history.aggregateDeviceHistory' as const,
@@ -784,8 +785,10 @@ const readHistory = async (
     const buckets = payload.buckets.filter((bucket) => bucket.telemetryKey === key);
     const first = buckets[0];
     if (first === undefined) return [];
+    const name = names.get(key);
     return [{
       key,
+      ...(name === undefined ? {} : { name }),
       unit: unitWords(first.unit),
       kind: pointKind(first.pointType),
       points: buckets.map((bucket) => ({
@@ -1369,7 +1372,14 @@ export const createHvacReadTools = ({
       const query = parseHistoryArguments(argumentsValue, limits);
       assertExecutionCapability(context, HISTORY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        // Each reading by its point's name, for the model and a card's chart (#640), when the asker may read the asset model.
+        const [{ payload: sitePayload }, model] = await Promise.all([
+          readSite(context, authorization, toolAuthorizationReader, registryReader),
+          hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+            ? readAssetModel(context, authorization, toolAuthorizationReader, registryReader).then((read) => read.model)
+            : Promise.resolve(null),
+        ]);
+        const device = model === null ? undefined : describeEquipment(model).find((candidate) => candidate.deviceId === query.deviceId);
         return assertResultBytes(await readHistory(
           context,
           authorization,
@@ -1377,9 +1387,11 @@ export const createHvacReadTools = ({
           telemetryHistoryReader,
           sitePayload.site.timezone,
           query,
+          new Map(device?.points.map((point) => [point.key, point.name]) ?? []),
         ), limits);
       });
     },
+    chart: historyChart,
   });
 
   const energyQueryTool: AgentTool = Object.freeze({
