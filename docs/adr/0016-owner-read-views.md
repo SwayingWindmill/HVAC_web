@@ -1,7 +1,15 @@
-# ADR 0016 — Owners publish read views; consumers keep no copies of owner master data
+# ADR 0016：负责方发布只读视图，使用方不保存负责方主数据的副本
 
-Status: accepted
+状态：已采纳（2026-10-02）
 
-Date: 2026-10-02
+## 决定
 
-A consumer in the same PostgreSQL database as an owner reads the owner's master data through versioned, read-only SQL views that the owner publishes in its own schema and grants to the consumer's role; it keeps no projection tables. A consumer in another database does not read the owner at all: the context that resolved the facts hands them over with the request. Concretely, Registry publishes its Gateway directory, Device Source Keys and Point bindings as views read by Connectivity (both in `hvac_s1`), and Connectivity sends Telemetry (in `hvac_s2`) each observation with its resolved Tenant, Site, Device and Point. We chose this because the projections it replaces (`telemetry_runtime.registry_device_bindings`, `registry_point_bindings`, `iam_scope_projections`) had no projector and were filled only by seed scripts, so they silently drifted from Registry; a view is always current and needs no synchronisation code, and handing resolved facts along avoids a second database connection or an event pipeline. This is the "call the owner's port" option of ADR 0013 §2: the view is the port, and the owner may change its tables freely as long as the view keeps its contract. If a consumer later needs owner facts it cannot receive with a request, it gets a projection fed by owner events at that point.
+使用方和负责方在同一个 PostgreSQL 数据库里时，使用方通过负责方在自己 schema 里发布、授权给使用方数据库角色的只读 SQL 视图（带版本）读主数据，不建自己的副本表。使用方在另一个数据库里时，根本不读负责方：已经查好这些信息的那一方，把它们随请求一起交过来。
+
+例子：设备登记（Registry）把网关目录、设备的数据来源编号和点位绑定发布成视图，由设备接入服务（Connectivity）读，两者都在 `hvac_s1` 库里；设备接入服务再把每条读数连同查好的租户、站点、设备和点位一起交给在 `hvac_s2` 库里的遥测。
+
+## 原因
+
+被替换掉的副本表（`telemetry_runtime.registry_device_bindings`、`registry_point_bindings`、`iam_scope_projections`）没有任何程序在同步，只靠种子脚本填，所以会悄悄和设备登记对不上。视图永远是最新的，不需要同步代码；把查好的信息随请求交过去，又省掉了第二个数据库连接或一条事件管道。
+
+这就是 ADR 0013 §2 里「调用负责方的接口」那种做法：视图就是接口，负责方可以随便改自己的表，只要视图的约定不变。以后如果某个使用方需要的信息没法随请求拿到，那时再给它建一个由负责方事件同步的副本。
