@@ -42,7 +42,7 @@ import {
 import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-reader.js';
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
-import { energyComparisonChart, energySeriesChart, equipmentEnergyChart } from './read-tool-charts.js';
+import { energyComparisonChart, energySeriesChart, equipmentEnergyChart, semanticChart } from './read-tool-charts.js';
 import { semanticCatalog } from './semantic-catalog.gen.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
@@ -1644,6 +1644,7 @@ export const createHvacReadTools = ({
         ), limits);
       });
     },
+    chart: semanticChart,
   });
 
   return Object.freeze([

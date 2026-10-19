@@ -719,6 +719,10 @@ test('a semantic query names machines and grouping values the way the pages do',
     { siteTime: '2026-10-15 00:00', 设备: '未登记的设备', 能源类型: '用电', 能耗: 2 },
   ]);
   assert.equal(result.dataStatus, '完整');
+  // One period grouped by device charts the devices; a grouping with one value is not a grouping (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
+    kind: 'HORIZONTAL_BAR', title: '10月15日各设备的能耗', unit: 'kWh', categories: ['C 机组电表', '未登记的设备'], series: [{ name: '能耗', values: [879, 2] }],
+  });
 });
 
 test('Tariff periods read as the pages show them, energy no Tariff covers as unpriced', async () => {
@@ -738,6 +742,9 @@ test('Tariff periods read as the pages show them, energy no Tariff covers as unp
     measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
   });
   assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
+  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
+    kind: 'BAR', title: '10月15日各电价时段的电费', unit: '元', categories: ['尖峰', '谷', '未计价'], series: [{ name: '电费', values: [12, 3, null] }],
+  });
 });
 
 test('one semantic query reads the Site\'s energy and its estimated cost together, one row per period', async () => {
@@ -770,6 +777,10 @@ test('one semantic query reads the Site\'s energy and its estimated cost togethe
   ]);
   // Both views stop early; the answer reaches only as far as the one that stops first.
   assert.equal(result.dataStatus, '不完整：数据截至 2026-10-16 02:00');
+  // Periods chart the measures that share the first one's unit (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
+    kind: 'BAR', title: '10月15日–10月17日每天用电量', unit: 'kWh', categories: ['10/15', '10/16', '10/17'], series: [{ name: '用电量', values: [1634, 1499, null] }],
+  });
 });
 
 test('a semantic query that groups or mixes other views across views is refused before reading, saying what works', async () => {
