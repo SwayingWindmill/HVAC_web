@@ -1,6 +1,8 @@
 # ADR 0004：设备快照、实时订阅和断线恢复的公开接口
 
-状态：已采纳（2026-07-23，问题单 #51），已实现。接口定义在 `contracts/http/s2-telemetry-public.openapi.json`，推送格式在 `contracts/events/s2-device-observation-publication.v1.schema.json`；`telemetry:public-contract:check` 检查它们。
+状态：已采纳（2026-07-23，问题单 #51），已实现。
+
+接口定义在 `contracts/http/s2-telemetry-public.openapi.json`，推送格式在 `contracts/events/s2-device-observation-publication.v1.schema.json`；`telemetry:public-contract:check` 检查它们。
 
 ## 背景
 

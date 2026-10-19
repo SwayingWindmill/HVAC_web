@@ -44,10 +44,10 @@ npm run ui:shadcn -- add <注册表里的组件>
 
 - 技术栈：React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui（`radix-nova`，组件用 Radix 的 `asChild` 组合）、TanStack Router / Query / Table、React Hook Form + Zod、date-fns、Lucide 图标；图表用 shadcn Chart + Recharts，数字孪生的 3D 用 React Three Fiber。
 - 状态各归其位：URL 状态归 Router，服务端数据归 Query，表单归 React Hook Form，组件自己的状态用 `useState` / `useReducer`；多个组件真正共享的纯前端状态才用 Zustand。同一个事实只放在一套状态里。
-- 站点范围的页面放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读）；对象详情在页面内的侧栏里打开，由 `?inspect=<id>` 指定。
-- 路由文件只解析 URL、做权限跳转、组合加载和出错状态；业务逻辑、查询、表单 schema 和领域组件放在 `features/<领域>`。
-- 页面调接口统一走 OpenAPI 生成的客户端加 feature 里的 query / mutation。实时页面先取快照再接推送。
-- 组件来自 shadcn/ui 和 `src/blocks` 里的组合（`Main`、`PageHeader`、`Panel`、`StateCard`、`DataTableBlock` 等，见 `DESIGN.md`）；普通列表用 `DataTableBlock`（`npm run design:check` 会检查）。
+- 站点范围的页面放在 `routes/_app._site.*`，站点由 `?site=` 指定（用 `useWorkspaceScope()` 读）；对象详情在页面内的侧栏里打开，由 `?inspect=<id>` 指定，没有单独的详情路由。
+- 路由文件只解析 URL、做权限跳转、组合加载和出错状态；业务逻辑、查询、表单 schema 和领域组件放在 `features/<领域>`。这就是全部的分层：没有 `pages/`、仓储层、通用 Store 或全局事件总线。
+- 页面调接口统一走 OpenAPI 生成的客户端加 feature 里的 query / mutation。实时页面先取快照再接推送，推送由实时状态层（`src/platform/telemetry-live/`）负责，业务组件不自己开 WebSocket。
+- 按钮、弹窗、表格等组件都来自 shadcn/ui 和 `src/blocks` 里的组合（`Main`、`PageHeader`、`Panel`、`StateCard`、`DataTableBlock` 等，见 `DESIGN.md`），不另做一套；普通列表用 `DataTableBlock`（`npm run design:check` 会检查）。
 - 页面只显示真实来源的数据；还没接上的，明确显示「未接入」。示例数据只出现在 `HVAC_WEB_FRONTEND_REVIEW=true` 的评审构建里。
-- 面向值班人员的界面只显示业务事实：状态、影响、时间、原因、谁负责、能做什么；用 `GLOSSARY.md` 里的词。内部值（UUID、trace ID、枚举、版本号）翻成日常说法，或者不显示。
-- 只做桌面端。界面改动要在 1440px 宽度下用真实数据实际看过（本地 8443 或服务器）；发现的问题一次改完，再看一遍确认。
+- 面向值班人员的界面只显示业务事实：状态、影响、时间、原因、谁负责、能做什么；用 `GLOSSARY.md` 里的词。内部值（UUID、trace ID、枚举、版本号、合同或 schema 名）翻成日常说法，或者不显示；业务编号用真的业务编号，不拿 UUID 截一段代替。
+- 只做桌面端。界面改动要在 1440px 宽度下用真实数据实际看过（本地 8443 或服务器），构建通过不算看过；发现的问题一次改完，再看一遍确认。

@@ -20,4 +20,4 @@ npx --no-install codegraph explore "how does command submission reach PostgreSQL
 npx --no-install codegraph affected path/to/changed-file.ts
 ```
 
-索引存在 `.codegraph/`（已在 `.gitignore` 里）。`codegraph.json` 排除了 worktree、临时数据、生成的产物、原型和参考资料，所以结果只描述现在在用的平台代码。
+索引存在 `.codegraph/`（已在 `.gitignore` 里）。排除的目录列在 `codegraph.json` 里（临时数据、生成的产物、原型和参考资料），所以结果只描述现在在用的平台代码。

@@ -1,6 +1,8 @@
 # ADR 0006：控制指令的请求、下发尝试和防重复执行
 
-状态：已采纳（2026-07-26），ADR 0018 修订了「结果不明」之后怎么办。指令经设备接入服务的 MQTT 下发到站点网关（`modules/command/pkg/mqttconnector`，见 `modules/connectivity/README.md`）。
+状态：已采纳（2026-07-26），ADR 0018 修订了「结果不明」之后怎么办。
+
+指令经设备接入服务的 MQTT 下发到站点网关（`modules/command/pkg/mqttconnector`，见 `modules/connectivity/README.md`）。
 
 ## 背景
 
