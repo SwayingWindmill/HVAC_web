@@ -34,4 +34,4 @@ npm run test:durable-unit
 npm run audit:durable-session
 ```
 
-故障和恢复的测试见 `docs/security/s0-durable-session-audit.md`。
+故障和恢复的测试见 `docs/security/session-and-audit.md`。

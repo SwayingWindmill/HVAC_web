@@ -39,4 +39,4 @@ npm run test:durable-postgres
 npm run audit:durable-session
 ```
 
-完整的事务、投递、行级隔离和哈希链设计见 `docs/security/s0-durable-session-audit.md`。
+完整的事务、投递、行级隔离和哈希链设计见 `docs/security/session-and-audit.md`。

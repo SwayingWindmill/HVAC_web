@@ -24,7 +24,7 @@ OIDC 令牌在服务端交换并加密保存。浏览器只拿到一个不透明
 
 网关通过 TLS 1.3 双向认证调 IAM，每次签一张短时授权，绑定网关的 SPIFFE 身份、IAM 对象、一个动作、一个会话范围、当前租户、策略版本和到期时间。客户端自己带的身份头或授权头一律拒绝。
 
-更详细的身份和威胁边界见 `docs/security/s0-authenticated-principal.md`。
+更详细的身份和威胁边界见 `docs/security/login-and-current-user.md`。
 
 ## 登录会话和操作记录
 
@@ -32,7 +32,7 @@ OIDC 令牌在服务端交换并加密保存。浏览器只拿到一个不透明
 
 登录、退出和管理员吊销会话，都在一个 PostgreSQL 事务里同时写会话状态、操作记录意图和 Protobuf 待发事件。成功后响应带固定的 `X-Audit-Message-ID`；事务提交之后才下发 cookie。网关查操作记录时，另签一张只限 `audit:read` 和当前租户的双向 TLS 授权。
 
-完整的事务、投递、收件表、行级隔离和哈希链设计见 `docs/security/s0-durable-session-audit.md`。
+完整的事务、投递、收件表、行级隔离和哈希链设计见 `docs/security/session-and-audit.md`。
 
 ## 接口归属
 
@@ -42,7 +42,7 @@ OIDC 令牌在服务端交换并加密保存。浏览器只拿到一个不透明
 
 旧系统的路由适配器已经不在网关里；历史上的迁移定义会被现在的解析器拒绝。
 
-数据归属、回滚、防腐、超时和熔断的细节见 `docs/security/s0-route-data-ownership.md`。
+数据归属、回滚、防腐、超时和熔断的细节见 `docs/security/route-ownership.md`。
 
 ## 测试
 
