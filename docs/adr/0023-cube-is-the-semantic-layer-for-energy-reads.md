@@ -1,37 +1,35 @@
-# ADR 0023 — Cube is the semantic layer for energy reads
+# ADR 0023：能耗统计都通过 Cube 读
 
-Status: accepted
+状态：已采纳（2026-10-16）
 
-Date: 2026-10-16
+## 背景
 
-## Context
+ADR 0008 把 Cube 放在统计数据和查询服务（`telemetry-query-service`）之间，但当时 Cube 实际只服务一样东西：能耗序列（按站点、设备、时间段的用电和供冷），用在能耗分析、总览和 AI 助手的能耗工具上。其他要汇总用电的地方各算各的：
 
-ADR 0008 put Cube Core between the analytics facts and `telemetry-query-service`, but in practice Cube serves one product: the Energy Series (electricity and cooling by Site, device and time bucket) behind 能耗分析, 总览 and the Operations Agent's energy Tool. Everything else that reads energy aggregates its own way:
+- 报表服务自己写 SQL 汇总 `analytics.energy_interval_facts_visible` 来出月报；
+- 网页在浏览器里用每小时用电和电价算电费，用用电和供冷算能效；
+- Cube 的模型露出了内部编号（`point_id`、`sensor_id`），也没有给使用方看的视图，模型没法从里面挑要查什么。
 
-- report-service sums `analytics.energy_interval_facts_visible` with its own SQL for the monthly report;
-- the Web computes cost from hourly electricity and the Tariff, and COP from electricity and cooling, in the browser;
-- the Cube model exposes internal identities (`point_id`, `sensor_id`) and has no consumer-facing views, so nothing it offers is usable by a model choosing what to query.
+结果同一个数有不止一种算法，而本该能问任何能耗问题的 AI 助手只有几个固定的工具。
 
-The same quantity therefore has more than one definition, and the Operations Agent, which should be able to ask for any governed energy measure, has only fixed Tools.
+## 决定
 
-## Decision
+凡是给人看或给 AI 助手用的能耗汇总，都通过查询服务和 Cube 读。一个能耗指标只在 Cube 里定义一次。
 
-Every read that aggregates energy for a person or for the Operations Agent goes through `telemetry-query-service` and Cube. Cube is where an energy measure is defined once.
+- Cube 对外只有**视图**，每个字段都有写给值班人员和 AI 助手看的中文标题和说明；cube 本身是内部的（`public: false`）。除了使用方要按它筛选的编号（站点、设备），内部编号不出现在视图里。
+- 只由能耗记录就能算出的指标放在 Cube 里：按范围和设备的用电量、供冷量，以及能效（供冷 ÷ 用电）。
+- 报表服务用自己的程序身份（ADR 0017）通过查询服务读站点每小时的用电和供冷，不直接读 ClickHouse。
+- AI 助手有一个在视图上做语义查询的工具（`energy_semantic_query`）：只能选白名单里的字段，站点由网关的授权固定。需要不止一次查询的问题仍用固定工具。
+- 读数历史（设备的原始读数序列）仍走查询服务的历史读取，读 `telemetry_history.observations`：数量巨大的原始序列不是语义指标。
+- 自己做计算、而不是给人看的负责方（指标计算、节能验证、结算、预测、故障诊断）继续读自己的输入，这些计算归它们自己。估算电费是例外（#575）：优化服务和节能验证用自己的程序身份从查询服务取电费，不再自己按电价算。
 
-- Cube exposes **views** as its only public surface, with Chinese titles and descriptions written for operators and for the Agent; cubes are internal (`public: false`). Internal identities stay out of views except the keys a consumer filters by (Site, equipment).
-- Measures that are pure functions of energy facts live in Cube: electricity and cooling energy by scope and equipment, and COP (cooling ÷ electricity).
-- report-service reads the Site's hourly electricity and cooling through `telemetry-query-service` as its own Workload Principal (ADR 0017), not through ClickHouse.
-- The Operations Agent gets a governed semantic query Tool over the views (members whitelisted, Site forced by the Gateway grant) once the first assistant release ships; fixed Tools stay for questions that need more than one query.
-- Readings history (raw device series) stays on the query service's history engine over `telemetry_history.observations`: high-cardinality raw series are not semantic measures.
-- Owners that compute rather than present (metric worker, savings verification, settlement, forecast, fault diagnosis) keep reading their own inputs; they own those calculations. Estimated energy cost is the exception (#575): the optimization service and savings verification take it from the query service as their own Workload Principals instead of pricing energy themselves.
+## 考虑过的做法
 
-## Considered Options
+- **去掉 Cube，让查询服务直接读 ClickHouse**：没有采用。少一个容器，但 AI 助手的开放式问题就需要我们自己造一个语义层，而且算法会继续散在各个服务里。
+- **Cube Cloud 的 AI 接口或 MCP 服务**：没有采用。平台在一台服务器上跑 Cube Core；AI 助手只通过查询服务访问 Cube，这样每次读取都带着网关按值班人员签的授权和数据质量信息。
 
-- **Remove Cube and let the query service read ClickHouse.** Rejected: one fewer container, but the Agent's open questions would need a semantic layer we would have to build ourselves, and definitions would keep spreading across services.
-- **Cube Cloud's AI API / MCP server.** Not adopted: the platform runs on one server with Cube Core; the Agent reaches Cube only through the query service so the Gateway's per-operator grant and the data-quality metadata stay on every read.
+## 结果
 
-## Consequences
-
-- Estimated energy cost is a Cube measure too (#575, `docs/specs/estimated-energy-cost.md`). The Tariff lives in PostgreSQL and ClickHouse cannot read a per-row timezone, so the Energy Processing projector lays each Site's import Tariff out as UTC price windows in ClickHouse, and the `site_energy_cost` view prices every electricity fact at the window its period ends in. Pages, report snapshots, the Operations Agent, the optimization baseline and M&V's avoided cost all read it; the `energy_cost` Metric is retired. Settlement stays the authority on the bill; demand charges are not in the estimate.
-- Cube still runs with the in-memory cache and without pre-aggregations or Cube Store. At one Site ClickHouse answers directly within the request budget; add Cube Store and pre-aggregations when the query service's p95 for Energy Series exceeds its budget or more Sites make the facts large.
-- A new energy measure is added to the Cube model and a view, then read through the query service; a service that writes its own SQL over the energy facts is a defect.
+- 估算电费也是 Cube 的指标（#575，`docs/specs/estimated-energy-cost.md`）。电价存在 PostgreSQL，ClickHouse 又没法按每一行的时区算，所以能耗处理程序把每个站点的购电电价展开成 ClickHouse 里按 UTC 的电价时段，`site_energy_cost` 视图按每段用电结束时刻所在的电价时段计价。页面、报表快照、AI 助手、优化的基线和节能验证的节省电费都读它；原来的 `energy_cost` 指标已停用。电费账单仍以结算为准；估算里不含需量电费。
+- Cube 仍用内存缓存，没有预聚合，也没有 Cube Store。一个站点时 ClickHouse 直接查就能在请求时限内返回；等查询服务读能耗序列的 p95 超出时限，或站点多了、数据变大了，再加 Cube Store 和预聚合。
+- 新的能耗指标要加进 Cube 的模型和一个视图，再通过查询服务读；哪个服务自己对能耗记录写 SQL，就是缺陷。
