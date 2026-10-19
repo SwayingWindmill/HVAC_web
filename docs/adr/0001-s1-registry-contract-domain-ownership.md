@@ -1,119 +1,59 @@
-# ADR 0001 — S1 Registry contract, domain and ownership baseline
+# ADR 0001：设备登记的编号、翻页和数据归属
 
-Status: accepted
+状态：已采纳（2026-07-21，问题单 #32）。最初的「组织 / 设备（Equipment）」叫法和退回旧系统的路由已经作废，名词以 ADR 0013 的租户 / 站点 / 空间 / 资产 / 设备 / 点位为准；下面是仍然有效的部分。
 
-Date: 2026-07-21
+## 背景
 
-Issue: #32
+在权限、登记服务、网关和网页动工之前，需要先定好登记数据怎么编号、怎么翻页、谁能写，并且不能让旧系统或 ThingsBoard 的编号变成平台的身份。
 
-Superseded in part by ADR 0005 and ADR 0013. UUIDv7, cursor/RLS and single-owner Registry principles remain accepted. Organization/Equipment public terminology and Legacy fallback assumptions are historical; the canonical model is Tenant/Site/Space/Asset/Device/Point.
+## 决定
 
-## Context
+### 编号
 
-S1 needs a stable Organization–Site–Equipment–Device read contract before IAM authorization, Core runtime, Legacy migration, Gateway routing or HVAC Web work can begin. The baseline must preserve S0's single-writer ownership, resource invisibility, reproducible generation and rollback rules while preventing Legacy or ThingsBoard identifiers from becoming public platform identity.
+- 所有对外的业务编号都是负责方生成的、不变的 UUIDv7。
+- 站点属于一个租户，并且有一个校验过的 IANA 时区（例如 `Asia/Shanghai`）。
+- 资产和设备是两个独立的身份，用有版本的绑定关联起来（一台机组可以有几块电表）。
+- 外部系统的编号（旧系统、ThingsBoard）只作为内部的对照数据；同一个集成实例里，同一种外部对象的同一个编号只能有一条有效的对照。
 
-## Decision
+### 列表和翻页
 
-### Public contract
+列表直接返回 `{items, nextCursor, hasMore}`，没有统一的外层包装，默认不给总数。不存在和无权查看的详情都返回 `404 RESOURCE_NOT_FOUND`，不透露东西存不存在。
 
-The Gateway OpenAPI adds exactly eight read operations:
-
-- `GET /api/v1/organizations`
-- `GET /api/v1/organizations/{organizationId}`
-- `GET /api/v1/organizations/{organizationId}/sites`
-- `GET /api/v1/sites/{siteId}`
-- `GET /api/v1/sites/{siteId}/equipment`
-- `GET /api/v1/equipment/{equipmentId}`
-- `GET /api/v1/sites/{siteId}/devices`
-- `GET /api/v1/devices/{deviceId}`
-
-Collections are direct `{items,nextCursor,hasMore}` DTOs with no global success envelope and no default exact count. Missing and unauthorized detail resources share `404 RESOURCE_NOT_FOUND`.
-
-### Identity and model
-
-- All public business IDs are immutable owner-generated UUIDv7.
-- `Site` has one owning Organization and a validated IANA timezone.
-- `Equipment` is a maintainable business asset.
-- `Device` is an IoT endpoint.
-- Equipment and Device are independent identities connected only by versioned `DeviceBinding` records.
-- Active `ExternalBinding` uniqueness is `(integration_instance_id, external_entity_type, external_id)`.
-- Raw Legacy and ThingsBoard IDs remain internal mapping data.
-
-### Cursor
-
-Cursor revision 1 is:
+翻页游标是：
 
 ```text
-base64url(canonical-json-payload).base64url(hmac-sha256(payload))
+base64url(规范化的 JSON).base64url(hmac-sha256(JSON))
 ```
 
-Required claims are `v`, `route`, `scopeHash`, `filterHash`, `order`, `last` and `queryRevision`. The cursor is integrity protected but not confidential. Every page request is re-authorized; route, Scope, filters and query revision must still match current truth. Default ordering is `displayName COLLATE "C", id`.
+里面有 `v`、`route`、`scopeHash`、`filterHash`、`order`、`last` 和 `queryRevision`。游标防篡改，但不保密。每一页都重新检查权限；接口、范围、筛选条件和查询版本必须和当前一致。默认按 `displayName COLLATE "C", id` 排序。
 
-### Problem Details
+### 固定的错误代码
 
-The initial Registry codes are:
-
-| Code | Status | Retryable |
+| 代码 | 状态 | 能否重试 |
 |---|---:|---:|
-| `RESOURCE_NOT_FOUND` | 404 | no |
-| `CURSOR_INVALID` | 400 | no |
-| `REGISTRY_UNAVAILABLE` | 503 | yes |
-| `REGISTRY_TIMEOUT` | 504 | yes |
-| `MAPPING_INVALID` | 409 | no |
-| `MAPPING_QUARANTINED` | 409 | no |
+| `RESOURCE_NOT_FOUND` | 404 | 否 |
+| `CURSOR_INVALID` | 400 | 否 |
+| `REGISTRY_UNAVAILABLE` | 503 | 是 |
+| `REGISTRY_TIMEOUT` | 504 | 是 |
+| `MAPPING_INVALID` | 409 | 否 |
+| `MAPPING_QUARANTINED` | 409 | 否 |
 
-### PostgreSQL ownership and RLS
+### 谁能写、行级隔离
 
-- `iam-service` uniquely writes Schema `iam`.
-- `platform-core-service` uniquely writes Schema `core_registry`.
-- Migration and runtime roles are distinct, `NOLOGIN`, `NOBYPASSRLS` group identities.
-- Runtime roles do not own tables or policies.
-- Core tables use mandatory application predicates plus forced PostgreSQL RLS.
-- Organization access and explicitly delegated Site access are represented separately.
-- Tenant-leading keyset indexes support Organization/Site filtering before display-name ordering.
-- `MigrationQuarantine` is inaccessible to ordinary Core runtime reads.
+- IAM 是 `iam` 表唯一的写入方，登记服务是 `core_registry` 表唯一的写入方。
+- 迁移角色和运行角色分开，都是 `NOLOGIN`、`NOBYPASSRLS` 的组角色；运行角色不拥有表和策略。
+- 登记的表既在应用里带范围条件，又强制 PostgreSQL 行级隔离。整个租户的权限和单独授权的站点分开表示。
+- 索引以租户开头，先按租户 / 站点过滤，再按名字排序。
+- 迁移的隔离区，平常的登记读取看不到。
 
-### Legacy migration states
+### 旧数据的对照状态
 
-Mappings use `DISCOVERED`, `MAPPED`, `VERIFIED`, `QUARANTINED` and `RETIRED`. Ambiguous Asset-to-Equipment conversion cannot have a target resource ID and remains in Quarantine. Reads cannot trigger synchronization or business double writes.
+对照的状态是：已发现、已对照、已核实、已隔离、已退役。说不清该迁成哪种对象的，不给目标编号，留在隔离区。读数据从不触发同步或双写。旧数据迁移工具见 `tools/legacy-registry-migrator`。
 
-### Route ownership
+### 查询怎么写
 
-All eight S1 routes initially remain `legacy-hvac-backend` primary with `platform-core-service` as the candidate owner. The permitted sequence is:
+试过 `sqlc v1.31.1`，它能生成确定性的 `pgx/v5` 代码，也能保留明确的范围条件。但登记服务仍直接用 `pgx`：事务内要设置行级隔离的上下文，查询又不多，不值得再加一个代码生成器。
 
-1. `LEGACY_PRIMARY_GO_SHADOW`
-2. `GO_CANARY_LEGACY_SHADOW`
-3. `GO_PRIMARY_LEGACY_READ_FALLBACK`
-4. `GO_PRIMARY`
+## 后果
 
-Shadow has `side_effect_policy=NONE`. Legacy fallback is read-only and forbidden after `AUTHORIZATION_DENIED` or `RESOURCE_NOT_FOUND`.
-
-### Query implementation
-
-A disposable `sqlc v1.31.1` POC generates deterministic `pgx/v5` code and proves explicit Scope predicates can be retained. S1 nevertheless keeps direct `pgx` for the initial runtime because transaction-local RLS setup and the small query set do not justify a second production generator yet.
-
-## Consequences
-
-Ticket 02 may implement IAM facts against the frozen IAM Schema. Ticket 03 may implement the Core service against the frozen Core Schema and generated contract. Ticket 04 may implement migration execution without redefining mapping states. Ticket 05 may implement `RegistryServerInterface`; Ticket 01 deliberately does not make the current Gateway handler implement it.
-
-Changing public IDs, Equipment/Device identity, cursor claims, ownership writers, fallback conditions or mapping states requires a new ADR and compatible revision rather than an in-place edit.
-
-## Architecture Decision Trace
-
-| Ticket 01 criterion | Architecture/spec source | Baseline artifact | Verification |
-|---|---|---|---|
-| Eight read endpoints and direct collections | S1 Public HTTP contract | `contracts/http/platform-gateway.openapi.yaml` | `contracts:check`, `s1:registry:check` |
-| UUIDv7 and revisions | S1 Domain model | OpenAPI + `s1-registry-model.v1.json` + DDL checks | static baseline and PostgreSQL constraints |
-| Site IANA timezone | S1 Domain model | `sites_iana_timezone` trigger | invalid-timezone PostgreSQL negative test |
-| Equipment/Device separation | S1 Domain model | separate tables/DTOs plus `device_bindings` | model and DDL checks |
-| ExternalBinding active uniqueness | S1 Domain model | partial unique index | duplicate-insert PostgreSQL negative test |
-| Stable Problem Details | S1 Public HTTP contract | OpenAPI `x-stable-codes` and model lock | generator/static checks |
-| Opaque Cursor binding | S1 Public HTTP contract | model cursor claims and generated clients | HMAC tamper and cross-Scope tests |
-| IAM/Core Schema ownership | S1 PostgreSQL ownership | Data Ownership Registry and bootstrap roles | ownership checker and schema-owner SQL |
-| Route ownership and fallback | S1 Legacy migration | Route Ownership Registry revision 2 | ownership checker |
-| DDL, RLS and indexes | S1 PostgreSQL ownership and RLS | `infra/registry/postgres/init` | real PostgreSQL integration test |
-| Two-Organization fixtures | S1 Testing Decisions | deterministic fixture SQL | owner/delegated/no-access RLS counts |
-| Legacy mapping states | S1 Legacy mapping | model + DDL + fixtures | static check and Quarantine SQL assertion |
-| sqlc versus pgx POC | S1 reuse assessment | `pocs/s1-sqlc` | deterministic generation and compile test |
-| Reproducible contract generation | S0 delivery convention | generator v5 and checked-in outputs | `contracts:check` |
-| Decision trace | S1 Ticket 01 | this ADR | Markdown review and CI evidence |
+改对外编号、资产和设备的身份关系、游标的内容、写入方或对照状态，要写新的 ADR，不能就地改这份。
