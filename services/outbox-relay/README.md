@@ -1,32 +1,32 @@
 # outbox-relay
 
-`outbox-relay` publishes committed Gateway Outbox rows to the Kafka-compatible Control Backbone. It is a separate runtime process and does not own Session or Audit Ledger state.
+把平台网关「待发事件表」（outbox）里已经提交的事件发到 Kafka 兼容的消息总线。它是单独的进程，不保存会话或操作记录。第一阶段的 Compose 里不运行它（没有 Kafka）。
 
-## Delivery semantics
+## 怎么投递
 
-The Relay claims one pending row using `FOR UPDATE SKIP LOCKED` and a finite lease.
+每次用 `FOR UPDATE SKIP LOCKED` 领一条待发的事件，并带一个有时限的租约。
 
-- Broker acknowledgement is required before `published_at` is recorded.
-- Publish failure keeps the row pending and records only a stable error code.
-- A failure after broker acknowledgement but before the database mark can produce a duplicate publication.
-- Duplicate convergence is provided downstream by the Audit Transactional Inbox.
+- 消息总线确认收到之后，才记下 `published_at`。
+- 发送失败，事件保持待发，只记一个固定的错误代码。
+- 总线确认之后、数据库还没标记之前出故障，可能会再发一次。
+- 重复的消息由操作记录服务的收件表去掉。
 
-This is explicit at-least-once delivery. The service does not claim exactly-once messaging.
+也就是「至少送达一次」，不保证只送一次。
 
-## Kafka record
+## Kafka 消息
 
-- topic: `control.security.session.v1`
-- key: `bff-session:<sha256 audit aggregate id>`; the browser Session cookie value is never published
-- value: deterministic `SessionAuditEventV1` Protobuf bytes
-- headers: message ID, schema version, aggregate version, Tenant and content type
+- 主题：`control.security.session.v1`
+- 键：`bff-session:<操作记录聚合编号的 sha256>`；浏览器会话 cookie 的值从不发出去
+- 值：确定性的 `SessionAuditEventV1` Protobuf 字节
+- 头：消息编号、格式版本、聚合版本、租户、内容类型
 
-The Relay validates the stored Protobuf envelope hash before publishing.
+发送前先校验存下的 Protobuf 信封的哈希。
 
-## Runtime database identity
+## 数据库身份
 
-`gateway_relay_runtime` can select and update Outbox delivery fields only. It cannot modify Session state, Audit Intent or Audit Ledger tables.
+`gateway_relay_runtime` 只能查和改待发事件的投递字段，不能改会话状态、操作记录意图或操作记录表。
 
-## Commands
+## 命令
 
 ```bash
 npm run build:outbox-relay
@@ -34,4 +34,4 @@ npm run test:durable-unit
 npm run audit:durable-session
 ```
 
-See `docs/security/s0-durable-session-audit.md` for failure and recovery tests.
+故障和恢复的测试见 `docs/security/s0-durable-session-audit.md`。
